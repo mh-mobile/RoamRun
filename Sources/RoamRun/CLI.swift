@@ -192,6 +192,13 @@ enum CLI {
             }
         }
         let monitor = InterfaceMonitor()
+        monitor.onLost = {
+            Task { @MainActor in
+                guard bridge.state.isActive else { return }
+                bridge.stop()
+                bridge.fail(ProxyBridge.noAddressMessage)
+            }
+        }
         monitor.onChange = { _ in
             Task { @MainActor in bridge.stop(); await bridge.start() }
         }

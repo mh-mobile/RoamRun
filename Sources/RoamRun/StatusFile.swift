@@ -60,6 +60,6 @@ enum StatusFile {
         // Any copy of RoamRun (the app in /Applications and a dev build can
         // both be around); anything else holding a recycled PID is ignored.
         let path = String(cString: buf)
-        return path.hasSuffix("/Contents/MacOS/RoamRun") || path == Bundle.main.executablePath
+        return (path as NSString).lastPathComponent == "RoamRun"
     }
 }

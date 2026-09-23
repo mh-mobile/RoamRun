@@ -6,6 +6,8 @@ import Network
 /// re-publish the proxy registration with the new address.
 final class InterfaceMonitor {
     var onChange: ((String) -> Void)?
+    /// en0 had an address and lost it.
+    var onLost: (() -> Void)?
 
     private let interfaceName: String
     private var monitor: NWPathMonitor?
@@ -37,6 +39,7 @@ final class InterfaceMonitor {
             // Remember the gap so getting the *same* IP back (sleep/wake,
             // Wi-Fi rejoin) still counts as a change — listeners bound to
             // the vanished address don't come back on their own.
+            if let old = lastKnownIP, !old.isEmpty { onLost?() }
             lastKnownIP = ""   // also when there was never an IP, so its arrival counts
             return
         }

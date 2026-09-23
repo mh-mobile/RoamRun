@@ -75,7 +75,7 @@ final class ProxyBridge: ObservableObject {
         DNSServiceProxy.killOrphanedHelpers { [weak self] m in self?.log(m) }
 
         guard let localIP = InterfaceMonitor.currentIPv4() else {
-            setState(.error("Could not read local IP (en0)"))
+            setState(.error(Self.noAddressMessage))
             return
         }
 
@@ -201,7 +201,6 @@ final class ProxyBridge: ObservableObject {
         let ports = (port...upper).filter { !coveredPorts.contains($0) }
         guard !ports.isEmpty else { return }
         coveredPorts.formUnion(ports)
-        tunnelReady = true
         log("live tunnel port \(port) discovered, relaying \(ports.first!)-\(ports.last!)")
         let gen = generation
         Task {
@@ -212,7 +211,9 @@ final class ProxyBridge: ObservableObject {
                     guard gen == generation else { pair.stop(); return }   // bridge stopped meanwhile
                     tunnelRelays[p] = pair
                     opened.append(p)
+                    tunnelReady = true
                 } catch {
+                    coveredPorts.remove(p)
                     log("failed to open relay for tunnel port \(p): \(error.localizedDescription)")
                 }
             }
@@ -254,11 +255,11 @@ final class ProxyBridge: ObservableObject {
     /// port shows up (the relay set grows past the control channel).
     private func warmUp(udid: String, gen: Int) async {
         for attempt in 1...5 {
-            guard gen == generation, coveredPorts.count <= 1 else { return }
+            guard gen == generation, !tunnelReady else { return }
             log("warming up tunnel for \(udid) (attempt \(attempt))")
             let r = await Proc.runAsync("/usr/bin/xcrun", ["devicectl", "--quiet", "--timeout", "30",
                                                           "device", "info", "details", "--device", udid])
-            if gen != generation || coveredPorts.count > 1 { return }
+            if gen != generation || tunnelReady { return }
             let err = r.err.split(separator: "\n").first.map(String.init) ?? ""
             log("warm-up: devicectl exited \(r.status)\(err.isEmpty ? "" : ": \(err)")")
             try? await Task.sleep(for: .seconds(3))
@@ -327,6 +328,8 @@ final class ProxyBridge: ObservableObject {
         autoRetry = false
         setState(.error("This Mac doesn't recognize \(profile.displayName)'s pairing — its Bonjour identity changed or the pairing was reset. Put the iPhone on this Mac's Wi‑Fi, remove it here and add it again. If Xcode also lost it, pair it in Xcode first."))
     }
+
+    static let noAddressMessage = "This Mac has no Wi‑Fi address (en0), so there is nothing to relay on. The bridge resumes when Wi‑Fi reconnects."
 
     /// Surface a refusal the coordinator decided on (e.g. same-LAN conflict).
     func fail(_ message: String) { setState(.error(message)) }

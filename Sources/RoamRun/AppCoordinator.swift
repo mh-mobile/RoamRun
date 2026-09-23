@@ -69,6 +69,9 @@ final class AppCoordinator: ObservableObject {
             }
         }
 
+        interfaceMonitor.onLost = { [weak self] in
+            Task { @MainActor in self?.onInterfaceLost() }
+        }
         interfaceMonitor.onChange = { [weak self] ip in
             Task { @MainActor in self?.onInterfaceChange(ip) }
         }
@@ -179,19 +182,29 @@ final class AppCoordinator: ObservableObject {
     func startBridge(_ profile: DeviceProfile) {
         guard let bridge = bridges[profile.id] else { return }
 
-        // Refuse while the real device is still visible on the LAN — our fake
-        // record would collide with its genuine announcement.
-        let fqdn = "\(profile.instanceName).\(profile.serviceType)"
-        if let live = capture.services[fqdn], Date().timeIntervalSince(live.lastSeen) < 15 {
-            logStore.log("\"\(profile.displayName)\" is still live on the local network — not bridging (would conflict)")
-            bridge.fail("\(profile.displayName) is on this Mac's network right now, so Xcode already sees it directly. RoamRun starts the bridge by itself once it moves to another network.")
-            return
-        }
-
         var ids = wasActiveIDs
         ids.insert(profile.id)
         wasActiveIDs = ids
-        Task { await bridge.start() }
+
+        let fqdn = "\(profile.instanceName).\(profile.serviceType)"
+        let lanRecord = capture.services[fqdn]
+        Task {
+            // The real iPhone still answering on this LAN would collide with our record.
+            if let lanRecord, await Self.answersOnLAN(lanRecord) {
+                logStore.log("\"\(profile.displayName)\" is still live on the local network — not bridging (would conflict)")
+                bridge.fail("\(profile.displayName) is on this Mac's network right now, so Xcode already sees it directly. RoamRun starts the bridge by itself once it moves to another network.")
+                return
+            }
+            await bridge.start()
+        }
+    }
+
+    private static func answersOnLAN(_ s: CapturedService) async -> Bool {
+        let ipv4 = s.hostIPs.filter { $0.contains(".") }
+        for ip in ipv4.isEmpty ? [s.host] : ipv4 {
+            if await ReachabilityProbe.speaksRemotePairing(host: ip, port: s.port, timeout: 2) { return true }
+        }
+        return false
     }
 
     func stopBridge(_ profile: DeviceProfile) {
@@ -238,23 +251,14 @@ final class AppCoordinator: ObservableObject {
     /// Probe a bounded range for the RemotePairing control channel when the
     /// captured port doesn't answer. Updates the profile on success.
     func scanRemotePairingPort(_ profile: DeviceProfile) async {
-        logStore.log("\"\(profile.displayName)\": scanning \(profile.providerIP) for RemotePairing port (49152-49255)")
         let host = profile.providerIP
-        let open = await withTaskGroup(of: UInt16?.self) { group in
-            for port in UInt16(49152)...UInt16(49255) {
-                group.addTask {
-                    await ReachabilityProbe.checkTCP(host: host, port: port, timeout: 1.2) ? port : nil
-                }
-            }
-            var open: [UInt16] = []
-            for await r in group { if let r { open.append(r) } }
-            return open.sorted()
-        }
-        // Other services share this range; keep the one that actually
-        // answers the RemotePairing handshake.
         var found: UInt16?
-        for port in open where found == nil {
-            if await ReachabilityProbe.speaksRemotePairing(host: host, port: port) { found = port }
+        for range in [UInt16(49152)...49255, UInt16(49256)...UInt16.max] where found == nil {
+            logStore.log("\"\(profile.displayName)\": scanning \(host) ports \(range.lowerBound)-\(range.upperBound)")
+            // An open port may be another service; confirm with the handshake.
+            for port in await Self.openPorts(host: host, in: range) where found == nil {
+                if await ReachabilityProbe.speaksRemotePairing(host: host, port: port) { found = port }
+            }
         }
         if let found, found == profile.remotePairingPort {
             logStore.log("\"\(profile.displayName)\": RemotePairing port is still \(found)")
@@ -273,6 +277,25 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
+    /// Probes `range` 256 ports at a time.
+    private static func openPorts(host: String, in range: ClosedRange<UInt16>) async -> [UInt16] {
+        var open: [UInt16] = []
+        var next = Int(range.lowerBound)
+        while next <= Int(range.upperBound) {
+            let batch = UInt16(next)...UInt16(min(next + 255, Int(range.upperBound)))
+            open += await withTaskGroup(of: UInt16?.self) { group in
+                for port in batch {
+                    group.addTask { await ReachabilityProbe.checkTCP(host: host, port: port, timeout: 1.2) ? port : nil }
+                }
+                var hits: [UInt16] = []
+                for await r in group { if let r { hits.append(r) } }
+                return hits
+            }
+            next += 256
+        }
+        return open.sorted()
+    }
+
     // MARK: - Internals
 
     /// Terminate all helper children (zone dump, proxy registrations, log
@@ -280,6 +303,15 @@ final class AppCoordinator: ObservableObject {
     func shutdown() {
         capture.stop()
         for bridge in bridges.values { bridge.stop() }
+    }
+
+    /// Relays are bound to en0's address; show the pause instead of a stale "active".
+    private func onInterfaceLost() {
+        logStore.log("local IP lost; bridges paused until Wi-Fi returns")
+        for bridge in bridges.values where bridge.state.isActive {
+            bridge.stop()
+            bridge.fail(ProxyBridge.noAddressMessage)
+        }
     }
 
     private func onInterfaceChange(_ ip: String) {

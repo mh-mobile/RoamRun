@@ -49,6 +49,7 @@ final class Relay {
 
     func start() async throws {
         guard let port = NWEndpoint.Port(rawValue: localPort) else { throw RelayError.invalidPort(localPort) }
+        lock.withLock { stopped = false }
         let params = NWParameters.tcp
         params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(localIP), port: port)
         let listener = try NWListener(using: params)
@@ -111,6 +112,9 @@ final class Relay {
             }
         }
         guard track(inbound, outbound) else {
+            // Also breaks the handler → finish → outbound retain cycle.
+            outbound.stateUpdateHandler = nil
+            outbound.cancel()
             inbound.cancel()
             return
         }
