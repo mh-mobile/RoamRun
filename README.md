@@ -50,7 +50,7 @@ TLS とペアリング認証は Mac⇄iPhone 間でエンドツーエンド。�
 ### ソースからビルド（推奨）
 
 ```sh
-git clone <this repo> && cd RoamRun
+git clone https://github.com/mh-mobile/RoamRun && cd RoamRun
 make run     # ビルドして起動（アドホック署名）
 ```
 
