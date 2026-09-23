@@ -122,4 +122,4 @@ iPhone の登録（Add iPhone）はアプリで一度だけ行ってください
 
 この実装は以下の公開情報をベースにしています:
 
-- Kevin Paterson, "How to remotely iterate & deploy your sideloaded iOS-apps over tailnet" — `dns-sd -P` + `socat` による同等構成の実証
+- Kevin Paterson, ["How to remotely iterate & deploy your sideloaded iOS-apps over tailnet"](https://dev.to/kvnpt/how-to-remotely-iterate-deploy-your-sideloaded-ios-apps-over-tailnet-jak) (DEV Community) — `dns-sd -P` + `socat` による同等構成の実証
