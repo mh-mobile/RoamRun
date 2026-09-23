@@ -116,7 +116,8 @@ iPhone の登録（Add iPhone）はアプリで一度だけ行ってください
 - Tailscale が DERP 中継経由だと動作しますが遅くなります（`roamrun doctor` で経路を確認できます）
 - iPhone 再起動後など、DDI の再ステージングで一度 USB 接続が必要な場合があります
 - TXT の authTag/identifier が変わった場合は、同じ Wi-Fi で iPhone を追加し直してください
-- ブリッジ中は、iPhone の Bonjour 識別子（identifier / authTag）を Mac がいる LAN に広告し続けます。信頼できないネットワーク（ホテル・カフェ等）ではブリッジを止めてください。中継自体はこの Mac 自身からの接続しか受け付けません
+- ブリッジ中は、**この Mac が属するローカルネットワーク**（Wi-Fi・有線など mDNS が有効な全インターフェース）に iPhone の Bonjour 識別子（identifier / authTag）を広告し続けます。iPhone 本体と違い値が固定のため、同じネットワークの第三者に端末の存在を追跡される可能性があります（Mac を自宅に置いて使う通常の構成では問題になりません）。中継は、この Mac 自身から以外の接続を即座に切断します。iPhone 側の通信は Tailscale で暗号化されるため、iPhone がどの Wi-Fi にいても影響しません
+- 同じネットワークに別の Mac がいると、その Mac の Xcode にもこの iPhone が一瞬表示されることがあります（接続は中継が拒否するため、操作や通信はできません）
 
 ## 参考
 
