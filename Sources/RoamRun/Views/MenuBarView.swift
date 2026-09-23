@@ -1,0 +1,78 @@
+import SwiftUI
+import AppKit
+
+struct MenuBarView: View {
+    @EnvironmentObject private var coordinator: AppCoordinator
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        if coordinator.profiles.isEmpty {
+            Text("No iPhones added yet")
+            Button("Add iPhone…") { openMain() }
+        }
+        ForEach(coordinator.profiles) { profile in
+            if let bridge = coordinator.bridges[profile.id] {
+                BridgeMenuItem(bridge: bridge, profile: profile)
+            }
+        }
+        Divider()
+        Button("Open RoamRun") { openMain() }
+            .keyboardShortcut("o")
+        Button("Quit RoamRun") { NSApp.terminate(nil) }
+            .keyboardShortcut("q")
+    }
+
+    private func openMain() {
+        openWindow(id: "main")
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
+private struct BridgeMenuItem: View {
+    @EnvironmentObject private var coordinator: AppCoordinator
+    @ObservedObject var bridge: ProxyBridge
+    let profile: DeviceProfile
+
+    var body: some View {
+        let status = coordinator.status(of: profile.id)
+        let viaCLI = coordinator.externalBridges[profile.id] != nil
+        // Menus only render plain text; the status rides along in the title.
+        Text("\(profile.displayName) — \(status.title)\(viaCLI ? " (Terminal)" : "")")
+        if viaCLI {
+            Button("Stop Bridge") { coordinator.stopExternalBridge(profile.id) }
+        } else if bridge.state == .off || status == .error {
+            Button("Start Bridge") { coordinator.startBridge(profile) }
+        } else {
+            Button("Stop Bridge") { coordinator.stopBridge(profile) }
+        }
+        Divider()
+    }
+}
+
+/// Menu bar icon: one glance tells whether Xcode can reach the iPhone.
+struct MenuBarIcon: View {
+    @ObservedObject var coordinator: AppCoordinator
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        icon.onAppear {
+            AppDelegate.openMain = {
+                openWindow(id: "main")
+                NSApp.activate(ignoringOtherApps: true)
+            }
+            // A launch that restores running bridges is a login/background
+            // launch — stay in the menu bar. Otherwise the user opened the
+            // app on purpose (or it's the first run): show the window.
+            if !coordinator.isRestoringBridges || Snapshot.path != nil { AppDelegate.openMain?() }
+        }
+    }
+
+    @ViewBuilder private var icon: some View {
+        switch coordinator.overallStatus {
+        case .ready: Image(systemName: "iphone.radiowaves.left.and.right")
+        case .error: Image(systemName: "exclamationmark.triangle")
+        case .off: Image(systemName: "iphone.slash")
+        default: Image(systemName: "iphone")
+        }
+    }
+}

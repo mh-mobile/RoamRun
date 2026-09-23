@@ -1,0 +1,6 @@
+.DS_Store
+.build/
+RoamRun.app/
+dmg-root/
+*.dmg
+FINDINGS.md
