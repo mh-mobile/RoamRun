@@ -170,8 +170,13 @@ struct AddDeviceView: View {
         }
     }
 
+    /// One row per device. An iPhone announces a new Bonjour instance each
+    /// time it changes network, and the old ones linger in the mDNS cache
+    /// (~75 min) — keep only the newest per host.
     private var servicesSorted: [CapturedService] {
-        coordinator.capture.services.values.sorted { a, b in
+        let newestPerHost = Dictionary(grouping: coordinator.capture.services.values, by: \.host)
+            .compactMap { $0.value.max { $0.lastSeen < $1.lastSeen } }
+        return newestPerHost.sorted { a, b in
             let la = liveness[a.instanceName] ?? false
             let lb = liveness[b.instanceName] ?? false
             return la == lb ? a.lastSeen > b.lastSeen : la && !lb

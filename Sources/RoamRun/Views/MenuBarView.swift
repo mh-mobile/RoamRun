@@ -18,7 +18,7 @@ struct MenuBarView: View {
         Divider()
         Button("Open RoamRun") { openMain() }
             .keyboardShortcut("o")
-        Button("Quit RoamRun") { NSApp.terminate(nil) }
+        Button("Quit RoamRun") { AppDelegate.quit() }
             .keyboardShortcut("q")
     }
 
