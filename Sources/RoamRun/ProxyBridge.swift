@@ -85,7 +85,7 @@ final class ProxyBridge: ObservableObject {
         }
 
         // Home again? Xcode sees the real iPhone; a fake record would only collide.
-        if await Self.isOnLAN(profile) {
+        if await isHome() {
             guard gen == generation else { return }
             setState(.local)
             log("on this Mac's network — standing aside until it leaves")
@@ -132,9 +132,11 @@ final class ProxyBridge: ObservableObject {
         // logs the UDID the warm-up needs) within ~1s of it appearing.
         // Lines already queued when the bridge stops or restarts still arrive;
         // the generation check drops them.
-        watcher.onPort = { [weak self] port in
+        watcher.onPort = { [weak self] port, owner in
             Task { @MainActor in
                 guard let self, gen == self.generation else { return }
+                // Another bridged iPhone's tunnel: its port isn't ours to relay.
+                if let owner, let mine = self.udid, owner.caseInsensitiveCompare(mine) != .orderedSame { return }
                 self.onTunnelPortDiscovered(port, localIP: localIP)
             }
         }
@@ -351,7 +353,7 @@ final class ProxyBridge: ObservableObject {
         let gen = generation
         Task {
             defer { checkingLAN = false }
-            guard await Self.isOnLAN(profile), gen == generation, state.isActive else { return }
+            guard await isHome(), gen == generation, state.isActive else { return }
             log("back on this Mac's network — standing aside until it leaves")
             generation += 1
             teardown()
@@ -365,10 +367,33 @@ final class ProxyBridge: ObservableObject {
         publishStatus()   // another process standing aside for the same iPhone may have cleared ours on exit
         checkingLAN = true
         let gen = generation
-        let home = await Self.isOnLAN(profile)
+        let home = await isHome()
         checkingLAN = false
         guard !home, gen == generation, state == .local else { return }
         await start()
+    }
+
+    /// Home if the iPhone itself advertises on this LAN — Tailscale may keep a
+    /// cellular path after it joins Wi-Fi — or if Tailscale's path says so.
+    private func isHome() async -> Bool {
+        if let udid {
+            let fake = profile.instanceName
+            if await Task.detached(operation: { Self.advertisedHere(udid: udid, besides: fake) }).value { return true }
+        }
+        return await Self.isOnLAN(profile)
+    }
+
+    /// At home the iPhone re-announces itself every ~30s under a fresh name,
+    /// and remotepairingd matches each one to its UDID.
+    // ponytail: can't tell another Mac's RoamRun record for the same iPhone from the real one.
+    nonisolated private static func advertisedHere(udid: String, besides fake: String) -> Bool {
+        let out = Proc.run("/usr/bin/log", ["show", "--last", "90s", "--style", "compact", "--predicate",
+                                            #"process == "remotepairingd" AND eventMessage CONTAINS "Resolved bonjour advert""#],
+                           timeout: 5).out
+        return out.split(separator: "\n").contains { line in
+            guard let (instance, owner) = TunnelPortWatcher.advert(in: String(line)) else { return false }
+            return instance != fake && owner?.caseInsensitiveCompare(udid) == .orderedSame
+        }
     }
 
     /// True when the iPhone's Tailscale endpoint sits directly on en0's link
