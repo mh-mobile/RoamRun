@@ -50,10 +50,18 @@ final class Relay {
         self.remotePort = remotePort
     }
 
+    /// Nagle off: the tunnel carries lldb's small request/response packets,
+    /// and Nagle + delayed ACK added ~150ms to every round trip.
+    private static func tcpParams() -> NWParameters {
+        let tcp = NWProtocolTCP.Options()
+        tcp.noDelay = true
+        return NWParameters(tls: nil, tcp: tcp)
+    }
+
     func start() async throws {
         guard let port = NWEndpoint.Port(rawValue: localPort) else { throw RelayError.invalidPort(localPort) }
         lock.withLock { stopped = false }
-        let params = NWParameters.tcp
+        let params = Self.tcpParams()
         params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(localIP), port: port)
         let listener = try NWListener(using: params)
         self.listener = listener
@@ -98,7 +106,7 @@ final class Relay {
             return
         }
         guard let rport = NWEndpoint.Port(rawValue: remotePort) else { inbound.cancel(); return }
-        let outbound = NWConnection(host: NWEndpoint.Host(remoteIP), port: rport, using: .tcp)
+        let outbound = NWConnection(host: NWEndpoint.Host(remoteIP), port: rport, using: Self.tcpParams())
         let stats = ConnStats()
         let port = remotePort
         let finish: (String) -> Void = { [weak self] reason in

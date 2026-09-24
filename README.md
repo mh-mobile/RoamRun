@@ -196,6 +196,7 @@ defaults delete com.roamrun.app
 - iPhone がスリープすると Tailscale（VPN 拡張）も休止し、外から届かなくなります。デバッグ中は iPhone のロックを解除し、画面をつけたままにしてください（自動ロックを長めに）
 - remotepairingd は約 42 秒ごとに制御チャネルを張り直します（Mac 自身の IP への ARP 確認が通らないため）。トンネルは約 0.4 秒で自動復旧し、デバッグセッションは継続します
 - Tailscale が DERP 中継経由だと動作しますが遅くなります（`roamrun doctor` で経路を確認できます）
+- 外出先では、**デバッガ付きの実行（⌘R）に 1 分前後かかります**。lldb の接続には約 500 回の往復が必要で、回線の遅延やパケットロスがそのまま効くためです（テザリング経由での実測: デバッガ付き約 1 分、デバッガなし約 4 秒）。ブレークポイントが不要なときは Edit Scheme › Run › Info の「Debug executable」をオフに、デバッガを使うときは Options の「Queue Debugging」と Diagnostics の「Main Thread Checker」「Thread Performance Checker」をオフにすると速くなります
 - iPhone 再起動後など、DDI の再ステージングで一度 USB 接続が必要な場合があります
 - TXT の authTag/identifier が変わった場合は、同じ Wi-Fi で iPhone を追加し直してください
 - ブリッジ中は、**この Mac が属するローカルネットワーク**（Wi-Fi・有線など mDNS が有効な全インターフェース）に iPhone の Bonjour 識別子（identifier / authTag）を広告し続けます。iPhone 本体と違い値が固定のため、同じネットワークの第三者に端末の存在を追跡される可能性があります（Mac を自宅に置いて使う通常の構成では問題になりません）。中継は、この Mac 自身から以外の接続を即座に切断します。iPhone 側の通信は Tailscale で暗号化されるため、iPhone がどの Wi-Fi にいても影響しません
