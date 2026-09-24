@@ -6,7 +6,7 @@ import Foundation
 enum CLI {
     /// This process was started as the CLI (vs. the menu bar app).
     nonisolated static var isRunning: Bool { commands.contains(CommandLine.arguments.dropFirst().first ?? "") }
-    nonisolated static let commands: Set<String> = ["devices", "up", "down", "status", "doctor", "init", "help", "--help", "-h"]
+    nonisolated static let commands: Set<String> = ["devices", "up", "down", "status", "doctor", "logs", "init", "help", "--help", "-h"]
     /// Posted by `roamrun down`; the app stops the bridge whose id is `object`.
     static let stopNotification = Notification.Name("com.roamrun.app.stopBridge")
 
@@ -24,6 +24,8 @@ enum CLI {
                                      (--wait: wait up to N seconds for ready)
       doctor [name] [--json]         Check each step from this Mac to the device and say what to fix
                                      (without a name, only devices with a running bridge)
+      logs <name> <bundle-id>        Relaunch the app with its console attached (print and os_log)
+                                     until Ctrl-C — it restarts the app; it can't join one already running
       init [--client <name>] [--print] [--uninstall]
                                      Install the agent skill (clients: claude, codex, cursor, gemini, copilot)
 
@@ -68,6 +70,14 @@ enum CLI {
                 } else {
                     up(p, verbose: args.contains("-v"), detachedChild: args.contains(detachedFlag))
                 }
+            case "logs":
+                // The bundle id is the second word that isn't a flag.
+                let words = args.indices.dropFirst()
+                    .filter { !args[$0].hasPrefix("-") && $0 != waitIdx.map { $0 + 1 } }.map { args[$0] }
+                guard name != nil, let p = targets.first, words.count >= 2 else {
+                    fail("usage: roamrun logs <name> <bundle-id>. " + names(profiles))
+                }
+                logs(p, bundleID: words[words.startIndex + 1])
             default: print(usage); exit(0)
             }
         }
@@ -189,6 +199,30 @@ enum CLI {
         return result["passcodeRequired"] as? Bool
     }
 
+    /// devicectl can't attach to a running process, so this relaunches the app
+    /// with `--console`. OS_ACTIVITY_DT_MODE mirrors os_log to stderr, as Xcode does.
+    private static func logs(_ profile: DeviceProfile, bundleID: String) -> Never {
+        func stop(_ why: String) -> Never {
+            FileHandle.standardError.write(Data("roamrun: \(why)\n".utf8))
+            exit(1)
+        }
+        // Bridged or on this Wi-Fi without a bridge: what matters is that Xcode sees it.
+        guard let udid = StatusFile.read()[profile.id]?.udid ?? profile.udid else {
+            stop("\(profile.displayName)'s UDID isn't known yet — start its bridge once: roamrun up \(shellName(profile.displayName)) -d")
+        }
+        let core = coreDeviceState(udid)
+        guard let core, core != "unavailable" else {
+            stop("Xcode can't reach \(profile.displayName) (\(core ?? "unknown")). If it's away, start the bridge: roamrun up \(shellName(profile.displayName)) -d; otherwise run roamrun doctor \(shellName(profile.displayName)).")
+        }
+        if isLocked(udid) == true { stop("\(profile.displayName) is locked — ask the user to unlock it and keep the screen on.") }
+        setenv("DEVICECTL_CHILD_OS_ACTIVITY_DT_MODE", "enable", 1)
+        let argv = ["/usr/bin/xcrun", "devicectl", "device", "process", "launch", "--console",
+                    "--terminate-existing", "--device", udid, bundleID]
+        var cargs = argv.map { strdup($0) } + [nil]
+        execv(argv[0], &cargs)
+        stop("could not run devicectl: \(String(cString: strerror(errno)))")
+    }
+
     private static func down(_ profile: DeviceProfile) -> Never {
         guard let e = StatusFile.read()[profile.id] else {
             print("\(profile.displayName) is not bridged."); exit(0)
@@ -283,8 +317,12 @@ enum CLI {
         // Same recovery as the app: retry errors, rebind when the Mac's IP changes.
         let retry = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
             MainActor.assumeIsolated {
+                if bridge.status == .error && bridge.autoRetry { Task { await bridge.start() } }
+            }
+        }
+        let away = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
+            MainActor.assumeIsolated {
                 if bridge.state == .local { Task { await bridge.resumeIfAway() } }
-                else if bridge.status == .error && bridge.autoRetry { Task { await bridge.start() } }
             }
         }
         let monitor = InterfaceMonitor()
@@ -316,7 +354,7 @@ enum CLI {
             src.resume()
             sources.append(src as AnyObject)
         }
-        keepAlive = [ticker, retry, monitor] + sources
+        keepAlive = [ticker, retry, away, monitor] + sources
 
         print("Bridging \(profile.displayName) over \(profile.providerIP)…")
         Task { await bridge.start() }
@@ -395,7 +433,8 @@ enum CLI {
             }
             check(peer.online, "Tailscale peer “\(peer.name)” is \(peer.online ? "online" : "offline")",
                   fix: "Unlock the device and keep its screen on — while it sleeps, iOS pauses the Tailscale VPN too.")
-            if peer.online {
+            // On this Wi-Fi Xcode reaches the device directly; the Tailscale path doesn't matter.
+            if peer.online, live[p.id]?.status != BridgeStatus.local.title {
                 check(!peer.curAddr.isEmpty, "Path: \(peer.pathDescription)",
                       fix: "Direct paths are much faster. Some networks (hotel, carrier NAT) force DERP.", warnOnly: true)
             }

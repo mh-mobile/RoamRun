@@ -59,6 +59,18 @@ final class BonjourCapture: ObservableObject {
         process = nil
     }
 
+    /// Start over from what mDNS holds right now: records we saw earlier may
+    /// be gone (device left, cache flushed) and the dump never says so.
+    func restart() {
+        stop()
+        services = [:]
+        srvByRecord = [:]
+        txtByRecord = [:]
+        ipsByHost = [:]
+        ptrs = []
+        start(serviceType: serviceType, domain: domain)
+    }
+
     private func parse(line: String) {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty, !trimmed.hasPrefix(";") else { return }

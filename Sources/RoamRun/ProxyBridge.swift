@@ -174,7 +174,7 @@ final class ProxyBridge: ObservableObject {
         setState(.active(localPort: localPort, tunnelPorts: []))
         log("bridge active: \(profile.providerIP) relayed locally on \(localIP):\(localPort)")
         waitingSince = .now
-        renewTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
+        renewTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.renewIfStuck()
                 self?.standAsideIfHome()
@@ -378,7 +378,13 @@ final class ProxyBridge: ObservableObject {
     private func isHome() async -> Bool {
         if let udid {
             let fake = profile.instanceName
-            if await Task.detached(operation: { Self.advertisedHere(udid: udid, besides: fake) }).value { return true }
+            // A resolved advert may be a stale cache entry (or a sleep proxy's):
+            // only an answer from it proves the iPhone is here.
+            if let instance = await Task.detached(operation: { Self.recentAdvert(udid: udid, besides: fake) }).value,
+               await ReachabilityProbe.speaksRemotePairing(.service(name: instance, type: profile.serviceType,
+                                                                   domain: profile.domain, interface: nil), timeout: 2) {
+                return true
+            }
         }
         return await Self.isOnLAN(profile)
     }
@@ -386,14 +392,15 @@ final class ProxyBridge: ObservableObject {
     /// At home the iPhone re-announces itself every ~30s under a fresh name,
     /// and remotepairingd matches each one to its UDID.
     // ponytail: can't tell another Mac's RoamRun record for the same iPhone from the real one.
-    nonisolated private static func advertisedHere(udid: String, besides fake: String) -> Bool {
+    nonisolated private static func recentAdvert(udid: String, besides fake: String) -> String? {
         let out = Proc.run("/usr/bin/log", ["show", "--last", "90s", "--style", "compact", "--predicate",
                                             #"process == "remotepairingd" AND eventMessage CONTAINS "Resolved bonjour advert""#],
                            timeout: 5).out
-        return out.split(separator: "\n").contains { line in
-            guard let (instance, owner) = TunnelPortWatcher.advert(in: String(line)) else { return false }
-            return instance != fake && owner?.caseInsensitiveCompare(udid) == .orderedSame
-        }
+        return out.split(separator: "\n").reversed().lazy.compactMap { line -> String? in
+            guard let (instance, owner) = TunnelPortWatcher.advert(in: String(line)),
+                  instance != fake, owner?.caseInsensitiveCompare(udid) == .orderedSame else { return nil }
+            return instance
+        }.first
     }
 
     /// True when the iPhone's Tailscale endpoint sits directly on en0's link

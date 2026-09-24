@@ -16,6 +16,9 @@ struct AddDeviceView: View {
     /// mDNS cache keeps dead records for ~75min, so zone-dump hits alone
     /// don't mean the device is still here.
     @State private var liveness: [String: Bool] = [:]
+    @State private var showUnresponsive = false
+    @State private var added = false
+    @State private var advertsKnown = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -30,15 +33,15 @@ struct AddDeviceView: View {
             section("3", "Name") {
                 TextField("Name", text: $name)
                     .textFieldStyle(.roundedBorder)
-                Text(coordinator.isNameTaken(name)
+                Text(!added && coordinator.isNameTaken(name)
                      ? "Another device already uses this name — pick a different one."
                      : "Used in the menu and the CLI: roamrun up <name>")
                     .font(.caption)
-                    .foregroundStyle(coordinator.isNameTaken(name) ? Color.red : .secondary)
+                    .foregroundStyle(!added && coordinator.isNameTaken(name) ? Color.red : .secondary)
             }
 
             HStack {
-                if let saved = alreadySaved {
+                if !added, let saved = alreadySaved {
                     Text("\(chosenIP) is already saved as “\(saved.displayName)”.")
                         .font(.caption)
                         .foregroundStyle(.red)
@@ -47,12 +50,12 @@ struct AddDeviceView: View {
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button("Add Device") {
-                    guard let captured = newest(for: selectedHost) else { return }
-                    if let id = coordinator.addDevice(captured: captured, provider: provider,
-                                                      meshDevice: meshDevice, manualIP: manualIP,
-                                                      name: name) {
-                        onAdded(id)
-                    }
+                    guard let captured = newest(for: selectedHost),
+                          let id = coordinator.addDevice(captured: captured, provider: provider,
+                                                         meshDevice: meshDevice, manualIP: manualIP,
+                                                         name: name) else { return }   // stay: the checks above say why
+                    added = true   // the sheet re-renders while closing: don't flag the device we just saved
+                    onAdded(id)
                     dismiss()
                 }
                 .buttonStyle(.borderedProminent)
@@ -62,11 +65,16 @@ struct AddDeviceView: View {
         }
         .padding(24)
         .frame(width: 520)
-        .onAppear { coordinator.refreshTailscale() }
+        .onAppear {
+            coordinator.refreshTailscale()
+            coordinator.capture.restart()   // only this sheet needs the scan
+        }
+        .onDisappear { coordinator.capture.stop() }
         .task { await probeLoop() }
         .task {
             while !Task.isCancelled {
                 await coordinator.learnAdvertTypes()
+                advertsKnown = true
                 try? await Task.sleep(for: .seconds(15))
             }
         }
@@ -77,9 +85,32 @@ struct AddDeviceView: View {
 
     // MARK: - Step 1
 
+    /// Rows that answer. The rest are usually devices that left, kept alive by
+    /// the mDNS cache or a Bonjour Sleep Proxy; unprobed rows wait (≤ ~1s) so
+    /// those never flash up.
+    private var visibleServices: [CapturedService] {
+        guard advertsKnown else { return [] }   // until we can tell saved devices apart, show nothing
+        return servicesSorted.filter { showUnresponsive || liveness[$0.host] == true }
+    }
+
     @ViewBuilder
     private var iphonePicker: some View {
-        if servicesSorted.isEmpty {
+        devicePicker
+        let hidden = advertsKnown ? servicesSorted.filter { liveness[$0.host] == false }.count : 0
+        if hidden > 0 && !showUnresponsive {
+            Button("\(hidden) not responding — show") { showUnresponsive = true }
+                .buttonStyle(.link)
+                .font(.caption)
+        }
+    }
+
+    @ViewBuilder
+    private var devicePicker: some View {
+        if advertsKnown && servicesSorted.isEmpty && !coordinator.capture.services.isEmpty
+            && coordinator.capture.services.values.allSatisfy({ isSaved(host: $0.host) }) {
+            Text("All devices on this network are already added.")
+                .foregroundStyle(.secondary)
+        } else if visibleServices.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
@@ -91,18 +122,19 @@ struct AddDeviceView: View {
                     Text("• Developer Mode is on (Settings › Privacy & Security)")
                     Text("• It has been paired with this Mac (USB, or Xcode 27 Device Hub › Pair Nearby Device)")
                 }
+                .fixedSize(horizontal: false, vertical: true)   // wrap instead of truncating
                 .font(.callout)
                 .foregroundStyle(.secondary)
             }
         } else {
             VStack(spacing: 0) {
-                ForEach(servicesSorted) { s in
+                ForEach(visibleServices) { s in
                     ServiceRow(service: s, live: liveness[s.host],
                                selected: selectedHost == s.host,
                                symbol: DeviceProfile.symbol(for: deviceType(ofHost: s.host)))
                         .contentShape(Rectangle())
                         .onTapGesture { selectedHost = s.host }
-                    if s.id != servicesSorted.last?.id { Divider() }
+                    if s.id != visibleServices.last?.id { Divider() }
                 }
             }
             .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.4)))
@@ -191,7 +223,8 @@ struct AddDeviceView: View {
     /// Stable order: responding devices first, then by name — rows must not
     /// jump around while the user is picking one.
     private var servicesSorted: [CapturedService] {
-        Set(coordinator.capture.services.values.map(\.host)).compactMap(newest(for:)).sorted { a, b in
+        Set(coordinator.capture.services.values.map(\.host)).filter { !isSaved(host: $0) }
+            .compactMap(newest(for:)).sorted { a, b in
             let la = liveness[a.host] != false, lb = liveness[b.host] != false
             guard la == lb else { return la }
             let c = a.shortHost.localizedStandardCompare(b.shortHost)
@@ -200,11 +233,20 @@ struct AddDeviceView: View {
     }
 
     /// Any of the host's (rotating) adverts that remotepairingd matched to a
-    /// known device — or a saved device with that host name.
+    /// known device (by UDID; host names aren't trusted).
     private func deviceType(ofHost host: String) -> String? {
         coordinator.capture.services.values.lazy.filter { $0.host == host }
             .compactMap { coordinator.advertTypes[$0.instanceName] }.first
-            ?? coordinator.profiles.first { $0.bonjourHost == host }?.deviceType
+    }
+
+    /// Already added? By UDID only — remotepairingd matches each advert to one.
+    /// Host names can't be trusted: they change on rename and repeat across
+    /// people ("iPhone").
+    private func isSaved(host: String) -> Bool {
+        let saved = Set(coordinator.profiles.compactMap { $0.udid?.uppercased() })
+        return coordinator.capture.services.values.contains {
+            $0.host == host && coordinator.advertUDIDs[$0.instanceName].map(saved.contains) == true
+        }
     }
 
     private func newest(for host: String?) -> CapturedService? {
@@ -224,15 +266,23 @@ struct AddDeviceView: View {
     /// stale cache entries pointing at devices that already left the network.
     private func probeLoop() async {
         while !Task.isCancelled {
-            for s in servicesSorted {
-                let targets = s.hostIPs.isEmpty ? [s.host] : s.hostIPs
-                var alive = false
-                for t in targets where !alive {
-                    alive = await ReachabilityProbe.checkTCP(host: t, port: s.port, timeout: 1.2)
+            let results = await withTaskGroup(of: (String, Bool).self) { group in
+                for s in servicesSorted {
+                    let targets = s.hostIPs.isEmpty ? [s.host] : s.hostIPs
+                    group.addTask {
+                        for t in targets where await ReachabilityProbe.checkTCP(host: t, port: s.port, timeout: 1.2) {
+                            return (s.host, true)
+                        }
+                        return (s.host, false)
+                    }
                 }
-                liveness[s.host] = alive
+                return await group.reduce(into: [:]) { $0[$1.0] = $1.1 }
             }
-            try? await Task.sleep(for: .seconds(4))
+            liveness.merge(results) { _, new in new }
+            // Re-check every 4s, but a newly seen device right away.
+            for _ in 0..<8 where !servicesSorted.contains(where: { liveness[$0.host] == nil }) {
+                try? await Task.sleep(for: .seconds(0.5))
+            }
         }
     }
 
@@ -246,7 +296,7 @@ struct AddDeviceView: View {
     }
 
     private var canAdd: Bool {
-        selectedHost != nil && !name.trimmingCharacters(in: .whitespaces).isEmpty
+        visibleServices.contains(where: { $0.host == selectedHost }) && !name.trimmingCharacters(in: .whitespaces).isEmpty
             && !coordinator.isNameTaken(name) && !chosenIP.isEmpty && alreadySaved == nil
     }
 }

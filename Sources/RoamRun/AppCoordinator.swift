@@ -51,7 +51,6 @@ final class AppCoordinator: ObservableObject {
 
         // Remove helpers orphaned by a previous launch *before* starting ours.
         DNSServiceProxy.killOrphanedHelpers { [weak self] m in self?.logStore.log(m) }
-        capture.start()
 
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
                                                object: nil, queue: .main) { [weak self] _ in
@@ -95,6 +94,13 @@ final class AppCoordinator: ObservableObject {
         Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.retryErroredBridges() }
         }
+        // Standing aside: resume soon after the device leaves this Wi-Fi.
+        Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                for b in self.bridges.values where b.state == .local { Task { await b.resumeIfAway() } }
+            }
+        }
         // Pick up bridges started from the command line.
         Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshExternalBridges() }
@@ -115,7 +121,8 @@ final class AppCoordinator: ObservableObject {
         // next retry once the CLI lets go.
         wasActiveIDs.remove(id)
         bridges[id]?.stop()
-        guard let e = externalBridges[id] else { return }
+        // The status file, not the 2s-polled copy: a bridge started a moment ago counts too.
+        guard let e = StatusFile.read()[id] ?? externalBridges[id], e.pid != getpid() else { return }
         if e.cli == true { kill(e.pid, SIGTERM) }   // its handler cleans up
         else {
             DistributedNotificationCenter.default().postNotificationName(
@@ -132,8 +139,7 @@ final class AppCoordinator: ObservableObject {
     private func retryErroredBridges() {
         for id in wasActiveIDs {
             guard let p = profiles.first(where: { $0.id == id }), let b = bridges[id] else { continue }
-            if b.state == .local { Task { await b.resumeIfAway() } }
-            else if b.status == .error && b.autoRetry { startBridge(p) }
+            if b.status == .error && b.autoRetry { startBridge(p) }
         }
     }
 
@@ -150,9 +156,12 @@ final class AppCoordinator: ObservableObject {
     func addDevice(captured: CapturedService, provider: MeshProvider,
                    meshDevice: MeshDevice?, manualIP: String, name: String) -> UUID? {
         let ip = provider == .manual ? manualIP.trimmingCharacters(in: .whitespaces) : (meshDevice?.ipv4 ?? "")
-        guard !ip.isEmpty else { return nil }
-        let profile = DeviceProfile(
-            displayName: name.trimmingCharacters(in: .whitespaces).isEmpty ? captured.shortHost : name.trimmingCharacters(in: .whitespaces),
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        let displayName = trimmed.isEmpty ? captured.shortHost : trimmed
+        // Same checks as the sheet, here too: two profiles for one device would collide.
+        guard !ip.isEmpty, !profiles.contains(where: { $0.providerIP == ip }), !isNameTaken(displayName) else { return nil }
+        var profile = DeviceProfile(
+            displayName: displayName,
             instanceName: captured.instanceName,
             serviceType: captured.serviceType,
             domain: captured.domain,
@@ -163,16 +172,21 @@ final class AppCoordinator: ObservableObject {
             providerHostName: provider == .manual ? manualIP : (meshDevice?.name ?? ""),
             providerIP: ip
         )
+        // Known already if remotepairingd matched this advert; else learned on first connect.
+        profile.udid = advertUDIDs[captured.instanceName]
         profiles.append(profile)
         let bridge = install(ProxyBridge(profile: profile))
         capture.ownedHosts.insert(bridge.spoofHost)
         store.save(profiles)
         logStore.log("added \"\(profile.displayName)\" -> \(ip)")
+        learnDeviceTypes()
         return profile.id
     }
 
     func deleteProfile(_ id: UUID) {
-        bridges[id]?.stop()
+        stopExternalBridge(id)   // a `roamrun up` for it would otherwise live on, unstoppable by name
+        if let spoof = bridges[id]?.spoofHost { capture.ownedHosts.remove(spoof) }
+        if selectedID == id { selectedID = nil }
         bridges[id] = nil
         bridgeObservers[id] = nil
         profiles.removeAll { $0.id == id }
@@ -233,6 +247,8 @@ final class AppCoordinator: ObservableObject {
     /// Bonjour instance → device kind, for the Add sheet's icons: remotepairingd
     /// matches every advert it sees to a UDID, devicectl knows each UDID's kind.
     @Published private(set) var advertTypes: [String: String] = [:]
+    /// Bonjour instance → UDID, for telling devices apart in the Add sheet.
+    @Published private(set) var advertUDIDs: [String: String] = [:]
     /// UDID → kind; a device's kind never changes, so devicectl is asked only about new UDIDs.
     private var knownTypes: [String: String] = [:]
 
@@ -251,6 +267,13 @@ final class AppCoordinator: ObservableObject {
             knownTypes.merge(await Task.detached { Self.deviceTypes() }.value) { _, new in new }
             for u in udids.values where knownTypes[u] == nil { knownTypes[u] = "" }   // unknown: don't ask again
         }
+        advertUDIDs = udids
+        // Profiles saved before their UDID was known: the advert they were added from names it.
+        var filled = false
+        for i in profiles.indices where profiles[i].udid == nil {
+            if let u = udids[profiles[i].instanceName] { profiles[i].udid = u; filled = true }
+        }
+        if filled { store.save(profiles); learnDeviceTypes() }
         advertTypes = udids.compactMapValues { knownTypes[$0].flatMap { $0.isEmpty ? nil : $0 } }
     }
 

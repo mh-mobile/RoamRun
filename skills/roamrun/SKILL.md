@@ -48,6 +48,12 @@ roamrun down iPhone                   # when finished (optional)
 ```
 
 Debugger: `lldb` → `device select $UDID` → `device process attach -n App`.
+
+App output (print and os_log): `roamrun logs iPhone com.example.App` relaunches
+the app with its console attached and streams until Ctrl-C — use it instead of
+the launch step. It can't join an already-running app. It never exits on its
+own, so run it in the background and stop it when done:
+`roamrun logs iPhone com.example.App > /tmp/app.log 2>&1 & sleep 20; kill $!`.
 If the bridge already runs in the menu bar app, just use it — `status` shows
 the owner, and `up` refuses a device another process bridges. Status
 "On this Wi‑Fi" means the iPhone is on the Mac's own network: no bridge is
