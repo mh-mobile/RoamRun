@@ -16,6 +16,8 @@ enum StatusFile {
         var updated: Date
 
         var isError: Bool { status == BridgeStatus.error.title }
+        /// Errored or standing aside (iPhone on this LAN): doesn't hold the device.
+        var holdsDevice: Bool { !isError && status != BridgeStatus.local.title }
     }
 
     static let url = ProfileStore.directory.appendingPathComponent("status.json")
@@ -40,7 +42,7 @@ enum StatusFile {
         flock(fd, LOCK_EX)
         defer { flock(fd, LOCK_UN) }
         var all = read()
-        if let held = all[id], held.pid != getpid(), entry == nil || !held.isError { return }
+        if let held = all[id], held.pid != getpid(), entry == nil || held.holdsDevice { return }
         all[id] = entry
         if let data = try? JSONEncoder().encode(all) { try? data.write(to: url, options: .atomic) }
     }
@@ -48,7 +50,7 @@ enum StatusFile {
     /// PID of *another* live process bridging this device. An errored bridge
     /// (e.g. iPhone asleep) doesn't hold the device.
     static func otherOwner(of id: UUID) -> Int32? {
-        guard let e = read()[id], e.pid != getpid(), !e.isError else { return nil }
+        guard let e = read()[id], e.pid != getpid(), e.holdsDevice else { return nil }
         return e.pid
     }
 
@@ -61,6 +63,6 @@ enum StatusFile {
         // Any copy of RoamRun (the app in /Applications and a dev build can
         // both be around); anything else holding a recycled PID is ignored.
         let path = String(cString: buf)
-        return (path as NSString).lastPathComponent == "RoamRun"
+        return path.hasSuffix(".app/Contents/MacOS/RoamRun") || path.hasSuffix("/.build/release/RoamRun")
     }
 }

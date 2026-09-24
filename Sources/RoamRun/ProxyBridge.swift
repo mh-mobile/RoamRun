@@ -46,6 +46,7 @@ final class ProxyBridge: ObservableObject {
     private var warmedUp = false
     private var waitingSince: Date?
     private var renewTimer: Timer?
+    private var checkingLAN = false
 
     /// Spoofed SRV target whose A record we publish pointing at this Mac.
     var spoofHost: String {
@@ -345,28 +346,50 @@ final class ProxyBridge: ObservableObject {
     /// The iPhone came back to this Mac's LAN while bridged: withdraw the fake
     /// record so it can't collide with the real one.
     private func standAsideIfHome() {
+        guard !checkingLAN else { return }
+        checkingLAN = true
         let gen = generation
         Task {
+            defer { checkingLAN = false }
             guard await Self.isOnLAN(profile), gen == generation, state.isActive else { return }
-            log("back on this Mac's network — stopping the bridge until it leaves")
-            stop()
+            log("back on this Mac's network — standing aside until it leaves")
+            generation += 1
+            teardown()
             setState(.local)
         }
     }
 
-    /// True when the iPhone's Tailscale endpoint is a private LAN address that
-    /// itself answers RemotePairing, i.e. the iPhone sits on this Mac's LAN.
-    /// (Behind another NAT — or away — that address doesn't answer.) Works even
-    /// after the iPhone rotated its Bonjour instance name.
+    /// Standing aside: start again only once the iPhone has left this LAN.
+    func resumeIfAway() async {
+        guard state == .local, !checkingLAN else { return }
+        publishStatus()   // another process standing aside for the same iPhone may have cleared ours on exit
+        checkingLAN = true
+        let gen = generation
+        let home = await Self.isOnLAN(profile)
+        checkingLAN = false
+        guard !home, gen == generation, state == .local else { return }
+        await start()
+    }
+
+    /// True when the iPhone's Tailscale endpoint sits directly on en0's link
+    /// and answers RemotePairing — i.e. Xcode can see it without us. Works
+    /// even after the iPhone rotated its Bonjour instance name.
     static func isOnLAN(_ profile: DeviceProfile) async -> Bool {
-        let path = (UserDefaults(suiteName: "com.roamrun.app") ?? .standard).string(forKey: "tailscaleCLIPath")
-        let client = TailscaleClient(binaryPath: path?.isEmpty == false ? path : nil)
-        let peers = await Task.detached { (try? client.listDevices()) ?? [] }.value
-        guard let addr = peers.first(where: { $0.ips.contains(profile.providerIP) })?.curAddr,
-              let host = addr.split(separator: ":").first.map(String.init),
-              host.hasPrefix("10.") || host.hasPrefix("192.168.") || host.range(of: #"^172\.(1[6-9]|2\d|3[01])\."#, options: .regularExpression) != nil
-        else { return false }
+        let ip = profile.providerIP
+        let direct = await Task.detached { Result { try TailscaleClient.fromSettings().directHost(ip) } }.value
+        guard profile.providerID == MeshProvider.tailscale.rawValue, case .success(let found) = direct else {
+            // ponytail: no Tailscale CLI (or a manual IP) — probe the host name seen at Add. Misses a
+            // renamed iPhone and can hit another iPhone of the same name; set the CLI path to avoid.
+            return await ReachabilityProbe.speaksRemotePairing(host: profile.bonjourHost, port: profile.remotePairingPort, timeout: 2)
+        }
+        guard let host = found, await Task.detached(operation: { isOnLink(host) }).value else { return false }
         return await ReachabilityProbe.speaksRemotePairing(host: host, port: profile.remotePairingPort, timeout: 2)
+    }
+
+    /// Reached through en0 without a gateway — the link Xcode's mDNS sees.
+    nonisolated private static func isOnLink(_ host: String) -> Bool {
+        let out = Proc.run("/sbin/route", ["-n", "get"] + (host.contains(":") ? ["-inet6"] : []) + [host], timeout: 3).out
+        return out.contains("interface: en0") && !out.contains("gateway:")
     }
 
     /// remotepairingd saw our record but found no pairing for it. Waiting

@@ -17,6 +17,7 @@ final class ProfileStore {
     func save(_ profiles: [DeviceProfile]) {
         if let data = try? JSONEncoder().encode(profiles) {
             try? data.write(to: url, options: .atomic)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         }
     }
 }

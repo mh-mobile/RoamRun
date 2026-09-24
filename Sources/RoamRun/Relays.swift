@@ -174,6 +174,8 @@ final class Relay {
 
     private func markEstablished(_ inbound: NWConnection) {
         lock.lock()
+        // .ready can arrive after finish() untracked the pair; don't count a ghost.
+        guard !stopped, connections.contains(where: { $0 === inbound }) else { lock.unlock(); return }
         let inserted = established.insert(ObjectIdentifier(inbound)).inserted
         let n = established.count
         lock.unlock()

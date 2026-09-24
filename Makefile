@@ -15,8 +15,9 @@ SIGN_FLAGS = --force --options runtime $(if $(filter -,$(SIGN_ID)),,--timestamp)
 all: app
 
 # xcrun pins Xcode's toolchain; a swiftly `swift` first in PATH breaks the build.
+# SNAPSHOT=1 compiles in the MB_SNAPSHOT screenshot mode (dev only; never in a dmg).
 build:
-	xcrun swift build -c release
+	xcrun swift build -c release $(if $(SNAPSHOT),-Xswiftc -DSNAPSHOT)
 
 app: build
 	rm -rf $(BUNDLE)
@@ -37,6 +38,7 @@ run: app
 	open $(BUNDLE)
 
 dmg: app
+	@if [ -n "$(SNAPSHOT)" ]; then echo "SNAPSHOT builds are for development only"; exit 1; fi
 	rm -rf dmg-root $(DMG)
 	mkdir dmg-root
 	cp -R $(BUNDLE) dmg-root/

@@ -100,8 +100,9 @@ enum CLI {
     /// after the iPhone falls asleep (its relayed connections linger).
     private static func row(_ p: DeviceProfile, _ e: StatusFile.Entry?, deep: Bool) -> Row {
         let udid = e?.udid ?? p.udid
-        let core = deep && e?.ready == true ? udid.flatMap(coreDeviceState) : nil
-        let ready = (e?.ready ?? false) && (!deep || core.map { $0 != "unavailable" } ?? false)
+        let usable = e?.ready == true || e?.status == BridgeStatus.local.title   // on this Wi-Fi: Xcode sees it directly
+        let core = deep && usable ? udid.flatMap(coreDeviceState) : nil
+        let ready = usable && (!deep || core.map { $0 != "unavailable" } ?? false)
         var status = e?.status ?? BridgeStatus.off.title
         var detail = e.flatMap { $0.detail.isEmpty ? nil : $0.detail }
         if e?.ready == true && !ready {
@@ -157,7 +158,7 @@ enum CLI {
             let live = StatusFile.read()
             rows = targets.map { row($0, live[$0.id], deep: true) }
             if rows.contains(where: \.ready) || Date.now >= deadline { break }
-            usleep(1_000_000)
+            usleep(3_000_000)   // each round spawns devicectl
         } while true
         if json {
             printJSON(rows)
@@ -238,14 +239,14 @@ enum CLI {
             guard child.isRunning else { fail("the background bridge exited — see \(logURL.path)") }
             guard let e = StatusFile.read()[profile.id], e.pid == child.processIdentifier else { continue }
             if e.status != last { last = e.status; print("  \(e.status)") }
-            if e.ready { break }
+            if e.ready || e.status == BridgeStatus.local.title { break }
         }
         print("""
         \(profile.displayName) is bridged in the background (pid \(child.processIdentifier)).
           Log:  \(logURL.path)
           Stop: roamrun down \(profile.displayName)
         """)
-        exit(last == BridgeStatus.ready.title ? 0 : 1)
+        exit(last == BridgeStatus.ready.title || last == BridgeStatus.local.title ? 0 : 1)
     }
 
     private static func up(_ profile: DeviceProfile, verbose: Bool, detachedChild: Bool = false) {
@@ -272,6 +273,7 @@ enum CLI {
                 default: break
                 }
                 if bridge.status == .ready { line += " — pick “\(profile.displayName)” in Xcode. Ctrl-C to stop." }
+                if bridge.status == .local { line += " — Xcode sees it directly; bridging resumes when it leaves." }
                 guard line != last else { return }
                 last = line
                 print("[\(Date.now.formatted(date: .omitted, time: .standard))] \(line)")
@@ -280,7 +282,8 @@ enum CLI {
         // Same recovery as the app: retry errors, rebind when the Mac's IP changes.
         let retry = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
             MainActor.assumeIsolated {
-                if bridge.state == .local || (bridge.status == .error && bridge.autoRetry) { Task { await bridge.start() } }
+                if bridge.state == .local { Task { await bridge.resumeIfAway() } }
+                else if bridge.status == .error && bridge.autoRetry { Task { await bridge.start() } }
             }
         }
         let monitor = InterfaceMonitor()
@@ -357,13 +360,12 @@ enum CLI {
               "Xcode's devicectl is available", fix: "Install Xcode and run it once (xcode-select -s /Applications/Xcode.app).")
         let ip = InterfaceMonitor.currentIPv4()
         check(ip != nil, "Wi-Fi address (en0): \(ip ?? "none")",
-              fix: "Connect this Mac to Wi-Fi — the bridge listens on en0 because Xcode only looks there.")
+              fix: "Connect en0 (Wi-Fi on most Macs, Ethernet on a Mac mini/Studio) to the network — the bridge listens there because Xcode only looks there.")
         let orphans = DNSServiceProxy.orphanedHelperCount()
         check(orphans == 0, orphans == 0 ? "No leftover helper processes" : "\(orphans) leftover helper process(es) from a crash",
               fix: "Open RoamRun (it cleans them up at launch) or Settings › Clean Up Leftover Helpers.", warnOnly: true)
 
-        let appDefaults = UserDefaults(suiteName: "com.roamrun.app")
-        let cli = TailscaleClient(binaryPath: appDefaults?.string(forKey: "tailscaleCLIPath").flatMap { $0.isEmpty ? nil : $0 })
+        let cli = TailscaleClient.fromSettings()
         let peers: [MeshDevice]
         do { peers = try cli.listDevices() } catch {
             check(false, "Tailscale: \(error.localizedDescription)", fix: "Install Tailscale and sign in, or set its CLI path in RoamRun › Settings.")

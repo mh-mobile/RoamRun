@@ -10,7 +10,8 @@ see `skills/roamrun/SKILL.md` — installed with `roamrun init` or
   `make run` also launches it. Don't call `swift build` directly — `make` pins
   Xcode's toolchain and stamps the real SDK version (needed for Liquid Glass).
 - `make install-cli` links `/usr/local/bin/roamrun`; `make dmg` packages.
-- UI screenshots without screen-recording rights:
+- UI screenshots without screen-recording rights: build with `make app SNAPSHOT=1`
+  (dev only — rebuild with plain `make app` afterwards), then
   `MB_SNAPSHOT=/tmp/x.png [MB_SNAPSHOT_SHEET=add|settings] [MB_APPEARANCE=dark] RoamRun.app/Contents/MacOS/RoamRun`
   (Liquid Glass surfaces don't render in these; ask the user for a real screenshot.)
 

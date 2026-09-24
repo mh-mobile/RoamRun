@@ -35,6 +35,23 @@ struct TailscaleClient {
         "/usr/local/bin/tailscale",
     ]
 
+    /// PATH as the user's own shell sets it (rc files included). An app opened
+    /// from Finder only gets launchd's minimal PATH, missing e.g. ~/go/bin or Nix.
+    static let shellPATH: String = {
+        let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.hasPrefix("/") ? $0 : nil } ?? "/bin/zsh"
+        let out = Proc.run(shell, ["-ilc", #"printf '\n__RR_PATH__%s' "$PATH""#], timeout: 3).out
+        guard let r = out.range(of: "__RR_PATH__", options: .backwards) else { return "" }
+        return out[r.upperBound...].trimmingCharacters(in: .newlines)
+    }()
+
+    /// The client with the CLI path from Settings. The app owns the defaults
+    /// domain; the CLI reads it by suite name.
+    static func fromSettings() -> TailscaleClient {
+        let defaults = Bundle.main.bundleIdentifier == "com.roamrun.app" ? .standard : UserDefaults(suiteName: "com.roamrun.app")
+        let path = defaults?.string(forKey: "tailscaleCLIPath") ?? ""
+        return TailscaleClient(binaryPath: path.isEmpty ? nil : path)
+    }
+
     func resolvedPath() -> String? {
         if let binaryPath, FileManager.default.isExecutableFile(atPath: binaryPath) {
             return binaryPath
@@ -42,8 +59,8 @@ struct TailscaleClient {
         for path in Self.candidatePaths where FileManager.default.isExecutableFile(atPath: path) {
             return path
         }
-        // Last resort: search PATH via login shell environment.
-        if let path = ProcessInfo.processInfo.environment["PATH"] {
+        // Last resort: our PATH, then the one the user's shell sets up.
+        for path in [ProcessInfo.processInfo.environment["PATH"] ?? "", Self.shellPATH] {
             for dir in path.split(separator: ":") where dir.hasPrefix("/") {   // never "." / relative
                 let candidate = "\(dir)/tailscale"
                 if FileManager.default.isExecutableFile(atPath: candidate) { return candidate }
@@ -85,8 +102,21 @@ struct TailscaleClient {
         return r.status == 0 && r.out.contains("pong")
     }
 
+    /// Host of the peer's direct path ("192.168.1.42"), nil when relayed or
+    /// unreachable. Pinging also wakes an idle peer, whose CurAddr is empty.
+    func directHost(_ ip: String) throws -> String? {
+        guard let path = resolvedPath() else { throw TailscaleClientError.cliNotFound }
+        let out = Proc.run(path, ["ping", "-c", "3", "--timeout", "2s", ip], timeout: 8).out
+        // "pong from my-iphone (100.64.0.10) via 192.168.1.42:41641 in 40ms" / "via DERP(tok) in …" / "via [fd00::1]:41641 in …"
+        guard let line = out.split(separator: "\n").last(where: { $0.hasPrefix("pong") }),
+              let via = line.range(of: " via ")?.upperBound,
+              let port = line[via...].range(of: ":", options: .backwards)?.lowerBound,
+              !line[via...].hasPrefix("DERP") else { return nil }
+        return line[via..<port].trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+    }
+
     private func run(_ path: String, _ args: [String]) throws -> String {
-        let r = Proc.run(path, args)
+        let r = Proc.run(path, args, timeout: 5)   // a wedged tailscaled must not hang a bridge start
         guard r.status == 0 else {
             throw TailscaleClientError.commandFailed("tailscale \(args.joined(separator: " ")): \(r.err)")
         }

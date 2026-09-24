@@ -6,6 +6,7 @@ struct MainWindowView: View {
     @State private var selection: DeviceProfile.ID?
     @State private var showAddDevice = false
     @State private var showSettings = false
+    @State private var pendingDelete: DeviceProfile?
 
     var body: some View {
         NavigationSplitView {
@@ -14,16 +15,17 @@ struct MainWindowView: View {
                     SidebarRow(profile: profile)
                         .tag(profile.id)
                         .contextMenu {
-                            Button("Delete Device", role: .destructive) {
-                                coordinator.deleteProfile(profile.id)
-                            }
+                            Button("Remove iPhone…", role: .destructive) { pendingDelete = profile }
                         }
                 }
-                .onDelete { indexSet in
-                    indexSet
-                        .map { coordinator.profiles[$0].id }
-                        .forEach { coordinator.deleteProfile($0) }
-                }
+                .onDelete { indexSet in pendingDelete = indexSet.first.map { coordinator.profiles[$0] } }
+            }
+            .alert("Remove “\(pendingDelete?.displayName ?? "")”?", isPresented: Binding(
+                get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
+                Button("Remove", role: .destructive) { pendingDelete.map { coordinator.deleteProfile($0.id) } }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("The bridge stops and the saved pairing details are deleted. You can add the iPhone again later.")
             }
             // Wide enough for "Ready for Xcode" and for the toolbar buttons,
             // which otherwise spill into an overflow (») menu.
@@ -67,7 +69,7 @@ struct MainWindowView: View {
         }
         .onAppear {
             if selection == nil { selection = coordinator.profiles.first?.id }
-            switch ProcessInfo.processInfo.environment["MB_SNAPSHOT_SHEET"] {
+            switch Snapshot.sheet {
             case "add": showAddDevice = true
             case "settings": showSettings = true
             default: break

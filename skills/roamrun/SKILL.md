@@ -48,7 +48,9 @@ roamrun down iPhone                   # when finished (optional)
 
 Debugger: `lldb` → `device select $UDID` → `device process attach -n App`.
 If the bridge already runs in the menu bar app, just use it — `status` shows
-the owner, and `up` refuses a device another process bridges.
+the owner, and `up` refuses a device another process bridges. Status
+"On this Wi‑Fi" means the iPhone is on the Mac's own network: no bridge is
+needed, Xcode sees it directly, and it counts as ready.
 
 ## 4. When something fails
 

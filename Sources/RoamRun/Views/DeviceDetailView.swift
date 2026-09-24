@@ -7,10 +7,10 @@ struct DeviceDetailView: View {
     @ObservedObject var bridge: ProxyBridge
     @State private var scanning = false
     @State private var confirmDelete = false
-    @State private var showDetails = ProcessInfo.processInfo.environment["MB_SNAPSHOT_EXPAND"] != nil
+    @State private var showDetails = Snapshot.expand
     @State private var renaming = false
     @State private var newName = ""
-    @State private var showLog = ProcessInfo.processInfo.environment["MB_SNAPSHOT_EXPAND"] != nil
+    @State private var showLog = Snapshot.expand
 
     var body: some View {
         ScrollView {
@@ -109,6 +109,7 @@ struct DeviceDetailView: View {
     private var technicalDetails: some View {
         VStack(alignment: .leading, spacing: 12) {
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
+                row("UDID", bridge.udid ?? profile.udid ?? "Learned on first connection")
                 row("Bonjour instance", profile.instanceName)
                 row("Bonjour host", profile.bonjourHost)
                 row("RemotePairing port", "\(profile.remotePairingPort)")

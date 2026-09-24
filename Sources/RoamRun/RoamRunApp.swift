@@ -68,14 +68,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+/// Dev builds only (`make app SNAPSHOT=1`); release builds contain none of this.
 /// `MB_SNAPSHOT=/path/shot.png` renders the main window to a PNG and quits —
-/// for README screenshots and UI checks without screen-recording rights.
-/// `MB_SNAPSHOT_SHEET=add|settings` opens that sheet first.
-/// `MB_APPEARANCE=dark|light` forces the appearance; `MB_SNAPSHOT_DELAY` (s).
+/// for UI checks without screen-recording rights.
+/// `MB_SNAPSHOT_SHEET=add|settings` opens that sheet first; `MB_SNAPSHOT_EXPAND`
+/// opens the detail sections. `MB_APPEARANCE=dark|light`; `MB_SNAPSHOT_DELAY` (s).
 enum Snapshot {
+    #if SNAPSHOT
     static let path = ProcessInfo.processInfo.environment["MB_SNAPSHOT"]
+    static let sheet = ProcessInfo.processInfo.environment["MB_SNAPSHOT_SHEET"]
+    static let expand = ProcessInfo.processInfo.environment["MB_SNAPSHOT_EXPAND"] != nil
+    #else
+    static let path: String? = nil
+    static let sheet: String? = nil
+    static let expand = false
+    #endif
 
     static func scheduleIfRequested() {
+        #if SNAPSHOT
         guard let path else { return }
         if let a = ProcessInfo.processInfo.environment["MB_APPEARANCE"] {
             NSApp.appearance = NSAppearance(named: a == "dark" ? .darkAqua : .aqua)
@@ -96,5 +106,6 @@ enum Snapshot {
             NotificationCenter.default.post(name: NSApplication.willTerminateNotification, object: NSApp)
             exit(0)
         }
+        #endif
     }
 }

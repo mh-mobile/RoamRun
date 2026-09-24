@@ -10,7 +10,7 @@ enum Proc {
 
     /// Runs to completion. Both pipes are drained before waiting — waiting
     /// first deadlocks once a tool writes more than the ~64KB pipe buffer.
-    static func run(_ path: String, _ args: [String]) -> Result {
+    static func run(_ path: String, _ args: [String], timeout: TimeInterval? = nil) -> Result {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: path)
         task.arguments = args
@@ -18,6 +18,9 @@ enum Proc {
         task.standardOutput = out
         task.standardError = err
         do { try task.run() } catch { return Result(status: -1, out: "", err: error.localizedDescription) }
+        if let timeout {
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { if task.isRunning { task.terminate() } }
+        }
 
         var errData = Data()
         let group = DispatchGroup()
@@ -37,7 +40,7 @@ enum Proc {
     static func tied(_ path: String, _ args: [String]) -> Process {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/sh")
-        let watchdog = #""$0" "$@" & c=$!; trap 'kill $c 2>/dev/null; wait $c; exit 0' TERM INT HUP; while kill -0 $PPID 2>/dev/null && kill -0 $c 2>/dev/null; do sleep 0.5; done; kill $c 2>/dev/null; wait $c"#
+        let watchdog = #"trap 'kill $c 2>/dev/null; wait $c; exit 0' TERM INT HUP; "$0" "$@" & c=$!; while kill -0 $PPID 2>/dev/null && kill -0 $c 2>/dev/null; do sleep 0.5 & wait $!; done; kill $c 2>/dev/null; wait $c"#
         task.arguments = ["-c", watchdog, path] + args
         return task
     }

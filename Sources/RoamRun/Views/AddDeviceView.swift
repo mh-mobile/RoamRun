@@ -38,6 +38,11 @@ struct AddDeviceView: View {
             }
 
             HStack {
+                if let saved = alreadySaved {
+                    Text("\(chosenIP) is already saved as “\(saved.displayName)”.")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
@@ -180,7 +185,9 @@ struct AddDeviceView: View {
     private var servicesSorted: [CapturedService] {
         Set(coordinator.capture.services.values.map(\.host)).compactMap(newest(for:)).sorted { a, b in
             let la = liveness[a.host] != false, lb = liveness[b.host] != false
-            return la == lb ? a.shortHost.localizedStandardCompare(b.shortHost) == .orderedAscending : la
+            guard la == lb else { return la }
+            let c = a.shortHost.localizedStandardCompare(b.shortHost)
+            return c == .orderedSame ? a.host < b.host : c == .orderedAscending
         }
     }
 
@@ -213,12 +220,17 @@ struct AddDeviceView: View {
         }
     }
 
+    private var chosenIP: String {
+        provider == .manual ? manualIP.trimmingCharacters(in: .whitespaces) : (meshDevice?.ipv4 ?? "")
+    }
+
+    /// Two profiles for one iPhone would both bridge it and collide.
+    private var alreadySaved: DeviceProfile? {
+        coordinator.profiles.first { $0.providerIP == chosenIP }
+    }
+
     private var canAdd: Bool {
-        guard selectedHost != nil, !name.trimmingCharacters(in: .whitespaces).isEmpty,
-              !coordinator.isNameTaken(name) else { return false }
-        switch provider {
-        case .tailscale: return meshDevice?.ipv4 != nil
-        case .manual: return !manualIP.trimmingCharacters(in: .whitespaces).isEmpty
-        }
+        selectedHost != nil && !name.trimmingCharacters(in: .whitespaces).isEmpty
+            && !coordinator.isNameTaken(name) && !chosenIP.isEmpty && alreadySaved == nil
     }
 }

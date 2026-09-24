@@ -77,7 +77,8 @@ final class AppCoordinator: ObservableObject {
         }
         interfaceMonitor.start()
 
-        for id in wasActiveIDs {
+        // A snapshot run is a throwaway copy; it must not touch the real app's bridges.
+        for id in wasActiveIDs where Snapshot.path == nil {
             if let p = profiles.first(where: { $0.id == id }) {
                 isRestoringBridges = true
                 logStore.log("restoring bridge for \"\(p.displayName)\"")
@@ -126,16 +127,16 @@ final class AppCoordinator: ObservableObject {
 
     private func retryErroredBridges() {
         for id in wasActiveIDs {
-            guard let p = profiles.first(where: { $0.id == id }),
-                  let b = bridges[id], b.state == .local || (b.status == .error && b.autoRetry) else { continue }
-            startBridge(p)
+            guard let p = profiles.first(where: { $0.id == id }), let b = bridges[id] else { continue }
+            if b.state == .local { Task { await b.resumeIfAway() } }
+            else if b.status == .error && b.autoRetry { startBridge(p) }
         }
     }
 
     /// Worst state across all bridges, for the menu bar icon.
     var overallStatus: BridgeStatus {
         let all = profiles.map { status(of: $0.id) }   // CLI-owned devices report the CLI's state
-        for s in [BridgeStatus.error, .ready, .waiting, .preparing, .starting] where all.contains(s) { return s }
+        for s in [BridgeStatus.error, .ready, .waiting, .preparing, .starting, .local] where all.contains(s) { return s }
         return .off
     }
 
@@ -147,7 +148,7 @@ final class AppCoordinator: ObservableObject {
         let ip = provider == .manual ? manualIP.trimmingCharacters(in: .whitespaces) : (meshDevice?.ipv4 ?? "")
         guard !ip.isEmpty else { return nil }
         let profile = DeviceProfile(
-            displayName: name.isEmpty ? captured.shortHost : name,
+            displayName: name.trimmingCharacters(in: .whitespaces).isEmpty ? captured.shortHost : name.trimmingCharacters(in: .whitespaces),
             instanceName: captured.instanceName,
             serviceType: captured.serviceType,
             domain: captured.domain,
