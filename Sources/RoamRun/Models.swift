@@ -110,6 +110,8 @@ enum BridgeStatus: Equatable, CaseIterable {
         }
     }
 
+    var isWorking: Bool { self == .starting || self == .preparing }
+
     var symbol: String {
         switch self {
         case .off: return "pause.circle"

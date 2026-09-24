@@ -161,6 +161,7 @@ private struct StatusCard: View {
             Image(systemName: status.symbol)
                 .font(.system(size: 26))
                 .foregroundStyle(status.color)
+                .spinning(status.isWorking)
                 .frame(width: 30)
             VStack(alignment: .leading, spacing: 6) {
                 Text(status.title).font(.headline)

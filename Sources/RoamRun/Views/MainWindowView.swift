@@ -100,9 +100,22 @@ private struct SidebarRow: View {
                 Label(viaCLI ? "\(status.title) · Terminal" : status.title, systemImage: status.symbol)
                     .labelStyle(StatusLabelStyle(color: status.color))
                     .font(.caption)
+                    .spinning(status.isWorking)
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+extension View {
+    /// Turns the status symbol while the bridge is working (macOS 15+).
+    @ViewBuilder func spinning(_ on: Bool) -> some View {
+        // Not isActive: a continuous rotate keeps going after it turns false.
+        if #available(macOS 15, *), on {
+            symbolEffect(.rotate, options: .repeat(.continuous))
+        } else {
+            self
+        }
     }
 }
 
