@@ -16,29 +16,50 @@ iOS 17+ のワイヤレスデバッグは CoreDevice スタック上で動き、
 
 ## 仕組み
 
-```
-[Xcode/remotepairingd]
-      │  Bonjour browse (_remotepairing._tcp)
-      ▼
-[dns-sd -P 偽装レコード]  … SRV target = Mac 自身の en0 IP
-      │  remotepairingd は「en0 上のデバイス」として接続
-      ▼
-[TCP/UDP リレー on en0]   … NWListener/NWConnection のバイト中継
-      │  Tailscale (WireGuard)
-      ▼
-[iPhone remotepairingd :49152]
-      │  CoreDevice ハンドシェイク (TLS, end-to-end)
-      ▼
-[QUIC トンネル on 動的ポート] ← log stream で実ポートを検出して追加リレー
+ひとことで言うと、**Xcode には「iPhone は同じ Wi-Fi にいる」と見せかけ、実際の通信は Tailscale に流します。**
+
+```mermaid
+flowchart LR
+  subgraph mac["自宅の Mac"]
+    xcode["Xcode / devicectl"] --> rpd["remotepairingd<br/>（Apple 純正）"]
+    fake["偽装 Bonjour 登録<br/>（宛先 = この Mac）"]
+    relay["RoamRun の中継<br/>（en0 で待ち受け）"]
+  end
+  subgraph away["外出先"]
+    iphone["iPhone<br/>（何らかの Wi-Fi に接続）"]
+  end
+  rpd -. "① iPhone を探す" .-> fake
+  rpd -- "② en0 へ接続" --> relay
+  relay == "③ Tailscale 経由" ==> iphone
 ```
 
-1. **キャプチャ**: `dns-sd -Z _remotepairing._tcp local` で iPhone の本物の広告（インスタンス名・SRV・TXT）を取得
-2. **偽装登録**: `dns-sd -P` で同じサービスを Mac 宛に再登録（SRV → `mb-xxxx.roamrun.local` → Mac の en0 IP）
-3. **リレー**: en0 上のローカルポートで待ち受け、iPhone の tailnet IP:49152 に中継
-4. **トンネル追跡**: `log stream` で `remotepairingd` の `Got tunnel endpoint` を監視し、トンネルポートを検出。iPhone はポートを連番で払い出すので、検出ポートから +16 まで先回りでリレーを開く
-5. **ウォームアップ**: remotepairingd は通知の約 5ms 後に接続するため、初回のトンネルは必ず間に合わない。ブリッジ起動時に裏で `devicectl` を叩いて初回を消費し、ユーザーの最初の Run までに先回りリレーを用意する
+1. Xcode の裏で動く `remotepairingd` は、同じネットワークにいる iPhone を Bonjour（`_remotepairing._tcp`）で探します。RoamRun は、事前に取り込んだ iPhone の Bonjour 情報を「接続先はこの Mac 自身」として公開し直します。
+2. `remotepairingd` は、その iPhone が同じ Wi-Fi にいると思って Mac 自身（en0）へ接続します。受けるのは RoamRun の中継です（この Mac 自身からの接続以外は拒否）。
+3. 中継は通信を Tailscale 経由で iPhone に流します。中身（ペアリングの確認や暗号化）は Apple 純正の Mac⇄iPhone 間でそのまま行われ、RoamRun は読みも書き換えもしません。
 
-TLS とペアリング認証は Mac⇄iPhone 間でエンドツーエンド。リレーはバイトを流すだけで中身を見ません。
+接続の順序は次のとおりです。
+
+```mermaid
+sequenceDiagram
+  participant X as Xcode
+  participant R as remotepairingd（Mac）
+  participant B as RoamRun
+  participant P as iPhone
+  B->>B: iPhone の Bonjour 情報を<br/>宛先 = この Mac で公開
+  R->>B: 制御チャネル接続（en0:49152）
+  B->>P: Tailscale 経由で中継
+  Note over R,P: ペアリング確認（Apple 純正・端から端まで暗号化）
+  X->>R: Run / インストール / デバッグ
+  R->>P: トンネルを要求（制御チャネル経由）
+  P-->>R: 「ポート N で待つ」
+  Note over B: ログから N を検出し<br/>N〜N+16 の中継を先回りで開く
+  R->>B: トンネル接続（en0:N）
+  B->>P: Tailscale 経由で中継
+  Note over X,P: インストール・起動・デバッグは、このトンネルの中で行われる
+```
+
+- **トンネルのポートは毎回変わります**（1 つずつ増える）。`remotepairingd` は通知の約 5ms 後に接続してくるため、RoamRun はログ（`log stream`）でポートを見つけるたびに、その先 16 個まで中継を先回りで開けておきます。
+- **ブリッジ起動直後の 1 回目**は、どうしても先回りが間に合いません。RoamRun は起動時に裏で `devicectl` を 1 回実行してこの 1 回目を消費し、利用者の最初の Run から成功するようにしています。
 
 ## 要件
 
