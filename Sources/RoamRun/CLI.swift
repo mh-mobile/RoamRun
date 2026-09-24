@@ -280,7 +280,7 @@ enum CLI {
         // Same recovery as the app: retry errors, rebind when the Mac's IP changes.
         let retry = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
             MainActor.assumeIsolated {
-                if case .error = bridge.state, bridge.autoRetry { Task { await bridge.start() } }
+                if bridge.state == .local || (bridge.status == .error && bridge.autoRetry) { Task { await bridge.start() } }
             }
         }
         let monitor = InterfaceMonitor()
@@ -413,7 +413,7 @@ enum CLI {
                       fix: "Put the iPhone on this Mac's Wi-Fi, remove it in RoamRun and add it again. If Xcode lost it too, pair it in Xcode first.")
             }
             if let e = live[p.id] {
-                check(e.ready, "Mac-side bridge: \(e.status) (\(owner(e)))", fix: e.detail.isEmpty ? "Wait a few seconds and run doctor again." : e.detail)
+                check(e.ready || e.status == BridgeStatus.local.title, "Mac-side bridge: \(e.status) (\(owner(e)))", fix: e.detail.isEmpty ? "Wait a few seconds and run doctor again." : e.detail)
                 if let udid = e.udid ?? p.udid {
                     check(true, "UDID: \(udid)")
                     let core = coreDeviceState(udid)

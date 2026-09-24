@@ -83,6 +83,15 @@ final class ProxyBridge: ObservableObject {
             return
         }
 
+        // Home again? Xcode sees the real iPhone; a fake record would only collide.
+        if await Self.isOnLAN(profile) {
+            guard gen == generation else { return }
+            setState(.local)
+            log("on this Mac's network — standing aside until it leaves")
+            return
+        }
+        guard gen == generation else { return }
+
         setState(.starting("Probing \(profile.providerIP):\(profile.remotePairingPort)"))
         let reachable = await ReachabilityProbe.checkTCP(host: profile.providerIP,
                                                          port: profile.remotePairingPort)
@@ -163,7 +172,10 @@ final class ProxyBridge: ObservableObject {
         log("bridge active: \(profile.providerIP) relayed locally on \(localIP):\(localPort)")
         waitingSince = .now
         renewTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.renewIfStuck() }
+            MainActor.assumeIsolated {
+                self?.renewIfStuck()
+                self?.standAsideIfHome()
+            }
         }
     }
 
@@ -298,6 +310,7 @@ final class ProxyBridge: ObservableObject {
         case .off: return .off
         case .starting: return .starting
         case .error: return .error
+        case .local: return .local
         case .active:
             if !phoneConnected { return .waiting }
             return tunnelReady ? .ready : .preparing
@@ -313,7 +326,7 @@ final class ProxyBridge: ObservableObject {
         case .starting(let step): detail = step
         case .error(let m): detail = m
         case .active(_, let t): ports = t
-        case .off: break
+        case .off, .local: break
         }
         StatusFile.write(profile.id, .init(pid: getpid(), cli: CLI.isRunning, udid: udid, status: s.title, detail: detail,
                                            ready: s == .ready, tunnelPorts: ports, updated: .now))
@@ -327,6 +340,33 @@ final class ProxyBridge: ObservableObject {
         waitingSince = .now
         log("no control channel for 60s — re-announcing Bonjour record")
         dnsProxy.renew()
+    }
+
+    /// The iPhone came back to this Mac's LAN while bridged: withdraw the fake
+    /// record so it can't collide with the real one.
+    private func standAsideIfHome() {
+        let gen = generation
+        Task {
+            guard await Self.isOnLAN(profile), gen == generation, state.isActive else { return }
+            log("back on this Mac's network — stopping the bridge until it leaves")
+            stop()
+            setState(.local)
+        }
+    }
+
+    /// True when the iPhone's Tailscale endpoint is a private LAN address that
+    /// itself answers RemotePairing, i.e. the iPhone sits on this Mac's LAN.
+    /// (Behind another NAT — or away — that address doesn't answer.) Works even
+    /// after the iPhone rotated its Bonjour instance name.
+    static func isOnLAN(_ profile: DeviceProfile) async -> Bool {
+        let path = (UserDefaults(suiteName: "com.roamrun.app") ?? .standard).string(forKey: "tailscaleCLIPath")
+        let client = TailscaleClient(binaryPath: path?.isEmpty == false ? path : nil)
+        let peers = await Task.detached { (try? client.listDevices()) ?? [] }.value
+        guard let addr = peers.first(where: { $0.ips.contains(profile.providerIP) })?.curAddr,
+              let host = addr.split(separator: ":").first.map(String.init),
+              host.hasPrefix("10.") || host.hasPrefix("192.168.") || host.range(of: #"^172\.(1[6-9]|2\d|3[01])\."#, options: .regularExpression) != nil
+        else { return false }
+        return await ReachabilityProbe.speaksRemotePairing(host: host, port: profile.remotePairingPort, timeout: 2)
     }
 
     /// remotepairingd saw our record but found no pairing for it. Waiting

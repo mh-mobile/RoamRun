@@ -198,6 +198,8 @@ private struct StatusCard: View {
             return "Paired over Tailscale. Preparing the debug tunnel — this takes a few seconds."
         case .ready:
             return "In Xcode, pick “\(profile.displayName)” as the run destination and press Run."
+        case .local:
+            return "\(profile.displayName) is on this Mac's network, so Xcode reaches it directly — no bridge needed. RoamRun resumes the bridge by itself when it leaves."
         case .error:
             if let external { return external.detail }
             if case .error(let m) = bridge.state { return m + "\nRoamRun retries automatically every 30 seconds." }

@@ -123,6 +123,7 @@ extension BridgeStatus {
         case .waiting: return .yellow
         case .ready: return .green
         case .error: return .red
+        case .local: return .blue
         }
     }
 }

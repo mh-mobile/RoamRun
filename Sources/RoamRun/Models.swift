@@ -69,6 +69,9 @@ enum BridgeState: Equatable {
     case starting(String)
     case active(localPort: UInt16, tunnelPorts: [UInt16])
     case error(String)
+    /// The iPhone is on this Mac's LAN: Xcode reaches it directly, so the
+    /// bridge stands aside (no fake record) until it leaves.
+    case local
 
     var isActive: Bool {
         if case .active = self { return true }
@@ -81,13 +84,14 @@ enum BridgeState: Equatable {
         case .starting(let step): return step
         case .active: return "Bridge active"
         case .error: return "Error"
+        case .local: return "On this Wi‑Fi"
         }
     }
 }
 
 /// What the user needs to know, derived from the bridge internals.
 enum BridgeStatus: Equatable, CaseIterable {
-    case off, starting, waiting, preparing, ready, error
+    case off, starting, waiting, preparing, ready, error, local
 
     /// Parses the title written to the shared status file.
     init(title: String) {
@@ -102,6 +106,7 @@ enum BridgeStatus: Equatable, CaseIterable {
         case .preparing: return "Connecting…"
         case .ready: return "Ready for Xcode"
         case .error: return "Needs attention"
+        case .local: return "On this Wi‑Fi"
         }
     }
 
@@ -112,6 +117,7 @@ enum BridgeStatus: Equatable, CaseIterable {
         case .waiting: return "iphone.slash"
         case .ready: return "checkmark.circle.fill"
         case .error: return "exclamationmark.triangle.fill"
+        case .local: return "wifi"
         }
     }
 }

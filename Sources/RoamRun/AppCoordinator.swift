@@ -127,7 +127,7 @@ final class AppCoordinator: ObservableObject {
     private func retryErroredBridges() {
         for id in wasActiveIDs {
             guard let p = profiles.first(where: { $0.id == id }),
-                  let b = bridges[id], case .error = b.state, b.autoRetry else { continue }
+                  let b = bridges[id], b.state == .local || (b.status == .error && b.autoRetry) else { continue }
             startBridge(p)
         }
     }
@@ -186,25 +186,9 @@ final class AppCoordinator: ObservableObject {
         ids.insert(profile.id)
         wasActiveIDs = ids
 
-        let fqdn = "\(profile.instanceName).\(profile.serviceType)"
-        let lanRecord = capture.services[fqdn]
-        Task {
-            // The real iPhone still answering on this LAN would collide with our record.
-            if let lanRecord, await Self.answersOnLAN(lanRecord) {
-                logStore.log("\"\(profile.displayName)\" is still live on the local network — not bridging (would conflict)")
-                bridge.fail("\(profile.displayName) is on this Mac's network right now, so Xcode already sees it directly. RoamRun starts the bridge by itself once it moves to another network.")
-                return
-            }
-            await bridge.start()
-        }
-    }
-
-    private static func answersOnLAN(_ s: CapturedService) async -> Bool {
-        let ipv4 = s.hostIPs.filter { $0.contains(".") }
-        for ip in ipv4.isEmpty ? [s.host] : ipv4 {
-            if await ReachabilityProbe.speaksRemotePairing(host: ip, port: s.port, timeout: 2) { return true }
-        }
-        return false
+        // Same-LAN detection lives in ProxyBridge.start (by Tailscale endpoint,
+        // which survives the iPhone rotating its Bonjour instance name).
+        Task { await bridge.start() }
     }
 
     func stopBridge(_ profile: DeviceProfile) {
