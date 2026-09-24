@@ -177,3 +177,11 @@ private func profile(_ name: String) -> DeviceProfile {
     p.deviceType = "appleTV"   // unknown kinds fall back
     #expect(p.symbol == "iphone")
 }
+
+// MARK: - Suggested commands
+
+@Test func namesAreQuotedForTheShell() {
+    #expect(CLI.shellName("MyiPhone") == "MyiPhone")
+    #expect(CLI.shellName("iPhone mh") == "'iPhone mh'")
+    #expect(CLI.shellName("Hiro's \"iPad\" $1") == #"'Hiro'\''s "iPad" $1'"#)
+}

@@ -16,19 +16,20 @@ enum CLI {
     AI agents: `roamrun init` installs the RoamRun skill for Claude Code, Codex,
     Cursor, Gemini CLI and Copilot (`roamrun init --print` to read it now).
 
-      devices [--json]               List saved iPhones (with UDID) and their bridge status
-      up <name> [-v] [-d]            Bridge an iPhone until Ctrl-C (-v: activity log, -d: run in the background)
+      devices [--json]               List saved devices (with UDID) and their bridge status
+      up <name> [-v] [-d]            Bridge a device until Ctrl-C (-v: activity log, -d: run in the background)
       down <name>                    Stop a bridge, whether the app or another `roamrun up` runs it
       status [name] [--wait N] [--json]
                                      Bridge status, UDID and lock state; exits 0 only if ready for Xcode
                                      (--wait: wait up to N seconds for ready)
-      doctor [name] [--json]         Check each step from this Mac to the iPhone and say what to fix
+      doctor [name] [--json]         Check each step from this Mac to the device and say what to fix
+                                     (without a name, only devices with a running bridge)
       init [--client <name>] [--print] [--uninstall]
                                      Install the agent skill (clients: claude, codex, cursor, gemini, copilot)
 
     Exit codes: 0 ok/ready, 1 not ready or a check failed, 2 usage error.
 
-    Add iPhones in the RoamRun app first (one-time, needs the iPhone on this Wi-Fi).
+    Add devices (iPhone, iPad, Vision Pro) in the RoamRun app first (one-time, needs the device on this Wi-Fi).
     """
 
     // Kept alive for the lifetime of `up`.
@@ -50,18 +51,18 @@ enum CLI {
             }.map { args[$0] }
             var targets = profiles
             if let name {
-                guard let p = find(name, in: profiles) else { fail("no iPhone named “\(name)”. " + names(profiles)) }
+                guard let p = find(name, in: profiles) else { fail("no device named “\(name)”. " + names(profiles)) }
                 targets = [p]
             }
             switch args[0] {
             case "devices": devices(profiles, json: json)
             case "status": status(targets, json: json, wait: wait)
-            case "doctor": Task { exit(await doctor(targets, json: json) ? 0 : 1) }
+            case "doctor": Task { exit(await doctor(targets, json: json, named: name != nil) ? 0 : 1) }
             case "down":
-                guard name != nil, let p = targets.first else { fail("which iPhone? " + names(profiles)) }
+                guard name != nil, let p = targets.first else { fail("which device? " + names(profiles)) }
                 down(p)
             case "up":
-                guard name != nil, let p = targets.first else { fail("which iPhone? " + names(profiles)) }
+                guard name != nil, let p = targets.first else { fail("which device? " + names(profiles)) }
                 if args.contains("-d") {
                     detach(p, verbose: args.contains("-v"))
                 } else {
@@ -107,7 +108,7 @@ enum CLI {
         var detail = e.flatMap { $0.detail.isEmpty ? nil : $0.detail }
         if e?.ready == true && !ready {
             status = BridgeStatus.waiting.title
-            detail = "The bridge is up but Xcode can't reach the iPhone (asleep, locked, off Wi-Fi, or Tailscale stuck on the iPhone). Run `roamrun doctor` for the cause."
+            detail = "The bridge is up but Xcode can't reach the device (asleep, locked, off Wi-Fi, or Tailscale stuck on the device). Run `roamrun doctor` for the cause."
         }
         return Row(name: p.displayName, id: p.id.uuidString, vpnAddress: p.providerIP, udid: udid,
                    status: status, ready: ready,
@@ -138,7 +139,7 @@ enum CLI {
     private static func devices(_ profiles: [DeviceProfile], json: Bool) -> Never {
         let live = StatusFile.read()
         if json { printJSON(profiles.map { row($0, live[$0.id], deep: false) }); exit(0) }
-        guard !profiles.isEmpty else { fail("no iPhones saved yet — add one in the RoamRun app") }
+        guard !profiles.isEmpty else { fail("no devices saved yet — add one in the RoamRun app") }
         let w = max(4, profiles.map(\.displayName.count).max() ?? 4)
         print("NAME".padding(toLength: w + 2, withPad: " ", startingAt: 0) + "VPN ADDRESS      UDID                       STATUS")
         for p in profiles {
@@ -170,7 +171,7 @@ enum CLI {
                 print(line)
                 if let udid = r.udid { print("  UDID: \(udid)") }
                 if let detail = r.detail { print("  \(detail)") }
-                if r.locked == true { print("  ⚠ The iPhone is locked — ask the user to unlock it and keep the screen on before installing or launching.") }
+                if r.locked == true { print("  ⚠ The device is locked — ask the user to unlock it and keep the screen on before installing or launching.") }
             }
         }
         exit(rows.contains { $0.ready } ? 0 : 1)
@@ -244,7 +245,7 @@ enum CLI {
         print("""
         \(profile.displayName) is bridged in the background (pid \(child.processIdentifier)).
           Log:  \(logURL.path)
-          Stop: roamrun down \(profile.displayName)
+          Stop: roamrun down \(shellName(profile.displayName))
         """)
         exit(last == BridgeStatus.ready.title || last == BridgeStatus.local.title ? 0 : 1)
     }
@@ -324,13 +325,15 @@ enum CLI {
     /// Walks the path Xcode → this Mac → Tailscale → iPhone and reports the
     /// first thing to fix at each hop.
     private struct Check: Encodable {
-        let scope: String          // "mac" or the iPhone's name
-        let result: String         // "ok", "warning" or "fail"
+        let scope: String          // "mac" or the device's name
+        let result: String         // "ok", "warning", "fail" or "skipped"
         let message: String
         let fix: String?
     }
 
-    private static func doctor(_ profiles: [DeviceProfile], json: Bool) async -> Bool {
+    /// Without a name, devices whose bridge is off are skipped: an unused device
+    /// being unreachable isn't a problem to fix.
+    private static func doctor(_ profiles: [DeviceProfile], json: Bool, named: Bool) async -> Bool {
         var checks: [Check] = []
         var scope = "mac"
         func section(_ title: String, _ name: String) {
@@ -354,7 +357,7 @@ enum CLI {
                 struct Report: Encodable { let healthy: Bool; let checks: [Check] }
                 printJSON(Report(healthy: healthy, checks: checks))
             } else {
-                print(healthy ? "\n" + paint("All good.", 32) : "\nFix the \(paint("✗", 31)) items above, top to bottom.")
+                print(healthy ? "\n" + paint("All good.", 32) : "\nFix the first failed check (\(paint("✗", 31))) first — the ones below it are often caused by it.")
             }
             return healthy
         }
@@ -377,16 +380,21 @@ enum CLI {
         }
         check(true, "Tailscale is running (\(peers.count) peers)")
 
-        if profiles.isEmpty { check(false, "No iPhones saved", fix: "Add one in the RoamRun app.") }
+        if profiles.isEmpty { check(false, "No devices saved", fix: "Add one in the RoamRun app.") }
         let live = StatusFile.read()
         for p in profiles {
             section("\n\(p.displayName) (\(p.providerIP))", p.displayName)
+            if !named, live[p.id] == nil {
+                checks.append(Check(scope: p.displayName, result: "skipped", message: "Bridge is off — not checked", fix: nil))
+                if !json { print(" – Bridge is off — not checked (roamrun doctor \(shellName(p.displayName)) checks it anyway)") }
+                continue
+            }
             guard let peer = peers.first(where: { $0.ips.contains(p.providerIP) }) else {
-                check(false, "Not found on this tailnet", fix: "Sign the iPhone into the same tailnet, or remove and re-add it in RoamRun.")
+                check(false, "Not found on this tailnet", fix: "Sign the device into the same tailnet, or remove and re-add it in RoamRun.")
                 continue
             }
             check(peer.online, "Tailscale peer “\(peer.name)” is \(peer.online ? "online" : "offline")",
-                  fix: "Unlock the iPhone and keep its screen on — while it sleeps, iOS pauses the Tailscale VPN too.")
+                  fix: "Unlock the device and keep its screen on — while it sleeps, iOS pauses the Tailscale VPN too.")
             if peer.online {
                 check(!peer.curAddr.isEmpty, "Path: \(peer.pathDescription)",
                       fix: "Direct paths are much faster. Some networks (hotel, carrier NAT) force DERP.", warnOnly: true)
@@ -397,15 +405,15 @@ enum CLI {
             } else if cli.ping(p.providerIP) {
                 // Tailscale answers but the iPhone's service doesn't: the iOS
                 // Tailscale data plane is stuck, or the iPhone left Wi-Fi.
-                check(false, "Tailscale reaches the iPhone, but RemotePairing port \(p.remotePairingPort) does not answer",
-                      fix: "Ask the user to (1) toggle the VPN off and on in the iPhone's Tailscale app — iOS Tailscale can show \"MagicSock function ReceiveIPv4 is not running\" and stop passing data while still looking connected; (2) check the iPhone is on Wi-Fi (cellular alone is not enough). If it restarted, run Find RemotePairing Port in the app.")
+                check(false, "Tailscale reaches the device, but RemotePairing port \(p.remotePairingPort) does not answer",
+                      fix: "Ask the user to (1) toggle the VPN off and on in the device's Tailscale app — iOS Tailscale can show \"MagicSock function ReceiveIPv4 is not running\" and stop passing data while still looking connected; (2) check the device is on Wi-Fi (cellular alone is not enough). If it restarted, run Find RemotePairing Port in the app.")
             } else {
-                check(false, "The iPhone does not answer over Tailscale",
-                      fix: "Ask the user to unlock the iPhone, keep the screen on and make sure Tailscale is on. If the Tailscale app shows a \"MagicSock … not running\" warning, toggle its VPN off and on.")
+                check(false, "The device does not answer over Tailscale",
+                      fix: "Ask the user to unlock the device, keep the screen on and make sure Tailscale is on. If the Tailscale app shows a \"MagicSock … not running\" warning, toggle its VPN off and on.")
             }
             if open {
                 let speaks = await ReachabilityProbe.speaksRemotePairing(host: p.providerIP, port: p.remotePairingPort)
-                check(speaks, "iPhone \(speaks ? "answers" : "does not answer") the RemotePairing handshake",
+                check(speaks, "Device \(speaks ? "answers" : "does not answer") the RemotePairing handshake",
                       fix: "Another service holds this port. Run Find RemotePairing Port in the app.")
             }
             // How remotepairingd last resolved our record: to a paired UDID, or nil.
@@ -415,26 +423,32 @@ enum CLI {
                     "process == \"remotepairingd\" AND eventMessage CONTAINS \"Resolved bonjour advert \(p.instanceName) to identity\""]),
                let last = out.split(separator: "\n").last(where: { $0.contains("to identity") }) {
                 let known = last.contains("associated with udid")
-                check(known, known ? "This Mac recognizes the iPhone's pairing" : "This Mac does not recognize the iPhone's pairing (identity nil)",
-                      fix: "Put the iPhone on this Mac's Wi-Fi, remove it in RoamRun and add it again. If Xcode lost it too, pair it in Xcode first.")
+                check(known, known ? "This Mac recognizes the device's pairing" : "This Mac does not recognize the device's pairing (identity nil)",
+                      fix: "Put the device on this Mac's Wi-Fi, remove it in RoamRun and add it again. If Xcode lost it too, pair it in Xcode first.")
             }
             if let e = live[p.id] {
                 check(e.ready || e.status == BridgeStatus.local.title, "Mac-side bridge: \(e.status) (\(owner(e)))", fix: e.detail.isEmpty ? "Wait a few seconds and run doctor again." : e.detail)
                 if let udid = e.udid ?? p.udid {
                     check(true, "UDID: \(udid)")
                     let core = coreDeviceState(udid)
-                    check(core != nil && core != "unavailable", "Xcode (CoreDevice) sees the iPhone as \(core ?? "unknown")",
-                          fix: "Ask the user to unlock the iPhone and keep the screen on; then run doctor again.")
+                    check(core != nil && core != "unavailable", "Xcode (CoreDevice) sees the device as \(core ?? "unknown")",
+                          fix: "Ask the user to unlock the device and keep the screen on; then run doctor again.")
                     if e.ready, let locked = isLocked(udid) {
-                        check(!locked, locked ? "iPhone is locked" : "iPhone is unlocked",
-                              fix: "Ask the user to unlock the iPhone and keep the screen on — installs and launches fail while it is locked.")
+                        check(!locked, locked ? "Device is locked" : "Device is unlocked",
+                              fix: "Ask the user to unlock the device and keep the screen on — installs and launches fail while it is locked.")
                     }
                 }
             } else {
-                check(false, "Bridge is off", fix: "roamrun up \(p.displayName) -d  (or Start Bridge in the app)")
+                check(false, "Bridge is off", fix: "roamrun up \(shellName(p.displayName)) -d  (or Start Bridge in the app)")
             }
         }
         return finish()
+    }
+
+    /// A name as it must be typed in a shell: 'iPhone mh', 'it'\''s'.
+    nonisolated static func shellName(_ name: String) -> String {
+        guard name.contains(where: { " '\"$`\\!*?&;|<>()".contains($0) }) else { return name }
+        return "'" + name.replacingOccurrences(of: "'", with: #"'\''"#) + "'"
     }
 
     private static func shell(_ path: String, _ args: [String]) -> String? {
@@ -511,14 +525,14 @@ enum CLI {
         let byName = profiles.filter { $0.displayName.caseInsensitiveCompare(name) == .orderedSame }
         let matches = byName.isEmpty ? profiles.filter { $0.id.uuidString.lowercased().hasPrefix(name.lowercased()) } : byName
         if matches.count > 1 {
-            fail("“\(name)” matches more than one iPhone — rename one in the app, or use its id: "
+            fail("“\(name)” matches more than one device — rename one in the app, or use its id: "
                  + matches.map { "\($0.id.uuidString.prefix(8))" }.joined(separator: ", "))
         }
         return matches.first
     }
 
     private static func names(_ profiles: [DeviceProfile]) -> String {
-        profiles.isEmpty ? "No iPhones saved yet — add one in the RoamRun app."
+        profiles.isEmpty ? "No devices saved yet — add one in the RoamRun app."
             : "Saved: " + profiles.map { "“\($0.displayName)”" }.joined(separator: ", ")
     }
 

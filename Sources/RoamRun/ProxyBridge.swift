@@ -98,7 +98,7 @@ final class ProxyBridge: ObservableObject {
                                                          port: profile.remotePairingPort)
         guard gen == generation else { return }   // stopped or restarted meanwhile
         guard reachable else {
-            setState(.error("\(profile.providerIP) did not respond on RemotePairing port \(profile.remotePairingPort) — check the mesh VPN and that the iPhone is on Wi-Fi"))
+            setState(.error("\(profile.providerIP) did not respond on RemotePairing port \(profile.remotePairingPort) — check the mesh VPN and that the device is on Wi-Fi"))
             return
         }
 
@@ -421,10 +421,10 @@ final class ProxyBridge: ObservableObject {
     /// won't help; say what will.
     private func onUnrecognized(_ instance: String) {
         guard instance == profile.instanceName, state.isActive else { return }
-        log("remotepairingd does not recognize this iPhone (identity nil)")
+        log("remotepairingd does not recognize this device (identity nil)")
         stop()
         autoRetry = false
-        setState(.error("This Mac doesn't recognize \(profile.displayName)'s pairing — its Bonjour identity changed or the pairing was reset. Put the iPhone on this Mac's Wi‑Fi, remove it here and add it again. If Xcode also lost it, pair it in Xcode first."))
+        setState(.error("This Mac doesn't recognize \(profile.displayName)'s pairing — its Bonjour identity changed or the pairing was reset. Put the device on this Mac's Wi‑Fi, remove it here and add it again. If Xcode also lost it, pair it in Xcode first."))
     }
 
     static let noAddressMessage = "This Mac has no Wi‑Fi address (en0), so there is nothing to relay on. The bridge resumes when Wi‑Fi reconnects."

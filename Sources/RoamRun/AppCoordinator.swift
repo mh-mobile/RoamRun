@@ -230,6 +230,30 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
+    /// Bonjour instance → device kind, for the Add sheet's icons: remotepairingd
+    /// matches every advert it sees to a UDID, devicectl knows each UDID's kind.
+    @Published private(set) var advertTypes: [String: String] = [:]
+    /// UDID → kind; a device's kind never changes, so devicectl is asked only about new UDIDs.
+    private var knownTypes: [String: String] = [:]
+
+    func learnAdvertTypes() async {
+        let udids = await Task.detached {
+            let out = Proc.run("/usr/bin/log", ["show", "--last", "15m", "--style", "compact", "--predicate",
+                                                #"process == "remotepairingd" AND eventMessage CONTAINS "Resolved bonjour advert""#],
+                               timeout: 10).out
+            var byInstance: [String: String] = [:]
+            for line in out.split(separator: "\n") {
+                if let (instance, udid) = TunnelPortWatcher.advert(in: String(line)), let udid { byInstance[instance] = udid.uppercased() }
+            }
+            return byInstance
+        }.value
+        if udids.values.contains(where: { knownTypes[$0] == nil }) {
+            knownTypes.merge(await Task.detached { Self.deviceTypes() }.value) { _, new in new }
+            for u in udids.values where knownTypes[u] == nil { knownTypes[u] = "" }   // unknown: don't ask again
+        }
+        advertTypes = udids.compactMapValues { knownTypes[$0].flatMap { $0.isEmpty ? nil : $0 } }
+    }
+
     nonisolated private static func deviceTypes() -> [String: String] {
         let out = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-devices-\(getpid()).json")
         defer { try? FileManager.default.removeItem(at: out) }
@@ -326,7 +350,7 @@ final class AppCoordinator: ObservableObject {
             let bridge = install(ProxyBridge(profile: profiles[idx]))
             if wasActive { Task { await bridge.start() } }
         } else {
-            logStore.log("\"\(profile.displayName)\": no RemotePairing port responded — is the iPhone on Wi-Fi?")
+            logStore.log("\"\(profile.displayName)\": no RemotePairing port responded — is the device on Wi-Fi?")
         }
     }
 

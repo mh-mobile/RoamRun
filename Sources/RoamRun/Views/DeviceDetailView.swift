@@ -33,7 +33,7 @@ struct DeviceDetailView: View {
 
                 HStack {
                     Spacer()
-                    Button("Remove iPhone…", role: .destructive) { confirmDelete = true }
+                    Button("Remove Device…", role: .destructive) { confirmDelete = true }
                         .buttonStyle(.borderless)
                         .foregroundStyle(.red)
                 }
@@ -45,7 +45,7 @@ struct DeviceDetailView: View {
             // a half-width band at the top.
             .frame(maxWidth: .infinity)
         }
-        .alert("Rename iPhone", isPresented: $renaming) {
+        .alert("Rename Device", isPresented: $renaming) {
             TextField("Name", text: $newName)
             Button("Rename") { coordinator.rename(profile.id, to: newName) }
                 .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty
@@ -58,7 +58,7 @@ struct DeviceDetailView: View {
             Button("Remove", role: .destructive) { coordinator.deleteProfile(profile.id) }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("The bridge stops and the saved pairing details are deleted. You can add the iPhone again later.")
+            Text("The bridge stops and the saved pairing details are deleted. You can add the device again later.")
         }
     }
 
@@ -127,7 +127,7 @@ struct DeviceDetailView: View {
                     }
                 }
                 .disabled(scanning)
-                Text("Use if the iPhone restarted and the bridge can't reach it.")
+                Text("Use if the device restarted and the bridge can't reach it.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -189,13 +189,13 @@ private struct StatusCard: View {
     private func message(for status: BridgeStatus) -> String {
         switch status {
         case .off:
-            return "Start the bridge when the iPhone is away from this Mac's Wi‑Fi. While it's on the same network, Xcode reaches it directly."
+            return "Start the bridge when the device is away from this Mac's Wi‑Fi. While it's on the same network, Xcode reaches it directly."
         case .starting:
             if let external, !external.detail.isEmpty { return external.detail + "…" }
             if case .starting(let step) = bridge.state { return step + "…" }
             return "Setting things up…"
         case .waiting:
-            return "Unlock the iPhone and keep its screen on (it can't be reached while asleep). Tailscale must be connected and the iPhone on a Wi‑Fi network — tethering is fine, cellular alone is not."
+            return "Unlock the device and keep its screen on (it can't be reached while asleep). Tailscale must be connected and the device on a Wi‑Fi network — tethering is fine, cellular alone is not."
         case .preparing:
             return "Paired over Tailscale. Preparing the debug tunnel — this takes a few seconds."
         case .ready:
@@ -237,7 +237,7 @@ private struct ConnectionPath: View {
         HStack(spacing: 0) {
             node("laptopcomputer", "This Mac", active: status != .off)
             link(active: linked, label: profile.providerID == MeshProvider.tailscale.rawValue ? "Tailscale" : "Mesh VPN")
-            node("iphone", profile.displayName, active: linked)
+            node(profile.symbol, profile.displayName, active: linked)
         }
         .padding(.horizontal, 8)
     }

@@ -7,8 +7,8 @@ struct MenuBarView: View {
 
     var body: some View {
         if coordinator.profiles.isEmpty {
-            Text("No iPhones added yet")
-            Button("Add iPhone…") { openMain() }
+            Text("No devices added yet")
+            Button("Add Device…") { openMain() }
         }
         ForEach(coordinator.profiles) { profile in
             if let bridge = coordinator.bridges[profile.id] {

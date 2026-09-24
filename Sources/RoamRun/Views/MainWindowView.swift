@@ -14,7 +14,7 @@ struct MainWindowView: View {
                     SidebarRow(profile: profile)
                         .tag(profile.id)
                         .contextMenu {
-                            Button("Remove iPhone…", role: .destructive) { pendingDelete = profile }
+                            Button("Remove Device…", role: .destructive) { pendingDelete = profile }
                         }
                 }
                 .onDelete { indexSet in pendingDelete = indexSet.first.map { coordinator.profiles[$0] } }
@@ -24,7 +24,7 @@ struct MainWindowView: View {
                 Button("Remove", role: .destructive) { pendingDelete.map { coordinator.deleteProfile($0.id) } }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("The bridge stops and the saved pairing details are deleted. You can add the iPhone again later.")
+                Text("The bridge stops and the saved pairing details are deleted. You can add the device again later.")
             }
             // Wide enough for "Ready for Xcode" and for the toolbar buttons,
             // which otherwise spill into an overflow (») menu.
@@ -32,9 +32,9 @@ struct MainWindowView: View {
             .toolbar {
                 ToolbarItem {
                     Button { showAddDevice = true } label: {
-                        Label("Add iPhone", systemImage: "plus")
+                        Label("Add Device", systemImage: "plus")
                     }
-                    .help("Add iPhone")
+                    .help("Add Device")
                 }
             }
         } detail: {
@@ -44,7 +44,7 @@ struct MainWindowView: View {
             } else if coordinator.profiles.isEmpty {
                 WelcomeView { showAddDevice = true }
             } else {
-                Text("Select an iPhone")
+                Text("Select a device")
                     .font(.title3)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -166,18 +166,18 @@ private struct WelcomeView: View {
             VStack(spacing: 6) {
                 Text("Debug your iPhone from anywhere")
                     .font(.title2.weight(.semibold))
-                Text("Xcode's wireless debugging only works on the same Wi‑Fi.\nRoamRun carries it over Tailscale, so the iPhone can be on any network.")
+                Text("Xcode's wireless debugging only works on the same Wi‑Fi.\nRoamRun carries it over Tailscale, so the device can be on any network.")
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
             }
             VStack(alignment: .leading, spacing: 10) {
-                Step(n: 1, text: "Pair the iPhone with this Mac once — over USB, or with Xcode 27 + iOS 27, Device Hub › Pair Nearby Device on the same Wi‑Fi.")
-                Step(n: 2, text: "Install Tailscale on this Mac and the iPhone, signed in to the same tailnet.")
-                Step(n: 3, text: "Add the iPhone here while it's on this Mac's Wi‑Fi.")
+                Step(n: 1, text: "Pair the device with this Mac once — over USB, or with Xcode 27 + iOS 27, Device Hub › Pair Nearby Device on the same Wi‑Fi.")
+                Step(n: 2, text: "Install Tailscale on this Mac and the device, signed in to the same tailnet.")
+                Step(n: 3, text: "Add the device here while it's on this Mac's Wi‑Fi.")
             }
             .padding(16)
             .background(RoundedRectangle(cornerRadius: 10).fill(.quaternary.opacity(0.5)))
-            Button("Add iPhone…", action: onAdd)
+            Button("Add Device…", action: onAdd)
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .keyboardShortcut(.defaultAction)

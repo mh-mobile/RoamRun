@@ -20,18 +20,18 @@ struct AddDeviceView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Add iPhone").font(.title2.weight(.semibold))
-                Text("Do this once, while the iPhone is on this Mac's Wi‑Fi (or plugged in by USB).")
+                Text("Add Device").font(.title2.weight(.semibold))
+                Text("Do this once, while the device is on this Mac's Wi‑Fi (or plugged in by USB).")
                     .foregroundStyle(.secondary)
             }
 
-            section("1", "Choose the iPhone") { iphonePicker }
+            section("1", "Choose the device") { iphonePicker }
             section("2", "Match it to its Tailscale device") { meshPicker }
             section("3", "Name") {
-                TextField("My iPhone", text: $name)
+                TextField("Name", text: $name)
                     .textFieldStyle(.roundedBorder)
                 Text(coordinator.isNameTaken(name)
-                     ? "Another iPhone already uses this name — pick a different one."
+                     ? "Another device already uses this name — pick a different one."
                      : "Used in the menu and the CLI: roamrun up <name>")
                     .font(.caption)
                     .foregroundStyle(coordinator.isNameTaken(name) ? Color.red : .secondary)
@@ -46,7 +46,7 @@ struct AddDeviceView: View {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button("Add iPhone") {
+                Button("Add Device") {
                     guard let captured = newest(for: selectedHost) else { return }
                     if let id = coordinator.addDevice(captured: captured, provider: provider,
                                                       meshDevice: meshDevice, manualIP: manualIP,
@@ -64,6 +64,12 @@ struct AddDeviceView: View {
         .frame(width: 520)
         .onAppear { coordinator.refreshTailscale() }
         .task { await probeLoop() }
+        .task {
+            while !Task.isCancelled {
+                await coordinator.learnAdvertTypes()
+                try? await Task.sleep(for: .seconds(15))
+            }
+        }
         .onChange(of: selectedHost) { _ in
             if name.isEmpty, let s = newest(for: selectedHost) { name = coordinator.uniqueName(s.shortHost) }
         }
@@ -77,11 +83,11 @@ struct AddDeviceView: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("Looking for iPhones on this network…").foregroundStyle(.secondary)
+                    Text("Looking for devices on this network…").foregroundStyle(.secondary)
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Not showing up? Check that:").font(.callout.weight(.medium))
-                    Text("• The iPhone is unlocked and on the same Wi‑Fi as this Mac (or on USB)")
+                    Text("• The device is unlocked and on the same Wi‑Fi as this Mac (or on USB)")
                     Text("• Developer Mode is on (Settings › Privacy & Security)")
                     Text("• It has been paired with this Mac (USB, or Xcode 27 Device Hub › Pair Nearby Device)")
                 }
@@ -92,7 +98,8 @@ struct AddDeviceView: View {
             VStack(spacing: 0) {
                 ForEach(servicesSorted) { s in
                     ServiceRow(service: s, live: liveness[s.host],
-                               selected: selectedHost == s.host)
+                               selected: selectedHost == s.host,
+                               symbol: DeviceProfile.symbol(for: deviceType(ofHost: s.host)))
                         .contentShape(Rectangle())
                         .onTapGesture { selectedHost = s.host }
                     if s.id != servicesSorted.last?.id { Divider() }
@@ -106,12 +113,13 @@ struct AddDeviceView: View {
         let service: CapturedService
         let live: Bool?
         let selected: Bool
+        let symbol: String
 
         var body: some View {
             HStack(spacing: 10) {
                 Image(systemName: selected ? "largecircle.fill.circle" : "circle")
                     .foregroundStyle(selected ? Color.accentColor : .secondary)
-                Image(systemName: "iphone").foregroundStyle(.secondary)
+                Image(systemName: symbol).foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(service.shortHost)
                     Text(service.hostIPs.first(where: { $0.contains(".") }) ?? service.host)
@@ -161,7 +169,7 @@ struct AddDeviceView: View {
                     .help("Refresh Tailscale devices")
                 }
             } else {
-                TextField("iPhone's VPN address, e.g. 100.64.0.5", text: $manualIP)
+                TextField("The device's VPN address, e.g. 100.64.0.5", text: $manualIP)
                     .textFieldStyle(.roundedBorder)
             }
         }
@@ -189,6 +197,14 @@ struct AddDeviceView: View {
             let c = a.shortHost.localizedStandardCompare(b.shortHost)
             return c == .orderedSame ? a.host < b.host : c == .orderedAscending
         }
+    }
+
+    /// Any of the host's (rotating) adverts that remotepairingd matched to a
+    /// known device — or a saved device with that host name.
+    private func deviceType(ofHost host: String) -> String? {
+        coordinator.capture.services.values.lazy.filter { $0.host == host }
+            .compactMap { coordinator.advertTypes[$0.instanceName] }.first
+            ?? coordinator.profiles.first { $0.bonjourHost == host }?.deviceType
     }
 
     private func newest(for host: String?) -> CapturedService? {

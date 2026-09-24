@@ -1,12 +1,13 @@
 ---
 name: roamrun
-description: Run, install and debug iOS apps on a physical iPhone that is not on this Mac's network (e.g. the user is away and the Mac is at home), over Tailscale with RoamRun. Use when building to a real device, installing/launching with devicectl, attaching lldb, or when Xcode can't see the iPhone because it is on another network.
+description: Run, install and debug iOS/iPadOS/visionOS apps on a physical iPhone, iPad or Apple Vision Pro that is not on this Mac's network (e.g. the user is away and the Mac is at home), over Tailscale with RoamRun. Use when building to a real device, installing/launching with devicectl, attaching lldb, or when Xcode can't see the iPhone because it is on another network.
 ---
 
 # RoamRun
 
 RoamRun makes a paired iPhone on another network look local to Xcode, over
-Tailscale. Drive it with the `roamrun` CLI, then build, install and launch with
+Tailscale. iPad and Apple Vision Pro work the same way; "iPhone" below means
+any of them (the CLI says "device"). Drive it with the `roamrun` CLI, then build, install and launch with
 Apple's own tools (`xcodebuild`, `xcrun devicectl`, `lldb`).
 
 ## 1. Check it's installed

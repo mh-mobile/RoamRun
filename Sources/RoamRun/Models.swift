@@ -65,7 +65,9 @@ struct DeviceProfile: Identifiable, Codable, Equatable {
     /// devicectl's deviceType ("iPhone", "iPad", "realityDevice"), learned by UDID.
     var deviceType: String?
 
-    var symbol: String {
+    var symbol: String { Self.symbol(for: deviceType) }
+
+    static func symbol(for deviceType: String?) -> String {
         switch deviceType {
         case "iPad": return "ipad"
         case "realityDevice": if #available(macOS 14, *) { return "vision.pro" } else { return "eyeglasses" }
@@ -112,7 +114,7 @@ enum BridgeStatus: Equatable, CaseIterable {
         switch self {
         case .off: return "Off"
         case .starting: return "Starting…"
-        case .waiting: return "Waiting for iPhone"
+        case .waiting: return "Waiting for device"
         case .preparing: return "Connecting…"
         case .ready: return "Ready for Xcode"
         case .error: return "Needs attention"
