@@ -22,6 +22,9 @@ final class TunnelPortWatcher {
     /// them means we can't tell whose it is, so the port stays unattributed.
     private static let establishPattern = #/\(([0-9A-Fa-f-]+)\): Sending tunnel establish request/#
     private var pending: [(udid: String, at: Date)] = []
+    /// After an ambiguous endpoint, any request in flight may be answered by
+    /// the wrong one — attribute nothing for a while.
+    private var ambiguousUntil = Date.distantPast
     /// What follows the first "Resolved bonjour advert " must be *exactly*
     /// "<uuid> to identity …" to the end of the line. The instance name comes
     /// from the LAN and may contain spaces, so a loose search could be fooled
@@ -54,14 +57,16 @@ final class TunnelPortWatcher {
         process = nil
     }
 
-    private func handle(_ line: String) {
-        pending.removeAll { $0.at.timeIntervalSinceNow < -5 }   // a failed request never gets an endpoint
+    func handle(_ line: String, now: Date = .now) {
+        pending.removeAll { now.timeIntervalSince($0.at) > 5 }   // a failed request never gets an endpoint
         if let m = line.firstMatch(of: Self.pattern), let port = UInt16(m.1) {
             let owners = Set(pending.map(\.udid))
-            onPort?(port, owners.count == 1 ? owners.first : nil)
-            if !pending.isEmpty { pending.removeFirst() }
+            if owners.count > 1 { ambiguousUntil = now + 5 }
+            onPort?(port, owners.count == 1 && now >= ambiguousUntil ? owners.first : nil)
+            // Unknown whose request this answered, so the rest can't be trusted either.
+            if owners.count > 1 { pending.removeAll() } else if !pending.isEmpty { pending.removeFirst() }
         } else if let m = line.firstMatch(of: Self.establishPattern) {
-            pending.append((String(m.1), .now))
+            pending.append((String(m.1), now))
         } else if let (instance, udid) = Self.advert(in: line) {
             if let udid { onDevice?(instance, udid) } else { onUnrecognized?(instance) }
         }

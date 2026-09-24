@@ -106,8 +106,11 @@ struct TailscaleClient {
     /// unreachable. Pinging also wakes an idle peer, whose CurAddr is empty.
     func directHost(_ ip: String) throws -> String? {
         guard let path = resolvedPath() else { throw TailscaleClientError.cliNotFound }
-        let out = Proc.run(path, ["ping", "-c", "3", "--timeout", "2s", ip], timeout: 8).out
-        // "pong from my-iphone (100.64.0.10) via 192.168.1.42:41641 in 40ms" / "via DERP(tok) in …" / "via [fd00::1]:41641 in …"
+        return Self.directHost(fromPing: Proc.run(path, ["ping", "-c", "3", "--timeout", "2s", ip], timeout: 8).out)
+    }
+
+    /// "pong from my-iphone (100.64.0.10) via 192.168.1.42:41641 in 40ms" / "via DERP(tok) in …" / "via [fd00::1]:41641 in …"
+    static func directHost(fromPing out: String) -> String? {
         guard let line = out.split(separator: "\n").last(where: { $0.hasPrefix("pong") }),
               let via = line.range(of: " via ")?.upperBound,
               let port = line[via...].range(of: ":", options: .backwards)?.lowerBound,

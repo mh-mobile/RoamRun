@@ -8,6 +8,11 @@ let package = Package(
         .executableTarget(
             name: "RoamRun",
             path: "Sources/RoamRun"
-        )
+        ),
+        .testTarget(
+            name: "RoamRunTests",
+            dependencies: ["RoamRun"],
+            path: "Tests/RoamRunTests"
+        ),
     ]
 )

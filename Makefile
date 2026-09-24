@@ -10,7 +10,7 @@ SIGN_ID ?= -
 NOTARY_PROFILE ?=
 SIGN_FLAGS = --force --options runtime $(if $(filter -,$(SIGN_ID)),,--timestamp)
 
-.PHONY: all build app run dmg icon install-cli clean
+.PHONY: all build app run dmg icon install-cli test clean
 
 all: app
 
@@ -33,6 +33,10 @@ app: build
 	cp skills/roamrun/SKILL.md $(BUNDLE)/Contents/Resources/roamrun-skill.md
 	codesign -s "$(SIGN_ID)" $(SIGN_FLAGS) $(BUNDLE)
 	@echo "Built $(BUNDLE)"
+
+# Pure logic only (parsers, ownership rules); the bridge itself needs a real iPhone.
+test:
+	xcrun swift test
 
 run: app
 	open $(BUNDLE)

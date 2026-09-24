@@ -133,3 +133,17 @@ enum BridgeStatus: Equatable, CaseIterable {
         }
     }
 }
+
+extension Array where Element == DeviceProfile {
+    /// Names are how the CLI addresses devices, so they must be unique.
+    func isNameTaken(_ name: String, except id: UUID? = nil) -> Bool {
+        let n = name.trimmingCharacters(in: .whitespaces)
+        return contains { $0.id != id && $0.displayName.caseInsensitiveCompare(n) == .orderedSame }
+    }
+
+    /// "iPhone", then "iPhone 2", "iPhone 3", …
+    func uniqueName(_ base: String) -> String {
+        guard isNameTaken(base) else { return base }
+        return (2...).lazy.map { "\(base) \($0)" }.first { !isNameTaken($0) }!
+    }
+}

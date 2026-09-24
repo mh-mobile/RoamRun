@@ -42,9 +42,15 @@ enum StatusFile {
         flock(fd, LOCK_EX)
         defer { flock(fd, LOCK_UN) }
         var all = read()
-        if let held = all[id], held.pid != getpid(), entry == nil || held.holdsDevice { return }
+        if let held = all[id], !mayReplace(held, with: entry, by: getpid()) { return }
         all[id] = entry
         if let data = try? JSONEncoder().encode(all) { try? data.write(to: url, options: .atomic) }
+    }
+
+    /// Only the owner clears or changes an entry; another process may take a
+    /// device over only while it's errored or standing aside.
+    static func mayReplace(_ held: Entry, with entry: Entry?, by pid: Int32) -> Bool {
+        held.pid == pid || (entry != nil && !held.holdsDevice)
     }
 
     /// PID of *another* live process bridging this device. An errored bridge
