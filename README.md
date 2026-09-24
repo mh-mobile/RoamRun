@@ -6,222 +6,228 @@
 
 <p align="center"><strong>Run your iOS apps wherever your device is.</strong></p>
 
-Xcode のワイヤレスデバッグを、Tailscale などの mesh VPN 越しに使えるようにする macOS メニューバーアプリ。
+<p align="center">English | <a href="README.ja.md">日本語</a></p>
 
-iPhone が Mac と別の Wi-Fi ネットワークにいる状態でも、Xcode（`devicectl`/`remoted`）からはローカルにいるデバイスとして見え続けます。
+A macOS menu bar app that makes Xcode's wireless debugging work over Tailscale or another mesh VPN.
 
-## なぜ必要か
+Even when the iPhone is on a different Wi-Fi network from the Mac, Xcode (`devicectl`/`remoted`) keeps seeing it as a local device.
 
-iOS 17+ のワイヤレスデバッグは CoreDevice スタック上で動き、デバイス発見は Bonjour/mDNS (`_remotepairing._tcp`) に依存しています。mDNS はリンクローカルマルチキャストなので、Tailscale のような L3 ユニキャスト VPN には乗りません。さらに Mac 側の `remotepairingd` は Bonjour で発見したインターフェースに接続をスコープするため、単に iPhone の tailnet IP を偽装広告しても接続は失敗します。
+## Why
 
-## 仕組み
+Since iOS 17, wireless debugging runs on the CoreDevice stack, and devices are discovered with Bonjour/mDNS (`_remotepairing._tcp`). mDNS is link-local multicast, so it doesn't travel over a layer-3 unicast VPN like Tailscale. On top of that, the Mac's `remotepairingd` scopes its connection to the interface it discovered the device on, so simply advertising the iPhone's tailnet IP doesn't work either.
 
-ひとことで言うと、**Xcode には「iPhone は同じ Wi-Fi にいる」と見せかけ、実際の通信は Tailscale に流します。**
+## How it works
+
+In short: **Xcode is told the iPhone is on the same Wi-Fi, and the traffic actually goes over Tailscale.**
 
 ```mermaid
 flowchart LR
-  subgraph mac["自宅の Mac"]
-    xcode["Xcode / devicectl"] --> rpd["remotepairingd<br/>（Apple 純正）"]
-    fake["偽装 Bonjour 登録<br/>（宛先 = この Mac）"]
-    relay["RoamRun の中継<br/>（en0 で待ち受け）"]
+  subgraph mac["Mac at home"]
+    xcode["Xcode / devicectl"] --> rpd["remotepairingd<br/>(Apple)"]
+    fake["Stand-in Bonjour record<br/>(pointing at this Mac)"]
+    relay["RoamRun relay<br/>(listening on en0)"]
   end
-  subgraph away["外出先"]
-    iphone["iPhone<br/>（何らかの Wi-Fi に接続）"]
+  subgraph away["Away"]
+    iphone["iPhone<br/>(on some Wi-Fi)"]
   end
-  rpd -. "① iPhone を探す" .-> fake
-  rpd -- "② en0 へ接続" --> relay
-  relay == "③ Tailscale 経由" ==> iphone
+  rpd -. "① looks for the iPhone" .-> fake
+  rpd -- "② connects to en0" --> relay
+  relay == "③ over Tailscale" ==> iphone
 ```
 
-1. Xcode の裏で動く `remotepairingd` は、同じネットワークにいる iPhone を Bonjour（`_remotepairing._tcp`）で探します。RoamRun は、事前に取り込んだ iPhone の Bonjour 情報を「接続先はこの Mac 自身」として公開し直します。
-2. `remotepairingd` は、その iPhone が同じ Wi-Fi にいると思って Mac 自身（en0）へ接続します。受けるのは RoamRun の中継です（この Mac 自身からの接続以外は拒否）。
-3. 中継は通信を Tailscale 経由で iPhone に流します。中身（ペアリングの確認や暗号化）は Apple 純正の Mac⇄iPhone 間でそのまま行われ、RoamRun は読みも書き換えもしません。
+1. `remotepairingd`, which runs behind Xcode, looks for iPhones on the local network with Bonjour (`_remotepairing._tcp`). RoamRun re-publishes the iPhone's Bonjour record, captured beforehand, with this Mac itself as the destination.
+2. Believing the iPhone is on the same Wi-Fi, `remotepairingd` connects to the Mac itself (en0). RoamRun's relay takes the connection (and refuses any that don't come from this Mac).
+3. The relay forwards the traffic to the iPhone over Tailscale. Pairing verification and encryption happen end to end between the Mac and the iPhone exactly as Apple implements them; RoamRun neither reads nor modifies the traffic.
 
-接続の順序は次のとおりです。
+The connection sequence:
 
 ```mermaid
 sequenceDiagram
   participant X as Xcode
-  participant R as remotepairingd（Mac）
+  participant R as remotepairingd (Mac)
   participant B as RoamRun
   participant P as iPhone
-  B->>B: iPhone の Bonjour 情報を<br/>宛先 = この Mac で公開
-  R->>B: 制御チャネル接続（en0:49152）
-  B->>P: Tailscale 経由で中継
-  Note over R,P: ペアリング確認（Apple 純正・端から端まで暗号化）
-  X->>R: Run / インストール / デバッグ
-  R->>P: トンネルを要求（制御チャネル経由）
-  P-->>R: 「ポート N で待つ」
-  Note over B: ログから N を検出し<br/>N〜N+16 の中継を先回りで開く
-  R->>B: トンネル接続（en0:N）
-  B->>P: Tailscale 経由で中継
-  Note over X,P: インストール・起動・デバッグは、このトンネルの中で行われる
+  B->>B: Publish the iPhone's Bonjour record<br/>with this Mac as the destination
+  R->>B: Control channel (en0:49152)
+  B->>P: Relay over Tailscale
+  Note over R,P: Pair verification (Apple's, end-to-end encrypted)
+  X->>R: Run / install / debug
+  R->>P: Request a tunnel (over the control channel)
+  P-->>R: "Listening on port N"
+  Note over B: Spot N in the log and open<br/>relays for N…N+16 ahead of time
+  R->>B: Tunnel connection (en0:N)
+  B->>P: Relay over Tailscale
+  Note over X,P: Installs, launches and debugging run inside this tunnel
 ```
 
-- **トンネルのポートは毎回変わります**（1 つずつ増える）。`remotepairingd` は通知の約 5ms 後に接続してくるため、RoamRun はログ（`log stream`）でポートを見つけるたびに、その先 16 個まで中継を先回りで開けておきます。
-- **ブリッジ起動直後の 1 回目**は、どうしても先回りが間に合いません。RoamRun は起動時に裏で `devicectl` を 1 回実行してこの 1 回目を消費し、利用者の最初の Run から成功するようにしています。
+- **The tunnel port changes every time** (it goes up by one). `remotepairingd` connects about 5 ms after announcing it, so each time RoamRun sees a port in the log (`log stream`) it opens relays for the next 16 ports in advance.
+- **The very first tunnel after a bridge starts** can't be caught in time. RoamRun runs `devicectl` in the background at startup to use up that first tunnel, so your first Run already succeeds.
 
-## 要件
+## Requirements
 
 - macOS 13+
-- iPhone は iOS 17.4 以降（CoreDevice トンネルが TCP の世代。17.0–17.3 の QUIC/UDP トンネルは非対応）
-- iPad、Apple Vision Pro でも同じ仕組みで動作を確認済み（以下「iPhone」はこれらも含みます）。Vision Pro はもともと USB がなく Wi-Fi だけで開発する端末なので、外出先からの利用とも相性が良いです
-- Xcode（devicectl が使えること）
-- Tailscale（または任意の mesh VPN + 手動 IP 指定）が Mac/iPhone 両方で接続済み
-- iPhone をこの Mac と一度ペアリング済み（USB、または Xcode 27 + iOS 27 なら同じ Wi-Fi 上で Device Hub の「+」→「Pair Nearby Device…」）、デベロッパモード ON
-- ブリッジ中も iPhone は**何らかの Wi-Fi に接続していること**（cellular 不可: remotepairingd は Wi-Fi association を前提に listen する）
+- iOS 17.4 or later on the iPhone (the generation whose CoreDevice tunnel is TCP; the QUIC/UDP tunnel of 17.0–17.3 isn't supported)
+- Also verified with iPad and Apple Vision Pro, which work the same way ("iPhone" below includes them). Vision Pro has no USB and is developed for over Wi-Fi anyway, which makes it a natural fit for working away from the Mac
+- Xcode (`devicectl` must be available)
+- Tailscale (or any mesh VPN with a manually entered IP), connected on both the Mac and the iPhone
+- The iPhone paired with this Mac once (over USB, or with Xcode 27 + iOS 27 on the same Wi-Fi via Device Hub › "+" › "Pair Nearby Device…"), with Developer Mode on
+- While bridged, the iPhone must be **connected to some Wi-Fi network** (cellular alone won't do: remotepairingd only listens while the iPhone is on Wi-Fi)
 
-## インストール
+## Install
 
-### ソースからビルド（推奨）
+### Build from source (recommended)
 
 ```sh
 git clone https://github.com/mh-mobile/RoamRun && cd RoamRun
-make run     # ビルドして起動（アドホック署名）
+make run     # build and launch (ad-hoc signed)
 ```
 
-Xcode プロジェクト不要。SwiftPM + Makefile で `.app` を組み立てます。手元でビルドしたアプリはダウンロード扱いにならないため、Gatekeeper の警告は出ません。常用するなら `RoamRun.app` を `/Applications` に移してください。
+No Xcode project needed: SwiftPM and a Makefile assemble the `.app`. An app you build yourself isn't treated as a download, so Gatekeeper won't warn. For everyday use, move `RoamRun.app` to `/Applications`.
 
-### ビルド済み dmg（GitHub Releases）
+### Prebuilt dmg (GitHub Releases)
 
-Releases の dmg は**アドホック署名のみ（公証なし）**です。初回起動時に macOS に止められるので、次のどちらかで許可してください:
+The dmg on Releases is **ad-hoc signed only (not notarized)**. macOS blocks it on first launch; allow it in either way:
 
-- 一度開こうとした後、**システム設定 → プライバシーとセキュリティ → 「このまま開く」**
-- または `xattr -dr com.apple.quarantine /Applications/RoamRun.app`
+- After trying to open it once, **System Settings → Privacy & Security → "Open Anyway"**
+- Or `xattr -dr com.apple.quarantine /Applications/RoamRun.app`
 
-dmg は `make dmg` で作れます（`SIGN_ID` / `NOTARY_PROFILE` を渡すと Developer ID 署名と公証も行います。Makefile 参照）。
+Build the dmg with `make dmg` (pass `SIGN_ID` / `NOTARY_PROFILE` to sign with a Developer ID and notarize; see the Makefile).
 
-## 使い方
+## Usage
 
-1. iPhone を USB または同一 Wi-Fi に接続した状態でメニューバーアイコン → Open RoamRun → Add iPhone
-2. 一覧から iPhone を選び、Tailscale 上の同じデバイス（または手動 IP）を紐付け
-3. iPhone を**別の Wi-Fi** に移してから Start Bridge
-   - 同一 LAN にいる間は衝突防止のためブリッジを拒否します
-4. Xcode の Devices ウインドウでデバイスが見え続け、ビルド・インストール・デバッグが可能
+1. With the iPhone on USB or the same Wi-Fi: menu bar icon → Open RoamRun → Add Device
+2. Pick the iPhone from the list and match it to the same device on Tailscale (or enter an IP manually)
+3. Start Bridge
+   - While the iPhone is on the Mac's Wi-Fi, the bridge stands aside as "On this Wi‑Fi" (Xcode reaches the iPhone directly); once the iPhone moves to another network, the bridge starts by itself
+4. The device stays visible in Xcode's Devices window, ready to build, install and debug
 
-Mac の IP が変わるとブリッジは自動再起動します。
+When the Mac's IP changes, the bridge restarts automatically.
 
 ## CLI
 
-アプリ本体がそのまま CLI にもなります（SSH 先の Mac やスクリプト向け）。
+The app binary doubles as a CLI (handy over SSH or in scripts).
 
 ```sh
-make install-cli              # /usr/local/bin/roamrun にリンク（BINDIR=~/bin なども可）
-                              # dmg 版はアプリの Settings → Command line tool → Install…
+make install-cli              # link /usr/local/bin/roamrun (BINDIR=~/bin also works)
+                              # dmg users: the app's Settings → Command line tool → Install…
 
-roamrun devices               # 登録済み iPhone（名前・UDID）と状態
-roamrun up <name>             # ブリッジを起動し、Ready まで表示。Ctrl-C で停止・後片付け
-roamrun up <name> -d          # バックグラウンドで起動（ターミナルを閉じても継続。ログは ~/Library/Logs/RoamRun/）
-roamrun status <name>         # Ready なら exit 0（スクリプトの待ち合わせ用）
-roamrun down <name>           # ブリッジを停止（アプリ側・別ターミナルの up どちらでも）
-roamrun doctor                # Mac → Tailscale → iPhone を順に診断し、直し方を表示
+roamrun devices               # saved devices (name, UDID) and their status
+roamrun up <name>             # start a bridge and show progress until Ready; Ctrl-C stops and cleans up
+roamrun up <name> -d          # start in the background (survives closing the terminal; log in ~/Library/Logs/RoamRun/)
+roamrun status <name>         # exits 0 when Ready (for waiting in scripts)
+roamrun down <name>           # stop a bridge, whether the app or another terminal's `up` runs it
+roamrun doctor                # check Mac → Tailscale → iPhone step by step and say how to fix
 ```
 
-`<name>` は iPhone 本体の名前ではなく、**RoamRun に登録した名前**です（大文字小文字は区別しません。`roamrun devices` で確認、アプリの詳細画面の ✏️ で変更可。名前は重複できません）。iPhone の登録（Add iPhone）はアプリで一度だけ行ってください。アプリと CLI が同じ iPhone を同時にブリッジしないよう、後から起動した側は起動を拒否します。
+`<name>` is **the name you gave the device in RoamRun**, not the iPhone's own name (case-insensitive; see `roamrun devices`, rename with ✏️ in the app's detail view; names must be unique). Add each device once in the app (Add Device). The app and the CLI never bridge the same iPhone at once: whichever starts second refuses.
 
-## AI エージェントから使う
+## Using it from an AI agent
 
-Claude Code・Codex・Cursor などのエージェントに、ビルド〜実機インストール〜デバッグを任せられます。エージェントに使い方を教えるスキルを入れてください:
+Claude Code, Codex, Cursor and other agents can take over building, installing on the device and debugging. Install the skill that teaches them how:
 
 ```sh
-roamrun init                                  # 入っているエージェントを検出してスキルを配置
-# または
-npx skills add mh-mobile/RoamRun             # skills CLI 経由
+roamrun init                                  # detect installed agents and add the skill
+# or
+npx skills add mh-mobile/RoamRun             # via the skills CLI
 ```
 
-スキルには手順（`roamrun up -d` → `status --wait --json` で UDID 取得 → `xcodebuild` / `devicectl`）と、「iPhone のロック解除など人間にしかできないこと」が書かれています。CLI は `--json` と終了コード（0 準備完了 / 1 未準備・失敗 / 2 使い方の誤り）に対応しています。
+The skill describes the steps (`roamrun up -d` → `status --wait --json` for the UDID → `xcodebuild` / `devicectl`) and what only a human can do, such as unlocking the iPhone. The CLI supports `--json` and exit codes (0 ready / 1 not ready or failed / 2 usage error).
 
-## 外出先で iPhone だけで使う
+## Working from just your iPhone, away from home
 
-Mac を自宅に置いたまま、手元の iPhone だけでビルド〜実機確認を回す使い方です。
+Leave the Mac at home and run the whole build-and-try loop from the iPhone in your hand.
 
-**前提: iPhone がインターネットにつながった Wi-Fi に接続していること。** モバイル回線だけでは使えません（iPhone の RemotePairing が Wi-Fi 接続時しか待ち受けないため）。「インターネット未接続」と表示される Wi-Fi に接続し、通信だけモバイル回線に流す構成でも待ち受けないことを確認しています。カフェやホテルの Wi-Fi、ポケット Wi-Fi、別の端末のテザリングなどを使ってください。
+**Prerequisite: the iPhone must be on a Wi-Fi network with internet access.** Cellular alone doesn't work (the iPhone's RemotePairing only listens while on Wi-Fi). Joining a Wi-Fi network marked "No Internet Connection" and sending traffic over cellular doesn't work either — we tested it. Use café or hotel Wi-Fi, a pocket Wi-Fi router, or tethering from another device.
 
-**回線について:** Tailscale は通常、Mac と iPhone を直接つなぎます（`tailscale status` で iPhone の行が `direct <アドレス>`）。UDP をふさいだ公衆 Wi-Fi などでは Tailscale の中継サーバー（DERP）経由になり（`relay "tok"` など）、動作はしますが遅くなります。ログイン画面のある Wi-Fi は、ログインを済ませてから使ってください。モバイル回線のテザリング（遅延 約 80ms、direct）で、インストール・起動・Xcode のデバッグ実行（ブレークポイント）まで確認済みです。
+**About the network path:** Tailscale normally connects the Mac and the iPhone directly (`tailscale status` shows `direct <address>` on the iPhone's line). On public Wi-Fi that blocks UDP and similar networks, traffic goes through Tailscale's relay servers (DERP; shown as `relay "tok"` etc.). That works, but it's slower. On Wi-Fi with a sign-in page, sign in first. Verified over cellular tethering (about 80 ms latency, direct): installing, launching, and debugging from Xcode with breakpoints.
 
-iPhone から Mac を操作する方法は 3 つあります。どの方法でも、テスト中のアプリと操作用のアプリを同じ iPhone 上で切り替えながら使います（アプリがバックグラウンドに回っても接続は切れません）。
+There are three ways to drive the Mac from the iPhone. In each case you switch between the app under test and the control app on the same iPhone (moving an app to the background doesn't drop the connection).
 
-| 方法 | iPhone 側 | 向いている用途 |
+| Method | On the iPhone | Best for |
 |---|---|---|
-| **AI エージェントに任せる（おすすめ）** | スマホから自宅 Mac のエージェントを操作する機能（Claude Code の [Remote Control](https://code.claude.com/docs/en/remote-control.md)、ChatGPT アプリ経由の [Codex](https://learn.chatgpt.com/docs/remote-connections) など） | 「ビルドして iPhone で動かして」と頼み、手元で確認して指摘する反復 |
-| SSH でターミナル操作 | SSH クライアント（Blink Shell、Termius など）+ Tailscale。tmux でセッションを維持すると、どのエージェントも同様に使える | `roamrun` / `xcodebuild` / `devicectl` / `lldb` を直接使う |
-| Mac の画面を遠隔操作 | 画面共有・VNC クライアント + Tailscale | Xcode の Run やブレークポイントを GUI で使う |
+| **Let an AI agent do it (recommended)** | Features for driving an agent on your home Mac from your phone (Claude Code's [Remote Control](https://code.claude.com/docs/en/remote-control.md), [Codex](https://learn.chatgpt.com/docs/remote-connections) via the ChatGPT app, and so on) | Ask "build it and run it on my iPhone", check the result in your hand, give feedback, repeat |
+| Terminal over SSH | An SSH client (Blink Shell, Termius, …) + Tailscale. Keep the session in tmux and any agent works the same way | Using `roamrun` / `xcodebuild` / `devicectl` / `lldb` directly |
+| Remote control of the Mac's screen | Screen Sharing / a VNC client + Tailscale | Xcode's Run and breakpoints in the GUI |
 
-例: Claude Code なら、自宅 Mac で `claude --remote-control`（または `claude remote-control`）を起動しておき、iPhone の Claude アプリの「Code」から接続します。Mac 側のプロセスが動いている間だけ操作できます。エージェントに RoamRun のスキル（`roamrun init`）を入れておくと、「iPhone のロックを解除して」などの依頼も流れの中で伝えてくれます。
+Example: with Claude Code, start `claude --remote-control` (or `claude remote-control`) on the Mac at home and connect from "Code" in the Claude app on the iPhone. You can drive it only while the Mac-side process is running. With RoamRun's skill installed in the agent (`roamrun init`), requests like "please unlock the iPhone" come up naturally as part of the flow.
 
-なお、これらの遠隔操作機能では、会話内容が各サービスのサーバーを経由・保存されます（会社支給の Mac では社内規定を確認してください）。
+Note that these remote features route conversations through, and store them on, each service's servers (check your company's policy on a work Mac).
 
-手に持って使っている間は画面がついているため、iPhone のスリープによる切断は起きにくくなります。置いたまま待つ場合は、自動ロックを長めにしてください。
+While the iPhone is in your hand its screen stays on, so it rarely drops off because of sleep. If you leave it waiting, set Auto-Lock to a longer time.
 
-## 構成
+## Source layout
 
-| ファイル | 役割 |
+Main files in `Sources/RoamRun/`:
+
+| File | Role |
 |---|---|
-| `BonjourCapture.swift` | `dns-sd -Z` ゾーンダンプの解析（PTR/SRV/TXT/A） |
-| `DNSServiceProxy.swift` | `dns-sd -P` 子プロセスによる偽装広告 + 孤児掃除 |
-| `Relays.swift` | NWListener/NWConnection の TCP バイトリレー（この Mac 自身からの接続のみ受理） |
-| `TunnelPortWatcher.swift` | `log stream` でトンネルポート動的検出 |
-| `InterfaceMonitor.swift` | en0 IP 変化の検知（getifaddrs + NWPathMonitor） |
-| `ReachabilityProbe.swift` | 制御チャネルの TCP 到達確認 |
-| `ProxyBridge.swift` | 上記のオーケストレーション（1デバイス=1インスタンス） |
-| `TailscaleClient.swift` | `tailscale status --json` の解析 |
-| `AppCoordinator.swift` | プロファイル管理・ブリッジ制御・プレゼンスチェック |
+| `BonjourCapture.swift` | Parses the `dns-sd -Z` zone dump (PTR/SRV/TXT/A) |
+| `DNSServiceProxy.swift` | Stand-in advertisement through a `dns-sd -P` child process, plus orphan cleanup |
+| `Relays.swift` | TCP byte relay on NWListener/NWConnection (accepts connections from this Mac only) |
+| `TunnelPortWatcher.swift` | Detects tunnel ports from `log stream` and attributes them to their device |
+| `InterfaceMonitor.swift` | Notices en0 IP changes (getifaddrs + NWPathMonitor) |
+| `ReachabilityProbe.swift` | TCP reachability and the RemotePairing handshake check |
+| `ProxyBridge.swift` | Orchestrates the above (one instance per device) |
+| `TailscaleClient.swift` | Parses `tailscale status --json` and `tailscale ping` |
+| `AppCoordinator.swift` | Profiles, bridge control, presence checks |
+| `StatusFile.swift` | Bridge status shared by the app and the CLI (who owns which device) |
+| `CLI.swift` | The `roamrun` command (same binary as the app) |
 
-## Mac に作るもの・アンインストール
+## What it creates on your Mac, and uninstalling
 
-RoamRun が書き込むのは次の場所だけです（システム設定や他のアプリには触れません）。
+RoamRun writes only to these places (it never touches system settings or other apps):
 
-| 場所 | 内容 |
+| Location | Contents |
 |---|---|
-| `~/Library/Application Support/RoamRun/` | 登録した iPhone（`profiles.json`）とブリッジの状態 |
-| `~/Library/Logs/RoamRun/` | `roamrun up -d` のログ |
-| `com.roamrun.app`（defaults） | 設定・前回動いていたブリッジ |
-| `/usr/local/bin/roamrun` | CLI を入れた場合のみ（既存のファイルや他のツールのリンクは上書きしません） |
-| `~/.claude/skills/roamrun/` など | `roamrun init` を実行した場合のみ（既存の他のスキルやリンクには触れません） |
+| `~/Library/Application Support/RoamRun/` | Saved devices (`profiles.json`) and bridge status |
+| `~/Library/Logs/RoamRun/` | Logs of `roamrun up -d` |
+| `com.roamrun.app` (defaults) | Settings and which bridges were running |
+| `/usr/local/bin/roamrun` | Only if you installed the CLI (never overwrites an existing file or another tool's link) |
+| `~/.claude/skills/roamrun/` etc. | Only if you ran `roamrun init` (never touches other skills or links) |
 
-ブリッジ中に起動する補助プロセス（`dns-sd` / `log stream`）は、RoamRun が強制終了しても 1 秒以内に自動で終了し、LAN への広告も消えます。
+The helper processes started while bridging (`dns-sd` / `log stream`) exit within a second even if RoamRun is force-quit, and the LAN advertisement goes away with them.
 
-完全に削除するには:
+To remove everything:
 
 ```sh
-roamrun init --uninstall                  # スキルを入れた場合
-rm /usr/local/bin/roamrun                 # CLI を入れた場合
+roamrun init --uninstall                  # if you installed the skill
+rm /usr/local/bin/roamrun                 # if you installed the CLI
 rm -rf ~/Library/Application\ Support/RoamRun ~/Library/Logs/RoamRun
 defaults delete com.roamrun.app
-# 最後に RoamRun.app を削除（「ログイン時に開く」を有効にしていた場合は先に無効化）
+# finally delete RoamRun.app (turn off "Open at Login" first if you enabled it)
 ```
 
-## 制限・既知の課題
+## Limitations and known issues
 
-- **Apple の非公開プロトコルに依存しています。** iOS 17 以降の CoreDevice / RemotePairing（Bonjour `_remotepairing._tcp` → 制御チャネル → トンネル）の挙動を前提にしており、将来の iOS / macOS / Xcode で動かなくなる可能性があります。困ったらまず `roamrun doctor` を実行してください。
-- iPhone は**何らかの Wi-Fi に接続**している必要があります（テザリング可、セルラーのみは不可: remotepairingd が Wi-Fi 接続時しか待ち受けないため）
-- iOS の Tailscale は、スリープやネットワーク切り替えの後に「MagicSock function ReceiveIPv4 is not running」と表示して通信が止まることがあります（接続中の表示のまま）。VPN をオフ → オンにし、Tailscale アプリは最新に保ってください
-- iPhone がスリープすると Tailscale（VPN 拡張）も休止し、外から届かなくなります。デバッグ中は iPhone のロックを解除し、画面をつけたままにしてください（自動ロックを長めに）
-- remotepairingd は約 42 秒ごとに制御チャネルを張り直します（Mac 自身の IP への ARP 確認が通らないため）。トンネルは約 0.4 秒で自動復旧し、デバッグセッションは継続します
-- Tailscale の中継サーバー（DERP）経由だと動作しますが遅くなります（`roamrun doctor` で経路を確認できます）
-- 外出先では、**デバッガ付きの実行（⌘R）に時間がかかります**。lldb の接続には数百回の往復が必要で、回線の遅延やパケットロスがそのまま効くためです。往復の回数は読み込むフレームワークの数とともに増え、インストールの時間はアプリのサイズにほぼ比例します（実測: 約 600KB のアプリ、テザリング経由、遅延 約 25〜60ms で、デバッガ付き約 1 分、デバッガなし約 4 秒。転送速度は 0.4〜0.9MB/秒）。ブレークポイントが不要なときは Edit Scheme › Run › Info の「Debug executable」をオフに、デバッガを使うときは Options の「Queue Debugging」と Diagnostics の「Main Thread Checker」「Thread Performance Checker」をオフにすると速くなります
-- iPhone 再起動後など、DDI の再ステージングで一度 USB 接続が必要な場合があります
-- TXT の authTag/identifier が変わった場合は、同じ Wi-Fi で iPhone を追加し直してください
-- ブリッジ中は、**この Mac が属するローカルネットワーク**（Wi-Fi・有線など mDNS が有効な全インターフェース）に iPhone の Bonjour 識別子（identifier / authTag）を広告し続けます。iPhone 本体と違い値が固定のため、同じネットワークの第三者に端末の存在を追跡される可能性があります（Mac を自宅に置いて使う通常の構成では問題になりません）。中継は、この Mac 自身から以外の接続を即座に切断します。iPhone 側の通信は Tailscale で暗号化されるため、iPhone がどの Wi-Fi にいても影響しません
-- 開発しない期間は、iPhone のデベロッパモードをオフにする、または不要なペアリングを解除すると安全です（Apple の推奨）
-- iPhone の RemotePairing のポートには、tailnet の他のメンバーからも到達できます（接続はできても、ペアリングの確認で弾かれます）。共有の tailnet では、Tailscale の Grants / ACL で iPhone に届く相手を自分の Mac に絞ることをおすすめします
-- 同じネットワークに別の Mac がいると、その Mac の Xcode にもこの iPhone が一瞬表示されることがあります（接続は中継が拒否するため、操作や通信はできません）
+- **It depends on Apple's private protocols.** It assumes how CoreDevice / RemotePairing behave since iOS 17 (Bonjour `_remotepairing._tcp` → control channel → tunnel), and future iOS / macOS / Xcode versions may break it. When in trouble, run `roamrun doctor` first.
+- The iPhone must be **connected to some Wi-Fi network** (tethering is fine, cellular alone is not: remotepairingd only listens while on Wi-Fi)
+- After sleep or a network change, Tailscale on iOS sometimes shows "MagicSock function ReceiveIPv4 is not running" and stops passing traffic while still looking connected. Turn the VPN off and on, and keep the Tailscale app up to date
+- When the iPhone sleeps, Tailscale (a VPN extension) pauses too and the iPhone becomes unreachable. While debugging, keep the iPhone unlocked with its screen on (set a longer Auto-Lock)
+- remotepairingd rebuilds the control channel about every 42 seconds (its ARP check on the Mac's own IP fails). The tunnel recovers in about 0.4 seconds and the debug session carries on
+- Through Tailscale's relay servers (DERP) it works, but more slowly (`roamrun doctor` shows the path)
+- Away from home, **running with the debugger (⌘R) takes a while**. Attaching lldb takes hundreds of round trips, so latency and packet loss add up directly. The number of round trips grows with the number of frameworks loaded, and install time is roughly proportional to the app's size (measured with a ~600 KB app over tethering at about 25–60 ms latency: about 1 minute with the debugger, about 4 seconds without; transfer rate 0.4–0.9 MB/s). When you don't need breakpoints, turn off "Debug executable" under Edit Scheme › Run › Info; when you do, turning off "Queue Debugging" (Options) and "Main Thread Checker" / "Thread Performance Checker" (Diagnostics) speeds it up
+- After the iPhone restarts, re-staging the DDI may need one USB connection
+- If the TXT record's authTag/identifier changes, add the iPhone again on the same Wi-Fi
+- While bridging, RoamRun keeps advertising the iPhone's Bonjour identifiers (identifier / authTag) on **every local network this Mac is on** (Wi-Fi, Ethernet — every interface with mDNS). Unlike the iPhone's own advertisement these values are fixed, so someone on the same network could track the device's presence (not an issue in the usual setup with the Mac at home). The relay immediately drops any connection that doesn't come from this Mac. The iPhone's side is encrypted by Tailscale, so whichever Wi-Fi it's on doesn't matter
+- When you're not developing, turning off the iPhone's Developer Mode or removing pairings you don't need is safer (Apple's recommendation)
+- Other members of your tailnet can reach the iPhone's RemotePairing port too (they can connect, but pair verification rejects them). On a shared tailnet, use Tailscale Grants / ACLs so only your Mac can reach the iPhone
+- If another Mac is on the same network, this iPhone may briefly show up in that Mac's Xcode as well (the relay refuses its connections, so it can't do anything with it)
 
-## 参考
+## Credits
 
-この実装は以下の公開情報をベースにしています:
+This implementation builds on the following public write-up:
 
-- Kevin Paterson, ["How to remotely iterate & deploy your sideloaded iOS-apps over tailnet"](https://dev.to/kvnpt/how-to-remotely-iterate-deploy-your-sideloaded-ios-apps-over-tailnet-jak) (DEV Community) — `dns-sd -P` + `socat` による同等構成の実証
+- Kevin Paterson, ["How to remotely iterate & deploy your sideloaded iOS-apps over tailnet"](https://dev.to/kvnpt/how-to-remotely-iterate-deploy-your-sideloaded-ios-apps-over-tailnet-jak) (DEV Community) — demonstrates an equivalent setup with `dns-sd -P` + `socat`
 
-## 関連プロジェクト
+## Related projects
 
-同じ課題（別ネットワークの iPhone に Xcode から届かせる）に取り組んでいるプロジェクトです。
+Projects tackling the same problem (reaching an iPhone on another network from Xcode):
 
-- [Viaaaron/iphone-tailnet-bridge](https://github.com/Viaaaron/iphone-tailnet-bridge) — Bonjour と socat による中継をシェルスクリプトで実装
-- [ahmadtawakol/iphone-tailnet-bridge](https://github.com/ahmadtawakol/iphone-tailnet-bridge) — 上記のフォーク。ネイティブ macOS アプリと Go 製ツールを追加
-- [CodeEagle/remote-ios-deploy-skill](https://github.com/CodeEagle/remote-ios-deploy-skill) — 同じ手法（Bonjour プロキシ + TCP/UDP 中継）をエージェント用スキル（SKILL.md）にしたもの
-- [lyo-eos/ios-ota](https://github.com/lyo-eos/ios-ota) — Tailscale 越しに署名済みアプリをインストール（Wi-Fi から 5G への切り替え後も継続）。Xcode の Run やデバッガではなく、インストールに特化
+- [Viaaaron/iphone-tailnet-bridge](https://github.com/Viaaaron/iphone-tailnet-bridge) — Bonjour plus a socat relay, as shell scripts
+- [ahmadtawakol/iphone-tailnet-bridge](https://github.com/ahmadtawakol/iphone-tailnet-bridge) — a fork of the above that adds a native macOS app and Go tools
+- [CodeEagle/remote-ios-deploy-skill](https://github.com/CodeEagle/remote-ios-deploy-skill) — the same approach (Bonjour proxy + TCP/UDP relay) as an agent skill (SKILL.md)
+- [lyo-eos/ios-ota](https://github.com/lyo-eos/ios-ota) — installs signed apps over Tailscale (and keeps going when switching from Wi-Fi to 5G). Focused on installing rather than Xcode's Run or the debugger
 
-## ライセンス
+## License
 
 [MIT](LICENSE)
