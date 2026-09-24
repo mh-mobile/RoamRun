@@ -63,6 +63,8 @@ icon:
 	rm -rf .build/AppIcon.iconset
 	xcrun swift scripts/make-icon.swift .build/AppIcon.iconset
 	iconutil -c icns .build/AppIcon.iconset -o Resources/AppIcon.icns
+	mkdir -p docs
+	cp .build/AppIcon.iconset/icon_256x256@2x.png docs/icon.png
 
 clean:
 	rm -rf .build $(BUNDLE) dmg-root $(APP_NAME)-*.dmg

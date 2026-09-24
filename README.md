@@ -1,6 +1,10 @@
-# RoamRun
+<p align="center">
+  <img src="docs/icon.png" width="128" height="128" alt="RoamRun icon">
+</p>
 
-**Run your iOS apps wherever your device is.**
+<h1 align="center">RoamRun</h1>
+
+<p align="center"><strong>Run your iOS apps wherever your device is.</strong></p>
 
 Xcode のワイヤレスデバッグを、Tailscale などの mesh VPN 越しに使えるようにする macOS メニューバーアプリ。
 
