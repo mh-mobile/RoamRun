@@ -55,6 +55,9 @@ endif
 # `roamrun` on PATH, pointing into the app bundle (one binary for app + CLI).
 BINDIR ?= /usr/local/bin
 install-cli: app
+	@t="$(BINDIR)/roamrun"; \
+	if { [ -e "$$t" ] || [ -L "$$t" ]; } && ! { [ -L "$$t" ] && readlink "$$t" | grep -q '/RoamRun$$'; }; then \
+		echo "$$t exists and is not a RoamRun link — not touching it"; exit 1; fi
 	ln -sfh "$(CURDIR)/$(BUNDLE)/Contents/MacOS/$(APP_NAME)" "$(BINDIR)/roamrun"
 	@echo "Installed $(BINDIR)/roamrun"
 

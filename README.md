@@ -123,6 +123,30 @@ npx skills add mh-mobile/RoamRun             # skills CLI 経由
 | `TailscaleClient.swift` | `tailscale status --json` の解析 |
 | `AppCoordinator.swift` | プロファイル管理・ブリッジ制御・プレゼンスチェック |
 
+## Mac に作るもの・アンインストール
+
+RoamRun が書き込むのは次の場所だけです（システム設定や他のアプリには触れません）。
+
+| 場所 | 内容 |
+|---|---|
+| `~/Library/Application Support/RoamRun/` | 登録した iPhone（`profiles.json`）とブリッジの状態 |
+| `~/Library/Logs/RoamRun/` | `roamrun up -d` のログ |
+| `com.roamrun.app`（defaults） | 設定・前回動いていたブリッジ |
+| `/usr/local/bin/roamrun` | CLI を入れた場合のみ（既存のファイルや他のツールのリンクは上書きしません） |
+| `~/.claude/skills/roamrun/` など | `roamrun init` を実行した場合のみ（既存の他のスキルやリンクには触れません） |
+
+ブリッジ中に起動する補助プロセス（`dns-sd` / `log stream`）は、RoamRun が強制終了しても 1 秒以内に自動で終了し、LAN への広告も消えます。
+
+完全に削除するには:
+
+```sh
+roamrun init --uninstall                  # スキルを入れた場合
+rm /usr/local/bin/roamrun                 # CLI を入れた場合
+rm -rf ~/Library/Application\ Support/RoamRun ~/Library/Logs/RoamRun
+defaults delete com.roamrun.app
+# 最後に RoamRun.app を削除（「ログイン時に開く」を有効にしていた場合は先に無効化）
+```
+
 ## 制限・既知の課題
 
 - **Apple の非公開プロトコルに依存しています。** iOS 17 以降の CoreDevice / RemotePairing（Bonjour `_remotepairing._tcp` → 制御チャネル → トンネル）の挙動を前提にしており、将来の iOS / macOS / Xcode で動かなくなる可能性があります。困ったらまず `roamrun doctor` を実行してください。

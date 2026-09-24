@@ -25,13 +25,11 @@ final class TunnelPortWatcher {
 
     func start() {
         guard process == nil else { return }
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/log")
-        task.arguments = [
+        let task = Proc.tied("/usr/bin/log", [
             "stream", "--style", "compact",
             "--predicate",
             #"process == "remotepairingd" AND (eventMessage CONTAINS "Got tunnel endpoint" OR eventMessage CONTAINS "Resolved bonjour advert")"#
-        ]
+        ])
         let pipe = Pipe()
         task.standardOutput = pipe
         task.standardError = FileHandle.nullDevice

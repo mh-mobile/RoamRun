@@ -36,9 +36,7 @@ final class DNSServiceProxy {
 
     @discardableResult
     private func spawn(_ args: [String]) -> Bool {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/dns-sd")
-        task.arguments = args
+        let task = Proc.tied("/usr/bin/dns-sd", args)
         task.standardOutput = FileHandle.nullDevice
         task.standardError = FileHandle.nullDevice
         guard (try? task.run()) != nil else { return false }
@@ -63,7 +61,7 @@ final class DNSServiceProxy {
             // Poll rather than waitUntilExit(): that spins the run loop, and a
             // stop() re-entering here would be undone by the spawn below.
             var tries = 0
-            while old.isRunning && tries < 50 { usleep(10_000); tries += 1 }
+            while old.isRunning && tries < 100 { usleep(10_000); tries += 1 }
         }
         process = nil
         spawn(lastArgs)
@@ -91,9 +89,10 @@ final class DNSServiceProxy {
         return out.split(separator: "\n").compactMap { line in
             let l = line.trimmingCharacters(in: .whitespaces)
             let isProxy = l.contains("dns-sd") && l.contains("-P") && l.contains(marker)
-            let isZoneDump = l.contains("dns-sd") && l.contains("-Z") && l.contains("_remotepairing")
-            let isLogWatch = l.contains("log stream") && l.contains("Got tunnel endpoint")
-            guard isProxy || isZoneDump || isLogWatch else { return nil }
+            let isLogWatch = l.contains("log stream") && l.contains("Got tunnel endpoint") && l.contains("Resolved bonjour advert")
+            // Only processes that are unmistakably ours (our host marker / our
+            // exact log predicate) — never a user's own dns-sd or log session.
+            guard isProxy || isLogWatch else { return nil }
             let parts = l.split(whereSeparator: { $0 == " " })
             guard parts.count > 2, let pid = Int32(parts[0]), parts[1] == "1" else { return nil }
             return pid

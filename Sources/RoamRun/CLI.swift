@@ -465,17 +465,33 @@ enum CLI {
         guard !targets.isEmpty else {
             fail("no supported agent found in ~ (.claude, .codex, .cursor, .gemini, .copilot). Use --client, or --print and paste it yourself.")
         }
+        let fm = FileManager.default
         for c in targets {
             let dir = home.appendingPathComponent("\(c.home)/skills/roamrun")
+            let file = dir.appendingPathComponent("SKILL.md")
+            // Only ever touch our own plain file: a linked dir/file is managed
+            // elsewhere (npx skills, a checkout), and a foreign SKILL.md is the user's.
+            if [dir, file].contains(where: { (try? fm.destinationOfSymbolicLink(atPath: $0.path)) != nil }) {
+                print("Skipped \(dir.path): it is a link managed elsewhere")
+                continue
+            }
+            let existing = try? String(contentsOf: file, encoding: .utf8)
+            let ours = existing?.hasPrefix("---\nname: roamrun\n") ?? false
             if args.contains("--uninstall") {
-                try? FileManager.default.removeItem(at: dir)
-                print("Removed \(dir.path)")
+                guard ours else { print("Skipped \(dir.path): no RoamRun skill there"); continue }
+                try? fm.removeItem(at: file)
+                rmdir(dir.path)   // only if now empty
+                print("Removed \(file.path)")
+                continue
+            }
+            if existing != nil && !ours {
+                print("Skipped \(dir.path): its SKILL.md isn't RoamRun's")
                 continue
             }
             do {
-                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-                try skill.write(to: dir.appendingPathComponent("SKILL.md"), options: .atomic)
-                print("Installed \(dir.path)/SKILL.md")
+                try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+                try skill.write(to: file, options: .atomic)
+                print("Installed \(file.path)")
             } catch {
                 fail("could not write \(dir.path): \(error.localizedDescription)")
             }

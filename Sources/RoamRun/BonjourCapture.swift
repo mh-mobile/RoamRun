@@ -27,9 +27,7 @@ final class BonjourCapture: ObservableObject {
         self.serviceType = serviceType
         self.domain = domain
 
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/dns-sd")
-        task.arguments = ["-Z", serviceType, domain]
+        let task = Proc.tied("/usr/bin/dns-sd", ["-Z", serviceType, domain])
         let pipe = Pipe()
         task.standardOutput = pipe
         task.standardError = FileHandle.nullDevice

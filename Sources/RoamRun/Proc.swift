@@ -30,6 +30,18 @@ enum Proc {
                       err: String(decoding: errData, as: UTF8.self))
     }
 
+    /// A long-running helper that can't outlive RoamRun: a tiny `sh` watchdog
+    /// runs it and kills it once RoamRun is gone — even after a crash or
+    /// SIGKILL. Otherwise a leftover `dns-sd -P` keeps advertising the iPhone
+    /// until reboot and can collide with the real one on the LAN.
+    static func tied(_ path: String, _ args: [String]) -> Process {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        let watchdog = #""$0" "$@" & c=$!; trap 'kill $c 2>/dev/null; wait $c; exit 0' TERM INT HUP; while kill -0 $PPID 2>/dev/null && kill -0 $c 2>/dev/null; do sleep 0.5; done; kill $c 2>/dev/null; wait $c"#
+        task.arguments = ["-c", watchdog, path] + args
+        return task
+    }
+
     /// Same, off the calling actor.
     static func runAsync(_ path: String, _ args: [String]) async -> Result {
         await Task.detached { run(path, args) }.value
