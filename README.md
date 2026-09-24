@@ -83,15 +83,15 @@ Mac の IP が変わるとブリッジは自動再起動します。
 make install-cli              # /usr/local/bin/roamrun にリンク（BINDIR=~/bin なども可）
                               # dmg 版はアプリの Settings → Command line tool → Install…
 
-roamrun devices               # 登録済み iPhone と状態
-roamrun up iPhone             # ブリッジを起動し、Ready まで表示。Ctrl-C で停止・後片付け
-roamrun up iPhone -d          # バックグラウンドで起動（ターミナルを閉じても継続。ログは ~/Library/Logs/RoamRun/）
-roamrun status iPhone         # Ready なら exit 0（スクリプトの待ち合わせ用）
-roamrun down iPhone           # ブリッジを停止（アプリ側・別ターミナルの up どちらでも）
+roamrun devices               # 登録済み iPhone（名前・UDID）と状態
+roamrun up <name>             # ブリッジを起動し、Ready まで表示。Ctrl-C で停止・後片付け
+roamrun up <name> -d          # バックグラウンドで起動（ターミナルを閉じても継続。ログは ~/Library/Logs/RoamRun/）
+roamrun status <name>         # Ready なら exit 0（スクリプトの待ち合わせ用）
+roamrun down <name>           # ブリッジを停止（アプリ側・別ターミナルの up どちらでも）
 roamrun doctor                # Mac → Tailscale → iPhone を順に診断し、直し方を表示
 ```
 
-iPhone の登録（Add iPhone）はアプリで一度だけ行ってください。アプリと CLI が同じ iPhone を同時にブリッジしないよう、後から起動した側は起動を拒否します。
+`<name>` は iPhone 本体の名前ではなく、**RoamRun に登録した名前**です（大文字小文字は区別しません。`roamrun devices` で確認、アプリの詳細画面の ✏️ で変更可。名前は重複できません）。iPhone の登録（Add iPhone）はアプリで一度だけ行ってください。アプリと CLI が同じ iPhone を同時にブリッジしないよう、後から起動した側は起動を拒否します。
 
 ## AI エージェントから使う
 

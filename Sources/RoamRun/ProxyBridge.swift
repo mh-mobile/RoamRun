@@ -17,7 +17,7 @@ final class ProxyBridge: ObservableObject {
     /// A tunnel has been negotiated at least once, so relays are primed.
     @Published private(set) var tunnelReady = false { didSet { publishStatus() } }
 
-    let profile: DeviceProfile
+    private(set) var profile: DeviceProfile
     var onLog: ((String) -> Void)?
     /// Called when remotepairingd reports a (new) UDID for this device.
     var onUDID: ((String) -> Void)?
@@ -340,6 +340,8 @@ final class ProxyBridge: ObservableObject {
     }
 
     static let noAddressMessage = "This Mac has no Wi‑Fi address (en0), so there is nothing to relay on. The bridge resumes when Wi‑Fi reconnects."
+
+    func rename(_ name: String) { profile.displayName = name }
 
     /// Surface a refusal the coordinator decided on (e.g. same-LAN conflict).
     func fail(_ message: String) { setState(.error(message)) }

@@ -8,6 +8,8 @@ struct DeviceDetailView: View {
     @State private var scanning = false
     @State private var confirmDelete = false
     @State private var showDetails = ProcessInfo.processInfo.environment["MB_SNAPSHOT_EXPAND"] != nil
+    @State private var renaming = false
+    @State private var newName = ""
     @State private var showLog = ProcessInfo.processInfo.environment["MB_SNAPSHOT_EXPAND"] != nil
 
     var body: some View {
@@ -43,6 +45,15 @@ struct DeviceDetailView: View {
             // a half-width band at the top.
             .frame(maxWidth: .infinity)
         }
+        .alert("Rename iPhone", isPresented: $renaming) {
+            TextField("Name", text: $newName)
+            Button("Rename") { coordinator.rename(profile.id, to: newName) }
+                .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty
+                          || coordinator.isNameTaken(newName, except: profile.id))
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Used in the menu and the CLI (roamrun up <name>). Must be unique.")
+        }
         .alert("Remove “\(profile.displayName)”?", isPresented: $confirmDelete) {
             Button("Remove", role: .destructive) { coordinator.deleteProfile(profile.id) }
             Button("Cancel", role: .cancel) {}
@@ -61,7 +72,15 @@ struct DeviceDetailView: View {
                 .frame(width: 52, height: 52)
                 .background(RoundedRectangle(cornerRadius: 12).fill(.quaternary))
             VStack(alignment: .leading, spacing: 2) {
-                Text(profile.displayName).font(.title2.weight(.semibold))
+                HStack(spacing: 6) {
+                    Text(profile.displayName).font(.title2.weight(.semibold))
+                    Button {
+                        newName = profile.displayName
+                        renaming = true
+                    } label: { Image(systemName: "pencil") }
+                    .buttonStyle(.borderless)
+                    .help("Rename")
+                }
                 Text(peerDescription).foregroundStyle(.secondary)
             }
             Spacer()

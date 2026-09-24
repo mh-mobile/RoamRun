@@ -28,6 +28,11 @@ struct AddDeviceView: View {
             section("3", "Name") {
                 TextField("My iPhone", text: $name)
                     .textFieldStyle(.roundedBorder)
+                Text(coordinator.isNameTaken(name)
+                     ? "Another iPhone already uses this name — pick a different one."
+                     : "Used in the menu and the CLI: roamrun up <name>")
+                    .font(.caption)
+                    .foregroundStyle(coordinator.isNameTaken(name) ? Color.red : .secondary)
             }
 
             HStack {
@@ -53,7 +58,7 @@ struct AddDeviceView: View {
         .onAppear { coordinator.refreshTailscale() }
         .task { await probeLoop() }
         .onChange(of: captured) { new in
-            if name.isEmpty, let new { name = new.shortHost }
+            if name.isEmpty, let new { name = coordinator.uniqueName(new.shortHost) }
         }
     }
 
@@ -199,7 +204,8 @@ struct AddDeviceView: View {
     }
 
     private var canAdd: Bool {
-        guard captured != nil, !name.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+        guard captured != nil, !name.trimmingCharacters(in: .whitespaces).isEmpty,
+              !coordinator.isNameTaken(name) else { return false }
         switch provider {
         case .tailscale: return meshDevice?.ipv4 != nil
         case .manual: return !manualIP.trimmingCharacters(in: .whitespaces).isEmpty

@@ -486,8 +486,13 @@ enum CLI {
     // MARK: - Helpers
 
     private static func find(_ name: String, in profiles: [DeviceProfile]) -> DeviceProfile? {
-        profiles.first { $0.displayName.caseInsensitiveCompare(name) == .orderedSame }
-            ?? profiles.first { $0.id.uuidString.lowercased().hasPrefix(name.lowercased()) }
+        let byName = profiles.filter { $0.displayName.caseInsensitiveCompare(name) == .orderedSame }
+        let matches = byName.isEmpty ? profiles.filter { $0.id.uuidString.lowercased().hasPrefix(name.lowercased()) } : byName
+        if matches.count > 1 {
+            fail("“\(name)” matches more than one iPhone — rename one in the app, or use its id: "
+                 + matches.map { "\($0.id.uuidString.prefix(8))" }.joined(separator: ", "))
+        }
+        return matches.first
     }
 
     private static func names(_ profiles: [DeviceProfile]) -> String {
