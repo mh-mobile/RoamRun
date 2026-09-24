@@ -67,7 +67,7 @@ struct DeviceDetailView: View {
 
     private var header: some View {
         HStack(spacing: 14) {
-            Image(systemName: "iphone")
+            Image(systemName: profile.symbol)
                 .font(.system(size: 28))
                 .frame(width: 52, height: 52)
                 .background(RoundedRectangle(cornerRadius: 12).fill(.quaternary))

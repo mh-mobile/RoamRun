@@ -15,6 +15,12 @@ struct MenuBarView: View {
                 BridgeMenuItem(bridge: bridge, profile: profile)
             }
         }
+        if coordinator.profiles.count > 1 {
+            Button("Reconnect Active Bridges") { coordinator.reconnectActiveBridges() }
+                .disabled(coordinator.runningProfiles.isEmpty)
+            Button("Stop All Bridges") { coordinator.stopAllBridges() }
+                .disabled(coordinator.runningProfiles.isEmpty && coordinator.externalBridges.isEmpty)
+        }
         Divider()
         Button("Open RoamRun") { openMain() }
             .keyboardShortcut("o")
@@ -37,7 +43,16 @@ private struct BridgeMenuItem: View {
         let status = coordinator.status(of: profile.id)
         let viaCLI = coordinator.externalBridges[profile.id] != nil
         // Menus only render plain text; the status rides along in the title.
-        Text("\(profile.displayName) — \(status.title)\(viaCLI ? " (Terminal)" : "")")
+        // A button row reads as live (a plain text row is greyed like a header).
+        Button {
+            coordinator.selectedID = profile.id
+            AppDelegate.openMain?()
+        } label: {
+            // A colored symbol glyph sits on the text baseline like the device icon.
+            Text("\(Image(systemName: profile.symbol)) \(profile.displayName) — ")
+                + Text(Image(systemName: status.symbol)).foregroundColor(status.color)
+                + Text(" \(status.title)\(viaCLI ? " (Terminal)" : "")")
+        }
         if viaCLI {
             Button("Stop Bridge") { coordinator.stopExternalBridge(profile.id) }
         } else if bridge.state == .off || status == .error {

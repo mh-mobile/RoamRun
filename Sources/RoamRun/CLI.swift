@@ -341,8 +341,12 @@ enum CLI {
             let result = ok ? "ok" : warnOnly ? "warning" : "fail"
             checks.append(Check(scope: scope, result: result, message: line, fix: ok || fix.isEmpty ? nil : fix))
             guard !json else { return }
-            print(" \(ok ? "✓" : warnOnly ? "!" : "✗") \(line)")
+            print(" \(paint(ok ? "✓" : warnOnly ? "!" : "✗", ok ? 32 : warnOnly ? 33 : 31)) \(line)")
             if !ok, !fix.isEmpty { print("     → \(fix)") }
+        }
+        /// ANSI color on a terminal only (not when piped, or with NO_COLOR set).
+        func paint(_ s: String, _ code: Int) -> String {
+            isatty(STDOUT_FILENO) != 0 && ProcessInfo.processInfo.environment["NO_COLOR"] == nil ? "\u{1B}[\(code);1m\(s)\u{1B}[0m" : s
         }
         func finish() -> Bool {
             let healthy = !checks.contains { $0.result == "fail" }
@@ -350,7 +354,7 @@ enum CLI {
                 struct Report: Encodable { let healthy: Bool; let checks: [Check] }
                 printJSON(Report(healthy: healthy, checks: checks))
             } else {
-                print(healthy ? "\nAll good." : "\nFix the ✗ items above, top to bottom.")
+                print(healthy ? "\n" + paint("All good.", 32) : "\nFix the \(paint("✗", 31)) items above, top to bottom.")
             }
             return healthy
         }

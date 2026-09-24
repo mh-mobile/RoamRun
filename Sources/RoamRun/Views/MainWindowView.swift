@@ -3,14 +3,13 @@ import AppKit
 
 struct MainWindowView: View {
     @EnvironmentObject private var coordinator: AppCoordinator
-    @State private var selection: DeviceProfile.ID?
     @State private var showAddDevice = false
     @State private var showSettings = false
     @State private var pendingDelete: DeviceProfile?
 
     var body: some View {
         NavigationSplitView {
-            List(selection: $selection) {
+            List(selection: $coordinator.selectedID) {
                 ForEach(coordinator.profiles) { profile in
                     SidebarRow(profile: profile)
                         .tag(profile.id)
@@ -39,7 +38,7 @@ struct MainWindowView: View {
                 }
             }
         } detail: {
-            if let id = selection, let profile = coordinator.profile(id),
+            if let id = coordinator.selectedID, let profile = coordinator.profile(id),
                let bridge = coordinator.bridges[id] {
                 DeviceDetailView(profile: profile, bridge: bridge)
             } else if coordinator.profiles.isEmpty {
@@ -52,6 +51,19 @@ struct MainWindowView: View {
             }
         }
         .toolbar {
+            if coordinator.profiles.count > 1 {
+                ToolbarItem(placement: .primaryAction) {
+                    Menu {
+                        Button("Reconnect Active Bridges") { coordinator.reconnectActiveBridges() }
+                            .disabled(coordinator.runningProfiles.isEmpty)
+                        Button("Stop All Bridges", role: .destructive) { coordinator.stopAllBridges() }
+                            .disabled(coordinator.runningProfiles.isEmpty && coordinator.externalBridges.isEmpty)
+                    } label: {
+                        Label("All Bridges", systemImage: "ellipsis.circle")
+                    }
+                    .help("All Bridges")
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button { showSettings = true } label: {
                     Label("Settings", systemImage: "gearshape")
@@ -60,7 +72,7 @@ struct MainWindowView: View {
             }
         }
         .sheet(isPresented: $showAddDevice) {
-            AddDeviceView { newID in selection = newID }
+            AddDeviceView { newID in coordinator.selectedID = newID }
                 .environmentObject(coordinator)
         }
         .sheet(isPresented: $showSettings) {
@@ -68,7 +80,7 @@ struct MainWindowView: View {
                 .environmentObject(coordinator)
         }
         .onAppear {
-            if selection == nil { selection = coordinator.profiles.first?.id }
+            if coordinator.selectedID == nil { coordinator.selectedID = coordinator.profiles.first?.id }
             switch Snapshot.sheet {
             case "add": showAddDevice = true
             case "settings": showSettings = true
@@ -91,7 +103,7 @@ private struct SidebarRow: View {
         let status = coordinator.status(of: profile.id)
         let viaCLI = coordinator.externalBridges[profile.id] != nil
         HStack(spacing: 10) {
-            Image(systemName: "iphone")
+            Image(systemName: profile.symbol)
                 .font(.title2)
                 .foregroundStyle(.secondary)
                 .frame(width: 24)

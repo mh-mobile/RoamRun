@@ -11,6 +11,8 @@ final class AppCoordinator: ObservableObject {
     @Published private(set) var tailscaleError: String?
     /// Bridges another process (`roamrun up`) is running, by profile id.
     @Published private(set) var externalBridges: [UUID: StatusFile.Entry] = [:]
+    /// Sidebar selection — shared so the menu bar can open a given device.
+    @Published var selectedID: UUID?
     @Published var tailscaleCLIPath: String {
         didSet {
             UserDefaults.standard.set(tailscaleCLIPath, forKey: "tailscaleCLIPath")
@@ -76,6 +78,8 @@ final class AppCoordinator: ObservableObject {
             Task { @MainActor in self?.onInterfaceChange(ip) }
         }
         interfaceMonitor.start()
+
+        learnDeviceTypes()
 
         // A snapshot run is a throwaway copy; it must not touch the real app's bridges.
         for id in wasActiveIDs where Snapshot.path == nil {
@@ -199,6 +203,49 @@ final class AppCoordinator: ObservableObject {
         wasActiveIDs = ids
     }
 
+    /// App bridges that are on (any state but Off); Terminal ones are the CLI's.
+    var runningProfiles: [DeviceProfile] {
+        profiles.filter { externalBridges[$0.id] == nil && bridges[$0.id].map { $0.state != .off } == true }
+    }
+
+    /// Tear down and start again — the manual "unstick" after sleep or a network change.
+    func reconnectActiveBridges() { runningProfiles.forEach(startBridge) }
+
+    func stopAllBridges() {
+        runningProfiles.forEach(stopBridge)
+        externalBridges.keys.forEach(stopExternalBridge)
+    }
+
+    /// iPhone, iPad or Vision Pro — for the icons. devicectl knows every paired
+    /// device's kind by UDID, even while it's away; asked once per profile.
+    func learnDeviceTypes() {
+        guard profiles.contains(where: { $0.udid != nil && $0.deviceType == nil }) else { return }
+        Task {
+            let types = await Task.detached { Self.deviceTypes() }.value
+            var changed = false
+            for i in profiles.indices where profiles[i].deviceType == nil {
+                if let u = profiles[i].udid, let t = types[u.uppercased()] { profiles[i].deviceType = t; changed = true }
+            }
+            if changed { store.save(profiles) }
+        }
+    }
+
+    nonisolated private static func deviceTypes() -> [String: String] {
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-devices-\(getpid()).json")
+        defer { try? FileManager.default.removeItem(at: out) }
+        _ = Proc.run("/usr/bin/xcrun", ["devicectl", "--quiet", "list", "devices", "--json-output", out.path], timeout: 30)
+        guard let data = try? Data(contentsOf: out),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let devices = (root["result"] as? [String: Any])?["devices"] as? [[String: Any]] else { return [:] }
+        var types: [String: String] = [:]
+        for d in devices {
+            guard let h = d["hardwareProperties"] as? [String: Any], h["reality"] as? String == "physical",
+                  let u = h["udid"] as? String, let t = h["deviceType"] as? String else { continue }
+            types[u.uppercased()] = t
+        }
+        return types
+    }
+
     // MARK: - Tailscale
 
     /// Off the main actor: a hung `tailscale status` must not freeze the UI.
@@ -228,6 +275,7 @@ final class AppCoordinator: ObservableObject {
             guard let self, let i = self.profiles.firstIndex(where: { $0.id == id }) else { return }
             self.profiles[i].udid = udid
             self.store.save(self.profiles)
+            self.learnDeviceTypes()
         }
         bridges[bridge.profile.id] = bridge
         bridgeObservers[bridge.profile.id] = bridge.objectWillChange
