@@ -6,7 +6,7 @@ import Foundation
 enum CLI {
     /// This process was started as the CLI (vs. the menu bar app).
     nonisolated static var isRunning: Bool { commands.contains(CommandLine.arguments.dropFirst().first ?? "") }
-    nonisolated static let commands: Set<String> = ["devices", "up", "down", "status", "doctor", "logs", "init", "help", "--help", "-h"]
+    nonisolated static let commands: Set<String> = ["devices", "up", "down", "status", "doctor", "logs", "install", "init", "help", "--help", "-h"]
     /// Posted by `roamrun down`; the app stops the bridge whose id is `object`.
     static let stopNotification = Notification.Name("com.roamrun.app.stopBridge")
 
@@ -24,6 +24,9 @@ enum CLI {
                                      (--wait: wait up to N seconds for ready)
       doctor [name] [--json]         Check each step from this Mac to the device and say what to fix
                                      (without a name, only devices with a running bridge)
+      install <name> <app.ipa|App.app>
+                                     Install an .ipa or .app signed for the device (Debugging, Release
+                                     Testing / Ad Hoc or Enterprise); checks the signing first
       logs <name> <bundle-id>        Relaunch the app with its console attached (print and os_log)
                                      until Ctrl-C — it restarts the app; it can't join one already running
       init [--client <name>] [--print] [--uninstall]
@@ -78,6 +81,13 @@ enum CLI {
                     fail("usage: roamrun logs <name> <bundle-id>. " + names(profiles))
                 }
                 logs(p, bundleID: words[words.startIndex + 1])
+            case "install":
+                let words = args.indices.dropFirst()
+                    .filter { !args[$0].hasPrefix("-") && $0 != waitIdx.map { $0 + 1 } }.map { args[$0] }
+                guard name != nil, let p = targets.first, words.count >= 2 else {
+                    fail("usage: roamrun install <name> <path to .ipa or .app>. " + names(profiles))
+                }
+                install(p, path: words[words.startIndex + 1])
             default: print(usage); exit(0)
             }
         }
@@ -201,12 +211,14 @@ enum CLI {
 
     /// devicectl can't attach to a running process, so this relaunches the app
     /// with `--console`. OS_ACTIVITY_DT_MODE mirrors os_log to stderr, as Xcode does.
-    private static func logs(_ profile: DeviceProfile, bundleID: String) -> Never {
-        func stop(_ why: String) -> Never {
-            FileHandle.standardError.write(Data("roamrun: \(why)\n".utf8))
-            exit(1)
-        }
-        // Bridged or on this Wi-Fi without a bridge: what matters is that Xcode sees it.
+    private static func stop(_ why: String) -> Never {
+        FileHandle.standardError.write(Data("roamrun: \(why)\n".utf8))
+        exit(1)
+    }
+
+    /// The UDID of a device Xcode can reach right now (bridged, or on this
+    /// Wi-Fi without a bridge) and that is unlocked; otherwise says what to do.
+    private static func reachableUDID(_ profile: DeviceProfile) -> String {
         guard let udid = StatusFile.read()[profile.id]?.udid ?? profile.udid else {
             stop("\(profile.displayName)'s UDID isn't known yet — start its bridge once: roamrun up \(shellName(profile.displayName)) -d")
         }
@@ -215,12 +227,81 @@ enum CLI {
             stop("Xcode can't reach \(profile.displayName) (\(core ?? "unknown")). If it's away, start the bridge: roamrun up \(shellName(profile.displayName)) -d; otherwise run roamrun doctor \(shellName(profile.displayName)).")
         }
         if isLocked(udid) == true { stop("\(profile.displayName) is locked — ask the user to unlock it and keep the screen on.") }
-        setenv("DEVICECTL_CHILD_OS_ACTIVITY_DT_MODE", "enable", 1)
-        let argv = ["/usr/bin/xcrun", "devicectl", "device", "process", "launch", "--console",
-                    "--terminate-existing", "--device", udid, bundleID]
+        return udid
+    }
+
+    /// Hands over to devicectl so Ctrl-C and kill reach it directly.
+    private static func exec(_ argv: [String]) -> Never {
         var cargs = argv.map { strdup($0) } + [nil]
         execv(argv[0], &cargs)
-        stop("could not run devicectl: \(String(cString: strerror(errno)))")
+        stop("could not run \(argv[0]): \(String(cString: strerror(errno)))")
+    }
+
+    /// devicectl installs any .app or .ipa signed for this device. Check the
+    /// signing first: the usual failure, and devicectl's error for it is cryptic.
+    private static func install(_ profile: DeviceProfile, path: String) -> Never {
+        guard FileManager.default.fileExists(atPath: path) else { stop("no such file: \(path)") }
+        let udid = reachableUDID(profile)
+        switch provisioning(of: path) {
+        case .appStore:
+            stop("\(path) is signed for App Store / TestFlight and can't be installed directly. Export it for Debugging, Release Testing (Ad Hoc) or Enterprise.")
+        case .devices(let list) where !list.contains(where: { $0.caseInsensitiveCompare(udid) == .orderedSame }):
+            stop("\(path) isn't signed for \(profile.displayName) (UDID \(udid) is not in its provisioning profile). Add the device to the profile and export again.")
+        default:
+            break
+        }
+        guard path.lowercased().hasSuffix(".ipa") else {
+            exec(["/usr/bin/xcrun", "devicectl", "device", "install", "app", "--device", udid, path])
+        }
+        // devicectl documents .app bundles only: unpack the .ipa and hand it the .app inside.
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-ipa-\(getpid())")
+        let cleanUp = { try? FileManager.default.removeItem(at: dir) }   // exit() skips defer
+        _ = Proc.run("/usr/bin/ditto", ["-x", "-k", path, dir.path], timeout: 300)
+        let payload = dir.appendingPathComponent("Payload")
+        guard let app = try? FileManager.default.contentsOfDirectory(atPath: payload.path).first(where: { $0.hasSuffix(".app") })
+        else { cleanUp(); stop("\(path) has no Payload/*.app inside — not an iOS app archive?") }
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        task.arguments = ["devicectl", "device", "install", "app", "--device", udid, payload.appendingPathComponent(app).path]
+        do { try task.run() } catch { cleanUp(); stop("could not run devicectl: \(error.localizedDescription)") }
+        task.waitUntilExit()   // output goes straight to this terminal
+        cleanUp()
+        exit(task.terminationStatus)
+    }
+
+    enum Provisioning: Equatable { case devices([String]), allDevices, appStore, unknown }
+
+    /// Reads embedded.mobileprovision from an .app or (unzipping) an .ipa.
+    static func provisioning(of path: String) -> Provisioning {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-install-\(getpid())")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var profile = URL(fileURLWithPath: path).appendingPathComponent("embedded.mobileprovision")
+        if path.lowercased().hasSuffix(".ipa") {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            _ = Proc.run("/usr/bin/unzip", ["-qo", path, "Payload/*.app/embedded.mobileprovision", "-d", dir.path], timeout: 30)
+            let payload = dir.appendingPathComponent("Payload")
+            guard let app = try? FileManager.default.contentsOfDirectory(atPath: payload.path).first(where: { $0.hasSuffix(".app") })
+            else { return .unknown }
+            profile = payload.appendingPathComponent(app).appendingPathComponent("embedded.mobileprovision")
+        }
+        let decoded = Proc.run("/usr/bin/security", ["cms", "-D", "-i", profile.path], timeout: 10).out
+        guard let data = decoded.data(using: .utf8),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        else { return .unknown }
+        return parseProvisioning(plist)
+    }
+
+    nonisolated static func parseProvisioning(_ plist: [String: Any]) -> Provisioning {
+        if let devices = plist["ProvisionedDevices"] as? [String] { return .devices(devices) }
+        if plist["ProvisionsAllDevices"] as? Bool == true { return .allDevices }
+        return .appStore   // neither a device list nor Enterprise: App Store / TestFlight
+    }
+
+    private static func logs(_ profile: DeviceProfile, bundleID: String) -> Never {
+        let udid = reachableUDID(profile)
+        setenv("DEVICECTL_CHILD_OS_ACTIVITY_DT_MODE", "enable", 1)
+        exec(["/usr/bin/xcrun", "devicectl", "device", "process", "launch", "--console",
+              "--terminate-existing", "--device", udid, bundleID])
     }
 
     private static func down(_ profile: DeviceProfile) -> Never {
@@ -385,6 +466,11 @@ enum CLI {
             print(" \(paint(ok ? "✓" : warnOnly ? "!" : "✗", ok ? 32 : warnOnly ? 33 : 31)) \(line)")
             if !ok, !fix.isEmpty { print("     → \(fix)") }
         }
+        /// Not a result: why a check didn't run.
+        func note(_ line: String) {
+            checks.append(Check(scope: scope, result: "skipped", message: line, fix: nil))
+            if !json { print(" – \(line)") }
+        }
         /// ANSI color on a terminal only (not when piped, or with NO_COLOR set).
         func paint(_ s: String, _ code: Int) -> String {
             isatty(STDOUT_FILENO) != 0 && ProcessInfo.processInfo.environment["NO_COLOR"] == nil ? "\u{1B}[\(code);1m\(s)\u{1B}[0m" : s
@@ -423,8 +509,7 @@ enum CLI {
         for p in profiles {
             section("\n\(p.displayName) (\(p.providerIP))", p.displayName)
             if !named, live[p.id] == nil {
-                checks.append(Check(scope: p.displayName, result: "skipped", message: "Bridge is off — not checked", fix: nil))
-                if !json { print(" – Bridge is off — not checked (roamrun doctor \(shellName(p.displayName)) checks it anyway)") }
+                note("Bridge is off — not checked (roamrun doctor \(shellName(p.displayName)) checks it anyway)")
                 continue
             }
             guard let peer = peers.first(where: { $0.ips.contains(p.providerIP) }) else {
@@ -455,19 +540,26 @@ enum CLI {
                 check(speaks, "Device \(speaks ? "answers" : "does not answer") the RemotePairing handshake",
                       fix: "Another service holds this port. Run Find RemotePairing Port in the app.")
             }
-            // How remotepairingd last resolved our record: to a paired UDID, or nil.
-            // instanceName comes from the network; only interpolate a plain UUID into the predicate.
-            if p.instanceName.allSatisfy({ $0.isHexDigit || $0 == "-" }),
-               let out = shell("/usr/bin/log", ["show", "--last", "15m", "--style", "compact", "--predicate",
-                    "process == \"remotepairingd\" AND eventMessage CONTAINS \"Resolved bonjour advert \(p.instanceName) to identity\""]),
-               let last = out.split(separator: "\n").last(where: { $0.contains("to identity") }) {
-                let known = last.contains("associated with udid")
-                check(known, known ? "This Mac recognizes the device's pairing" : "This Mac does not recognize the device's pairing (identity nil)",
+            // How remotepairingd last resolved our record (nil = pairing lost), or any
+            // advert matched to this UDID. Only plain hex/UUIDs go into the predicates.
+            let plain = { (s: String) in !s.isEmpty && s.allSatisfy { $0.isHexDigit || $0 == "-" } }
+            let udid = live[p.id]?.udid ?? p.udid
+            let ours = plain(p.instanceName) ? shell("/usr/bin/log", ["show", "--last", "15m", "--style", "compact", "--predicate",
+                "process == \"remotepairingd\" AND eventMessage CONTAINS \"Resolved bonjour advert \(p.instanceName) to identity\""])?
+                .split(separator: "\n").last(where: { $0.contains("to identity") }) : nil
+            if let ours, !ours.contains("associated with udid") {
+                check(false, "This Mac does not recognize the device's pairing (identity nil)",
                       fix: "Put the device on this Mac's Wi-Fi, remove it in RoamRun and add it again. If Xcode lost it too, pair it in Xcode first.")
+            } else if ours != nil || (udid.map(plain) == true && shell("/usr/bin/log", ["show", "--last", "15m", "--style", "compact", "--predicate",
+                "process == \"remotepairingd\" AND eventMessage CONTAINS \"associated with udid \(udid!)\""])?.contains("associated with udid") == true) {
+                check(true, "This Mac recognizes the device's pairing")
+            } else {
+                note("Pairing not checked — no advert of this device was matched in the last 15 minutes")
             }
             if let e = live[p.id] {
                 check(e.ready || e.status == BridgeStatus.local.title, "Mac-side bridge: \(e.status) (\(owner(e)))", fix: e.detail.isEmpty ? "Wait a few seconds and run doctor again." : e.detail)
-                if let udid = e.udid ?? p.udid {
+                if udid == nil { note("UDID not known yet — learned the first time the bridge connects") }
+                if let udid {
                     check(true, "UDID: \(udid)")
                     let core = coreDeviceState(udid)
                     check(core != nil && core != "unavailable", "Xcode (CoreDevice) sees the device as \(core ?? "unknown")",

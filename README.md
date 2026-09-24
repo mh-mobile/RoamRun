@@ -117,10 +117,13 @@ roamrun up <name> -d          # start in the background (survives closing the te
 roamrun status <name>         # exits 0 when Ready (for waiting in scripts)
 roamrun down <name>           # stop a bridge, whether the app or another terminal's `up` runs it
 roamrun doctor                # check Mac → Tailscale → iPhone step by step and say how to fix
+roamrun install <name> <App.ipa|App.app>   # install a build signed for the device (checks the signing first)
 roamrun logs <name> <bundle-id>   # relaunch the app and stream its print / os_log output (Ctrl-C to stop)
 ```
 
 `<name>` is **the name you gave the device in RoamRun**, not the iPhone's own name (case-insensitive; see `roamrun devices`, rename with ✏️ in the app's detail view; names must be unique). Add each device once in the app (Add Device). The app and the CLI never bridge the same iPhone at once: whichever starts second refuses. `logs` relaunches the app, since `devicectl` can't attach a console to one already running; it works over a bridge and on the same Wi-Fi alike.
+
+`install` takes an `.ipa` (e.g. from CI) or an `.app` exported for **Debugging, Release Testing (Ad Hoc) or Enterprise** — the device's UDID must be in its provisioning profile (Enterprise: any device that trusts the certificate). Builds for App Store Connect (App Store / TestFlight) can't be installed directly; `install` says so before trying. RoamRun only reaches devices paired with this Mac; to hand a build to devices that aren't, use TestFlight or over-the-air distribution (Ad Hoc / Enterprise).
 
 ## Using it from an AI agent
 

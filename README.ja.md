@@ -117,10 +117,13 @@ roamrun up <name> -d          # バックグラウンドで起動（ターミナ
 roamrun status <name>         # Ready なら exit 0（スクリプトの待ち合わせ用）
 roamrun down <name>           # ブリッジを停止（アプリ側・別ターミナルの up どちらでも）
 roamrun doctor                # Mac → Tailscale → iPhone を順に診断し、直し方を表示
+roamrun install <name> <App.ipa|App.app>   # その端末用に署名されたビルドをインストール（先に署名を確認）
 roamrun logs <name> <bundle-id>   # アプリを起動し直し、print / os_log の出力を流す（Ctrl-C で停止）
 ```
 
 `<name>` は iPhone 本体の名前ではなく、**RoamRun に登録した名前**です（大文字小文字は区別しません。`roamrun devices` で確認、アプリの詳細画面の ✏️ で変更可。名前は重複できません）。iPhone の登録（Add Device）はアプリで一度だけ行ってください。アプリと CLI が同じ iPhone を同時にブリッジしないよう、後から起動した側は起動を拒否します。`logs` はアプリを起動し直します（`devicectl` は、すでに動いているアプリにコンソールをつなげないため）。ブリッジ経由でも、同じ Wi-Fi でも使えます。
+
+`install` には、**Debugging、Release Testing（Ad Hoc）、Enterprise** で書き出した `.ipa`（CI で作ったものなど）や `.app` を渡せます。端末の UDID がプロビジョニングプロファイルに入っている必要があります（Enterprise は、証明書を信頼した端末ならどれでも）。App Store Connect 用（App Store / TestFlight）のビルドは直接インストールできないので、`install` が実行前にそう伝えます。RoamRun が届くのはこの Mac とペアリング済みの端末だけです。ペアリングしていない端末にビルドを配るには、TestFlight や OTA 配布（Ad Hoc / Enterprise）を使ってください。
 
 ## AI エージェントから使う
 

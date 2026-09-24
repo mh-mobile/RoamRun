@@ -185,3 +185,11 @@ private func profile(_ name: String) -> DeviceProfile {
     #expect(CLI.shellName("iPhone mh") == "'iPhone mh'")
     #expect(CLI.shellName("Hiro's \"iPad\" $1") == #"'Hiro'\''s "iPad" $1'"#)
 }
+
+// MARK: - Install: which signing a provisioning profile allows
+
+@Test func provisioningKinds() {
+    #expect(CLI.parseProvisioning(["ProvisionedDevices": ["00008102-000B00000000B002"]]) == .devices(["00008102-000B00000000B002"]))
+    #expect(CLI.parseProvisioning(["ProvisionsAllDevices": true]) == .allDevices)   // Enterprise
+    #expect(CLI.parseProvisioning(["Name": "App Store"]) == .appStore)             // no device list
+}

@@ -49,6 +49,10 @@ roamrun down iPhone                   # when finished (optional)
 
 Debugger: `lldb` → `device select $UDID` → `device process attach -n App`.
 
+Prebuilt .ipa (e.g. from CI) or .app: `roamrun install iPhone App.ipa` — checks
+it's signed for this device (Debugging, Release Testing / Ad Hoc, Enterprise)
+before installing; App Store / TestFlight builds can't be installed directly.
+
 App output (print and os_log): `roamrun logs iPhone com.example.App` relaunches
 the app with its console attached and streams until Ctrl-C — use it instead of
 the launch step. It can't join an already-running app. It never exits on its
