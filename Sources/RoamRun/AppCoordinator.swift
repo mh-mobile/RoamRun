@@ -238,6 +238,12 @@ final class AppCoordinator: ObservableObject {
     @discardableResult
     private func install(_ bridge: ProxyBridge) -> ProxyBridge {
         bridge.onLog = { [weak self] m in self?.logStore.log(m) }
+        let id = bridge.profile.id
+        bridge.onUDID = { [weak self] udid in
+            guard let self, let i = self.profiles.firstIndex(where: { $0.id == id }) else { return }
+            self.profiles[i].udid = udid
+            self.store.save(self.profiles)
+        }
         bridges[bridge.profile.id] = bridge
         bridgeObservers[bridge.profile.id] = bridge.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }

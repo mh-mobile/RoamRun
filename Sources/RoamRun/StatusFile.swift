@@ -8,6 +8,7 @@ enum StatusFile {
         var pid: Int32
         /// Written by `roamrun up` (vs. the app) — decides how to stop it.
         var cli: Bool?
+        var udid: String?
         var status: String
         var detail: String
         var ready: Bool

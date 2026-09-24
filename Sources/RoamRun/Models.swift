@@ -59,6 +59,9 @@ struct DeviceProfile: Identifiable, Codable, Equatable {
     var providerID: String
     var providerHostName: String
     var providerIP: String
+    /// Hardware UDID (xcodebuild `-destination id=`, devicectl `--device`),
+    /// learned from remotepairingd once the bridge first connects.
+    var udid: String?
 }
 
 enum BridgeState: Equatable {

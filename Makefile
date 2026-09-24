@@ -29,6 +29,7 @@ app: build
 	cp Info.plist $(BUNDLE)/Contents/Info.plist
 	mkdir -p $(BUNDLE)/Contents/Resources
 	cp Resources/AppIcon.icns $(BUNDLE)/Contents/Resources/
+	cp skills/roamrun/SKILL.md $(BUNDLE)/Contents/Resources/roamrun-skill.md
 	codesign -s "$(SIGN_ID)" $(SIGN_FLAGS) $(BUNDLE)
 	@echo "Built $(BUNDLE)"
 

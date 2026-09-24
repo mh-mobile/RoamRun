@@ -78,6 +78,13 @@ struct TailscaleClient {
         return devices.sorted { ($0.os == "iOS") != ($1.os == "iOS") ? $0.os == "iOS" : $0.name < $1.name }
     }
 
+    /// Tailscale-level reachability (disco ping), independent of iPhone services.
+    func ping(_ ip: String) -> Bool {
+        guard let path = resolvedPath() else { return false }
+        let r = Proc.run(path, ["ping", "-c", "1", "--timeout", "3s", ip])
+        return r.status == 0 && r.out.contains("pong")
+    }
+
     private func run(_ path: String, _ args: [String]) throws -> String {
         let r = Proc.run(path, args)
         guard r.status == 0 else {

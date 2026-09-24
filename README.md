@@ -93,6 +93,18 @@ roamrun doctor                # Mac → Tailscale → iPhone を順に診断し�
 
 iPhone の登録（Add iPhone）はアプリで一度だけ行ってください。アプリと CLI が同じ iPhone を同時にブリッジしないよう、後から起動した側は起動を拒否します。
 
+## AI エージェントから使う
+
+Claude Code・Codex・Cursor などのエージェントに、ビルド〜実機インストール〜デバッグを任せられます。エージェントに使い方を教えるスキルを入れてください:
+
+```sh
+roamrun init                                  # 入っているエージェントを検出してスキルを配置
+# または
+npx skills add mh-mobile/RoamRun             # skills CLI 経由
+```
+
+スキルには手順（`roamrun up -d` → `status --wait --json` で UDID 取得 → `xcodebuild` / `devicectl`）と、「iPhone のロック解除など人間にしかできないこと」が書かれています。CLI は `--json` と終了コード（0 準備完了 / 1 未準備・失敗 / 2 使い方の誤り）に対応しています。
+
 ## 構成
 
 | ファイル | 役割 |

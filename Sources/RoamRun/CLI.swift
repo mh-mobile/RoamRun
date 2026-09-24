@@ -6,18 +6,27 @@ import Foundation
 enum CLI {
     /// This process was started as the CLI (vs. the menu bar app).
     nonisolated static var isRunning: Bool { commands.contains(CommandLine.arguments.dropFirst().first ?? "") }
-    nonisolated static let commands: Set<String> = ["devices", "up", "down", "status", "doctor", "help", "--help", "-h"]
+    nonisolated static let commands: Set<String> = ["devices", "up", "down", "status", "doctor", "init", "help", "--help", "-h"]
     /// Posted by `roamrun down`; the app stops the bridge whose id is `object`.
     static let stopNotification = Notification.Name("com.roamrun.app.stopBridge")
 
     private static let usage = """
     Usage: roamrun <command>
 
-      devices              List saved iPhones and their bridge status
-      up <name> [-v] [-d]  Bridge an iPhone until Ctrl-C (-v: activity log, -d: run in the background)
-      down <name>          Stop a bridge, whether the app or another `roamrun up` runs it
-      status [name]        Show bridge status; exits 0 only if the iPhone is ready for Xcode
-      doctor [name]        Check each step from this Mac to the iPhone and say what to fix
+    AI agents: `roamrun init` installs the RoamRun skill for Claude Code, Codex,
+    Cursor, Gemini CLI and Copilot (`roamrun init --print` to read it now).
+
+      devices [--json]               List saved iPhones (with UDID) and their bridge status
+      up <name> [-v] [-d]            Bridge an iPhone until Ctrl-C (-v: activity log, -d: run in the background)
+      down <name>                    Stop a bridge, whether the app or another `roamrun up` runs it
+      status [name] [--wait N] [--json]
+                                     Bridge status, UDID and lock state; exits 0 only if ready for Xcode
+                                     (--wait: wait up to N seconds for ready)
+      doctor [name] [--json]         Check each step from this Mac to the iPhone and say what to fix
+      init [--client <name>] [--print] [--uninstall]
+                                     Install the agent skill (clients: claude, codex, cursor, gemini, copilot)
+
+    Exit codes: 0 ok/ready, 1 not ready or a check failed, 2 usage error.
 
     Add iPhones in the RoamRun app first (one-time, needs the iPhone on this Wi-Fi).
     """
@@ -29,25 +38,30 @@ enum CLI {
     nonisolated static func run(_ args: [String]) -> Never {
         setvbuf(stdout, nil, _IOLBF, 0)
         MainActor.assumeIsolated {
+            if args[0] == "init" { initSkill(args) }   // takes no iPhone name
             let profiles = ProfileStore().load()
+            let json = args.contains("--json")
+            let waitIdx = args.firstIndex(of: "--wait")
+            let wait = waitIdx.flatMap { args.indices.contains($0 + 1) ? Double(args[$0 + 1]) : nil }
+            if waitIdx != nil && wait == nil { fail("--wait needs a number of seconds") }
+            // First argument after the command that isn't a flag or --wait's value.
+            let name = args.indices.dropFirst().first { i in
+                !args[i].hasPrefix("-") && i != waitIdx.map { $0 + 1 }
+            }.map { args[$0] }
+            var targets = profiles
+            if let name {
+                guard let p = find(name, in: profiles) else { fail("no iPhone named “\(name)”. " + names(profiles)) }
+                targets = [p]
+            }
             switch args[0] {
-            case "devices": devices(profiles)
-            case "status": status(profiles, name: args.dropFirst().first)
-            case "doctor":
-                var targets = profiles
-                if let name = args.dropFirst().first {
-                    guard let p = find(name, in: profiles) else { fail("no iPhone named “\(name)”. " + names(profiles)) }
-                    targets = [p]
-                }
-                Task { exit(await doctor(targets) ? 0 : 1) }
+            case "devices": devices(profiles, json: json)
+            case "status": status(targets, json: json, wait: wait)
+            case "doctor": Task { exit(await doctor(targets, json: json) ? 0 : 1) }
             case "down":
-                guard let name = args.dropFirst().first, let p = find(name, in: profiles) else {
-                    fail("which iPhone? " + names(profiles))
-                }
+                guard name != nil, let p = targets.first else { fail("which iPhone? " + names(profiles)) }
                 down(p)
             case "up":
-                guard let name = args.dropFirst().first(where: { !$0.hasPrefix("-") }),
-                      let p = find(name, in: profiles) else { fail("which iPhone? " + names(profiles)) }
+                guard name != nil, let p = targets.first else { fail("which iPhone? " + names(profiles)) }
                 if args.contains("-d") {
                     detach(p, verbose: args.contains("-v"))
                 } else {
@@ -63,36 +77,114 @@ enum CLI {
 
     // MARK: - Commands
 
-    private static func devices(_ profiles: [DeviceProfile]) -> Never {
-        guard !profiles.isEmpty else { fail("no iPhones saved yet — add one in the RoamRun app") }
+    /// One device as `status --json` / `devices --json` report it.
+    private struct Row: Encodable {
+        let name: String
+        let id: String
+        let vpnAddress: String
+        let udid: String?
+        let status: String
+        let ready: Bool
+        let owner: String?
+        let pid: Int32?
+        let tunnelPorts: [UInt16]
+        /// CoreDevice's view: "connected", "disconnected" (reachable, no tunnel yet) or "unavailable".
+        let coreDevice: String?
+        let detail: String?
+        /// nil when unknown (not queried, or the iPhone is unreachable).
+        let locked: Bool?
+    }
+
+    /// `ready` means Xcode can use the device right now: the bridge is up *and*
+    /// CoreDevice sees the iPhone. The bridge alone can look ready for a while
+    /// after the iPhone falls asleep (its relayed connections linger).
+    private static func row(_ p: DeviceProfile, _ e: StatusFile.Entry?, deep: Bool) -> Row {
+        let udid = e?.udid ?? p.udid
+        let core = deep && e?.ready == true ? udid.flatMap(coreDeviceState) : nil
+        let ready = (e?.ready ?? false) && (!deep || core.map { $0 != "unavailable" } ?? false)
+        var status = e?.status ?? BridgeStatus.off.title
+        var detail = e.flatMap { $0.detail.isEmpty ? nil : $0.detail }
+        if e?.ready == true && !ready {
+            status = BridgeStatus.waiting.title
+            detail = "The bridge is up but Xcode can't reach the iPhone (asleep, locked, off Wi-Fi, or Tailscale stuck on the iPhone). Run `roamrun doctor` for the cause."
+        }
+        return Row(name: p.displayName, id: p.id.uuidString, vpnAddress: p.providerIP, udid: udid,
+                   status: status, ready: ready,
+                   owner: e.map(owner), pid: e?.pid, tunnelPorts: e?.tunnelPorts ?? [],
+                   coreDevice: core, detail: detail,
+                   locked: ready ? udid.flatMap(isLocked) : nil)
+    }
+
+    /// devicectl's tunnelState for this UDID; nil if devicectl failed.
+    private static func coreDeviceState(_ udid: String) -> String? {
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-list-\(getpid()).json")
+        defer { try? FileManager.default.removeItem(at: out) }
+        _ = Proc.run("/usr/bin/xcrun", ["devicectl", "--quiet", "--timeout", "10", "list", "devices", "--json-output", out.path])
+        guard let data = try? Data(contentsOf: out),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let devices = (root["result"] as? [String: Any])?["devices"] as? [[String: Any]],
+              let device = devices.first(where: { ($0["hardwareProperties"] as? [String: Any])?["udid"] as? String == udid })
+        else { return nil }
+        return (device["connectionProperties"] as? [String: Any])?["tunnelState"] as? String
+    }
+
+    private static func printJSON<T: Encodable>(_ value: T) {
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        print(String(decoding: (try? enc.encode(value)) ?? Data(), as: UTF8.self))
+    }
+
+    private static func devices(_ profiles: [DeviceProfile], json: Bool) -> Never {
         let live = StatusFile.read()
+        if json { printJSON(profiles.map { row($0, live[$0.id], deep: false) }); exit(0) }
+        guard !profiles.isEmpty else { fail("no iPhones saved yet — add one in the RoamRun app") }
         let w = max(4, profiles.map(\.displayName.count).max() ?? 4)
-        print("NAME".padding(toLength: w + 2, withPad: " ", startingAt: 0) + "VPN ADDRESS      STATUS")
+        print("NAME".padding(toLength: w + 2, withPad: " ", startingAt: 0) + "VPN ADDRESS      UDID                       STATUS")
         for p in profiles {
-            let status = live[p.id].map { "\($0.status) (\(owner($0)))" } ?? "Off"
+            let e = live[p.id]
+            let status = e.map { "\($0.status) (\(owner($0)))" } ?? "Off"
             print(p.displayName.padding(toLength: w + 2, withPad: " ", startingAt: 0)
-                  + p.providerIP.padding(toLength: 17, withPad: " ", startingAt: 0) + status)
+                  + p.providerIP.padding(toLength: 17, withPad: " ", startingAt: 0)
+                  + (e?.udid ?? p.udid ?? "-").padding(toLength: 27, withPad: " ", startingAt: 0) + status)
         }
         exit(0)
     }
 
-    private static func status(_ profiles: [DeviceProfile], name: String?) -> Never {
-        var targets = profiles
-        if let name {
-            guard let p = find(name, in: profiles) else { fail("no iPhone named “\(name)”. " + names(profiles)) }
-            targets = [p]
+    private static func status(_ targets: [DeviceProfile], json: Bool, wait: Double?) -> Never {
+        var rows: [Row]
+        let deadline = Date.now.addingTimeInterval(wait ?? 0)
+        repeat {
+            let live = StatusFile.read()
+            rows = targets.map { row($0, live[$0.id], deep: true) }
+            if rows.contains(where: \.ready) || Date.now >= deadline { break }
+            usleep(1_000_000)
+        } while true
+        if json {
+            printJSON(rows)
+        } else {
+            for r in rows {
+                var line = "\(r.name): \(r.status)"
+                if let owner = r.owner { line += " — \(owner)" }
+                if let lo = r.tunnelPorts.min(), let hi = r.tunnelPorts.max() { line += ", tunnel ports \(lo)–\(hi)" }
+                print(line)
+                if let udid = r.udid { print("  UDID: \(udid)") }
+                if let detail = r.detail { print("  \(detail)") }
+                if r.locked == true { print("  ⚠ The iPhone is locked — ask the user to unlock it and keep the screen on before installing or launching.") }
+            }
         }
-        let live = StatusFile.read()
-        var anyReady = false
-        for p in targets {
-            guard let e = live[p.id] else { print("\(p.displayName): Off"); continue }
-            anyReady = anyReady || e.ready
-            var line = "\(p.displayName): \(e.status) — \(owner(e))"
-            if let lo = e.tunnelPorts.min(), let hi = e.tunnelPorts.max() { line += ", tunnel ports \(lo)–\(hi)" }
-            print(line)
-            if !e.detail.isEmpty { print("  \(e.detail)") }
-        }
-        exit(anyReady ? 0 : 1)
+        exit(rows.contains { $0.ready } ? 0 : 1)
+    }
+
+    /// Needs the tunnel; nil when devicectl can't reach the device.
+    private static func isLocked(_ udid: String) -> Bool? {
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-lock-\(getpid()).json")
+        defer { try? FileManager.default.removeItem(at: out) }
+        _ = Proc.run("/usr/bin/xcrun", ["devicectl", "--quiet", "--timeout", "10", "device", "info", "lockState",
+                                        "--device", udid, "--json-output", out.path])
+        guard let data = try? Data(contentsOf: out),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let result = root["result"] as? [String: Any] else { return nil }
+        return result["passcodeRequired"] as? Bool
     }
 
     private static func down(_ profile: DeviceProfile) -> Never {
@@ -228,15 +320,39 @@ enum CLI {
 
     /// Walks the path Xcode → this Mac → Tailscale → iPhone and reports the
     /// first thing to fix at each hop.
-    private static func doctor(_ profiles: [DeviceProfile]) async -> Bool {
-        var healthy = true
+    private struct Check: Encodable {
+        let scope: String          // "mac" or the iPhone's name
+        let result: String         // "ok", "warning" or "fail"
+        let message: String
+        let fix: String?
+    }
+
+    private static func doctor(_ profiles: [DeviceProfile], json: Bool) async -> Bool {
+        var checks: [Check] = []
+        var scope = "mac"
+        func section(_ title: String, _ name: String) {
+            scope = name
+            if !json { print(title) }
+        }
         func check(_ ok: Bool, _ line: String, fix: String = "", warnOnly: Bool = false) {
+            let result = ok ? "ok" : warnOnly ? "warning" : "fail"
+            checks.append(Check(scope: scope, result: result, message: line, fix: ok || fix.isEmpty ? nil : fix))
+            guard !json else { return }
             print(" \(ok ? "✓" : warnOnly ? "!" : "✗") \(line)")
             if !ok, !fix.isEmpty { print("     → \(fix)") }
-            if !ok && !warnOnly { healthy = false }
+        }
+        func finish() -> Bool {
+            let healthy = !checks.contains { $0.result == "fail" }
+            if json {
+                struct Report: Encodable { let healthy: Bool; let checks: [Check] }
+                printJSON(Report(healthy: healthy, checks: checks))
+            } else {
+                print(healthy ? "\nAll good." : "\nFix the ✗ items above, top to bottom.")
+            }
+            return healthy
         }
 
-        print("This Mac")
+        section("This Mac", "mac")
         check(FileManager.default.isExecutableFile(atPath: "/usr/bin/xcrun") && shell("/usr/bin/xcrun", ["--find", "devicectl"]) != nil,
               "Xcode's devicectl is available", fix: "Install Xcode and run it once (xcode-select -s /Applications/Xcode.app).")
         let ip = InterfaceMonitor.currentIPv4()
@@ -251,14 +367,14 @@ enum CLI {
         let peers: [MeshDevice]
         do { peers = try cli.listDevices() } catch {
             check(false, "Tailscale: \(error.localizedDescription)", fix: "Install Tailscale and sign in, or set its CLI path in RoamRun › Settings.")
-            return false
+            return finish()
         }
         check(true, "Tailscale is running (\(peers.count) peers)")
 
         if profiles.isEmpty { check(false, "No iPhones saved", fix: "Add one in the RoamRun app.") }
         let live = StatusFile.read()
         for p in profiles {
-            print("\n\(p.displayName) (\(p.providerIP))")
+            section("\n\(p.displayName) (\(p.providerIP))", p.displayName)
             guard let peer = peers.first(where: { $0.ips.contains(p.providerIP) }) else {
                 check(false, "Not found on this tailnet", fix: "Sign the iPhone into the same tailnet, or remove and re-add it in RoamRun.")
                 continue
@@ -270,8 +386,17 @@ enum CLI {
                       fix: "Direct paths are much faster. Some networks (hotel, carrier NAT) force DERP.", warnOnly: true)
             }
             let open = await ReachabilityProbe.checkTCP(host: p.providerIP, port: p.remotePairingPort, timeout: 4)
-            check(open, "RemotePairing port \(p.remotePairingPort) is \(open ? "reachable" : "not reachable")",
-                  fix: "Keep the iPhone on a Wi-Fi network (tethering is fine, cellular alone is not) and unlocked. If it restarted, run Find RemotePairing Port in the app.")
+            if open {
+                check(true, "RemotePairing port \(p.remotePairingPort) is reachable")
+            } else if cli.ping(p.providerIP) {
+                // Tailscale answers but the iPhone's service doesn't: the iOS
+                // Tailscale data plane is stuck, or the iPhone left Wi-Fi.
+                check(false, "Tailscale reaches the iPhone, but RemotePairing port \(p.remotePairingPort) does not answer",
+                      fix: "Ask the user to (1) toggle the VPN off and on in the iPhone's Tailscale app — iOS Tailscale can show \"MagicSock function ReceiveIPv4 is not running\" and stop passing data while still looking connected; (2) check the iPhone is on Wi-Fi (cellular alone is not enough). If it restarted, run Find RemotePairing Port in the app.")
+            } else {
+                check(false, "The iPhone does not answer over Tailscale",
+                      fix: "Ask the user to unlock the iPhone, keep the screen on and make sure Tailscale is on. If the Tailscale app shows a \"MagicSock … not running\" warning, toggle its VPN off and on.")
+            }
             if open {
                 let speaks = await ReachabilityProbe.speaksRemotePairing(host: p.providerIP, port: p.remotePairingPort)
                 check(speaks, "iPhone \(speaks ? "answers" : "does not answer") the RemotePairing handshake",
@@ -288,18 +413,74 @@ enum CLI {
                       fix: "Put the iPhone on this Mac's Wi-Fi, remove it in RoamRun and add it again. If Xcode lost it too, pair it in Xcode first.")
             }
             if let e = live[p.id] {
-                check(e.ready, "Bridge: \(e.status) (\(owner(e)))", fix: e.detail.isEmpty ? "Wait a few seconds and run doctor again." : e.detail)
+                check(e.ready, "Mac-side bridge: \(e.status) (\(owner(e)))", fix: e.detail.isEmpty ? "Wait a few seconds and run doctor again." : e.detail)
+                if let udid = e.udid ?? p.udid {
+                    check(true, "UDID: \(udid)")
+                    let core = coreDeviceState(udid)
+                    check(core != nil && core != "unavailable", "Xcode (CoreDevice) sees the iPhone as \(core ?? "unknown")",
+                          fix: "Ask the user to unlock the iPhone and keep the screen on; then run doctor again.")
+                    if e.ready, let locked = isLocked(udid) {
+                        check(!locked, locked ? "iPhone is locked" : "iPhone is unlocked",
+                              fix: "Ask the user to unlock the iPhone and keep the screen on — installs and launches fail while it is locked.")
+                    }
+                }
             } else {
                 check(false, "Bridge is off", fix: "roamrun up \(p.displayName) -d  (or Start Bridge in the app)")
             }
         }
-        print(healthy ? "\nAll good." : "\nFix the ✗ items above, top to bottom.")
-        return healthy
+        return finish()
     }
 
     private static func shell(_ path: String, _ args: [String]) -> String? {
         let r = Proc.run(path, args)
         return r.status == 0 ? r.out : nil
+    }
+
+    /// Global skill directories of agents that follow the Agent Skills layout.
+    private static let skillClients: [(name: String, home: String)] = [
+        ("claude", ".claude"), ("codex", ".codex"), ("cursor", ".cursor"),
+        ("gemini", ".gemini"), ("copilot", ".copilot"),
+    ]
+
+    /// Installs the bundled SKILL.md for every detected (or named) agent.
+    private static func initSkill(_ args: [String]) -> Never {
+        let exe = Bundle.main.executableURL?.resolvingSymlinksInPath()
+        let bundled = exe?.deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Resources/roamrun-skill.md")
+        guard let bundled, let skill = try? Data(contentsOf: bundled) else {
+            fail("skill not found in the app bundle — build with `make app`")
+        }
+        if args.contains("--print") { FileHandle.standardOutput.write(skill); exit(0) }
+
+        // $HOME first, like other CLIs (homeDirectoryForCurrentUser ignores it).
+        let home = ProcessInfo.processInfo.environment["HOME"].map { URL(fileURLWithPath: $0) }
+            ?? FileManager.default.homeDirectoryForCurrentUser
+        let named = args.indices.filter { args[$0] == "--client" && args.indices.contains($0 + 1) }.map { args[$0 + 1] }
+        if let unknown = named.first(where: { n in !skillClients.contains { $0.name == n } }) {
+            fail("unknown client “\(unknown)”. Known: \(skillClients.map(\.name).joined(separator: ", "))")
+        }
+        let targets = skillClients.filter { c in
+            named.isEmpty ? FileManager.default.fileExists(atPath: home.appendingPathComponent(c.home).path) : named.contains(c.name)
+        }
+        guard !targets.isEmpty else {
+            fail("no supported agent found in ~ (.claude, .codex, .cursor, .gemini, .copilot). Use --client, or --print and paste it yourself.")
+        }
+        for c in targets {
+            let dir = home.appendingPathComponent("\(c.home)/skills/roamrun")
+            if args.contains("--uninstall") {
+                try? FileManager.default.removeItem(at: dir)
+                print("Removed \(dir.path)")
+                continue
+            }
+            do {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                try skill.write(to: dir.appendingPathComponent("SKILL.md"), options: .atomic)
+                print("Installed \(dir.path)/SKILL.md")
+            } catch {
+                fail("could not write \(dir.path): \(error.localizedDescription)")
+            }
+        }
+        exit(0)
     }
 
     // MARK: - Helpers

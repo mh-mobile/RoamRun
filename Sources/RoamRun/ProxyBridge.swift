@@ -19,6 +19,9 @@ final class ProxyBridge: ObservableObject {
 
     let profile: DeviceProfile
     var onLog: ((String) -> Void)?
+    /// Called when remotepairingd reports a (new) UDID for this device.
+    var onUDID: ((String) -> Void)?
+    private(set) var udid: String?
 
     /// False after an error retrying can't fix (unrecognized pairing) — the
     /// auto-retry loops leave it alone. Same-LAN / CLI-owner refusals stay
@@ -51,6 +54,7 @@ final class ProxyBridge: ObservableObject {
 
     init(profile: DeviceProfile) {
         self.profile = profile
+        self.udid = profile.udid
     }
 
     func start() async {
@@ -245,7 +249,13 @@ final class ProxyBridge: ObservableObject {
     /// dialed it. Burn that attempt ourselves so the lookahead relays are up
     /// before the user's first Run.
     private func onDeviceReachable(instance: String, udid: String) {
-        guard instance == profile.instanceName, !warmedUp else { return }
+        guard instance == profile.instanceName else { return }
+        if udid != self.udid {
+            self.udid = udid
+            onUDID?(udid)
+            publishStatus()
+        }
+        guard !warmedUp else { return }
         warmedUp = true
         Task { await warmUp(udid: udid, gen: generation) }
     }
@@ -305,7 +315,7 @@ final class ProxyBridge: ObservableObject {
         case .active(_, let t): ports = t
         case .off: break
         }
-        StatusFile.write(profile.id, .init(pid: getpid(), cli: CLI.isRunning, status: s.title, detail: detail,
+        StatusFile.write(profile.id, .init(pid: getpid(), cli: CLI.isRunning, udid: udid, status: s.title, detail: detail,
                                            ready: s == .ready, tunnelPorts: ports, updated: .now))
     }
 
