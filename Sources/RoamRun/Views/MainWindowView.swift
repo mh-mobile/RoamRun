@@ -143,7 +143,7 @@ private struct WelcomeView: View {
                     .foregroundStyle(.secondary)
             }
             VStack(alignment: .leading, spacing: 10) {
-                Step(n: 1, text: "Pair the iPhone with Xcode once (USB), with “Connect via network” on.")
+                Step(n: 1, text: "Pair the iPhone with this Mac once — over USB, or with Xcode 27 + iOS 27, Device Hub › Pair Nearby Device on the same Wi‑Fi.")
                 Step(n: 2, text: "Install Tailscale on this Mac and the iPhone, signed in to the same tailnet.")
                 Step(n: 3, text: "Add the iPhone here while it's on this Mac's Wi‑Fi.")
             }

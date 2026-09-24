@@ -23,8 +23,9 @@ Install (or `make install-cli` from the repo).
 
 - **Unlock the iPhone and keep its screen on.** A sleeping iPhone is
   unreachable; a locked one refuses installs and launches.
-- One-time setup: pair the iPhone with this Mac in Xcode (USB, Trust,
-  Developer Mode, "Connect via network"), then add it in the RoamRun app while
+- One-time setup: pair the iPhone with this Mac (USB + Trust, or with Xcode 27
+  + iOS 27, Device Hub › + › Pair Nearby Device on the same Wi-Fi), turn on
+  Developer Mode, then add it in the RoamRun app while
   it is on the Mac's Wi-Fi.
 - Keep the iPhone on some Wi-Fi (tethering is fine; cellular alone is not).
 
@@ -58,7 +59,8 @@ the owner, and `up` refuses a device another process bridges.
 - `doctor` says Tailscale reaches the iPhone but the RemotePairing port doesn't
   answer → ask the user to toggle the VPN off/on in the iPhone's Tailscale app
   (iOS Tailscale sometimes shows "MagicSock function ReceiveIPv4 is not running"
-  and stops passing data while looking connected), and to check it's on Wi-Fi.
+  and stops passing data while looking connected), to keep the Tailscale app
+  updated, and to check it's on Wi-Fi.
 - `The peer is no longer reachable` → macOS rebuilds the control channel about
   every 42 s; retry the command once, then run `doctor`.
 

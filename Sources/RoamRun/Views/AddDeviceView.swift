@@ -76,7 +76,7 @@ struct AddDeviceView: View {
                     Text("Not showing up? Check that:").font(.callout.weight(.medium))
                     Text("• The iPhone is unlocked and on the same Wi‑Fi as this Mac (or on USB)")
                     Text("• Developer Mode is on (Settings › Privacy & Security)")
-                    Text("• It has been paired with Xcode, with “Connect via network” checked")
+                    Text("• It has been paired with this Mac (USB, or Xcode 27 Device Hub › Pair Nearby Device)")
                 }
                 .font(.callout)
                 .foregroundStyle(.secondary)
