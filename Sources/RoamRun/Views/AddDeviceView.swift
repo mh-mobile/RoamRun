@@ -5,12 +5,14 @@ struct AddDeviceView: View {
     @Environment(\.dismiss) private var dismiss
     var onAdded: (UUID) -> Void = { _ in }
 
-    @State private var captured: CapturedService?
+    /// Selected device, by host: its newest Bonjour instance can change
+    /// while the sheet is open, the device doesn't.
+    @State private var selectedHost: String?
     @State private var provider: MeshProvider = .tailscale
     @State private var meshDevice: MeshDevice?
     @State private var manualIP = ""
     @State private var name = ""
-    /// instanceName -> whether the advertised host:port actually answers.
+    /// host -> whether the advertised host:port actually answers.
     /// mDNS cache keeps dead records for ~75min, so zone-dump hits alone
     /// don't mean the device is still here.
     @State private var liveness: [String: Bool] = [:]
@@ -40,7 +42,7 @@ struct AddDeviceView: View {
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button("Add iPhone") {
-                    guard let captured else { return }
+                    guard let captured = newest(for: selectedHost) else { return }
                     if let id = coordinator.addDevice(captured: captured, provider: provider,
                                                       meshDevice: meshDevice, manualIP: manualIP,
                                                       name: name) {
@@ -57,8 +59,8 @@ struct AddDeviceView: View {
         .frame(width: 520)
         .onAppear { coordinator.refreshTailscale() }
         .task { await probeLoop() }
-        .onChange(of: captured) { new in
-            if name.isEmpty, let new { name = coordinator.uniqueName(new.shortHost) }
+        .onChange(of: selectedHost) { _ in
+            if name.isEmpty, let s = newest(for: selectedHost) { name = coordinator.uniqueName(s.shortHost) }
         }
     }
 
@@ -84,10 +86,10 @@ struct AddDeviceView: View {
         } else {
             VStack(spacing: 0) {
                 ForEach(servicesSorted) { s in
-                    ServiceRow(service: s, live: liveness[s.instanceName],
-                               selected: captured?.instanceName == s.instanceName)
+                    ServiceRow(service: s, live: liveness[s.host],
+                               selected: selectedHost == s.host)
                         .contentShape(Rectangle())
-                        .onTapGesture { captured = s }
+                        .onTapGesture { selectedHost = s.host }
                     if s.id != servicesSorted.last?.id { Divider() }
                 }
             }
@@ -173,14 +175,17 @@ struct AddDeviceView: View {
     /// One row per device. An iPhone announces a new Bonjour instance each
     /// time it changes network, and the old ones linger in the mDNS cache
     /// (~75 min) — keep only the newest per host.
+    /// Stable order: responding devices first, then by name — rows must not
+    /// jump around while the user is picking one.
     private var servicesSorted: [CapturedService] {
-        let newestPerHost = Dictionary(grouping: coordinator.capture.services.values, by: \.host)
-            .compactMap { $0.value.max { $0.lastSeen < $1.lastSeen } }
-        return newestPerHost.sorted { a, b in
-            let la = liveness[a.instanceName] ?? false
-            let lb = liveness[b.instanceName] ?? false
-            return la == lb ? a.lastSeen > b.lastSeen : la && !lb
+        Set(coordinator.capture.services.values.map(\.host)).compactMap(newest(for:)).sorted { a, b in
+            let la = liveness[a.host] != false, lb = liveness[b.host] != false
+            return la == lb ? a.shortHost.localizedStandardCompare(b.shortHost) == .orderedAscending : la
         }
+    }
+
+    private func newest(for host: String?) -> CapturedService? {
+        coordinator.capture.services.values.filter { $0.host == host }.max { $0.lastSeen < $1.lastSeen }
     }
 
     /// iPhones first, then online peers — the one you want is near the top.
@@ -196,20 +201,20 @@ struct AddDeviceView: View {
     /// stale cache entries pointing at devices that already left the network.
     private func probeLoop() async {
         while !Task.isCancelled {
-            for s in coordinator.capture.services.values {
+            for s in servicesSorted {
                 let targets = s.hostIPs.isEmpty ? [s.host] : s.hostIPs
                 var alive = false
                 for t in targets where !alive {
                     alive = await ReachabilityProbe.checkTCP(host: t, port: s.port, timeout: 1.2)
                 }
-                liveness[s.instanceName] = alive
+                liveness[s.host] = alive
             }
             try? await Task.sleep(for: .seconds(4))
         }
     }
 
     private var canAdd: Bool {
-        guard captured != nil, !name.trimmingCharacters(in: .whitespaces).isEmpty,
+        guard selectedHost != nil, !name.trimmingCharacters(in: .whitespaces).isEmpty,
               !coordinator.isNameTaken(name) else { return false }
         switch provider {
         case .tailscale: return meshDevice?.ipv4 != nil
