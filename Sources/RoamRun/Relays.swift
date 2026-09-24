@@ -52,9 +52,17 @@ final class Relay {
 
     /// Nagle off: the tunnel carries lldb's small request/response packets,
     /// and Nagle + delayed ACK added ~150ms to every round trip.
-    private static func tcpParams() -> NWParameters {
+    /// Keepalive (outbound only): a sleeping iPhone never sends a FIN, so
+    /// without probes its dead connection kept the bridge looking Ready.
+    private static func tcpParams(keepalive: Bool = false) -> NWParameters {
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
+        if keepalive {
+            tcp.enableKeepalive = true
+            tcp.keepaliveIdle = 10
+            tcp.keepaliveInterval = 5
+            tcp.keepaliveCount = 3   // dead after ~25s of silence
+        }
         return NWParameters(tls: nil, tcp: tcp)
     }
 
@@ -106,7 +114,7 @@ final class Relay {
             return
         }
         guard let rport = NWEndpoint.Port(rawValue: remotePort) else { inbound.cancel(); return }
-        let outbound = NWConnection(host: NWEndpoint.Host(remoteIP), port: rport, using: Self.tcpParams())
+        let outbound = NWConnection(host: NWEndpoint.Host(remoteIP), port: rport, using: Self.tcpParams(keepalive: true))
         let stats = ConnStats()
         let port = remotePort
         let finish: (String) -> Void = { [weak self] reason in
