@@ -29,11 +29,14 @@ final class Relay {
     let localPort: UInt16
     let remoteIP: String
     let remotePort: UInt16
-    /// Number of relayed connections currently open (called off-main).
+    /// Number of connections that actually reached the iPhone (called off-main).
     var onOpenCountChange: ((Int) -> Void)?
 
     private var listener: NWListener?
     private var connections: [NWConnection] = []
+    /// Inbound connections whose upstream leg is established. An accepted
+    /// connection that never reaches the iPhone must not count as "connected".
+    private var established = Set<ObjectIdentifier>()
     private var stopped = false
     private let lock = NSLock()
     /// Only local remotepairingd uses a relay; a few connections at most.
@@ -77,13 +80,13 @@ final class Relay {
     func stop() {
         listener?.cancel()
         listener = nil
-        lock.lock(); stopped = true; let open = connections; connections = []; lock.unlock()
+        lock.lock(); stopped = true; let open = connections; connections = []; established = []; lock.unlock()
         for c in open { c.cancel() }
     }
 
     var openCount: Int {
         lock.lock(); defer { lock.unlock() }
-        return connections.count / 2
+        return established.count
     }
 
     private func accept(_ inbound: NWConnection) {
@@ -105,8 +108,9 @@ final class Relay {
         }
         // Upstream refused/unreachable: drop the local side too, otherwise
         // remotepairingd sits on an accepted socket that leads nowhere.
-        outbound.stateUpdateHandler = { state in
+        outbound.stateUpdateHandler = { [weak self] state in
             switch state {
+            case .ready: self?.markEstablished(inbound)
             case .waiting(let e), .failed(let e): finish("upstream \(e.localizedDescription)")
             default: break
             }
@@ -164,19 +168,26 @@ final class Relay {
         lock.lock()
         guard !stopped, connections.count / 2 < Self.maxConnections else { lock.unlock(); return false }
         connections += conns
-        let n = connections.count / 2
         lock.unlock()
-        onOpenCountChange?(n)
         return true
+    }
+
+    private func markEstablished(_ inbound: NWConnection) {
+        lock.lock()
+        let inserted = established.insert(ObjectIdentifier(inbound)).inserted
+        let n = established.count
+        lock.unlock()
+        if inserted { onOpenCountChange?(n) }
     }
 
     private func untrack(_ conns: NWConnection...) {
         lock.lock()
         let before = connections.count
         connections.removeAll { c in conns.contains { $0 === c } }
-        let changed = connections.count != before, n = connections.count / 2
+        let wasEstablished = conns.contains { established.remove(ObjectIdentifier($0)) != nil }
+        let changed = connections.count != before, n = established.count
         lock.unlock()
-        if changed { onOpenCountChange?(n) }
+        if changed && wasEstablished { onOpenCountChange?(n) }
     }
 }
 
