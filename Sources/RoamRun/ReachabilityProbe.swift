@@ -76,3 +76,36 @@ private final class ProbeBox: @unchecked Sendable {
         body()
     }
 }
+
+extension ReachabilityProbe {
+    /// The device's RemotePairing port, which can change when it restarts:
+    /// the usual range first, then the rest. An open port may be another
+    /// service, so each is confirmed with the handshake.
+    static func findRemotePairingPort(host: String) async -> UInt16? {
+        for range in [UInt16(49152)...49255, UInt16(49256)...UInt16.max] {
+            for port in await openPorts(host: host, in: range) where await speaksRemotePairing(host: host, port: port) {
+                return port
+            }
+        }
+        return nil
+    }
+
+    /// Probes `range` 256 ports at a time.
+    private static func openPorts(host: String, in range: ClosedRange<UInt16>) async -> [UInt16] {
+        var open: [UInt16] = []
+        var next = Int(range.lowerBound)
+        while next <= Int(range.upperBound) {
+            let batch = UInt16(next)...UInt16(min(next + 255, Int(range.upperBound)))
+            open += await withTaskGroup(of: UInt16?.self) { group in
+                for port in batch {
+                    group.addTask { await ReachabilityProbe.checkTCP(host: host, port: port, timeout: 1.2) ? port : nil }
+                }
+                var hits: [UInt16] = []
+                for await r in group { if let r { hits.append(r) } }
+                return hits
+            }
+            next += 256
+        }
+        return open.sorted()
+    }
+}

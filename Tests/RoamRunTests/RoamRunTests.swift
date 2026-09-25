@@ -434,3 +434,15 @@ private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> { CLI.
     watcher.handle(endpoint(64025))
     #expect(host == "192.168.1.15")
 }
+
+@Test func statusFileKeepsGoodEntriesNextToABadOne() throws {
+    let good = StatusFile.Entry(pid: 1, cli: false, udid: nil, status: "Off", detail: "", ready: false, tunnelPorts: [], updated: .now)
+    let id = UUID()
+    // The real file's shape, as written by StatusFile.write.
+    let written = try JSONEncoder().encode([id: good])
+    #expect(StatusFile.decode(written)[id] == good)
+    var raw = try #require(JSONSerialization.jsonObject(with: written) as? [Any])
+    raw += [UUID().uuidString, ["pid": "not a number"]]
+    let decoded = StatusFile.decode(try JSONSerialization.data(withJSONObject: raw))
+    #expect(decoded.keys.contains(id) && decoded.count == 1)
+}

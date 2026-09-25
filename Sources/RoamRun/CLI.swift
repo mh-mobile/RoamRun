@@ -588,6 +588,15 @@ enum CLI {
         let bridge = ProxyBridge(profile: profile)
         self.bridge = bridge
         bridge.onLog = { m in if verbose { print("    \(m)") } }
+        bridge.onProfileChange = { moved in   // save where the device answers now, as the app does
+            let store = ProfileStore()
+            var all = store.load()
+            guard let i = all.firstIndex(where: { $0.id == moved.id }) else { return }
+            all[i].providerIP = moved.providerIP
+            all[i].remotePairingPort = moved.remotePairingPort
+            store.save(all)
+            print("  \(moved.displayName) now answers at \(moved.providerIP):\(moved.remotePairingPort) (saved)")
+        }
 
         // Print status transitions, not a stream of identical lines.
         var last = ""

@@ -42,6 +42,10 @@ final class Relay {
     /// Only local remotepairingd uses a relay; a few connections at most.
     // ponytail: flat cap; a flood from a local process just gets refused.
     private static let maxConnections = 64
+    /// Across all relays in this process: each pair is two file descriptors.
+    private static let maxTotal = 256
+    private static let totalLock = NSLock()
+    nonisolated(unsafe) private static var total = 0
 
     init(localIP: String, localPort: UInt16, remoteIP: String, remotePort: UInt16) {
         self.localIP = localIP
@@ -98,6 +102,7 @@ final class Relay {
         listener?.cancel()
         listener = nil
         lock.lock(); stopped = true; let open = connections; connections = []; established = []; lock.unlock()
+        Self.totalLock.withLock { Self.total -= open.count / 2 }
         for c in open { c.cancel() }
     }
 
@@ -110,7 +115,7 @@ final class Relay {
         // Compare raw bytes: IPv4Address == also compares an interface scope.
         guard case .hostPort(let host, _) = inbound.endpoint, case .ipv4(let from) = host,
               from.rawValue == IPv4Address(localIP)?.rawValue else {
-            relayLog.log("refused :\(self.localPort) connection from \(String(describing: inbound.endpoint), privacy: .public)")
+            relayLog.log("refused :\(self.localPort) connection from \(String(describing: inbound.endpoint), privacy: .private)")
             inbound.cancel()
             return
         }
@@ -185,6 +190,8 @@ final class Relay {
     private func track(_ conns: NWConnection...) -> Bool {
         lock.lock()
         guard !stopped, connections.count / 2 < Self.maxConnections else { lock.unlock(); return false }
+        let admitted = Self.totalLock.withLock { Self.total < Self.maxTotal ? (Self.total += 1, true).1 : false }
+        guard admitted else { lock.unlock(); return false }
         connections += conns
         lock.unlock()
         return true
@@ -207,6 +214,7 @@ final class Relay {
         let wasEstablished = conns.contains { established.remove(ObjectIdentifier($0)) != nil }
         let changed = connections.count != before, n = established.count
         lock.unlock()
+        if changed { Self.totalLock.withLock { Self.total -= 1 } }
         if changed && wasEstablished { onOpenCountChange?(n) }
     }
 }

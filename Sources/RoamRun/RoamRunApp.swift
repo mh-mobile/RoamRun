@@ -6,6 +6,12 @@ import AppKit
 @main
 enum Entry {
     static func main() {
+        // GUI apps start with 256 file descriptors; relays use two per connection.
+        var limit = rlimit()
+        if getrlimit(RLIMIT_NOFILE, &limit) == 0, limit.rlim_cur < 4096 {
+            limit.rlim_cur = min(4096, limit.rlim_max)
+            setrlimit(RLIMIT_NOFILE, &limit)
+        }
         let args = Array(CommandLine.arguments.dropFirst())
         // Called as `roamrun` (the PATH link) it's always the command line, even
         // bare — the app's own launch runs …/MacOS/RoamRun. Any other argument

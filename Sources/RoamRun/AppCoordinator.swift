@@ -313,6 +313,12 @@ final class AppCoordinator: ObservableObject {
             self.store.save(self.profiles)
             self.learnDeviceTypes()
         }
+        bridge.onProfileChange = { [weak self] moved in
+            guard let self, let i = self.profiles.firstIndex(where: { $0.id == id }) else { return }
+            self.profiles[i].providerIP = moved.providerIP
+            self.profiles[i].remotePairingPort = moved.remotePairingPort
+            self.store.save(self.profiles)
+        }
         bridges[bridge.profile.id] = bridge
         bridgeObservers[bridge.profile.id] = bridge.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
@@ -341,14 +347,8 @@ final class AppCoordinator: ObservableObject {
     /// captured port doesn't answer. Updates the profile on success.
     func scanRemotePairingPort(_ profile: DeviceProfile) async {
         let host = profile.providerIP
-        var found: UInt16?
-        for range in [UInt16(49152)...49255, UInt16(49256)...UInt16.max] where found == nil {
-            logStore.log("\"\(profile.displayName)\": scanning \(host) ports \(range.lowerBound)-\(range.upperBound)", device: profile.id)
-            // An open port may be another service; confirm with the handshake.
-            for port in await Self.openPorts(host: host, in: range) where found == nil {
-                if await ReachabilityProbe.speaksRemotePairing(host: host, port: port) { found = port }
-            }
-        }
+        logStore.log("\"\(profile.displayName)\": scanning \(host) for its RemotePairing port", device: profile.id)
+        let found = await ReachabilityProbe.findRemotePairingPort(host: host)
         if let found, found == profile.remotePairingPort {
             logStore.log("\"\(profile.displayName)\": RemotePairing port is still \(found)", device: profile.id)
         } else if let found, let idx = profiles.firstIndex(where: { $0.id == profile.id }) {
@@ -365,25 +365,6 @@ final class AppCoordinator: ObservableObject {
         } else {
             logStore.log("\"\(profile.displayName)\": no RemotePairing port responded — is the device on Wi-Fi?", device: profile.id)
         }
-    }
-
-    /// Probes `range` 256 ports at a time.
-    private static func openPorts(host: String, in range: ClosedRange<UInt16>) async -> [UInt16] {
-        var open: [UInt16] = []
-        var next = Int(range.lowerBound)
-        while next <= Int(range.upperBound) {
-            let batch = UInt16(next)...UInt16(min(next + 255, Int(range.upperBound)))
-            open += await withTaskGroup(of: UInt16?.self) { group in
-                for port in batch {
-                    group.addTask { await ReachabilityProbe.checkTCP(host: host, port: port, timeout: 1.2) ? port : nil }
-                }
-                var hits: [UInt16] = []
-                for await r in group { if let r { hits.append(r) } }
-                return hits
-            }
-            next += 256
-        }
-        return open.sorted()
     }
 
     // MARK: - Internals

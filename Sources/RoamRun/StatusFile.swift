@@ -26,9 +26,22 @@ enum StatusFile {
     /// executable, not just liveness, guards against recycled PIDs — these
     /// PIDs get SIGTERM from `roamrun down` and the app's Stop button.
     static func read() -> [UUID: Entry] {
-        guard let data = try? Data(contentsOf: url),
-              let all = try? JSONDecoder().decode([UUID: Entry].self, from: data) else { return [:] }
-        return all.filter { isRoamRun($0.value.pid) }
+        guard let data = try? Data(contentsOf: url) else { return [:] }
+        return decode(data).filter { isRoamRun($0.value.pid) }
+    }
+
+    /// Entry by entry: one bad entry (e.g. from another version) mustn't hide the others.
+    /// JSONEncoder writes a UUID-keyed dictionary as a flat [key, value, key, value, …] array.
+    static func decode(_ data: Data) -> [UUID: Entry] {
+        guard let raw = (try? JSONSerialization.jsonObject(with: data)) as? [Any] else { return [:] }
+        var all: [UUID: Entry] = [:]
+        for i in stride(from: 0, to: raw.count - 1, by: 2) {
+            guard let key = raw[i] as? String, let id = UUID(uuidString: key),
+                  let d = try? JSONSerialization.data(withJSONObject: raw[i + 1]),
+                  let e = try? JSONDecoder().decode(Entry.self, from: d) else { continue }
+            all[id] = e
+        }
+        return all
     }
 
     /// Sets (or with nil, clears) this process's entry. Never touches an

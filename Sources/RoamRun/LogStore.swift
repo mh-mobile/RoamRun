@@ -9,7 +9,8 @@ final class LogStore: ObservableObject {
     private static let logger = Logger(subsystem: "com.roamrun.app", category: "bridge")
 
     func log(_ message: String, device: UUID? = nil) {
-        Self.logger.log("\(message, privacy: .public)")
+        // Private in the system log: lines carry UDIDs and addresses. The in-app log shows them in full.
+        Self.logger.log("\(message, privacy: .private)")
         let stamp = Date.now.formatted(date: .omitted, time: .standard)
         lines.append((device, "\(stamp)  \(message)"))
         if lines.count > limit { lines.removeFirst(lines.count - limit) }

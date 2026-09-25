@@ -39,6 +39,10 @@ final class TunnelPortWatcher {
     private static let advertMarker = "Resolved bonjour advert "
     private static let advertPattern = #/([0-9A-Fa-f-]+) to identity (?:associated with udid ([0-9A-Fa-f-]+)|nil, udid nil)/#
 
+    /// Apple's own remotepairingd only: any process can be named that and log lines
+    /// like these, but only Apple's lives in these SIP-protected places.
+    static let fromRemotepairingd = #"process == "remotepairingd" AND (processImagePath BEGINSWITH "/System/" OR processImagePath BEGINSWITH "/Library/Apple/")"#
+
     /// False if `log stream` couldn't be launched.
     @discardableResult
     func start() -> Bool {
@@ -46,7 +50,7 @@ final class TunnelPortWatcher {
         let task = Proc.tied("/usr/bin/log", [
             "stream", "--style", "compact",
             "--predicate",
-            #"process == "remotepairingd" AND (eventMessage CONTAINS "Got tunnel endpoint" OR eventMessage CONTAINS "Sending tunnel establish request" OR eventMessage CONTAINS "Resolved bonjour advert")"#
+            Self.fromRemotepairingd + #" AND (eventMessage CONTAINS "Got tunnel endpoint" OR eventMessage CONTAINS "Sending tunnel establish request" OR eventMessage CONTAINS "Resolved bonjour advert")"#
         ])
         let pipe = Pipe(), errPipe = Pipe()
         task.standardOutput = pipe
@@ -107,7 +111,7 @@ final class TunnelPortWatcher {
     static func recentAdverts(last window: String, containing phrase: String = "Resolved bonjour advert",
                               timeout: TimeInterval = 10) -> [(String, String?)] {
         Proc.run("/usr/bin/log", ["show", "--last", window, "--style", "compact", "--predicate",
-                                  "process == \"remotepairingd\" AND eventMessage CONTAINS[c] \"\(phrase)\""], timeout: timeout)
+                                  fromRemotepairingd + " AND eventMessage CONTAINS[c] \"\(phrase)\""], timeout: timeout)
             .out.split(separator: "\n").compactMap { advert(in: String($0)) }
     }
 

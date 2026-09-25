@@ -22,6 +22,8 @@ final class ProxyBridge: ObservableObject {
     var onLog: ((String) -> Void)?
     /// Called when remotepairingd reports a (new) UDID for this device.
     var onUDID: ((String) -> Void)?
+    /// Called when the bridge found the device at a new address or port; save it.
+    var onProfileChange: ((DeviceProfile) -> Void)?
     private(set) var udid: String?
 
     /// False after an error retrying can't fix (unrecognized pairing) — the
@@ -53,6 +55,10 @@ final class ProxyBridge: ObservableObject {
     private var lastFullCheck = Date.distantPast
     /// Standing aside, consecutive checks that found the device away.
     private var awayTicks = 0
+    /// Re-announcements in a row without a control channel.
+    private var stuckRenewals = 0
+    /// A port scan that found nothing isn't repeated for a while (e.g. device on cellular).
+    private var lastFailedScan = Date.distantPast
     private static let homeLog = Logger(subsystem: "com.roamrun.app", category: "home")
 
     /// Spoofed SRV target whose A record we publish pointing at this Mac.
@@ -74,6 +80,7 @@ final class ProxyBridge: ObservableObject {
         watcher = TunnelPortWatcher()
         warmingUp = false
         awayTicks = 0
+        stuckRenewals = 0
         activatedAt = .distantFuture
         autoRetry = true
         phoneConnected = false
@@ -106,9 +113,21 @@ final class ProxyBridge: ObservableObject {
         guard gen == generation else { return }
 
         setState(.starting("Probing \(profile.providerIP):\(profile.remotePairingPort)"))
-        let reachable = await ReachabilityProbe.checkTCP(host: profile.providerIP,
+        var reachable = await ReachabilityProbe.checkTCP(host: profile.providerIP,
                                                          port: profile.remotePairingPort)
         guard gen == generation else { return }   // stopped or restarted meanwhile
+        if !reachable {
+            let (moved, answers) = await relocate()
+            guard gen == generation else { return }
+            if moved.providerIP != profile.providerIP || moved.remotePairingPort != profile.remotePairingPort {
+                // Only these two: a rename during the (possibly long) lookup must survive.
+                profile.providerIP = moved.providerIP
+                profile.remotePairingPort = moved.remotePairingPort
+                onProfileChange?(profile)   // kept even if it doesn't answer right now
+            }
+            reachable = answers
+        }
+        guard gen == generation else { return }
         guard reachable else {
             setState(.error("\(profile.providerIP) did not respond on RemotePairing port \(profile.remotePairingPort) — check the mesh VPN and that the device is on Wi-Fi"))
             return
@@ -166,7 +185,7 @@ final class ProxyBridge: ObservableObject {
                 self.onUnrecognized(instance)
             }
         }
-        watcher.onLog = { [weak self] m in self?.log(m) }
+        watcher.onLog = { [weak self] m in Task { @MainActor in self?.log(m) } }   // may come from the reader queue
         watcher.onExit = { [weak self] m in
             Task { @MainActor in self?.helperDied(m, gen: gen) }
         }
@@ -202,6 +221,7 @@ final class ProxyBridge: ObservableObject {
         waitingSince = .now
         renewTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
+                self?.publishStatus()   // restores our entry if status.json was lost or rewritten
                 self?.renewIfStuck()
                 self?.standAsideIfHome()
             }
@@ -248,11 +268,17 @@ final class ProxyBridge: ObservableObject {
     /// sequentially, so pre-open the next ones for the retry.
     // ponytail: fixed lookahead of 16; widen if the device skips further ahead.
     private func onTunnelPortDiscovered(_ port: UInt16, localIP: String) {
+        // First: if ports jumped (e.g. lower after a device reboot), the old window must go.
+        let reaped = reapTunnelRelays(around: port)
+        if !reaped.isEmpty, case .active(let lp, let existing) = state {
+            setState(.active(localPort: lp, tunnelPorts: existing.filter { !reaped.contains($0) }))
+        }
         let upper = UInt16(min(Int(port) + 16, Int(UInt16.max)))
         let ports = (port...upper).filter { !coveredPorts.contains($0) }
         guard !ports.isEmpty else { return }
-        // Bounded whatever the log says: normal use keeps well under this (old ones are reaped).
-        guard tunnelRelays.count < 64 else { log("tunnel port \(port) ignored: 64 relays already open"); return }
+        // Bounded whatever the log says; the window above keeps normal use near 49.
+        // coveredPorts includes binds still in flight, and the control port (hence - 1).
+        guard coveredPorts.count - 1 + ports.count <= 64 else { log("tunnel port \(port) ignored: 64 relays already open"); return }
         coveredPorts.formUnion(ports)
         log("live tunnel port \(port) discovered, relaying \(ports.first!)-\(ports.last!)")
         let gen = generation
@@ -272,26 +298,26 @@ final class ProxyBridge: ObservableObject {
                 }
             }
             guard gen == generation else { return }   // restarted meanwhile: these ports aren't the new bridge's
-            let reaped = reapTunnelRelays(below: port)
             if case .active(let lp, let existing) = state {
-                setState(.active(localPort: lp, tunnelPorts: existing.filter { !reaped.contains($0) } + opened))
+                setState(.active(localPort: lp, tunnelPorts: existing + opened))
             }
         }
     }
 
-    /// Tunnel ports only move forward, so relays well behind the newest one
-    /// will not be dialed again. Close those that carry no connection.
-    // ponytail: fixed 32-port tail kept; widen if old tunnels get reused.
-    private func reapTunnelRelays(below newest: UInt16) -> Set<UInt16> {
+    /// Tunnel ports move forward, so relays well behind the newest one — or
+    /// ahead of it after a jump back — won't be dialed again. Close those
+    /// that carry no connection.
+    // ponytail: fixed window of newest-32...newest+16; widen if old tunnels get reused.
+    private func reapTunnelRelays(around newest: UInt16) -> Set<UInt16> {
         var reaped = Set<UInt16>()
-        let cutoff = Int(newest) - 32
-        for (port, pair) in tunnelRelays where Int(port) < cutoff && pair.openCount == 0 {
+        let window = (Int(newest) - 32)...(Int(newest) + 16)
+        for (port, pair) in tunnelRelays where !window.contains(Int(port)) && pair.openCount == 0 {
             pair.stop()
             tunnelRelays[port] = nil
             coveredPorts.remove(port)
             reaped.insert(port)
         }
-        if !reaped.isEmpty { log("closed \(reaped.count) idle tunnel relays below \(cutoff)") }
+        if !reaped.isEmpty { log("closed \(reaped.count) idle tunnel relays outside \(window.lowerBound)-\(window.upperBound)") }
         return reaped
     }
 
@@ -309,6 +335,11 @@ final class ProxyBridge: ObservableObject {
             return
         }
         if udid != self.udid {
+            // Learned once; a different one later is suspicious (spoofed log line) — don't save it.
+            if let known = self.udid, known.caseInsensitiveCompare(udid) != .orderedSame {
+                log("ignoring UDID \(udid) reported for our record (saved: \(known))")
+                return
+            }
             self.udid = udid
             onUDID?(udid)
             publishStatus()
@@ -384,12 +415,64 @@ final class ProxyBridge: ObservableObject {
                                            ready: s == .ready, tunnelPorts: ports, updated: .now))
     }
 
+    /// The device answers nowhere we know: it may have a new Tailscale address
+    /// (re-registered) or RemotePairing port (restarted). Returns the profile
+    /// with whatever was learned, and whether the device answers there.
+    private func relocate() async -> (DeviceProfile, Bool) {
+        var p = profile
+        if p.providerID == MeshProvider.tailscale.rawValue, !p.providerHostName.isEmpty {
+            setState(.starting("Looking up \(p.providerHostName) on Tailscale"))
+            let peers = await Task.detached { try? TailscaleClient.fromSettings().listDevices() }.value ?? []
+            if let ip = peers.first(where: { $0.name == p.providerHostName })?.ipv4, ip != p.providerIP {
+                log("\(p.providerHostName) has a new address: \(p.providerIP) → \(ip)")
+                p.providerIP = ip
+                if await ReachabilityProbe.checkTCP(host: ip, port: p.remotePairingPort) { return (p, true) }
+            }
+        }
+        // Only scan a device that is up (answers Tailscale) — not one that's asleep or
+        // offline — and not again soon after a scan found nothing (e.g. it's on cellular).
+        let ip = p.providerIP
+        guard p.providerID == MeshProvider.tailscale.rawValue, Date.now.timeIntervalSince(lastFailedScan) > 600,
+              await Task.detached(operation: { TailscaleClient.fromSettings().ping(ip) }).value else { return (p, false) }
+        setState(.starting("Looking for \(profile.displayName)'s RemotePairing port"))
+        guard let port = await ReachabilityProbe.findRemotePairingPort(host: p.providerIP) else {
+            lastFailedScan = .now
+            return (p, false)
+        }
+        if port != p.remotePairingPort { log("RemotePairing port moved: \(p.remotePairingPort) → \(port)") }
+        p.remotePairingPort = port
+        return (p, true)
+    }
+
     /// Waiting for a minute with the record up usually means remotepairingd
     /// gave up on this device ("Not attempting to reconnect…"). Re-announce.
     private func renewIfStuck() {
-        guard state.isActive, !phoneConnected, let since = waitingSince,
-              Date.now.timeIntervalSince(since) > 60 else { return }
+        guard state.isActive, !phoneConnected else { stuckRenewals = 0; return }
+        guard let since = waitingSince, Date.now.timeIntervalSince(since) > 60 else { return }
         waitingSince = .now
+        stuckRenewals += 1
+        // Three minutes and still nothing: the device may have moved port or address. The
+        // error retry runs start() again, which finds it (relocate).
+        if stuckRenewals >= 3 {
+            stuckRenewals = 0
+            let gen = generation
+            let ip = profile.providerIP
+            Task {
+                // Port closed while the device answers Tailscale: it moved. Asleep: keep waiting.
+                guard !(await ReachabilityProbe.checkTCP(host: ip, port: profile.remotePairingPort)),
+                      profile.providerID == MeshProvider.tailscale.rawValue,
+                      await Task.detached(operation: { TailscaleClient.fromSettings().ping(ip) }).value,
+                      gen == generation, state.isActive, !phoneConnected else {
+                    if gen == generation, state.isActive, !phoneConnected { dnsProxy.renew() }   // asleep: keep nudging
+                    return
+                }
+                log("\(profile.providerIP):\(profile.remotePairingPort) no longer answers — looking for the device again")
+                generation += 1
+                teardown()
+                setState(.error("\(profile.displayName) no longer answers on \(profile.providerIP):\(profile.remotePairingPort). Retrying shortly."))
+            }
+            return
+        }
         log("no control channel for 60s — re-announcing Bonjour record")
         dnsProxy.renew()
     }
