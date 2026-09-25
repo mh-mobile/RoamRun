@@ -8,6 +8,10 @@ enum Proc {
         let err: String
     }
 
+    /// Its own queue gets a thread even while callers (e.g. runAsync) block
+    /// every Swift concurrency / global-queue thread.
+    private static let timers = DispatchQueue(label: "com.roamrun.app.proc-timers")
+
     /// Runs to completion. Both pipes are drained before waiting — waiting
     /// first deadlocks once a tool writes more than the ~64KB pipe buffer.
     /// Never unbounded: a wedged tool must not hang the CLI or a bridge's checks.
@@ -19,8 +23,8 @@ enum Proc {
         task.standardOutput = out
         task.standardError = err
         do { try task.run() } catch { return Result(status: -1, out: "", err: error.localizedDescription) }
-        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { if task.isRunning { task.terminate() } }
-        DispatchQueue.global().asyncAfter(deadline: .now() + timeout + 2) {   // ignored TERM
+        timers.asyncAfter(deadline: .now() + timeout) { if task.isRunning { task.terminate() } }
+        timers.asyncAfter(deadline: .now() + timeout + 2) {   // ignored TERM
             if task.isRunning { kill(task.processIdentifier, SIGKILL) }
         }
 

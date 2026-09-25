@@ -16,7 +16,4 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: xcrun swift --version
-      - run: sysctl -n hw.ncpu hw.memsize
-      - run: xcrun swift test --no-parallel
-        continue-on-error: true
       - run: make test

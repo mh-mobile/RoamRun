@@ -258,14 +258,14 @@ private let t0 = Date(timeIntervalSinceReferenceDate: 800_000_000)
     #expect(HomeRule.shouldResume(awayTicks: 3))
 }
 
-@Test func manySlowToolsAtOnceAllTimeOut() {
-    // More blocked pipe readers than CPU cores must not starve the timeout timers.
+@Test func slowToolsFillingTheTaskPoolStillTimeOut() async {
+    // runAsync blocks a Swift concurrency thread per call; with every one of
+    // them blocked, the timeout timers must still get to run.
     let start = Date()
-    let done = DispatchGroup()
-    for _ in 0..<80 {
-        done.enter()
-        Thread.detachNewThread { _ = Proc.run("/bin/sleep", ["20"], timeout: 1); done.leave() }
+    await withTaskGroup(of: Void.self) { group in
+        for _ in 0..<ProcessInfo.processInfo.activeProcessorCount {
+            group.addTask { _ = await Task.detached { Proc.run("/bin/sleep", ["20"], timeout: 1) }.value }
+        }
     }
-    done.wait()
     #expect(Date().timeIntervalSince(start) < 4)
 }
