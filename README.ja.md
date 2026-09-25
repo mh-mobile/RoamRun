@@ -14,6 +14,8 @@
 
 <p align="center"><a href="README.md">English</a> | 日本語</p>
 
+<p align="center"><img src="docs/main.png" width="800" alt="RoamRun のメイン画面"></p>
+
 Xcode のワイヤレスデバッグを、Tailscale などの mesh VPN 越しに使えるようにする macOS メニューバーアプリ。
 
 iPhone が Mac と別の Wi-Fi ネットワークにいる状態でも、Xcode（`devicectl`/`remoted`）からはローカルにいるデバイスとして見え続けます。
@@ -125,6 +127,11 @@ dmg は `make dmg` で作れます（`SIGN_ID` / `NOTARY_PROFILE` を渡すと D
 4. Xcode の Devices ウインドウでデバイスが見え続け、ビルド・インストール・デバッグが可能
 
 Mac の IP が変わるとブリッジは自動再起動します。
+
+<p align="center">
+  <img src="docs/add-device.png" width="520" alt="デバイスの追加">
+  <img src="docs/menu.png" width="260" alt="メニューバーのメニュー">
+</p>
 
 ## CLI
 

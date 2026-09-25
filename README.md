@@ -14,6 +14,8 @@
 
 <p align="center">English | <a href="README.ja.md">日本語</a></p>
 
+<p align="center"><img src="docs/main.png" width="800" alt="RoamRun main window: iPadPro ready for Xcode over Tailscale"></p>
+
 A macOS menu bar app that makes Xcode's wireless debugging work over Tailscale or another mesh VPN.
 
 Even when the iPhone is on a different Wi-Fi network from the Mac, Xcode (`devicectl`/`remoted`) keeps seeing it as a local device.
@@ -125,6 +127,11 @@ There's no auto-update. With Homebrew, `brew upgrade --cask roamrun` (it quits R
 4. The device stays visible in Xcode's Devices window, ready to build, install and debug
 
 When the Mac's IP changes, the bridge restarts automatically.
+
+<p align="center">
+  <img src="docs/add-device.png" width="520" alt="Add Device sheet">
+  <img src="docs/menu.png" width="260" alt="Menu bar menu">
+</p>
 
 ## CLI
 
