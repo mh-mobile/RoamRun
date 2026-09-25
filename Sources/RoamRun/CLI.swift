@@ -20,11 +20,12 @@ enum CLI {
       up <name> [-v] [-d]            Bridge a device until Ctrl-C (-v: activity log, -d: run in the background)
       down <name>                    Stop a bridge, whether the app or another `roamrun up` runs it
       status [name] [--wait N] [--json]
-                                     Bridge status, UDID and lock state; exits 0 only if ready for Xcode
+                                     Bridge status, UDID and lock state; exits 0 only if Xcode can use
+                                     the device (bridged and ready, or on this Wi-Fi)
                                      (--wait: wait up to N seconds for ready)
       doctor [name] [--json]         Check each step from this Mac to the device and say what to fix
                                      (without a name, only devices with a running bridge)
-      install <name> <app.ipa|App.app>
+      install <name> <App.ipa|App.app>
                                      Install an .ipa or .app signed for the device (Debugging, Release
                                      Testing / Ad Hoc or Enterprise); checks the signing first
       logs <name> <bundle-id>        Relaunch the app with its console attached (print and os_log)
@@ -34,7 +35,8 @@ enum CLI {
 
     Exit codes: 0 ok/ready, 1 not ready or a check failed, 2 usage error.
 
-    Add devices (iPhone, iPad, Vision Pro) in the RoamRun app first (one-time, needs the device on this Wi-Fi).
+    Add devices (iPhone, iPad, Vision Pro) in the RoamRun app first (one-time, with the device on this
+    Wi-Fi or USB).
     """
 
     // Kept alive for the lifetime of `up`.
@@ -44,6 +46,10 @@ enum CLI {
     nonisolated static func run(_ args: [String]) -> Never {
         setvbuf(stdout, nil, _IOLBF, 0)
         MainActor.assumeIsolated {
+            if !commands.contains(args[0]) {
+                FileHandle.standardError.write(Data("roamrun: unknown command “\(args[0])”\n\n\(usage)\n".utf8))
+                exit(2)
+            }
             if args[0] == "init" { initSkill(args) }   // takes no iPhone name
             let profiles = ProfileStore().load()
             let json = args.contains("--json")
