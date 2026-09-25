@@ -16,7 +16,7 @@ final class DNSServiceProxy: @unchecked Sendable {
 
     /// A quick stop → start must let the old registration go first, or mDNSResponder
     /// may rename the new one. Waits up to 1 s without blocking the caller's thread.
-    func previousExited() async {
+    @MainActor func previousExited() async {
         for _ in 0..<100 where stopping?.isRunning == true { try? await Task.sleep(for: .milliseconds(10)) }
         stopping = nil
     }
@@ -73,6 +73,7 @@ final class DNSServiceProxy: @unchecked Sendable {
         let old = process
         process = nil
         old?.terminate()
+        if let old { stopping = old }   // a start right after must wait for it too
         let token = UUID()
         renewToken = token
         // Let the old registration go first, or mDNSResponder may rename ours — waiting

@@ -30,11 +30,12 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Picker("Interface", selection: $networkInterface) {
                         Text("Automatic (\(InterfaceMonitor.pickLAN(chosen: nil, available: Set(interfaces.keys))))").tag("")
-                        ForEach(interfaces.keys.filter { $0.hasPrefix("en") }.sorted(), id: \.self) { name in
-                            Text("\(name) — \(interfaces[name] ?? "")").tag(name)
+                        // Also a chosen one that's gone now (e.g. an unplugged adapter), so the choice stays visible.
+                        ForEach(Set(interfaces.keys.filter { $0.hasPrefix("en") } + (networkInterface.isEmpty ? [] : [networkInterface])).sorted(), id: \.self) { name in
+                            Text("\(name) — \(interfaces[name] ?? "not connected")").tag(name)
                         }
                     }
-                    .onChange(of: networkInterface) { _ in coordinator.reconnectActiveBridges() }
+                    .onChange(of: networkInterface) { _ in coordinator.lanInterfaceChanged() }
                     Text("Where the bridge listens: the network Xcode looks for devices on. Automatic uses en0 (Wi‑Fi on most Macs) when it's connected.")
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

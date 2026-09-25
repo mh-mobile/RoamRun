@@ -241,6 +241,12 @@ final class AppCoordinator: ObservableObject {
     /// Tear down and start again — the manual "unstick" after sleep or a network change.
     func reconnectActiveBridges() { runningProfiles.forEach(startBridge) }
 
+    /// Settings › Network changed: rebind once on the new interface.
+    func lanInterfaceChanged() {
+        interfaceMonitor.resync()
+        reconnectActiveBridges()
+    }
+
     func stopAllBridges() {
         runningProfiles.forEach(stopBridge)
         externalBridges.keys.forEach(stopExternalBridge)

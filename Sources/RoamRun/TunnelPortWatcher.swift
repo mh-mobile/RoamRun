@@ -45,10 +45,10 @@ final class TunnelPortWatcher: @unchecked Sendable {
     /// like these, but only Apple's lives in these SIP-protected places.
     static let fromRemotepairingd = #"process == "remotepairingd" AND (processImagePath BEGINSWITH "/System/" OR processImagePath BEGINSWITH "/Library/Apple/")"#
 
-    /// False if `log stream` couldn't be launched.
+    /// nil when running; otherwise why `log stream` couldn't be launched.
     @discardableResult
-    func start() -> Bool {
-        guard process == nil else { return true }
+    func start() -> String? {
+        guard process == nil else { return nil }
         let task = Proc.tied("/usr/bin/log", [
             "stream", "--style", "compact",
             "--predicate",
@@ -74,10 +74,9 @@ final class TunnelPortWatcher: @unchecked Sendable {
             try task.run()
             process = task
             onLog?("Watching remotepairingd for tunnel endpoint")
-            return true
+            return nil
         } catch {
-            onLog?("Failed to start log stream: \(error.localizedDescription)")
-            return false
+            return "log stream failed to start: \(error.localizedDescription)"
         }
     }
 
@@ -165,15 +164,21 @@ final class TunnelCoordinator {
             Task { @MainActor in TunnelCoordinator.shared.subscribers.values.forEach { $0.onUnrecognized(instance) } }
         }
         w.onLog = { m in Task { @MainActor in TunnelCoordinator.shared.subscribers.values.forEach { $0.onLog(m) } } }
+        let exited = Weak(w)
         w.onExit = { m in
             Task { @MainActor in
                 let c = TunnelCoordinator.shared
+                guard let gone = exited.value, c.watcher === gone else { return }   // not a newer watcher's business
                 c.watcher = nil   // the next subscribe starts a fresh one
                 c.subscribers.values.forEach { $0.onExit(m) }
             }
         }
         watcher = w
-        guard w.start() else { watcher = nil; subscribers[id] = nil; return false }
+        if let failure = w.start() {
+            watcher = nil; subscribers[id] = nil
+            s.onLog(failure)   // said here: the subscriber is gone before any broadcast arrives
+            return false
+        }
         return true
     }
 
@@ -184,11 +189,13 @@ final class TunnelCoordinator {
 
     private func route(_ port: UInt16, owner: String?, host: String) {
         let subs = subscribers.map { (id: $0.key, udid: $0.value.udid()) }
+        // A known device that no bridge here is for (e.g. one on this Wi‑Fi Xcode uses directly): not ours, not news.
+        if let owner, !subs.contains(where: { $0.udid == nil || $0.udid?.caseInsensitiveCompare(owner) == .orderedSame }) { return }
         // Another process (the app, or a `roamrun up`) bridging a device: an unattributed port may be its.
         let othersBridging = owner == nil || !subs.contains { $0.udid.map { $0.caseInsensitiveCompare(owner!) == .orderedSame } == true }
             ? StatusFile.read().values.contains { $0.pid != getpid() && $0.holdsDevice } : false
         guard let id = Self.recipient(owner: owner, subscribers: subs, othersBridging: othersBridging) else {
-            subscribers.values.first?.onLog("tunnel port \(port) \(owner.map { "for \($0) " } ?? "")not relayed: can't tell which bridged device it's for")
+            if owner == nil { subscribers.values.first?.onLog("tunnel port \(port) not relayed: can't tell which bridged device it's for") }
             return
         }
         subscribers[id]?.onPort(port, host)

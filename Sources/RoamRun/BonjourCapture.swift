@@ -79,6 +79,8 @@ final class BonjourCapture: ObservableObject {
         txtByRecord = [:]
         ipsByHost = [:]
         ptrs = []
+        seen = [:]
+        hostSeen = [:]
         start(serviceType: serviceType, domain: domain)
     }
 

@@ -611,7 +611,9 @@ final class ProxyBridge: ObservableObject {
     /// Reached through en0 without a gateway — the link Xcode's mDNS sees.
     nonisolated private static func isOnLink(_ host: String) -> Bool {
         let out = Proc.run("/sbin/route", ["-n", "get"] + (host.contains(":") ? ["-inet6"] : []) + [host], timeout: 3).out
-        return out.contains("interface: \(InterfaceMonitor.lanInterface)") && !out.contains("gateway:")
+        let iface = out.split(separator: "\n").lazy.map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { $0.hasPrefix("interface:") }?.dropFirst("interface:".count).trimmingCharacters(in: .whitespaces)
+        return iface == InterfaceMonitor.lanInterface && !out.contains("gateway:")   // exact: en1 isn't en10
     }
 
     /// Without `log stream` no tunnel port is ever found; without `dns-sd` the

@@ -31,6 +31,12 @@ final class InterfaceMonitor: @unchecked Sendable {
         queue.async { self.check() }
     }
 
+    /// The chosen interface changed: take its current address as known, without
+    /// reporting a change (the caller restarts the bridges once).
+    func resync() {
+        queue.sync { lastKnownIP = Self.currentIPv4(on: fixedInterface ?? Self.lanInterface) ?? "" }
+    }
+
     func stop() {
         monitor?.cancel()
         monitor = nil

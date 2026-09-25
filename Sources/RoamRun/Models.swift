@@ -126,7 +126,7 @@ enum BridgeStatus: String, CaseIterable {
     }
 }
 
-/// Every field is optional on disk, with a default: a field added in a later
+/// Beyond id, instance name and address, every field is optional on disk: a field added in a later
 /// version (or missing from an older file) must not make the whole list unreadable.
 /// The on-disk shape stays a plain array so older RoamRun versions still read it.
 extension DeviceProfile {
@@ -137,9 +137,10 @@ extension DeviceProfile {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        // Required: without these it isn't a device (and a random id would change every load).
+        id = try c.decode(UUID.self, forKey: .id)
         displayName = try c.decodeIfPresent(String.self, forKey: .displayName) ?? "Device"
-        instanceName = try c.decodeIfPresent(String.self, forKey: .instanceName) ?? ""
+        instanceName = try c.decode(String.self, forKey: .instanceName)
         serviceType = try c.decodeIfPresent(String.self, forKey: .serviceType) ?? "_remotepairing._tcp"
         domain = try c.decodeIfPresent(String.self, forKey: .domain) ?? "local"
         remotePairingPort = try c.decodeIfPresent(UInt16.self, forKey: .remotePairingPort) ?? 49152
@@ -147,7 +148,7 @@ extension DeviceProfile {
         txt = try c.decodeIfPresent([String: String].self, forKey: .txt) ?? [:]
         providerID = try c.decodeIfPresent(String.self, forKey: .providerID) ?? MeshProvider.tailscale.rawValue
         providerHostName = try c.decodeIfPresent(String.self, forKey: .providerHostName) ?? ""
-        providerIP = try c.decodeIfPresent(String.self, forKey: .providerIP) ?? ""
+        providerIP = try c.decode(String.self, forKey: .providerIP)
         udid = try c.decodeIfPresent(String.self, forKey: .udid)
         deviceType = try c.decodeIfPresent(String.self, forKey: .deviceType)
     }
