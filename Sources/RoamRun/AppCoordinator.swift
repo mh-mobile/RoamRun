@@ -66,7 +66,7 @@ final class AppCoordinator: ObservableObject {
             MainActor.assumeIsolated {
                 guard let self, let id = (note.object as? String).flatMap(UUID.init),
                       let p = self.profile(id) else { return }
-                self.logStore.log("\"\(p.displayName)\": stopped from the command line")
+                self.logStore.log("\"\(p.displayName)\": stopped from the command line", device: p.id)
                 self.stopBridge(p)
             }
         }
@@ -85,7 +85,7 @@ final class AppCoordinator: ObservableObject {
         for id in wasActiveIDs where Snapshot.path == nil {
             if let p = profiles.first(where: { $0.id == id }) {
                 isRestoringBridges = true
-                logStore.log("restoring bridge for \"\(p.displayName)\"")
+                logStore.log("restoring bridge for \"\(p.displayName)\"", device: p.id)
                 self.bridge(for: p)?.requestStart()
             }
         }
@@ -158,7 +158,7 @@ final class AppCoordinator: ObservableObject {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         let displayName = trimmed.isEmpty ? captured.shortHost : trimmed
         // Same checks as the sheet, here too: two profiles for one device would collide.
-        guard !ip.isEmpty, !profiles.contains(where: { $0.providerIP == ip }), !isNameTaken(displayName) else { return nil }
+        guard !ip.isEmpty, !profiles.contains(where: { $0.providerIP == ip }), profiles.nameProblem(displayName) == nil else { return nil }
         var profile = DeviceProfile(
             displayName: displayName,
             instanceName: captured.instanceName,
@@ -177,7 +177,7 @@ final class AppCoordinator: ObservableObject {
         let bridge = install(ProxyBridge(profile: profile))
         capture.ownedHosts.insert(bridge.spoofHost)
         store.save(profiles)
-        logStore.log("added \"\(profile.displayName)\" -> \(ip)")
+        logStore.log("added \"\(profile.displayName)\" -> \(ip)", device: profile.id)
         learnDeviceTypes()
         return profile.id
     }
@@ -253,13 +253,8 @@ final class AppCoordinator: ObservableObject {
 
     func learnAdvertTypes() async {
         let udids = await Task.detached {
-            let out = Proc.run("/usr/bin/log", ["show", "--last", "15m", "--style", "compact", "--predicate",
-                                                #"process == "remotepairingd" AND eventMessage CONTAINS "Resolved bonjour advert""#],
-                               timeout: 10).out
             var byInstance: [String: String] = [:]
-            for line in out.split(separator: "\n") {
-                if let (instance, udid) = TunnelPortWatcher.advert(in: String(line)), let udid { byInstance[instance] = udid.uppercased() }
-            }
+            for (instance, udid) in TunnelPortWatcher.recentAdverts(last: "15m") { if let udid { byInstance[instance] = udid.uppercased() } }
             return byInstance
         }.value
         if udids.values.contains(where: { knownTypes[$0] == nil }) {
@@ -310,8 +305,8 @@ final class AppCoordinator: ObservableObject {
     /// observe the coordinator (menu bar icon, sidebar) stay current.
     @discardableResult
     private func install(_ bridge: ProxyBridge) -> ProxyBridge {
-        bridge.onLog = { [weak self] m in self?.logStore.log(m) }
         let id = bridge.profile.id
+        bridge.onLog = { [weak self] m in self?.logStore.log(m, device: id) }
         bridge.onUDID = { [weak self] udid in
             guard let self, let i = self.profiles.firstIndex(where: { $0.id == id }) else { return }
             self.profiles[i].udid = udid
@@ -332,7 +327,7 @@ final class AppCoordinator: ObservableObject {
     @discardableResult
     func rename(_ id: UUID, to newName: String) -> Bool {
         let n = newName.trimmingCharacters(in: .whitespaces)
-        guard !n.isEmpty, !isNameTaken(n, except: id),
+        guard profiles.nameProblem(n, except: id) == nil,
               let i = profiles.firstIndex(where: { $0.id == id }) else { return false }
         profiles[i].displayName = n
         store.save(profiles)
@@ -348,18 +343,18 @@ final class AppCoordinator: ObservableObject {
         let host = profile.providerIP
         var found: UInt16?
         for range in [UInt16(49152)...49255, UInt16(49256)...UInt16.max] where found == nil {
-            logStore.log("\"\(profile.displayName)\": scanning \(host) ports \(range.lowerBound)-\(range.upperBound)")
+            logStore.log("\"\(profile.displayName)\": scanning \(host) ports \(range.lowerBound)-\(range.upperBound)", device: profile.id)
             // An open port may be another service; confirm with the handshake.
             for port in await Self.openPorts(host: host, in: range) where found == nil {
                 if await ReachabilityProbe.speaksRemotePairing(host: host, port: port) { found = port }
             }
         }
         if let found, found == profile.remotePairingPort {
-            logStore.log("\"\(profile.displayName)\": RemotePairing port is still \(found)")
+            logStore.log("\"\(profile.displayName)\": RemotePairing port is still \(found)", device: profile.id)
         } else if let found, let idx = profiles.firstIndex(where: { $0.id == profile.id }) {
             profiles[idx].remotePairingPort = found
             store.save(profiles)
-            logStore.log("\"\(profile.displayName)\": RemotePairing port updated to \(found)")
+            logStore.log("\"\(profile.displayName)\": RemotePairing port updated to \(found)", device: profile.id)
             // ProxyBridge holds its profile by value — swap it in or the
             // new port only takes effect after a relaunch.
             // Also errored / standing aside: the scan is how you fix a bridge that can't reach the device.
@@ -368,7 +363,7 @@ final class AppCoordinator: ObservableObject {
             let bridge = install(ProxyBridge(profile: profiles[idx]))
             if wasOn { bridge.requestStart() }
         } else {
-            logStore.log("\"\(profile.displayName)\": no RemotePairing port responded — is the device on Wi-Fi?")
+            logStore.log("\"\(profile.displayName)\": no RemotePairing port responded — is the device on Wi-Fi?", device: profile.id)
         }
     }
 

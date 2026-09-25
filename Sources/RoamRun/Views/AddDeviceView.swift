@@ -30,15 +30,14 @@ struct AddDeviceView: View {
             }
 
             section("1", "Choose the device") { iphonePicker }
-            section("2", "Match it to its Tailscale device") { meshPicker }
+            section("2", provider == .tailscale ? "Match it to its Tailscale device" : "Enter its VPN address") { meshPicker }
             section("3", "Name") {
                 TextField("Name", text: $name)
                     .textFieldStyle(.roundedBorder)
-                Text(!added && coordinator.isNameTaken(name)
-                     ? "Another device already uses this name — pick a different one."
-                     : "Used in the menu and the CLI: roamrun up <name>")
+                let problem = added || name.isEmpty ? nil : coordinator.profiles.nameProblem(name)
+                Text(problem ?? "Used in the menu and the CLI: roamrun up <name>")
                     .font(.caption)
-                    .foregroundStyle(!added && coordinator.isNameTaken(name) ? Color.red : .secondary)
+                    .foregroundStyle(problem != nil ? Color.red : .secondary)
             }
 
             HStack {
@@ -307,7 +306,7 @@ struct AddDeviceView: View {
     }
 
     private var canAdd: Bool {
-        visibleServices.contains(where: { $0.host == selectedHost }) && !name.trimmingCharacters(in: .whitespaces).isEmpty
-            && !coordinator.isNameTaken(name) && isIPAddress(chosenIP) && alreadySaved == nil
+        visibleServices.contains(where: { $0.host == selectedHost }) && coordinator.profiles.nameProblem(name) == nil
+            && isIPAddress(chosenIP) && alreadySaved == nil
     }
 }

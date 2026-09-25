@@ -71,10 +71,9 @@ final class DNSServiceProxy {
     /// `dns-sd -P` proxy registrations (matched by our spoof-host marker) and
     /// `log stream` watchers for the tunnel endpoint.
     @discardableResult
-    static func killOrphanedHelpers(matching marker: String = ".roamrun.local",
-                                    onLog: ((String) -> Void)? = nil) -> Int {
+    static func killOrphanedHelpers(onLog: ((String) -> Void)? = nil) -> Int {
         var killed = 0
-        for pid in orphanedHelpers(matching: marker) where kill(pid, SIGTERM) == 0 {
+        for pid in orphanedHelpers() where kill(pid, SIGTERM) == 0 {
             killed += 1
             onLog?("Killed leftover helper process (pid \(pid))")
         }
@@ -83,14 +82,18 @@ final class DNSServiceProxy {
 
     /// PIDs of our helper processes whose parent died (re-parented to
     /// launchd). Helpers of a live `roamrun up` or app instance don't count.
-    private static func orphanedHelpers(matching marker: String) -> [Int32] {
-        let out = Proc.run("/bin/ps", ["-axo", "pid=,ppid=,command="]).out
-        return out.split(separator: "\n").compactMap { line in
+    private static func orphanedHelpers() -> [Int32] {
+        orphans(fromPS: Proc.run("/bin/ps", ["-axo", "pid=,ppid=,command="]).out)
+    }
+
+    /// From `ps -axo pid=,ppid=,command=`: only processes that are unmistakably
+    /// ours (our host marker / our exact log predicate) — never a user's own
+    /// dns-sd or log session — whose parent died (re-parented to launchd).
+    static func orphans(fromPS out: String) -> [Int32] {
+        out.split(separator: "\n").compactMap { line in
             let l = line.trimmingCharacters(in: .whitespaces)
-            let isProxy = l.contains("dns-sd") && l.contains("-P") && l.contains(marker)
+            let isProxy = l.contains("dns-sd") && l.contains("-P") && l.contains(".roamrun.local")
             let isLogWatch = l.contains("log stream") && l.contains("Got tunnel endpoint") && l.contains("Resolved bonjour advert")
-            // Only processes that are unmistakably ours (our host marker / our
-            // exact log predicate) — never a user's own dns-sd or log session.
             guard isProxy || isLogWatch else { return nil }
             let parts = l.split(whereSeparator: { $0 == " " })
             guard parts.count > 2, let pid = Int32(parts[0]), parts[1] == "1" else { return nil }
@@ -99,8 +102,8 @@ final class DNSServiceProxy {
     }
 
     /// Leftover helpers without killing them (for `roamrun doctor`).
-    static func orphanedHelperCount(matching marker: String = ".roamrun.local") -> Int {
-        orphanedHelpers(matching: marker).count
+    static func orphanedHelperCount() -> Int {
+        orphanedHelpers().count
     }
 
 }

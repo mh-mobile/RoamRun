@@ -72,11 +72,16 @@ struct TailscaleClient {
     /// `tailscale status --json` → every peer as a MeshDevice (Self excluded).
     func listDevices() throws -> [MeshDevice] {
         guard let path = resolvedPath() else { throw TailscaleClientError.cliNotFound }
-        let out = try run(path, ["status", "--json"])
-        guard let data = out.data(using: .utf8),
-              let root = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { throw TailscaleClientError.commandFailed("tailscale status: bad JSON") }
+        guard let devices = Self.devices(fromStatusJSON: try run(path, ["status", "--json"])) else {
+            throw TailscaleClientError.commandFailed("tailscale status: bad JSON")
+        }
+        return devices
+    }
 
+    /// Peers from `tailscale status --json`, iOS first; nil if it isn't that JSON.
+    static func devices(fromStatusJSON out: String) -> [MeshDevice]? {
+        guard let data = out.data(using: .utf8),
+              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
         var devices: [MeshDevice] = []
         if let peers = root["Peer"] as? [String: Any] {
             for (_, value) in peers {

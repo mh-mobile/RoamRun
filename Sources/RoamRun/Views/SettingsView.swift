@@ -80,6 +80,7 @@ struct SettingsView: View {
         .padding(20)
         .frame(width: 460)
         .onAppear { cliPath = coordinator.tailscaleCLIPath }
+        .onDisappear { coordinator.tailscaleCLIPath = cliPath }   // Esc closes too
     }
 
     private var cliStatusText: String {

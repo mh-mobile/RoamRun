@@ -91,7 +91,8 @@ enum BridgeState: Equatable {
 }
 
 /// What the user needs to know, derived from the bridge internals.
-enum BridgeStatus: Equatable, CaseIterable {
+/// Raw values are the `state` key of `--json` output: scripts depend on them.
+enum BridgeStatus: String, CaseIterable {
     case off, starting, waiting, preparing, ready, error, local
 
     /// Parses the title written to the shared status file.
@@ -126,6 +127,16 @@ enum BridgeStatus: Equatable, CaseIterable {
 }
 
 extension Array where Element == DeviceProfile {
+    /// Why a (trimmed) name can't be used, or nil. The CLI takes a leading "-" for an option.
+    func nameProblem(_ name: String, except id: UUID? = nil) -> String? {
+        let n = name.trimmingCharacters(in: .whitespaces)
+        if n.isEmpty { return "Enter a name." }
+        if n.hasPrefix("-") { return "A name can't start with “-” (the CLI would read it as an option)." }
+        if n.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }) { return "A name can't contain control characters." }
+        if isNameTaken(n, except: id) { return "Another device already uses this name — pick a different one." }
+        return nil
+    }
+
     /// Names are how the CLI addresses devices, so they must be unique.
     func isNameTaken(_ name: String, except id: UUID? = nil) -> Bool {
         let n = name.trimmingCharacters(in: .whitespaces)

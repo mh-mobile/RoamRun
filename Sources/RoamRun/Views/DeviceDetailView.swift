@@ -26,7 +26,7 @@ struct DeviceDetailView: View {
                     }
                     Divider().padding(.vertical, 10)
                     DisclosureGroup("Activity log", isExpanded: $showLog) {
-                        DeviceLog(filter: profile.displayName).padding(.top, 8)
+                        DeviceLog(device: profile.id).padding(.top, 8)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
@@ -48,11 +48,11 @@ struct DeviceDetailView: View {
         .alert("Rename Device", isPresented: $renaming) {
             TextField("Name", text: $newName)
             Button("Rename") { coordinator.rename(profile.id, to: newName) }
-                .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty
-                          || coordinator.isNameTaken(newName, except: profile.id))
+                .disabled(coordinator.profiles.nameProblem(newName, except: profile.id) != nil)
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Used in the menu and the CLI (roamrun up <name>). Must be unique.")
+            Text(coordinator.profiles.nameProblem(newName, except: profile.id).map { $0 + " " } ?? "")
+                + Text("Used in the menu and the CLI (roamrun up <name>). Must be unique and not start with “-”.")
         }
         .alert("Remove “\(profile.displayName)”?", isPresented: $confirmDelete) {
             Button("Remove", role: .destructive) { coordinator.deleteProfile(profile.id) }
@@ -187,6 +187,7 @@ private struct StatusCard: View {
     }
 
     private func message(for status: BridgeStatus) -> String {
+        let vpn = MeshProvider(rawValue: profile.providerID) == .tailscale ? "Tailscale" : "the VPN"
         switch status {
         case .off:
             return "Start the bridge when the device is away from this Mac's Wi‑Fi. While it's on the same network, Xcode reaches it directly."
@@ -195,16 +196,16 @@ private struct StatusCard: View {
             if case .starting(let step) = bridge.state { return step + "…" }
             return "Setting things up…"
         case .waiting:
-            return "Unlock the device and keep its screen on (it can't be reached while asleep). Tailscale must be connected and the device on a Wi‑Fi network — tethering is fine, cellular alone is not."
+            return "Unlock the device and keep its screen on (it can't be reached while asleep). \(vpn) must be connected and the device on a Wi‑Fi network — tethering is fine, cellular alone is not."
         case .preparing:
-            return "Paired over Tailscale. Preparing the debug tunnel — this takes a few seconds."
+            return "Paired over \(vpn). Preparing the debug tunnel — this takes a few seconds."
         case .ready:
             return "In Xcode, pick “\(profile.displayName)” as the run destination and press Run."
         case .local:
             return "\(profile.displayName) is on this Mac's network, so Xcode reaches it directly — no bridge needed. RoamRun resumes the bridge by itself when it leaves."
         case .error:
-            if let external { return external.detail }
-            if case .error(let m) = bridge.state { return m + "\nRoamRun retries automatically every 30 seconds." }
+            if let external { return external.detail.isEmpty ? "The other RoamRun process reported an error — see its log." : external.detail }
+            if case .error(let m) = bridge.state { return bridge.autoRetry ? m + "\nRoamRun retries automatically every 30 seconds." : m }
             return ""
         }
     }
@@ -268,12 +269,10 @@ private struct ConnectionPath: View {
 /// This device's lines from the shared log, with a copy button for bug reports.
 private struct DeviceLog: View {
     @EnvironmentObject private var coordinator: AppCoordinator
-    let filter: String
+    let device: UUID
 
     var body: some View {
-        let lines = coordinator.logStore.lines.filter {
-            $0.contains("[\(filter)]") || $0.contains("\"\(filter)\"")
-        }
+        let lines = coordinator.logStore.lines.filter { $0.device == device }.map(\.text)
         VStack(alignment: .trailing, spacing: 6) {
             ScrollViewReader { proxy in
                 ScrollView {

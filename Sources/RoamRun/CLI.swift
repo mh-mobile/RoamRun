@@ -24,7 +24,7 @@ enum CLI {
                                      the device (bridged and ready, or on this Wi-Fi)
                                      (--wait: wait up to N seconds for ready)
       doctor [name] [--json]         Check each step from this Mac to the device and say what to fix
-                                     (without a name, only devices with a running bridge)
+                                     (without a name: devices with a running bridge, or all if none runs)
       run <name> [--scheme S] [--workspace W | --project P] [--configuration C] [--logs]
                                      Build the project in this folder for the device, install and launch it
                                      (--logs: then stream its output like `logs`)
@@ -73,44 +73,35 @@ enum CLI {
             if let copy = store.keptUnreadable {
                 FileHandle.standardError.write(Data("roamrun: couldn't read saved devices; kept the file as \(copy.path)\n".utf8))
             }
-            let known: Set<String> = ["--json", "--wait", "-v", "-d", "--scheme", "--workspace", "--project",
-                                      "--configuration", "--logs", detachedFlag]
-            for (i, a) in args.enumerated().dropFirst() where a.hasPrefix("-") && !known.contains(a) && args[i - 1] != "--wait" {
-                fail("unknown option \(a) — see roamrun --help")
+            let parsed: Parsed
+            switch parse(args) {
+            case .success(let p): parsed = p
+            case .failure(let e): fail(e.message)
             }
-            let json = args.contains("--json")
-            let waitIdx = args.firstIndex(of: "--wait")
-            let wait = waitIdx.flatMap { args.indices.contains($0 + 1) ? Double(args[$0 + 1]) : nil }
-            if waitIdx != nil && !(wait.map { $0.isFinite && $0 >= 0 } ?? false) { fail("--wait needs a number of seconds") }
-            for flag in ["--scheme", "--workspace", "--project", "--configuration"] {
-                if let i = args.firstIndex(of: flag), !args.indices.contains(i + 1) || args[i + 1].hasPrefix("-") {
-                    fail("\(flag) needs a value")
-                }
-            }
-            // Words after the command that aren't flags or a flag's value.
-            let valued: Set<String> = ["--wait", "--scheme", "--workspace", "--project", "--configuration"]
-            let words = args.indices.dropFirst().filter { i in
-                !args[i].hasPrefix("-") && !valued.contains(args[i - 1])
-            }.map { args[$0] }
+            let (json, wait, words) = (parsed.flags.contains("--json"), parsed.wait, parsed.words)
             let name = words.first
             var targets = profiles
             if let name {
-                guard let p = find(name, in: profiles) else { fail("no device named “\(name)”. " + names(profiles)) }
+                guard let p = find(name, in: profiles) else { fail("no device named \(shellName(name)). " + names(profiles)) }
                 targets = [p]
             }
             switch args[0] {
             case "devices": devices(profiles, json: json)
             case "status": status(targets, json: json, wait: wait)
-            case "doctor": Task { exit(await doctor(targets, json: json, named: name != nil) ? 0 : 1) }
+            case "doctor":
+                // No name and nothing running: check every device rather than report "All good." unchecked.
+                let running = StatusFile.read()
+                let checkAll = name != nil || !targets.contains { running[$0.id] != nil }
+                Task { exit(await doctor(targets, json: json, checkAll: checkAll) ? 0 : 1) }
             case "down":
                 guard name != nil, let p = targets.first else { fail("which device? " + names(profiles)) }
                 down(p)
             case "up":
                 guard name != nil, let p = targets.first else { fail("which device? " + names(profiles)) }
-                if args.contains("-d") {
-                    detach(p, verbose: args.contains("-v"))
+                if parsed.flags.contains("-d") {
+                    detach(p, verbose: parsed.flags.contains("-v"))
                 } else {
-                    up(p, verbose: args.contains("-v"), detachedChild: args.contains(detachedFlag))
+                    up(p, verbose: parsed.flags.contains("-v"), detachedChild: parsed.flags.contains(detachedFlag))
                 }
             case "logs":
                 guard name != nil, let p = targets.first, words.count >= 2 else {
@@ -119,11 +110,9 @@ enum CLI {
                 logs(p, bundleID: words[words.startIndex + 1])
             case "run":
                 guard name != nil, let p = targets.first else { fail("usage: roamrun run <name> [--scheme S]. " + names(profiles)) }
-                func value(_ flag: String) -> String? {
-                    args.firstIndex(of: flag).flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil }
-                }
-                runApp(p, scheme: value("--scheme"), workspace: value("--workspace"), project: value("--project"),
-                       configuration: value("--configuration") ?? "Debug", logs: args.contains("--logs"))
+                let v = parsed.values
+                runApp(p, scheme: v["--scheme"], workspace: v["--workspace"], project: v["--project"],
+                       configuration: v["--configuration"] ?? "Debug", logs: parsed.flags.contains("--logs"))
             case "screenshot":
                 guard name != nil, let p = targets.first else {
                     fail("usage: roamrun screenshot <name> [file.png]. " + names(profiles))
@@ -142,11 +131,73 @@ enum CLI {
         exit(0)
     }
 
+    // MARK: - Arguments
+
+    /// What each command accepts: options (value-taking ones marked) and how many words.
+    nonisolated private static let specs: [String: (options: Set<String>, words: ClosedRange<Int>)] = [
+        "devices": (["--json"], 0...0),
+        "status": (["--json", "--wait="], 0...1),
+        "doctor": (["--json"], 0...1),
+        "down": ([], 0...1),
+        "up": (["-v", "-d", detachedFlag], 0...1),
+        "logs": ([], 0...2),
+        "run": (["--scheme=", "--workspace=", "--project=", "--configuration=", "--logs"], 0...1),
+        "screenshot": ([], 0...2),
+        "install": ([], 0...2),
+    ]
+
+    struct Parsed: Equatable {
+        var words: [String] = []
+        var flags: Set<String> = []
+        var values: [String: String] = [:]
+        var wait: Double?
+    }
+
+    struct ArgumentError: Error, Equatable { let message: String }
+
+    /// Too few words is left to each command (its message lists the saved devices).
+    nonisolated static func parse(_ args: [String]) -> Result<Parsed, ArgumentError> {
+        guard let spec = specs[args[0]] else { return .success(Parsed()) }
+        var p = Parsed()
+        var i = 1
+        while i < args.count {
+            let a = args[i]
+            if spec.options.contains(a + "=") {
+                guard i + 1 < args.count, !args[i + 1].hasPrefix("-") || a == "--wait" else {
+                    return .failure(.init(message: a == "--wait" ? "--wait needs a number of seconds" : "\(a) needs a value"))
+                }
+                p.values[a] = args[i + 1]
+                i += 2
+                continue
+            }
+            if a.hasPrefix("-") {
+                guard !a.hasSuffix("="), spec.options.contains(a) else {
+                    let hint = spec.words.upperBound > 0 ? " (a device name starting with “-”? use its id, see roamrun devices)" : ""
+                    return .failure(.init(message: "\(args[0]) doesn't take \(a) — see roamrun --help\(hint)"))
+                }
+                p.flags.insert(a)
+            } else {
+                guard p.words.count < spec.words.upperBound else {
+                    return .failure(.init(message: "unexpected \(shellName(a)) — see roamrun --help"))
+                }
+                p.words.append(a)
+            }
+            i += 1
+        }
+        if let w = p.values["--wait"] {
+            guard let n = Double(w), n.isFinite, n >= 0 else { return .failure(.init(message: "--wait needs a number of seconds")) }
+            p.wait = n
+        }
+        return .success(p)
+    }
+
     // MARK: - Commands
 
     /// One device as `status --json` / `devices --json` report it.
     private struct Row: Encodable {
         let name: String
+        /// Stable key for scripts: off, starting, waiting, preparing, ready, error, local (on this Wi-Fi).
+        let state: String
         let id: String
         let vpnAddress: String
         let udid: String?
@@ -176,7 +227,7 @@ enum CLI {
             status = BridgeStatus.waiting.title
             detail = "The bridge is up but Xcode can't reach the device (asleep, locked, off Wi-Fi, or Tailscale stuck on the device). Run `roamrun doctor` for the cause."
         }
-        return Row(name: p.displayName, id: p.id.uuidString, vpnAddress: p.providerIP, udid: udid,
+        return Row(name: p.displayName, state: BridgeStatus(title: status).rawValue, id: p.id.uuidString, vpnAddress: p.providerIP, udid: udid,
                    status: status, ready: ready,
                    owner: e.map(owner), pid: e?.pid, tunnelPorts: e?.tunnelPorts ?? [],
                    coreDevice: core, detail: detail,
@@ -185,10 +236,15 @@ enum CLI {
 
     /// devicectl's tunnelState for this UDID; nil if devicectl failed.
     nonisolated static func coreDeviceState(_ udid: String) -> String? {
-        guard let devices = Proc.devicectl(["--timeout", "10", "list", "devices"])?["devices"] as? [[String: Any]],
-              let device = devices.first(where: { ($0["hardwareProperties"] as? [String: Any])?["udid"] as? String == udid })
-        else { return nil }
-        return (device["connectionProperties"] as? [String: Any])?["tunnelState"] as? String
+        Proc.devicectl(["--timeout", "10", "list", "devices"]).flatMap { tunnelState(in: $0, udid: udid) }
+    }
+
+    /// From `devicectl list devices` JSON's result; UDIDs compared in any case.
+    nonisolated static func tunnelState(in result: [String: Any], udid: String) -> String? {
+        let device = (result["devices"] as? [[String: Any]])?.first {
+            (($0["hardwareProperties"] as? [String: Any])?["udid"] as? String)?.caseInsensitiveCompare(udid) == .orderedSame
+        }
+        return (device?["connectionProperties"] as? [String: Any])?["tunnelState"] as? String
     }
 
     private static func printJSON<T: Encodable>(_ value: T) {
@@ -200,12 +256,12 @@ enum CLI {
     private static func devices(_ profiles: [DeviceProfile], json: Bool) -> Never {
         let live = StatusFile.read()
         if json { printJSON(profiles.map { row($0, live[$0.id], deep: false) }); exit(0) }
-        guard !profiles.isEmpty else { print("No devices saved yet — add one in the RoamRun app."); exit(0) }
+        guard !profiles.isEmpty else { print(noDevices); exit(0) }
         let w = max(4, profiles.map(\.displayName.count).max() ?? 4)
         print("NAME".padding(toLength: w + 2, withPad: " ", startingAt: 0) + "VPN ADDRESS      UDID                       STATUS")
         for p in profiles {
             let e = live[p.id]
-            let status = e.map { "\($0.status) (\(owner($0)))" } ?? "Off"
+            let status = e.map { "\($0.status) (\(owner($0)))" } ?? BridgeStatus.off.title
             print(p.displayName.padding(toLength: w + 2, withPad: " ", startingAt: 0)
                   + p.providerIP.padding(toLength: 17, withPad: " ", startingAt: 0)
                   + (e?.udid ?? p.udid ?? "-").padding(toLength: 27, withPad: " ", startingAt: 0) + status)
@@ -214,7 +270,7 @@ enum CLI {
     }
 
     private static func status(_ targets: [DeviceProfile], json: Bool, wait: Double?) -> Never {
-        if targets.isEmpty && !json { stop("no devices saved yet — add one in the RoamRun app") }
+        if targets.isEmpty && !json { stop(noDevices) }
         var rows: [Row]
         let deadline = Date.now.addingTimeInterval(wait ?? 0)
         repeat {
@@ -368,7 +424,7 @@ enum CLI {
             chosen = schemes[0]
         }
         let build = ["/usr/bin/xcrun", "xcodebuild"] + container
-            + ["-scheme", chosen, "-configuration", configuration, "-destination", "id=\(udid)"]
+            + ["-scheme", chosen, "-configuration", configuration, "-destination", "id=\(udid)", "-allowProvisioningUpdates"]
         print("Building \(chosen) for \(profile.displayName)…")
         guard visible(build + ["-quiet", "build"]) == 0 else { stop("the build failed (see above)") }
 
@@ -393,11 +449,7 @@ enum CLI {
             stop("the install failed (see above)")
         }
         print("Launching \(bundleID)…")
-        if logs {
-            setenv("DEVICECTL_CHILD_OS_ACTIVITY_DT_MODE", "enable", 1)
-            exec(["/usr/bin/xcrun", "devicectl", "device", "process", "launch", "--console",
-                  "--terminate-existing", "--device", udid, bundleID])
-        }
+        if logs { launchWithConsole(udid: udid, bundleID: bundleID) }
         exec(["/usr/bin/xcrun", "devicectl", "device", "process", "launch", "--terminate-existing", "--device", udid, bundleID])
     }
 
@@ -441,7 +493,11 @@ enum CLI {
     /// devicectl can't attach to a running process, so this relaunches the app
     /// with `--console`. OS_ACTIVITY_DT_MODE mirrors os_log to stderr, as Xcode does.
     private static func logs(_ profile: DeviceProfile, bundleID: String) -> Never {
-        let udid = reachableUDID(profile)
+        launchWithConsole(udid: reachableUDID(profile), bundleID: bundleID)
+    }
+
+    /// Relaunch with print / os_log streamed here until Ctrl-C.
+    private static func launchWithConsole(udid: String, bundleID: String) -> Never {
         setenv("DEVICECTL_CHILD_OS_ACTIVITY_DT_MODE", "enable", 1)
         exec(["/usr/bin/xcrun", "devicectl", "device", "process", "launch", "--console",
               "--terminate-existing", "--device", udid, bundleID])
@@ -471,7 +527,7 @@ enum CLI {
     }
 
     /// Internal: marks the background copy spawned by `up -d`.
-    private static let detachedFlag = "--detached-child"
+    nonisolated private static let detachedFlag = "--detached-child"
 
     /// `up -d`: re-launch ourselves in a new session with output going to a
     /// log file, wait until the bridge settles, then hand the prompt back.
@@ -570,7 +626,7 @@ enum CLI {
             }
         }
         monitor.onChange = { _ in
-            Task { @MainActor in bridge.stop(); await bridge.start() }
+            Task { @MainActor in bridge.stop(); bridge.requestStart() }
         }
         monitor.start()
 
@@ -605,9 +661,9 @@ enum CLI {
         let fix: String?
     }
 
-    /// Without a name, devices whose bridge is off are skipped: an unused device
-    /// being unreachable isn't a problem to fix.
-    private static func doctor(_ profiles: [DeviceProfile], json: Bool, named: Bool) async -> Bool {
+    /// Unless checkAll, devices whose bridge is off are skipped: an unused device
+    /// isn't a problem to report.
+    private static func doctor(_ profiles: [DeviceProfile], json: Bool, checkAll: Bool) async -> Bool {
         var checks: [Check] = []
         var scope = "mac"
         func section(_ title: String, _ name: String) {
@@ -643,7 +699,7 @@ enum CLI {
 
         section("This Mac", "mac")
         check(FileManager.default.isExecutableFile(atPath: "/usr/bin/xcrun") && shell("/usr/bin/xcrun", ["--find", "devicectl"]) != nil,
-              "Xcode's devicectl is available", fix: "Install Xcode and run it once (xcode-select -s /Applications/Xcode.app).")
+              "Xcode's devicectl is available", fix: "Install Xcode and run it once (sudo xcode-select -s /Applications/Xcode.app).")
         let ip = InterfaceMonitor.currentIPv4()
         check(ip != nil, "Wi-Fi address (en0): \(ip ?? "none")",
               fix: "Connect en0 (Wi-Fi on most Macs, Ethernet on a Mac mini/Studio) to the network — the bridge listens there because Xcode only looks there.")
@@ -660,8 +716,8 @@ enum CLI {
             check(true, "Tailscale is running (\(peers.count) peers)")
         } catch {
             // Devices entered by IP (another mesh VPN) don't need Tailscale.
-            if profiles.contains(where: { viaTailscale($0) && (named || live[$0.id] != nil) }) {
-                check(false, "Tailscale: \(error.localizedDescription)", fix: "Install Tailscale and sign in, or set its CLI path in RoamRun › Settings.")
+            if profiles.contains(where: { viaTailscale($0) && (checkAll || live[$0.id] != nil) }) {
+                check(false, "Tailscale: \(error.localizedDescription)", fix: "Install Tailscale and sign in, or set its CLI path in RoamRun (Open RoamRun › ⚙ Settings).")
                 return finish()
             }
             note("Tailscale not checked (no device uses it)")
@@ -670,7 +726,7 @@ enum CLI {
         if profiles.isEmpty { check(false, "No devices saved", fix: "Add one in the RoamRun app.") }
         for p in profiles {
             section("\n\(p.displayName) (\(p.providerIP))", p.displayName)
-            if !named, live[p.id] == nil {
+            if !checkAll, live[p.id] == nil {
                 note("Bridge is off — not checked (roamrun doctor \(shellName(p.displayName)) checks it anyway)")
                 continue
             }
@@ -710,14 +766,14 @@ enum CLI {
             // advert matched to this UDID. Only plain hex/UUIDs go into the predicates.
             let plain = { (s: String) in !s.isEmpty && s.allSatisfy { $0.isHexDigit || $0 == "-" } }
             let udid = live[p.id]?.udid ?? p.udid
-            let ours = plain(p.instanceName) ? shell("/usr/bin/log", ["show", "--last", "15m", "--style", "compact", "--predicate",
-                "process == \"remotepairingd\" AND eventMessage CONTAINS \"Resolved bonjour advert \(p.instanceName) to identity\""])?
-                .split(separator: "\n").last(where: { $0.contains("to identity") }) : nil
-            if let ours, !ours.contains("associated with udid") {
+            // Through the hardened parser: instance names in these lines come from the LAN.
+            let adverts = { (phrase: String) in TunnelPortWatcher.recentAdverts(last: "15m", containing: phrase) }
+            let ours = plain(p.instanceName) ? adverts("Resolved bonjour advert \(p.instanceName) to identity").last { $0.0 == p.instanceName } : nil
+            if let ours, ours.1 == nil {
                 check(false, "This Mac does not recognize the device's pairing (identity nil)",
                       fix: "Put the device on this Mac's Wi-Fi, remove it in RoamRun and add it again. If Xcode lost it too, pair it in Xcode first.")
-            } else if ours != nil || (udid.map(plain) == true && shell("/usr/bin/log", ["show", "--last", "15m", "--style", "compact", "--predicate",
-                "process == \"remotepairingd\" AND eventMessage CONTAINS \"associated with udid \(udid!)\""])?.contains("associated with udid") == true) {
+            } else if ours != nil || (udid.map(plain) == true && adverts("associated with udid \(udid ?? "")")
+                .contains { $0.1?.caseInsensitiveCompare(udid ?? "") == .orderedSame }) {
                 check(true, "This Mac recognizes the device's pairing")
             } else {
                 note("Pairing not checked — no advert of this device was matched in the last 15 minutes")
@@ -744,7 +800,7 @@ enum CLI {
 
     /// A name as it must be typed in a shell: 'iPhone mh', 'it'\''s'.
     nonisolated static func shellName(_ name: String) -> String {
-        guard name.contains(where: { " '\"$`\\!*?&;|<>()".contains($0) }) else { return name }
+        guard name.isEmpty || !name.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "._-".contains($0)) }) else { return name }
         return "'" + name.replacingOccurrences(of: "'", with: #"'\''"#) + "'"
     }
 
@@ -825,9 +881,17 @@ enum CLI {
 
     // MARK: - Helpers
 
-    private static func find(_ name: String, in profiles: [DeviceProfile]) -> DeviceProfile? {
+    private static let noDevices = "No devices saved yet — add one in the RoamRun app."
+
+    /// By name (any case), else by an id prefix of 8+ characters (shorter is more likely a typo).
+    nonisolated static func matches(_ name: String, in profiles: [DeviceProfile]) -> [DeviceProfile] {
         let byName = profiles.filter { $0.displayName.caseInsensitiveCompare(name) == .orderedSame }
-        let matches = byName.isEmpty ? profiles.filter { $0.id.uuidString.lowercased().hasPrefix(name.lowercased()) } : byName
+        guard byName.isEmpty, name.count >= 8 else { return byName }
+        return profiles.filter { $0.id.uuidString.lowercased().hasPrefix(name.lowercased()) }
+    }
+
+    private static func find(_ name: String, in profiles: [DeviceProfile]) -> DeviceProfile? {
+        let matches = matches(name, in: profiles)
         if matches.count > 1 {
             fail("“\(name)” matches more than one device — rename one in the app, or use its id: "
                  + matches.map { "\($0.id.uuidString.prefix(8))" }.joined(separator: ", "))
@@ -836,8 +900,8 @@ enum CLI {
     }
 
     private static func names(_ profiles: [DeviceProfile]) -> String {
-        profiles.isEmpty ? "No devices saved yet — add one in the RoamRun app."
-            : "Saved: " + profiles.map { "“\($0.displayName)”" }.joined(separator: ", ")
+        profiles.isEmpty ? noDevices
+            : "Saved: " + profiles.map { shellName($0.displayName) }.joined(separator: ", ")
     }
 
     private static func owner(_ e: StatusFile.Entry) -> String {
