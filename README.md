@@ -106,7 +106,7 @@ Build the dmg with `make dmg` (pass `SIGN_ID` / `NOTARY_PROFILE` to sign with a 
 
 ### Updating
 
-There's no auto-update. Quit RoamRun, replace `/Applications/RoamRun.app` with the new version (from source: `git pull` and `make app` first), and open it. Saved devices and the CLI link stay as they are, and bridges that were running start again.
+There's no auto-update. Quit RoamRun, replace `/Applications/RoamRun.app` with the new version (from source: `git pull` and `make app` first), and open it. Saved devices and the CLI link stay as they are, and bridges that were running start again. A new dmg is blocked on first launch like the first install: allow it again with "Open Anyway".
 
 ## Usage
 
