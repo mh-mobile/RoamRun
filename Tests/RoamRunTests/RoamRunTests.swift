@@ -193,3 +193,32 @@ private func profile(_ name: String) -> DeviceProfile {
     #expect(CLI.parseProvisioning(["ProvisionsAllDevices": true]) == .allDevices)   // Enterprise
     #expect(CLI.parseProvisioning(["Name": "App Store"]) == .appStore)             // no device list
 }
+
+// MARK: - Helper processes never hang us
+
+private func timed(_ path: String, _ args: [String]) -> (Proc.Result, TimeInterval) {
+    let start = Date()
+    let r = Proc.run(path, args, timeout: 1)
+    return (r, Date().timeIntervalSince(start))
+}
+
+@Test func quickToolReturnsItsOutput() {
+    let (r, t) = timed("/bin/echo", ["hello"])
+    #expect(r.status == 0 && r.out == "hello\n" && t < 1)
+}
+
+@Test func slowToolIsStoppedAtTheTimeout() {
+    let (r, t) = timed("/bin/sleep", ["20"])
+    #expect(r.status != 0 && t < 2.5)
+}
+
+@Test func toolIgnoringTermIsKilled() {
+    let (r, t) = timed("/bin/sh", ["-c", "trap '' TERM; while :; do :; done"])
+    #expect(r.status == 9 && t < 4.5)   // SIGKILL 2s after the ignored TERM
+}
+
+@Test func grandchildHoldingThePipeDoesNotHangUs() {
+    // sh is killed, but its `sleep` keeps stdout open.
+    let (r, t) = timed("/bin/sh", ["-c", "trap '' TERM; sleep 8"])
+    #expect(r.status == -1 && t < 6.5)
+}
