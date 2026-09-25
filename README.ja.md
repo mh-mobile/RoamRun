@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/mh-mobile/RoamRun/actions/workflows/ci.yml"><img src="https://github.com/mh-mobile/RoamRun/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/mh-mobile/RoamRun" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/macOS-13%2B-blue" alt="macOS 13+">
+  <img src="https://img.shields.io/badge/macOS-13%2B%20Apple%20Silicon-blue" alt="macOS 13+ on Apple Silicon">
 </p>
 
 <p align="center"><a href="README.md">English</a> | 日本語</p>
@@ -73,7 +73,7 @@ sequenceDiagram
 
 ## 要件
 
-- macOS 13+
+- macOS 13+、Apple Silicon（Intel Mac は非対応）
 - iPhone は iOS 17.4 以降（CoreDevice トンネルが TCP の世代。17.0–17.3 の QUIC/UDP トンネルは非対応）
 - iPad、Apple Vision Pro でも同じ仕組みで動作を確認済み（以下「iPhone」はこれらも含みます）。Vision Pro はもともと USB がなく Wi-Fi だけで開発する端末なので、外出先からの利用とも相性が良いです
 - Xcode（devicectl が使えること）
@@ -167,7 +167,7 @@ roamrun init                                  # 入っているエージェン�
 npx skills add mh-mobile/RoamRun             # skills CLI 経由
 ```
 
-スキルには手順（`roamrun up -d` → `status --wait --json` で UDID 取得 → `xcodebuild` / `devicectl`）と、「iPhone のロック解除など人間にしかできないこと」が書かれています。CLI は `--json` と終了コード（0 準備完了 / 1 未準備・失敗 / 2 使い方の誤り）に対応しています。
+スキルには手順（`roamrun up -d` → `status --wait 60 --json` で UDID 取得 → `xcodebuild` / `devicectl`）と、「iPhone のロック解除など人間にしかできないこと」が書かれています。CLI は `--json` と終了コード（0 準備完了 / 1 未準備・失敗 / 2 使い方の誤り）に対応しています。
 
 ## 外出先で iPhone だけで使う
 
@@ -218,15 +218,15 @@ RoamRun が書き込むのは次の場所だけです（システム設定や他
 | `~/Library/Application Support/RoamRun/` | 登録した iPhone（`profiles.json`）とブリッジの状態 |
 | `~/Library/Logs/RoamRun/` | `roamrun up -d` のログ |
 | `com.roamrun.app`（defaults） | 設定・前回動いていたブリッジ |
-| `/usr/local/bin/roamrun` | CLI を入れた場合のみ（既存のファイルや他のツールのリンクは上書きしません） |
+| `/usr/local/bin/roamrun` | アプリか `make install-cli` で CLI を入れた場合のみ（既存のファイルや他のツールのリンクは上書きしません）。Homebrew は代わりに `/opt/homebrew/bin/roamrun` にリンクします |
 | `~/.claude/skills/roamrun/` など | `roamrun init` を実行した場合のみ（既存の他のスキルやリンクには触れません） |
 
 ブリッジ中に起動する補助プロセス（`dns-sd` / `log stream`）は、RoamRun が強制終了しても 1 秒以内に自動で終了し、LAN への広告も消えます。
 
-Homebrew なら `brew uninstall --zap --cask roamrun` でアプリ・CLI のリンク・設定・ログを削除します（スキルは先に `roamrun init --uninstall`）。それ以外で完全に削除するには:
+まず `roamrun up -d` で始めたブリッジを止めます（`roamrun down <name>`）。アプリを消しても動き続けるためです。Homebrew なら、そのあと `brew uninstall --zap --cask roamrun` でアプリ・CLI のリンク・設定・ログを削除します（スキルは先に `roamrun init --uninstall`）。それ以外で完全に削除するには:
 
 ```sh
-roamrun init --uninstall                  # スキルを入れた場合
+roamrun init --uninstall                  # スキルを入れた場合（npx で入れたなら npx skills remove roamrun）
 rm /usr/local/bin/roamrun                 # CLI を入れた場合
 rm -rf ~/Library/Application\ Support/RoamRun ~/Library/Logs/RoamRun
 defaults delete com.roamrun.app
@@ -245,6 +245,7 @@ defaults delete com.roamrun.app
 - iPhone 再起動後など、DDI の再ステージングで一度 USB 接続が必要な場合があります
 - TXT の authTag/identifier が変わった場合は、同じ Wi-Fi で iPhone を追加し直してください
 - ブリッジ中は、**この Mac が属するローカルネットワーク**（Wi-Fi・有線など mDNS が有効な全インターフェース）に iPhone の Bonjour 識別子（identifier / authTag）を広告し続けます。iPhone 本体と違い値が固定のため、同じネットワークの第三者に端末の存在を追跡される可能性があります（Mac を自宅に置いて使う通常の構成では問題になりません）。中継は、この Mac 自身から以外の接続を即座に切断します。iPhone 側の通信は Tailscale で暗号化されるため、iPhone がどの Wi-Fi にいても影響しません
+- **動作確認は Xcode と `devicectl` で行っています。** Flutter や React Native も同じツールでビルド・インストールするため、ブリッジが Ready なら動くはずですが、まだ確認していません（[#5](https://github.com/mh-mobile/RoamRun/issues/5)）。`roamrun run` は今いるフォルダの Xcode プロジェクトをビルドします（Flutter / React Native なら `ios/` の下）
 - 開発しない期間は、iPhone のデベロッパモードをオフにする、または不要なペアリングを解除すると安全です（Apple の推奨）
 - iPhone の RemotePairing のポートには、tailnet の他のメンバーからも到達できます（接続はできても、ペアリングの確認で弾かれます）。共有の tailnet では、Tailscale の Grants / ACL で iPhone に届く相手を自分の Mac に絞ることをおすすめします
 - 同じネットワークに別の Mac がいると、その Mac の Xcode にもこの iPhone が一瞬表示されることがあります（接続は中継が拒否するため、操作や通信はできません）

@@ -46,8 +46,11 @@ live in `HomeRule` (ProxyBridge.swift) and are unit-tested — change them there
    `CFBundleVersion` (+1 each release) in `Info.plist`; commit, push, wait for CI.
 2. Build the dmg from a fresh clone of that commit (a working copy can hold
    uncommitted changes): `make dmg` → `RoamRun-<version>.dmg`.
-3. `gh release create v<version> RoamRun-<version>.dmg --title "RoamRun <version>" --notes …`
-   — the tag must point at the commit the dmg was built from.
+3. `gh release create v<version> RoamRun-<version>.dmg --target <that commit's full sha> --title "RoamRun <version>" --notes …`
+   — the tag must point at the commit the dmg was built from. Keep the notes'
+   claims in line with the README.
+4. Homebrew tap (`mh-mobile/homebrew-tap`, `Casks/roamrun.rb`): set `version`
+   and `sha256` (`shasum -a 256` of the dmg), `brew style` + `brew audit --cask --online`, push.
 
 ## Rules
 

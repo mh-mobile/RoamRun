@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/mh-mobile/RoamRun/actions/workflows/ci.yml"><img src="https://github.com/mh-mobile/RoamRun/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/mh-mobile/RoamRun" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/macOS-13%2B-blue" alt="macOS 13+">
+  <img src="https://img.shields.io/badge/macOS-13%2B%20Apple%20Silicon-blue" alt="macOS 13+ on Apple Silicon">
 </p>
 
 <p align="center">English | <a href="README.ja.md">日本語</a></p>
@@ -73,7 +73,7 @@ sequenceDiagram
 
 ## Requirements
 
-- macOS 13+
+- macOS 13+ on Apple Silicon (Intel Macs aren't supported)
 - iOS 17.4 or later on the iPhone (the generation whose CoreDevice tunnel is TCP; the QUIC/UDP tunnel of 17.0–17.3 isn't supported)
 - Also verified with iPad and Apple Vision Pro, which work the same way ("iPhone" below includes them). Vision Pro has no USB and is developed for over Wi-Fi anyway, which makes it a natural fit for working away from the Mac
 - Xcode (`devicectl` must be available)
@@ -167,7 +167,7 @@ roamrun init                                  # detect installed agents and add 
 npx skills add mh-mobile/RoamRun             # via the skills CLI
 ```
 
-The skill describes the steps (`roamrun up -d` → `status --wait --json` for the UDID → `xcodebuild` / `devicectl`) and what only a human can do, such as unlocking the iPhone. The CLI supports `--json` and exit codes (0 ready / 1 not ready or failed / 2 usage error).
+The skill describes the steps (`roamrun up -d` → `status --wait 60 --json` for the UDID → `xcodebuild` / `devicectl`) and what only a human can do, such as unlocking the iPhone. The CLI supports `--json` and exit codes (0 ready / 1 not ready or failed / 2 usage error).
 
 ## Working from just your iPhone, away from home
 
@@ -218,19 +218,19 @@ RoamRun writes only to these places (it never touches system settings or other a
 | `~/Library/Application Support/RoamRun/` | Saved devices (`profiles.json`) and bridge status |
 | `~/Library/Logs/RoamRun/` | Logs of `roamrun up -d` |
 | `com.roamrun.app` (defaults) | Settings and which bridges were running |
-| `/usr/local/bin/roamrun` | Only if you installed the CLI (never overwrites an existing file or another tool's link) |
+| `/usr/local/bin/roamrun` | Only if you installed the CLI from the app or `make install-cli` (never overwrites an existing file or another tool's link); Homebrew links `/opt/homebrew/bin/roamrun` instead |
 | `~/.claude/skills/roamrun/` etc. | Only if you ran `roamrun init` (never touches other skills or links) |
 
 The helper processes started while bridging (`dns-sd` / `log stream`) exit within a second even if RoamRun is force-quit, and the LAN advertisement goes away with them.
 
-With Homebrew, `brew uninstall --zap --cask roamrun` removes the app, the CLI link, settings and logs (skills: `roamrun init --uninstall` first). Otherwise, to remove everything:
+First stop bridges started with `roamrun up -d` (`roamrun down <name>`): they keep running without the app. With Homebrew, `brew uninstall --zap --cask roamrun` then removes the app, the CLI link, settings and logs (skills: `roamrun init --uninstall` first). Otherwise, to remove everything:
 
 ```sh
-roamrun init --uninstall                  # if you installed the skill
+roamrun init --uninstall                  # if you installed the skill (with npx: npx skills remove roamrun)
 rm /usr/local/bin/roamrun                 # if you installed the CLI
 rm -rf ~/Library/Application\ Support/RoamRun ~/Library/Logs/RoamRun
 defaults delete com.roamrun.app
-# finally delete /Applications/RoamRun.app (turn off "Open at Login" first if you enabled it)
+# finally delete /Applications/RoamRun.app (turn off "Open at login" first if you enabled it)
 ```
 
 ## Limitations and known issues
@@ -245,6 +245,7 @@ defaults delete com.roamrun.app
 - After the iPhone restarts, re-staging the DDI may need one USB connection
 - If the TXT record's authTag/identifier changes, add the iPhone again on the same Wi-Fi
 - While bridging, RoamRun keeps advertising the iPhone's Bonjour identifiers (identifier / authTag) on **every local network this Mac is on** (Wi-Fi, Ethernet — every interface with mDNS). Unlike the iPhone's own advertisement these values are fixed, so someone on the same network could track the device's presence (not an issue in the usual setup with the Mac at home). The relay immediately drops any connection that doesn't come from this Mac. The iPhone's side is encrypted by Tailscale, so whichever Wi-Fi it's on doesn't matter
+- **Tested with Xcode and `devicectl`.** Flutter and React Native build and install through the same tools, so they should work while the bridge is Ready, but this hasn't been verified yet ([#5](https://github.com/mh-mobile/RoamRun/issues/5)). `roamrun run` builds the Xcode project in the current folder (for those, the one under `ios/`)
 - When you're not developing, turning off the iPhone's Developer Mode or removing pairings you don't need is safer (Apple's recommendation)
 - Other members of your tailnet can reach the iPhone's RemotePairing port too (they can connect, but pair verification rejects them). On a shared tailnet, use Tailscale Grants / ACLs so only your Mac can reach the iPhone
 - If another Mac is on the same network, this iPhone may briefly show up in that Mac's Xcode as well (the relay refuses its connections, so it can't do anything with it)

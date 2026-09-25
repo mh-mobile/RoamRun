@@ -17,3 +17,8 @@ jobs:
       - uses: actions/checkout@v5
       - run: xcrun swift --version
       - run: make test
+      - name: Build the app bundle
+        run: |
+          make app
+          plutil -lint RoamRun.app/Contents/Info.plist
+          codesign --verify --strict RoamRun.app

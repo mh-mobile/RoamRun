@@ -34,7 +34,8 @@ bounded.
 
 ## What it touches on the Mac
 
-- No admin rights, no kernel or network-configuration changes, no daemons.
+- No kernel or network-configuration changes, no daemons. Admin rights only
+  if you install the CLI and `/usr/local/bin` isn't writable (a password prompt).
 - Files: `~/Library/Application Support/RoamRun/` (device profiles, mode 0600,
   and bridge status), `~/Library/Logs/RoamRun/`, and the `com.roamrun.app`
   defaults. The CLI link and agent skills are installed only on request and
@@ -42,5 +43,5 @@ bounded.
 - Helper processes (`dns-sd`, `log stream`) are tied to RoamRun and exit within
   a second if it quits or is killed, taking the advertisement with them.
 
-See the README's *Limitations* section for the full list, including how to
-remove everything.
+See the README's *Limitations and known issues* for the full list, and *What
+it creates on your Mac, and uninstalling* for how to remove everything.
