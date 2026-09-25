@@ -6,7 +6,8 @@ import Foundation
 /// SRV target at *this Mac's* IP so remotepairingd connects to our local relay.
 ///
 ///   dns-sd -P <name> <type> <domain> <port> <host> <ip> [k=v ...]
-final class DNSServiceProxy {
+/// Used from the main actor; its termination handlers and renew wait hop back there.
+final class DNSServiceProxy: @unchecked Sendable {
     private var process: Process?
     private var lastArgs: [String] = []
     private var renewToken: UUID?
@@ -33,9 +34,10 @@ final class DNSServiceProxy {
         let task = Proc.tied("/usr/bin/dns-sd", args)
         task.standardOutput = FileHandle.nullDevice
         task.standardError = FileHandle.nullDevice
-        task.terminationHandler = { [weak self] t in
+        let me = Weak(self)
+        task.terminationHandler = { t in
             DispatchQueue.main.async {
-                guard let self, self.process === t else { return }
+                guard let self = me.value, self.process === t else { return }
                 self.process = nil
                 self.onExit?(t.terminationStatus)
             }
@@ -65,11 +67,12 @@ final class DNSServiceProxy {
         renewToken = token
         // Let the old registration go first, or mDNSResponder may rename ours — waiting
         // off the main thread; a stop() meanwhile cancels the respawn.
-        DispatchQueue.global().async { [weak self] in
+        let me = Weak(self)
+        DispatchQueue.global().async {
             var tries = 0
             while old?.isRunning == true && tries < 100 { usleep(10_000); tries += 1 }
             DispatchQueue.main.async {
-                guard let self, self.renewToken == token, self.process == nil else { return }
+                guard let self = me.value, self.renewToken == token, self.process == nil else { return }
                 self.renewToken = nil
                 if !self.spawn(self.lastArgs) { self.onExit?(-1) }
             }

@@ -89,6 +89,8 @@ final class LineReader: @unchecked Sendable {
     private var pending = Data()
 
     init(_ pipe: Pipe, onLine: @escaping (String) -> Void) {
+        // readabilityHandler calls are serial, so onLine never runs concurrently with itself.
+        nonisolated(unsafe) let onLine = onLine
         pipe.fileHandleForReading.readabilityHandler = { [self] handle in
             let data = handle.availableData
             guard !data.isEmpty else {
@@ -114,4 +116,10 @@ private final class OutputBox: @unchecked Sendable {
     var out: Data { lock.withLock { _out } }
     var err: Data { lock.withLock { _err } }
     func append(_ d: Data, out: Bool) { lock.withLock { if out { _out.append(d) } else { _err.append(d) } } }
+}
+
+/// A weak reference that can cross into a background callback and hop back to main.
+final class Weak<T: AnyObject>: @unchecked Sendable {
+    weak var value: T?
+    init(_ value: T) { self.value = value }
 }

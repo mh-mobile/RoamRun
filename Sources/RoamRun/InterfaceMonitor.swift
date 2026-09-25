@@ -4,7 +4,8 @@ import Network
 /// Tracks the Mac's IPv4 address on the LAN interface (en0 by default) and
 /// notifies when it changes, so active bridges can re-bind their relays and
 /// re-publish the proxy registration with the new address.
-final class InterfaceMonitor {
+/// State touched only on `queue` (checks) or before start().
+final class InterfaceMonitor: @unchecked Sendable {
     var onChange: ((String) -> Void)?
     /// en0 had an address and lost it.
     var onLost: (() -> Void)?

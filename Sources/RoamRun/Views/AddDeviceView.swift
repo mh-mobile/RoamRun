@@ -279,7 +279,9 @@ struct AddDeviceView: View {
                         return (s.host, false)
                     }
                 }
-                return await group.reduce(into: [:]) { $0[$1.0] = $1.1 }
+                var found: [String: Bool] = [:]
+                for await (host, live) in group { found[host] = live }
+                return found
             }
             liveness.merge(results) { _, new in new }
             // Re-check every 4s, but a newly seen device right away.

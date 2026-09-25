@@ -49,7 +49,7 @@ extension ReachabilityProbe {
         let conn = NWConnection(to: endpoint, using: .tcp)
         return await withCheckedContinuation { cont in
             let box = ProbeBox()
-            let finish: (Bool) -> Void = { ok in box.done { conn.stateUpdateHandler = nil; conn.cancel(); cont.resume(returning: ok) } }
+            let finish: @Sendable (Bool) -> Void = { ok in box.done { conn.stateUpdateHandler = nil; conn.cancel(); cont.resume(returning: ok) } }
             conn.stateUpdateHandler = { state in
                 switch state {
                 case .ready:
@@ -70,12 +70,14 @@ extension ReachabilityProbe {
 private final class ProbeBox: @unchecked Sendable {
     private var fired = false
     private let lock = NSLock()
+    /// Runs `body` once; outside the lock, so cancel() or a resume can't re-enter it.
     func done(_ body: () -> Void) {
-        lock.lock()
-        defer { lock.unlock() }
-        guard !fired else { return }
-        fired = true
-        body()
+        let first = lock.withLock { () -> Bool in
+            guard !fired else { return false }
+            fired = true
+            return true
+        }
+        if first { body() }
     }
 }
 

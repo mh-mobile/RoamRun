@@ -24,7 +24,8 @@ enum RelayError: LocalizedError {
 /// connections arrive *from* that address. Anyone else on the LAN — who can
 /// see the Bonjour record we publish — is refused, rather than being handed
 /// this Mac's tailnet route to the iPhone.
-final class Relay {
+/// Connection bookkeeping is under `lock`; NW callbacks run on global queues.
+final class Relay: @unchecked Sendable {
     let localIP: String
     let localPort: UInt16
     let remoteIP: String
@@ -123,7 +124,7 @@ final class Relay {
         let outbound = NWConnection(host: NWEndpoint.Host(remoteIP), port: rport, using: Self.tcpParams(keepalive: true))
         let stats = ConnStats()
         let port = remotePort
-        let finish: (String) -> Void = { [weak self] reason in
+        let finish: @Sendable (String) -> Void = { [weak self] reason in
             stats.logOnce("tcp :\(port) sent=\(stats.up)B recv=\(stats.down)B \(reason)")
             outbound.stateUpdateHandler = nil   // it holds this closure, which holds outbound
             inbound.cancel(); outbound.cancel()
@@ -153,8 +154,8 @@ final class Relay {
     }
 
     private func pump(from: NWConnection, to: NWConnection, stats: ConnStats,
-                      isUp: Bool, finish: @escaping (String) -> Void) {
-        let handle: (Data?, NWConnection.ContentContext?, Bool, NWError?) -> Void = { [weak self] data, _, isComplete, error in
+                      isUp: Bool, finish: @escaping @Sendable (String) -> Void) {
+        let handle: @Sendable (Data?, NWConnection.ContentContext?, Bool, NWError?) -> Void = { [weak self] data, _, isComplete, error in
             if let error {
                 finish("err=\(error.localizedDescription)")
                 return
@@ -176,7 +177,7 @@ final class Relay {
             stats.add(data.count, up: isUp)
             // Backpressure: read the next chunk only once this one is handed
             // off, so a fast side can't buffer a whole install in memory.
-            to.send(content: data, completion: .contentProcessed { sendError in
+            to.send(content: data, completion: .contentProcessed { [weak self] sendError in
                 if let sendError { finish("send err=\(sendError.localizedDescription)"); return }
                 self?.pump(from: from, to: to, stats: stats, isUp: isUp, finish: finish)
             })
@@ -253,11 +254,13 @@ private final class ConnStats: @unchecked Sendable {
 private final class ReadyBox: @unchecked Sendable {
     private var didResume = false
     private let lock = NSLock()
+    /// Runs `body` once; outside the lock, so what it calls can't re-enter it.
     func resume(_ body: () -> Void) {
-        lock.lock()
-        defer { lock.unlock() }
-        guard !didResume else { return }
-        didResume = true
-        body()
+        let first = lock.withLock { () -> Bool in
+            guard !didResume else { return false }
+            didResume = true
+            return true
+        }
+        if first { body() }
     }
 }

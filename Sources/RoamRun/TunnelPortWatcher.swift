@@ -3,7 +3,9 @@ import Foundation
 /// Watches `log stream` for remotepairingd's "Got tunnel endpoint" line and
 /// reports the UDP/TCP port the CoreDevice tunnel actually landed on, so we
 /// can relay exactly that port instead of forwarding a blind range.
-final class TunnelPortWatcher {
+/// Started/stopped on the main actor; `handle` runs on the pipe reader's serial queue,
+/// and its termination handler hops back to main.
+final class TunnelPortWatcher: @unchecked Sendable {
     /// (port, UDID of the iPhone it belongs to — nil if not seen, the IPv4 address remotepairingd dials).
     var onPort: ((UInt16, String?, String) -> Void)?
     /// (Bonjour instance, UDID) each time remotepairingd authenticates a
@@ -21,13 +23,13 @@ final class TunnelPortWatcher {
     private var errReader: LineReader?
     // Advert lines (LAN-supplied names) are routed away before these run; the
     // prefix keeps them strict without breaking if macOS appends a field.
-    private static let pattern = #/tunnel-\d+: Got tunnel endpoint: '([0-9.]+)(?:%[^' :]*)?:(\d+)'/#
+    nonisolated(unsafe) private static let pattern = #/tunnel-\d+: Got tunnel endpoint: '([0-9.]+)(?:%[^' :]*)?:(\d+)'/#
     /// The endpoint line doesn't name the device; the line right before it does.
     /// Requests still waiting for their endpoint; two different iPhones among
     /// them means we can't tell whose it is, so the port stays unattributed.
     /// Any endpoint in the known format, e.g. a link-local IPv6 one ('fe80::…%en0.64106') we don't relay.
-    private static let anyEndpoint = #/tunnel-\d+: Got tunnel endpoint: '[^' ]*'/#
-    private static let establishPattern = #/device-\d+ \(([0-9A-Fa-f-]+)\): Sending tunnel establish request/#
+    nonisolated(unsafe) private static let anyEndpoint = #/tunnel-\d+: Got tunnel endpoint: '[^' ]*'/#
+    nonisolated(unsafe) private static let establishPattern = #/device-\d+ \(([0-9A-Fa-f-]+)\): Sending tunnel establish request/#
     private var pending: [(udid: String, at: Date)] = []
     /// After an ambiguous endpoint, any request in flight may be answered by
     /// the wrong one — attribute nothing for a while.
@@ -37,7 +39,7 @@ final class TunnelPortWatcher {
     /// from the LAN and may contain spaces, so a loose search could be fooled
     /// by a crafted name that embeds a fake "… to identity nil" phrase.
     private static let advertMarker = "Resolved bonjour advert "
-    private static let advertPattern = #/([0-9A-Fa-f-]+) to identity (?:associated with udid ([0-9A-Fa-f-]+)|nil, udid nil)/#
+    nonisolated(unsafe) private static let advertPattern = #/([0-9A-Fa-f-]+) to identity (?:associated with udid ([0-9A-Fa-f-]+)|nil, udid nil)/#
 
     /// Apple's own remotepairingd only: any process can be named that and log lines
     /// like these, but only Apple's lives in these SIP-protected places.
@@ -58,10 +60,11 @@ final class TunnelPortWatcher {
         reader = LineReader(pipe) { [weak self] line in self?.handle(line) }
         let firstErr = FirstLine()
         errReader = LineReader(errPipe) { firstErr.offer($0) }
-        task.terminationHandler = { [weak self] t in
+        let me = Weak(self)
+        task.terminationHandler = { t in
             // Give the stderr reader a moment to deliver the reason.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                guard let self, self.process === t else { return }   // stop() isn't a failure
+                guard let self = me.value, self.process === t else { return }   // stop() isn't a failure
                 self.process = nil
                 let err = firstErr.value
                 self.onExit?("log stream exited (status \(t.terminationStatus))" + (err.isEmpty ? "" : ": \(err)"))

@@ -61,7 +61,7 @@ struct RoamRunApp: App {
 
 /// Double-clicking the app while it's already running should show the window.
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    static var openMain: (() -> Void)?
+    @MainActor static var openMain: (() -> Void)?
 
     /// Posted by a second launch; the running app opens its window.
     static let showNotification = Notification.Name("com.roamrun.app.showWindow")
@@ -79,11 +79,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func handleQuitEvent(_ event: NSAppleEventDescriptor, withReply reply: NSAppleEventDescriptor) {
-        Self.quit()
+        MainActor.assumeIsolated { Self.quit() }   // Apple Events arrive on the main thread
     }
 
     /// Closes any open sheet first — otherwise AppKit won't let the app quit.
-    static func quit() {
+    @MainActor static func quit() {
         for window in NSApp.windows {
             if let sheet = window.attachedSheet { window.endSheet(sheet) }
         }
