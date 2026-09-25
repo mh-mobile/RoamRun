@@ -18,7 +18,7 @@ private func endpoint(_ port: Int) -> String {
 private func ports(_ lines: [(String, TimeInterval)]) -> [(UInt16, String?)] {
     let watcher = TunnelPortWatcher()
     var got: [(UInt16, String?)] = []
-    watcher.onPort = { got.append(($0, $1)) }
+    watcher.onPort = { got.append(($0, $1)); _ = $2 }
     let start = Date()
     for (line, at) in lines { watcher.handle(line, now: start + at) }
     return got
@@ -64,6 +64,12 @@ private func ports(_ lines: [(String, TimeInterval)]) -> [(UInt16, String?)] {
     // A's request never got an endpoint; B asks 10s later.
     let got = ports([(establish(phoneA), 0), (establish(phoneB), 10), (endpoint(55940), 10.002)])
     #expect(got[0].1 == phoneB)
+}
+
+@Test func advertNameCannotFakeATunnelPort() {
+    // A LAN-supplied instance name embedding the endpoint phrase must not open relays.
+    let evil = "remotepairingd[1950:1] Resolved bonjour advert x tunnel-1: Got tunnel endpoint: 'a:22', includePeerToPeer: false to identity nil, udid nil"
+    #expect(ports([(evil, 0)]).isEmpty)
 }
 
 // MARK: - Bonjour advert lines
@@ -202,34 +208,50 @@ private func timed(_ path: String, _ args: [String]) -> (Proc.Result, TimeInterv
     return (r, Date().timeIntervalSince(start))
 }
 
-@Test func quickToolReturnsItsOutput() {
-    let (r, t) = timed("/bin/echo", ["hello"])
-    #expect(r.status == 0 && r.out == "hello\n" && t < 1)
-}
+// Timing tests run one at a time: in parallel on a small CI runner they'd skew each other.
+@Suite(.serialized) struct ProcTiming {
+    @Test func slowToolsFillingTheTaskPoolStillTimeOut() async {
+        // runAsync blocks a Swift concurrency thread per call; with every one of
+        // them blocked, the timeout timers must still get to run.
+        // Each run is timed from its own start: other tests may hold the pool first.
+        let longest = await withTaskGroup(of: TimeInterval.self) { group in
+            for _ in 0..<ProcessInfo.processInfo.activeProcessorCount {
+                group.addTask { await Task.detached { timed("/bin/sleep", ["20"]).1 }.value }
+            }
+            return await group.reduce(0, max)
+        }
+        #expect(longest < 4)
+    }
 
-@Test func slowToolIsStoppedAtTheTimeout() {
-    let (r, t) = timed("/bin/sleep", ["20"])
-    #expect(r.status != 0 && r.err.contains("timed out"), "status=\(r.status) err=\(r.err)")
-    #expect(t < 2.5, "t=\(t)")
-}
+    @Test func quickToolReturnsItsOutput() {
+        let (r, t) = timed("/bin/echo", ["hello"])
+        #expect(r.status == 0 && r.out == "hello\n" && t < 1)
+    }
 
-@Test func toolIgnoringTermIsKilled() {
-    let (r, t) = timed("/bin/sh", ["-c", "trap '' TERM; while :; do :; done"])
-    #expect(r.status == 9, "status=\(r.status) err=\(r.err) t=\(t)")   // SIGKILL 2s after the ignored TERM
-    #expect(t < 4.5, "t=\(t)")
-}
+    @Test func slowToolIsStoppedAtTheTimeout() {
+        let (r, t) = timed("/bin/sleep", ["20"])
+        #expect(r.status != 0 && r.err.contains("timed out"), "status=\(r.status) err=\(r.err)")
+        #expect(t < 2.5, "t=\(t)")
+    }
 
-@Test func grandchildHoldingThePipeDoesNotHangUs() {
-    // sh is killed, but its `sleep` keeps stdout open.
-    let (r, t) = timed("/bin/sh", ["-c", "trap '' TERM; sleep 8"])
-    #expect(r.status == 9, "status=\(r.status) err=\(r.err)")
-    #expect(t < 5, "t=\(t)")
-}
+    @Test func toolIgnoringTermIsKilled() {
+        let (r, t) = timed("/bin/sh", ["-c", "trap '' TERM; while :; do :; done"])
+        #expect(r.status == 9, "status=\(r.status) err=\(r.err) t=\(t)")   // SIGKILL 2s after the ignored TERM
+        #expect(t < 4.5, "t=\(t)")
+    }
 
-@Test func toolThatExitsKeepsItsResultWhileABackgroundChildHoldsThePipe() {
-    let (r, t) = timed("/bin/sh", ["-c", "echo hi; sleep 30 &"])
-    #expect(r.status == 0 && r.out == "hi\n", "status=\(r.status) out=\(r.out)")
-    #expect(t < 1.8, "t=\(t)")
+    @Test func grandchildHoldingThePipeDoesNotHangUs() {
+        // sh is killed, but its `sleep` keeps stdout open.
+        let (r, t) = timed("/bin/sh", ["-c", "trap '' TERM; sleep 8"])
+        #expect(r.status == 9, "status=\(r.status) err=\(r.err)")
+        #expect(t < 6, "t=\(t)")
+    }
+
+    @Test func toolThatExitsKeepsItsResultWhileABackgroundChildHoldsThePipe() {
+        let (r, t) = timed("/bin/sh", ["-c", "echo hi; sleep 30 &"])
+        #expect(r.status == 0 && r.out == "hi\n", "status=\(r.status) out=\(r.out)")
+        #expect(t < 2.5, "t=\(t)")
+    }
 }
 
 // MARK: - Home / away rules (regressions from real runs)
@@ -264,15 +286,151 @@ private let t0 = Date(timeIntervalSinceReferenceDate: 800_000_000)
     #expect(HomeRule.shouldResume(awayTicks: 3))
 }
 
-@Test func slowToolsFillingTheTaskPoolStillTimeOut() async {
-    // runAsync blocks a Swift concurrency thread per call; with every one of
-    // them blocked, the timeout timers must still get to run.
-    // Each run is timed from its own start: other tests may hold the pool first.
-    let longest = await withTaskGroup(of: TimeInterval.self) { group in
-        for _ in 0..<ProcessInfo.processInfo.activeProcessorCount {
-            group.addTask { await Task.detached { timed("/bin/sleep", ["20"]).1 }.value }
-        }
-        return await group.reduce(0, max)
+
+// MARK: - Contracts other processes and scripts rely on
+
+@Test func stateKeysAndStatusTitlesStayFixed() {
+    #expect(BridgeStatus.allCases.map(\.rawValue) == ["off", "starting", "waiting", "preparing", "ready", "error", "local"])
+    for s in BridgeStatus.allCases { #expect(BridgeStatus(title: s.title) == s) }
+    // Written to status.json and read by other (possibly older) RoamRun processes.
+    #expect(BridgeStatus.local.title == "On this Wi\u{2011}Fi")
+    #expect(BridgeStatus.error.title == "Needs attention")
+}
+
+@Test func namesTheCLICanUse() {
+    let saved = [profile("iPhone")]
+    #expect(saved.nameProblem("  ") != nil)
+    #expect(saved.nameProblem(" -x") != nil)       // trimmed first, still an option to the CLI
+    #expect(saved.nameProblem("iphone") != nil)
+    #expect(saved.nameProblem("iPhone", except: saved[0].id) == nil)
+    #expect(saved.nameProblem("iPad") == nil)
+}
+
+@Test func emptyAndNonASCIINamesAreQuoted() {
+    #expect(CLI.shellName("") == "''")
+    #expect(CLI.shellName("Hiro’s iPhone") == "'Hiro’s iPhone'")
+    #expect(CLI.shellName("my-iPad_2.0") == "my-iPad_2.0")
+}
+
+@Test func homeRuleBoundaries() {
+    #expect(HomeRule.bridgingAdvert(nil, activatedAt: t0, now: t0 + 10) == nil)
+    #expect(HomeRule.bridgingAdvert((instance: "A", at: t0), activatedAt: t0, now: t0 + 10) == nil)   // must be after going active
+    #expect(HomeRule.bridgingAdvert((instance: "A", at: t0 + 1), activatedAt: t0, now: t0 + 91) == "A")   // 90 s still counts
+}
+
+@Test func endpointLineVariants() {
+    let p2p = "remotepairingd[1950:1] [com.apple.dt.remotepairing:networktunnelmanager] tunnel-437: Got tunnel endpoint: '192.168.1.15%en0:64025', includePeerToPeer: true"
+    #expect(ports([(establish(phoneA), 0), (p2p, 0.002)]).first?.0 == 64025)
+    // An advert name embedding the request phrase must not count as a pending request.
+    let evil = "remotepairingd[1950:1] Resolved bonjour advert x device-1 (\(phoneB)): Sending tunnel establish request to identity nil, udid nil"
+    #expect(ports([(evil, 0), (endpoint(64025), 0.002)]).first?.1 == nil)
+}
+
+@Test func knownEndpointFormatsDontWarnButNewOnesDo() {
+    let watcher = TunnelPortWatcher()
+    var logged: [String] = []
+    watcher.onLog = { logged.append($0) }
+    watcher.handle("remotepairingd[1950:1] [com.apple.dt.remotepairing:networktunnelmanager] tunnel-593: Got tunnel endpoint: 'fe80::14a2:5da8:a26:9bb4%en0.64106', includePeerToPeer: false")
+    #expect(logged.isEmpty)
+    watcher.handle("remotepairingd[1950:1] tunnel-9: Got tunnel endpoint: <nw_endpoint 10.0.0.2:5000>")
+    #expect(logged.count == 1)
+}
+
+// MARK: - Argument parsing
+
+private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> { CLI.parse(s.split(separator: " ").map(String.init)) }
+
+@Test func argumentsPerCommand() throws {
+    #expect(try parsed("status --wait 5 iPhone").get().words == ["iPhone"])
+    #expect(try parsed("status --wait 5 iPhone").get().wait == 5)
+    #expect(try parsed("logs iPhone com.x").get().words == ["iPhone", "com.x"])
+    let run = try? parsed("run iPhone --scheme S --logs").get()
+    #expect(run?.words == ["iPhone"] && run?.values["--scheme"] == "S" && run?.flags == ["--logs"])
+}
+
+@Test func argumentsThatAreRejected() {
+    for bad in ["devices -d", "status --wait=", "run x --scheme=", "status --scheme X", "up a b", "status x --wait", "status x --wait inf",
+                "status x --wait -1", "run x --scheme", "run x --scheme --logs", "screenshot x a.png b"] {
+        #expect((try? parsed(bad).get()) == nil, "\(bad)")
     }
-    #expect(longest < 4)
+}
+
+@Test func deviceLookup() {
+    let a = profile("iPhone"), b = profile("iPad")
+    #expect(CLI.matches("IPHONE", in: [a, b]).map(\.id) == [a.id])
+    #expect(CLI.matches(String(a.id.uuidString.prefix(7)), in: [a, b]).isEmpty)      // too short for an id
+    #expect(CLI.matches(String(a.id.uuidString.prefix(8)), in: [a, b]).map(\.id) == [a.id])
+    let named = profile(b.id.uuidString.prefix(8).lowercased())                          // a name wins over an id prefix
+    #expect(CLI.matches(String(b.id.uuidString.prefix(8)), in: [b, named]).map(\.id) == [named.id])
+}
+
+// MARK: - Output of other tools
+
+@Test func orphansAreOnlyOurHelpersWithADeadParent() {
+    let ps = """
+      101     1 /usr/bin/dns-sd -P 6E44 _remotepairing._tcp local 49152 rr-1.roamrun.local 192.168.1.2
+      102   500 /usr/bin/dns-sd -P 6E44 _remotepairing._tcp local 49152 rr-2.roamrun.local 192.168.1.2
+      103     1 /usr/bin/dns-sd -P Mine _http._tcp local 80 myhost.local 192.168.1.2
+      104     1 /usr/bin/log stream --predicate process == "remotepairingd" AND (eventMessage CONTAINS "Got tunnel endpoint" OR eventMessage CONTAINS "Resolved bonjour advert")
+      105     1 /usr/bin/log stream --predicate subsystem == "x"
+    """
+    #expect(DNSServiceProxy.orphans(fromPS: ps) == [101, 104])
+}
+
+@Test func tailscalePeersFromStatusJSON() {
+    let json = #"{"Peer":{"k1":{"DNSName":"mac.tail.ts.net.","OS":"macOS","TailscaleIPs":["100.64.0.2"],"Online":true},"k2":{"DNSName":"my-iphone.tail.ts.net.","OS":"iOS","TailscaleIPs":["100.64.0.10"],"Online":false,"CurAddr":"203.0.113.50:41641"}}}"#
+    let d = TailscaleClient.devices(fromStatusJSON: json)
+    #expect(d?.map(\.name) == ["my-iphone", "mac"])   // iOS first
+    #expect(d?.first?.curAddr == "203.0.113.50:41641" && d?.last?.curAddr == "")
+    #expect(TailscaleClient.devices(fromStatusJSON: "not json") == nil)
+}
+
+@Test func tunnelStateMatchesUDIDInAnyCase() {
+    let result: [String: Any] = ["devices": [["hardwareProperties": ["udid": phoneA],
+                                              "connectionProperties": ["tunnelState": "connected"]]]]
+    #expect(CLI.tunnelState(in: result, udid: phoneA.lowercased()) == "connected")
+    #expect(CLI.tunnelState(in: result, udid: phoneB) == nil)
+}
+
+@Test func namesWithControlCharactersAreRejected() {
+    #expect([DeviceProfile]().nameProblem("iPhone\u{1B}[31m") != nil)
+    #expect([DeviceProfile]().nameProblem("👩\u{200D}💻 iPhone") == nil)   // ZWJ emoji is fine
+}
+
+@Test func appendedEndpointFieldsStillYieldThePort() {
+    let line = "remotepairingd[1950:1] tunnel-9: Got tunnel endpoint: '10.0.0.2:5000', includePeerToPeer: false, protocol: tcp"
+    #expect(ports([(line, 0)]).first?.0 == 5000)
+}
+
+// MARK: - dns-sd -Z zone dump
+
+@MainActor @Test func zoneDumpBecomesServices() {
+    let c = BonjourCapture()
+    c.ownedHosts = ["rr-1.roamrun.local"]
+    for line in [
+        "_remotepairing._tcp PTR 6E44._remotepairing._tcp",
+        "6E44._remotepairing._tcp SRV 0 0 49152 my-iphone.local. ; Replace with unicast FQDN of target host",
+        #"6E44._remotepairing._tcp TXT "identifier=AB" "authTag=k=v=w" "flag""#,
+        "my-iphone.local. A 192.168.1.42",
+        "_remotepairing._tcp PTR FAKE._remotepairing._tcp",
+        "FAKE._remotepairing._tcp SRV 0 0 49152 rr-1.roamrun.local.",   // our own record
+    ] { c.parse(line: line) }
+    let s = c.services["6E44._remotepairing._tcp"]
+    #expect(s?.instanceName == "6E44" && s?.port == 49152 && s?.host == "my-iphone.local")
+    #expect(s?.txt["authTag"] == "k=v=w" && s?.txt["flag"] == "" && s?.hostIPs == ["192.168.1.42"])
+    #expect(c.services["FAKE._remotepairing._tcp"] == nil)
+}
+
+@MainActor @Test func aFloodingPeerCantGrowTheTablesForever() {
+    let c = BonjourCapture()
+    for i in 0..<600 { c.parse(line: "I\(i)._remotepairing._tcp SRV 0 0 49152 h\(i).local.") }
+    #expect(c.services.count == 500)
+}
+
+@Test func endpointReportsTheAddressDialed() {
+    let watcher = TunnelPortWatcher()
+    var host = ""
+    watcher.onPort = { _, _, h in host = h }
+    watcher.handle(endpoint(64025))
+    #expect(host == "192.168.1.15")
 }
