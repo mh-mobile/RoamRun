@@ -219,7 +219,7 @@ Main files in `Sources/RoamRun/`:
 | `DNSServiceProxy.swift` | Stand-in advertisement through a `dns-sd -P` child process, plus orphan cleanup |
 | `Relays.swift` | TCP byte relay on NWListener/NWConnection (accepts connections from this Mac only) |
 | `TunnelPortWatcher.swift` | Detects tunnel ports from `log stream` and attributes them to their device |
-| `InterfaceMonitor.swift` | Notices en0 IP changes (getifaddrs + NWPathMonitor) |
+| `InterfaceMonitor.swift` | Picks the LAN interface (en0 unless set in Settings) and notices its IP changes (getifaddrs + NWPathMonitor) |
 | `ReachabilityProbe.swift` | TCP reachability and the RemotePairing handshake check |
 | `ProxyBridge.swift` | Orchestrates the above (one instance per device) |
 | `TailscaleClient.swift` | Parses `tailscale status --json` and `tailscale ping` |
@@ -254,6 +254,7 @@ defaults delete com.roamrun.app
 ## Limitations and known issues
 
 - **It depends on Apple's private protocols.** It assumes how CoreDevice / RemotePairing behave since iOS 17 (Bonjour `_remotepairing._tcp` → control channel → tunnel), and future iOS / macOS / Xcode versions may break it. When in trouble, run `roamrun doctor` first.
+- The bridge listens on **en0** (Wi-Fi on most Macs). If this Mac reaches its LAN through another interface (e.g. Ethernet on a Mac mini), pick it in Open RoamRun › ⚙ Settings › Network
 - The iPhone must be **connected to some Wi-Fi network** (tethering is fine, cellular alone is not: remotepairingd only listens while on Wi-Fi)
 - After sleep or a network change, Tailscale on iOS sometimes shows "MagicSock function ReceiveIPv4 is not running" and stops passing traffic while still looking connected. Turn the VPN off and on, and keep the Tailscale app up to date
 - When the iPhone sleeps, Tailscale (a VPN extension) pauses too and the iPhone becomes unreachable. While debugging, keep the iPhone unlocked with its screen on (set a longer Auto-Lock)

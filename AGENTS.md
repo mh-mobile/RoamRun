@@ -40,8 +40,16 @@ one line each with the signal that decided: `log stream --level debug
 --predicate 'subsystem == "com.roamrun.app" AND category == "home"'`. The rules
 live in `HomeRule` (ProxyBridge.swift) and are unit-tested — change them there.
 
+Tunnel ports are the most Apple-dependent part: relays open for newest…newest+16
+and are reaped outside newest−32…newest+16. Each discovered port is logged at
+debug level with whether a lookahead relay was already there (hit/miss) and the
+jump from the previous one: `log stream --level debug --predicate
+'subsystem == "com.roamrun.app" AND category == "tunnel"'`. Misses or large
+jumps after an iOS update mean the window needs retuning.
+
 ## Releasing
 
+0. Run docs/release-checklist.md on real devices.
 1. Bump `CFBundleShortVersionString` (shown by `roamrun --version`) and
    `CFBundleVersion` (+1 each release) in `Info.plist`; commit, push, wait for CI.
 2. Build the dmg from a fresh clone of that commit (a working copy can hold

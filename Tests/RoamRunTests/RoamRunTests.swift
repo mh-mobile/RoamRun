@@ -421,10 +421,12 @@ private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> { CLI.
     #expect(c.services["FAKE._remotepairing._tcp"] == nil)
 }
 
-@MainActor @Test func aFloodingPeerCantGrowTheTablesForever() {
+@MainActor @Test func aFloodingPeerCantGrowTheTablesOrLockOutARealDevice() {
     let c = BonjourCapture()
     for i in 0..<600 { c.parse(line: "I\(i)._remotepairing._tcp SRV 0 0 49152 h\(i).local.") }
     #expect(c.services.count == 500)
+    c.parse(line: "REAL._remotepairing._tcp SRV 0 0 49152 my-iphone.local.")   // arrives after the flood
+    #expect(c.services["REAL._remotepairing._tcp"] != nil && c.services.count == 500)
 }
 
 @Test func endpointReportsTheAddressDialed() {
@@ -614,4 +616,27 @@ private func relayPort() -> UInt16 { UInt16.random(in: 40000...49000) }
         try await again.start(); defer { again.stop() }
         #expect(await roundTrip(port: port, payload: Data("x".utf8)) == Data("x".utf8))
     }
+}
+
+// MARK: - Which bridge gets a tunnel port (#16)
+
+@Test func tunnelPortsGoToTheirOwnDeviceOnly() {
+    let a = UUID(), b = UUID()
+    let two: [(id: UUID, udid: String?)] = [(a, phoneA), (b, phoneB)]
+    #expect(TunnelCoordinator.recipient(owner: phoneB.lowercased(), subscribers: two, othersBridging: false) == b)
+    #expect(TunnelCoordinator.recipient(owner: nil, subscribers: two, othersBridging: false) == nil)       // ambiguous: nobody
+    #expect(TunnelCoordinator.recipient(owner: nil, subscribers: [(a, phoneA)], othersBridging: false) == a)
+    #expect(TunnelCoordinator.recipient(owner: nil, subscribers: [(a, phoneA)], othersBridging: true) == nil)   // the app + a roamrun up
+    // A bridge that hasn't learned its UDID yet takes an attributed port only when it's alone.
+    #expect(TunnelCoordinator.recipient(owner: phoneB, subscribers: [(a, nil)], othersBridging: false) == a)
+    #expect(TunnelCoordinator.recipient(owner: phoneB, subscribers: [(a, nil), (b, phoneA)], othersBridging: false) == nil)
+    // Owner known and matched: other processes don't matter.
+    #expect(TunnelCoordinator.recipient(owner: phoneA, subscribers: two, othersBridging: true) == a)
+}
+
+@Test func automaticInterfaceKeepsEn0() {
+    #expect(InterfaceMonitor.pickLAN(chosen: nil, available: ["en0", "en1", "utun3"]) == "en0")     // unchanged for everyone with en0
+    #expect(InterfaceMonitor.pickLAN(chosen: "", available: ["en10", "en2", "utun3"]) == "en2")     // e.g. a Mac mini on Ethernet
+    #expect(InterfaceMonitor.pickLAN(chosen: "en5", available: ["en0"]) == "en5")                  // Settings wins
+    #expect(InterfaceMonitor.pickLAN(chosen: nil, available: []) == "en0")
 }

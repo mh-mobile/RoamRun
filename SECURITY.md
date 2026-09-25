@@ -22,7 +22,8 @@ bounded.
   notice the device is paired with this Mac — on every network the Mac joins,
   e.g. a café's if you bridge from a laptop. Bridges stand aside (publish
   nothing) while the device is on the Mac's own network.
-- **It listens for TCP on the Mac's primary interface (en0).** The relay accepts
+- **It listens for TCP on the Mac's LAN interface (en0 unless chosen otherwise in
+  Settings › Network).** The relay accepts
   a connection only if it comes from this Mac's own address (so any local process
   qualifies, as it could reach the device's Tailscale address anyway) — anything
   else is dropped immediately. It forwards bytes unchanged to the device's Tailscale (or
