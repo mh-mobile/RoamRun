@@ -13,16 +13,16 @@ enum ReachabilityProbe {
             conn.stateUpdateHandler = { state in
                 switch state {
                 case .ready:
-                    box.done { conn.cancel(); cont.resume(returning: true) }
+                    box.done { conn.stateUpdateHandler = nil; conn.cancel(); cont.resume(returning: true) }
                 case .failed, .cancelled:
-                    box.done { conn.cancel(); cont.resume(returning: false) }
+                    box.done { conn.stateUpdateHandler = nil; conn.cancel(); cont.resume(returning: false) }
                 default:
                     break
                 }
             }
             conn.start(queue: .global(qos: .utility))
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-                box.done { conn.cancel(); cont.resume(returning: false) }
+                box.done { conn.stateUpdateHandler = nil; conn.cancel(); cont.resume(returning: false) }
             }
         }
     }
@@ -47,7 +47,7 @@ extension ReachabilityProbe {
         let conn = NWConnection(to: endpoint, using: .tcp)
         return await withCheckedContinuation { cont in
             let box = ProbeBox()
-            let finish: (Bool) -> Void = { ok in box.done { conn.cancel(); cont.resume(returning: ok) } }
+            let finish: (Bool) -> Void = { ok in box.done { conn.stateUpdateHandler = nil; conn.cancel(); cont.resume(returning: ok) } }
             conn.stateUpdateHandler = { state in
                 switch state {
                 case .ready:

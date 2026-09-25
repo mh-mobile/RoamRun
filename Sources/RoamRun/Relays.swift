@@ -94,6 +94,7 @@ final class Relay {
     }
 
     func stop() {
+        listener?.stateUpdateHandler = nil
         listener?.cancel()
         listener = nil
         lock.lock(); stopped = true; let open = connections; connections = []; established = []; lock.unlock()
@@ -119,6 +120,7 @@ final class Relay {
         let port = remotePort
         let finish: (String) -> Void = { [weak self] reason in
             stats.logOnce("tcp :\(port) sent=\(stats.up)B recv=\(stats.down)B \(reason)")
+            outbound.stateUpdateHandler = nil   // it holds this closure, which holds outbound
             inbound.cancel(); outbound.cancel()
             self?.untrack(inbound, outbound)
         }

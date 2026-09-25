@@ -92,7 +92,10 @@ final class ProxyBridge: ObservableObject {
             return
         }
         // A SIGKILLed app or `roamrun up` leaves dns-sd advertising a dead relay.
-        DNSServiceProxy.killOrphanedHelpers { [weak self] m in self?.log(m) }
+        // Off the main actor: `ps` can take a while.
+        let killed = await Task.detached { DNSServiceProxy.killOrphanedHelpers() }.value
+        guard gen == generation else { return }
+        if killed > 0 { log("killed \(killed) leftover helper process(es)") }
 
         guard let localIP = InterfaceMonitor.currentIPv4() else {
             setState(.error(Self.noAddressMessage))
