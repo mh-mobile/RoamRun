@@ -218,16 +218,18 @@ enum CLI {
     /// after the iPhone falls asleep (its relayed connections linger).
     private static func row(_ p: DeviceProfile, _ e: StatusFile.Entry?, deep: Bool) -> Row {
         let udid = e?.udid ?? p.udid
-        let usable = e?.ready == true || e?.status == BridgeStatus.local.title   // on this Wi-Fi: Xcode sees it directly
+        let usable = e?.ready == true || e?.kind == .local   // on this Wi-Fi: Xcode sees it directly
         let core = deep && usable ? udid.flatMap(coreDeviceState) : nil
         let ready = usable && (!deep || core.map { $0 != "unavailable" } ?? false)
         var status = e?.status ?? BridgeStatus.off.title
+        var kind = e?.kind ?? .off
         var detail = e.flatMap { $0.detail.isEmpty ? nil : $0.detail }
         if e?.ready == true && !ready {
             status = BridgeStatus.waiting.title
+            kind = .waiting
             detail = "The bridge is up but Xcode can't reach the device (asleep, locked, off Wi-Fi, or Tailscale stuck on the device). Run `roamrun doctor` for the cause."
         }
-        return Row(name: p.displayName, state: BridgeStatus(title: status).rawValue, id: p.id.uuidString, vpnAddress: p.providerIP, udid: udid,
+        return Row(name: p.displayName, state: kind.rawValue, id: p.id.uuidString, vpnAddress: p.providerIP, udid: udid,
                    status: status, ready: ready,
                    owner: e.map(owner), pid: e?.pid, tunnelPorts: e?.tunnelPorts ?? [],
                    coreDevice: core, detail: detail,
@@ -559,7 +561,7 @@ enum CLI {
             alreadyBridged(profile, e)
         }
         // Another `roamrun up` already watches it (standing aside on this Wi‑Fi): a second would just yield.
-        if let e = StatusFile.read()[profile.id], e.cli == true, e.pid != getpid(), e.status == BridgeStatus.local.title {
+        if let e = StatusFile.read()[profile.id], e.cli == true, e.pid != getpid(), e.kind == .local {
             print("\(profile.displayName) is on this Wi\u{2011}Fi and already watched by roamrun up (pid \(e.pid)) — it takes over when the device leaves.")
             exit(0)
         }
@@ -584,7 +586,7 @@ enum CLI {
         do { try child.run() } catch { stop("could not start the background bridge: \(error.localizedDescription)") }
 
         // Wait (≤60s) for Ready; a slower start keeps going in the background.
-        var last = ""
+        var last = "", lastKind = BridgeStatus.off
         for _ in 0..<120 {
             usleep(500_000)
             guard child.isRunning else {
@@ -594,13 +596,14 @@ enum CLI {
             }
             guard let e = StatusFile.read()[profile.id], e.pid == child.processIdentifier else { continue }
             if e.status != last { last = e.status; print("  \(e.status)") }
-            if e.ready || e.status == BridgeStatus.local.title { break }
+            lastKind = e.kind
+            if e.ready || e.kind == .local { break }
         }
         let pid = child.processIdentifier
-        switch last {
-        case BridgeStatus.ready.title:
+        switch lastKind {
+        case .ready:
             print("\(profile.displayName) is bridged in the background (pid \(pid)).")
-        case BridgeStatus.local.title:
+        case .local:
             print("\(profile.displayName) is on this Wi‑Fi, so Xcode reaches it directly. The bridge waits in the background (pid \(pid)) and takes over when it leaves.")
         default:
             print("\(profile.displayName) isn't ready yet (\(last.isEmpty ? "no status" : last)). The bridge keeps trying in the background (pid \(pid)).")
@@ -609,7 +612,7 @@ enum CLI {
           Log:  \(logURL.path)
           Stop: roamrun down \(shellName(profile.displayName))
         """)
-        exit(last == BridgeStatus.ready.title || last == BridgeStatus.local.title ? 0 : 1)
+        exit(lastKind == .ready || lastKind == .local ? 0 : 1)
     }
 
     private static func up(_ profile: DeviceProfile, verbose: Bool, detachedChild: Bool = false) {
@@ -787,7 +790,7 @@ enum CLI {
                 continue
             }
             // On this Wi‑Fi Xcode reaches the device directly: the VPN path doesn't matter.
-            if live[p.id]?.status == BridgeStatus.local.title {
+            if live[p.id]?.kind == .local {
                 note("On this Wi\u{2011}Fi — VPN checks skipped (Xcode reaches the device directly)")
             } else {
                 if viaTailscale(p) {
@@ -798,7 +801,7 @@ enum CLI {
                     check(peer.online, "Tailscale peer “\(peer.name)” is \(peer.online ? "online" : "offline")",
                           fix: "Unlock the device and keep its screen on — while it sleeps, iOS pauses the Tailscale VPN too.")
                     // On this Wi-Fi Xcode reaches the device directly; the Tailscale path doesn't matter.
-                    if peer.online, live[p.id]?.status != BridgeStatus.local.title {
+                    if peer.online, live[p.id]?.kind != .local {
                         check(!peer.curAddr.isEmpty, "Path: \(peer.pathDescription)",
                               fix: "Direct paths are much faster. Some networks (hotel, carrier NAT) force DERP.", warnOnly: true)
                     }
@@ -840,7 +843,7 @@ enum CLI {
                 note("Pairing not checked — no advert of this device was matched in the last 15 minutes")
             }
             if let e = live[p.id] {
-                check(e.ready || e.status == BridgeStatus.local.title, "Mac-side bridge: \(e.status) (\(owner(e)))", fix: e.detail.isEmpty ? "Wait a few seconds and run doctor again." : e.detail)
+                check(e.ready || e.kind == .local, "Mac-side bridge: \(e.status) (\(owner(e)))", fix: e.detail.isEmpty ? "Wait a few seconds and run doctor again." : e.detail)
                 if udid == nil { note("UDID not known yet — learned the first time the bridge connects") }
                 if let udid {
                     check(true, "UDID: \(udid)")

@@ -156,7 +156,7 @@ private struct StatusCard: View {
     let external: StatusFile.Entry?
 
     var body: some View {
-        let status = external.map { BridgeStatus(title: $0.status) } ?? bridge.status
+        let status = external.map(\.kind) ?? bridge.status
         HStack(alignment: .top, spacing: 14) {
             Image(systemName: status.symbol)
                 .font(.system(size: 26))

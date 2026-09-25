@@ -420,7 +420,7 @@ final class ProxyBridge: ObservableObject {
         case .off, .local: break
         }
         StatusFile.write(profile.id, .init(pid: getpid(), cli: CLI.isRunning, udid: udid, status: s.title, detail: detail,
-                                           ready: s == .ready, tunnelPorts: ports, updated: .now))
+                                           ready: s == .ready, tunnelPorts: ports, updated: .now, state: s.rawValue))
     }
 
     /// The device answers nowhere we know: it may have a new Tailscale address

@@ -14,10 +14,15 @@ enum StatusFile {
         var ready: Bool
         var tunnelPorts: [UInt16]
         var updated: Date
+        /// BridgeStatus raw value ("local", …): the stable key. `status` stays the display
+        /// title for older RoamRun versions, which ignore this field.
+        var state: String? = nil
 
-        var isError: Bool { status == BridgeStatus.error.title }
+        /// From `state`, else from the title an older version wrote.
+        var kind: BridgeStatus { state.flatMap(BridgeStatus.init(rawValue:)) ?? BridgeStatus(title: status) }
+        var isError: Bool { kind == .error }
         /// Errored or standing aside (iPhone on this LAN): doesn't hold the device.
-        var holdsDevice: Bool { !isError && status != BridgeStatus.local.title }
+        var holdsDevice: Bool { kind != .error && kind != .local }
     }
 
     static let url = ProfileStore.directory.appendingPathComponent("status.json")
@@ -57,7 +62,10 @@ enum StatusFile {
         var all = read()
         if let held = all[id], !mayReplace(held, with: entry, by: getpid()) { return }
         all[id] = entry
-        if let data = try? JSONEncoder().encode(all) { try? data.write(to: url, options: .atomic) }
+        if let data = try? JSONEncoder().encode(all), (try? data.write(to: url, options: .atomic)) != nil {
+            // Every atomic write makes a new file: umask would decide its mode otherwise.
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        }
     }
 
     /// Only the owner clears or changes an entry; another process may take a

@@ -467,3 +467,30 @@ private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> { CLI.
     #expect(CLI.appTarget(in: [app, clip], scheme: "Clip")?["TARGET_NAME"] == "App")   // never the clip
     #expect(CLI.appTarget(in: [], scheme: "App") == nil)
 }
+
+// MARK: - Saved file compatibility
+
+@Test func profilesFromOlderAndNewerVersionsDecode() throws {
+    // As 0.1.x writes it.
+    let v01 = #"[{"id":"940F4303-91B8-4C9C-9861-763E5429DDC6","displayName":"iPad","instanceName":"6E44","serviceType":"_remotepairing._tcp","domain":"local","remotePairingPort":49152,"bonjourHost":"my-ipad.local","txt":{"identifier":"AB"},"providerID":"tailscale","providerHostName":"my-ipad","providerIP":"100.64.0.10","udid":"00008101-000A00000000A001"}]"#
+    let old = try JSONDecoder().decode([DeviceProfile].self, from: Data(v01.utf8))
+    #expect(old.first?.displayName == "iPad" && old.first?.remotePairingPort == 49152 && old.first?.deviceType == nil)
+    // Fields missing, or added by a later version: still readable.
+    let sparse = #"[{"id":"940F4303-91B8-4C9C-9861-763E5429DDC6","displayName":"iPad","providerIP":"100.64.0.10","futureField":true}]"#
+    let p = try JSONDecoder().decode([DeviceProfile].self, from: Data(sparse.utf8))
+    #expect(p.first?.serviceType == "_remotepairing._tcp" && p.first?.providerID == "tailscale")
+    // And what we write reads back the same.
+    #expect(try JSONDecoder().decode([DeviceProfile].self, from: JSONEncoder().encode(old)) == old)
+}
+
+@Test func statusEntriesCarryAStableStateAndOldOnesStillRead() throws {
+    var e = StatusFile.Entry(pid: 1, cli: false, udid: nil, status: "On this Wi\u{2011}Fi", detail: "", ready: false, tunnelPorts: [], updated: .now)
+    #expect(e.kind == .local && !e.holdsDevice)            // written by 0.1.7 and older: title only
+    e.state = "ready"
+    #expect(e.kind == .ready && e.holdsDevice)             // the stable key wins
+    let round = try JSONDecoder().decode(StatusFile.Entry.self, from: JSONEncoder().encode(e))
+    #expect(round.state == "ready")
+    // What an older reader sees: the extra key is ignored, the title is still there.
+    let json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(e)) as? [String: Any])
+    #expect(json["status"] as? String == "On this Wi\u{2011}Fi")
+}

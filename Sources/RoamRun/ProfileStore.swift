@@ -15,6 +15,10 @@ final class ProfileStore {
     func load() -> [DeviceProfile] {
         guard let data = try? Data(contentsOf: url) else { return [] }
         if let profiles = try? JSONDecoder().decode([DeviceProfile].self, from: data) { return profiles }
+        // One malformed entry shouldn't cost the others: keep what decodes (and a copy of the file below).
+        let salvaged = ((try? JSONSerialization.jsonObject(with: data)) as? [Any])?.compactMap { item in
+            (try? JSONSerialization.data(withJSONObject: item)).flatMap { try? JSONDecoder().decode(DeviceProfile.self, from: $0) }
+        }
         // The next save would replace it with an empty list: keep a copy, once per distinct content.
         let fm = FileManager.default
         let kept = (try? fm.contentsOfDirectory(at: Self.directory, includingPropertiesForKeys: nil)) ?? []
@@ -24,7 +28,7 @@ final class ProfileStore {
             let copy = url.appendingPathExtension("unreadable-\(Int(Date.now.timeIntervalSince1970))")
             if (try? fm.copyItem(at: url, to: copy)) != nil { keptUnreadable = copy }
         }
-        return []
+        return salvaged ?? []
     }
 
     /// False if it couldn't be written (disk full, permissions): the caller must say so.

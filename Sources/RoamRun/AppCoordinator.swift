@@ -79,8 +79,9 @@ final class AppCoordinator: ObservableObject {
         // `roamrun down <name>` asks the app to stop one of its bridges.
         DistributedNotificationCenter.default().addObserver(forName: CLI.stopNotification,
                                                             object: nil, queue: .main) { [weak self] note in
+            let target = (note.object as? String).flatMap(UUID.init)   // read before crossing into the main actor
             MainActor.assumeIsolated {
-                guard let self, let id = (note.object as? String).flatMap(UUID.init),
+                guard let self, let id = target,
                       let p = self.profile(id) else { return }
                 self.logStore.log("\"\(p.displayName)\": stopped from the command line", device: p.id)
                 self.stopBridge(p)
@@ -147,7 +148,7 @@ final class AppCoordinator: ObservableObject {
 
     /// App bridge status, or the CLI's when the command line owns the device.
     func status(of id: UUID) -> BridgeStatus {
-        if let e = externalBridges[id] { return BridgeStatus(title: e.status) }
+        if let e = externalBridges[id] { return e.kind }
         return bridges[id]?.status ?? .off
     }
 
