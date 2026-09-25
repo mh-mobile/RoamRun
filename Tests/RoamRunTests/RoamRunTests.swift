@@ -209,18 +209,21 @@ private func timed(_ path: String, _ args: [String]) -> (Proc.Result, TimeInterv
 
 @Test func slowToolIsStoppedAtTheTimeout() {
     let (r, t) = timed("/bin/sleep", ["20"])
-    #expect(r.status != 0 && t < 2.5)
+    #expect(r.status != 0, "status=\(r.status) err=\(r.err)")
+    #expect(t < 2.5, "t=\(t)")
 }
 
 @Test func toolIgnoringTermIsKilled() {
     let (r, t) = timed("/bin/sh", ["-c", "trap '' TERM; while :; do :; done"])
-    #expect(r.status == 9 && t < 4.5)   // SIGKILL 2s after the ignored TERM
+    #expect(r.status == 9, "status=\(r.status) err=\(r.err) t=\(t)")   // SIGKILL 2s after the ignored TERM
+    #expect(t < 4.5, "t=\(t)")
 }
 
 @Test func grandchildHoldingThePipeDoesNotHangUs() {
     // sh is killed, but its `sleep` keeps stdout open.
     let (r, t) = timed("/bin/sh", ["-c", "trap '' TERM; sleep 8"])
-    #expect(r.status == -1 && t < 6.5)
+    #expect(r.status == -1, "status=\(r.status) err=\(r.err)")
+    #expect(t < 6.5, "t=\(t)")
 }
 
 // MARK: - Home / away rules (regressions from real runs)
