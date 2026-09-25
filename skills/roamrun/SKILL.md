@@ -69,7 +69,8 @@ the launch step. It can't join an already-running app. It never exits on its
 own, so run it in the background and stop it when done:
 `roamrun logs iPhone com.example.App > /tmp/app.log 2>&1 & sleep 20; kill $!`.
 If the bridge already runs in the menu bar app, just use it — `status` shows
-the owner, and `up` refuses a device another process bridges. Status
+the owner, and `up` exits 0 when another process already has it ready
+(exit 1 if that one is still coming up). Status
 "On this Wi‑Fi" means the iPhone is on the Mac's own network: no bridge is
 needed, Xcode sees it directly, and it counts as ready.
 

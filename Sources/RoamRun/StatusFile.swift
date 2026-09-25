@@ -4,7 +4,7 @@ import Foundation
 /// can report on — and refuse to collide with — a bridge the other runs.
 // ponytail: whole-file rewrite, last writer wins; fine for a handful of devices.
 enum StatusFile {
-    struct Entry: Codable {
+    struct Entry: Codable, Equatable {
         var pid: Int32
         /// Written by `roamrun up` (vs. the app) — decides how to stop it.
         var cli: Bool?
@@ -66,9 +66,9 @@ enum StatusFile {
         guard pid > 1 else { return false }
         var buf = [CChar](repeating: 0, count: 4096)
         guard proc_pidpath(pid, &buf, UInt32(buf.count)) > 0 else { return false }
-        // Any copy of RoamRun (the app in /Applications and a dev build can
-        // both be around); anything else holding a recycled PID is ignored.
+        // Any RoamRun.app copy (proc_pidpath resolves symlinks, so a
+        // `.build/…` path never shows here); a recycled PID is ignored.
         let path = String(cString: buf)
-        return path.hasSuffix(".app/Contents/MacOS/RoamRun") || path.hasSuffix("/.build/release/RoamRun")
+        return path.hasSuffix(".app/Contents/MacOS/RoamRun")
     }
 }

@@ -87,7 +87,7 @@ struct DeviceDetailView: View {
             if external != nil {
                 Button("Stop Bridge") { coordinator.stopExternalBridge(profile.id) }
                     .controlSize(.large)
-            } else if bridge.state == .off || bridge.status == .error {
+            } else if bridge.state == .off {   // an errored bridge keeps retrying: offer Stop (Try Again is in the card)
                 Button("Start Bridge") { coordinator.startBridge(profile) }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)

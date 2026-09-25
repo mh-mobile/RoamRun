@@ -110,9 +110,7 @@ final class AppCoordinator: ObservableObject {
 
     private func refreshExternalBridges() {
         let now = StatusFile.read().filter { $0.value.pid != getpid() }
-        let changed = now.keys != externalBridges.keys
-            || now.contains { externalBridges[$0.key]?.status != $0.value.status }
-        if changed { externalBridges = now }
+        if now != externalBridges { externalBridges = now }   // detail changes too (Probing…, errors)
     }
 
     /// Stops a bridge run by `roamrun up` (its SIGTERM handler cleans up).
@@ -368,10 +366,11 @@ final class AppCoordinator: ObservableObject {
             logStore.log("\"\(profile.displayName)\": RemotePairing port updated to \(found)")
             // ProxyBridge holds its profile by value — swap it in or the
             // new port only takes effect after a relaunch.
-            let wasActive = bridges[profile.id]?.state.isActive == true
+            // Also errored / standing aside: the scan is how you fix a bridge that can't reach the device.
+            let wasOn = bridges[profile.id].map { $0.state != .off } == true
             bridges[profile.id]?.stop()
             let bridge = install(ProxyBridge(profile: profiles[idx]))
-            if wasActive { Task { await bridge.start() } }
+            if wasOn { Task { await bridge.start() } }
         } else {
             logStore.log("\"\(profile.displayName)\": no RemotePairing port responded — is the device on Wi-Fi?")
         }

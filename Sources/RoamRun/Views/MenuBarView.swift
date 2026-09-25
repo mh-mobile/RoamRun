@@ -55,7 +55,7 @@ private struct BridgeMenuItem: View {
         }
         if viaCLI {
             Button("Stop Bridge") { coordinator.stopExternalBridge(profile.id) }
-        } else if bridge.state == .off || status == .error {
+        } else if bridge.state == .off {
             Button("Start Bridge") { coordinator.startBridge(profile) }
         } else {
             Button("Stop Bridge") { coordinator.stopBridge(profile) }

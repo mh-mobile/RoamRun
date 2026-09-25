@@ -54,6 +54,7 @@ enum CLI {
                 FileHandle.standardError.write(Data("roamrun: unknown command “\(args[0])”\n\n\(usage)\n".utf8))
                 exit(2)
             }
+            if args.dropFirst().contains(where: { $0 == "--help" || $0 == "-h" }) { print(usage); exit(0) }
             if args[0] == "version" || args[0] == "--version" {
                 // Through the /usr/local/bin link, Bundle.main isn't the app: resolve it.
                 let app = Bundle.main.executableURL?.resolvingSymlinksInPath()
@@ -161,7 +162,7 @@ enum CLI {
                    status: status, ready: ready,
                    owner: e.map(owner), pid: e?.pid, tunnelPorts: e?.tunnelPorts ?? [],
                    coreDevice: core, detail: detail,
-                   locked: ready ? udid.flatMap(isLocked) : nil)
+                   locked: deep && ready ? udid.flatMap(isLocked) : nil)
     }
 
     /// devicectl's tunnelState for this UDID; nil if devicectl failed.
@@ -186,7 +187,7 @@ enum CLI {
     private static func devices(_ profiles: [DeviceProfile], json: Bool) -> Never {
         let live = StatusFile.read()
         if json { printJSON(profiles.map { row($0, live[$0.id], deep: false) }); exit(0) }
-        guard !profiles.isEmpty else { fail("no devices saved yet — add one in the RoamRun app") }
+        guard !profiles.isEmpty else { stop("no devices saved yet — add one in the RoamRun app") }
         let w = max(4, profiles.map(\.displayName.count).max() ?? 4)
         print("NAME".padding(toLength: w + 2, withPad: " ", startingAt: 0) + "VPN ADDRESS      UDID                       STATUS")
         for p in profiles {
@@ -236,8 +237,7 @@ enum CLI {
         return result["passcodeRequired"] as? Bool
     }
 
-    /// devicectl can't attach to a running process, so this relaunches the app
-    /// with `--console`. OS_ACTIVITY_DT_MODE mirrors os_log to stderr, as Xcode does.
+    /// A runtime failure (exit 1). `fail` is for usage errors (exit 2).
     private static func stop(_ why: String) -> Never {
         FileHandle.standardError.write(Data("roamrun: \(why)\n".utf8))
         exit(1)
@@ -401,6 +401,17 @@ enum CLI {
         return .appStore   // neither a device list nor Enterprise: App Store / TestFlight
     }
 
+    /// Another process bridges the device. Ready → nothing to do; still coming up → say so.
+    private static func alreadyBridged(_ profile: DeviceProfile, _ e: StatusFile.Entry) -> Never {
+        if e.ready {
+            print("\(profile.displayName) is already bridged by \(owner(e)) — ready for Xcode.")
+            exit(0)
+        }
+        stop("\(profile.displayName) is being bridged by \(owner(e)) (\(e.status)). Use it once it's ready, or run roamrun down \(shellName(profile.displayName)) first.")
+    }
+
+    /// devicectl can't attach to a running process, so this relaunches the app
+    /// with `--console`. OS_ACTIVITY_DT_MODE mirrors os_log to stderr, as Xcode does.
     private static func logs(_ profile: DeviceProfile, bundleID: String) -> Never {
         let udid = reachableUDID(profile)
         setenv("DEVICECTL_CHILD_OS_ACTIVITY_DT_MODE", "enable", 1)
@@ -421,7 +432,7 @@ enum CLI {
         // Wait for the owner to clear its status entry.
         var tries = 0
         while StatusFile.read()[profile.id] != nil && tries < 50 { usleep(100_000); tries += 1 }
-        guard StatusFile.read()[profile.id] == nil else { fail("\(who) did not stop the bridge") }
+        guard StatusFile.read()[profile.id] == nil else { stop("\(who) did not stop the bridge") }
         print("Stopped \(profile.displayName) (\(who)).")
         exit(0)
     }
@@ -433,7 +444,7 @@ enum CLI {
     /// log file, wait until the bridge settles, then hand the prompt back.
     private static func detach(_ profile: DeviceProfile, verbose: Bool) -> Never {
         if StatusFile.otherOwner(of: profile.id) != nil, let e = StatusFile.read()[profile.id] {
-            fail("\(profile.displayName) is already bridged by \(owner(e)). Stop it there first.")
+            alreadyBridged(profile, e)
         }
         let logDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Logs/RoamRun", isDirectory: true)
@@ -442,7 +453,7 @@ enum CLI {
         let safeName = String(profile.displayName.map { $0.isLetter || $0.isNumber || "-_ ".contains($0) ? $0 : "_" })
         let logURL = logDir.appendingPathComponent("\(safeName.isEmpty ? profile.id.uuidString : safeName).log")
         FileManager.default.createFile(atPath: logURL.path, contents: nil)
-        guard let log = try? FileHandle(forWritingTo: logURL) else { fail("can't write \(logURL.path)") }
+        guard let log = try? FileHandle(forWritingTo: logURL) else { stop("can't write \(logURL.path)") }
 
         let child = Process()
         child.executableURL = Bundle.main.executableURL?.resolvingSymlinksInPath()
@@ -450,13 +461,13 @@ enum CLI {
         child.standardInput = FileHandle.nullDevice
         child.standardOutput = log
         child.standardError = log
-        do { try child.run() } catch { fail("could not start the background bridge: \(error.localizedDescription)") }
+        do { try child.run() } catch { stop("could not start the background bridge: \(error.localizedDescription)") }
 
         // Wait (≤60s) for Ready; a slower start keeps going in the background.
         var last = ""
         for _ in 0..<120 {
             usleep(500_000)
-            guard child.isRunning else { fail("the background bridge exited — see \(logURL.path)") }
+            guard child.isRunning else { stop("the background bridge exited — see \(logURL.path)") }
             guard let e = StatusFile.read()[profile.id], e.pid == child.processIdentifier else { continue }
             if e.status != last { last = e.status; print("  \(e.status)") }
             if e.ready || e.status == BridgeStatus.local.title { break }
@@ -471,7 +482,7 @@ enum CLI {
 
     private static func up(_ profile: DeviceProfile, verbose: Bool, detachedChild: Bool = false) {
         if StatusFile.otherOwner(of: profile.id) != nil, let e = StatusFile.read()[profile.id] {
-            fail("\(profile.displayName) is already bridged by \(owner(e)). Stop it there first.")
+            alreadyBridged(profile, e)
         }
         if detachedChild {
             // Own session: closing the terminal / ending SSH doesn't reach us.
@@ -706,7 +717,7 @@ enum CLI {
         let bundled = exe?.deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Resources/roamrun-skill.md")
         guard let bundled, let skill = try? Data(contentsOf: bundled) else {
-            fail("skill not found in the app bundle — build with `make app`")
+            stop("skill not found in the app bundle — build with `make app`")
         }
         if args.contains("--print") { FileHandle.standardOutput.write(skill); exit(0) }
 
@@ -721,7 +732,7 @@ enum CLI {
             named.isEmpty ? FileManager.default.fileExists(atPath: home.appendingPathComponent(c.home).path) : named.contains(c.name)
         }
         guard !targets.isEmpty else {
-            fail("no supported agent found in ~ (.claude, .codex, .cursor, .gemini, .copilot). Use --client, or --print and paste it yourself.")
+            stop("no supported agent found in ~ (.claude, .codex, .cursor, .gemini, .copilot). Use --client, or --print and paste it yourself.")
         }
         let fm = FileManager.default
         for c in targets {
@@ -751,7 +762,7 @@ enum CLI {
                 try skill.write(to: file, options: .atomic)
                 print("Installed \(file.path)")
             } catch {
-                fail("could not write \(dir.path): \(error.localizedDescription)")
+                stop("could not write \(dir.path): \(error.localizedDescription)")
             }
         }
         exit(0)
