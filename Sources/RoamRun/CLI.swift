@@ -54,7 +54,9 @@ enum CLI {
                 FileHandle.standardError.write(Data("roamrun: unknown command “\(args[0])”\n\n\(usage)\n".utf8))
                 exit(2)
             }
-            if args.dropFirst().contains(where: { $0 == "--help" || $0 == "-h" }) { print(usage); exit(0) }
+            if ["help", "--help", "-h"].contains(args[0]) || args.dropFirst().contains(where: { $0 == "--help" || $0 == "-h" }) {
+                print(usage); exit(0)
+            }
             if args[0] == "version" || args[0] == "--version" {
                 // Through the /usr/local/bin link, Bundle.main isn't the app: resolve it.
                 let app = Bundle.main.executableURL?.resolvingSymlinksInPath()
@@ -69,10 +71,15 @@ enum CLI {
             if let copy = store.keptUnreadable {
                 FileHandle.standardError.write(Data("roamrun: couldn't read saved devices; kept the file as \(copy.path)\n".utf8))
             }
+            let known: Set<String> = ["--json", "--wait", "-v", "-d", "--scheme", "--workspace", "--project",
+                                      "--configuration", "--logs", detachedFlag]
+            for (i, a) in args.enumerated().dropFirst() where a.hasPrefix("-") && !known.contains(a) && args[i - 1] != "--wait" {
+                fail("unknown option \(a) — see roamrun --help")
+            }
             let json = args.contains("--json")
             let waitIdx = args.firstIndex(of: "--wait")
             let wait = waitIdx.flatMap { args.indices.contains($0 + 1) ? Double(args[$0 + 1]) : nil }
-            if waitIdx != nil && wait == nil { fail("--wait needs a number of seconds") }
+            if waitIdx != nil && !(wait.map { $0.isFinite && $0 >= 0 } ?? false) { fail("--wait needs a number of seconds") }
             for flag in ["--scheme", "--workspace", "--project", "--configuration"] {
                 if let i = args.firstIndex(of: flag), !args.indices.contains(i + 1) || args[i + 1].hasPrefix("-") {
                     fail("\(flag) needs a value")
@@ -191,7 +198,7 @@ enum CLI {
     private static func devices(_ profiles: [DeviceProfile], json: Bool) -> Never {
         let live = StatusFile.read()
         if json { printJSON(profiles.map { row($0, live[$0.id], deep: false) }); exit(0) }
-        guard !profiles.isEmpty else { stop("no devices saved yet — add one in the RoamRun app") }
+        guard !profiles.isEmpty else { print("No devices saved yet — add one in the RoamRun app."); exit(0) }
         let w = max(4, profiles.map(\.displayName.count).max() ?? 4)
         print("NAME".padding(toLength: w + 2, withPad: " ", startingAt: 0) + "VPN ADDRESS      UDID                       STATUS")
         for p in profiles {
@@ -205,6 +212,7 @@ enum CLI {
     }
 
     private static func status(_ targets: [DeviceProfile], json: Bool, wait: Double?) -> Never {
+        if targets.isEmpty && !json { stop("no devices saved yet — add one in the RoamRun app") }
         var rows: [Row]
         let deadline = Date.now.addingTimeInterval(wait ?? 0)
         repeat {
@@ -476,8 +484,16 @@ enum CLI {
             if e.status != last { last = e.status; print("  \(e.status)") }
             if e.ready || e.status == BridgeStatus.local.title { break }
         }
+        let pid = child.processIdentifier
+        switch last {
+        case BridgeStatus.ready.title:
+            print("\(profile.displayName) is bridged in the background (pid \(pid)).")
+        case BridgeStatus.local.title:
+            print("\(profile.displayName) is on this Wi‑Fi, so Xcode reaches it directly. The bridge waits in the background (pid \(pid)) and takes over when it leaves.")
+        default:
+            print("\(profile.displayName) isn't ready yet (\(last.isEmpty ? "no status" : last)). The bridge keeps trying in the background (pid \(pid)).")
+        }
         print("""
-        \(profile.displayName) is bridged in the background (pid \(child.processIdentifier)).
           Log:  \(logURL.path)
           Stop: roamrun down \(shellName(profile.displayName))
         """)
@@ -615,43 +631,54 @@ enum CLI {
         check(orphans == 0, orphans == 0 ? "No leftover helper processes" : "\(orphans) leftover helper process(es) from a crash",
               fix: "Open RoamRun (it cleans them up at launch) or Settings › Clean Up Leftover Helpers.", warnOnly: true)
 
+        let live = StatusFile.read()
         let cli = TailscaleClient.fromSettings()
-        let peers: [MeshDevice]
-        do { peers = try cli.listDevices() } catch {
-            check(false, "Tailscale: \(error.localizedDescription)", fix: "Install Tailscale and sign in, or set its CLI path in RoamRun › Settings.")
-            return finish()
+        let viaTailscale = { (p: DeviceProfile) in p.providerID == MeshProvider.tailscale.rawValue }
+        var peers: [MeshDevice] = []
+        do {
+            peers = try cli.listDevices()
+            check(true, "Tailscale is running (\(peers.count) peers)")
+        } catch {
+            // Devices entered by IP (another mesh VPN) don't need Tailscale.
+            if profiles.contains(where: { viaTailscale($0) && (named || live[$0.id] != nil) }) {
+                check(false, "Tailscale: \(error.localizedDescription)", fix: "Install Tailscale and sign in, or set its CLI path in RoamRun › Settings.")
+                return finish()
+            }
+            note("Tailscale not checked (no device uses it)")
         }
-        check(true, "Tailscale is running (\(peers.count) peers)")
 
         if profiles.isEmpty { check(false, "No devices saved", fix: "Add one in the RoamRun app.") }
-        let live = StatusFile.read()
         for p in profiles {
             section("\n\(p.displayName) (\(p.providerIP))", p.displayName)
             if !named, live[p.id] == nil {
                 note("Bridge is off — not checked (roamrun doctor \(shellName(p.displayName)) checks it anyway)")
                 continue
             }
-            guard let peer = peers.first(where: { $0.ips.contains(p.providerIP) }) else {
-                check(false, "Not found on this tailnet", fix: "Sign the device into the same tailnet, or remove and re-add it in RoamRun.")
-                continue
-            }
-            check(peer.online, "Tailscale peer “\(peer.name)” is \(peer.online ? "online" : "offline")",
-                  fix: "Unlock the device and keep its screen on — while it sleeps, iOS pauses the Tailscale VPN too.")
-            // On this Wi-Fi Xcode reaches the device directly; the Tailscale path doesn't matter.
-            if peer.online, live[p.id]?.status != BridgeStatus.local.title {
-                check(!peer.curAddr.isEmpty, "Path: \(peer.pathDescription)",
-                      fix: "Direct paths are much faster. Some networks (hotel, carrier NAT) force DERP.", warnOnly: true)
+            if viaTailscale(p) {
+                guard let peer = peers.first(where: { $0.ips.contains(p.providerIP) }) else {
+                    check(false, "Not found on this tailnet", fix: "Sign the device into the same tailnet, or remove and re-add it in RoamRun.")
+                    continue
+                }
+                check(peer.online, "Tailscale peer “\(peer.name)” is \(peer.online ? "online" : "offline")",
+                      fix: "Unlock the device and keep its screen on — while it sleeps, iOS pauses the Tailscale VPN too.")
+                // On this Wi-Fi Xcode reaches the device directly; the Tailscale path doesn't matter.
+                if peer.online, live[p.id]?.status != BridgeStatus.local.title {
+                    check(!peer.curAddr.isEmpty, "Path: \(peer.pathDescription)",
+                          fix: "Direct paths are much faster. Some networks (hotel, carrier NAT) force DERP.", warnOnly: true)
+                }
+            } else {
+                note("VPN address entered by hand — Tailscale checks skipped")
             }
             let open = await ReachabilityProbe.checkTCP(host: p.providerIP, port: p.remotePairingPort, timeout: 4)
             if open {
                 check(true, "RemotePairing port \(p.remotePairingPort) is reachable")
-            } else if cli.ping(p.providerIP) {
+            } else if viaTailscale(p), cli.ping(p.providerIP) {
                 // Tailscale answers but the iPhone's service doesn't: the iOS
                 // Tailscale data plane is stuck, or the iPhone left Wi-Fi.
                 check(false, "Tailscale reaches the device, but RemotePairing port \(p.remotePairingPort) does not answer",
                       fix: "Ask the user to (1) toggle the VPN off and on in the device's Tailscale app — iOS Tailscale can show \"MagicSock function ReceiveIPv4 is not running\" and stop passing data while still looking connected; (2) check the device is on Wi-Fi (cellular alone is not enough). If it restarted, run Find RemotePairing Port in the app.")
             } else {
-                check(false, "The device does not answer over Tailscale",
+                check(false, "The device does not answer over \(viaTailscale(p) ? "Tailscale" : "the VPN")",
                       fix: "Ask the user to unlock the device, keep the screen on and make sure Tailscale is on. If the Tailscale app shows a \"MagicSock … not running\" warning, toggle its VPN off and on.")
             }
             if open {
@@ -714,6 +741,10 @@ enum CLI {
 
     /// Installs the bundled SKILL.md for every detected (or named) agent.
     private static func initSkill(_ args: [String]) -> Never {
+        // A typo (e.g. --uninstal) must not fall through to installing everywhere.
+        for (i, a) in args.enumerated().dropFirst() where a.hasPrefix("-") && args[i - 1] != "--client" {
+            guard ["--client", "--print", "--uninstall"].contains(a) else { fail("unknown option \(a) — see roamrun --help") }
+        }
         if let i = args.lastIndex(of: "--client"), !args.indices.contains(i + 1) || args[i + 1].hasPrefix("-") {
             fail("--client needs a value (\(skillClients.map(\.name).joined(separator: ", ")))")
         }
