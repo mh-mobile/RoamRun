@@ -87,7 +87,7 @@ sequenceDiagram
 brew install --cask mh-mobile/tap/roamrun
 ```
 
-`RoamRun.app` を `/Applications` に入れ、`roamrun` コマンドもリンクします。公証がないため、初回起動時とアップデートのたびに macOS に止められます。一度開こうとした後、**システム設定 → プライバシーとセキュリティ → 「このまま開く」**で許可してください。
+`RoamRun.app` を `/Applications` に入れ、`roamrun` コマンドもリンクします。公証がないため、初回起動時に macOS に止められます（`brew upgrade` 後は不要）。一度開こうとした後、**システム設定 → プライバシーとセキュリティ → 「このまま開く」**で許可してください。
 
 ### ソースからビルド
 

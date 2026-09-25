@@ -87,7 +87,7 @@ sequenceDiagram
 brew install --cask mh-mobile/tap/roamrun
 ```
 
-Installs `RoamRun.app` in `/Applications` and links the `roamrun` command. RoamRun isn't notarized, so macOS blocks it on first launch and after each upgrade: try to open it once, then **System Settings → Privacy & Security → "Open Anyway"**.
+Installs `RoamRun.app` in `/Applications` and links the `roamrun` command. RoamRun isn't notarized, so macOS blocks it on first launch (not after `brew upgrade`): try to open it once, then **System Settings → Privacy & Security → "Open Anyway"**.
 
 ### Build from source
 
