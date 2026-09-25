@@ -26,6 +26,9 @@ struct SettingsView: View {
             GroupBox("General") {
                 VStack(alignment: .leading, spacing: 8) {
                     Toggle("Open at login", isOn: $coordinator.launchAtLogin)
+                    if let problem = coordinator.loginItemProblem {
+                        Text(problem).font(.caption).foregroundStyle(.red)
+                    }
                     Text("Keeps bridges you left on running in the menu bar after a restart.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -58,11 +61,10 @@ struct SettingsView: View {
 
             GroupBox("Troubleshooting") {
                 VStack(alignment: .leading, spacing: 8) {
-                    Button("Clean Up Leftover Helpers") {
-                        DNSServiceProxy.killOrphanedHelpers { m in coordinator.logStore.log(m) }
-                    }
+                    Button("Clean Up Leftover Helpers") { coordinator.cleanUpLeftoverHelpers() }
                     Text("Stops dns-sd / log processes left behind by a crash.")
                         .font(.caption).foregroundStyle(.secondary)
+                    RecentMessages(log: coordinator.logStore)
                 }
                 .padding(.vertical, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -89,6 +91,23 @@ struct SettingsView: View {
         case .installed: return "Installed at \(CLIInstaller.installedPath ?? CLIInstaller.linkPath)"
         case .pointsElsewhere: return "Linked to another copy of RoamRun"
         case .blockedByFile: return "\(CLIInstaller.linkPath) is taken by another file"
+        }
+    }
+}
+
+/// App-wide messages (not about one device): launch problems, cleanup, Tailscale.
+/// Observes the log itself so a result logged later (e.g. Clean Up) shows up.
+private struct RecentMessages: View {
+    @ObservedObject var log: LogStore
+
+    var body: some View {
+        let recent = log.lines.filter { $0.device == nil }.suffix(8).map(\.text)
+        if !recent.isEmpty {
+            Text("Recent messages").font(.caption.weight(.semibold)).padding(.top, 4)
+            Text(recent.joined(separator: "\n"))
+                .font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

@@ -446,3 +446,24 @@ private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> { CLI.
     let decoded = StatusFile.decode(try JSONSerialization.data(withJSONObject: raw))
     #expect(decoded.keys.contains(id) && decoded.count == 1)
 }
+
+@Test func oneOfTwoWatchersStepsBack() {
+    let cli = StatusFile.Entry(pid: 200, cli: true, udid: nil, status: "On this Wi\u{2011}Fi", detail: "", ready: false, tunnelPorts: [], updated: .now)
+    var app = cli; app.cli = false
+    #expect(HomeRule.yields(meCLI: false, myPID: 100, to: cli))    // the app yields to roamrun up
+    #expect(!HomeRule.yields(meCLI: true, myPID: 300, to: app))    // roamrun up keeps it
+    #expect(HomeRule.yields(meCLI: true, myPID: 300, to: cli))     // of two CLIs the newer steps back
+    #expect(!HomeRule.yields(meCLI: true, myPID: 100, to: cli))
+}
+
+@Test func runInstallsTheApplicationNotAnAppClip() {
+    let t = { (name: String, type: String) -> [String: Any] in
+        ["buildSettings": ["WRAPPER_EXTENSION": "app", "PLATFORM_NAME": "iphoneos", "TARGET_NAME": name,
+                           "PRODUCT_TYPE": type, "WRAPPER_NAME": "\(name).app", "TARGET_BUILD_DIR": "/b"]]
+    }
+    let clip = t("Clip", "com.apple.product-type.application.on-demand-install-capable")
+    let app = t("App", "com.apple.product-type.application")
+    #expect(CLI.appTarget(in: [clip, app], scheme: "App (Staging)")?["TARGET_NAME"] == "App")
+    #expect(CLI.appTarget(in: [app, clip], scheme: "Clip")?["TARGET_NAME"] == "App")   // never the clip
+    #expect(CLI.appTarget(in: [], scheme: "App") == nil)
+}

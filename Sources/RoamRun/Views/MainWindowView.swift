@@ -26,6 +26,13 @@ struct MainWindowView: View {
             } message: {
                 Text("The bridge stops and the saved pairing details are deleted. You can add the device again later.")
             }
+            // A second alert on the same view is unreliable on macOS 13: host it separately.
+            .background(Color.clear.alert("RoamRun needs attention", isPresented: Binding(
+                get: { coordinator.launchWarning != nil }, set: { if !$0 { coordinator.launchWarning = nil } })) {
+                Button("OK") {}
+            } message: {
+                Text(coordinator.launchWarning ?? "")
+            })
             // Wide enough for "Ready for Xcode" and for the toolbar buttons,
             // which otherwise spill into an overflow (») menu.
             .navigationSplitViewColumnWidth(min: 230, ideal: 250)
@@ -41,6 +48,7 @@ struct MainWindowView: View {
             if let id = coordinator.selectedID, let profile = coordinator.profile(id),
                let bridge = coordinator.bridges[id] {
                 DeviceDetailView(profile: profile, bridge: bridge)
+                    .id(profile.id)   // fresh view state (e.g. an ongoing scan) per device
             } else if coordinator.profiles.isEmpty {
                 WelcomeView { showAddDevice = true }
             } else {

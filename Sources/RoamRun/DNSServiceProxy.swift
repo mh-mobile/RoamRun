@@ -9,6 +9,7 @@ import Foundation
 final class DNSServiceProxy {
     private var process: Process?
     private var lastArgs: [String] = []
+    private var renewToken: UUID?
     /// `dns-sd -P` died on its own (not via stop()/renew()): the record is gone.
     var onExit: ((Int32) -> Void)?
 
@@ -45,6 +46,7 @@ final class DNSServiceProxy {
     }
 
     func stop() {
+        renewToken = nil   // a renew waiting to respawn must not bring the record back
         process?.terminate()
         process = nil
     }
@@ -54,17 +56,24 @@ final class DNSServiceProxy {
     /// control channel (e.g. the iPhone switched networks); a fresh
     /// announcement is the only nudge it listens to.
     func renew() {
-        guard !lastArgs.isEmpty else { return }
-        // Let the old registration go first, or mDNSResponder may rename ours.
-        if let old = process {
-            old.terminate()
-            // Poll rather than waitUntilExit(): that spins the run loop, and a
-            // stop() re-entering here would be undone by the spawn below.
-            var tries = 0
-            while old.isRunning && tries < 100 { usleep(10_000); tries += 1 }
-        }
+        // A renew already waiting for the old process to go will bring the record back.
+        guard !lastArgs.isEmpty, !(renewToken != nil && process == nil) else { return }
+        let old = process
         process = nil
-        if !spawn(lastArgs) { onExit?(-1) }
+        old?.terminate()
+        let token = UUID()
+        renewToken = token
+        // Let the old registration go first, or mDNSResponder may rename ours — waiting
+        // off the main thread; a stop() meanwhile cancels the respawn.
+        DispatchQueue.global().async { [weak self] in
+            var tries = 0
+            while old?.isRunning == true && tries < 100 { usleep(10_000); tries += 1 }
+            DispatchQueue.main.async {
+                guard let self, self.renewToken == token, self.process == nil else { return }
+                self.renewToken = nil
+                if !self.spawn(self.lastArgs) { self.onExit?(-1) }
+            }
+        }
     }
 
     /// Kill helper processes left behind by a crashed/killed previous launch:

@@ -20,8 +20,13 @@ final class AppCoordinator: ObservableObject {
         }
     }
     @Published var launchAtLogin: Bool {
-        didSet { applyLaunchAtLogin() }
+        didSet { if !syncingLoginItem { applyLaunchAtLogin() } }
     }
+    /// Why "Open at login" isn't in effect (an error, or approval needed), for Settings.
+    @Published private(set) var loginItemProblem: String?
+    private var syncingLoginItem = false
+    /// Shown once at launch, e.g. the saved devices couldn't be read.
+    @Published var launchWarning: String?
 
     let capture = BonjourCapture()
     let logStore = LogStore()
@@ -38,13 +43,18 @@ final class AppCoordinator: ObservableObject {
     }
 
     init() {
-        launchAtLogin = SMAppService.mainApp.status == .enabled
+        let loginStatus = SMAppService.mainApp.status
+        launchAtLogin = loginStatus == .enabled || loginStatus == .requiresApproval
+        if loginStatus == .requiresApproval { loginItemProblem = "Allow RoamRun in System Settings › General › Login Items." }
         let savedCLIPath = UserDefaults.standard.string(forKey: "tailscaleCLIPath") ?? ""
         tailscaleClient.binaryPath = savedCLIPath.isEmpty ? nil : savedCLIPath
         tailscaleCLIPath = savedCLIPath
 
         profiles = store.load()
-        if let copy = store.keptUnreadable { logStore.log("couldn't read saved devices; kept the file as \(copy.path)") }
+        if let copy = store.keptUnreadable {
+            logStore.log("couldn't read saved devices; kept the file as \(copy.path)")
+            launchWarning = "RoamRun couldn't read its saved devices, so the list starts empty. The file was kept as \(copy.path)."
+        }
         for p in profiles { install(ProxyBridge(profile: p)) }
 
         capture.onLog = { [weak self] m in self?.logStore.log(m) }
@@ -52,6 +62,12 @@ final class AppCoordinator: ObservableObject {
 
         // Remove helpers orphaned by a previous launch *before* starting ours.
         DNSServiceProxy.killOrphanedHelpers { [weak self] m in self?.logStore.log(m) }
+
+        // After sleep, relayed connections can look open while dead: re-announce right away.
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification,
+                                                          object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.bridges.values.forEach { $0.nudgeAfterWake() } }
+        }
 
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
                                                object: nil, queue: .main) { [weak self] _ in
@@ -176,7 +192,7 @@ final class AppCoordinator: ObservableObject {
         profiles.append(profile)
         let bridge = install(ProxyBridge(profile: profile))
         capture.ownedHosts.insert(bridge.spoofHost)
-        store.save(profiles)
+        persist()
         logStore.log("added \"\(profile.displayName)\" -> \(ip)", device: profile.id)
         learnDeviceTypes()
         return profile.id
@@ -190,7 +206,7 @@ final class AppCoordinator: ObservableObject {
         bridgeObservers[id] = nil
         profiles.removeAll { $0.id == id }
         wasActiveIDs.remove(id)
-        store.save(profiles)
+        persist()
     }
 
     // MARK: - Bridging
@@ -239,7 +255,7 @@ final class AppCoordinator: ObservableObject {
             for i in profiles.indices where profiles[i].deviceType == nil {
                 if let u = profiles[i].udid, let t = types[u.uppercased()] { profiles[i].deviceType = t; changed = true }
             }
-            if changed { store.save(profiles) }
+            if changed { persist() }
         }
     }
 
@@ -267,7 +283,7 @@ final class AppCoordinator: ObservableObject {
         for i in profiles.indices where profiles[i].udid == nil {
             if let u = udids[profiles[i].instanceName] { profiles[i].udid = u; filled = true }
         }
-        if filled { store.save(profiles); learnDeviceTypes() }
+        if filled { persist(); learnDeviceTypes() }
         advertTypes = udids.compactMapValues { knownTypes[$0].flatMap { $0.isEmpty ? nil : $0 } }
     }
 
@@ -310,14 +326,24 @@ final class AppCoordinator: ObservableObject {
         bridge.onUDID = { [weak self] udid in
             guard let self, let i = self.profiles.firstIndex(where: { $0.id == id }) else { return }
             self.profiles[i].udid = udid
-            self.store.save(self.profiles)
+            self.persist()
             self.learnDeviceTypes()
+        }
+        // Stepped back for a `roamrun up` watching the same device: take over again once it's gone.
+        bridge.onYield = { [weak self] other in
+            Task { @MainActor in
+                while StatusFile.isRoamRun(other.pid) { try? await Task.sleep(for: .seconds(5)) }
+                guard let self, self.wasActiveIDs.contains(id), let p = self.profile(id),
+                      self.bridges[id]?.state == .off else { return }
+                self.startBridge(p)
+            }
         }
         bridge.onProfileChange = { [weak self] moved in
             guard let self, let i = self.profiles.firstIndex(where: { $0.id == id }) else { return }
             self.profiles[i].providerIP = moved.providerIP
             self.profiles[i].remotePairingPort = moved.remotePairingPort
-            self.store.save(self.profiles)
+            self.profiles[i].providerHostName = moved.providerHostName
+            self.persist()
         }
         bridges[bridge.profile.id] = bridge
         bridgeObservers[bridge.profile.id] = bridge.objectWillChange
@@ -336,7 +362,7 @@ final class AppCoordinator: ObservableObject {
         guard profiles.nameProblem(n, except: id) == nil,
               let i = profiles.firstIndex(where: { $0.id == id }) else { return false }
         profiles[i].displayName = n
-        store.save(profiles)
+        persist()
         bridges[id]?.rename(n)
         return true
     }
@@ -353,7 +379,7 @@ final class AppCoordinator: ObservableObject {
             logStore.log("\"\(profile.displayName)\": RemotePairing port is still \(found)", device: profile.id)
         } else if let found, let idx = profiles.firstIndex(where: { $0.id == profile.id }) {
             profiles[idx].remotePairingPort = found
-            store.save(profiles)
+            persist()
             logStore.log("\"\(profile.displayName)\": RemotePairing port updated to \(found)", device: profile.id)
             // ProxyBridge holds its profile by value — swap it in or the
             // new port only takes effect after a relaunch.
@@ -397,6 +423,7 @@ final class AppCoordinator: ObservableObject {
     }
 
     private func applyLaunchAtLogin() {
+        loginItemProblem = nil
         do {
             if launchAtLogin {
                 try SMAppService.mainApp.register()
@@ -404,7 +431,28 @@ final class AppCoordinator: ObservableObject {
                 try SMAppService.mainApp.unregister()
             }
         } catch {
+            loginItemProblem = error.localizedDescription
             logStore.log("launch at login: \(error.localizedDescription)")
+        }
+        // Show what's actually in effect, not what was asked for.
+        let status = SMAppService.mainApp.status
+        if status == .requiresApproval { loginItemProblem = "Allow RoamRun in System Settings › General › Login Items." }
+        let on = status == .enabled || status == .requiresApproval
+        if on != launchAtLogin { syncingLoginItem = true; launchAtLogin = on; syncingLoginItem = false }
+    }
+
+    /// Saves the device list; a failed write would lose changes at the next launch, so say so.
+    private func persist() {
+        guard !store.save(profiles) else { return }
+        logStore.log("couldn't save the device list to \(ProfileStore.directory.path)")
+        launchWarning = "RoamRun couldn't save your devices (\(ProfileStore.directory.path)). Changes will be lost when it quits — check the disk and folder permissions."
+    }
+
+    /// Stops helpers a crashed run left behind, off the main thread; says what it did.
+    func cleanUpLeftoverHelpers() {
+        Task {
+            let killed = await Task.detached { DNSServiceProxy.killOrphanedHelpers() }.value
+            logStore.log(killed == 0 ? "no leftover helpers found" : "stopped \(killed) leftover helper process(es)")
         }
     }
 }

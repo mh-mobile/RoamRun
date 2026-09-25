@@ -21,7 +21,7 @@ enum CLI {
       down <name>                    Stop a bridge, whether the app or another `roamrun up` runs it
       status [name] [--wait N] [--json]
                                      Bridge status, UDID and lock state; exits 0 only if Xcode can use
-                                     the device (bridged and ready, or on this Wi-Fi)
+                                     the device (bridged and ready, or a bridge standing aside on this Wi-Fi)
                                      (--wait: wait up to N seconds for ready)
       doctor [name] [--json]         Check each step from this Mac to the device and say what to fix
                                      (without a name: devices with a running bridge, or all if none runs)
@@ -363,10 +363,16 @@ enum CLI {
         // devicectl documents .app bundles only: unpack the .ipa and hand it the .app inside.
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-ipa-\(UUID().uuidString)")
         let cleanUp = { try? FileManager.default.removeItem(at: dir) }   // exit() skips defer
-        _ = Proc.run("/usr/bin/ditto", ["-x", "-k", path, dir.path], timeout: 300)
+        let unzip = Proc.run("/usr/bin/ditto", ["-x", "-k", path, dir.path], timeout: 300)
+        guard unzip.status == 0 else { cleanUp(); stop("couldn't unpack \(path): \(firstLine(unzip.err) ?? "ditto exited \(unzip.status)")") }
         let payload = dir.appendingPathComponent("Payload")
         guard let app = try? FileManager.default.contentsOfDirectory(atPath: payload.path).first(where: { $0.hasSuffix(".app") })
         else { cleanUp(); stop("\(path) has no Payload/*.app inside — not an iOS app archive?") }
+        // A crafted archive could make Payload/X.app a link to somewhere else on this Mac.
+        let appURL = payload.appendingPathComponent(app)
+        guard (try? appURL.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink != true else {
+            cleanUp(); stop("\(path)'s Payload/\(app) is a symbolic link — not installing it")
+        }
         let status = visible(["/usr/bin/xcrun", "devicectl", "device", "install", "app", "--device", udid,
                               payload.appendingPathComponent(app).path])
         cleanUp()
@@ -381,6 +387,12 @@ enum CLI {
             stop("\(path) is signed for App Store / TestFlight and can't be installed directly. Export it for Debugging, Release Testing (Ad Hoc) or Enterprise.")
         case .devices(let list) where !list.contains(where: { $0.caseInsensitiveCompare(udid) == .orderedSame }):
             stop("\(path) isn't signed for \(profile.displayName) (UDID \(udid) is not in its provisioning profile). Add the device to the profile and export again.")
+        case .unknown:
+            let info = NSDictionary(contentsOfFile: (path as NSString).appendingPathComponent("Info.plist"))
+            if (info?["DTPlatformName"] as? String)?.hasSuffix("simulator") == true {
+                stop("\(path) is a Simulator build — build for a device (Any iOS Device / the device itself).")
+            }
+            FileHandle.standardError.write(Data("roamrun: couldn't read \(path)'s provisioning profile — if the install fails, check it's a device build signed for \(profile.displayName)\n".utf8))
         default:
             break
         }
@@ -414,11 +426,12 @@ enum CLI {
         let chosen: String
         if let scheme { chosen = scheme }
         else {
-            let list = Proc.run("/usr/bin/xcrun", ["xcodebuild", "-list", "-json"] + container, timeout: 120).out
-            let root = (try? JSONSerialization.jsonObject(with: Data(list.utf8))) as? [String: Any]
+            // Generous: the first -list of a project can resolve its packages.
+            let list = Proc.run("/usr/bin/xcrun", ["xcodebuild", "-list", "-json"] + container, timeout: 300)
+            let root = (try? JSONSerialization.jsonObject(with: Data(list.out.utf8))) as? [String: Any]
             let schemes = ((root?["workspace"] ?? root?["project"]) as? [String: Any])?["schemes"] as? [String] ?? []
             guard schemes.count == 1 else {
-                stop(schemes.isEmpty ? "couldn't list the schemes — pass --scheme"
+                stop(schemes.isEmpty ? "couldn't list the schemes (\(firstLine(list.err) ?? "xcodebuild exited \(list.status)")) — pass --scheme"
                                      : "which scheme? \(schemes.joined(separator: ", ")) — pass --scheme")
             }
             chosen = schemes[0]
@@ -429,14 +442,10 @@ enum CLI {
         guard visible(build + ["-quiet", "build"]) == 0 else { stop("the build failed (see above)") }
 
         // The built .app: the build settings of the target that produces one.
-        let settings = Proc.run(build[0], Array(build.dropFirst()) + ["-showBuildSettings", "-json"], timeout: 120).out
-        let targets = (try? JSONSerialization.jsonObject(with: Data(settings.utf8))) as? [[String: Any]] ?? []
-        // The scheme's own target first: a watchOS companion is an .app too.
-        let apps = targets.compactMap { $0["buildSettings"] as? [String: String] }
-            .filter { $0["WRAPPER_EXTENSION"] == "app" && $0["PLATFORM_NAME"] != "watchos" }
-        guard let s = apps.first(where: { $0["TARGET_NAME"] == chosen }) ?? apps.first,
-              let dir = s["TARGET_BUILD_DIR"], let wrapper = s["WRAPPER_NAME"] else {
-            stop("built, but couldn't find the .app in the build settings")
+        let settings = Proc.run(build[0], Array(build.dropFirst()) + ["-showBuildSettings", "-json"], timeout: 300)
+        let targets = (try? JSONSerialization.jsonObject(with: Data(settings.out.utf8))) as? [[String: Any]] ?? []
+        guard let s = appTarget(in: targets, scheme: chosen), let dir = s["TARGET_BUILD_DIR"], let wrapper = s["WRAPPER_NAME"] else {
+            stop("built, but couldn't find the .app in the build settings (\(firstLine(settings.err) ?? "no app target"))")
         }
         let app = (dir as NSString).appendingPathComponent(wrapper)
         guard let bundleID = NSDictionary(contentsOfFile: (app as NSString).appendingPathComponent("Info.plist"))?["CFBundleIdentifier"] as? String
@@ -451,6 +460,20 @@ enum CLI {
         print("Launching \(bundleID)…")
         if logs { launchWithConsole(udid: udid, bundleID: bundleID) }
         exec(["/usr/bin/xcrun", "devicectl", "device", "process", "launch", "--terminate-existing", "--device", udid, bundleID])
+    }
+
+    /// The target `run` installs: an application (not an App Clip, extension or
+    /// watch app), the scheme's own target first.
+    nonisolated static func appTarget(in targets: [[String: Any]], scheme: String) -> [String: String]? {
+        let apps = targets.compactMap { $0["buildSettings"] as? [String: String] }
+            .filter { $0["WRAPPER_EXTENSION"] == "app" && $0["PLATFORM_NAME"] != "watchos" }
+        let real = apps.filter { $0["PRODUCT_TYPE"] == "com.apple.product-type.application" }
+        let pool = real.isEmpty ? apps : real
+        return pool.first { $0["TARGET_NAME"] == scheme } ?? pool.first
+    }
+
+    private static func firstLine(_ s: String) -> String? {
+        s.split(separator: "\n").first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.map(String.init)
     }
 
     enum Provisioning: Equatable { case devices([String]), allDevices, appStore, unknown }
@@ -535,11 +558,20 @@ enum CLI {
         if StatusFile.otherOwner(of: profile.id) != nil, let e = StatusFile.read()[profile.id] {
             alreadyBridged(profile, e)
         }
+        // Another `roamrun up` already watches it (standing aside on this Wi‑Fi): a second would just yield.
+        if let e = StatusFile.read()[profile.id], e.cli == true, e.pid != getpid(), e.status == BridgeStatus.local.title {
+            print("\(profile.displayName) is on this Wi\u{2011}Fi and already watched by roamrun up (pid \(e.pid)) — it takes over when the device leaves.")
+            exit(0)
+        }
         let logDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Logs/RoamRun", isDirectory: true)
         try? FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
         let safeName = fileSafe(profile.displayName)
         let logURL = logDir.appendingPathComponent("\(safeName.isEmpty ? profile.id.uuidString : safeName).log")
+        // Keep the previous run's log (an earlier failure may point at it).
+        let previous = logURL.appendingPathExtension("1")
+        try? FileManager.default.removeItem(at: previous)
+        try? FileManager.default.moveItem(at: logURL, to: previous)
         FileManager.default.createFile(atPath: logURL.path, contents: nil)
         guard let log = try? FileHandle(forWritingTo: logURL) else { stop("can't write \(logURL.path)") }
 
@@ -555,7 +587,11 @@ enum CLI {
         var last = ""
         for _ in 0..<120 {
             usleep(500_000)
-            guard child.isRunning else { stop("the background bridge exited — see \(logURL.path)") }
+            guard child.isRunning else {
+                // It exits on an error retrying can't fix (see up); its last line says which.
+                let tail = (try? String(contentsOf: logURL, encoding: .utf8)).flatMap { $0.split(separator: "\n").last.map(String.init) }
+                stop("the background bridge exited\(tail.map { ": \($0)" } ?? "") — see \(logURL.path)")
+            }
             guard let e = StatusFile.read()[profile.id], e.pid == child.processIdentifier else { continue }
             if e.status != last { last = e.status; print("  \(e.status)") }
             if e.ready || e.status == BridgeStatus.local.title { break }
@@ -588,14 +624,19 @@ enum CLI {
         let bridge = ProxyBridge(profile: profile)
         self.bridge = bridge
         bridge.onLog = { m in if verbose { print("    \(m)") } }
+        bridge.onYield = { other in
+            print("\(profile.displayName): another roamrun up (pid \(other.pid)) is already handling it — exiting.")
+            exit(0)
+        }
         bridge.onProfileChange = { moved in   // save where the device answers now, as the app does
             let store = ProfileStore()
             var all = store.load()
             guard let i = all.firstIndex(where: { $0.id == moved.id }) else { return }
             all[i].providerIP = moved.providerIP
             all[i].remotePairingPort = moved.remotePairingPort
-            store.save(all)
-            print("  \(moved.displayName) now answers at \(moved.providerIP):\(moved.remotePairingPort) (saved)")
+            all[i].providerHostName = moved.providerHostName
+            let saved = store.save(all)
+            print("  \(moved.displayName) now answers at \(moved.providerIP):\(moved.remotePairingPort)\(saved ? " (saved)" : " (couldn't save it)")")
         }
 
         // Print status transitions, not a stream of identical lines.
@@ -618,7 +659,13 @@ enum CLI {
         // Same recovery as the app: retry errors, rebind when the Mac's IP changes.
         let retry = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
             MainActor.assumeIsolated {
-                if bridge.status == .error && bridge.autoRetry { bridge.requestStart() }
+                guard bridge.status == .error else { return }
+                if bridge.autoRetry { bridge.requestStart(); return }
+                // Retrying can't fix it (lost pairing, no admin rights): say why and stop.
+                let reason = { if case .error(let m) = bridge.state { m } else { "the bridge failed" } }()
+                bridge.stop()   // before printing: its "bridge stopped" line mustn't be the log's last
+                FileHandle.standardError.write(Data("roamrun: \(reason)\n".utf8))
+                exit(1)
             }
         }
         let away = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
@@ -739,37 +786,42 @@ enum CLI {
                 note("Bridge is off — not checked (roamrun doctor \(shellName(p.displayName)) checks it anyway)")
                 continue
             }
-            if viaTailscale(p) {
-                guard let peer = peers.first(where: { $0.ips.contains(p.providerIP) }) else {
-                    check(false, "Not found on this tailnet", fix: "Sign the device into the same tailnet, or remove and re-add it in RoamRun.")
-                    continue
-                }
-                check(peer.online, "Tailscale peer “\(peer.name)” is \(peer.online ? "online" : "offline")",
-                      fix: "Unlock the device and keep its screen on — while it sleeps, iOS pauses the Tailscale VPN too.")
-                // On this Wi-Fi Xcode reaches the device directly; the Tailscale path doesn't matter.
-                if peer.online, live[p.id]?.status != BridgeStatus.local.title {
-                    check(!peer.curAddr.isEmpty, "Path: \(peer.pathDescription)",
-                          fix: "Direct paths are much faster. Some networks (hotel, carrier NAT) force DERP.", warnOnly: true)
-                }
+            // On this Wi‑Fi Xcode reaches the device directly: the VPN path doesn't matter.
+            if live[p.id]?.status == BridgeStatus.local.title {
+                note("On this Wi\u{2011}Fi — VPN checks skipped (Xcode reaches the device directly)")
             } else {
-                note("VPN address entered by hand — Tailscale checks skipped")
-            }
-            let open = await ReachabilityProbe.checkTCP(host: p.providerIP, port: p.remotePairingPort, timeout: 4)
-            if open {
-                check(true, "RemotePairing port \(p.remotePairingPort) is reachable")
-            } else if viaTailscale(p), cli.ping(p.providerIP) {
-                // Tailscale answers but the iPhone's service doesn't: the iOS
-                // Tailscale data plane is stuck, or the iPhone left Wi-Fi.
-                check(false, "Tailscale reaches the device, but RemotePairing port \(p.remotePairingPort) does not answer",
-                      fix: "Ask the user to (1) toggle the VPN off and on in the device's Tailscale app — iOS Tailscale can show \"MagicSock function ReceiveIPv4 is not running\" and stop passing data while still looking connected; (2) check the device is on Wi-Fi (cellular alone is not enough). If it restarted, run Find RemotePairing Port in the app.")
-            } else {
-                check(false, "The device does not answer over \(viaTailscale(p) ? "Tailscale" : "the VPN")",
-                      fix: "Ask the user to unlock the device, keep the screen on and make sure Tailscale is on. If the Tailscale app shows a \"MagicSock … not running\" warning, toggle its VPN off and on.")
-            }
-            if open {
-                let speaks = await ReachabilityProbe.speaksRemotePairing(host: p.providerIP, port: p.remotePairingPort)
-                check(speaks, "Device \(speaks ? "answers" : "does not answer") the RemotePairing handshake",
-                      fix: "Another service holds this port. Run Find RemotePairing Port in the app.")
+                if viaTailscale(p) {
+                    guard let peer = peers.first(where: { $0.ips.contains(p.providerIP) }) else {
+                        check(false, "Not found on this tailnet", fix: "Sign the device into the same tailnet, or remove and re-add it in RoamRun.")
+                        continue
+                    }
+                    check(peer.online, "Tailscale peer “\(peer.name)” is \(peer.online ? "online" : "offline")",
+                          fix: "Unlock the device and keep its screen on — while it sleeps, iOS pauses the Tailscale VPN too.")
+                    // On this Wi-Fi Xcode reaches the device directly; the Tailscale path doesn't matter.
+                    if peer.online, live[p.id]?.status != BridgeStatus.local.title {
+                        check(!peer.curAddr.isEmpty, "Path: \(peer.pathDescription)",
+                              fix: "Direct paths are much faster. Some networks (hotel, carrier NAT) force DERP.", warnOnly: true)
+                    }
+                } else {
+                    note("VPN address entered by hand — Tailscale checks skipped")
+                }
+                let open = await ReachabilityProbe.checkTCP(host: p.providerIP, port: p.remotePairingPort, timeout: 4)
+                if open {
+                    check(true, "RemotePairing port \(p.remotePairingPort) is reachable")
+                } else if viaTailscale(p), cli.ping(p.providerIP) {
+                    // Tailscale answers but the iPhone's service doesn't: the iOS
+                    // Tailscale data plane is stuck, or the iPhone left Wi-Fi.
+                    check(false, "Tailscale reaches the device, but RemotePairing port \(p.remotePairingPort) does not answer",
+                          fix: "Ask the user to (1) toggle the VPN off and on in the device's Tailscale app — iOS Tailscale can show \"MagicSock function ReceiveIPv4 is not running\" and stop passing data while still looking connected; (2) check the device is on Wi-Fi (cellular alone is not enough). If it restarted, run Find RemotePairing Port in the app.")
+                } else {
+                    check(false, "The device does not answer over \(viaTailscale(p) ? "Tailscale" : "the VPN")",
+                          fix: "Ask the user to unlock the device, keep the screen on and make sure Tailscale is on. If the Tailscale app shows a \"MagicSock … not running\" warning, toggle its VPN off and on.")
+                }
+                if open {
+                    let speaks = await ReachabilityProbe.speaksRemotePairing(host: p.providerIP, port: p.remotePairingPort)
+                    check(speaks, "Device \(speaks ? "answers" : "does not answer") the RemotePairing handshake",
+                          fix: "Another service holds this port. Run Find RemotePairing Port in the app.")
+                }
             }
             // How remotepairingd last resolved our record (nil = pairing lost), or any
             // advert matched to this UDID. Only plain hex/UUIDs go into the predicates.
@@ -827,8 +879,11 @@ enum CLI {
     /// Installs the bundled SKILL.md for every detected (or named) agent.
     private static func initSkill(_ args: [String]) -> Never {
         // A typo (e.g. --uninstal) must not fall through to installing everywhere.
-        for (i, a) in args.enumerated().dropFirst() where a.hasPrefix("-") && args[i - 1] != "--client" {
-            guard ["--client", "--print", "--uninstall"].contains(a) else { fail("unknown option \(a) — see roamrun --help") }
+        for (i, a) in args.enumerated().dropFirst() where args[i - 1] != "--client" {
+            // Also bare words: `init claude` must not install into every client.
+            guard ["--client", "--print", "--uninstall"].contains(a) else {
+                fail(a.hasPrefix("-") ? "unknown option \(a) — see roamrun --help" : "unexpected \(shellName(a)) — to pick a client: roamrun init --client \(shellName(a))")
+            }
         }
         if let i = args.lastIndex(of: "--client"), !args.indices.contains(i + 1) || args[i + 1].hasPrefix("-") {
             fail("--client needs a value (\(skillClients.map(\.name).joined(separator: ", ")))")
@@ -868,7 +923,7 @@ enum CLI {
             let ours = existing?.hasPrefix("---\nname: roamrun\n") ?? false
             if args.contains("--uninstall") {
                 guard ours else { print("Skipped \(dir.path): no RoamRun skill there"); continue }
-                try? fm.removeItem(at: file)
+                do { try fm.removeItem(at: file) } catch { print("Couldn't remove \(file.path): \(error.localizedDescription)"); continue }
                 rmdir(dir.path)   // only if now empty
                 print("Removed \(file.path)")
                 continue

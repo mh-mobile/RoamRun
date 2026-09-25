@@ -27,10 +27,11 @@ final class ProfileStore {
         return []
     }
 
-    func save(_ profiles: [DeviceProfile]) {
-        if let data = try? JSONEncoder().encode(profiles) {
-            try? data.write(to: url, options: .atomic)
-            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-        }
+    /// False if it couldn't be written (disk full, permissions): the caller must say so.
+    @discardableResult
+    func save(_ profiles: [DeviceProfile]) -> Bool {
+        guard let data = try? JSONEncoder().encode(profiles), (try? data.write(to: url, options: .atomic)) != nil else { return false }
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        return true
     }
 }

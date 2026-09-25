@@ -24,6 +24,8 @@ final class ProxyBridge: ObservableObject {
     var onUDID: ((String) -> Void)?
     /// Called when the bridge found the device at a new address or port; save it.
     var onProfileChange: ((DeviceProfile) -> Void)?
+    /// Called after this bridge stopped because another process stands aside for the same device.
+    var onYield: ((StatusFile.Entry) -> Void)?
     private(set) var udid: String?
 
     /// False after an error retrying can't fix (unrecognized pairing) — the
@@ -57,6 +59,8 @@ final class ProxyBridge: ObservableObject {
     private var awayTicks = 0
     /// Re-announcements in a row without a control channel.
     private var stuckRenewals = 0
+    /// First "identity nil" for our record; a second one within minutes is believed.
+    private var unrecognizedSince: Date?
     /// A port scan that found nothing isn't repeated for a while (e.g. device on cellular).
     private var lastFailedScan = Date.distantPast
     private static let homeLog = Logger(subsystem: "com.roamrun.app", category: "home")
@@ -81,6 +85,7 @@ final class ProxyBridge: ObservableObject {
         warmingUp = false
         awayTicks = 0
         stuckRenewals = 0
+        unrecognizedSince = nil
         activatedAt = .distantFuture
         autoRetry = true
         phoneConnected = false
@@ -119,10 +124,12 @@ final class ProxyBridge: ObservableObject {
         if !reachable {
             let (moved, answers) = await relocate()
             guard gen == generation else { return }
-            if moved.providerIP != profile.providerIP || moved.remotePairingPort != profile.remotePairingPort {
-                // Only these two: a rename during the (possibly long) lookup must survive.
+            if moved.providerIP != profile.providerIP || moved.remotePairingPort != profile.remotePairingPort
+                || moved.providerHostName != profile.providerHostName {
+                // Only these: a rename in RoamRun during the (possibly long) lookup must survive.
                 profile.providerIP = moved.providerIP
                 profile.remotePairingPort = moved.remotePairingPort
+                profile.providerHostName = moved.providerHostName
                 onProfileChange?(profile)   // kept even if it doesn't answer right now
             }
             reachable = answers
@@ -334,6 +341,7 @@ final class ProxyBridge: ObservableObject {
             }
             return
         }
+        unrecognizedSince = nil   // recognized after all
         if udid != self.udid {
             // Learned once; a different one later is suspicious (spoofed log line) — don't save it.
             if let known = self.udid, known.caseInsensitiveCompare(udid) != .orderedSame {
@@ -423,6 +431,11 @@ final class ProxyBridge: ObservableObject {
         if p.providerID == MeshProvider.tailscale.rawValue, !p.providerHostName.isEmpty {
             setState(.starting("Looking up \(p.providerHostName) on Tailscale"))
             let peers = await Task.detached { try? TailscaleClient.fromSettings().listDevices() }.value ?? []
+            // Renamed on Tailscale (same address): follow the new name, so a later address change is found.
+            if let current = peers.first(where: { $0.ips.contains(p.providerIP) }), current.name != p.providerHostName {
+                log("Tailscale name is now \(current.name) (was \(p.providerHostName))")
+                p.providerHostName = current.name
+            }
             if let ip = peers.first(where: { $0.name == p.providerHostName })?.ipv4, ip != p.providerIP {
                 log("\(p.providerHostName) has a new address: \(p.providerIP) → \(ip)")
                 p.providerIP = ip
@@ -477,6 +490,15 @@ final class ProxyBridge: ObservableObject {
         dnsProxy.renew()
     }
 
+    /// After the Mac wakes, relayed connections may be dead while still looking open:
+    /// re-announce now instead of waiting for keepalive and the 60 s renew.
+    func nudgeAfterWake() {
+        guard state.isActive else { return }
+        log("Mac woke — re-announcing Bonjour record")
+        waitingSince = .now
+        dnsProxy.renew()
+    }
+
     /// The iPhone came back to this Mac's LAN while bridged: withdraw the fake
     /// record so it can't collide with the real one.
     private func standAsideIfHome() {
@@ -498,6 +520,15 @@ final class ProxyBridge: ObservableObject {
     /// Standing aside: start again only once the iPhone has left this LAN.
     func resumeIfAway() async {
         guard state == .local, !checkingLAN else { return }
+        // Two processes standing aside for one device would keep overwriting each
+        // other's status entry (and `down` could stop only one): one steps back.
+        if let other = StatusFile.read()[profile.id], other.pid != getpid(),
+           HomeRule.yields(meCLI: CLI.isRunning, myPID: getpid(), to: other) {
+            log("another RoamRun process (pid \(other.pid)) watches this device too — stopping here")
+            stop()
+            onYield?(other)
+            return
+        }
         publishStatus()   // another process standing aside for the same iPhone may have cleared ours on exit
         checkingLAN = true
         let gen = generation
@@ -601,6 +632,14 @@ final class ProxyBridge: ObservableObject {
     /// won't help; say what will.
     private func onUnrecognized(_ instance: String) {
         guard instance == profile.instanceName, state.isActive else { return }
+        // Once can be a hiccup (e.g. right after remotepairingd restarts); act on a second
+        // sighting — a later one, not the same announcement logged twice.
+        if let first = unrecognizedSince, Date.now.timeIntervalSince(first) < 20 { return }
+        guard let first = unrecognizedSince, Date.now.timeIntervalSince(first) < 300 else {
+            unrecognizedSince = .now
+            log("remotepairingd did not recognize this device (identity nil) — waiting to see it again")
+            return
+        }
         log("remotepairingd does not recognize this device (identity nil)")
         stop()
         autoRetry = false
@@ -639,4 +678,12 @@ enum HomeRule {
     }
 
     static func shouldResume(awayTicks: Int) -> Bool { awayTicks >= missesBeforeResume }
+
+    /// Of two processes watching one device, which steps back: the app yields
+    /// to `roamrun up` (the user just asked for it); of two CLIs, the newer (higher pid).
+    static func yields(meCLI: Bool, myPID: Int32, to other: StatusFile.Entry) -> Bool {
+        let otherCLI = other.cli == true
+        if meCLI != otherCLI { return !meCLI }
+        return myPID > other.pid
+    }
 }

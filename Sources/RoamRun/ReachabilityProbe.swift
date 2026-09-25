@@ -14,7 +14,9 @@ enum ReachabilityProbe {
                 switch state {
                 case .ready:
                     box.done { conn.stateUpdateHandler = nil; conn.cancel(); cont.resume(returning: true) }
-                case .failed, .cancelled:
+                // Refused: no need to sit out the timeout. Other .waiting (the path still
+                // settling after wake or a network switch) may still turn .ready.
+                case .failed, .cancelled, .waiting(.posix(.ECONNREFUSED)):
                     box.done { conn.stateUpdateHandler = nil; conn.cancel(); cont.resume(returning: false) }
                 default:
                     break
