@@ -33,6 +33,11 @@ watcher or CLI, check with the iPhone unlocked and its screen on:
 If `doctor` says the iPhone is asleep, ask the user to unlock it — that's not a
 code bug.
 
+Home/away decisions (bridge vs. "On this Wi-Fi") are logged at debug level,
+one line each with the signal that decided: `log stream --level debug
+--predicate 'subsystem == "com.roamrun.app" AND category == "home"'`. The rules
+live in `HomeRule` (ProxyBridge.swift) and are unit-tested — change them there.
+
 ## Rules
 
 - Keep the skill (`skills/roamrun/SKILL.md`) in sync with CLI behaviour; it

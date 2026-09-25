@@ -222,3 +222,35 @@ private func timed(_ path: String, _ args: [String]) -> (Proc.Result, TimeInterv
     let (r, t) = timed("/bin/sh", ["-c", "trap '' TERM; sleep 8"])
     #expect(r.status == -1 && t < 6.5)
 }
+
+// MARK: - Home / away rules (regressions from real runs)
+
+private let t0 = Date(timeIntervalSinceReferenceDate: 800_000_000)
+
+@Test func bridgingIgnoresAnAdvertLearnedBeforeLeaving() {
+    // Learned at home at t0, bridge went active at t0+20 after leaving: not proof of home.
+    let seen = (instance: "HOME-ADVERT", at: t0)
+    #expect(HomeRule.bridgingAdvert(seen, activatedAt: t0 + 20, now: t0 + 40) == nil)
+}
+
+@Test func bridgingUsesAnAdvertSeenSinceItWentActive() {
+    let seen = (instance: "BACK-HOME", at: t0 + 30)
+    #expect(HomeRule.bridgingAdvert(seen, activatedAt: t0 + 20, now: t0 + 40) == "BACK-HOME")
+    #expect(HomeRule.bridgingAdvert(seen, activatedAt: t0 + 20, now: t0 + 200) == nil)   // stale after 90s
+}
+
+@Test func standingAsideProbesAKnownNameButReconfirmsEveryFiveMinutes() {
+    #expect(HomeRule.useCheapProbe(known: "A", lastFullCheck: t0, now: t0 + 60))
+    #expect(!HomeRule.useCheapProbe(known: "A", lastFullCheck: t0, now: t0 + 301))
+    #expect(!HomeRule.useCheapProbe(known: nil, lastFullCheck: t0, now: t0 + 60))
+}
+
+@Test func oneMissedCheckAtHomeDoesNotResume() {
+    #expect(!HomeRule.shouldResume(awayTicks: 1))
+    #expect(!HomeRule.shouldResume(awayTicks: 2))
+}
+
+@Test func leavingResumesAfterSeveralMissesWhateverCoreDeviceSays() {
+    // No CoreDevice input at all: a just-closed bridge's link can't hold it back.
+    #expect(HomeRule.shouldResume(awayTicks: 3))
+}

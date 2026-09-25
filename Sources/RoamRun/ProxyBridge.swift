@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 /// Runs one device bridge end to end:
 ///
@@ -47,7 +48,18 @@ final class ProxyBridge: ObservableObject {
     private var waitingSince: Date?
     private var renewTimer: Timer?
     private var checkingLAN = false
-    private var liveAdvert: (instance: String, at: Date)?
+    // Home detection. Each signal is only trusted in the state it's valid in (HomeRule).
+    /// When this bridge last went active; bridging trusts only adverts seen after it.
+    private var activatedAt = Date.distantFuture
+    /// Latest of the device's own adverts the watcher saw. Written only by the watcher.
+    private var seenAdvert: (instance: String, at: Date)?
+    /// A name known to be the device's advert, for the cheap stand-aside probe.
+    private var homeAdvert: String?
+    /// Standing aside, the last time isHome confirmed the UDID the slow way.
+    private var lastFullCheck = Date.distantPast
+    /// Standing aside, consecutive checks that found the device away.
+    private var awayTicks = 0
+    private static let homeLog = Logger(subsystem: "com.roamrun.app", category: "home")
 
     /// Spoofed SRV target whose A record we publish pointing at this Mac.
     var spoofHost: String {
@@ -67,6 +79,8 @@ final class ProxyBridge: ObservableObject {
         // delivering lines on its own queue while we'd reassign callbacks.
         watcher = TunnelPortWatcher()
         warmingUp = false
+        awayTicks = 0
+        activatedAt = .distantFuture
         autoRetry = true
         phoneConnected = false
         tunnelReady = false
@@ -172,6 +186,7 @@ final class ProxyBridge: ObservableObject {
             return
         }
 
+        activatedAt = .now
         setState(.active(localPort: localPort, tunnelPorts: []))
         log("bridge active: \(profile.providerIP) relayed locally on \(localIP):\(localPort)")
         waitingSince = .now
@@ -267,7 +282,10 @@ final class ProxyBridge: ObservableObject {
     private func onDeviceReachable(instance: String, udid: String) {
         guard instance == profile.instanceName else {
             // The device's own advert, seen live while bridging: lets isHome skip `log show`.
-            if let mine = self.udid, udid.caseInsensitiveCompare(mine) == .orderedSame { liveAdvert = (instance, .now) }
+            if let mine = self.udid, udid.caseInsensitiveCompare(mine) == .orderedSame {
+                seenAdvert = (instance, .now)
+                homeAdvert = instance
+            }
             return
         }
         if udid != self.udid {
@@ -366,6 +384,8 @@ final class ProxyBridge: ObservableObject {
             defer { checkingLAN = false }
             guard await isHome(), gen == generation, state.isActive else { return }
             log("back on this Mac's network — standing aside until it leaves")
+            lastFullCheck = .now   // just proved; no full check on the next tick
+            awayTicks = 0
             generation += 1
             teardown()
             setState(.local)
@@ -378,37 +398,53 @@ final class ProxyBridge: ObservableObject {
         publishStatus()   // another process standing aside for the same iPhone may have cleared ours on exit
         checkingLAN = true
         let gen = generation
-        var home = await isHome()
-        // A device can miss one handshake (e.g. while locking). Standing aside there's
-        // no bridge, so if Xcode still reaches it, it reaches it directly: still home.
-        // ponytail: resuming then waits for CoreDevice to drop the old direct link (~30s seen).
-        if !home, let udid, let core = await Task.detached(operation: { CLI.coreDeviceState(udid) }).value,
-           core != "unavailable" {
-            home = true
-        }
+        let home = await isHome()
         checkingLAN = false
-        guard !home, gen == generation, state == .local else { return }
+        guard gen == generation, state == .local else { return }
+        // A device can miss a check (e.g. while locking): resume only after a few
+        // misses in a row. Not CoreDevice — it keeps a just-closed bridge's link for minutes.
+        awayTicks = home ? 0 : awayTicks + 1
+        guard HomeRule.shouldResume(awayTicks: awayTicks) else { return }
+        awayTicks = 0
         await start()
     }
 
     /// Home if the iPhone itself advertises on this LAN — Tailscale may keep a
     /// cellular path after it joins Wi-Fi — or if Tailscale's path says so.
     private func isHome() async -> Bool {
+        let bridging = state.isActive, now = Date.now
+        // Not bridging: try a name known to be the device's advert before any `log show`.
+        // iOS doesn't withdraw rotated _remotepairing names: 15-min-old instance
+        // names still resolved and answered in ~0.1s (measured). The name is
+        // per-device, so an answer means this device is on the LAN. Every 5 min
+        // the full check below re-confirms the UDID, so a mistake can't persist.
+        if !bridging, HomeRule.useCheapProbe(known: homeAdvert, lastFullCheck: lastFullCheck, now: now),
+           let known = homeAdvert, await answers(known) {
+            return decided(true, "cached advert \(known.prefix(8))")
+        }
+        if !bridging { lastFullCheck = now }
         if let udid {
             let fake = profile.instanceName
             // A resolved advert may be a stale cache entry (or a sleep proxy's):
-            // only an answer from it proves the iPhone is here.
-            // Bridging, the log stream already feeds us adverts; otherwise look back in the log.
-            let instance = state.isActive
-                ? liveAdvert.flatMap { $0.at.timeIntervalSinceNow > -90 ? $0.instance : nil }
+            // only an answer from it proves the device is here.
+            let instance = bridging
+                ? HomeRule.bridgingAdvert(seenAdvert, activatedAt: activatedAt, now: now)
                 : await Task.detached(operation: { Self.recentAdvert(udid: udid, besides: fake) }).value
-            if let instance,
-               await ReachabilityProbe.speaksRemotePairing(.service(name: instance, type: profile.serviceType,
-                                                                   domain: profile.domain, interface: nil), timeout: 2) {
-                return true
-            }
+            if !bridging, let instance { homeAdvert = instance }
+            if let instance, await answers(instance) { return decided(true, "advert \(instance.prefix(8))") }
         }
-        return await Self.isOnLAN(profile)
+        return decided(await Self.isOnLAN(profile), "Tailscale path")
+    }
+
+    private func answers(_ instance: String) async -> Bool {
+        await ReachabilityProbe.speaksRemotePairing(.service(name: instance, type: profile.serviceType,
+                                                             domain: profile.domain, interface: nil), timeout: 2)
+    }
+
+    /// One line per decision at debug level (off by default): which signal decided.
+    private func decided(_ home: Bool, _ by: String) -> Bool {
+        Self.homeLog.debug("\(self.profile.displayName, privacy: .public): \(home ? "home" : "away", privacy: .public) (\(by, privacy: .public), \(self.state.isActive ? "bridging" : "not bridging", privacy: .public))")
+        return home
     }
 
     /// At home the iPhone re-announces itself every ~30s under a fresh name,
@@ -465,4 +501,27 @@ final class ProxyBridge: ObservableObject {
 
     private func setState(_ s: BridgeState) { state = s }
     private func log(_ m: String) { onLog?("[\(profile.displayName)] \(m)") }
+}
+
+/// The home/away rules, pure so they're tested (RoamRunTests). Each signal is
+/// trusted only where it's valid:
+/// - bridging: only adverts the watcher saw after this bridge went active —
+///   a name learned at home before leaving must not bring it back;
+/// - standing aside: a known advert name, re-confirmed by UDID every 5 min;
+/// - resuming: several misses in a row, never CoreDevice (it keeps a
+///   just-closed bridge's link for minutes, looking like a direct one).
+enum HomeRule {
+    static let fullCheckEvery: TimeInterval = 300
+    static let missesBeforeResume = 3
+
+    static func bridgingAdvert(_ seen: (instance: String, at: Date)?, activatedAt: Date, now: Date) -> String? {
+        guard let seen, seen.at > activatedAt, now.timeIntervalSince(seen.at) <= 90 else { return nil }
+        return seen.instance
+    }
+
+    static func useCheapProbe(known: String?, lastFullCheck: Date, now: Date) -> Bool {
+        known != nil && now.timeIntervalSince(lastFullCheck) < fullCheckEvery
+    }
+
+    static func shouldResume(awayTicks: Int) -> Bool { awayTicks >= missesBeforeResume }
 }
