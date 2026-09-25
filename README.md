@@ -81,7 +81,15 @@ sequenceDiagram
 
 ## Install
 
-### Build from source (recommended)
+### Homebrew (recommended)
+
+```sh
+brew install --cask mh-mobile/tap/roamrun
+```
+
+Installs `RoamRun.app` in `/Applications` and links the `roamrun` command. RoamRun isn't notarized, so macOS blocks it on first launch and after each upgrade: try to open it once, then **System Settings → Privacy & Security → "Open Anyway"**.
+
+### Build from source
 
 ```sh
 git clone https://github.com/mh-mobile/RoamRun && cd RoamRun
@@ -106,7 +114,7 @@ Build the dmg with `make dmg` (pass `SIGN_ID` / `NOTARY_PROFILE` to sign with a 
 
 ### Updating
 
-There's no auto-update. Quit RoamRun, replace `/Applications/RoamRun.app` with the new version (from source: `git pull` and `make app` first), and open it. Saved devices and the CLI link stay as they are, and bridges that were running start again. A new dmg is blocked on first launch like the first install: allow it again with "Open Anyway".
+There's no auto-update. With Homebrew, `brew upgrade --cask roamrun` (it quits RoamRun first). Otherwise quit RoamRun, replace `/Applications/RoamRun.app` with the new version (from source: `git pull` and `make app` first), and open it. Saved devices and the CLI link stay as they are, and bridges that were running start again. A new dmg is blocked on first launch like the first install: allow it again with "Open Anyway".
 
 ## Usage
 
@@ -122,6 +130,7 @@ When the Mac's IP changes, the bridge restarts automatically.
 
 The app binary doubles as a CLI (handy over SSH or in scripts). To put `roamrun` on your PATH (`/usr/local/bin/roamrun`):
 
+- **Homebrew:** already linked (`/opt/homebrew/bin/roamrun` on Apple Silicon).
 - **dmg:** click "Also install the roamrun command for Terminal…" on the first screen, or RoamRun → Settings → Command line tool → **Install…**
 - **Built from source:** the same, once the app is in `/Applications`; or `make install-cli` to use the build in the repo folder (`BINDIR=~/bin` also works)
 
@@ -207,7 +216,7 @@ RoamRun writes only to these places (it never touches system settings or other a
 
 The helper processes started while bridging (`dns-sd` / `log stream`) exit within a second even if RoamRun is force-quit, and the LAN advertisement goes away with them.
 
-To remove everything:
+With Homebrew, `brew uninstall --zap --cask roamrun` removes the app, the CLI link, settings and logs (skills: `roamrun init --uninstall` first). Otherwise, to remove everything:
 
 ```sh
 roamrun init --uninstall                  # if you installed the skill

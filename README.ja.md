@@ -81,7 +81,15 @@ sequenceDiagram
 
 ## インストール
 
-### ソースからビルド（推奨）
+### Homebrew（推奨）
+
+```sh
+brew install --cask mh-mobile/tap/roamrun
+```
+
+`RoamRun.app` を `/Applications` に入れ、`roamrun` コマンドもリンクします。公証がないため、初回起動時とアップデートのたびに macOS に止められます。一度開こうとした後、**システム設定 → プライバシーとセキュリティ → 「このまま開く」**で許可してください。
+
+### ソースからビルド
 
 ```sh
 git clone https://github.com/mh-mobile/RoamRun && cd RoamRun
@@ -106,7 +114,7 @@ dmg は `make dmg` で作れます（`SIGN_ID` / `NOTARY_PROFILE` を渡すと D
 
 ### アップデート
 
-自動アップデートはありません。RoamRun を終了し、`/Applications/RoamRun.app` を新しいものに置き換えて起動します（ソースからの場合は先に `git pull` と `make app`）。登録済みデバイスと CLI のリンクはそのまま残り、動いていたブリッジも再開します。dmg で更新した場合は初回インストールと同じく起動時に止められるので、もう一度「このまま開く」で許可してください。
+自動アップデートはありません。Homebrew なら `brew upgrade --cask roamrun`（RoamRun を終了してから置き換えます）。それ以外は RoamRun を終了し、`/Applications/RoamRun.app` を新しいものに置き換えて起動します（ソースからの場合は先に `git pull` と `make app`）。登録済みデバイスと CLI のリンクはそのまま残り、動いていたブリッジも再開します。dmg で更新した場合は初回インストールと同じく起動時に止められるので、もう一度「このまま開く」で許可してください。
 
 ## 使い方
 
@@ -122,6 +130,7 @@ Mac の IP が変わるとブリッジは自動再起動します。
 
 アプリ本体がそのまま CLI にもなります（SSH 先の Mac やスクリプト向け）。`roamrun` コマンド（`/usr/local/bin/roamrun`）の入れ方：
 
+- **Homebrew:** リンク済み（Apple Silicon では `/opt/homebrew/bin/roamrun`）
 - **dmg 版:** 最初の画面の「Also install the roamrun command for Terminal…」、または RoamRun → Settings → Command line tool → **Install…**
 - **ソースからビルドした場合:** `/Applications` に移したなら同じ手順。フォルダ内のビルドを使うなら `make install-cli`（`BINDIR=~/bin` なども可）
 
@@ -207,7 +216,7 @@ RoamRun が書き込むのは次の場所だけです（システム設定や他
 
 ブリッジ中に起動する補助プロセス（`dns-sd` / `log stream`）は、RoamRun が強制終了しても 1 秒以内に自動で終了し、LAN への広告も消えます。
 
-完全に削除するには:
+Homebrew なら `brew uninstall --zap --cask roamrun` でアプリ・CLI のリンク・設定・ログを削除します（スキルは先に `roamrun init --uninstall`）。それ以外で完全に削除するには:
 
 ```sh
 roamrun init --uninstall                  # スキルを入れた場合

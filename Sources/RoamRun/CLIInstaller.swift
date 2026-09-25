@@ -4,6 +4,8 @@ import Foundation
 /// CLI), like VS Code's "Install 'code' command in PATH".
 enum CLIInstaller {
     static let linkPath = "/usr/local/bin/roamrun"
+    /// Where the Homebrew cask links it on Apple Silicon (Intel: linkPath).
+    static let homebrewLink = "/opt/homebrew/bin/roamrun"
 
     enum State: Equatable {
         case notInstalled
@@ -16,12 +18,20 @@ enum CLIInstaller {
         Bundle.main.executableURL?.resolvingSymlinksInPath().path ?? CommandLine.arguments[0]
     }
 
+    /// A link to this copy, ours or Homebrew's.
+    static var installedPath: String? {
+        [linkPath, homebrewLink].first { path in
+            (try? FileManager.default.destinationOfSymbolicLink(atPath: path))
+                .map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path == target } ?? false
+        }
+    }
+
     static var state: State {
+        if installedPath != nil { return .installed }
         let fm = FileManager.default
         guard let dest = try? fm.destinationOfSymbolicLink(atPath: linkPath) else {
             return fm.fileExists(atPath: linkPath) ? .blockedByFile : .notInstalled
         }
-        if URL(fileURLWithPath: dest).resolvingSymlinksInPath().path == target { return .installed }
         return (dest as NSString).lastPathComponent == "RoamRun" ? .pointsElsewhere(dest) : .blockedByFile
     }
 

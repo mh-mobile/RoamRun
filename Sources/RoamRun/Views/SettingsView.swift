@@ -85,7 +85,7 @@ struct SettingsView: View {
     private var cliStatusText: String {
         switch cliState {
         case .notInstalled: return "Not installed"
-        case .installed: return "Installed at \(CLIInstaller.linkPath)"
+        case .installed: return "Installed at \(CLIInstaller.installedPath ?? CLIInstaller.linkPath)"
         case .pointsElsewhere: return "Linked to another copy of RoamRun"
         case .blockedByFile: return "\(CLIInstaller.linkPath) is taken by another file"
         }

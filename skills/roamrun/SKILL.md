@@ -16,8 +16,8 @@ Apple's own tools (`xcodebuild`, `xcrun devicectl`, `lldb`).
 roamrun --help
 ```
 
-If missing, the user installs the RoamRun app
-(https://github.com/mh-mobile/RoamRun) and installs the command from the app's
+If missing, the user installs RoamRun (`brew install --cask mh-mobile/tap/roamrun`
+links the command too; or https://github.com/mh-mobile/RoamRun) and installs the command from the app's
 first screen or Settings › Command line tool › Install (or `make install-cli`
 from the repo).
 

@@ -172,7 +172,7 @@ private struct WelcomeView: View {
             .buttonStyle(.link)
             if let cliError { Text(cliError).font(.caption).foregroundStyle(.red) }
         case .installed:
-            Label("roamrun installed at \(CLIInstaller.linkPath)", systemImage: "checkmark.circle.fill")
+            Label("roamrun installed at \(CLIInstaller.installedPath ?? CLIInstaller.linkPath)", systemImage: "checkmark.circle.fill")
                 .labelStyle(StatusLabelStyle(color: .green))
                 .font(.caption)
                 .foregroundStyle(.secondary)
