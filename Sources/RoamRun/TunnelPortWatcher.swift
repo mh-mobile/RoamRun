@@ -4,8 +4,8 @@ import Foundation
 /// reports the UDP/TCP port the CoreDevice tunnel actually landed on, so we
 /// can relay exactly that port instead of forwarding a blind range.
 final class TunnelPortWatcher {
-    /// (port, UDID of the iPhone it belongs to — nil if not seen).
-    var onPort: ((UInt16, String?) -> Void)?
+    /// (port, UDID of the iPhone it belongs to — nil if not seen, the IPv4 address remotepairingd dials).
+    var onPort: ((UInt16, String?, String) -> Void)?
     /// (Bonjour instance, UDID) each time remotepairingd authenticates a
     /// control channel — i.e. the device just became reachable.
     var onDevice: ((String, String) -> Void)?
@@ -19,11 +19,15 @@ final class TunnelPortWatcher {
     private var process: Process?
     private var reader: LineReader?
     private var errReader: LineReader?
-    private static let pattern = #/Got tunnel endpoint: '[^']*:(\d+)'/#
+    // Advert lines (LAN-supplied names) are routed away before these run; the
+    // prefix keeps them strict without breaking if macOS appends a field.
+    private static let pattern = #/tunnel-\d+: Got tunnel endpoint: '([0-9.]+)(?:%[^' :]*)?:(\d+)'/#
     /// The endpoint line doesn't name the device; the line right before it does.
     /// Requests still waiting for their endpoint; two different iPhones among
     /// them means we can't tell whose it is, so the port stays unattributed.
-    private static let establishPattern = #/\(([0-9A-Fa-f-]+)\): Sending tunnel establish request/#
+    /// Any endpoint in the known format, e.g. a link-local IPv6 one ('fe80::…%en0.64106') we don't relay.
+    private static let anyEndpoint = #/tunnel-\d+: Got tunnel endpoint: '[^' ]*'/#
+    private static let establishPattern = #/device-\d+ \(([0-9A-Fa-f-]+)\): Sending tunnel establish request/#
     private var pending: [(udid: String, at: Date)] = []
     /// After an ambiguous endpoint, any request in flight may be answered by
     /// the wrong one — attribute nothing for a while.
@@ -77,17 +81,34 @@ final class TunnelPortWatcher {
 
     func handle(_ line: String, now: Date = .now) {
         pending.removeAll { now.timeIntervalSince($0.at) > 5 }   // a failed request never gets an endpoint
-        if let m = line.firstMatch(of: Self.pattern), let port = UInt16(m.1) {
+        // Advert lines first: their instance name comes from the LAN.
+        if line.contains(Self.advertMarker) {
+            if let (instance, udid) = Self.advert(in: line) {
+                if let udid { onDevice?(instance, udid) } else { onUnrecognized?(instance) }
+            }
+            return
+        }
+        if let m = line.firstMatch(of: Self.pattern), let port = UInt16(m.2) {
             let owners = Set(pending.map(\.udid))
             if owners.count > 1 { ambiguousUntil = now + 5 }
-            onPort?(port, owners.count == 1 && now >= ambiguousUntil ? owners.first : nil)
+            onPort?(port, owners.count == 1 && now >= ambiguousUntil ? owners.first : nil, String(m.1))
             // Unknown whose request this answered, so the rest can't be trusted either.
             if owners.count > 1 { pending.removeAll() } else if !pending.isEmpty { pending.removeFirst() }
         } else if let m = line.firstMatch(of: Self.establishPattern) {
             pending.append((String(m.1), now))
-        } else if let (instance, udid) = Self.advert(in: line) {
-            if let udid { onDevice?(instance, udid) } else { onUnrecognized?(instance) }
+        } else if line.contains("Got tunnel endpoint"), line.firstMatch(of: Self.anyEndpoint) == nil {
+            // The format changed (a macOS update?): say so rather than silently find no ports.
+            onLog?("unrecognized tunnel endpoint line: \(line.suffix(160))")
         }
+    }
+
+    /// remotepairingd's advert resolutions in the last `window`, oldest first.
+    /// `phrase` narrows the query and goes into a log predicate: callers pass fixed text or plain hex.
+    static func recentAdverts(last window: String, containing phrase: String = "Resolved bonjour advert",
+                              timeout: TimeInterval = 10) -> [(String, String?)] {
+        Proc.run("/usr/bin/log", ["show", "--last", window, "--style", "compact", "--predicate",
+                                  "process == \"remotepairingd\" AND eventMessage CONTAINS[c] \"\(phrase)\""], timeout: timeout)
+            .out.split(separator: "\n").compactMap { advert(in: String($0)) }
     }
 
     /// (instance, UDID — nil when remotepairingd has no pairing for it).

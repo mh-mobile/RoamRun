@@ -144,9 +144,11 @@ final class ProxyBridge: ObservableObject {
         // logs the UDID the warm-up needs) within ~1s of it appearing.
         // Lines already queued when the bridge stops or restarts still arrive;
         // the generation check drops them.
-        watcher.onPort = { [weak self] port, owner in
+        watcher.onPort = { [weak self] port, owner, host in
             Task { @MainActor in
                 guard let self, gen == self.generation else { return }
+                // Our relays answer on this Mac's en0 address; any other endpoint isn't ours to open.
+                guard host == localIP else { return }
                 // Another bridged iPhone's tunnel: its port isn't ours to relay.
                 if let owner, let mine = self.udid, owner.caseInsensitiveCompare(mine) != .orderedSame { return }
                 self.onTunnelPortDiscovered(port, localIP: localIP)
@@ -249,12 +251,15 @@ final class ProxyBridge: ObservableObject {
         let upper = UInt16(min(Int(port) + 16, Int(UInt16.max)))
         let ports = (port...upper).filter { !coveredPorts.contains($0) }
         guard !ports.isEmpty else { return }
+        // Bounded whatever the log says: normal use keeps well under this (old ones are reaped).
+        guard tunnelRelays.count < 64 else { log("tunnel port \(port) ignored: 64 relays already open"); return }
         coveredPorts.formUnion(ports)
         log("live tunnel port \(port) discovered, relaying \(ports.first!)-\(ports.last!)")
         let gen = generation
         Task {
             var opened: [UInt16] = []
             for p in ports {
+                guard gen == generation else { return }   // restarted: coveredPorts is the new bridge's now
                 do {
                     let pair = try await bindRelay(localIP: localIP, localPort: p, remotePort: p)
                     guard gen == generation else { pair.stop(); return }   // bridge stopped meanwhile
@@ -466,14 +471,9 @@ final class ProxyBridge: ObservableObject {
     /// and remotepairingd matches each one to its UDID.
     // ponytail: can't tell another Mac's RoamRun record for the same iPhone from the real one.
     nonisolated private static func recentAdvert(udid: String, besides fake: String) -> String? {
-        let out = Proc.run("/usr/bin/log", ["show", "--last", "90s", "--style", "compact", "--predicate",
-                                            #"process == "remotepairingd" AND eventMessage CONTAINS "Resolved bonjour advert""#],
-                           timeout: 5).out
-        return out.split(separator: "\n").reversed().lazy.compactMap { line -> String? in
-            guard let (instance, owner) = TunnelPortWatcher.advert(in: String(line)),
-                  instance != fake, owner?.caseInsensitiveCompare(udid) == .orderedSame else { return nil }
-            return instance
-        }.first
+        TunnelPortWatcher.recentAdverts(last: "90s", timeout: 5).reversed().first { instance, owner in
+            instance != fake && owner?.caseInsensitiveCompare(udid) == .orderedSame
+        }?.0
     }
 
     /// True when the iPhone's Tailscale endpoint sits directly on en0's link
@@ -505,6 +505,12 @@ final class ProxyBridge: ObservableObject {
         log(what)
         generation += 1
         teardown()
+        // Retrying can't fix this one: `log stream` needs an admin account.
+        if what.contains("Must be admin") {
+            autoRetry = false
+            setState(.error("Reading remotepairingd's log needs an administrator account on this Mac (\(what))."))
+            return
+        }
         setState(.error("Helper stopped: \(what). Retrying shortly."))
     }
 

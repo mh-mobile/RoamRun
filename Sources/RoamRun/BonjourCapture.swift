@@ -5,6 +5,9 @@ import Foundation
 /// target host, TXT the pairing metadata, A/AAAA the host addresses.
 @MainActor
 final class BonjourCapture: ObservableObject {
+    /// A flooding LAN peer must not grow the tables without bound.
+    private static let cap = 500
+
     @Published private(set) var services: [String: CapturedService] = [:]
 
     /// Hostnames we publish ourselves via `dns-sd -P`. Instances resolving to
@@ -75,7 +78,7 @@ final class BonjourCapture: ObservableObject {
         start(serviceType: serviceType, domain: domain)
     }
 
-    private func parse(line: String) {
+    func parse(line: String) {   // internal for tests
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty, !trimmed.hasPrefix(";") else { return }
         let tokens = trimmed.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
@@ -88,6 +91,7 @@ final class BonjourCapture: ObservableObject {
             guard recordName == serviceType else { return }
             let instanceFQDN = tokens[2].trimmingCharacters(in: CharacterSet(charactersIn: ".").union(.whitespaces))
             guard !instanceFQDN.isEmpty else { return }
+            guard ptrs.contains(instanceFQDN) || ptrs.count < Self.cap else { return }
             if ptrs.insert(instanceFQDN).inserted { emit(recordName: instanceFQDN) }
         case "SRV":
             // <instance>._type SRV 0 0 <port> <host>. ; comment
@@ -96,6 +100,7 @@ final class BonjourCapture: ObservableObject {
             if let c = host.firstIndex(of: ";") { host = String(host[..<c]) }
             host = host.trimmingCharacters(in: .whitespaces)
             if host.hasSuffix(".") { host.removeLast() }
+            guard srvByRecord[recordName] != nil || srvByRecord.count < Self.cap else { return }
             srvByRecord[recordName] = (host, port)
             emit(recordName: recordName)
         case "TXT":
@@ -108,13 +113,14 @@ final class BonjourCapture: ObservableObject {
                     dict[pair] = ""
                 }
             }
-            if !dict.isEmpty { txtByRecord[recordName] = dict }
+            if !dict.isEmpty, txtByRecord[recordName] != nil || txtByRecord.count < Self.cap { txtByRecord[recordName] = dict }
             emit(recordName: recordName)
         case "A", "AAAA":
             // <host>. A <ip>
             var host = recordName
             if host.hasSuffix(".") { host.removeLast() }
-            if !(ipsByHost[host] ?? []).contains(tokens[2]) { ipsByHost[host, default: []].append(tokens[2]) }
+            guard ipsByHost[host] != nil || ipsByHost.count < Self.cap else { return }
+            if !(ipsByHost[host] ?? []).contains(tokens[2]), (ipsByHost[host]?.count ?? 0) < 8 { ipsByHost[host, default: []].append(tokens[2]) }
             // host IPs may complete a pending service
             for (rec, srv) in srvByRecord where srv.host == host { emit(recordName: rec) }
         default:
@@ -124,7 +130,7 @@ final class BonjourCapture: ObservableObject {
 
     private func emit(recordName: String) {
         guard ptrs.contains(recordName) || recordName.hasSuffix(".\(serviceType)") else { return }
-        let instance = recordName.replacingOccurrences(of: ".\(serviceType)", with: "")
+        let instance = String(recordName.dropLast(recordName.hasSuffix(".\(serviceType)") ? serviceType.count + 1 : 0))
         guard let srv = srvByRecord[recordName] else { return }
         if ownedHosts.contains(srv.host) { return }
         services[recordName] = CapturedService(
