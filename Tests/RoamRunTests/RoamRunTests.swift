@@ -209,18 +209,21 @@ private func timed(_ path: String, _ args: [String]) -> (Proc.Result, TimeInterv
 
 @Test func slowToolIsStoppedAtTheTimeout() {
     let (r, t) = timed("/bin/sleep", ["20"])
-    #expect(r.status != 0 && t < 2.5)
+    #expect(r.status != 0, "status=\(r.status) err=\(r.err)")
+    #expect(t < 2.5, "t=\(t)")
 }
 
 @Test func toolIgnoringTermIsKilled() {
     let (r, t) = timed("/bin/sh", ["-c", "trap '' TERM; while :; do :; done"])
-    #expect(r.status == 9 && t < 4.5)   // SIGKILL 2s after the ignored TERM
+    #expect(r.status == 9, "status=\(r.status) err=\(r.err) t=\(t)")   // SIGKILL 2s after the ignored TERM
+    #expect(t < 4.5, "t=\(t)")
 }
 
 @Test func grandchildHoldingThePipeDoesNotHangUs() {
     // sh is killed, but its `sleep` keeps stdout open.
     let (r, t) = timed("/bin/sh", ["-c", "trap '' TERM; sleep 8"])
-    #expect(r.status == -1 && t < 6.5)
+    #expect(r.status == -1, "status=\(r.status) err=\(r.err)")
+    #expect(t < 6.5, "t=\(t)")
 }
 
 // MARK: - Home / away rules (regressions from real runs)
@@ -255,14 +258,15 @@ private let t0 = Date(timeIntervalSinceReferenceDate: 800_000_000)
     #expect(HomeRule.shouldResume(awayTicks: 3))
 }
 
-@Test func manySlowToolsAtOnceAllTimeOut() {
-    // More blocked pipe readers than CPU cores must not starve the timeout timers.
-    let start = Date()
-    let done = DispatchGroup()
-    for _ in 0..<80 {
-        done.enter()
-        Thread.detachNewThread { _ = Proc.run("/bin/sleep", ["20"], timeout: 1); done.leave() }
+@Test func slowToolsFillingTheTaskPoolStillTimeOut() async {
+    // runAsync blocks a Swift concurrency thread per call; with every one of
+    // them blocked, the timeout timers must still get to run.
+    // Each run is timed from its own start: other tests may hold the pool first.
+    let longest = await withTaskGroup(of: TimeInterval.self) { group in
+        for _ in 0..<ProcessInfo.processInfo.activeProcessorCount {
+            group.addTask { await Task.detached { timed("/bin/sleep", ["20"]).1 }.value }
+        }
+        return await group.reduce(0, max)
     }
-    done.wait()
-    #expect(Date().timeIntervalSince(start) < 4)
+    #expect(longest < 4)
 }
