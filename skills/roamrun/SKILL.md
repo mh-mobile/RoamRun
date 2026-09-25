@@ -36,7 +36,7 @@ from the repo).
 Shortest path, from the project folder once the device is ready:
 
 ```sh
-roamrun up iPhone -d                              # skip if it's on this Mac's Wi-Fi
+roamrun up iPhone -d                              # also on this Mac's Wi-Fi: returns at once, standing aside
 roamrun run iPhone [--scheme S] [--logs]          # build → install → launch (--scheme: only if several; --logs: stream output)
 ```
 

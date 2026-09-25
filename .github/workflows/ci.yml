@@ -23,5 +23,7 @@ jobs:
           plutil -lint RoamRun.app/Contents/Info.plist
           codesign --verify --strict RoamRun.app
           plutil -extract CFBundleVersion raw Info.plist | grep -Eq '^[0-9]+$'
+          RoamRun.app/Contents/MacOS/RoamRun --help > /dev/null
+          RoamRun.app/Contents/MacOS/RoamRun init --print | head -2 | grep -qx 'name: roamrun'   # init/--uninstall rely on this header
       - name: Build the screenshot (SNAPSHOT) variant
         run: xcrun swift build -Xswiftc -DSNAPSHOT
