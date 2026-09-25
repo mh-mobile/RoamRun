@@ -40,7 +40,7 @@ roamrun up iPhone -d                              # skip if it's on this Mac's W
 roamrun run iPhone [--scheme S] [--logs]          # build → install → launch (--scheme: only if several; --logs: stream output)
 ```
 
-`run` checks reachability and lock state first, and the signing right after the build, and says what to do.
+Only `run` projects the user trusts: their build scripts run on this Mac. `run` checks reachability and lock state first, and the signing right after the build, and says what to do.
 Step by step, when you need more control:
 
 ```sh
