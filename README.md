@@ -117,6 +117,7 @@ roamrun up <name> -d          # start in the background (survives closing the te
 roamrun status <name>         # exits 0 when Ready (for waiting in scripts)
 roamrun down <name>           # stop a bridge, whether the app or another terminal's `up` runs it
 roamrun doctor                # check Mac → Tailscale → iPhone step by step and say how to fix
+roamrun run <name> --scheme App [--logs]   # in the project folder: build → install → launch (--logs: stream output)
 roamrun install <name> <App.ipa|App.app>   # install a build signed for the device (checks the signing first)
 roamrun logs <name> <bundle-id>   # relaunch the app and stream its print / os_log output (Ctrl-C to stop)
 ```

@@ -43,7 +43,7 @@ final class ProxyBridge: ObservableObject {
     private var coveredPorts = Set<UInt16>()
     private var localPort: UInt16 = 0
     private var generation = 0
-    private var warmedUp = false
+    private var warmingUp = false
     private var waitingSince: Date?
     private var renewTimer: Timer?
     private var checkingLAN = false
@@ -65,7 +65,7 @@ final class ProxyBridge: ObservableObject {
         // Fresh watcher: the previous log stream's reader may still be
         // delivering lines on its own queue while we'd reassign callbacks.
         watcher = TunnelPortWatcher()
-        warmedUp = false
+        warmingUp = false
         autoRetry = true
         phoneConnected = false
         tunnelReady = false
@@ -270,9 +270,15 @@ final class ProxyBridge: ObservableObject {
             onUDID?(udid)
             publishStatus()
         }
-        guard !warmedUp else { return }
-        warmedUp = true
-        Task { await warmUp(udid: udid, gen: generation) }
+        // Also when the device only connects long after the bridge started (it
+        // left home minutes later): without a first tunnel it sits at Connecting.
+        guard !warmingUp, !tunnelReady else { return }
+        warmingUp = true
+        let gen = generation
+        Task {
+            await warmUp(udid: udid, gen: gen)
+            if gen == generation { warmingUp = false }   // retry on the next resolution if still no tunnel
+        }
     }
 
     /// Right after the record appears CoreDevice may not list the device yet,
@@ -367,7 +373,13 @@ final class ProxyBridge: ObservableObject {
         publishStatus()   // another process standing aside for the same iPhone may have cleared ours on exit
         checkingLAN = true
         let gen = generation
-        let home = await isHome()
+        var home = await isHome()
+        // A device can miss one handshake (e.g. while locking). Standing aside there's
+        // no bridge, so if Xcode still reaches it, it reaches it directly: still home.
+        if !home, let udid, let core = await Task.detached(operation: { CLI.coreDeviceState(udid) }).value,
+           core != "unavailable" {
+            home = true
+        }
         checkingLAN = false
         guard !home, gen == generation, state == .local else { return }
         await start()

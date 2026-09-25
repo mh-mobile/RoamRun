@@ -117,6 +117,7 @@ roamrun up <name> -d          # バックグラウンドで起動（ターミナ
 roamrun status <name>         # Ready なら exit 0（スクリプトの待ち合わせ用）
 roamrun down <name>           # ブリッジを停止（アプリ側・別ターミナルの up どちらでも）
 roamrun doctor                # Mac → Tailscale → iPhone を順に診断し、直し方を表示
+roamrun run <name> --scheme App [--logs]   # プロジェクトのフォルダで：ビルド → インストール → 起動（--logs で出力も流す）
 roamrun install <name> <App.ipa|App.app>   # その端末用に署名されたビルドをインストール（先に署名を確認）
 roamrun logs <name> <bundle-id>   # アプリを起動し直し、print / os_log の出力を流す（Ctrl-C で停止）
 ```

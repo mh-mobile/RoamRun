@@ -32,6 +32,16 @@ Install (or `make install-cli` from the repo).
 
 ## 3. Recipe
 
+Shortest path, from the project folder once the device is ready:
+
+```sh
+roamrun up iPhone -d                              # skip if it's on this Mac's Wi-Fi
+roamrun run iPhone --scheme App [--logs]          # build → install → launch (--logs: stream output)
+```
+
+`run` checks reachability, lock state and signing first and says what to do.
+Step by step, when you need more control:
+
 ```sh
 roamrun devices                       # saved iPhones + UDID
 roamrun up iPhone -d                  # bridge in the background; returns when ready

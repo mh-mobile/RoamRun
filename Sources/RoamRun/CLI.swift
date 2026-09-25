@@ -6,7 +6,7 @@ import Foundation
 enum CLI {
     /// This process was started as the CLI (vs. the menu bar app).
     nonisolated static var isRunning: Bool { commands.contains(CommandLine.arguments.dropFirst().first ?? "") }
-    nonisolated static let commands: Set<String> = ["devices", "up", "down", "status", "doctor", "logs", "install", "init", "help", "--help", "-h"]
+    nonisolated static let commands: Set<String> = ["devices", "up", "down", "status", "doctor", "run", "install", "logs", "init", "help", "--help", "-h"]
     /// Posted by `roamrun down`; the app stops the bridge whose id is `object`.
     static let stopNotification = Notification.Name("com.roamrun.app.stopBridge")
 
@@ -25,6 +25,9 @@ enum CLI {
                                      (--wait: wait up to N seconds for ready)
       doctor [name] [--json]         Check each step from this Mac to the device and say what to fix
                                      (without a name, only devices with a running bridge)
+      run <name> [--scheme S] [--workspace W | --project P] [--configuration C] [--logs]
+                                     Build the project in this folder for the device, install and launch it
+                                     (--logs: then stream its output like `logs`)
       install <name> <App.ipa|App.app>
                                      Install an .ipa or .app signed for the device (Debugging, Release
                                      Testing / Ad Hoc or Enterprise); checks the signing first
@@ -56,10 +59,12 @@ enum CLI {
             let waitIdx = args.firstIndex(of: "--wait")
             let wait = waitIdx.flatMap { args.indices.contains($0 + 1) ? Double(args[$0 + 1]) : nil }
             if waitIdx != nil && wait == nil { fail("--wait needs a number of seconds") }
-            // First argument after the command that isn't a flag or --wait's value.
-            let name = args.indices.dropFirst().first { i in
-                !args[i].hasPrefix("-") && i != waitIdx.map { $0 + 1 }
+            // Words after the command that aren't flags or a flag's value.
+            let valued: Set<String> = ["--wait", "--scheme", "--workspace", "--project", "--configuration"]
+            let words = args.indices.dropFirst().filter { i in
+                !args[i].hasPrefix("-") && !valued.contains(args[i - 1])
             }.map { args[$0] }
+            let name = words.first
             var targets = profiles
             if let name {
                 guard let p = find(name, in: profiles) else { fail("no device named “\(name)”. " + names(profiles)) }
@@ -80,16 +85,18 @@ enum CLI {
                     up(p, verbose: args.contains("-v"), detachedChild: args.contains(detachedFlag))
                 }
             case "logs":
-                // The bundle id is the second word that isn't a flag.
-                let words = args.indices.dropFirst()
-                    .filter { !args[$0].hasPrefix("-") && $0 != waitIdx.map { $0 + 1 } }.map { args[$0] }
                 guard name != nil, let p = targets.first, words.count >= 2 else {
                     fail("usage: roamrun logs <name> <bundle-id>. " + names(profiles))
                 }
                 logs(p, bundleID: words[words.startIndex + 1])
+            case "run":
+                guard name != nil, let p = targets.first else { fail("usage: roamrun run <name> [--scheme S]. " + names(profiles)) }
+                func value(_ flag: String) -> String? {
+                    args.firstIndex(of: flag).flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil }
+                }
+                runApp(p, scheme: value("--scheme"), workspace: value("--workspace"), project: value("--project"),
+                       configuration: value("--configuration") ?? "Debug", logs: args.contains("--logs"))
             case "install":
-                let words = args.indices.dropFirst()
-                    .filter { !args[$0].hasPrefix("-") && $0 != waitIdx.map { $0 + 1 } }.map { args[$0] }
                 guard name != nil, let p = targets.first, words.count >= 2 else {
                     fail("usage: roamrun install <name> <path to .ipa or .app>. " + names(profiles))
                 }
@@ -144,7 +151,7 @@ enum CLI {
     }
 
     /// devicectl's tunnelState for this UDID; nil if devicectl failed.
-    private static func coreDeviceState(_ udid: String) -> String? {
+    nonisolated static func coreDeviceState(_ udid: String) -> String? {
         let out = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-list-\(getpid()).json")
         defer { try? FileManager.default.removeItem(at: out) }
         _ = Proc.run("/usr/bin/xcrun", ["devicectl", "--quiet", "--timeout", "10", "list", "devices", "--json-output", out.path])
@@ -248,14 +255,7 @@ enum CLI {
     private static func install(_ profile: DeviceProfile, path: String) -> Never {
         guard FileManager.default.fileExists(atPath: path) else { stop("no such file: \(path)") }
         let udid = reachableUDID(profile)
-        switch provisioning(of: path) {
-        case .appStore:
-            stop("\(path) is signed for App Store / TestFlight and can't be installed directly. Export it for Debugging, Release Testing (Ad Hoc) or Enterprise.")
-        case .devices(let list) where !list.contains(where: { $0.caseInsensitiveCompare(udid) == .orderedSame }):
-            stop("\(path) isn't signed for \(profile.displayName) (UDID \(udid) is not in its provisioning profile). Add the device to the profile and export again.")
-        default:
-            break
-        }
+        checkSigning(profile, udid: udid, path: path)
         guard path.lowercased().hasSuffix(".ipa") else {
             exec(["/usr/bin/xcrun", "devicectl", "device", "install", "app", "--device", udid, path])
         }
@@ -266,13 +266,91 @@ enum CLI {
         let payload = dir.appendingPathComponent("Payload")
         guard let app = try? FileManager.default.contentsOfDirectory(atPath: payload.path).first(where: { $0.hasSuffix(".app") })
         else { cleanUp(); stop("\(path) has no Payload/*.app inside — not an iOS app archive?") }
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-        task.arguments = ["devicectl", "device", "install", "app", "--device", udid, payload.appendingPathComponent(app).path]
-        do { try task.run() } catch { cleanUp(); stop("could not run devicectl: \(error.localizedDescription)") }
-        task.waitUntilExit()   // output goes straight to this terminal
+        let status = visible(["/usr/bin/xcrun", "devicectl", "device", "install", "app", "--device", udid,
+                              payload.appendingPathComponent(app).path])
         cleanUp()
-        exit(task.terminationStatus)
+        exit(status)
+    }
+
+    /// App Store builds and builds not provisioned for this device fail with a
+    /// cryptic devicectl error — say what's wrong before trying.
+    private static func checkSigning(_ profile: DeviceProfile, udid: String, path: String) {
+        switch provisioning(of: path) {
+        case .appStore:
+            stop("\(path) is signed for App Store / TestFlight and can't be installed directly. Export it for Debugging, Release Testing (Ad Hoc) or Enterprise.")
+        case .devices(let list) where !list.contains(where: { $0.caseInsensitiveCompare(udid) == .orderedSame }):
+            stop("\(path) isn't signed for \(profile.displayName) (UDID \(udid) is not in its provisioning profile). Add the device to the profile and export again.")
+        default:
+            break
+        }
+    }
+
+    /// Runs a tool with its output going straight to this terminal.
+    private static func visible(_ argv: [String]) -> Int32 {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: argv[0])
+        task.arguments = Array(argv.dropFirst())
+        do { try task.run() } catch { stop("could not run \(argv[0]): \(error.localizedDescription)") }
+        task.waitUntilExit()
+        return task.terminationStatus
+    }
+
+    /// Build → install → launch, for the project in the current folder.
+    private static func runApp(_ profile: DeviceProfile, scheme: String?, workspace: String?, project: String?,
+                               configuration: String, logs: Bool) -> Never {
+        let udid = reachableUDID(profile)
+        let container: [String]
+        if let workspace { container = ["-workspace", workspace] }
+        else if let project { container = ["-project", project] }
+        else {
+            let here = (try? FileManager.default.contentsOfDirectory(atPath: ".")) ?? []
+            let workspaces = here.filter { $0.hasSuffix(".xcworkspace") }, projects = here.filter { $0.hasSuffix(".xcodeproj") }
+            if workspaces.count == 1 { container = ["-workspace", workspaces[0]] }
+            else if workspaces.isEmpty, projects.count == 1 { container = ["-project", projects[0]] }
+            else if workspaces.isEmpty && projects.isEmpty { stop("no .xcworkspace or .xcodeproj here — cd into the project, or pass --workspace / --project") }
+            else { stop("more than one project here: \((workspaces + projects).joined(separator: ", ")) — pass --workspace or --project") }
+        }
+        let chosen: String
+        if let scheme { chosen = scheme }
+        else {
+            let list = Proc.run("/usr/bin/xcrun", ["xcodebuild", "-list", "-json"] + container, timeout: 120).out
+            let root = (try? JSONSerialization.jsonObject(with: Data(list.utf8))) as? [String: Any]
+            let schemes = ((root?["workspace"] ?? root?["project"]) as? [String: Any])?["schemes"] as? [String] ?? []
+            guard schemes.count == 1 else {
+                stop(schemes.isEmpty ? "couldn't list the schemes — pass --scheme"
+                                     : "which scheme? \(schemes.joined(separator: ", ")) — pass --scheme")
+            }
+            chosen = schemes[0]
+        }
+        let build = ["/usr/bin/xcrun", "xcodebuild"] + container
+            + ["-scheme", chosen, "-configuration", configuration, "-destination", "id=\(udid)"]
+        print("Building \(chosen) for \(profile.displayName)…")
+        guard visible(build + ["-quiet", "build"]) == 0 else { stop("the build failed (see above)") }
+
+        // The built .app: the build settings of the target that produces one.
+        let settings = Proc.run(build[0], Array(build.dropFirst()) + ["-showBuildSettings", "-json"], timeout: 120).out
+        let targets = (try? JSONSerialization.jsonObject(with: Data(settings.utf8))) as? [[String: Any]] ?? []
+        guard let s = targets.compactMap({ $0["buildSettings"] as? [String: String] })
+                .first(where: { $0["WRAPPER_EXTENSION"] == "app" }),
+              let dir = s["TARGET_BUILD_DIR"], let wrapper = s["WRAPPER_NAME"] else {
+            stop("built, but couldn't find the .app in the build settings")
+        }
+        let app = (dir as NSString).appendingPathComponent(wrapper)
+        guard let bundleID = NSDictionary(contentsOfFile: (app as NSString).appendingPathComponent("Info.plist"))?["CFBundleIdentifier"] as? String
+        else { stop("built, but \(app) has no bundle identifier") }
+
+        checkSigning(profile, udid: udid, path: app)
+        print("Installing \(wrapper)…")
+        guard visible(["/usr/bin/xcrun", "devicectl", "device", "install", "app", "--device", udid, app]) == 0 else {
+            stop("the install failed (see above)")
+        }
+        print("Launching \(bundleID)…")
+        if logs {
+            setenv("DEVICECTL_CHILD_OS_ACTIVITY_DT_MODE", "enable", 1)
+            exec(["/usr/bin/xcrun", "devicectl", "device", "process", "launch", "--console",
+                  "--terminate-existing", "--device", udid, bundleID])
+        }
+        exec(["/usr/bin/xcrun", "devicectl", "device", "process", "launch", "--terminate-existing", "--device", udid, bundleID])
     }
 
     enum Provisioning: Equatable { case devices([String]), allDevices, appStore, unknown }
