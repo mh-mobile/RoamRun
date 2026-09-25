@@ -261,11 +261,12 @@ private let t0 = Date(timeIntervalSinceReferenceDate: 800_000_000)
 @Test func slowToolsFillingTheTaskPoolStillTimeOut() async {
     // runAsync blocks a Swift concurrency thread per call; with every one of
     // them blocked, the timeout timers must still get to run.
-    let start = Date()
-    await withTaskGroup(of: Void.self) { group in
+    // Each run is timed from its own start: other tests may hold the pool first.
+    let longest = await withTaskGroup(of: TimeInterval.self) { group in
         for _ in 0..<ProcessInfo.processInfo.activeProcessorCount {
-            group.addTask { _ = await Task.detached { Proc.run("/bin/sleep", ["20"], timeout: 1) }.value }
+            group.addTask { await Task.detached { timed("/bin/sleep", ["20"]).1 }.value }
         }
+        return await group.reduce(0, max)
     }
-    #expect(Date().timeIntervalSince(start) < 4)
+    #expect(longest < 4)
 }
