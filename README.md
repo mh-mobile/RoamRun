@@ -171,7 +171,7 @@ xcrun devicectl device copy from --device <udid> --domain-type appDataContainer 
 xcrun devicectl device info files --device <udid> --domain-type systemCrashLogs     # crash logs (.ips); copy them the same way
 ```
 
-`roamrun status <name>` shows the UDID. UI tests also mean XCUITest-based drivers such as WebDriverAgent run on a device that is away; once started, reach them at the device's Tailscale address. More tools are being checked ([issues](https://github.com/mh-mobile/RoamRun/issues): Instruments, …).
+`roamrun status <name>` shows the UDID. UI tests also mean XCUITest-based drivers run on a device that is away, so tools that let an AI agent read and tap the screen work over the bridge too (tried: WebDriverAgent — reached at the device's Tailscale address, about 2 s per tap over tethering; agent-device — works, but its many round trips made each action take 25–35 s, and taps missed a windowed iPad app). Expect them to be slower than on the same Wi-Fi. More tools are being checked ([issues](https://github.com/mh-mobile/RoamRun/issues): Instruments, …).
 
 ## Using it from an AI agent
 

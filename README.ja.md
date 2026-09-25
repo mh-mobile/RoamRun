@@ -171,7 +171,7 @@ xcrun devicectl device copy from --device <udid> --domain-type appDataContainer 
 xcrun devicectl device info files --device <udid> --domain-type systemCrashLogs     # クラッシュログ（.ips）。取り出し方は同じ
 ```
 
-UDID は `roamrun status <name>` で表示されます。UI テストが動くので、WebDriverAgent のような XCUITest ベースの操作ツールも外出先の実機で動きます（起動後は実機の Tailscale のアドレスで接続）。ほかのツールも確認中です（[Issue](https://github.com/mh-mobile/RoamRun/issues): Instruments など）。
+UDID は `roamrun status <name>` で表示されます。UI テストが動くので、XCUITest ベースの操作ツール（AI エージェントが画面を読んでタップするもの）もブリッジ経由で動きます（試したもの: WebDriverAgent — 起動後は実機の Tailscale のアドレスで接続し、テザリング経由でタップ 1 回 約 2 秒。agent-device — 動くものの往復が多く 1 操作 25〜35 秒かかり、iPad のウィンドウ表示のアプリではタップがずれた）。同じ Wi-Fi にいるときより遅くなる前提で使ってください。ほかのツールも確認中です（[Issue](https://github.com/mh-mobile/RoamRun/issues): Instruments など）。
 
 ## AI エージェントから使う
 
