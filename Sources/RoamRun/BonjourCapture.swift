@@ -23,6 +23,10 @@ final class BonjourCapture: ObservableObject {
     private var txtByRecord: [String: [String: String]] = [:]
     private var ipsByHost: [String: [String]] = [:]
     private var ptrs: Set<String> = []
+    /// When each record (instance) was last seen: full tables drop the stalest, so a
+    /// flood can't lock real devices out.
+    private var seen: [String: Date] = [:]
+    private var hostSeen: [String: Date] = [:]
     private var serviceType = "_remotepairing._tcp"
     private var domain = "local"
 
@@ -91,7 +95,7 @@ final class BonjourCapture: ObservableObject {
             guard recordName == serviceType else { return }
             let instanceFQDN = tokens[2].trimmingCharacters(in: CharacterSet(charactersIn: ".").union(.whitespaces))
             guard !instanceFQDN.isEmpty else { return }
-            guard ptrs.contains(instanceFQDN) || ptrs.count < Self.cap else { return }
+            makeRoom(for: instanceFQDN)
             if ptrs.insert(instanceFQDN).inserted { emit(recordName: instanceFQDN) }
         case "SRV":
             // <instance>._type SRV 0 0 <port> <host>. ; comment
@@ -100,7 +104,7 @@ final class BonjourCapture: ObservableObject {
             if let c = host.firstIndex(of: ";") { host = String(host[..<c]) }
             host = host.trimmingCharacters(in: .whitespaces)
             if host.hasSuffix(".") { host.removeLast() }
-            guard srvByRecord[recordName] != nil || srvByRecord.count < Self.cap else { return }
+            makeRoom(for: recordName)
             srvByRecord[recordName] = (host, port)
             emit(recordName: recordName)
         case "TXT":
@@ -113,19 +117,35 @@ final class BonjourCapture: ObservableObject {
                     dict[pair] = ""
                 }
             }
-            if !dict.isEmpty, txtByRecord[recordName] != nil || txtByRecord.count < Self.cap { txtByRecord[recordName] = dict }
+            if !dict.isEmpty { makeRoom(for: recordName); txtByRecord[recordName] = dict }
             emit(recordName: recordName)
         case "A", "AAAA":
             // <host>. A <ip>
             var host = recordName
             if host.hasSuffix(".") { host.removeLast() }
-            guard ipsByHost[host] != nil || ipsByHost.count < Self.cap else { return }
+            if ipsByHost[host] == nil, ipsByHost.count >= Self.cap,
+               let stalest = hostSeen.min(by: { $0.value < $1.value })?.key {
+                ipsByHost[stalest] = nil; hostSeen[stalest] = nil
+            }
+            hostSeen[host] = .now
             if !(ipsByHost[host] ?? []).contains(tokens[2]), (ipsByHost[host]?.count ?? 0) < 8 { ipsByHost[host, default: []].append(tokens[2]) }
             // host IPs may complete a pending service
             for (rec, srv) in srvByRecord where srv.host == host { emit(recordName: rec) }
         default:
             break
         }
+    }
+
+    /// Marks `record` fresh; when the tables are full, forgets the least recently seen record.
+    private func makeRoom(for record: String) {
+        if seen[record] == nil, seen.count >= Self.cap, let stalest = seen.min(by: { $0.value < $1.value })?.key {
+            seen[stalest] = nil
+            ptrs.remove(stalest)
+            srvByRecord[stalest] = nil
+            txtByRecord[stalest] = nil
+            services[stalest] = nil
+        }
+        seen[record] = .now
     }
 
     private func emit(recordName: String) {
