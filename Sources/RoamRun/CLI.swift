@@ -6,7 +6,7 @@ import Foundation
 enum CLI {
     /// This process was started as the CLI (vs. the menu bar app).
     nonisolated static var isRunning: Bool { commands.contains(CommandLine.arguments.dropFirst().first ?? "") }
-    nonisolated static let commands: Set<String> = ["devices", "up", "down", "status", "doctor", "run", "install", "logs", "init", "help", "--help", "-h"]
+    nonisolated static let commands: Set<String> = ["devices", "up", "down", "status", "doctor", "run", "install", "logs", "init", "version", "--version", "help", "--help", "-h"]
     /// Posted by `roamrun down`; the app stops the bridge whose id is `object`.
     static let stopNotification = Notification.Name("com.roamrun.app.stopBridge")
 
@@ -33,6 +33,7 @@ enum CLI {
                                      Testing / Ad Hoc or Enterprise); checks the signing first
       logs <name> <bundle-id>        Relaunch the app with its console attached (print and os_log)
                                      until Ctrl-C — it restarts the app; it can't join one already running
+      version                        Print the version (also --version)
       init [--client <name>] [--print] [--uninstall]
                                      Install the agent skill (clients: claude, codex, cursor, gemini, copilot)
 
@@ -52,6 +53,14 @@ enum CLI {
             if !commands.contains(args[0]) {
                 FileHandle.standardError.write(Data("roamrun: unknown command “\(args[0])”\n\n\(usage)\n".utf8))
                 exit(2)
+            }
+            if args[0] == "version" || args[0] == "--version" {
+                // Through the /usr/local/bin link, Bundle.main isn't the app: resolve it.
+                let app = Bundle.main.executableURL?.resolvingSymlinksInPath()
+                    .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                let info = app.flatMap(Bundle.init(url:))?.infoDictionary ?? Bundle.main.infoDictionary
+                print("roamrun \(info?["CFBundleShortVersionString"] as? String ?? "dev") (\(info?["CFBundleVersion"] as? String ?? "?"))")
+                exit(0)
             }
             if args[0] == "init" { initSkill(args) }   // takes no iPhone name
             let profiles = ProfileStore().load()
@@ -690,6 +699,9 @@ enum CLI {
 
     /// Installs the bundled SKILL.md for every detected (or named) agent.
     private static func initSkill(_ args: [String]) -> Never {
+        if let i = args.lastIndex(of: "--client"), !args.indices.contains(i + 1) || args[i + 1].hasPrefix("-") {
+            fail("--client needs a value (\(skillClients.map(\.name).joined(separator: ", ")))")
+        }
         let exe = Bundle.main.executableURL?.resolvingSymlinksInPath()
         let bundled = exe?.deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Resources/roamrun-skill.md")

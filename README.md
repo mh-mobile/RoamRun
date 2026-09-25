@@ -218,6 +218,10 @@ defaults delete com.roamrun.app
 - Other members of your tailnet can reach the iPhone's RemotePairing port too (they can connect, but pair verification rejects them). On a shared tailnet, use Tailscale Grants / ACLs so only your Mac can reach the iPhone
 - If another Mac is on the same network, this iPhone may briefly show up in that Mac's Xcode as well (the relay refuses its connections, so it can't do anything with it)
 
+## Security
+
+What RoamRun exposes and how, and how to report a vulnerability: [SECURITY.md](SECURITY.md).
+
 ## Credits
 
 This implementation builds on the following public write-up:
