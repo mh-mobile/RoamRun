@@ -494,3 +494,124 @@ private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> { CLI.
     let json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(e)) as? [String: Any])
     #expect(json["status"] as? String == "On this Wi\u{2011}Fi")
 }
+
+// MARK: - Status file under concurrent writers (flock is per open file description,
+// so threads that each open() the lock exclude each other like processes do)
+
+@Test func concurrentWritersDontLoseEachOthersEntries() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-test-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let ids = (0..<24).map { _ in UUID() }
+    DispatchQueue.concurrentPerform(iterations: ids.count) { i in
+        let e = StatusFile.Entry(pid: 1, cli: false, udid: nil, status: "Ready for Xcode", detail: "", ready: true,
+                                 tunnelPorts: [], updated: .now, state: "ready")
+        StatusFile.write(ids[i], e, in: dir, live: { _ in true })
+    }
+    #expect(StatusFile.read(in: dir, live: { _ in true }).count == ids.count)
+    let mode = try FileManager.default.attributesOfItem(atPath: dir.appendingPathComponent("status.json").path)[.posixPermissions] as? Int
+    #expect(mode == 0o600)
+}
+
+// MARK: - Relay, end to end on localhost (fake device = an echo server)
+
+import Network
+
+/// Echoes everything back; `refuse` makes it close each connection at once.
+private final class EchoServer: @unchecked Sendable {
+    let listener: NWListener
+    init() throws {
+        listener = try NWListener(using: .tcp, on: .any)
+        listener.newConnectionHandler = { c in
+            c.start(queue: .global())
+            func loop() {
+                c.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, done, err in
+                    if let data, !data.isEmpty { c.send(content: data, completion: .contentProcessed { _ in loop() }) }
+                    else if done || err != nil { c.cancel() }
+                    else { loop() }
+                }
+            }
+            loop()
+        }
+    }
+    func start() async -> UInt16 {
+        await withCheckedContinuation { cont in
+            listener.stateUpdateHandler = { [listener] s in if case .ready = s { cont.resume(returning: listener.port!.rawValue) } }
+            listener.start(queue: .global())
+        }
+    }
+    func stop() { listener.cancel() }
+}
+
+/// Sends `payload` to 127.0.0.1:port and returns what comes back before the peer closes (or times out).
+private func roundTrip(port: UInt16, payload: Data, timeout: TimeInterval = 5) async -> Data? {
+    let conn = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+    return await withCheckedContinuation { cont in
+        let box = OnceBox()
+        let finish: @Sendable (Data?) -> Void = { d in box.run { conn.cancel(); cont.resume(returning: d) } }
+        conn.stateUpdateHandler = { s in
+            switch s {
+            case .ready:
+                conn.send(content: payload, completion: .contentProcessed { _ in })
+                conn.receive(minimumIncompleteLength: payload.count, maximumLength: 65536) { data, _, _, _ in finish(data) }
+            case .failed, .cancelled: finish(nil)
+            default: break
+            }
+        }
+        conn.start(queue: .global())
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { finish(nil) }
+    }
+}
+
+private final class OnceBox: @unchecked Sendable {
+    private let lock = NSLock(); private var done = false
+    func run(_ body: () -> Void) { if lock.withLock({ let first = !done; done = true; return first }) { body() } }
+}
+
+/// A free-ish local port for the relay to bind.
+private func relayPort() -> UInt16 { UInt16.random(in: 40000...49000) }
+
+@Suite(.serialized) struct RelayOnLocalhost {
+    @Test func bytesGoThroughUnchanged() async throws {
+        let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
+        let relay = Relay(localIP: "127.0.0.1", localPort: relayPort(), remoteIP: "127.0.0.1", remotePort: upstream)
+        try await relay.start(); defer { relay.stop() }
+        let payload = Data((0..<4000).map { UInt8($0 % 251) })
+        #expect(await roundTrip(port: relay.localPort, payload: payload) == payload)
+    }
+
+    @Test func refusedUpstreamClosesTheLocalSide() async throws {
+        let server = try EchoServer(); let dead = await server.start(); server.stop()   // nothing listens there now
+        let relay = Relay(localIP: "127.0.0.1", localPort: relayPort(), remoteIP: "127.0.0.1", remotePort: dead)
+        try await relay.start(); defer { relay.stop() }
+        let start = Date()
+        let got = await roundTrip(port: relay.localPort, payload: Data("hi".utf8), timeout: 8)
+        #expect(got == nil || got?.isEmpty == true)
+        #expect(Date().timeIntervalSince(start) < 7)   // closed, not left hanging until our timeout
+    }
+
+    @Test func connectionsBeyondTheCapAreRefused() async throws {
+        let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
+        let relay = Relay(localIP: "127.0.0.1", localPort: relayPort(), remoteIP: "127.0.0.1", remotePort: upstream)
+        try await relay.start(); defer { relay.stop() }
+        var held: [NWConnection] = []
+        defer { held.forEach { $0.cancel() } }
+        for _ in 0..<64 {   // the per-relay cap, each kept open
+            let c = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: relay.localPort)!, using: .tcp)
+            c.start(queue: .global()); held.append(c)
+        }
+        try await Task.sleep(for: .seconds(1))
+        #expect(await roundTrip(port: relay.localPort, payload: Data("x".utf8), timeout: 3) == nil)
+    }
+
+    @Test func stopFreesThePort() async throws {
+        let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
+        let port = relayPort()
+        let first = Relay(localIP: "127.0.0.1", localPort: port, remoteIP: "127.0.0.1", remotePort: upstream)
+        try await first.start()
+        first.stop()
+        try await Task.sleep(for: .milliseconds(200))
+        let again = Relay(localIP: "127.0.0.1", localPort: port, remoteIP: "127.0.0.1", remotePort: upstream)
+        try await again.start(); defer { again.stop() }
+        #expect(await roundTrip(port: port, payload: Data("x".utf8)) == Data("x".utf8))
+    }
+}

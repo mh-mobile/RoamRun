@@ -26,13 +26,15 @@ enum StatusFile {
     }
 
     static let url = ProfileStore.directory.appendingPathComponent("status.json")
+    /// `dir` and `live` are for tests: a scratch folder, and owners that aren't RoamRun.app.
+    typealias Liveness = (Int32) -> Bool
 
     /// Entries whose owner is still a live RoamRun process. Checking the
     /// executable, not just liveness, guards against recycled PIDs — these
     /// PIDs get SIGTERM from `roamrun down` and the app's Stop button.
-    static func read() -> [UUID: Entry] {
-        guard let data = try? Data(contentsOf: url) else { return [:] }
-        return decode(data).filter { isRoamRun($0.value.pid) }
+    static func read(in dir: URL = ProfileStore.directory, live: Liveness = isRoamRun) -> [UUID: Entry] {
+        guard let data = try? Data(contentsOf: dir.appendingPathComponent("status.json")) else { return [:] }
+        return decode(data).filter { live($0.value.pid) }
     }
 
     /// Entry by entry: one bad entry (e.g. from another version) mustn't hide the others.
@@ -52,14 +54,15 @@ enum StatusFile {
     /// Sets (or with nil, clears) this process's entry. Never touches an
     /// entry a *different* live process holds for a healthy bridge — the
     /// check sits under the lock so app and CLI can't both claim a device.
-    static func write(_ id: UUID, _ entry: Entry?) {
-        try? FileManager.default.createDirectory(at: ProfileStore.directory, withIntermediateDirectories: true)
-        let fd = open(lockURL.path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
+    static func write(_ id: UUID, _ entry: Entry?, in dir: URL = ProfileStore.directory, live: Liveness = isRoamRun) {
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("status.json")
+        let fd = open(dir.appendingPathComponent("status.lock").path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
         guard fd >= 0 else { return }
         defer { close(fd) }
         flock(fd, LOCK_EX)
         defer { flock(fd, LOCK_UN) }
-        var all = read()
+        var all = read(in: dir, live: live)
         if let held = all[id], !mayReplace(held, with: entry, by: getpid()) { return }
         all[id] = entry
         if let data = try? JSONEncoder().encode(all), (try? data.write(to: url, options: .atomic)) != nil {
@@ -81,7 +84,6 @@ enum StatusFile {
         return e.pid
     }
 
-    private static let lockURL = ProfileStore.directory.appendingPathComponent("status.lock")
 
     static func isRoamRun(_ pid: Int32) -> Bool {
         guard pid > 1 else { return false }
