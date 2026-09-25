@@ -47,6 +47,7 @@ final class ProxyBridge: ObservableObject {
     private var waitingSince: Date?
     private var renewTimer: Timer?
     private var checkingLAN = false
+    private var liveAdvert: (instance: String, at: Date)?
 
     /// Spoofed SRV target whose A record we publish pointing at this Mac.
     var spoofHost: String {
@@ -264,7 +265,11 @@ final class ProxyBridge: ObservableObject {
     /// dialed it. Burn that attempt ourselves so the lookahead relays are up
     /// before the user's first Run.
     private func onDeviceReachable(instance: String, udid: String) {
-        guard instance == profile.instanceName else { return }
+        guard instance == profile.instanceName else {
+            // The device's own advert, seen live while bridging: lets isHome skip `log show`.
+            if let mine = self.udid, udid.caseInsensitiveCompare(mine) == .orderedSame { liveAdvert = (instance, .now) }
+            return
+        }
         if udid != self.udid {
             self.udid = udid
             onUDID?(udid)
@@ -393,7 +398,11 @@ final class ProxyBridge: ObservableObject {
             let fake = profile.instanceName
             // A resolved advert may be a stale cache entry (or a sleep proxy's):
             // only an answer from it proves the iPhone is here.
-            if let instance = await Task.detached(operation: { Self.recentAdvert(udid: udid, besides: fake) }).value,
+            // Bridging, the log stream already feeds us adverts; otherwise look back in the log.
+            let instance = state.isActive
+                ? liveAdvert.flatMap { $0.at.timeIntervalSinceNow > -90 ? $0.instance : nil }
+                : await Task.detached(operation: { Self.recentAdvert(udid: udid, besides: fake) }).value
+            if let instance,
                await ReachabilityProbe.speaksRemotePairing(.service(name: instance, type: profile.serviceType,
                                                                    domain: profile.domain, interface: nil), timeout: 2) {
                 return true
