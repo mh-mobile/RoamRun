@@ -6,6 +6,12 @@
 
 <p align="center"><strong>Run your iOS apps wherever your device is.</strong></p>
 
+<p align="center">
+  <a href="https://github.com/mh-mobile/RoamRun/actions/workflows/ci.yml"><img src="https://github.com/mh-mobile/RoamRun/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/mh-mobile/RoamRun" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/macOS-13%2B-blue" alt="macOS 13+">
+</p>
+
 <p align="center">English | <a href="README.ja.md">日本語</a></p>
 
 A macOS menu bar app that makes Xcode's wireless debugging work over Tailscale or another mesh VPN.
