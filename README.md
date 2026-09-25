@@ -166,9 +166,12 @@ While the bridge is Ready, Xcode's command-line tools reach the device as if it 
 xcrun devicectl device capture screenshot --device <udid> --destination shot.png   # what `roamrun screenshot` runs
 xcrun devicectl device process launch --device <udid> <bundle-id>
 xcodebuild test -destination id=<udid> …                                           # UI tests (XCUITest) run on the device
+xcrun devicectl device info files --device <udid> --domain-type appDataContainer --domain-identifier <bundle-id>   # list an app's files
+xcrun devicectl device copy from --device <udid> --domain-type appDataContainer --domain-identifier <bundle-id> --source <path> --destination <local path>   # pull one (copy to: push)
+xcrun devicectl device info files --device <udid> --domain-type systemCrashLogs     # crash logs (.ips); copy them the same way
 ```
 
-`roamrun status <name>` shows the UDID. UI tests also mean XCUITest-based drivers such as WebDriverAgent run on a device that is away; once started, reach them at the device's Tailscale address. More tools are being checked ([issues](https://github.com/mh-mobile/RoamRun/issues): app data, Instruments, …).
+`roamrun status <name>` shows the UDID. UI tests also mean XCUITest-based drivers such as WebDriverAgent run on a device that is away; once started, reach them at the device's Tailscale address. More tools are being checked ([issues](https://github.com/mh-mobile/RoamRun/issues): Instruments, …).
 
 ## Using it from an AI agent
 

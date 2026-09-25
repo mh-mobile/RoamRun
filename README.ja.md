@@ -166,9 +166,12 @@ roamrun screenshot <name> [file.png]   # 実機の画面を PNG で保存し、�
 xcrun devicectl device capture screenshot --device <udid> --destination shot.png   # `roamrun screenshot` の中身
 xcrun devicectl device process launch --device <udid> <bundle-id>
 xcodebuild test -destination id=<udid> …                                           # UI テスト（XCUITest）も実機で動く
+xcrun devicectl device info files --device <udid> --domain-type appDataContainer --domain-identifier <bundle-id>   # アプリのファイル一覧
+xcrun devicectl device copy from --device <udid> --domain-type appDataContainer --domain-identifier <bundle-id> --source <path> --destination <保存先>   # 取り出し（copy to で送り込み）
+xcrun devicectl device info files --device <udid> --domain-type systemCrashLogs     # クラッシュログ（.ips）。取り出し方は同じ
 ```
 
-UDID は `roamrun status <name>` で表示されます。UI テストが動くので、WebDriverAgent のような XCUITest ベースの操作ツールも外出先の実機で動きます（起動後は実機の Tailscale のアドレスで接続）。ほかのツールも確認中です（[Issue](https://github.com/mh-mobile/RoamRun/issues): アプリのデータ、Instruments など）。
+UDID は `roamrun status <name>` で表示されます。UI テストが動くので、WebDriverAgent のような XCUITest ベースの操作ツールも外出先の実機で動きます（起動後は実機の Tailscale のアドレスで接続）。ほかのツールも確認中です（[Issue](https://github.com/mh-mobile/RoamRun/issues): Instruments など）。
 
 ## AI エージェントから使う
 
