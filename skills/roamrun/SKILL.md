@@ -64,6 +64,10 @@ Prebuilt .ipa (e.g. from CI) or .app: `roamrun install iPhone App.ipa` — check
 it's signed for this device (Debugging, Release Testing / Ad Hoc, Enterprise)
 before installing; App Store / TestFlight builds can't be installed directly.
 
+Check what the app shows: `roamrun screenshot iPhone /tmp/shot.png` saves the
+device's screen as PNG and prints the path — look at it after launching (or
+after a change) instead of asking the user to describe the screen.
+
 App output (print and os_log): `roamrun logs iPhone com.example.App` relaunches
 the app with its console attached and streams until Ctrl-C — use it instead of
 the launch step. It can't join an already-running app. It never exits on its

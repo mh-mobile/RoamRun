@@ -151,6 +151,7 @@ roamrun doctor                # Mac → Tailscale → iPhone を順に診断し�
 roamrun run <name> [--scheme S] [--logs]   # プロジェクトのフォルダで：ビルド → インストール → 起動（--scheme は複数あるときだけ。--logs で出力も流す）
 roamrun install <name> <App.ipa|App.app>   # その端末用に署名されたビルドをインストール（先に署名を確認）
 roamrun logs <name> <bundle-id>   # アプリを起動し直し、print / os_log の出力を流す（Ctrl-C で停止）
+roamrun screenshot <name> [file.png]   # 実機の画面を PNG で保存し、パスを表示（Xcode 27）
 ```
 
 `<name>` は iPhone 本体の名前ではなく、**RoamRun に登録した名前**です（大文字小文字は区別しません。`roamrun devices` で確認、アプリの詳細画面の ✏️ で変更可。名前は重複できません）。iPhone の登録（Add Device）はアプリで一度だけ行ってください。アプリと CLI が同じ iPhone を同時にブリッジしないよう、後から起動した側は起動を拒否します。`logs` はアプリを起動し直します（`devicectl` は、すでに動いているアプリにコンソールをつなげないため）。ブリッジ経由でも、同じ Wi-Fi でも使えます。
@@ -162,10 +163,12 @@ roamrun logs <name> <bundle-id>   # アプリを起動し直し、print / os_log
 ブリッジが Ready の間は、Xcode のコマンドラインツールからも、同じ Wi-Fi にいるときと同じように実機を扱えます。確認済みのもの:
 
 ```sh
-xcrun devicectl device capture screenshot --device <udid> --destination shot.png   # 実機の画面を PNG で保存（Xcode 27）
+xcrun devicectl device capture screenshot --device <udid> --destination shot.png   # `roamrun screenshot` の中身
+xcrun devicectl device process launch --device <udid> <bundle-id>
+xcodebuild test -destination id=<udid> …                                           # UI テスト（XCUITest）も実機で動く
 ```
 
-UDID は `roamrun status <name>` で表示されます。ほかのツールも確認中です（[Issue](https://github.com/mh-mobile/RoamRun/issues): UI テスト、アプリのデータ、Instruments など）。
+UDID は `roamrun status <name>` で表示されます。UI テストが動くので、WebDriverAgent のような XCUITest ベースの操作ツールも外出先の実機で動きます（起動後は実機の Tailscale のアドレスで接続）。ほかのツールも確認中です（[Issue](https://github.com/mh-mobile/RoamRun/issues): アプリのデータ、Instruments など）。
 
 ## AI エージェントから使う
 

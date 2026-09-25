@@ -6,7 +6,7 @@ import Foundation
 enum CLI {
     /// This process was started as the CLI (vs. the menu bar app).
     nonisolated static var isRunning: Bool { commands.contains(CommandLine.arguments.dropFirst().first ?? "") }
-    nonisolated static let commands: Set<String> = ["devices", "up", "down", "status", "doctor", "run", "install", "logs", "init", "version", "--version", "help", "--help", "-h"]
+    nonisolated static let commands: Set<String> = ["devices", "up", "down", "status", "doctor", "run", "install", "logs", "screenshot", "init", "version", "--version", "help", "--help", "-h"]
     /// Posted by `roamrun down`; the app stops the bridge whose id is `object`.
     static let stopNotification = Notification.Name("com.roamrun.app.stopBridge")
 
@@ -33,6 +33,8 @@ enum CLI {
                                      Testing / Ad Hoc or Enterprise); checks the signing first
       logs <name> <bundle-id>        Relaunch the app with its console attached (print and os_log)
                                      until Ctrl-C — it restarts the app; it can't join one already running
+      screenshot <name> [file.png]   Save the device's screen as PNG (default: ./<name>-<time>.png) and
+                                     print its path — to check what an app shows (Xcode 27)
       version                        Print the version (also --version)
       init [--client <name>] [--print] [--uninstall]
                                      Install the agent skill (clients: claude, codex, cursor, gemini, copilot)
@@ -122,6 +124,11 @@ enum CLI {
                 }
                 runApp(p, scheme: value("--scheme"), workspace: value("--workspace"), project: value("--project"),
                        configuration: value("--configuration") ?? "Debug", logs: args.contains("--logs"))
+            case "screenshot":
+                guard name != nil, let p = targets.first else {
+                    fail("usage: roamrun screenshot <name> [file.png]. " + names(profiles))
+                }
+                screenshot(p, path: words.count >= 2 ? words[words.startIndex + 1] : nil)
             case "install":
                 guard name != nil, let p = targets.first, words.count >= 2 else {
                     fail("usage: roamrun install <name> <path to .ipa or .app>. " + names(profiles))
@@ -262,6 +269,27 @@ enum CLI {
         var cargs = argv.map { strdup($0) } + [nil]
         execv(argv[0], &cargs)
         stop("could not run \(argv[0]): \(String(cString: strerror(errno)))")
+    }
+
+    /// Through the tunnel like everything else: works over the bridge.
+    private static func screenshot(_ profile: DeviceProfile, path: String?) -> Never {
+        let f = DateFormatter()
+        f.dateFormat = "yyyyMMdd-HHmmss"
+        let stamp = f.string(from: .now)
+        let file = URL(fileURLWithPath: path ?? "\(fileSafe(profile.displayName))-\(stamp).png").standardizedFileURL
+        guard file.pathExtension.lowercased() == "png" else { fail("the file must end in .png") }
+        let udid = reachableUDID(profile)
+        let capture = ["devicectl", "--quiet", "device", "capture", "screenshot", "--device", udid, "--destination", file.path]
+        var r = Proc.run("/usr/bin/xcrun", capture, timeout: 60)
+        if r.status != 0, r.err.contains("CoreDeviceError") {   // e.g. the ~42s control-channel rebuild: once more
+            sleep(2)
+            r = Proc.run("/usr/bin/xcrun", capture, timeout: 60)
+        }
+        guard r.status == 0, FileManager.default.fileExists(atPath: file.path) else {
+            stop("screenshot failed: " + (r.err.split(separator: "\n").first.map(String.init) ?? "devicectl exited \(r.status)"))
+        }
+        print(file.path)
+        exit(0)
     }
 
     /// devicectl installs any .app or .ipa signed for this device. Check the
@@ -437,6 +465,11 @@ enum CLI {
         exit(0)
     }
 
+    /// The display name is user/network supplied: keep it to one safe path component.
+    private static func fileSafe(_ name: String) -> String {
+        String(name.map { $0.isLetter || $0.isNumber || "-_ ".contains($0) ? $0 : "_" })
+    }
+
     /// Internal: marks the background copy spawned by `up -d`.
     private static let detachedFlag = "--detached-child"
 
@@ -449,8 +482,7 @@ enum CLI {
         let logDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Logs/RoamRun", isDirectory: true)
         try? FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
-        // The display name is user/network supplied: keep it to one safe path component.
-        let safeName = String(profile.displayName.map { $0.isLetter || $0.isNumber || "-_ ".contains($0) ? $0 : "_" })
+        let safeName = fileSafe(profile.displayName)
         let logURL = logDir.appendingPathComponent("\(safeName.isEmpty ? profile.id.uuidString : safeName).log")
         FileManager.default.createFile(atPath: logURL.path, contents: nil)
         guard let log = try? FileHandle(forWritingTo: logURL) else { stop("can't write \(logURL.path)") }

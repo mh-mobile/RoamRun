@@ -151,6 +151,7 @@ roamrun doctor                # check Mac → Tailscale → iPhone step by step 
 roamrun run <name> [--scheme S] [--logs]   # in the project folder: build → install → launch (--scheme: only if it has several; --logs: stream output)
 roamrun install <name> <App.ipa|App.app>   # install a build signed for the device (checks the signing first)
 roamrun logs <name> <bundle-id>   # relaunch the app and stream its print / os_log output (Ctrl-C to stop)
+roamrun screenshot <name> [file.png]   # save the device's screen as PNG and print the path (Xcode 27)
 ```
 
 `<name>` is **the name you gave the device in RoamRun**, not the iPhone's own name (case-insensitive; see `roamrun devices`, rename with ✏️ in the app's detail view; names must be unique). Add each device once in the app (Add Device). The app and the CLI never bridge the same iPhone at once: whichever starts second refuses. `logs` relaunches the app, since `devicectl` can't attach a console to one already running; it works over a bridge and on the same Wi-Fi alike.
@@ -162,10 +163,12 @@ roamrun logs <name> <bundle-id>   # relaunch the app and stream its print / os_l
 While the bridge is Ready, Xcode's command-line tools reach the device as if it were on this Wi-Fi. Verified so far:
 
 ```sh
-xcrun devicectl device capture screenshot --device <udid> --destination shot.png   # the device's screen as PNG (Xcode 27)
+xcrun devicectl device capture screenshot --device <udid> --destination shot.png   # what `roamrun screenshot` runs
+xcrun devicectl device process launch --device <udid> <bundle-id>
+xcodebuild test -destination id=<udid> …                                           # UI tests (XCUITest) run on the device
 ```
 
-`roamrun status <name>` shows the UDID. More tools are being checked ([issues](https://github.com/mh-mobile/RoamRun/issues): UI tests, app data, Instruments, …).
+`roamrun status <name>` shows the UDID. UI tests also mean XCUITest-based drivers such as WebDriverAgent run on a device that is away; once started, reach them at the device's Tailscale address. More tools are being checked ([issues](https://github.com/mh-mobile/RoamRun/issues): app data, Instruments, …).
 
 ## Using it from an AI agent
 
