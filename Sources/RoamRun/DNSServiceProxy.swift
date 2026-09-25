@@ -68,9 +68,8 @@ final class DNSServiceProxy {
     }
 
     /// Kill helper processes left behind by a crashed/killed previous launch:
-    /// `dns-sd -P` proxy registrations (matched by our spoof-host marker),
-    /// `dns-sd -Z` zone dumps for the pairing service, and `log stream`
-    /// watchers for the tunnel endpoint.
+    /// `dns-sd -P` proxy registrations (matched by our spoof-host marker) and
+    /// `log stream` watchers for the tunnel endpoint.
     @discardableResult
     static func killOrphanedHelpers(matching marker: String = ".roamrun.local",
                                     onLog: ((String) -> Void)? = nil) -> Int {

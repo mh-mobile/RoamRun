@@ -376,6 +376,7 @@ final class ProxyBridge: ObservableObject {
         var home = await isHome()
         // A device can miss one handshake (e.g. while locking). Standing aside there's
         // no bridge, so if Xcode still reaches it, it reaches it directly: still home.
+        // ponytail: resuming then waits for CoreDevice to drop the old direct link (~30s seen).
         if !home, let udid, let core = await Task.detached(operation: { CLI.coreDeviceState(udid) }).value,
            core != "unavailable" {
             home = true

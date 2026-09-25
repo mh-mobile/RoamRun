@@ -10,7 +10,8 @@ enum Proc {
 
     /// Runs to completion. Both pipes are drained before waiting — waiting
     /// first deadlocks once a tool writes more than the ~64KB pipe buffer.
-    static func run(_ path: String, _ args: [String], timeout: TimeInterval? = nil) -> Result {
+    /// Never unbounded: a wedged tool must not hang the CLI or a bridge's checks.
+    static func run(_ path: String, _ args: [String], timeout: TimeInterval = 45) -> Result {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: path)
         task.arguments = args
@@ -18,19 +19,24 @@ enum Proc {
         task.standardOutput = out
         task.standardError = err
         do { try task.run() } catch { return Result(status: -1, out: "", err: error.localizedDescription) }
-        if let timeout {
-            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { if task.isRunning { task.terminate() } }
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { if task.isRunning { task.terminate() } }
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout + 2) {   // ignored TERM
+            if task.isRunning { kill(task.processIdentifier, SIGKILL) }
         }
 
-        var errData = Data()
+        let box = OutputBox()
         let group = DispatchGroup()
-        DispatchQueue.global().async(group: group) { errData = err.fileHandleForReading.readDataToEndOfFile() }
-        let outData = out.fileHandleForReading.readDataToEndOfFile()
-        group.wait()
+        DispatchQueue.global().async(group: group) { box.set(err: err.fileHandleForReading.readDataToEndOfFile()) }
+        DispatchQueue.global().async(group: group) { box.set(out: out.fileHandleForReading.readDataToEndOfFile()) }
+        // A grandchild can keep the pipes open after we killed the tool: stop
+        // waiting then (the readers finish whenever that one exits).
+        guard group.wait(timeout: .now() + timeout + 4) == .success else {
+            return Result(status: -1, out: "", err: "\(path) timed out after \(Int(timeout))s")
+        }
         task.waitUntilExit()
         return Result(status: task.terminationStatus,
-                      out: String(decoding: outData, as: UTF8.self),
-                      err: String(decoding: errData, as: UTF8.self))
+                      out: String(decoding: box.out, as: UTF8.self),
+                      err: String(decoding: box.err, as: UTF8.self))
     }
 
     /// A long-running helper that can't outlive RoamRun: a tiny `sh` watchdog
@@ -72,4 +78,13 @@ final class LineReader: @unchecked Sendable {
             }
         }
     }
+}
+
+private final class OutputBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _out = Data(), _err = Data()
+    var out: Data { lock.withLock { _out } }
+    var err: Data { lock.withLock { _err } }
+    func set(out: Data) { lock.withLock { _out = out } }
+    func set(err: Data) { lock.withLock { _err = err } }
 }

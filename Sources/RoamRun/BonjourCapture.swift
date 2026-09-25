@@ -14,6 +14,7 @@ final class BonjourCapture: ObservableObject {
     var onLog: ((String) -> Void)?
 
     private var process: Process?
+    private var stopped = false
     private var reader: LineReader?
     private var srvByRecord: [String: (host: String, port: UInt16)] = [:]
     private var txtByRecord: [String: [String: String]] = [:]
@@ -24,6 +25,7 @@ final class BonjourCapture: ObservableObject {
 
     func start(serviceType: String = "_remotepairing._tcp", domain: String = "local") {
         guard process == nil else { return }
+        stopped = false
         self.serviceType = serviceType
         self.domain = domain
 
@@ -45,6 +47,7 @@ final class BonjourCapture: ObservableObject {
                     self.process = nil
                     self.onLog?("dns-sd -Z exited unexpectedly; restarting in 5s")
                     try? await Task.sleep(for: .seconds(5))
+                    guard !self.stopped else { return }   // the sheet closed meanwhile
                     self.start(serviceType: self.serviceType, domain: self.domain)
                 }
             }
@@ -55,6 +58,7 @@ final class BonjourCapture: ObservableObject {
     }
 
     func stop() {
+        stopped = true
         process?.terminate()
         process = nil
     }

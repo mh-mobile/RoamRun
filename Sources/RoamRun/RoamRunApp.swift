@@ -20,6 +20,9 @@ enum Entry {
             let others = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
                 .filter { $0.processIdentifier != getpid() }
             if let running = others.first, Snapshot.path == nil {
+                // A menu bar app has no window to bring forward: ask it to open one.
+                DistributedNotificationCenter.default().postNotificationName(
+                    AppDelegate.showNotification, object: nil, userInfo: nil, deliverImmediately: true)
                 running.activate()
                 exit(0)
             }
@@ -54,8 +57,14 @@ struct RoamRunApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static var openMain: (() -> Void)?
 
+    /// Posted by a second launch; the running app opens its window.
+    static let showNotification = Notification.Name("com.roamrun.app.showWindow")
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         Snapshot.scheduleIfRequested()
+        DistributedNotificationCenter.default().addObserver(forName: Self.showNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { AppDelegate.openMain?() }
+        }
         // AppKit rejects the system Quit event (Dock, Activity Monitor,
         // AppleScript) with "user canceled" while a sheet is open.
         NSAppleEventManager.shared().setEventHandler(

@@ -13,6 +13,8 @@ see `skills/roamrun/SKILL.md` — installed with `roamrun init` or
 - `make test` runs the unit tests (log parsing, port attribution, status-file
   ownership, names). They never touch the real status/profile files or start a
   bridge — keep it that way (no `AppCoordinator` in tests).
+- Only one RoamRun app runs at a time (matched by bundle id): a dev build won't
+  start while an installed copy is running — quit that one first.
 - UI screenshots without screen-recording rights: build with `make app SNAPSHOT=1`
   (dev only — rebuild with plain `make app` afterwards), then
   `MB_SNAPSHOT=/tmp/x.png [MB_SNAPSHOT_SHEET=add|settings] [MB_APPEARANCE=dark] RoamRun.app/Contents/MacOS/RoamRun`

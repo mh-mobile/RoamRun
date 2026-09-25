@@ -278,7 +278,7 @@ final class AppCoordinator: ObservableObject {
     }
 
     nonisolated private static func deviceTypes() -> [String: String] {
-        let out = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-devices-\(getpid()).json")
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-devices-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: out) }
         _ = Proc.run("/usr/bin/xcrun", ["devicectl", "--quiet", "list", "devices", "--json-output", out.path], timeout: 30)
         guard let data = try? Data(contentsOf: out),

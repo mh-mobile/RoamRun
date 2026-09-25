@@ -59,6 +59,11 @@ enum CLI {
             let waitIdx = args.firstIndex(of: "--wait")
             let wait = waitIdx.flatMap { args.indices.contains($0 + 1) ? Double(args[$0 + 1]) : nil }
             if waitIdx != nil && wait == nil { fail("--wait needs a number of seconds") }
+            for flag in ["--scheme", "--workspace", "--project", "--configuration"] {
+                if let i = args.firstIndex(of: flag), !args.indices.contains(i + 1) || args[i + 1].hasPrefix("-") {
+                    fail("\(flag) needs a value")
+                }
+            }
             // Words after the command that aren't flags or a flag's value.
             let valued: Set<String> = ["--wait", "--scheme", "--workspace", "--project", "--configuration"]
             let words = args.indices.dropFirst().filter { i in
@@ -152,7 +157,7 @@ enum CLI {
 
     /// devicectl's tunnelState for this UDID; nil if devicectl failed.
     nonisolated static func coreDeviceState(_ udid: String) -> String? {
-        let out = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-list-\(getpid()).json")
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-list-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: out) }
         _ = Proc.run("/usr/bin/xcrun", ["devicectl", "--quiet", "--timeout", "10", "list", "devices", "--json-output", out.path])
         guard let data = try? Data(contentsOf: out),
@@ -212,7 +217,7 @@ enum CLI {
 
     /// Needs the tunnel; nil when devicectl can't reach the device.
     private static func isLocked(_ udid: String) -> Bool? {
-        let out = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-lock-\(getpid()).json")
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-lock-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: out) }
         _ = Proc.run("/usr/bin/xcrun", ["devicectl", "--quiet", "--timeout", "10", "device", "info", "lockState",
                                         "--device", udid, "--json-output", out.path])
@@ -254,13 +259,16 @@ enum CLI {
     /// signing first: the usual failure, and devicectl's error for it is cryptic.
     private static func install(_ profile: DeviceProfile, path: String) -> Never {
         guard FileManager.default.fileExists(atPath: path) else { stop("no such file: \(path)") }
+        guard [".ipa", ".app"].contains(where: path.lowercased().trimmingCharacters(in: ["/"]).hasSuffix) else {
+            stop("\(path) is not an .ipa or .app")
+        }
         let udid = reachableUDID(profile)
         checkSigning(profile, udid: udid, path: path)
         guard path.lowercased().hasSuffix(".ipa") else {
             exec(["/usr/bin/xcrun", "devicectl", "device", "install", "app", "--device", udid, path])
         }
         // devicectl documents .app bundles only: unpack the .ipa and hand it the .app inside.
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-ipa-\(getpid())")
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-ipa-\(UUID().uuidString)")
         let cleanUp = { try? FileManager.default.removeItem(at: dir) }   // exit() skips defer
         _ = Proc.run("/usr/bin/ditto", ["-x", "-k", path, dir.path], timeout: 300)
         let payload = dir.appendingPathComponent("Payload")
@@ -330,8 +338,10 @@ enum CLI {
         // The built .app: the build settings of the target that produces one.
         let settings = Proc.run(build[0], Array(build.dropFirst()) + ["-showBuildSettings", "-json"], timeout: 120).out
         let targets = (try? JSONSerialization.jsonObject(with: Data(settings.utf8))) as? [[String: Any]] ?? []
-        guard let s = targets.compactMap({ $0["buildSettings"] as? [String: String] })
-                .first(where: { $0["WRAPPER_EXTENSION"] == "app" }),
+        // The scheme's own target first: a watchOS companion is an .app too.
+        let apps = targets.compactMap { $0["buildSettings"] as? [String: String] }
+            .filter { $0["WRAPPER_EXTENSION"] == "app" && $0["PLATFORM_NAME"] != "watchos" }
+        guard let s = apps.first(where: { $0["TARGET_NAME"] == chosen }) ?? apps.first,
               let dir = s["TARGET_BUILD_DIR"], let wrapper = s["WRAPPER_NAME"] else {
             stop("built, but couldn't find the .app in the build settings")
         }
@@ -339,6 +349,7 @@ enum CLI {
         guard let bundleID = NSDictionary(contentsOfFile: (app as NSString).appendingPathComponent("Info.plist"))?["CFBundleIdentifier"] as? String
         else { stop("built, but \(app) has no bundle identifier") }
 
+        _ = reachableUDID(profile)   // a long build: it may have locked or dropped off meanwhile
         checkSigning(profile, udid: udid, path: app)
         print("Installing \(wrapper)…")
         guard visible(["/usr/bin/xcrun", "devicectl", "device", "install", "app", "--device", udid, app]) == 0 else {
@@ -357,7 +368,7 @@ enum CLI {
 
     /// Reads embedded.mobileprovision from an .app or (unzipping) an .ipa.
     static func provisioning(of path: String) -> Provisioning {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-install-\(getpid())")
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-install-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: dir) }
         var profile = URL(fileURLWithPath: path).appendingPathComponent("embedded.mobileprovision")
         if path.lowercased().hasSuffix(".ipa") {
