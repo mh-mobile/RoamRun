@@ -157,6 +157,16 @@ roamrun logs <name> <bundle-id>   # アプリを起動し直し、print / os_log
 
 `install` には、**Debugging、Release Testing（Ad Hoc）、Enterprise** で書き出した `.ipa`（CI で作ったものなど）や `.app` を渡せます。端末の UDID がプロビジョニングプロファイルに入っている必要があります（Enterprise は、証明書を信頼した端末ならどれでも）。App Store Connect 用（App Store / TestFlight）のビルドは直接インストールできないので、`install` が実行前にそう伝えます。RoamRun が届くのはこの Mac とペアリング済みの端末だけです。ペアリングしていない端末にビルドを配るには、TestFlight や OTA 配布（Ad Hoc / Enterprise）を使ってください。
 
+### ブリッジ経由で使えるほかのツール
+
+ブリッジが Ready の間は、Xcode のコマンドラインツールからも、同じ Wi-Fi にいるときと同じように実機を扱えます。確認済みのもの:
+
+```sh
+xcrun devicectl device capture screenshot --device <udid> --destination shot.png   # 実機の画面を PNG で保存（Xcode 27）
+```
+
+UDID は `roamrun status <name>` で表示されます。ほかのツールも確認中です（[Issue](https://github.com/mh-mobile/RoamRun/issues): UI テスト、アプリのデータ、Instruments など）。
+
 ## AI エージェントから使う
 
 Claude Code・Codex・Cursor などのエージェントに、ビルド〜実機インストール〜デバッグを任せられます。エージェントに使い方を教えるスキルを入れてください:

@@ -157,6 +157,16 @@ roamrun logs <name> <bundle-id>   # relaunch the app and stream its print / os_l
 
 `install` takes an `.ipa` (e.g. from CI) or an `.app` exported for **Debugging, Release Testing (Ad Hoc) or Enterprise** — the device's UDID must be in its provisioning profile (Enterprise: any device that trusts the certificate). Builds for App Store Connect (App Store / TestFlight) can't be installed directly; `install` says so before trying. RoamRun only reaches devices paired with this Mac; to hand a build to devices that aren't, use TestFlight or over-the-air distribution (Ad Hoc / Enterprise).
 
+### Other tools over the bridge
+
+While the bridge is Ready, Xcode's command-line tools reach the device as if it were on this Wi-Fi. Verified so far:
+
+```sh
+xcrun devicectl device capture screenshot --device <udid> --destination shot.png   # the device's screen as PNG (Xcode 27)
+```
+
+`roamrun status <name>` shows the UDID. More tools are being checked ([issues](https://github.com/mh-mobile/RoamRun/issues): UI tests, app data, Instruments, …).
+
 ## Using it from an AI agent
 
 Claude Code, Codex, Cursor and other agents can take over building, installing on the device and debugging. Install the skill that teaches them how:
