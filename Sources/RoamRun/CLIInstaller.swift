@@ -4,7 +4,7 @@ import Foundation
 /// CLI), like VS Code's "Install 'code' command in PATH".
 enum CLIInstaller {
     static let linkPath = "/usr/local/bin/roamrun"
-    /// Where the Homebrew cask links it on Apple Silicon (Intel: linkPath).
+    /// Where the Homebrew cask links it.
     static let homebrewLink = "/opt/homebrew/bin/roamrun"
 
     enum State: Equatable {
@@ -26,19 +26,29 @@ enum CLIInstaller {
         }
     }
 
-    static var state: State {
-        if installedPath != nil { return .installed }
+    static var state: State { installedPath != nil ? .installed : linkState }
+
+    /// linkPath alone — what install() would replace.
+    private static var linkState: State {
         let fm = FileManager.default
         guard let dest = try? fm.destinationOfSymbolicLink(atPath: linkPath) else {
             return fm.fileExists(atPath: linkPath) ? .blockedByFile : .notInstalled
         }
+        if URL(fileURLWithPath: dest).resolvingSymlinksInPath().path == target { return .installed }
         return (dest as NSString).lastPathComponent == "RoamRun" ? .pointsElsewhere(dest) : .blockedByFile
     }
 
     /// Plain FileManager first; if /usr/local/bin is missing or not writable
     /// (no Homebrew), retry once through an admin-password prompt.
     static func install() throws {
-        guard state != .blockedByFile else {
+        // Opened from the dmg or Downloads, macOS runs a temporary copy (App
+        // Translocation) or the dmg's own, both gone once the app quits.
+        let readOnly = (try? URL(fileURLWithPath: target).resourceValues(forKeys: [.volumeIsReadOnlyKey]))?.volumeIsReadOnly == true
+        guard !target.contains("/AppTranslocation/"), !readOnly else {
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSLocalizedDescriptionKey:
+                "Move RoamRun to /Applications and open it from there first — this copy is temporary."])
+        }
+        guard linkState != .blockedByFile else {
             throw CocoaError(.fileWriteFileExists, userInfo: [NSLocalizedDescriptionKey:
                 "\(linkPath) belongs to something else. Remove it yourself if you want RoamRun's CLI there."])
         }
