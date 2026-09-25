@@ -44,6 +44,7 @@ final class AppCoordinator: ObservableObject {
         tailscaleCLIPath = savedCLIPath
 
         profiles = store.load()
+        if let copy = store.keptUnreadable { logStore.log("couldn't read saved devices; kept the file as \(copy.path)") }
         for p in profiles { install(ProxyBridge(profile: p)) }
 
         capture.onLog = { [weak self] m in self?.logStore.log(m) }
@@ -85,7 +86,7 @@ final class AppCoordinator: ObservableObject {
             if let p = profiles.first(where: { $0.id == id }) {
                 isRestoringBridges = true
                 logStore.log("restoring bridge for \"\(p.displayName)\"")
-                Task { await self.bridge(for: p)?.start() }
+                self.bridge(for: p)?.requestStart()
             }
         }
 
@@ -205,7 +206,7 @@ final class AppCoordinator: ObservableObject {
 
         // Same-LAN detection lives in ProxyBridge.start (by Tailscale endpoint,
         // which survives the iPhone rotating its Bonjour instance name).
-        Task { await bridge.start() }
+        bridge.requestStart()
     }
 
     func stopBridge(_ profile: DeviceProfile) {
@@ -370,7 +371,7 @@ final class AppCoordinator: ObservableObject {
             let wasOn = bridges[profile.id].map { $0.state != .off } == true
             bridges[profile.id]?.stop()
             let bridge = install(ProxyBridge(profile: profiles[idx]))
-            if wasOn { Task { await bridge.start() } }
+            if wasOn { bridge.requestStart() }
         } else {
             logStore.log("\"\(profile.displayName)\": no RemotePairing port responded — is the device on Wi-Fi?")
         }

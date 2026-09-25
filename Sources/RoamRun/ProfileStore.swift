@@ -9,9 +9,22 @@ final class ProfileStore {
         try? FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true)
     }
 
+    /// Set when profiles.json couldn't be read and was kept aside under this name.
+    private(set) var keptUnreadable: URL?
+
     func load() -> [DeviceProfile] {
         guard let data = try? Data(contentsOf: url) else { return [] }
-        return (try? JSONDecoder().decode([DeviceProfile].self, from: data)) ?? []
+        if let profiles = try? JSONDecoder().decode([DeviceProfile].self, from: data) { return profiles }
+        // The next save would replace it with an empty list: keep a copy, once per distinct content.
+        let fm = FileManager.default
+        let kept = (try? fm.contentsOfDirectory(at: Self.directory, includingPropertiesForKeys: nil)) ?? []
+        if let same = kept.first(where: { $0.lastPathComponent.hasPrefix("profiles.json.unreadable") && (try? Data(contentsOf: $0)) == data }) {
+            keptUnreadable = same
+        } else {
+            let copy = url.appendingPathExtension("unreadable-\(Int(Date.now.timeIntervalSince1970))")
+            if (try? fm.copyItem(at: url, to: copy)) != nil { keptUnreadable = copy }
+        }
+        return []
     }
 
     func save(_ profiles: [DeviceProfile]) {

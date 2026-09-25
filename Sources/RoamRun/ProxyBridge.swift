@@ -168,7 +168,17 @@ final class ProxyBridge: ObservableObject {
             }
         }
         watcher.onLog = { [weak self] m in self?.log(m) }
-        watcher.start()
+        watcher.onExit = { [weak self] m in
+            Task { @MainActor in self?.helperDied(m, gen: gen) }
+        }
+        dnsProxy.onExit = { [weak self] status in
+            Task { @MainActor in self?.helperDied("dns-sd exited (status \(status))", gen: gen) }
+        }
+        guard watcher.start() else {
+            teardown()
+            setState(.error("Couldn't watch remotepairingd's log (see Activity log). Retrying shortly."))
+            return
+        }
 
         do {
             setState(.starting("Publishing Bonjour proxy"))
@@ -181,6 +191,7 @@ final class ProxyBridge: ObservableObject {
                                   txt: profile.txt)
             log("published \(profile.instanceName) -> \(localIP):\(localPort) via \(spoofHost)")
         } catch {
+            generation += 1   // drop late callbacks from this attempt
             teardown()   // don't hold relays/watcher under an error another process may clear
             setState(.error(error.localizedDescription))
             return
@@ -196,6 +207,12 @@ final class ProxyBridge: ObservableObject {
                 self?.standAsideIfHome()
             }
         }
+    }
+
+    /// Start from synchronous code. A stop() before the task gets to run wins.
+    func requestStart() {
+        let g = generation
+        Task { guard g == generation else { return }; await start() }
     }
 
     func stop() {
@@ -480,6 +497,17 @@ final class ProxyBridge: ObservableObject {
     nonisolated private static func isOnLink(_ host: String) -> Bool {
         let out = Proc.run("/sbin/route", ["-n", "get"] + (host.contains(":") ? ["-inet6"] : []) + [host], timeout: 3).out
         return out.contains("interface: en0") && !out.contains("gateway:")
+    }
+
+    /// Without `log stream` no tunnel port is ever found; without `dns-sd` the
+    /// record is gone. Either way the bridge only looks alive: fail it, and the
+    /// error retry starts it afresh.
+    private func helperDied(_ what: String, gen: Int) {
+        guard gen == generation else { return }
+        log(what)
+        generation += 1
+        teardown()
+        setState(.error("Helper stopped: \(what). Retrying shortly."))
     }
 
     /// remotepairingd saw our record but found no pairing for it. Waiting

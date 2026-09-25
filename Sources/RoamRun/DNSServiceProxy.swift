@@ -18,6 +18,8 @@ final class DNSServiceProxy {
 
     private var process: Process?
     private var lastArgs: [String] = []
+    /// `dns-sd -P` died on its own (not via stop()/renew()): the record is gone.
+    var onExit: ((Int32) -> Void)?
 
     /// - Parameters:
     ///   - instanceName: captured service instance name (republished verbatim)
@@ -39,6 +41,13 @@ final class DNSServiceProxy {
         let task = Proc.tied("/usr/bin/dns-sd", args)
         task.standardOutput = FileHandle.nullDevice
         task.standardError = FileHandle.nullDevice
+        task.terminationHandler = { [weak self] t in
+            DispatchQueue.main.async {
+                guard let self, self.process === t else { return }
+                self.process = nil
+                self.onExit?(t.terminationStatus)
+            }
+        }
         guard (try? task.run()) != nil else { return false }
         process = task
         return true
@@ -64,7 +73,7 @@ final class DNSServiceProxy {
             while old.isRunning && tries < 100 { usleep(10_000); tries += 1 }
         }
         process = nil
-        spawn(lastArgs)
+        if !spawn(lastArgs) { onExit?(-1) }
     }
 
     /// Kill helper processes left behind by a crashed/killed previous launch:

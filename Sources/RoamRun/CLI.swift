@@ -64,7 +64,11 @@ enum CLI {
                 exit(0)
             }
             if args[0] == "init" { initSkill(args) }   // takes no iPhone name
-            let profiles = ProfileStore().load()
+            let store = ProfileStore()
+            let profiles = store.load()
+            if let copy = store.keptUnreadable {
+                FileHandle.standardError.write(Data("roamrun: couldn't read saved devices; kept the file as \(copy.path)\n".utf8))
+            }
             let json = args.contains("--json")
             let waitIdx = args.firstIndex(of: "--wait")
             let wait = waitIdx.flatMap { args.indices.contains($0 + 1) ? Double(args[$0 + 1]) : nil }
@@ -513,7 +517,7 @@ enum CLI {
         // Same recovery as the app: retry errors, rebind when the Mac's IP changes.
         let retry = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
             MainActor.assumeIsolated {
-                if bridge.status == .error && bridge.autoRetry { Task { await bridge.start() } }
+                if bridge.status == .error && bridge.autoRetry { bridge.requestStart() }
             }
         }
         let away = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
@@ -553,7 +557,7 @@ enum CLI {
         keepAlive = [ticker, retry, away, monitor] + sources
 
         print("Bridging \(profile.displayName) over \(profile.providerIP)…")
-        Task { await bridge.start() }
+        bridge.requestStart()
     }
 
     /// Walks the path Xcode → this Mac → Tailscale → iPhone and reports the

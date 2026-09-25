@@ -13,9 +13,12 @@ final class TunnelPortWatcher {
     /// the Mac no longer trusts it, or its TXT (authTag) is stale.
     var onUnrecognized: ((String) -> Void)?
     var onLog: ((String) -> Void)?
+    /// `log stream` died on its own (not via stop()), with the reason.
+    var onExit: ((String) -> Void)?
 
     private var process: Process?
     private var reader: LineReader?
+    private var errReader: LineReader?
     private static let pattern = #/Got tunnel endpoint: '[^']*:(\d+)'/#
     /// The endpoint line doesn't name the device; the line right before it does.
     /// Requests still waiting for their endpoint; two different iPhones among
@@ -32,23 +35,38 @@ final class TunnelPortWatcher {
     private static let advertMarker = "Resolved bonjour advert "
     private static let advertPattern = #/([0-9A-Fa-f-]+) to identity (?:associated with udid ([0-9A-Fa-f-]+)|nil, udid nil)/#
 
-    func start() {
-        guard process == nil else { return }
+    /// False if `log stream` couldn't be launched.
+    @discardableResult
+    func start() -> Bool {
+        guard process == nil else { return true }
         let task = Proc.tied("/usr/bin/log", [
             "stream", "--style", "compact",
             "--predicate",
             #"process == "remotepairingd" AND (eventMessage CONTAINS "Got tunnel endpoint" OR eventMessage CONTAINS "Sending tunnel establish request" OR eventMessage CONTAINS "Resolved bonjour advert")"#
         ])
-        let pipe = Pipe()
+        let pipe = Pipe(), errPipe = Pipe()
         task.standardOutput = pipe
-        task.standardError = FileHandle.nullDevice
+        task.standardError = errPipe   // e.g. "Must be admin to run 'stream' command"
         reader = LineReader(pipe) { [weak self] line in self?.handle(line) }
+        let firstErr = FirstLine()
+        errReader = LineReader(errPipe) { firstErr.offer($0) }
+        task.terminationHandler = { [weak self] t in
+            // Give the stderr reader a moment to deliver the reason.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                guard let self, self.process === t else { return }   // stop() isn't a failure
+                self.process = nil
+                let err = firstErr.value
+                self.onExit?("log stream exited (status \(t.terminationStatus))" + (err.isEmpty ? "" : ": \(err)"))
+            }
+        }
         do {
             try task.run()
             process = task
             onLog?("Watching remotepairingd for tunnel endpoint")
+            return true
         } catch {
             onLog?("Failed to start log stream: \(error.localizedDescription)")
+            return false
         }
     }
 
@@ -78,4 +96,11 @@ final class TunnelPortWatcher {
               let m = line[r.upperBound...].trimmingCharacters(in: .whitespaces).wholeMatch(of: advertPattern) else { return nil }
         return (String(m.1), m.2.map(String.init))
     }
+}
+
+private final class FirstLine: @unchecked Sendable {
+    private let lock = NSLock()
+    private var line = ""
+    var value: String { lock.withLock { line } }
+    func offer(_ l: String) { lock.withLock { if line.isEmpty { line = l } } }
 }
