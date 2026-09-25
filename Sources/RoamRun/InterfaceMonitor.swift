@@ -10,14 +10,15 @@ final class InterfaceMonitor: @unchecked Sendable {
     /// en0 had an address and lost it.
     var onLost: (() -> Void)?
 
-    private let interfaceName: String
+    /// nil: follow `lanInterface`, which Settings (or a cable) can change.
+    private let fixedInterface: String?
     private var monitor: NWPathMonitor?
     /// Path updates and the initial check run here, never concurrently.
     private let queue = DispatchQueue(label: "com.roamrun.app.interface-monitor")
     private(set) var lastKnownIP: String?
 
-    init(interfaceName: String = "en0") {
-        self.interfaceName = interfaceName
+    init(interfaceName: String? = nil) {
+        self.fixedInterface = interfaceName
     }
 
     func start() {
@@ -36,7 +37,7 @@ final class InterfaceMonitor: @unchecked Sendable {
     }
 
     private func check() {
-        guard let ip = Self.currentIPv4(on: interfaceName) else {
+        guard let ip = Self.currentIPv4(on: fixedInterface ?? Self.lanInterface) else {
             // Remember the gap so getting the *same* IP back (sleep/wake,
             // Wi-Fi rejoin) still counts as a change — listeners bound to
             // the vanished address don't come back on their own.
@@ -51,21 +52,39 @@ final class InterfaceMonitor: @unchecked Sendable {
         }
     }
 
-    /// First non-loopback IPv4 address on the given interface via getifaddrs.
-    static func currentIPv4(on interfaceName: String = "en0") -> String? {
+    /// The app's defaults; the CLI reads the app's domain by suite name.
+    static var settings: UserDefaults? {
+        Bundle.main.bundleIdentifier == "com.roamrun.app" ? .standard : UserDefaults(suiteName: "com.roamrun.app")
+    }
+
+    /// The LAN interface Xcode's Bonjour sees and the relays listen on: the one
+    /// chosen in Settings; else en0 whenever it has an address (every setup so far);
+    /// else the first other Ethernet/Wi‑Fi port (en1, en2, …) that has one.
+    static var lanInterface: String {
+        pickLAN(chosen: settings?.string(forKey: "networkInterface"), available: Set(ipv4Addresses().keys))
+    }
+
+    nonisolated static func pickLAN(chosen: String?, available: Set<String>) -> String {
+        if let chosen, !chosen.isEmpty { return chosen }
+        if available.contains("en0") { return "en0" }
+        return available.filter { $0.hasPrefix("en") }.sorted { $0.localizedStandardCompare($1) == .orderedAscending }.first ?? "en0"
+    }
+
+    static func currentIPv4(on interfaceName: String = lanInterface) -> String? { ipv4Addresses()[interfaceName] }
+
+    /// Interface name → its (last) non-loopback IPv4 address, via getifaddrs.
+    static func ipv4Addresses() -> [String: String] {
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
+        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return [:] }
         defer { freeifaddrs(ifaddr) }
-        var result: String?
+        var result: [String: String] = [:]
         for ptr in sequence(first: first, next: { $0.pointee.ifa_next }) {
             let addr = ptr.pointee
             guard let sa = addr.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET) else { continue }
-            let name = String(cString: addr.ifa_name)
-            guard name == interfaceName else { continue }
             var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             getnameinfo(sa, socklen_t(sa.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
             let ip = String(cString: host)
-            if !ip.hasPrefix("127.") { result = ip }
+            if !ip.hasPrefix("127.") { result[String(cString: addr.ifa_name)] = ip }
         }
         return result
     }

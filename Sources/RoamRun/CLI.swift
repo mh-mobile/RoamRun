@@ -760,8 +760,9 @@ enum CLI {
         check(FileManager.default.isExecutableFile(atPath: "/usr/bin/xcrun") && shell("/usr/bin/xcrun", ["--find", "devicectl"]) != nil,
               "Xcode's devicectl is available", fix: "Install Xcode and run it once (sudo xcode-select -s /Applications/Xcode.app).")
         let ip = InterfaceMonitor.currentIPv4()
-        check(ip != nil, "Wi-Fi address (en0): \(ip ?? "none")",
-              fix: "Connect en0 (Wi-Fi on most Macs, Ethernet on a Mac mini/Studio) to the network — the bridge listens there because Xcode only looks there.")
+        let lan = InterfaceMonitor.lanInterface
+        check(ip != nil, "LAN address (\(lan)): \(ip ?? "none")",
+              fix: "Connect \(lan) to the network — the bridge listens where Xcode looks for devices. To use another interface, pick it in RoamRun (Open RoamRun › ⚙ Settings › Network).")
         let orphans = DNSServiceProxy.orphanedHelperCount()
         check(orphans == 0, orphans == 0 ? "No leftover helper processes" : "\(orphans) leftover helper process(es) from a crash",
               fix: "Open RoamRun (it cleans them up at launch) or Settings › Clean Up Leftover Helpers.", warnOnly: true)

@@ -7,6 +7,9 @@ struct SettingsView: View {
     @State private var cliState = CLIInstaller.state
     @State private var cliError: String?
 
+    @AppStorage("networkInterface") private var networkInterface = ""
+    private let interfaces = InterfaceMonitor.ipv4Addresses()
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Settings").font(.title2)
@@ -16,6 +19,23 @@ struct SettingsView: View {
                     TextField("Auto-detect", text: $cliPath)
                         .textFieldStyle(.roundedBorder)
                     Text("Leave empty to find it automatically (Tailscale.app, Homebrew, /usr/local/bin). Set a path only if you installed the CLI elsewhere.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.vertical, 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            GroupBox("Network") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Picker("Interface", selection: $networkInterface) {
+                        Text("Automatic (\(InterfaceMonitor.pickLAN(chosen: nil, available: Set(interfaces.keys))))").tag("")
+                        ForEach(interfaces.keys.filter { $0.hasPrefix("en") }.sorted(), id: \.self) { name in
+                            Text("\(name) — \(interfaces[name] ?? "")").tag(name)
+                        }
+                    }
+                    .onChange(of: networkInterface) { _ in coordinator.reconnectActiveBridges() }
+                    Text("Where the bridge listens: the network Xcode looks for devices on. Automatic uses en0 (Wi‑Fi on most Macs) when it's connected.")
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
