@@ -21,8 +21,9 @@ bounded.
   network could notice the device is paired with this Mac. Bridges stand aside
   (publish nothing) while the device is on the Mac's own network.
 - **It listens for TCP on the Mac's primary interface (en0).** The relay accepts
-  a connection only if it comes from this Mac's own address — anything else is
-  dropped immediately. It forwards bytes unchanged to the device's Tailscale (or
+  a connection only if it comes from this Mac's own address (so any local process
+  qualifies, as it could reach the device's Tailscale address anyway) — anything
+  else is dropped immediately. It forwards bytes unchanged to the device's Tailscale (or
   manually entered) address and never reads, stores or alters them.
 - **Authentication and encryption are Apple's.** Pairing verification and the
   encrypted CoreDevice tunnel run end to end between the Mac and the device.
@@ -39,7 +40,10 @@ bounded.
 - Files: `~/Library/Application Support/RoamRun/` (device profiles, mode 0600,
   and bridge status), `~/Library/Logs/RoamRun/`, and the `com.roamrun.app`
   defaults. The CLI link and agent skills are installed only on request and
-  never overwrite files they didn't create.
+  never overwrite other files (they do replace an existing RoamRun link or
+  RoamRun skill).
+- Any process of your user can ask the app to stop a bridge (`roamrun down`
+  uses an unauthenticated distributed notification); it can't start one.
 - Helper processes (`dns-sd`, `log stream`) are tied to RoamRun and exit within
   a second if it quits or is killed, taking the advertisement with them.
 

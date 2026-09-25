@@ -73,7 +73,7 @@ sequenceDiagram
 
 ## Requirements
 
-- macOS 13+ on Apple Silicon (Intel Macs aren't supported)
+- macOS 13+ on Apple Silicon (Intel Macs aren't supported), with an **administrator account** (RoamRun reads remotepairingd's log with `log stream`, which macOS only allows admins)
 - iOS 17.4 or later on the iPhone (the generation whose CoreDevice tunnel is TCP; the QUIC/UDP tunnel of 17.0–17.3 isn't supported)
 - Also verified with iPad and Apple Vision Pro, which work the same way ("iPhone" below includes them). Vision Pro has no USB and is developed for over Wi-Fi anyway, which makes it a natural fit for working away from the Mac
 - Xcode (`devicectl` must be available)
@@ -97,7 +97,7 @@ Installs `RoamRun.app` in `/Applications` and links the `roamrun` command. RoamR
 git clone https://github.com/mh-mobile/RoamRun && cd RoamRun
 ```
 
-- **Try it:** `make run` — builds and launches `RoamRun.app` in the repo folder.
+- **Try it:** `make run` — builds and launches `RoamRun.app` in the repo folder (quit an installed RoamRun first: only one runs at a time).
 - **Everyday use:** `make app`, move `RoamRun.app` to `/Applications`, open it, and install the CLI from the app (see [CLI](#cli)).
 - **Developing RoamRun:** `make install-cli` links `roamrun` to the build in the repo folder, so each `make app` takes effect right away. If you later move the app, reinstall the CLI from the app.
 
@@ -138,23 +138,25 @@ When the Mac's IP changes, the bridge restarts automatically.
 The app binary doubles as a CLI (handy over SSH or in scripts). To put `roamrun` on your PATH (`/usr/local/bin/roamrun`):
 
 - **Homebrew:** already linked (`/opt/homebrew/bin/roamrun` on Apple Silicon).
-- **dmg:** click "Also install the roamrun command for Terminal…" on the first screen, or RoamRun → Settings → Command line tool → **Install…**
-- **Built from source:** the same, once the app is in `/Applications`; or `make install-cli` to use the build in the repo folder (`BINDIR=~/bin` also works)
+- **dmg:** click "Also install the roamrun command for Terminal…" on the first screen, or Open RoamRun → ⚙ Settings → Command line tool → **Install…**
+- **Built from source:** the same, once the app is in `/Applications`; or `make install-cli` to use the build in the repo folder (`BINDIR=$HOME/bin` also works)
 
 ```sh
 roamrun devices               # saved devices (name, UDID) and their status
 roamrun up <name>             # start a bridge and show progress until Ready; Ctrl-C stops and cleans up
 roamrun up <name> -d          # start in the background (survives closing the terminal; log in ~/Library/Logs/RoamRun/)
-roamrun status <name>         # exits 0 when Ready (for waiting in scripts)
+roamrun status <name>         # exits 0 when Ready (for waiting in scripts; without a name: when any device is)
 roamrun down <name>           # stop a bridge, whether the app or another terminal's `up` runs it
 roamrun doctor                # check Mac → Tailscale → iPhone step by step and say how to fix
-roamrun run <name> [--scheme S] [--logs]   # in the project folder: build → install → launch (--scheme: only if it has several; --logs: stream output)
+roamrun run <name> [--scheme S] [--logs]   # in the project folder: build → install → launch (--scheme: only if it has several; --logs: stream output; like Xcode, it may create provisioning profiles)
 roamrun install <name> <App.ipa|App.app>   # install a build signed for the device (checks the signing first)
 roamrun logs <name> <bundle-id>   # relaunch the app and stream its print / os_log output (Ctrl-C to stop)
 roamrun screenshot <name> [file.png]   # save the device's screen as PNG and print the path (Xcode 27)
 ```
 
-`<name>` is **the name you gave the device in RoamRun**, not the iPhone's own name (case-insensitive; see `roamrun devices`, rename with ✏️ in the app's detail view; names must be unique). Add each device once in the app (Add Device). The app and the CLI never bridge the same iPhone at once: whichever starts second refuses. `logs` relaunches the app, since `devicectl` can't attach a console to one already running; it works over a bridge and on the same Wi-Fi alike.
+Options: `--json` (`devices`, `status`, `doctor`), `--wait N` (`status`: wait up to N seconds for Ready), `-v` (`up`: show the activity log), `--workspace W` / `--project P` / `--configuration C` (`run`). `roamrun --help` lists everything; a command rejects options it doesn't take (exit 2).
+
+`<name>` is **the name you gave the device in RoamRun**, not the iPhone's own name (case-insensitive; see `roamrun devices`, rename with ✏️ in the app's detail view; names must be unique). Add each device once in the app (Add Device). The app and the CLI never bridge the same iPhone at once: whichever starts second refuses (`up` exits 0 if the other one already has it ready), except that a bridge that is standing aside ("On this Wi‑Fi") or has an error can be taken over. `logs` relaunches the app, since `devicectl` can't attach a console to one already running; it works over a bridge and on the same Wi-Fi alike.
 
 `install` takes an `.ipa` (e.g. from CI) or an `.app` exported for **Debugging, Release Testing (Ad Hoc) or Enterprise** — the device's UDID must be in its provisioning profile (Enterprise: any device that trusts the certificate). Builds for App Store Connect (App Store / TestFlight) can't be installed directly; `install` says so before trying. RoamRun only reaches devices paired with this Mac; to hand a build to devices that aren't, use TestFlight or over-the-air distribution (Ad Hoc / Enterprise).
 
@@ -261,7 +263,7 @@ defaults delete com.roamrun.app
 - After the iPhone restarts, re-staging the DDI may need one USB connection
 - If the TXT record's authTag/identifier changes, add the iPhone again on the same Wi-Fi
 - While bridging, RoamRun keeps advertising the iPhone's Bonjour identifiers (identifier / authTag) on **every local network this Mac is on** (Wi-Fi, Ethernet — every interface with mDNS). Unlike the iPhone's own advertisement these values are fixed, so someone on the same network could track the device's presence (not an issue in the usual setup with the Mac at home). The relay immediately drops any connection that doesn't come from this Mac. The iPhone's side is encrypted by Tailscale, so whichever Wi-Fi it's on doesn't matter
-- **Tested with Xcode and `devicectl`.** Flutter and React Native build and install through the same tools, so they should work while the bridge is Ready, but this hasn't been verified yet ([#5](https://github.com/mh-mobile/RoamRun/issues/5)). `roamrun run` builds the Xcode project in the current folder (for those, the one under `ios/`)
+- **Tested with Xcode and `devicectl`.** Flutter and React Native build and install through the same tools, so they should work while the bridge is Ready, but this hasn't been verified yet ([#5](https://github.com/mh-mobile/RoamRun/issues/5)). `roamrun run` builds the Xcode project in the current folder (for those, `cd ios` first)
 - When you're not developing, turning off the iPhone's Developer Mode or removing pairings you don't need is safer (Apple's recommendation)
 - Other members of your tailnet can reach the iPhone's RemotePairing port too (they can connect, but pair verification rejects them). On a shared tailnet, use Tailscale Grants / ACLs so only your Mac can reach the iPhone
 - If another Mac is on the same network, this iPhone may briefly show up in that Mac's Xcode as well (the relay refuses its connections, so it can't do anything with it)

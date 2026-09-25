@@ -73,7 +73,7 @@ sequenceDiagram
 
 ## 要件
 
-- macOS 13+、Apple Silicon（Intel Mac は非対応）
+- macOS 13+、Apple Silicon（Intel Mac は非対応）。Mac の**管理者アカウント**で使うこと（RoamRun は `log stream` で remotepairingd のログを読みますが、macOS は管理者にしか許可していません）
 - iPhone は iOS 17.4 以降（CoreDevice トンネルが TCP の世代。17.0–17.3 の QUIC/UDP トンネルは非対応）
 - iPad、Apple Vision Pro でも同じ仕組みで動作を確認済み（以下「iPhone」はこれらも含みます）。Vision Pro はもともと USB がなく Wi-Fi だけで開発する端末なので、外出先からの利用とも相性が良いです
 - Xcode（devicectl が使えること）
@@ -97,7 +97,7 @@ brew install --cask mh-mobile/tap/roamrun
 git clone https://github.com/mh-mobile/RoamRun && cd RoamRun
 ```
 
-- **試すだけ:** `make run` — リポジトリのフォルダ内に `RoamRun.app` をビルドして起動
+- **試すだけ:** `make run` — リポジトリのフォルダ内に `RoamRun.app` をビルドして起動（インストール済みの RoamRun は先に終了。同時に 1 つしか起動しません）
 - **普段使い:** `make app` → `RoamRun.app` を `/Applications` に移して起動し、アプリから CLI を入れる（[CLI](#cli) 参照）
 - **RoamRun の開発:** `make install-cli` で `roamrun` をフォルダ内のビルドにリンク。`make app` のたびにすぐ反映されます。あとでアプリを移したら、アプリから CLI を入れ直してください
 
@@ -138,23 +138,25 @@ Mac の IP が変わるとブリッジは自動再起動します。
 アプリ本体がそのまま CLI にもなります（SSH 先の Mac やスクリプト向け）。`roamrun` コマンド（`/usr/local/bin/roamrun`）の入れ方：
 
 - **Homebrew:** リンク済み（Apple Silicon では `/opt/homebrew/bin/roamrun`）
-- **dmg 版:** 最初の画面の「Also install the roamrun command for Terminal…」、または RoamRun → Settings → Command line tool → **Install…**
-- **ソースからビルドした場合:** `/Applications` に移したなら同じ手順。フォルダ内のビルドを使うなら `make install-cli`（`BINDIR=~/bin` なども可）
+- **dmg 版:** 最初の画面の「Also install the roamrun command for Terminal…」、または Open RoamRun → ⚙ Settings → Command line tool → **Install…**
+- **ソースからビルドした場合:** `/Applications` に移したなら同じ手順。フォルダ内のビルドを使うなら `make install-cli`（`BINDIR=$HOME/bin` なども可）
 
 ```sh
 roamrun devices               # 登録済み iPhone（名前・UDID）と状態
 roamrun up <name>             # ブリッジを起動し、Ready まで表示。Ctrl-C で停止・後片付け
 roamrun up <name> -d          # バックグラウンドで起動（ターミナルを閉じても継続。ログは ~/Library/Logs/RoamRun/）
-roamrun status <name>         # Ready なら exit 0（スクリプトの待ち合わせ用）
+roamrun status <name>         # Ready なら exit 0（スクリプトの待ち合わせ用。名前なしならどれか 1 台が Ready で 0）
 roamrun down <name>           # ブリッジを停止（アプリ側・別ターミナルの up どちらでも）
 roamrun doctor                # Mac → Tailscale → iPhone を順に診断し、直し方を表示
-roamrun run <name> [--scheme S] [--logs]   # プロジェクトのフォルダで：ビルド → インストール → 起動（--scheme は複数あるときだけ。--logs で出力も流す）
+roamrun run <name> [--scheme S] [--logs]   # プロジェクトのフォルダで：ビルド → インストール → 起動（--scheme は複数あるときだけ。--logs で出力も流す。Xcode と同じく署名のプロファイルを作ることがある）
 roamrun install <name> <App.ipa|App.app>   # その端末用に署名されたビルドをインストール（先に署名を確認）
 roamrun logs <name> <bundle-id>   # アプリを起動し直し、print / os_log の出力を流す（Ctrl-C で停止）
 roamrun screenshot <name> [file.png]   # 実機の画面を PNG で保存し、パスを表示（Xcode 27）
 ```
 
-`<name>` は iPhone 本体の名前ではなく、**RoamRun に登録した名前**です（大文字小文字は区別しません。`roamrun devices` で確認、アプリの詳細画面の ✏️ で変更可。名前は重複できません）。iPhone の登録（Add Device）はアプリで一度だけ行ってください。アプリと CLI が同じ iPhone を同時にブリッジしないよう、後から起動した側は起動を拒否します。`logs` はアプリを起動し直します（`devicectl` は、すでに動いているアプリにコンソールをつなげないため）。ブリッジ経由でも、同じ Wi-Fi でも使えます。
+オプション: `--json`（`devices`、`status`、`doctor`）、`--wait N`（`status`: 最大 N 秒 Ready を待つ）、`-v`（`up`: アクティビティログを表示）、`--workspace W` / `--project P` / `--configuration C`（`run`）。一覧は `roamrun --help` で表示されます。コマンドが受け付けないオプションはエラーになります（exit 2）。
+
+`<name>` は iPhone 本体の名前ではなく、**RoamRun に登録した名前**です（大文字小文字は区別しません。`roamrun devices` で確認、アプリの詳細画面の ✏️ で変更可。名前は重複できません）。iPhone の登録（Add Device）はアプリで一度だけ行ってください。アプリと CLI が同じ iPhone を同時にブリッジしないよう、後から起動した側は起動を拒否します（相手がすでに Ready なら `up` は exit 0）。ただし、待機中（On this Wi‑Fi）やエラーのブリッジは引き継げます。`logs` はアプリを起動し直します（`devicectl` は、すでに動いているアプリにコンソールをつなげないため）。ブリッジ経由でも、同じ Wi-Fi でも使えます。
 
 `install` には、**Debugging、Release Testing（Ad Hoc）、Enterprise** で書き出した `.ipa`（CI で作ったものなど）や `.app` を渡せます。端末の UDID がプロビジョニングプロファイルに入っている必要があります（Enterprise は、証明書を信頼した端末ならどれでも）。App Store Connect 用（App Store / TestFlight）のビルドは直接インストールできないので、`install` が実行前にそう伝えます。RoamRun が届くのはこの Mac とペアリング済みの端末だけです。ペアリングしていない端末にビルドを配るには、TestFlight や OTA 配布（Ad Hoc / Enterprise）を使ってください。
 
@@ -261,7 +263,7 @@ defaults delete com.roamrun.app
 - iPhone 再起動後など、DDI の再ステージングで一度 USB 接続が必要な場合があります
 - TXT の authTag/identifier が変わった場合は、同じ Wi-Fi で iPhone を追加し直してください
 - ブリッジ中は、**この Mac が属するローカルネットワーク**（Wi-Fi・有線など mDNS が有効な全インターフェース）に iPhone の Bonjour 識別子（identifier / authTag）を広告し続けます。iPhone 本体と違い値が固定のため、同じネットワークの第三者に端末の存在を追跡される可能性があります（Mac を自宅に置いて使う通常の構成では問題になりません）。中継は、この Mac 自身から以外の接続を即座に切断します。iPhone 側の通信は Tailscale で暗号化されるため、iPhone がどの Wi-Fi にいても影響しません
-- **動作確認は Xcode と `devicectl` で行っています。** Flutter や React Native も同じツールでビルド・インストールするため、ブリッジが Ready なら動くはずですが、まだ確認していません（[#5](https://github.com/mh-mobile/RoamRun/issues/5)）。`roamrun run` は今いるフォルダの Xcode プロジェクトをビルドします（Flutter / React Native なら `ios/` の下）
+- **動作確認は Xcode と `devicectl` で行っています。** Flutter や React Native も同じツールでビルド・インストールするため、ブリッジが Ready なら動くはずですが、まだ確認していません（[#5](https://github.com/mh-mobile/RoamRun/issues/5)）。`roamrun run` は今いるフォルダの Xcode プロジェクトをビルドします（Flutter / React Native なら先に `cd ios`）
 - 開発しない期間は、iPhone のデベロッパモードをオフにする、または不要なペアリングを解除すると安全です（Apple の推奨）
 - iPhone の RemotePairing のポートには、tailnet の他のメンバーからも到達できます（接続はできても、ペアリングの確認で弾かれます）。共有の tailnet では、Tailscale の Grants / ACL で iPhone に届く相手を自分の Mac に絞ることをおすすめします
 - 同じネットワークに別の Mac がいると、その Mac の Xcode にもこの iPhone が一瞬表示されることがあります（接続は中継が拒否するため、操作や通信はできません）

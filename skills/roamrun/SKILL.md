@@ -18,7 +18,7 @@ roamrun --help
 
 If missing, the user installs RoamRun (`brew install --cask mh-mobile/tap/roamrun`
 links the command too; or https://github.com/mh-mobile/RoamRun) and installs the command from the app's
-first screen or Settings › Command line tool › Install (or `make install-cli`
+first screen or Open RoamRun › ⚙ Settings › Command line tool › Install (or `make install-cli`
 from the repo).
 
 ## 2. Things only the user can do — ask, don't retry
@@ -40,12 +40,12 @@ roamrun up iPhone -d                              # skip if it's on this Mac's W
 roamrun run iPhone [--scheme S] [--logs]          # build → install → launch (--scheme: only if several; --logs: stream output)
 ```
 
-`run` checks reachability, lock state and signing first and says what to do.
+`run` checks reachability and lock state first, and the signing right after the build, and says what to do.
 Step by step, when you need more control:
 
 ```sh
 roamrun devices                       # saved iPhones + UDID
-roamrun up iPhone -d                  # bridge in the background; returns when ready
+roamrun up iPhone -d                  # bridge in the background; returns when ready (exit 1 after 60 s if not — it keeps trying)
 roamrun status iPhone --wait 60 --json > /tmp/rr.json || roamrun doctor iPhone
 UDID=$(jq -r '.[0].udid' /tmp/rr.json)       # works for xcodebuild AND devicectl
 jq -e '.[0].locked != true' /tmp/rr.json >/dev/null || echo "ask the user to unlock the iPhone"
@@ -94,3 +94,4 @@ needed, Xcode sees it directly, and it counts as ready.
   every 42 s; retry the command once, then run `doctor`.
 
 Exit codes: `0` ok/ready, `1` not ready or a check failed, `2` usage error.
+In `--json`, compare `ready` or `state` (off, starting, waiting, preparing, ready, error, local); `status` is display text.

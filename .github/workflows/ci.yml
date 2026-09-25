@@ -22,3 +22,6 @@ jobs:
           make app
           plutil -lint RoamRun.app/Contents/Info.plist
           codesign --verify --strict RoamRun.app
+          plutil -extract CFBundleVersion raw Info.plist | grep -Eq '^[0-9]+$'
+      - name: Build the screenshot (SNAPSHOT) variant
+        run: xcrun swift build -Xswiftc -DSNAPSHOT

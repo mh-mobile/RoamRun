@@ -64,6 +64,7 @@ install-cli: app
 	@t="$(BINDIR)/roamrun"; \
 	if { [ -e "$$t" ] || [ -L "$$t" ]; } && ! { [ -L "$$t" ] && readlink "$$t" | grep -q '/RoamRun$$'; }; then \
 		echo "$$t exists and is not a RoamRun link — not touching it"; exit 1; fi
+	@[ -d "$(BINDIR)" ] || { echo "$(BINDIR) doesn't exist — create it (sudo mkdir -p $(BINDIR)) or pass BINDIR=$$HOME/bin"; exit 1; }
 	ln -sfh "$(CURDIR)/$(BUNDLE)/Contents/MacOS/$(APP_NAME)" "$(BINDIR)/roamrun"
 	@echo "Installed $(BINDIR)/roamrun"
 
