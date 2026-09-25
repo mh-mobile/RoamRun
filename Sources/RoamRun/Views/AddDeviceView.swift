@@ -1,4 +1,5 @@
 import SwiftUI
+import Network
 
 struct AddDeviceView: View {
     @EnvironmentObject private var coordinator: AppCoordinator
@@ -203,6 +204,9 @@ struct AddDeviceView: View {
             } else {
                 TextField("The device's VPN address, e.g. 100.64.0.5", text: $manualIP)
                     .textFieldStyle(.roundedBorder)
+                if !chosenIP.isEmpty && !isIPAddress(chosenIP) {
+                    Text("Enter an IP address, e.g. 100.64.0.5").font(.caption).foregroundStyle(.red)
+                }
             }
         }
     }
@@ -286,6 +290,13 @@ struct AddDeviceView: View {
         }
     }
 
+    /// Dotted-quad IPv4 or IPv6, no zone: IPv4Address alone also takes "10.1" or "0x7f.1".
+    private func isIPAddress(_ s: String) -> Bool {
+        guard !s.contains("%") else { return false }
+        if s.contains(":") { return IPv6Address(s) != nil }
+        return s.split(separator: ".").count == 4 && s.allSatisfy { $0.isNumber || $0 == "." } && IPv4Address(s) != nil
+    }
+
     private var chosenIP: String {
         provider == .manual ? manualIP.trimmingCharacters(in: .whitespaces) : (meshDevice?.ipv4 ?? "")
     }
@@ -297,6 +308,6 @@ struct AddDeviceView: View {
 
     private var canAdd: Bool {
         visibleServices.contains(where: { $0.host == selectedHost }) && !name.trimmingCharacters(in: .whitespaces).isEmpty
-            && !coordinator.isNameTaken(name) && !chosenIP.isEmpty && alreadySaved == nil
+            && !coordinator.isNameTaken(name) && isIPAddress(chosenIP) && alreadySaved == nil
     }
 }
