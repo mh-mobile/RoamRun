@@ -14,6 +14,15 @@ enum Entry {
         if invokedAsCLI || args.first.map({ first in !["-psn_", "-NS", "-Apple"].contains(where: first.hasPrefix) }) == true {
             CLI.run(args.isEmpty ? ["help"] : args)
         } else {
+            // One app at a time: macOS only checks this for Finder/open launches,
+            // not when the binary is run directly. A second copy would restore
+            // the same bridges and show a second menu bar icon.
+            let others = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
+                .filter { $0.processIdentifier != getpid() }
+            if let running = others.first, Snapshot.path == nil {
+                running.activate()
+                exit(0)
+            }
             RoamRunApp.main()
         }
     }
