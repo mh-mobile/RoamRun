@@ -12,7 +12,7 @@ enum Proc {
     /// every Swift concurrency / global-queue thread.
     private static let timers = DispatchQueue(label: "com.roamrun.app.proc-timers")
 
-    /// Runs to completion. Both pipes are drained before waiting — waiting
+    /// Runs to completion. Both pipes are drained while it runs — waiting
     /// first deadlocks once a tool writes more than the ~64KB pipe buffer.
     /// Never unbounded: a wedged tool must not hang the CLI or a bridge's checks.
     static func run(_ path: String, _ args: [String], timeout: TimeInterval = 45) -> Result {
@@ -20,30 +20,37 @@ enum Proc {
         task.executableURL = URL(fileURLWithPath: path)
         task.arguments = args
         let out = Pipe(), err = Pipe()
+        task.standardInput = FileHandle.nullDevice   // an interactive shell must not read the CLI's terminal
         task.standardOutput = out
         task.standardError = err
+        // Not waitUntilExit(): it spins the caller's run loop (often the main one).
+        let exited = DispatchSemaphore(value: 0)
+        task.terminationHandler = { _ in exited.signal() }
         do { try task.run() } catch { return Result(status: -1, out: "", err: error.localizedDescription) }
-        timers.asyncAfter(deadline: .now() + timeout) { if task.isRunning { task.terminate() } }
+        let box = OutputBox()
+        timers.asyncAfter(deadline: .now() + timeout) { if task.isRunning { box.timedOut = true; task.terminate() } }
         timers.asyncAfter(deadline: .now() + timeout + 2) {   // ignored TERM
             if task.isRunning { kill(task.processIdentifier, SIGKILL) }
         }
 
         // Blocking reads get their own threads: on the shared GCD pool they
         // can use up every worker and hold back the timers above.
-        let box = OutputBox()
         let group = DispatchGroup()
-        group.enter(); group.enter()
-        Thread.detachNewThread { box.set(err: err.fileHandleForReading.readDataToEndOfFile()); group.leave() }
-        Thread.detachNewThread { box.set(out: out.fileHandleForReading.readDataToEndOfFile()); group.leave() }
-        // A grandchild can keep the pipes open after we killed the tool: stop
-        // waiting then (the readers finish whenever that one exits).
-        guard group.wait(timeout: .now() + timeout + 4) == .success else {
-            return Result(status: -1, out: "", err: "\(path) timed out after \(Int(timeout))s")
+        for (pipe, isOut) in [(out, true), (err, false)] {
+            group.enter()
+            Thread.detachNewThread {
+                while case let d = pipe.fileHandleForReading.availableData, !d.isEmpty { box.append(d, out: isOut) }
+                group.leave()
+            }
         }
-        task.waitUntilExit()
+        exited.wait()   // bounded by the TERM/KILL timers
+        // A grandchild can keep the pipes open after the tool exited: keep what
+        // it wrote so far (the readers finish whenever that one exits).
+        _ = group.wait(timeout: .now() + 1)
+        let stderr = String(decoding: box.err, as: UTF8.self)
         return Result(status: task.terminationStatus,
                       out: String(decoding: box.out, as: UTF8.self),
-                      err: String(decoding: box.err, as: UTF8.self))
+                      err: box.timedOut ? "\(path) timed out after \(Int(timeout))s" + (stderr.isEmpty ? "" : "\n" + stderr) : stderr)
     }
 
     /// A long-running helper that can't outlive RoamRun: a tiny `sh` watchdog
@@ -89,9 +96,12 @@ final class LineReader: @unchecked Sendable {
 
 private final class OutputBox: @unchecked Sendable {
     private let lock = NSLock()
-    private var _out = Data(), _err = Data()
+    private var _out = Data(), _err = Data(), _timedOut = false
+    var timedOut: Bool {
+        get { lock.withLock { _timedOut } }
+        set { lock.withLock { _timedOut = newValue } }
+    }
     var out: Data { lock.withLock { _out } }
     var err: Data { lock.withLock { _err } }
-    func set(out: Data) { lock.withLock { _out = out } }
-    func set(err: Data) { lock.withLock { _err = err } }
+    func append(_ d: Data, out: Bool) { lock.withLock { if out { _out.append(d) } else { _err.append(d) } } }
 }

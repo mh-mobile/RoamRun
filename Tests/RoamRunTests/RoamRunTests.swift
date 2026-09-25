@@ -209,7 +209,7 @@ private func timed(_ path: String, _ args: [String]) -> (Proc.Result, TimeInterv
 
 @Test func slowToolIsStoppedAtTheTimeout() {
     let (r, t) = timed("/bin/sleep", ["20"])
-    #expect(r.status != 0, "status=\(r.status) err=\(r.err)")
+    #expect(r.status != 0 && r.err.contains("timed out"), "status=\(r.status) err=\(r.err)")
     #expect(t < 2.5, "t=\(t)")
 }
 
@@ -222,8 +222,14 @@ private func timed(_ path: String, _ args: [String]) -> (Proc.Result, TimeInterv
 @Test func grandchildHoldingThePipeDoesNotHangUs() {
     // sh is killed, but its `sleep` keeps stdout open.
     let (r, t) = timed("/bin/sh", ["-c", "trap '' TERM; sleep 8"])
-    #expect(r.status == -1, "status=\(r.status) err=\(r.err)")
-    #expect(t < 6.5, "t=\(t)")
+    #expect(r.status == 9, "status=\(r.status) err=\(r.err)")
+    #expect(t < 5, "t=\(t)")
+}
+
+@Test func toolThatExitsKeepsItsResultWhileABackgroundChildHoldsThePipe() {
+    let (r, t) = timed("/bin/sh", ["-c", "echo hi; sleep 30 &"])
+    #expect(r.status == 0 && r.out == "hi\n", "status=\(r.status) out=\(r.out)")
+    #expect(t < 1.8, "t=\(t)")
 }
 
 // MARK: - Home / away rules (regressions from real runs)
