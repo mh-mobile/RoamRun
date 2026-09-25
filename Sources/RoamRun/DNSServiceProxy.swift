@@ -11,6 +11,15 @@ final class DNSServiceProxy: @unchecked Sendable {
     private var process: Process?
     private var lastArgs: [String] = []
     private var renewToken: UUID?
+    /// The registration stop() ended, until it has exited.
+    private var stopping: Process?
+
+    /// A quick stop → start must let the old registration go first, or mDNSResponder
+    /// may rename the new one. Waits up to 1 s without blocking the caller's thread.
+    func previousExited() async {
+        for _ in 0..<100 where stopping?.isRunning == true { try? await Task.sleep(for: .milliseconds(10)) }
+        stopping = nil
+    }
     /// `dns-sd -P` died on its own (not via stop()/renew()): the record is gone.
     var onExit: ((Int32) -> Void)?
 
@@ -50,6 +59,7 @@ final class DNSServiceProxy: @unchecked Sendable {
     func stop() {
         renewToken = nil   // a renew waiting to respawn must not bring the record back
         process?.terminate()
+        if let p = process { stopping = p }
         process = nil
     }
 

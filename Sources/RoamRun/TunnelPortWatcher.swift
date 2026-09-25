@@ -132,3 +132,77 @@ private final class FirstLine: @unchecked Sendable {
     var value: String { lock.withLock { line } }
     func offer(_ l: String) { lock.withLock { if line.isEmpty { line = l } } }
 }
+
+/// One `log stream` for every bridge in this process: each line is parsed once
+/// and a tunnel port goes only to the bridge whose device asked for it. With a
+/// watcher per bridge, every bridge saw every port and they raced to relay it.
+@MainActor
+final class TunnelCoordinator {
+    static let shared = TunnelCoordinator()
+
+    struct Subscriber {
+        var udid: () -> String?
+        var onPort: (UInt16, String) -> Void          // port, address dialed
+        var onDevice: (String, String) -> Void        // instance, UDID
+        var onUnrecognized: (String) -> Void
+        var onLog: (String) -> Void
+        var onExit: (String) -> Void
+    }
+
+    private var watcher: TunnelPortWatcher?
+    private var subscribers: [UUID: Subscriber] = [:]
+
+    /// False if `log stream` couldn't be started.
+    func subscribe(_ id: UUID, _ s: Subscriber) -> Bool {
+        subscribers[id] = s
+        if watcher != nil { return true }
+        let w = TunnelPortWatcher()
+        w.onPort = { port, owner, host in Task { @MainActor in TunnelCoordinator.shared.route(port, owner: owner, host: host) } }
+        w.onDevice = { instance, udid in
+            Task { @MainActor in TunnelCoordinator.shared.subscribers.values.forEach { $0.onDevice(instance, udid) } }
+        }
+        w.onUnrecognized = { instance in
+            Task { @MainActor in TunnelCoordinator.shared.subscribers.values.forEach { $0.onUnrecognized(instance) } }
+        }
+        w.onLog = { m in Task { @MainActor in TunnelCoordinator.shared.subscribers.values.forEach { $0.onLog(m) } } }
+        w.onExit = { m in
+            Task { @MainActor in
+                let c = TunnelCoordinator.shared
+                c.watcher = nil   // the next subscribe starts a fresh one
+                c.subscribers.values.forEach { $0.onExit(m) }
+            }
+        }
+        watcher = w
+        guard w.start() else { watcher = nil; subscribers[id] = nil; return false }
+        return true
+    }
+
+    func unsubscribe(_ id: UUID) {
+        subscribers[id] = nil
+        if subscribers.isEmpty { watcher?.stop(); watcher = nil }
+    }
+
+    private func route(_ port: UInt16, owner: String?, host: String) {
+        let subs = subscribers.map { (id: $0.key, udid: $0.value.udid()) }
+        // Another process (the app, or a `roamrun up`) bridging a device: an unattributed port may be its.
+        let othersBridging = owner == nil || !subs.contains { $0.udid.map { $0.caseInsensitiveCompare(owner!) == .orderedSame } == true }
+            ? StatusFile.read().values.contains { $0.pid != getpid() && $0.holdsDevice } : false
+        guard let id = Self.recipient(owner: owner, subscribers: subs, othersBridging: othersBridging) else {
+            subscribers.values.first?.onLog("tunnel port \(port) \(owner.map { "for \($0) " } ?? "")not relayed: can't tell which bridged device it's for")
+            return
+        }
+        subscribers[id]?.onPort(port, host)
+    }
+
+    /// Who relays a tunnel port. Known owner: the bridge for that UDID. Unknown owner (or a
+    /// bridge that hasn't learned its UDID yet): only when that bridge is the only one anywhere.
+    nonisolated static func recipient(owner: String?, subscribers: [(id: UUID, udid: String?)], othersBridging: Bool) -> UUID? {
+        if let owner, let match = subscribers.first(where: { $0.udid?.caseInsensitiveCompare(owner) == .orderedSame }) {
+            return match.id
+        }
+        guard !othersBridging else { return nil }
+        if owner == nil { return subscribers.count == 1 ? subscribers[0].id : nil }
+        let unknown = subscribers.filter { $0.udid == nil }
+        return subscribers.count == 1 && unknown.count == 1 ? unknown[0].id : nil
+    }
+}

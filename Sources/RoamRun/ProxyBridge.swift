@@ -38,7 +38,6 @@ final class ProxyBridge: ObservableObject {
     /// QUIC over UDP, which RoamRun doesn't support).
     private var controlRelay: Relay?
     private var tunnelRelays: [UInt16: Relay] = [:]
-    private var watcher = TunnelPortWatcher()
     private var coveredPorts = Set<UInt16>()
     private var localPort: UInt16 = 0
     private var generation = 0
@@ -64,6 +63,10 @@ final class ProxyBridge: ObservableObject {
     /// A port scan that found nothing isn't repeated for a while (e.g. device on cellular).
     private var lastFailedScan = Date.distantPast
     private static let homeLog = Logger(subsystem: "com.roamrun.app", category: "home")
+    /// Lookahead hit/miss and port jumps (debug level): the data to retune +16 / -32
+    /// if a future iOS allocates tunnel ports differently.
+    private static let tunnelLog = Logger(subsystem: "com.roamrun.app", category: "tunnel")
+    private var lastTunnelPort: UInt16?
 
     /// Spoofed SRV target whose A record we publish pointing at this Mac.
     var spoofHost: String {
@@ -79,13 +82,11 @@ final class ProxyBridge: ObservableObject {
         generation += 1
         let gen = generation
         teardown()   // a failed or repeated start must not leave relays/timers behind
-        // Fresh watcher: the previous log stream's reader may still be
-        // delivering lines on its own queue while we'd reassign callbacks.
-        watcher = TunnelPortWatcher()
         warmingUp = false
         awayTicks = 0
         stuckRenewals = 0
         unrecognizedSince = nil
+        lastTunnelPort = nil
         activatedAt = .distantFuture
         autoRetry = true
         phoneConnected = false
@@ -170,41 +171,38 @@ final class ProxyBridge: ObservableObject {
         // logs the UDID the warm-up needs) within ~1s of it appearing.
         // Lines already queued when the bridge stops or restarts still arrive;
         // the generation check drops them.
-        watcher.onPort = { [weak self] port, owner, host in
-            Task { @MainActor in
-                guard let self, gen == self.generation else { return }
+        // One watcher per process routes each tunnel port to the bridge whose device asked for it.
+        // Lines already queued when the bridge stops or restarts still arrive; the generation check drops them.
+        let me = Weak(self)
+        let subscribed = TunnelCoordinator.shared.subscribe(profile.id, .init(
+            udid: { me.value?.udid },
+            onPort: { port, host in
+                guard let self = me.value, gen == self.generation else { return }
                 // Our relays answer on this Mac's en0 address; any other endpoint isn't ours to open.
                 guard host == localIP else { return }
-                // Another bridged iPhone's tunnel: its port isn't ours to relay.
-                if let owner, let mine = self.udid, owner.caseInsensitiveCompare(mine) != .orderedSame { return }
                 self.onTunnelPortDiscovered(port, localIP: localIP)
-            }
-        }
-        watcher.onDevice = { [weak self] instance, udid in
-            Task { @MainActor in
-                guard let self, gen == self.generation else { return }
+            },
+            onDevice: { instance, udid in
+                guard let self = me.value, gen == self.generation else { return }
                 self.onDeviceReachable(instance: instance, udid: udid)
-            }
-        }
-        watcher.onUnrecognized = { [weak self] instance in
-            Task { @MainActor in
-                guard let self, gen == self.generation else { return }
+            },
+            onUnrecognized: { instance in
+                guard let self = me.value, gen == self.generation else { return }
                 self.onUnrecognized(instance)
-            }
-        }
-        watcher.onLog = { [weak self] m in Task { @MainActor in self?.log(m) } }   // may come from the reader queue
-        watcher.onExit = { [weak self] m in
-            Task { @MainActor in self?.helperDied(m, gen: gen) }
-        }
+            },
+            onLog: { m in me.value?.log(m) },
+            onExit: { m in me.value?.helperDied(m, gen: gen) }))
         dnsProxy.onExit = { [weak self] status in
             Task { @MainActor in self?.helperDied("dns-sd exited (status \(status))", gen: gen) }
         }
-        guard watcher.start() else {
+        guard subscribed else {
             teardown()
             setState(.error("Couldn't watch remotepairingd's log (see Activity log). Retrying shortly."))
             return
         }
 
+        await dnsProxy.previousExited()
+        guard gen == generation else { return }
         do {
             setState(.starting("Publishing Bonjour proxy"))
             try dnsProxy.register(instanceName: profile.instanceName,
@@ -252,7 +250,7 @@ final class ProxyBridge: ObservableObject {
     private func teardown() {
         renewTimer?.invalidate()
         renewTimer = nil
-        watcher.stop()
+        TunnelCoordinator.shared.unsubscribe(profile.id)
         dnsProxy.stop()
         controlRelay?.stop()
         controlRelay = nil
@@ -275,6 +273,11 @@ final class ProxyBridge: ObservableObject {
     /// sequentially, so pre-open the next ones for the retry.
     // ponytail: fixed lookahead of 16; widen if the device skips further ahead.
     private func onTunnelPortDiscovered(_ port: UInt16, localIP: String) {
+        // Hit: a lookahead relay was already listening when remotepairingd dialed this port.
+        let hit = tunnelRelays[port] != nil
+        let jump = lastTunnelPort.map { Int(port) - Int($0) }
+        lastTunnelPort = port
+        Self.tunnelLog.debug("\(self.profile.displayName, privacy: .public): tunnel port \(port) \(hit ? "hit" : "miss", privacy: .public), jump \(jump.map(String.init) ?? "first", privacy: .public)")
         // First: if ports jumped (e.g. lower after a device reboot), the old window must go.
         let reaped = reapTunnelRelays(around: port)
         if !reaped.isEmpty, case .active(let lp, let existing) = state {
@@ -608,7 +611,7 @@ final class ProxyBridge: ObservableObject {
     /// Reached through en0 without a gateway — the link Xcode's mDNS sees.
     nonisolated private static func isOnLink(_ host: String) -> Bool {
         let out = Proc.run("/sbin/route", ["-n", "get"] + (host.contains(":") ? ["-inet6"] : []) + [host], timeout: 3).out
-        return out.contains("interface: en0") && !out.contains("gateway:")
+        return out.contains("interface: \(InterfaceMonitor.lanInterface)") && !out.contains("gateway:")
     }
 
     /// Without `log stream` no tunnel port is ever found; without `dns-sd` the
@@ -646,7 +649,9 @@ final class ProxyBridge: ObservableObject {
         setState(.error("This Mac doesn't recognize \(profile.displayName)'s pairing — its Bonjour identity changed or the pairing was reset. Put the device on this Mac's Wi‑Fi, remove it here and add it again. If Xcode also lost it, pair it in Xcode first."))
     }
 
-    static let noAddressMessage = "This Mac has no Wi‑Fi address (en0), so there is nothing to relay on. The bridge resumes when Wi‑Fi reconnects."
+    static var noAddressMessage: String {
+        "This Mac has no address on \(InterfaceMonitor.lanInterface) (its LAN interface), so there is nothing to relay on. The bridge resumes when it reconnects."
+    }
 
     func rename(_ name: String) { profile.displayName = name }
 
