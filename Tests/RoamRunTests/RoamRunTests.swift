@@ -254,3 +254,15 @@ private let t0 = Date(timeIntervalSinceReferenceDate: 800_000_000)
     // No CoreDevice input at all: a just-closed bridge's link can't hold it back.
     #expect(HomeRule.shouldResume(awayTicks: 3))
 }
+
+@Test func manySlowToolsAtOnceAllTimeOut() {
+    // More blocked pipe readers than CPU cores must not starve the timeout timers.
+    let start = Date()
+    let done = DispatchGroup()
+    for _ in 0..<80 {
+        done.enter()
+        Thread.detachNewThread { _ = Proc.run("/bin/sleep", ["20"], timeout: 1); done.leave() }
+    }
+    done.wait()
+    #expect(Date().timeIntervalSince(start) < 4)
+}

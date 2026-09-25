@@ -24,10 +24,13 @@ enum Proc {
             if task.isRunning { kill(task.processIdentifier, SIGKILL) }
         }
 
+        // Blocking reads get their own threads: on the shared GCD pool they
+        // can use up every worker and hold back the timers above.
         let box = OutputBox()
         let group = DispatchGroup()
-        DispatchQueue.global().async(group: group) { box.set(err: err.fileHandleForReading.readDataToEndOfFile()) }
-        DispatchQueue.global().async(group: group) { box.set(out: out.fileHandleForReading.readDataToEndOfFile()) }
+        group.enter(); group.enter()
+        Thread.detachNewThread { box.set(err: err.fileHandleForReading.readDataToEndOfFile()); group.leave() }
+        Thread.detachNewThread { box.set(out: out.fileHandleForReading.readDataToEndOfFile()); group.leave() }
         // A grandchild can keep the pipes open after we killed the tool: stop
         // waiting then (the readers finish whenever that one exits).
         guard group.wait(timeout: .now() + timeout + 4) == .success else {
