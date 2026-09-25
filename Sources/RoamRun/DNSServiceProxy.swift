@@ -7,15 +7,6 @@ import Foundation
 ///
 ///   dns-sd -P <name> <type> <domain> <port> <host> <ip> [k=v ...]
 final class DNSServiceProxy {
-    enum ProxyError: LocalizedError {
-        case failedToLaunch(String)
-        var errorDescription: String? {
-            switch self {
-            case .failedToLaunch(let m): return m
-            }
-        }
-    }
-
     private var process: Process?
     private var lastArgs: [String] = []
     /// `dns-sd -P` died on its own (not via stop()/renew()): the record is gone.
@@ -33,7 +24,7 @@ final class DNSServiceProxy {
         var args = ["-P", instanceName, serviceType, domain, String(port), host, ip]
         args += txt.map { "\($0.key)=\($0.value)" }
         lastArgs = args
-        guard spawn(args) else { throw ProxyError.failedToLaunch("dns-sd -P failed to launch") }
+        guard spawn(args) else { throw CocoaError(.executableLoad, userInfo: [NSLocalizedDescriptionKey: "dns-sd -P failed to launch"]) }
     }
 
     @discardableResult

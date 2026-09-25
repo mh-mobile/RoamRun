@@ -16,7 +16,6 @@ struct CapturedService: Identifiable, Hashable {
     var lastSeen: Date
 
     var id: String { instanceName }
-    var identifier: String? { txt["identifier"] }
     var shortHost: String { host.replacingOccurrences(of: ".local", with: "") }
 }
 
@@ -88,16 +87,6 @@ enum BridgeState: Equatable {
     var isActive: Bool {
         if case .active = self { return true }
         return false
-    }
-
-    var shortLabel: String {
-        switch self {
-        case .off: return "Off"
-        case .starting(let step): return step
-        case .active: return "Bridge active"
-        case .error: return "Error"
-        case .local: return "On this Wi‑Fi"
-        }
     }
 }
 

@@ -178,12 +178,7 @@ enum CLI {
 
     /// devicectl's tunnelState for this UDID; nil if devicectl failed.
     nonisolated static func coreDeviceState(_ udid: String) -> String? {
-        let out = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-list-\(UUID().uuidString).json")
-        defer { try? FileManager.default.removeItem(at: out) }
-        _ = Proc.run("/usr/bin/xcrun", ["devicectl", "--quiet", "--timeout", "10", "list", "devices", "--json-output", out.path])
-        guard let data = try? Data(contentsOf: out),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let devices = (root["result"] as? [String: Any])?["devices"] as? [[String: Any]],
+        guard let devices = Proc.devicectl(["--timeout", "10", "list", "devices"])?["devices"] as? [[String: Any]],
               let device = devices.first(where: { ($0["hardwareProperties"] as? [String: Any])?["udid"] as? String == udid })
         else { return nil }
         return (device["connectionProperties"] as? [String: Any])?["tunnelState"] as? String
@@ -239,14 +234,7 @@ enum CLI {
 
     /// Needs the tunnel; nil when devicectl can't reach the device.
     private static func isLocked(_ udid: String) -> Bool? {
-        let out = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-lock-\(UUID().uuidString).json")
-        defer { try? FileManager.default.removeItem(at: out) }
-        _ = Proc.run("/usr/bin/xcrun", ["devicectl", "--quiet", "--timeout", "10", "device", "info", "lockState",
-                                        "--device", udid, "--json-output", out.path])
-        guard let data = try? Data(contentsOf: out),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let result = root["result"] as? [String: Any] else { return nil }
-        return result["passcodeRequired"] as? Bool
+        Proc.devicectl(["--timeout", "10", "device", "info", "lockState", "--device", udid])?["passcodeRequired"] as? Bool
     }
 
     /// A runtime failure (exit 1). `fail` is for usage errors (exit 2).
@@ -440,7 +428,7 @@ enum CLI {
         // may still have it on its restore list and would take it back.
         DistributedNotificationCenter.default().postNotificationName(
             stopNotification, object: profile.id.uuidString, userInfo: nil, deliverImmediately: true)
-        if e.cli == true { kill(e.pid, SIGTERM) }   // its handler tears down dns-sd / log children
+        if e.cli == true, e.pid != getpid() { kill(e.pid, SIGTERM) }   // its handler tears down dns-sd / log children
         // Wait for the owner to clear its status entry.
         var tries = 0
         while StatusFile.read()[profile.id] != nil && tries < 50 { usleep(100_000); tries += 1 }

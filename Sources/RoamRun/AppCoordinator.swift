@@ -277,12 +277,7 @@ final class AppCoordinator: ObservableObject {
     }
 
     nonisolated private static func deviceTypes() -> [String: String] {
-        let out = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-devices-\(UUID().uuidString).json")
-        defer { try? FileManager.default.removeItem(at: out) }
-        _ = Proc.run("/usr/bin/xcrun", ["devicectl", "--quiet", "list", "devices", "--json-output", out.path], timeout: 30)
-        guard let data = try? Data(contentsOf: out),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let devices = (root["result"] as? [String: Any])?["devices"] as? [[String: Any]] else { return [:] }
+        guard let devices = Proc.devicectl(["list", "devices"], timeout: 30)?["devices"] as? [[String: Any]] else { return [:] }
         var types: [String: String] = [:]
         for d in devices {
             guard let h = d["hardwareProperties"] as? [String: Any], h["reality"] as? String == "physical",

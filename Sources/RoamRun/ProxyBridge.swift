@@ -29,17 +29,11 @@ final class ProxyBridge: ObservableObject {
     /// retryable: they clear by themselves once the iPhone leaves or the CLI stops.
     private(set) var autoRetry = true
 
-    /// TCP only: since iOS 17.4 the CoreDevice tunnel is TCP (17.0–17.3
-    /// used QUIC over UDP, which RoamRun doesn't support). A UDP relay would
-    /// only add an idle, spoofable surface on the LAN.
-    private struct RelayPair {
-        let tcp: Relay
-        func stop() { tcp.stop() }
-    }
-
     private var dnsProxy = DNSServiceProxy()
-    private var controlRelay: RelayPair?
-    private var tunnelRelays: [UInt16: RelayPair] = [:]
+    /// TCP only: since iOS 17.4 the CoreDevice tunnel is TCP (17.0–17.3 used
+    /// QUIC over UDP, which RoamRun doesn't support).
+    private var controlRelay: Relay?
+    private var tunnelRelays: [UInt16: Relay] = [:]
     private var watcher = TunnelPortWatcher()
     private var coveredPorts = Set<UInt16>()
     private var localPort: UInt16 = 0
@@ -123,12 +117,12 @@ final class ProxyBridge: ObservableObject {
         // Control channel: prefer the real port number (49152), fall back
         // to the next free ones if it is taken locally.
         setState(.starting("Opening relays"))
-        var control: RelayPair?
+        var control: Relay?
         var lastError = ""
         let first = profile.remotePairingPort
         for port in first...UInt16(min(Int(first) + 20, Int(UInt16.max))) {
             do {
-                control = try await bindPair(localIP: localIP, localPort: port, remotePort: first)
+                control = try await bindRelay(localIP: localIP, localPort: port, remotePort: first)
                 break
             } catch {
                 lastError = error.localizedDescription
@@ -140,9 +134,9 @@ final class ProxyBridge: ObservableObject {
             return
         }
         controlRelay = control
-        localPort = control.tcp.localPort
+        localPort = control.localPort
         coveredPorts.insert(localPort)
-        control.tcp.onOpenCountChange = { [weak self] _ in
+        control.onOpenCountChange = { [weak self] _ in
             Task { @MainActor in self?.controlConnectionsChanged(gen: gen) }
         }
 
@@ -241,10 +235,10 @@ final class ProxyBridge: ObservableObject {
         tunnelReady = false
     }
 
-    private func bindPair(localIP: String, localPort: UInt16, remotePort: UInt16) async throws -> RelayPair {
-        let tcp = Relay(localIP: localIP, localPort: localPort, remoteIP: profile.providerIP, remotePort: remotePort)
-        try await tcp.start()
-        return RelayPair(tcp: tcp)
+    private func bindRelay(localIP: String, localPort: UInt16, remotePort: UInt16) async throws -> Relay {
+        let relay = Relay(localIP: localIP, localPort: localPort, remoteIP: profile.providerIP, remotePort: remotePort)
+        try await relay.start()
+        return relay
     }
 
     /// remotepairingd connects ~5ms after logging the endpoint, so the port we
@@ -262,7 +256,7 @@ final class ProxyBridge: ObservableObject {
             var opened: [UInt16] = []
             for p in ports {
                 do {
-                    let pair = try await bindPair(localIP: localIP, localPort: p, remotePort: p)
+                    let pair = try await bindRelay(localIP: localIP, localPort: p, remotePort: p)
                     guard gen == generation else { pair.stop(); return }   // bridge stopped meanwhile
                     tunnelRelays[p] = pair
                     opened.append(p)
@@ -272,6 +266,7 @@ final class ProxyBridge: ObservableObject {
                     log("failed to open relay for tunnel port \(p): \(error.localizedDescription)")
                 }
             }
+            guard gen == generation else { return }   // restarted meanwhile: these ports aren't the new bridge's
             let reaped = reapTunnelRelays(below: port)
             if case .active(let lp, let existing) = state {
                 setState(.active(localPort: lp, tunnelPorts: existing.filter { !reaped.contains($0) } + opened))
@@ -285,7 +280,7 @@ final class ProxyBridge: ObservableObject {
     private func reapTunnelRelays(below newest: UInt16) -> Set<UInt16> {
         var reaped = Set<UInt16>()
         let cutoff = Int(newest) - 32
-        for (port, pair) in tunnelRelays where Int(port) < cutoff && pair.tcp.openCount == 0 {
+        for (port, pair) in tunnelRelays where Int(port) < cutoff && pair.openCount == 0 {
             pair.stop()
             tunnelRelays[port] = nil
             coveredPorts.remove(port)
@@ -347,10 +342,10 @@ final class ProxyBridge: ObservableObject {
         guard gen == generation else { return }
         // Read the live count: notifications from different threads can
         // arrive out of order, so a passed-in value may be stale.
-        if (controlRelay?.tcp.openCount ?? 0) > 0 { phoneConnected = true; waitingSince = nil; return }
+        if (controlRelay?.openCount ?? 0) > 0 { phoneConnected = true; waitingSince = nil; return }
         Task {
             try? await Task.sleep(for: .seconds(5))
-            if gen == generation, controlRelay?.tcp.openCount == 0 {
+            if gen == generation, controlRelay?.openCount == 0 {
                 phoneConnected = false
                 if waitingSince == nil { waitingSince = .now }
             }

@@ -65,6 +65,16 @@ enum Proc {
         return task
     }
 
+    /// `xcrun devicectl <args> --json-output …`: its "result" object; nil if it failed.
+    static func devicectl(_ args: [String], timeout: TimeInterval = 45) -> [String: Any]? {
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: out) }
+        _ = run("/usr/bin/xcrun", ["devicectl", "--quiet"] + args + ["--json-output", out.path], timeout: timeout)
+        guard let data = try? Data(contentsOf: out),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return root["result"] as? [String: Any]
+    }
+
     /// Same, off the calling actor.
     static func runAsync(_ path: String, _ args: [String]) async -> Result {
         await Task.detached { run(path, args) }.value
