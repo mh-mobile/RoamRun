@@ -60,7 +60,7 @@ enum CLI {
                 let app = Bundle.main.executableURL?.resolvingSymlinksInPath()
                     .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
                 let info = app.flatMap(Bundle.init(url:))?.infoDictionary ?? Bundle.main.infoDictionary
-                print("roamrun \(info?["CFBundleShortVersionString"] as? String ?? "dev") (\(info?["CFBundleVersion"] as? String ?? "?"))")
+                print("roamrun \(info?["CFBundleShortVersionString"] as? String ?? "dev")")
                 exit(0)
             }
             if args[0] == "init" { initSkill(args) }   // takes no iPhone name

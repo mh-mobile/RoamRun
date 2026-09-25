@@ -9,7 +9,9 @@ see `skills/roamrun/SKILL.md` — installed with `roamrun init` or
 - `make app` builds `RoamRun.app` (menu bar app and `roamrun` CLI in one binary);
   `make run` also launches it. Don't call `swift build` directly — `make` pins
   Xcode's toolchain and stamps the real SDK version (needed for Liquid Glass).
-- `make install-cli` links `/usr/local/bin/roamrun`; `make dmg` packages.
+- `make install-cli` links `/usr/local/bin/roamrun` to the build in the repo
+  folder (for development; the app's first screen / Settings link the copy that
+  is running, e.g. `/Applications`). `make dmg` packages.
 - `make test` runs the unit tests (log parsing, port attribution, status-file
   ownership, names). They never touch the real status/profile files or start a
   bridge — keep it that way (no `AppCoordinator` in tests).
@@ -37,6 +39,15 @@ Home/away decisions (bridge vs. "On this Wi-Fi") are logged at debug level,
 one line each with the signal that decided: `log stream --level debug
 --predicate 'subsystem == "com.roamrun.app" AND category == "home"'`. The rules
 live in `HomeRule` (ProxyBridge.swift) and are unit-tested — change them there.
+
+## Releasing
+
+1. Bump `CFBundleShortVersionString` (shown by `roamrun --version`) and
+   `CFBundleVersion` (+1 each release) in `Info.plist`; commit, push, wait for CI.
+2. Build the dmg from a fresh clone of that commit (a working copy can hold
+   uncommitted changes): `make dmg` → `RoamRun-<version>.dmg`.
+3. `gh release create v<version> RoamRun-<version>.dmg --title "RoamRun <version>" --notes …`
+   — the tag must point at the commit the dmg was built from.
 
 ## Rules
 

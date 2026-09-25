@@ -85,10 +85,13 @@ sequenceDiagram
 
 ```sh
 git clone https://github.com/mh-mobile/RoamRun && cd RoamRun
-make run     # ビルドして起動（アドホック署名）
 ```
 
-Xcode プロジェクト不要。SwiftPM + Makefile で `.app` を組み立てます。手元でビルドしたアプリはダウンロード扱いにならないため、Gatekeeper の警告は出ません。常用するなら `RoamRun.app` を `/Applications` に移してください。
+- **試すだけ:** `make run` — リポジトリのフォルダ内に `RoamRun.app` をビルドして起動
+- **普段使い:** `make app` → `RoamRun.app` を `/Applications` に移して起動し、アプリから CLI を入れる（[CLI](#cli) 参照）
+- **RoamRun の開発:** `make install-cli` で `roamrun` をフォルダ内のビルドにリンク。`make app` のたびにすぐ反映されます。あとでアプリを移したら、アプリから CLI を入れ直してください
+
+Xcode プロジェクト不要。SwiftPM + Makefile で `.app` を組み立てます。手元でビルドしたアプリはダウンロード扱いにならないため、Gatekeeper の警告は出ません。
 
 ### ビルド済み dmg（GitHub Releases）
 
@@ -97,7 +100,13 @@ Releases の dmg は**アドホック署名のみ（公証なし）**です。�
 - 一度開こうとした後、**システム設定 → プライバシーとセキュリティ → 「このまま開く」**
 - または `xattr -dr com.apple.quarantine /Applications/RoamRun.app`
 
+最初の画面から `roamrun` コマンドも入れられます。
+
 dmg は `make dmg` で作れます（`SIGN_ID` / `NOTARY_PROFILE` を渡すと Developer ID 署名と公証も行います。Makefile 参照）。
+
+### アップデート
+
+自動アップデートはありません。RoamRun を終了し、`/Applications/RoamRun.app` を新しいものに置き換えて起動します（ソースからの場合は先に `git pull` と `make app`）。登録済みデバイスと CLI のリンクはそのまま残り、動いていたブリッジも再開します。
 
 ## 使い方
 
@@ -111,19 +120,19 @@ Mac の IP が変わるとブリッジは自動再起動します。
 
 ## CLI
 
-アプリ本体がそのまま CLI にもなります（SSH 先の Mac やスクリプト向け）。
+アプリ本体がそのまま CLI にもなります（SSH 先の Mac やスクリプト向け）。`roamrun` コマンド（`/usr/local/bin/roamrun`）の入れ方：
+
+- **dmg 版:** 最初の画面の「Also install the roamrun command for Terminal…」、または RoamRun → Settings → Command line tool → **Install…**
+- **ソースからビルドした場合:** `/Applications` に移したなら同じ手順。フォルダ内のビルドを使うなら `make install-cli`（`BINDIR=~/bin` なども可）
 
 ```sh
-make install-cli              # /usr/local/bin/roamrun にリンク（BINDIR=~/bin なども可）
-                              # dmg 版はアプリの Settings → Command line tool → Install…
-
 roamrun devices               # 登録済み iPhone（名前・UDID）と状態
 roamrun up <name>             # ブリッジを起動し、Ready まで表示。Ctrl-C で停止・後片付け
 roamrun up <name> -d          # バックグラウンドで起動（ターミナルを閉じても継続。ログは ~/Library/Logs/RoamRun/）
 roamrun status <name>         # Ready なら exit 0（スクリプトの待ち合わせ用）
 roamrun down <name>           # ブリッジを停止（アプリ側・別ターミナルの up どちらでも）
 roamrun doctor                # Mac → Tailscale → iPhone を順に診断し、直し方を表示
-roamrun run <name> --scheme App [--logs]   # プロジェクトのフォルダで：ビルド → インストール → 起動（--logs で出力も流す）
+roamrun run <name> [--scheme S] [--logs]   # プロジェクトのフォルダで：ビルド → インストール → 起動（--scheme は複数あるときだけ。--logs で出力も流す）
 roamrun install <name> <App.ipa|App.app>   # その端末用に署名されたビルドをインストール（先に署名を確認）
 roamrun logs <name> <bundle-id>   # アプリを起動し直し、print / os_log の出力を流す（Ctrl-C で停止）
 ```
@@ -205,7 +214,7 @@ roamrun init --uninstall                  # スキルを入れた場合
 rm /usr/local/bin/roamrun                 # CLI を入れた場合
 rm -rf ~/Library/Application\ Support/RoamRun ~/Library/Logs/RoamRun
 defaults delete com.roamrun.app
-# 最後に RoamRun.app を削除（「ログイン時に開く」を有効にしていた場合は先に無効化）
+# 最後に /Applications/RoamRun.app を削除（「ログイン時に開く」を有効にしていた場合は先に無効化）
 ```
 
 ## 制限・既知の課題

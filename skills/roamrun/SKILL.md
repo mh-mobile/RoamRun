@@ -17,8 +17,9 @@ roamrun --help
 ```
 
 If missing, the user installs the RoamRun app
-(https://github.com/mh-mobile/RoamRun), then Settings › Command line tool ›
-Install (or `make install-cli` from the repo).
+(https://github.com/mh-mobile/RoamRun) and installs the command from the app's
+first screen or Settings › Command line tool › Install (or `make install-cli`
+from the repo).
 
 ## 2. Things only the user can do — ask, don't retry
 
@@ -36,7 +37,7 @@ Shortest path, from the project folder once the device is ready:
 
 ```sh
 roamrun up iPhone -d                              # skip if it's on this Mac's Wi-Fi
-roamrun run iPhone --scheme App [--logs]          # build → install → launch (--logs: stream output)
+roamrun run iPhone [--scheme S] [--logs]          # build → install → launch (--scheme: only if several; --logs: stream output)
 ```
 
 `run` checks reachability, lock state and signing first and says what to do.

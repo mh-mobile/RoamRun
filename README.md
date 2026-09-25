@@ -85,10 +85,13 @@ sequenceDiagram
 
 ```sh
 git clone https://github.com/mh-mobile/RoamRun && cd RoamRun
-make run     # build and launch (ad-hoc signed)
 ```
 
-No Xcode project needed: SwiftPM and a Makefile assemble the `.app`. An app you build yourself isn't treated as a download, so Gatekeeper won't warn. For everyday use, move `RoamRun.app` to `/Applications`.
+- **Try it:** `make run` — builds and launches `RoamRun.app` in the repo folder.
+- **Everyday use:** `make app`, move `RoamRun.app` to `/Applications`, open it, and install the CLI from the app (see [CLI](#cli)).
+- **Developing RoamRun:** `make install-cli` links `roamrun` to the build in the repo folder, so each `make app` takes effect right away. If you later move the app, reinstall the CLI from the app.
+
+No Xcode project needed: SwiftPM and a Makefile assemble the `.app`. An app you build yourself isn't treated as a download, so Gatekeeper won't warn.
 
 ### Prebuilt dmg (GitHub Releases)
 
@@ -97,7 +100,13 @@ The dmg on Releases is **ad-hoc signed only (not notarized)**. macOS blocks it o
 - After trying to open it once, **System Settings → Privacy & Security → "Open Anyway"**
 - Or `xattr -dr com.apple.quarantine /Applications/RoamRun.app`
 
+The first screen offers to install the `roamrun` command.
+
 Build the dmg with `make dmg` (pass `SIGN_ID` / `NOTARY_PROFILE` to sign with a Developer ID and notarize; see the Makefile).
+
+### Updating
+
+There's no auto-update. Quit RoamRun, replace `/Applications/RoamRun.app` with the new version (from source: `git pull` and `make app` first), and open it. Saved devices and the CLI link stay as they are, and bridges that were running start again.
 
 ## Usage
 
@@ -111,19 +120,19 @@ When the Mac's IP changes, the bridge restarts automatically.
 
 ## CLI
 
-The app binary doubles as a CLI (handy over SSH or in scripts).
+The app binary doubles as a CLI (handy over SSH or in scripts). To put `roamrun` on your PATH (`/usr/local/bin/roamrun`):
+
+- **dmg:** click "Also install the roamrun command for Terminal…" on the first screen, or RoamRun → Settings → Command line tool → **Install…**
+- **Built from source:** the same, once the app is in `/Applications`; or `make install-cli` to use the build in the repo folder (`BINDIR=~/bin` also works)
 
 ```sh
-make install-cli              # link /usr/local/bin/roamrun (BINDIR=~/bin also works)
-                              # dmg users: the app's Settings → Command line tool → Install…
-
 roamrun devices               # saved devices (name, UDID) and their status
 roamrun up <name>             # start a bridge and show progress until Ready; Ctrl-C stops and cleans up
 roamrun up <name> -d          # start in the background (survives closing the terminal; log in ~/Library/Logs/RoamRun/)
 roamrun status <name>         # exits 0 when Ready (for waiting in scripts)
 roamrun down <name>           # stop a bridge, whether the app or another terminal's `up` runs it
 roamrun doctor                # check Mac → Tailscale → iPhone step by step and say how to fix
-roamrun run <name> --scheme App [--logs]   # in the project folder: build → install → launch (--logs: stream output)
+roamrun run <name> [--scheme S] [--logs]   # in the project folder: build → install → launch (--scheme: only if it has several; --logs: stream output)
 roamrun install <name> <App.ipa|App.app>   # install a build signed for the device (checks the signing first)
 roamrun logs <name> <bundle-id>   # relaunch the app and stream its print / os_log output (Ctrl-C to stop)
 ```
@@ -205,7 +214,7 @@ roamrun init --uninstall                  # if you installed the skill
 rm /usr/local/bin/roamrun                 # if you installed the CLI
 rm -rf ~/Library/Application\ Support/RoamRun ~/Library/Logs/RoamRun
 defaults delete com.roamrun.app
-# finally delete RoamRun.app (turn off "Open at Login" first if you enabled it)
+# finally delete /Applications/RoamRun.app (turn off "Open at Login" first if you enabled it)
 ```
 
 ## Limitations and known issues

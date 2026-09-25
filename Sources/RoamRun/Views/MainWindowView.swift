@@ -157,6 +157,29 @@ extension BridgeStatus {
 
 private struct WelcomeView: View {
     let onAdd: () -> Void
+    @State private var cliState = CLIInstaller.state
+    @State private var cliError: String?
+
+    /// Optional; also in Settings. Shown only when there's nothing to replace.
+    @ViewBuilder private var cliOffer: some View {
+        switch cliState {
+        case .notInstalled:
+            Button("Also install the roamrun command for Terminal…") {
+                do { try CLIInstaller.install(); cliError = nil }
+                catch { cliError = error.localizedDescription }
+                cliState = CLIInstaller.state
+            }
+            .buttonStyle(.link)
+            if let cliError { Text(cliError).font(.caption).foregroundStyle(.red) }
+        case .installed:
+            Label("roamrun installed at \(CLIInstaller.linkPath)", systemImage: "checkmark.circle.fill")
+                .labelStyle(StatusLabelStyle(color: .green))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        default:
+            EmptyView()
+        }
+    }
 
     var body: some View {
         VStack(spacing: 20) {
@@ -181,6 +204,7 @@ private struct WelcomeView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .keyboardShortcut(.defaultAction)
+            cliOffer
         }
         .padding(32)
         .frame(maxWidth: 520)
