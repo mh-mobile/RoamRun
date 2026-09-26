@@ -9,6 +9,9 @@ enum CLI {
     nonisolated static let commands: Set<String> = ["devices", "up", "down", "status", "doctor", "run", "install", "logs", "screenshot", "init", "version", "--version", "help", "--help", "-h"]
     /// Posted by `roamrun down`; the app stops the bridge whose id is `object`.
     static let stopNotification = Notification.Name(AppID.bundle + ".stopBridge")
+    /// What a RoamRun before 0.1.12 listens for, should it still run next to this CLI.
+    // ponytail: bundle-id migration only; drop after a few releases.
+    static let legacyStopNotification = Notification.Name(AppID.legacy + ".stopBridge")
 
     private static let usage = """
     Usage: roamrun <command>
@@ -587,8 +590,10 @@ enum CLI {
         let who = owner(e)   // before it exits and the pid stops resolving
         // Always tell the app too: even when the CLI owns the device, the app
         // may still have it on its restore list and would take it back.
-        DistributedNotificationCenter.default().postNotificationName(
-            stopNotification, object: profile.id.uuidString, userInfo: nil, deliverImmediately: true)
+        for name in [stopNotification, legacyStopNotification] {
+            DistributedNotificationCenter.default().postNotificationName(
+                name, object: profile.id.uuidString, userInfo: nil, deliverImmediately: true)
+        }
         if e.cli == true, e.pid != getpid() { kill(e.pid, SIGTERM) }   // its handler tears down dns-sd / log children
         // Wait for the owner to clear its status entry.
         var tries = 0

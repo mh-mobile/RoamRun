@@ -10,7 +10,7 @@ SIGN_ID ?= -
 NOTARY_PROFILE ?=
 SIGN_FLAGS = --force --options runtime $(if $(filter -,$(SIGN_ID)),,--timestamp)
 
-.PHONY: all build app run dmg icon install-cli test clean
+.PHONY: all build app run dmg release-dmg icon install-cli test clean
 
 all: app
 
@@ -66,6 +66,18 @@ ifneq ($(NOTARY_PROFILE),)
 	xcrun stapler staple $(DMG)
 endif
 	@echo "Built $(DMG)"
+
+# A release: always Developer ID signed and notarized, or it fails. `make dmg` alone
+# stays the ad-hoc developer build. The short name works while the keychain holds one
+# Developer ID Application identity; else pass RELEASE_SIGN_ID with the full name.
+RELEASE_SIGN_ID ?= Developer ID Application
+RELEASE_NOTARY_PROFILE ?= roamrun-notary
+release-dmg:
+	$(MAKE) dmg SIGN_ID="$(RELEASE_SIGN_ID)" NOTARY_PROFILE="$(RELEASE_NOTARY_PROFILE)"
+	xcrun stapler validate $(BUNDLE)
+	xcrun stapler validate $(DMG)
+	spctl -a -vv -t exec $(BUNDLE) 2>&1 | grep -q "source=Notarized Developer ID"
+	@echo "Release $(DMG) is signed, notarized and stapled"
 
 # `roamrun` on PATH, pointing into the app bundle (one binary for app + CLI).
 BINDIR ?= /usr/local/bin

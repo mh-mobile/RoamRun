@@ -402,6 +402,14 @@ private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> { CLI.
     #expect(CLI.staleSkills(home: home, bundled: current) == [home.appendingPathComponent(".claude/skills/roamrun").path])
 }
 
+@Test func infoPlistMatchesAppID() throws {
+    // AppID.bundle names the defaults domain, log subsystem and notifications: it must be the real id.
+    let plist = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        .deletingLastPathComponent().appendingPathComponent("Info.plist")
+    let info = try PropertyListSerialization.propertyList(from: Data(contentsOf: plist), format: nil) as? [String: Any]
+    #expect(info?["CFBundleIdentifier"] as? String == AppID.bundle)
+}
+
 @Test func settingsCarryOverFromTheOldBundleID() {
     let old: [String: Any] = ["networkInterface": "en1", "wasActiveIDs": ["A"]]
     #expect(AppID.carriedOver(old: nil, new: nil) == nil)                         // nothing saved yet
