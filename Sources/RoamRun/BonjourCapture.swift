@@ -19,6 +19,9 @@ final class BonjourCapture: ObservableObject {
     private var process: Process?
     private var stopped = false
     private var reader: LineReader?
+    /// Which dns-sd a line came from: after stop() or restart(), an old one's
+    /// buffered lines must not refill the tables.
+    private var scan = 0
     private var srvByRecord: [String: (host: String, port: UInt16)] = [:]
     private var txtByRecord: [String: [String: String]] = [:]
     private var ipsByHost: [String: [String]] = [:]
@@ -40,8 +43,13 @@ final class BonjourCapture: ObservableObject {
         let pipe = Pipe()
         task.standardOutput = pipe
         task.standardError = FileHandle.nullDevice
+        scan += 1
+        let mine = scan
         reader = LineReader(pipe) { [weak self] line in
-            Task { @MainActor in self?.parse(line: line) }
+            Task { @MainActor in
+                guard let self, self.scan == mine else { return }
+                self.parse(line: line)
+            }
         }
         // Before run(): a dns-sd that dies at once must still be restarted.
         task.terminationHandler = { [weak self] ended in
@@ -67,6 +75,7 @@ final class BonjourCapture: ObservableObject {
 
     func stop() {
         stopped = true
+        scan += 1
         process?.terminate()
         process = nil
     }

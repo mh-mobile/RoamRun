@@ -16,6 +16,10 @@ screen on.
    each time the bridge shows the error and is Ready again within ~30 s; launch again.
 6. Delete `~/Library/Application Support/RoamRun/status.json` while it's Ready:
    `roamrun status <name>` shows it again within ~10 s.
+   Then, with the app bridging it: delete `status.json` again and at once run
+   `roamrun up <name> -d`. The CLI takes the device, and within ~10 s the app
+   steps back — only one `dns-sd -P … roamrun.local` for that device is left
+   (`ps -ax`). `roamrun down <name>` stops both (the app doesn't take it back).
 7. `roamrun down <name>` → no `dns-sd -P … roamrun.local` or `log stream` left (`ps -ax`).
 
 ## Two devices, both away (the multi-device path)

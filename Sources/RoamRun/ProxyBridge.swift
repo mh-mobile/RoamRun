@@ -44,6 +44,8 @@ final class ProxyBridge: ObservableObject {
     private var warmingUp = false
     private var waitingSince: Date?
     private var renewTimer: Timer?
+    /// From the claim on, while starting too: gives the device up if another process claimed it.
+    private var claimTimer: Timer?
     private var checkingLAN = false
     // Home detection. Each signal is only trusted in the state it's valid in (HomeRule).
     /// When this bridge last went active; bridging trusts only adverts seen after it.
@@ -96,7 +98,10 @@ final class ProxyBridge: ObservableObject {
         // (Start, retries, restore, network change, CLI) goes through it. The
         // claim is one step under status.lock; only `.written` means it's ours.
         switch publishStatus() {
-        case .written: break
+        case .written:
+            claimTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.checkClaim() }
+            }
         case .heldBy(let other):
             yieldClaim(to: other, "is already bridging")
             return
@@ -118,6 +123,8 @@ final class ProxyBridge: ObservableObject {
         // Home again? Xcode sees the real iPhone; a fake record would only collide.
         if await isHome() {
             guard gen == generation else { return }
+            claimTimer?.invalidate()   // nothing held while standing aside
+            claimTimer = nil
             setState(.local)
             log("on this Mac's network — standing aside until it leaves")
             return
@@ -209,8 +216,10 @@ final class ProxyBridge: ObservableObject {
 
         await dnsProxy.previousExited()
         guard gen == generation else { return }
+        setState(.starting("Publishing Bonjour proxy"))
+        checkClaim()   // lost the device while starting? Don't advertise it next to its new owner.
+        guard gen == generation else { return }
         do {
-            setState(.starting("Publishing Bonjour proxy"))
             try dnsProxy.register(instanceName: profile.instanceName,
                                   serviceType: profile.serviceType,
                                   domain: profile.domain,
@@ -232,12 +241,6 @@ final class ProxyBridge: ObservableObject {
         waitingSince = .now
         renewTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
-                // Restores our entry if status.json was lost — unless another process
-                // claimed the device meanwhile (e.g. the file was deleted): then it's theirs.
-                if case .heldBy(let other) = self?.publishStatus() {
-                    self?.stop()
-                    self?.yieldClaim(to: other, "took over")
-                }
                 self?.renewIfStuck()
                 self?.standAsideIfHome()
             }
@@ -261,6 +264,8 @@ final class ProxyBridge: ObservableObject {
     private func teardown() {
         renewTimer?.invalidate()
         renewTimer = nil
+        claimTimer?.invalidate()
+        claimTimer = nil
         TunnelCoordinator.shared.unsubscribe(profile.id)
         dnsProxy.stop()
         controlRelay?.stop()
@@ -681,12 +686,25 @@ final class ProxyBridge: ObservableObject {
     /// Surface a refusal the coordinator decided on (e.g. same-LAN conflict).
     func fail(_ message: String) { setState(.error(message)) }
 
+    /// Restores our entry if status.json was lost — unless another process claimed
+    /// the device meanwhile (e.g. the file was deleted): then it's theirs. Standing
+    /// aside or errored we don't hold it, so there's nothing to check.
+    private func checkClaim() {
+        guard ![BridgeStatus.off, .error, .local].contains(status) else { return }
+        if case .heldBy(let other) = publishStatus() {
+            stop()
+            yieldClaim(to: other, "took over")
+        }
+    }
+
     /// Another process holds the device. The app keeps retrying (it shows the error, and
     /// takes over once the other ends); `roamrun up` gives up: refused, it isn't in
     /// status.json, so `down` couldn't stop it.
     private func yieldClaim(to other: StatusFile.Entry, _ what: String) {
         if CLI.isRunning { autoRetry = false }
-        setState(.error("Another RoamRun process (pid \(other.pid)) \(what) \(profile.displayName). Stop it there first."))
+        setState(.error(other.pid == getpid()
+            ? "Another saved device here (same UDID) is bridging \(profile.displayName). Remove the duplicate."
+            : "Another RoamRun process (pid \(other.pid)) \(what) \(profile.displayName). Stop it there first."))
     }
 
     private func setState(_ s: BridgeState) { state = s }
