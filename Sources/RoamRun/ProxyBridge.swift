@@ -440,6 +440,9 @@ final class ProxyBridge: ObservableObject {
         case .active(_, let t): ports = t
         case .off, .local: break
         }
+        // Not an error: the bridge itself works over the mesh VPN. But the home
+        // check is blind while this lasts, so say so wherever status is read.
+        if LocalNetwork.denied { detail = detail.isEmpty ? LocalNetwork.advice : detail + " — " + LocalNetwork.advice }
         return StatusFile.write(profile.id, .init(pid: getpid(), cli: CLI.isRunning, udid: udid, status: s.title, detail: detail,
                                                   ready: s == .ready, tunnelPorts: ports, updated: .now,
                                                   state: s.rawValue, started: StatusFile.myStart))
@@ -598,8 +601,16 @@ final class ProxyBridge: ObservableObject {
             if !bridging, let instance { homeAdvert = instance }
             if let instance, await answers(instance) { return decided(true, "advert \(instance.prefix(8))") }
         }
+        if LocalNetwork.denied {
+            if !saidLocalNetworkDenied { saidLocalNetworkDenied = true; log(LocalNetwork.advice) }
+        } else {
+            saidLocalNetworkDenied = false
+        }
         return decided(await Self.isOnLAN(profile), "Tailscale path")
     }
+
+    /// Said once per spell, not every check.
+    private var saidLocalNetworkDenied = false
 
     private func answers(_ instance: String) async -> Bool {
         await ReachabilityProbe.speaksRemotePairing(.service(name: instance, type: profile.serviceType,

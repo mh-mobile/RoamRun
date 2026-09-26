@@ -256,6 +256,7 @@ defaults delete com.roamrun.app 2>/dev/null   # 0.1.12 より前の版が残し�
 ## 制限・既知の課題
 
 - **Apple の非公開プロトコルに依存しています。** iOS 17 以降の CoreDevice / RemotePairing（Bonjour `_remotepairing._tcp` → 制御チャネル → トンネル）の挙動を前提にしており、将来の iOS / macOS / Xcode で動かなくなる可能性があります。困ったらまず `roamrun doctor` を実行してください。
+- **macOS が RoamRun のローカルネットワークアクセスを拒否していると、端末は常に「外にいる」と判定されます。** この Wi-Fi への確認がすべて即失敗するため、すぐ隣にある端末をブリッジし続け（偽の広告も出し続け）ます。mesh VPN 経由の通信は影響を受けないので、他に気づく手がかりがありません。0.1.14 から、ウィンドウ・アクティビティログ・`roamrun status` でその旨を表示します。システム設定 › プライバシーとセキュリティ › ローカルネットワークで RoamRun を許可してください。すでにオンなら RoamRun を入れ直してください（0.1.12 の bundle id 変更のようにアプリが変わると、許可が外れたまま直らないことがあります）([#23](https://github.com/mh-mobile/RoamRun/issues/23))
 - ブリッジは **en0**（多くの Mac では Wi-Fi）で待ち受けます。この Mac が別のインターフェース（Mac mini の有線など）で LAN につながっている場合は、Open RoamRun › ⚙ Settings › Network で選んでください
 - iPhone は**何らかの Wi-Fi に接続**している必要があります（別の端末のテザリングは可。セルラーのみや、その iPhone 自身のインターネット共有は不可: remotepairingd が Wi-Fi 接続時しか待ち受けないため）
 - iOS の Tailscale は、スリープやネットワーク切り替えの後に「MagicSock function ReceiveIPv4 is not running」と表示して通信が止まることがあります（接続中の表示のまま）。VPN をオフ → オンにし、Tailscale アプリは最新に保ってください

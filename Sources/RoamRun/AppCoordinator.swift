@@ -150,7 +150,17 @@ final class AppCoordinator: ObservableObject {
     private func refreshExternalBridges() {
         let now = StatusFile.read().filter { $0.value.pid != getpid() }
         if now != externalBridges { externalBridges = now }   // detail changes too (Probing…, errors)
+        // Nothing else tells the user: over the mesh VPN everything still works,
+        // so a blocked local network only shows up as the device looking away.
+        if LocalNetwork.denied, launchWarning == nil, !warnedLocalNetwork {
+            warnedLocalNetwork = true
+            launchWarning = LocalNetwork.advice
+            logStore.log(LocalNetwork.advice)
+        }
     }
+
+    /// The alert is shown once a run; the activity log and `roamrun status` keep saying it.
+    private var warnedLocalNetwork = false
 
     /// Stops a bridge run by `roamrun up` (its SIGTERM handler cleans up).
     func stopExternalBridge(_ id: UUID) {

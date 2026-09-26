@@ -918,3 +918,10 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(CLI.probeSeconds(by: now.addingTimeInterval(1), now: now) == 1)
     #expect(CLI.probeSeconds(by: now.addingTimeInterval(-5), now: now) == 1)             // past: still one try
 }
+
+@Test func aBlockedLocalNetworkAgesOutInsteadOfBeingCleared() {
+    let now = Date.now
+    #expect(!LocalNetwork.isDenied(last: nil, now: now))
+    #expect(LocalNetwork.isDenied(last: now.addingTimeInterval(-5), now: now))
+    #expect(!LocalNetwork.isDenied(last: now.addingTimeInterval(-300), now: now))
+}

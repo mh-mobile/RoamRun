@@ -1,6 +1,31 @@
 import Foundation
 import Network
 
+/// macOS gates local-network access per app. With it off for RoamRun every probe
+/// to this Wi-Fi fails at once, which looks exactly like the device being away —
+/// so a "no" from the home check can't be trusted while this is set. Only a
+/// local-network destination is ever refused this way, so any probe may report.
+enum LocalNetwork {
+    static let advice = "macOS is blocking RoamRun's access to the local network, so it can't tell whether the device is on this Wi-Fi. Allow RoamRun in System Settings › Privacy & Security › Local Network; if it is already on, reinstall RoamRun."
+
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var lastDenial: Date?
+
+    static var denied: Bool { isDenied(last: lock.withLock { lastDenial }, now: .now) }
+
+    static func note(_ path: NWPath?) {
+        guard let path, path.status == .unsatisfied, path.unsatisfiedReason == .localNetworkDenied else { return }
+        lock.withLock { lastDenial = .now }
+    }
+
+    /// Ages out instead of being cleared: once access is allowed again no probe
+    /// reports another denial, so nothing has to notice that it stopped.
+    static func isDenied(last: Date?, now: Date) -> Bool {
+        guard let last else { return false }
+        return now.timeIntervalSince(last) < 120
+    }
+}
+
 enum ReachabilityProbe {
     /// Plain TCP connect check against the device's RemotePairing port on its
     /// mesh IP. Confirms the route exists and remotepairingd is listening
@@ -18,6 +43,8 @@ enum ReachabilityProbe {
                 // settling after wake or a network switch) may still turn .ready.
                 case .failed, .cancelled, .waiting(.posix(.ECONNREFUSED)):
                     box.done { conn.stateUpdateHandler = nil; conn.cancel(); cont.resume(returning: false) }
+                case .waiting:
+                    LocalNetwork.note(conn.currentPath)
                 default:
                     break
                 }
@@ -59,6 +86,7 @@ extension ReachabilityProbe {
                     }
                 // As in checkTCP: other .waiting (a path settling after wake) may still turn .ready.
                 case .failed, .cancelled, .waiting(.posix(.ECONNREFUSED)): finish(false)
+                case .waiting: LocalNetwork.note(conn.currentPath)
                 default: break
                 }
             }
