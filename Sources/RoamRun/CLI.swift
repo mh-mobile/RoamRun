@@ -26,8 +26,9 @@ enum CLI {
                                      Bridge status, UDID and lock state; exits 0 only if Xcode can use
                                      the device (bridged and ready, or a bridge standing aside on this Wi-Fi);
                                      without a name it lists every saved device and exits 0 if any one of
-                                     them is ready (--wait: wait up to N seconds for ready, checked between
-                                     rounds a few seconds apart, so it can return a little after N)
+                                     them is ready (--wait: wait up to N seconds for ready; each round runs
+                                     two devicectl calls per device before the deadline is looked at again,
+                                     so it can return several seconds after N)
       doctor [name] [--json]         Check each step from this Mac to the device and say what to fix
                                      (without a name: devices with a running bridge, or all if none runs)
       run <name> [--scheme S] [--workspace W | --project P] [--configuration C] [--logs] [launch options]
@@ -295,17 +296,25 @@ enum CLI {
 
     /// devicectl's tunnelState for this UDID; nil if devicectl failed.
     nonisolated static func coreDeviceState(_ udid: String, by deadline: Date? = nil) -> String? {
+        devicectl(["list", "devices"], by: deadline).flatMap { tunnelState(in: $0, udid: udid) }
+    }
+
+    /// devicectl with only as much time as a `--wait` has left; without one, the
+    /// timeouts it has always had.
+    nonisolated private static func devicectl(_ args: [String], by deadline: Date?) -> [String: Any]? {
         let secs = probeSeconds(by: deadline)
-        return Proc.devicectl(["--timeout", "\(secs)", "list", "devices"], timeout: Double(secs) + 5)
-            .flatMap { tunnelState(in: $0, udid: udid) }
+        let timed = ["--timeout", "\(secs)"] + args
+        guard deadline != nil else { return Proc.devicectl(timed) }
+        return Proc.devicectl(timed, timeout: Double(secs) + 5)
     }
 
     /// How long a `status` probe may take. Each round of `--wait N` runs two
     /// devicectl calls per device before the deadline is looked at again, so
-    /// without this a `--wait 1` could sit for ~20s per device.
+    /// without this a `--wait 1` could sit for ~20s per device. devicectl
+    /// refuses a --timeout below 5, which is the floor here too.
     nonisolated static func probeSeconds(by deadline: Date?, now: Date = .now) -> Int {
         guard let deadline else { return 10 }
-        return max(1, min(10, Int(deadline.timeIntervalSince(now).rounded(.up))))
+        return max(5, min(10, Int(deadline.timeIntervalSince(now).rounded(.up))))
     }
 
     /// From `devicectl list devices` JSON's result; UDIDs compared in any case.
@@ -367,9 +376,7 @@ enum CLI {
 
     /// Needs the tunnel; nil when devicectl can't reach the device.
     private static func isLocked(_ udid: String, by deadline: Date? = nil) -> Bool? {
-        let secs = probeSeconds(by: deadline)
-        return Proc.devicectl(["--timeout", "\(secs)", "device", "info", "lockState", "--device", udid],
-                              timeout: Double(secs) + 5)?["passcodeRequired"] as? Bool
+        devicectl(["device", "info", "lockState", "--device", udid], by: deadline)?["passcodeRequired"] as? Bool
     }
 
     /// A runtime failure (exit 1). `fail` is for usage errors (exit 2).
@@ -919,6 +926,11 @@ enum CLI {
             }
             if let e = live[p.id] {
                 check(e.ready || e.kind == .local, "Mac-side bridge: \(e.status) (\(owner(e)))", fix: e.detail.isEmpty ? "Wait a few seconds and run doctor again." : e.detail)
+                // A ready bridge passes the check above, so its detail is never shown.
+                if e.detail.contains(LocalNetwork.advice) {
+                    check(false, "macOS is blocking RoamRun's local network access, so it can't tell whether the device is on this Wi-Fi",
+                          fix: LocalNetwork.advice, warnOnly: true)
+                }
                 if udid == nil { note("UDID not known yet — learned the first time the bridge connects") }
                 if let udid {
                     check(true, "UDID: \(udid)")

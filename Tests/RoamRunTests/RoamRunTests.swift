@@ -915,8 +915,10 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     let now = Date.now
     #expect(CLI.probeSeconds(by: nil, now: now) == 10)                                  // no --wait: unchanged
     #expect(CLI.probeSeconds(by: now.addingTimeInterval(60), now: now) == 10)            // plenty: capped
-    #expect(CLI.probeSeconds(by: now.addingTimeInterval(1), now: now) == 1)
-    #expect(CLI.probeSeconds(by: now.addingTimeInterval(-5), now: now) == 1)             // past: still one try
+    #expect(CLI.probeSeconds(by: now.addingTimeInterval(7), now: now) == 7)
+    // devicectl refuses a --timeout below 5 with a usage error, so that's the floor.
+    #expect(CLI.probeSeconds(by: now.addingTimeInterval(1), now: now) == 5)
+    #expect(CLI.probeSeconds(by: now.addingTimeInterval(-5), now: now) == 5)             // past: still one try
 }
 
 @Test func aBlockedLocalNetworkAgesOutInsteadOfBeingCleared() {

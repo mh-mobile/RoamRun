@@ -6,7 +6,7 @@ import Network
 /// so a "no" from the home check can't be trusted while this is set. Only a
 /// local-network destination is ever refused this way, so any probe may report.
 enum LocalNetwork {
-    static let advice = "macOS is blocking RoamRun's access to the local network, so it can't tell whether the device is on this Wi-Fi. Allow RoamRun in System Settings › Privacy & Security › Local Network; if it is already on, reinstall RoamRun."
+    static let advice = "macOS is blocking RoamRun's access to the local network, so it can't tell whether the device is on this Wi-Fi. Allow RoamRun in System Settings › Privacy & Security › Local Network; if it is already on, the app has to be reinstalled (see Limitations in the README)."
 
     private static let lock = NSLock()
     nonisolated(unsafe) private static var lastDenial: Date?
@@ -42,6 +42,7 @@ enum ReachabilityProbe {
                 // Refused: no need to sit out the timeout. Other .waiting (the path still
                 // settling after wake or a network switch) may still turn .ready.
                 case .failed, .cancelled, .waiting(.posix(.ECONNREFUSED)):
+                    LocalNetwork.note(conn.currentPath)
                     box.done { conn.stateUpdateHandler = nil; conn.cancel(); cont.resume(returning: false) }
                 case .waiting:
                     LocalNetwork.note(conn.currentPath)
@@ -85,7 +86,9 @@ extension ReachabilityProbe {
                         finish(data.map { $0.starts(with: Data("RPPairing".utf8)) } ?? false)
                     }
                 // As in checkTCP: other .waiting (a path settling after wake) may still turn .ready.
-                case .failed, .cancelled, .waiting(.posix(.ECONNREFUSED)): finish(false)
+                case .failed, .cancelled, .waiting(.posix(.ECONNREFUSED)):
+                    LocalNetwork.note(conn.currentPath)
+                    finish(false)
                 case .waiting: LocalNetwork.note(conn.currentPath)
                 default: break
                 }
