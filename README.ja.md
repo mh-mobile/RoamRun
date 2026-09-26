@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/macOS-13%2B%20Apple%20Silicon-blue" alt="macOS 13+ on Apple Silicon">
 </p>
 
-<p align="center"><a href="README.md">English</a> | 日本語</p>
+<p align="center"><a href="https://mh-mobile.github.io/RoamRun/">Web サイト</a> · <a href="README.md">English</a> | 日本語</p>
 
 <p align="center"><img src="docs/main.png" width="800" alt="RoamRun のメイン画面"></p>
 
