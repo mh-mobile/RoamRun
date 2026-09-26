@@ -117,7 +117,7 @@ enum Snapshot {
     static let expand = false
     #endif
 
-    static func scheduleIfRequested() {
+    @MainActor static func scheduleIfRequested() {
         #if SNAPSHOT
         guard let path else { return }
         if let a = ProcessInfo.processInfo.environment["MB_APPEARANCE"] {

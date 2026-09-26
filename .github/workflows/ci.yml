@@ -25,7 +25,7 @@ jobs:
           plutil -extract CFBundleVersion raw Info.plist | grep -Eq '^[0-9]+$'
           RoamRun.app/Contents/MacOS/RoamRun --help > /dev/null
           RoamRun.app/Contents/MacOS/RoamRun init --print | head -2 | grep -qx 'name: roamrun'   # init/--uninstall rely on this header
-      - name: No warnings (Swift 6 language mode, data races are errors)
-        run: xcrun swift build -Xswiftc -warnings-as-errors
-      - name: Build the screenshot (SNAPSHOT) variant
-        run: xcrun swift build -Xswiftc -DSNAPSHOT
+      - name: No warnings in the app, the tests or the SNAPSHOT variant (Swift 6 mode, data races are errors)
+        run: |
+          xcrun swift build --build-tests -Xswiftc -warnings-as-errors
+          xcrun swift build -Xswiftc -DSNAPSHOT -Xswiftc -warnings-as-errors

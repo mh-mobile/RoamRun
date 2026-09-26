@@ -562,7 +562,7 @@ private final class EchoServer: @unchecked Sendable {
             lock.withLock { self?.conns.append(c) }
             c.start(queue: .global())
             guard !silent else { return }
-            func loop() {
+            @Sendable func loop() {
                 c.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, done, err in
                     if let data, !data.isEmpty { c.send(content: data, completion: .contentProcessed { _ in loop() }) }
                     else if done || err != nil { c.cancel() }
