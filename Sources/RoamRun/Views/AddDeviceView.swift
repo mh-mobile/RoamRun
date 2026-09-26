@@ -89,6 +89,7 @@ struct AddDeviceView: View {
     /// the mDNS cache or a Bonjour Sleep Proxy; unprobed rows wait (≤ ~1s) so
     /// those never flash up.
     private var visibleServices: [CapturedService] {
+        if let fake = Snapshot.fakeServices { return fake }
         guard advertsKnown else { return [] }   // until we can tell saved devices apart, show nothing
         return servicesSorted.filter { showUnresponsive || liveness[$0.host] == true }
     }
@@ -141,11 +142,16 @@ struct AddDeviceView: View {
     private var serviceList: some View {
         VStack(spacing: 0) {
             ForEach(visibleServices) { s in
-                ServiceRow(service: s, live: liveness[s.host],
+                ServiceRow(service: s, live: Snapshot.fakeServices == nil ? liveness[s.host] : true,
                            selected: selectedHost == s.host,
                            symbol: DeviceProfile.symbol(for: deviceType(ofHost: s.host)))
                     .contentShape(Rectangle())
                     .onTapGesture { selectedHost = s.host }
+                    // A tap gesture alone isn't reachable with VoiceOver: make the row a selectable button.
+                    .accessibilityElement(children: .combine)
+                    .accessibilityAddTraits(selectedHost == s.host ? [.isButton, .isSelected] : .isButton)
+                    .accessibilityValue(selectedHost == s.host ? "Selected" : "")   // macOS VoiceOver may not voice the trait
+                    .accessibilityAction { selectedHost = s.host }
                 if s.id != visibleServices.last?.id { Divider() }
             }
         }
@@ -161,9 +167,10 @@ struct AddDeviceView: View {
             HStack(spacing: 10) {
                 Image(systemName: selected ? "largecircle.fill.circle" : "circle")
                     .foregroundStyle(selected ? Color.accentColor : .secondary)
-                Image(systemName: symbol).foregroundStyle(.secondary)
+                    .accessibilityHidden(true)   // "selected" is a trait of the row
+                Image(systemName: symbol).foregroundStyle(.secondary).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(service.shortHost)
+                    Text(service.shortHost).lineLimit(1).truncationMode(.middle)
                     Text(service.hostIPs.first(where: { $0.contains(".") }) ?? service.host)
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -206,7 +213,7 @@ struct AddDeviceView: View {
                     }
                     .labelsHidden()
                     Button { coordinator.refreshTailscale() } label: {
-                        Image(systemName: "arrow.clockwise")
+                        Label("Refresh Tailscale devices", systemImage: "arrow.clockwise").labelStyle(.iconOnly)
                     }
                     .help("Refresh Tailscale devices")
                 }

@@ -83,12 +83,15 @@ struct MenuBarIcon: View {
         }
     }
 
-    @ViewBuilder private var icon: some View {
-        switch coordinator.overallStatus {
-        case .ready: Image(systemName: "iphone.radiowaves.left.and.right")
-        case .error: Image(systemName: "exclamationmark.triangle")
-        case .off: Image(systemName: "iphone.slash")
-        default: Image(systemName: "iphone")
+    private var icon: some View {
+        Group {
+            switch coordinator.overallStatus {
+            case .ready: Image(systemName: "iphone.radiowaves.left.and.right")
+            case .error: Image(systemName: "exclamationmark.triangle")
+            case .off: Image(systemName: "iphone.slash")
+            default: Image(systemName: "iphone")
+            }
         }
+        .accessibilityLabel("RoamRun: \(coordinator.overallStatus.title)")
     }
 }

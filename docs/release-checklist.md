@@ -56,6 +56,18 @@ screen on.
     hangs on the download; if so, compare `shasum -a 256` of the published dmg
     with the cask by hand.
 
+## UI at scale and for everyone
+
+- `make app SNAPSHOT=1` (rebuild with plain `make app` afterwards), then
+  `MB_FAKE_PROFILES=60 MB_FAKE_DEVICES=40` (see AGENTS.md):
+  the sidebar, the Add Device list and the menu scroll instead of running off screen,
+  long names truncate instead of pushing buttons away; also at the smallest window size.
+- VoiceOver (⌘F5) or Accessibility Inspector on the main window, the Add Device sheet,
+  the menu and the menu bar icon: every button says what it does, the chosen device in
+  Add Device reads as selected, the connection line reads "Connected" / "Not connected",
+  and the menu bar icon reads "RoamRun: <status>". With Reduce Motion on, the status
+  icon doesn't spin.
+
 ## Debug logs worth a look after an iOS or Xcode update
 
 - Home/away decisions: `log stream --level debug --predicate 'subsystem == "io.github.mh-mobile.roamrun" AND category == "home"'`

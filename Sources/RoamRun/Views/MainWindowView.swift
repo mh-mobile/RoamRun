@@ -115,8 +115,9 @@ private struct SidebarRow: View {
                 .font(.title2)
                 .foregroundStyle(.secondary)
                 .frame(width: 24)
+                .accessibilityHidden(true)   // the name and status below say it
             VStack(alignment: .leading, spacing: 2) {
-                Text(profile.displayName).fontWeight(.medium)
+                Text(profile.displayName).fontWeight(.medium).lineLimit(1).help(profile.displayName)
                 Label(viaCLI ? "\(status.title) · Terminal" : status.title, systemImage: status.symbol)
                     .labelStyle(StatusLabelStyle(color: status.color))
                     .font(.caption)
@@ -129,12 +130,20 @@ private struct SidebarRow: View {
 
 extension View {
     /// Turns the status symbol while the bridge is working (macOS 15+).
-    @ViewBuilder func spinning(_ on: Bool) -> some View {
+    func spinning(_ on: Bool) -> some View { modifier(Spinning(on: on)) }
+}
+
+/// Still under Reduce Motion (Accessibility › Display).
+private struct Spinning: ViewModifier {
+    let on: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    @ViewBuilder func body(content: Content) -> some View {
         // Not isActive: a continuous rotate keeps going after it turns false.
-        if #available(macOS 15, *), on {
-            symbolEffect(.rotate, options: .repeat(.continuous))
+        if #available(macOS 15, *), on, !reduceMotion {
+            content.symbolEffect(.rotate, options: .repeat(.continuous))
         } else {
-            self
+            content
         }
     }
 }

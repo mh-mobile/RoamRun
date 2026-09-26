@@ -20,7 +20,11 @@ see `skills/roamrun/SKILL.md` — installed with `roamrun init` or
 - UI screenshots without screen-recording rights: build with `make app SNAPSHOT=1`
   (dev only — rebuild with plain `make app` afterwards), then
   `MB_SNAPSHOT=/tmp/x.png [MB_SNAPSHOT_SHEET=add|settings] [MB_APPEARANCE=dark] RoamRun.app/Contents/MacOS/RoamRun`
-  (Liquid Glass surfaces don't render in these; ask the user for a real screenshot.)
+  (Liquid Glass surfaces and the main window's sidebar don't render in these; ask the
+  user for a real screenshot.) Add `MB_FAKE_PROFILES=60` / `MB_FAKE_DEVICES=40` for many
+  saved devices / devices on the network, some with long names — never saved to disk,
+  and their bridges don't start. Also without `MB_SNAPSHOT`, to look at the live window
+  (quit the installed RoamRun first: only one runs, so its bridges pause meanwhile).
 
 ## Verify on a real iPhone before calling a change done
 

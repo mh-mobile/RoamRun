@@ -50,7 +50,7 @@ final class AppCoordinator: ObservableObject {
         tailscaleClient.binaryPath = savedCLIPath.isEmpty ? nil : savedCLIPath
         tailscaleCLIPath = savedCLIPath
 
-        profiles = store.load()
+        profiles = Snapshot.fakeProfiles ?? store.load()
         if let copy = store.keptUnreadable {
             logStore.log("couldn't read saved devices; kept the file as \(copy.path)")
             launchWarning = "RoamRun couldn't read its saved devices, so the list starts empty. The file was kept as \(copy.path)."
@@ -219,7 +219,8 @@ final class AppCoordinator: ObservableObject {
     func bridge(for profile: DeviceProfile) -> ProxyBridge? { bridges[profile.id] }
 
     func startBridge(_ profile: DeviceProfile) {
-        guard let bridge = bridges[profile.id] else { return }
+        // Screenshot mode's fake devices are for looking at: no real bridge, no saved state.
+        guard Snapshot.fakeProfiles == nil, let bridge = bridges[profile.id] else { return }
 
         var ids = wasActiveIDs
         ids.insert(profile.id)
@@ -462,6 +463,7 @@ final class AppCoordinator: ObservableObject {
 
     /// Saves the device list; a failed write would lose changes at the next launch, so say so.
     private func persist() {
+        guard Snapshot.fakeProfiles == nil else { return }   // screenshot mode's fake devices never reach disk
         guard !store.save(profiles) else { return }
         logStore.log("couldn't save the device list to \(ProfileStore.directory.path)")
         launchWarning = "RoamRun couldn't save your devices (\(ProfileStore.directory.path)). Changes will be lost when it quits — check the disk and folder permissions."

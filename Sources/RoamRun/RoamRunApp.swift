@@ -147,15 +147,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// for UI checks without screen-recording rights.
 /// `MB_SNAPSHOT_SHEET=add|settings` opens that sheet first; `MB_SNAPSHOT_EXPAND`
 /// opens the detail sections. `MB_APPEARANCE=dark|light`; `MB_SNAPSHOT_DELAY` (s).
+/// `MB_FAKE_PROFILES` / `MB_FAKE_DEVICES`: see below (also without MB_SNAPSHOT, to look live).
 enum Snapshot {
     #if SNAPSHOT
     static let path = ProcessInfo.processInfo.environment["MB_SNAPSHOT"]
     static let sheet = ProcessInfo.processInfo.environment["MB_SNAPSHOT_SHEET"]
     static let expand = ProcessInfo.processInfo.environment["MB_SNAPSHOT_EXPAND"] != nil
+    /// `MB_FAKE_PROFILES=n` / `MB_FAKE_DEVICES=n`: that many saved devices / devices on the
+    /// network (the first and every fifth with a long name), to check the UI at scale. Never saved.
+    static let fakeProfiles: [DeviceProfile]? = count("MB_FAKE_PROFILES").map { n in
+        (0..<n).map { DeviceProfile(displayName: name($0), instanceName: "fake-\($0)", serviceType: "_remotepairing._tcp",
+                                     domain: "local", remotePairingPort: 49152, bonjourHost: "", txt: [:], providerID: "tailscale",
+                                     providerHostName: "", providerIP: "100.64.\($0 / 250).\($0 % 250 + 1)") }
+    }
+    static let fakeServices: [CapturedService]? = count("MB_FAKE_DEVICES").map { n in
+        (0..<n).map { CapturedService(instanceName: "fake-\($0)", serviceType: "_remotepairing._tcp", domain: "local", port: 49152,
+                                      host: name($0).replacingOccurrences(of: " ", with: "-") + ".local",
+                                      hostIPs: ["192.168.\($0 / 250).\($0 % 250 + 1)"], txt: [:], lastSeen: .now) }
+    }
+    private static func count(_ key: String) -> Int? { ProcessInfo.processInfo.environment[key].flatMap(Int.init) }
+    private static func name(_ i: Int) -> String {
+        i % 5 == 0 ? "Engineering Team Shared iPhone 15 Pro Max for QA \(i)" : "Test iPhone \(i)"
+    }
     #else
     static let path: String? = nil
     static let sheet: String? = nil
     static let expand = false
+    static let fakeProfiles: [DeviceProfile]? = nil
+    static let fakeServices: [CapturedService]? = nil
     #endif
 
     @MainActor static func scheduleIfRequested() {

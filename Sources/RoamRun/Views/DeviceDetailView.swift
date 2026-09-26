@@ -71,13 +71,16 @@ struct DeviceDetailView: View {
                 .font(.system(size: 28))
                 .frame(width: 52, height: 52)
                 .background(RoundedRectangle(cornerRadius: 12).fill(.quaternary))
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(profile.displayName).font(.title2.weight(.semibold))
+                        .lineLimit(1).truncationMode(.middle)   // keeps Rename and the bridge button in view
+                        .help(profile.displayName)
                     Button {
                         newName = profile.displayName
                         renaming = true
-                    } label: { Image(systemName: "pencil") }
+                    } label: { Label("Rename", systemImage: "pencil").labelStyle(.iconOnly) }
                     .buttonStyle(.borderless)
                     .help("Rename")
                 }
@@ -163,6 +166,7 @@ private struct StatusCard: View {
                 .foregroundStyle(status.color)
                 .spinning(status.isWorking)
                 .frame(width: 30)
+                .accessibilityHidden(true)   // the title next to it says the same
             VStack(alignment: .leading, spacing: 6) {
                 Text(status.title).font(.headline)
                 Text(message(for: status))
@@ -241,6 +245,10 @@ private struct ConnectionPath: View {
             node(profile.symbol, profile.displayName, active: linked)
         }
         .padding(.horizontal, 8)
+        // One element: the line's color is what says "connected".
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("This Mac to \(profile.displayName) over \(profile.providerID == MeshProvider.tailscale.rawValue ? "Tailscale" : "the mesh VPN")")
+        .accessibilityValue(linked ? "Connected" : "Not connected")
     }
 
     private func node(_ symbol: String, _ title: String, active: Bool) -> some View {
