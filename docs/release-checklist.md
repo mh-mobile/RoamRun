@@ -24,6 +24,11 @@ screen on.
    launch works and each device only gets its own tunnel ports (Technical details).
    Then both at once, 15 rounds: every launch works and both stay Ready.
    `for i in $(seq 15); do for u in <udid1> <udid2>; do xcrun devicectl device process launch --device $u --terminate-existing <bundle id> & done; wait; done`
+   Cold, 3 times: quit the app, wait ~20 s (no `dns-sd … roamrun.local` left), reopen it —
+   both bridges start and set up their tunnels together — then launch on both at once
+   as soon as both are Ready. A CoreDevice error 10004 ("process identifier … could not
+   be determined") has so far been the launch racing the app, not the bridge (the device
+   answered); retry it, and look closer if it repeats.
 
 ## Home
 

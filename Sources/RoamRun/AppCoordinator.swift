@@ -175,7 +175,11 @@ final class AppCoordinator: ObservableObject {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         let displayName = trimmed.isEmpty ? captured.shortHost : trimmed
         // Same checks as the sheet, here too: two profiles for one device would collide.
-        guard !ip.isEmpty, !profiles.contains(where: { $0.providerIP == ip }), profiles.nameProblem(displayName) == nil else { return nil }
+        // By UDID when remotepairingd knows the advert (instance names rotate), else the exact advert.
+        let udid = advertUDIDs[captured.instanceName]
+        guard !ip.isEmpty, profiles.nameProblem(displayName) == nil,
+              !profiles.contains(where: { $0.providerIP == ip || $0.instanceName == captured.instanceName
+                  || (udid != nil && $0.udid?.caseInsensitiveCompare(udid!) == .orderedSame) }) else { return nil }
         var profile = DeviceProfile(
             displayName: displayName,
             instanceName: captured.instanceName,
@@ -189,7 +193,7 @@ final class AppCoordinator: ObservableObject {
             providerIP: ip
         )
         // Known already if remotepairingd matched this advert; else learned on first connect.
-        profile.udid = advertUDIDs[captured.instanceName]
+        profile.udid = udid
         profiles.append(profile)
         let bridge = install(ProxyBridge(profile: profile))
         capture.ownedHosts.insert(bridge.spoofHost)
@@ -381,10 +385,20 @@ final class AppCoordinator: ObservableObject {
     func scanRemotePairingPort(_ profile: DeviceProfile) async {
         let host = profile.providerIP
         logStore.log("\"\(profile.displayName)\": scanning \(host) for its RemotePairing port", device: profile.id)
-        let found = await ReachabilityProbe.findRemotePairingPort(host: host)
-        if let found, found == profile.remotePairingPort {
+        let found: UInt16
+        // Asked for and watched: time enough for every port even on a host that drops probes.
+        switch await ReachabilityProbe.findRemotePairingPort(host: host, limit: .seconds(120)) {
+        case .found(let port): found = port
+        case .notFound:
+            logStore.log("\"\(profile.displayName)\": no RemotePairing port responded — is the device on Wi-Fi?", device: profile.id)
+            return
+        case .timedOut:
+            logStore.log("\"\(profile.displayName)\": the scan timed out before every port was checked", device: profile.id)
+            return
+        }
+        if found == profile.remotePairingPort {
             logStore.log("\"\(profile.displayName)\": RemotePairing port is still \(found)", device: profile.id)
-        } else if let found, let idx = profiles.firstIndex(where: { $0.id == profile.id }) {
+        } else if let idx = profiles.firstIndex(where: { $0.id == profile.id }) {
             profiles[idx].remotePairingPort = found
             persist()
             logStore.log("\"\(profile.displayName)\": RemotePairing port updated to \(found)", device: profile.id)
@@ -395,8 +409,6 @@ final class AppCoordinator: ObservableObject {
             bridges[profile.id]?.stop()
             let bridge = install(ProxyBridge(profile: profiles[idx]))
             if wasOn { bridge.requestStart() }
-        } else {
-            logStore.log("\"\(profile.displayName)\": no RemotePairing port responded — is the device on Wi-Fi?", device: profile.id)
         }
     }
 

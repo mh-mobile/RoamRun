@@ -220,7 +220,8 @@ enum CLI {
         let udid = e?.udid ?? p.udid
         let usable = e?.ready == true || e?.kind == .local   // on this Wi-Fi: Xcode sees it directly
         let core = deep && usable ? udid.flatMap(coreDeviceState) : nil
-        let ready = usable && (!deep || core.map { $0 != "unavailable" } ?? false)
+        // No UDID yet (standing aside before it ever connected): nothing to ask CoreDevice, trust the bridge.
+        let ready = usable && (!deep || udid == nil || core.map { $0 != "unavailable" } ?? false)
         var status = e?.status ?? BridgeStatus.off.title
         var kind = e?.kind ?? .off
         var detail = e.flatMap { $0.detail.isEmpty ? nil : $0.detail }
@@ -370,10 +371,10 @@ enum CLI {
         let payload = dir.appendingPathComponent("Payload")
         guard let app = try? FileManager.default.contentsOfDirectory(atPath: payload.path).first(where: { $0.hasSuffix(".app") })
         else { cleanUp(); stop("\(path) has no Payload/*.app inside — not an iOS app archive?") }
-        // A crafted archive could make Payload/X.app a link to somewhere else on this Mac.
+        // A crafted archive could make Payload or Payload/X.app a link to somewhere else on this Mac.
         let appURL = payload.appendingPathComponent(app)
-        guard (try? appURL.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink != true else {
-            cleanUp(); stop("\(path)'s Payload/\(app) is a symbolic link — not installing it")
+        guard appURL.resolvingSymlinksInPath().path.hasPrefix(dir.resolvingSymlinksInPath().path + "/Payload/") else {
+            cleanUp(); stop("\(path)'s Payload/\(app) links outside the archive — not installing it")
         }
         let status = visible(["/usr/bin/xcrun", "devicectl", "device", "install", "app", "--device", udid,
                               payload.appendingPathComponent(app).path])

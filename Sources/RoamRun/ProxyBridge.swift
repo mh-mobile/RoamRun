@@ -61,7 +61,7 @@ final class ProxyBridge: ObservableObject {
     /// First "identity nil" for our record; a second one within minutes is believed.
     private var unrecognizedSince: Date?
     /// A port scan that found nothing isn't repeated for a while (e.g. device on cellular).
-    private var lastFailedScan = Date.distantPast
+    private var noScanUntil = Date.distantPast
     private static let homeLog = Logger(subsystem: "com.roamrun.app", category: "home")
     /// Lookahead hit/miss and port jumps (debug level): the data to retune +16 / -32
     /// if a future iOS allocates tunnel ports differently.
@@ -92,12 +92,19 @@ final class ProxyBridge: ObservableObject {
         phoneConnected = false
         tunnelReady = false
         setState(.starting("Checking local interface"))
-        // One bridge per iPhone across processes — checked here so every
-        // path (Start, retries, restore, network change, CLI) goes through it.
-        // No check-then-act race: the .starting above already claimed the entry
-        // under status.lock, or was refused because another process holds it.
-        if let pid = StatusFile.otherOwner(of: profile.id) {
-            setState(.error("Another RoamRun process (pid \(pid)) is already bridging \(profile.displayName). Stop it there first."))
+        // One bridge per iPhone across processes — claimed here so every path
+        // (Start, retries, restore, network change, CLI) goes through it. The
+        // claim is one step under status.lock; only `.written` means it's ours.
+        switch publishStatus() {
+        case .written: break
+        case .heldBy(let other):
+            // The app keeps retrying (it shows the error, and takes over once the other ends).
+            // `roamrun up` gives up: refused, it isn't in status.json, so `down` couldn't stop it.
+            if CLI.isRunning { autoRetry = false }
+            setState(.error("Another RoamRun process (pid \(other.pid)) is already bridging \(profile.displayName). Stop it there first."))
+            return
+        case .failed(let why):
+            setState(.error("Couldn't record this bridge, so another RoamRun could start it too: \(why)"))
             return
         }
         // A SIGKILLed app or `roamrun up` leaves dns-sd advertising a dead relay.
@@ -413,9 +420,10 @@ final class ProxyBridge: ObservableObject {
         }
     }
 
-    private func publishStatus() {
+    @discardableResult
+    private func publishStatus() -> StatusFile.WriteResult {
         let s = status
-        guard s != .off else { StatusFile.write(profile.id, nil); return }
+        guard s != .off else { return StatusFile.write(profile.id, nil) }
         var detail = ""
         var ports: [UInt16] = []
         switch state {
@@ -424,8 +432,8 @@ final class ProxyBridge: ObservableObject {
         case .active(_, let t): ports = t
         case .off, .local: break
         }
-        StatusFile.write(profile.id, .init(pid: getpid(), cli: CLI.isRunning, udid: udid, status: s.title, detail: detail,
-                                           ready: s == .ready, tunnelPorts: ports, updated: .now, state: s.rawValue))
+        return StatusFile.write(profile.id, .init(pid: getpid(), cli: CLI.isRunning, udid: udid, status: s.title, detail: detail,
+                                                  ready: s == .ready, tunnelPorts: ports, updated: .now, state: s.rawValue))
     }
 
     /// The device answers nowhere we know: it may have a new Tailscale address
@@ -450,11 +458,20 @@ final class ProxyBridge: ObservableObject {
         // Only scan a device that is up (answers Tailscale) — not one that's asleep or
         // offline — and not again soon after a scan found nothing (e.g. it's on cellular).
         let ip = p.providerIP
-        guard p.providerID == MeshProvider.tailscale.rawValue, Date.now.timeIntervalSince(lastFailedScan) > 600,
+        guard p.providerID == MeshProvider.tailscale.rawValue, Date.now > noScanUntil,
               await Task.detached(operation: { TailscaleClient.fromSettings().ping(ip) }).value else { return (p, false) }
         setState(.starting("Looking for \(profile.displayName)'s RemotePairing port"))
-        guard let port = await ReachabilityProbe.findRemotePairingPort(host: p.providerIP) else {
-            lastFailedScan = .now
+        let port: UInt16
+        switch await ReachabilityProbe.findRemotePairingPort(host: p.providerIP) {
+        case .found(let found): port = found
+        case .notFound:
+            log("no port on \(p.providerIP) answered as RemotePairing")
+            noScanUntil = .now + 600
+            return (p, false)
+        case .timedOut:
+            // A rescan starts over and would stall at the same place: same pause.
+            log("RemotePairing port scan timed out before the full range was checked (Find RemotePairing Port in the app checks it all)")
+            noScanUntil = .now + 600
             return (p, false)
         }
         if port != p.remotePairingPort { log("RemotePairing port moved: \(p.remotePairingPort) → \(port)") }

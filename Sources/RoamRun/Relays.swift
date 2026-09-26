@@ -73,6 +73,9 @@ final class Relay: @unchecked Sendable {
         return NWParameters(tls: nil, tcp: tcp)
     }
 
+    /// A relay dropped without stop() would keep its pairs in the process-wide count.
+    deinit { stop() }
+
     func start() async throws {
         guard let port = NWEndpoint.Port(rawValue: localPort) else { throw RelayError.invalidPort(localPort) }
         lock.withLock { stopped = false }

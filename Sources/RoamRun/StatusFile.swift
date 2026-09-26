@@ -51,24 +51,35 @@ enum StatusFile {
         return all
     }
 
+    enum WriteResult: Equatable {
+        case written
+        case heldBy(Entry)
+        case failed(String)
+    }
+
     /// Sets (or with nil, clears) this process's entry. Never touches an
     /// entry a *different* live process holds for a healthy bridge — the
-    /// check sits under the lock so app and CLI can't both claim a device.
-    static func write(_ id: UUID, _ entry: Entry?, in dir: URL = ProfileStore.directory, live: Liveness = isRoamRun) {
+    /// check sits under the lock, so a `.written` claim is exclusive.
+    @discardableResult
+    static func write(_ id: UUID, _ entry: Entry?, in dir: URL = ProfileStore.directory, live: Liveness = isRoamRun) -> WriteResult {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent("status.json")
         let fd = open(dir.appendingPathComponent("status.lock").path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
-        guard fd >= 0 else { return }
+        guard fd >= 0 else { return .failed("can't open status.lock: \(String(cString: strerror(errno)))") }
         defer { close(fd) }
-        flock(fd, LOCK_EX)
+        guard flock(fd, LOCK_EX) == 0 else { return .failed("can't lock status.lock: \(String(cString: strerror(errno)))") }
         defer { flock(fd, LOCK_UN) }
         var all = read(in: dir, live: live)
-        if let held = all[id], !mayReplace(held, with: entry, by: getpid()) { return }
+        if let held = all[id], !mayReplace(held, with: entry, by: getpid()) { return .heldBy(held) }
         all[id] = entry
-        if let data = try? JSONEncoder().encode(all), (try? data.write(to: url, options: .atomic)) != nil {
-            // Every atomic write makes a new file: umask would decide its mode otherwise.
-            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        do {
+            try JSONEncoder().encode(all).write(to: url, options: .atomic)
+        } catch {
+            return .failed("can't write status.json: \(error.localizedDescription)")
         }
+        // Every atomic write makes a new file: umask would decide its mode otherwise.
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        return .written
     }
 
     /// Only the owner clears or changes an entry; another process may take a

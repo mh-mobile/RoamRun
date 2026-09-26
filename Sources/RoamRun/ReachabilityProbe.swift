@@ -57,7 +57,8 @@ extension ReachabilityProbe {
                     conn.receive(minimumIncompleteLength: 9, maximumLength: 64) { data, _, _, _ in
                         finish(data.map { $0.starts(with: Data("RPPairing".utf8)) } ?? false)
                     }
-                case .failed, .cancelled, .waiting: finish(false)
+                // As in checkTCP: other .waiting (a path settling after wake) may still turn .ready.
+                case .failed, .cancelled, .waiting(.posix(.ECONNREFUSED)): finish(false)
                 default: break
                 }
             }
@@ -82,36 +83,40 @@ private final class ProbeBox: @unchecked Sendable {
 }
 
 extension ReachabilityProbe {
-    /// The device's RemotePairing port, which can change when it restarts:
-    /// the usual range first, then the rest. An open port may be another
-    /// service, so each is confirmed with the handshake. Gives up after `limit`
-    /// seconds: a host that drops probes costs 1.2 s per batch, ~80 s for them all.
-    static func findRemotePairingPort(host: String, limit: TimeInterval = 30) async -> UInt16? {
-        let deadline = Date.now + limit
-        for range in [UInt16(49152)...49255, UInt16(49256)...UInt16.max] {
-            for port in await openPorts(host: host, in: range, until: deadline) where await speaksRemotePairing(host: host, port: port) {
-                return port
-            }
-        }
-        return nil
+    enum PortScan: Equatable {
+        case found(UInt16)
+        case notFound   // every port checked
+        case timedOut   // gave up before the end; the port may be further on
     }
 
-    /// Probes `range` 256 ports at a time.
-    private static func openPorts(host: String, in range: ClosedRange<UInt16>, until deadline: Date) async -> [UInt16] {
-        var open: [UInt16] = []
-        var next = Int(range.lowerBound)
-        while next <= Int(range.upperBound), Date.now < deadline, !Task.isCancelled {
-            let batch = UInt16(next)...UInt16(min(next + 255, Int(range.upperBound)))
-            open += await withTaskGroup(of: UInt16?.self) { group in
+    /// The device's RemotePairing port, which can change when it restarts: the
+    /// usual range first (49152…), 256 ports at a time. An open port may be another
+    /// service, so each is confirmed with the handshake as its batch comes in.
+    /// Every probe gets only the time left: a host that drops probes would
+    /// otherwise cost 1.2 s per batch, ~80 s in all, plus 4 s per silent port.
+    static func findRemotePairingPort(host: String, limit: Duration = .seconds(30)) async -> PortScan {
+        let clock = ContinuousClock()
+        let deadline = clock.now + limit
+        func left() -> TimeInterval { (deadline - clock.now) / .seconds(1) }
+        var next = 49152
+        while next <= 65535 {
+            guard left() > 0, !Task.isCancelled else { return .timedOut }
+            let batch = UInt16(next)...UInt16(min(next + 255, 65535))
+            let timeout = min(1.2, left())
+            let open = await withTaskGroup(of: UInt16?.self) { group in
                 for port in batch {
-                    group.addTask { await ReachabilityProbe.checkTCP(host: host, port: port, timeout: 1.2) ? port : nil }
+                    group.addTask { await ReachabilityProbe.checkTCP(host: host, port: port, timeout: timeout) ? port : nil }
                 }
                 var hits: [UInt16] = []
                 for await r in group { if let r { hits.append(r) } }
-                return hits
+                return hits.sorted()
+            }
+            for port in open {
+                guard left() > 0, !Task.isCancelled else { return .timedOut }
+                if await speaksRemotePairing(host: host, port: port, timeout: min(4, left())) { return .found(port) }
             }
             next += 256
         }
-        return open.sorted()
+        return .notFound
     }
 }

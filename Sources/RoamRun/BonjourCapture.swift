@@ -43,21 +43,22 @@ final class BonjourCapture: ObservableObject {
         reader = LineReader(pipe) { [weak self] line in
             Task { @MainActor in self?.parse(line: line) }
         }
+        // Before run(): a dns-sd that dies at once must still be restarted.
+        task.terminationHandler = { [weak self] ended in
+            Task { @MainActor in
+                // Only restart if *this* process was the live one — a
+                // late handler from an old one must not drop its successor.
+                guard let self, self.process === ended else { return }
+                self.process = nil
+                self.onLog?("dns-sd -Z exited unexpectedly; restarting in 5s")
+                try? await Task.sleep(for: .seconds(5))
+                guard !self.stopped else { return }   // the sheet closed meanwhile
+                self.start(serviceType: self.serviceType, domain: self.domain)
+            }
+        }
         do {
             try task.run()
             process = task
-            task.terminationHandler = { [weak self] ended in
-                Task { @MainActor in
-                    // Only restart if *this* process was the live one — a
-                    // late handler from an old one must not drop its successor.
-                    guard let self, self.process === ended else { return }
-                    self.process = nil
-                    self.onLog?("dns-sd -Z exited unexpectedly; restarting in 5s")
-                    try? await Task.sleep(for: .seconds(5))
-                    guard !self.stopped else { return }   // the sheet closed meanwhile
-                    self.start(serviceType: self.serviceType, domain: self.domain)
-                }
-            }
             onLog?("Bonjour scan started (\(serviceType))")
         } catch {
             onLog?("Failed to start dns-sd -Z: \(error.localizedDescription)")

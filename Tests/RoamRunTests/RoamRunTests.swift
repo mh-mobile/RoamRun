@@ -516,17 +516,46 @@ private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> { CLI.
     #expect(mode == 0o600)
 }
 
+@Test func writeSaysWhetherTheClaimIsOurs() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-test-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let id = UUID(), other: Int32 = getpid() + 1
+    func e(_ pid: Int32, _ s: BridgeStatus) -> StatusFile.Entry {
+        .init(pid: pid, cli: false, udid: nil, status: s.title, detail: "", ready: false, tunnelPorts: [], updated: .now, state: s.rawValue)
+    }
+    let live: StatusFile.Liveness = { _ in true }
+    #expect(StatusFile.write(id, e(other, .ready), in: dir, live: live) == .written)   // nobody held it
+    // Healthy elsewhere: refused, and told who holds it — also for a later attempt.
+    func holder(_ r: StatusFile.WriteResult) -> Int32? { if case .heldBy(let e) = r { e.pid } else { nil } }
+    #expect(holder(StatusFile.write(id, e(getpid(), .starting), in: dir, live: live)) == other)
+    #expect(holder(StatusFile.write(id, nil, in: dir, live: live)) == other)
+    // Errored elsewhere: ours to take.
+    let errored = UUID()
+    #expect(StatusFile.write(errored, e(other, .error), in: dir, live: live) == .written)
+    #expect(StatusFile.write(errored, e(getpid(), .starting), in: dir, live: live) == .written)
+    // Can't write at all: a failure, not a silent success.
+    let file = dir.appendingPathComponent("not-a-dir"); try Data().write(to: file)
+    if case .failed = StatusFile.write(id, e(getpid(), .starting), in: file, live: live) {} else { Issue.record("expected .failed") }
+}
+
 // MARK: - Relay, end to end on localhost (fake device = an echo server)
 
 import Network
 
-/// Echoes everything back; `refuse` makes it close each connection at once.
+/// Echoes everything back (or, `silent`, accepts and never answers). Keeps its
+/// connections, so a test can close them all at a moment of its choosing.
 private final class EchoServer: @unchecked Sendable {
     let listener: NWListener
-    init() throws {
-        listener = try NWListener(using: .tcp, on: .any)
-        listener.newConnectionHandler = { c in
+    private let lock = NSLock()
+    private var conns: [NWConnection] = []
+    var accepted: Int { lock.withLock { conns.count } }
+
+    init(silent: Bool = false, port: UInt16? = nil) throws {
+        listener = try port.map { try NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: $0)!) } ?? NWListener(using: .tcp, on: .any)
+        listener.newConnectionHandler = { [lock, weak self] c in
+            lock.withLock { self?.conns.append(c) }
             c.start(queue: .global())
+            guard !silent else { return }
             func loop() {
                 c.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, done, err in
                     if let data, !data.isEmpty { c.send(content: data, completion: .contentProcessed { _ in loop() }) }
@@ -537,13 +566,28 @@ private final class EchoServer: @unchecked Sendable {
             loop()
         }
     }
+    /// The port, or 0 if it couldn't listen (e.g. a fixed port that's taken).
     func start() async -> UInt16 {
         await withCheckedContinuation { cont in
-            listener.stateUpdateHandler = { [listener] s in if case .ready = s { cont.resume(returning: listener.port!.rawValue) } }
+            let once = OnceBox()
+            listener.stateUpdateHandler = { [listener] s in
+                switch s {
+                case .ready: once.run { cont.resume(returning: listener.port!.rawValue) }
+                case .failed, .waiting, .cancelled: once.run { listener.cancel(); cont.resume(returning: 0) }
+                default: break
+                }
+            }
             listener.start(queue: .global())
         }
     }
-    func stop() { listener.cancel() }
+    func closeAll() { lock.withLock { conns }.forEach { $0.cancel() } }
+    func stop() { listener.cancel(); closeAll() }
+}
+
+/// Polls `condition` for up to 5 s: connection callbacks land when they land.
+private func eventually(_ condition: () -> Bool) async throws -> Bool {
+    for _ in 0..<50 where !condition() { try await Task.sleep(for: .milliseconds(100)) }
+    return condition()
 }
 
 /// Sends `payload` to 127.0.0.1:port and returns what comes back before the peer closes (or times out).
@@ -619,44 +663,72 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
         }
     }
 
-    /// A close races the relay's callbacks: wait (up to 5 s) for the count to settle.
-    private func pairsSettleToZero() async throws -> Bool {
-        for _ in 0..<50 where Relay.openPairs != 0 { try await Task.sleep(for: .milliseconds(100)) }
-        return Relay.openPairs == 0
-    }
-
     /// The process-wide pair count must come back to zero whichever side ends a
-    /// connection first — stop(), the client, or a failing upstream — or relays
+    /// connection first — stop(), the client, or the upstream — or relays
     /// slowly lose capacity until they refuse everything.
     @Test func pairCountSurvivesStopAndCloseRaces() async throws {
         let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
-        #expect(Relay.openPairs == 0)
+        #expect(try await eventually { Relay.openPairs == 0 })
 
-        // Stop with connections open, then the clients' late closes arrive.
+        // Stop with every connection tracked, then the clients' late closes arrive.
         let a = try await startedRelay(upstream: upstream)
         var held = hold(64, to: a)
-        try await Task.sleep(for: .seconds(1))
+        #expect(try await eventually { Relay.openPairs == 64 })
         a.stop()
         held.forEach { $0.cancel() }
-        #expect(try await pairsSettleToZero())
+        #expect(try await eventually { Relay.openPairs == 0 })
 
-        // Upstream refusing while stop() runs.
-        let dead = try EchoServer(); let deadPort = await dead.start(); dead.stop()
-        let b = try await startedRelay(upstream: deadPort)
+        // stop() and the upstream closing every connection, at the same moment.
+        let far = try EchoServer(); let farPort = await far.start(); defer { far.stop() }
+        let b = try await startedRelay(upstream: farPort)
         held = hold(40, to: b)
-        try await Task.sleep(for: .milliseconds(30))
-        b.stop()
+        #expect(try await eventually { far.accepted == 40 && Relay.openPairs == 40 })
+        DispatchQueue.concurrentPerform(iterations: 2) { i in if i == 0 { far.closeAll() } else { b.stop() } }
         held.forEach { $0.cancel() }
-        #expect(try await pairsSettleToZero())
+        #expect(try await eventually { Relay.openPairs == 0 })
 
         // Full, all closed by the clients: new connections get through again.
         let c = try await startedRelay(upstream: upstream); defer { c.stop() }
         held = hold(64, to: c)
-        try await Task.sleep(for: .seconds(2))   // let all 64 be accepted and tracked
+        #expect(try await eventually { Relay.openPairs == 64 })
         #expect(await roundTrip(port: c.localPort, payload: Data("x".utf8), timeout: 2) == nil)
         held.forEach { $0.cancel() }
-        #expect(try await pairsSettleToZero())
+        #expect(try await eventually { Relay.openPairs == 0 })
         #expect(await roundTrip(port: c.localPort, payload: Data("x".utf8)) == Data("x".utf8))
+    }
+
+    /// 256 pairs across all relays: one more is refused anywhere, until one closes.
+    @Test func processWideCapSpansRelays() async throws {
+        let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
+        var relays: [Relay] = []
+        defer { relays.forEach { $0.stop() } }
+        var held: [[NWConnection]] = []
+        defer { held.joined().forEach { $0.cancel() } }
+        for _ in 0..<4 {
+            let r = try await startedRelay(upstream: upstream)
+            relays.append(r); held.append(hold(64, to: r))
+        }
+        #expect(try await eventually { Relay.openPairs == 256 })
+        let fifth = try await startedRelay(upstream: upstream); relays.append(fifth)
+        #expect(await roundTrip(port: fifth.localPort, payload: Data("x".utf8), timeout: 2) == nil)
+        held[0][0].cancel()
+        #expect(try await eventually { Relay.openPairs == 255 })
+        #expect(await roundTrip(port: fifth.localPort, payload: Data("x".utf8)) == Data("x".utf8))
+    }
+
+    /// Here, not top-level: its probes sweep 49152…, where these echo servers listen.
+    @Test func portScanKeepsItsDeadlineEvenOnASilentPort() async throws {
+        // A port that accepts and never answers the handshake (4 s timeout on its own).
+        var silent: EchoServer?
+        for port in UInt16(49152)...49160 where silent == nil {
+            if let s = try? EchoServer(silent: true, port: port), await s.start() != 0 { silent = s }
+        }
+        guard let silent else { return }   // all taken: nothing to test here
+        defer { silent.stop() }
+        let clock = ContinuousClock(), start = clock.now
+        let r = await ReachabilityProbe.findRemotePairingPort(host: "127.0.0.1", limit: .seconds(1))
+        #expect(r == .timedOut)
+        #expect(clock.now - start < .seconds(3.5))   // 1 s alone; slower beside parallel tests, but under the 4 s handshake
     }
 
     @Test func stopFreesThePort() async throws {
