@@ -421,6 +421,23 @@ private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> { CLI.
     #expect(AppID.carriedOver(old: marked, new: nil) == nil)                                   // deleted settings stay deleted
 }
 
+import ServiceManagement
+
+@Test func openAtLoginSurvivesALostRegistration() {
+    // Never chosen here: whatever the system says.
+    #expect(AppCoordinator.loginItem(saved: nil, status: .notRegistered) == (on: false, register: false))
+    #expect(AppCoordinator.loginItem(saved: nil, status: .enabled) == (on: true, register: false))
+    // Chosen and still registered. .requiresApproval is the user switching it off in System
+    // Settings: still "on" here, and we don't register over their choice.
+    #expect(AppCoordinator.loginItem(saved: true, status: .enabled) == (on: true, register: false))
+    #expect(AppCoordinator.loginItem(saved: true, status: .requiresApproval) == (on: true, register: false))
+    // The registration went with the old bundle id (0.1.12) or a replaced app: put it back.
+    #expect(AppCoordinator.loginItem(saved: true, status: .notRegistered) == (on: true, register: true))
+    #expect(AppCoordinator.loginItem(saved: true, status: .notFound) == (on: true, register: true))
+    // Switched off stays off.
+    #expect(AppCoordinator.loginItem(saved: false, status: .notRegistered) == (on: false, register: false))
+}
+
 @Test func deviceLookup() {
     let a = profile("iPhone"), b = profile("iPad")
     #expect(CLI.matches("IPHONE", in: [a, b]).map(\.id) == [a.id])

@@ -20,8 +20,13 @@ final class AppCoordinator: ObservableObject {
         }
     }
     @Published var launchAtLogin: Bool {
-        didSet { if !syncingLoginItem { applyLaunchAtLogin() } }
+        didSet {
+            guard !syncingLoginItem else { return }
+            UserDefaults.standard.set(launchAtLogin, forKey: Self.launchAtLoginKey)   // outlives the registration
+            applyLaunchAtLogin()
+        }
     }
+    static let launchAtLoginKey = "launchAtLogin"
     /// Why "Open at login" isn't in effect (an error, or approval needed), for Settings.
     @Published private(set) var loginItemProblem: String?
     private var syncingLoginItem = false
@@ -43,8 +48,11 @@ final class AppCoordinator: ObservableObject {
     }
 
     init() {
+        let saved = UserDefaults.standard.object(forKey: Self.launchAtLoginKey) as? Bool
         let loginStatus = SMAppService.mainApp.status
-        launchAtLogin = loginStatus == .enabled || loginStatus == .requiresApproval
+        let login = Self.loginItem(saved: saved, status: loginStatus)
+        launchAtLogin = login.on
+        if saved == nil { UserDefaults.standard.set(login.on, forKey: Self.launchAtLoginKey) }
         if loginStatus == .requiresApproval { loginItemProblem = "Allow RoamRun in System Settings › General › Login Items." }
         let savedCLIPath = UserDefaults.standard.string(forKey: "tailscaleCLIPath") ?? ""
         tailscaleClient.binaryPath = savedCLIPath.isEmpty ? nil : savedCLIPath
@@ -97,6 +105,10 @@ final class AppCoordinator: ObservableObject {
         interfaceMonitor.start()
 
         learnDeviceTypes()
+
+        // Only the installed copy registers itself: a build run from a folder must not
+        // become the login item in place of it.
+        if login.register, Bundle.main.bundlePath.hasPrefix("/Applications/") { applyLaunchAtLogin() }
 
         // A snapshot run is a throwaway copy; it must not touch the real app's bridges.
         for id in wasActiveIDs where Snapshot.path == nil {
@@ -440,6 +452,16 @@ final class AppCoordinator: ObservableObject {
             // Through startBridge, so the CLI-owner and same-LAN checks apply.
             if let p = profile(id) { startBridge(p) }
         }
+    }
+
+    /// What the toggle shows, and whether to register again. A registration belongs to the
+    /// bundle id, so changing it (0.1.12) or replacing the app drops it while the user's choice
+    /// stands. `.requiresApproval` still counts as on: that's them switching it off in System
+    /// Settings, which we leave alone.
+    nonisolated static func loginItem(saved: Bool?, status: SMAppService.Status) -> (on: Bool, register: Bool) {
+        let live = status == .enabled || status == .requiresApproval
+        let lost = saved == true && !live
+        return (live || lost, lost)
     }
 
     private func applyLaunchAtLogin() {
