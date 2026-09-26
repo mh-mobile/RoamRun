@@ -72,11 +72,15 @@ endif
 # Developer ID Application identity; else pass RELEASE_SIGN_ID with the full name.
 RELEASE_SIGN_ID ?= Developer ID Application
 RELEASE_NOTARY_PROFILE ?= roamrun-notary
+# Built under a -pending name; the release name appears only once every check passed.
+PENDING_DMG = $(APP_NAME)-$(VERSION)-pending.dmg
 release-dmg:
-	$(MAKE) dmg SIGN_ID="$(RELEASE_SIGN_ID)" NOTARY_PROFILE="$(RELEASE_NOTARY_PROFILE)"
+	rm -f $(DMG) $(PENDING_DMG)
+	$(MAKE) dmg DMG="$(PENDING_DMG)" SIGN_ID="$(RELEASE_SIGN_ID)" NOTARY_PROFILE="$(RELEASE_NOTARY_PROFILE)"
 	xcrun stapler validate $(BUNDLE)
-	xcrun stapler validate $(DMG)
+	xcrun stapler validate $(PENDING_DMG)
 	spctl -a -vv -t exec $(BUNDLE) 2>&1 | grep -q "source=Notarized Developer ID"
+	mv $(PENDING_DMG) $(DMG)
 	@echo "Release $(DMG) is signed, notarized and stapled"
 
 # `roamrun` on PATH, pointing into the app bundle (one binary for app + CLI).
