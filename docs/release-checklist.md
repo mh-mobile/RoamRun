@@ -20,11 +20,16 @@ screen on.
    `roamrun up <name> -d`. The CLI takes the device, and within ~10 s the app
    steps back — only one `dns-sd -P … roamrun.local` for that device is left
    (`ps -ax`). `roamrun down <name>` stops both (the app doesn't take it back).
-7. `roamrun down <name>` → no `dns-sd -P … roamrun.local` or `log stream` left (`ps -ax`).
+7. Launch options, with an app that prints `ProcessInfo.processInfo.arguments`,
+   its environment and the URL it opens (or check them in the debugger):
+   `roamrun run <name> --logs --arg -RRTest --arg yes --env RR_VALUE=123 --url <a URL it handles>`
+   → the log shows `-RRTest yes` and `RR_VALUE=123`, the app opens that URL's screen, and
+   `roamrun screenshot <name>` shows it.
+8. `roamrun down <name>` → no `dns-sd -P … roamrun.local` or `log stream` left (`ps -ax`).
 
 ## Two devices, both away (the multi-device path)
 
-8. Bridge both from the app. Launch an app on each, a few times in turn: every
+9. Bridge both from the app. Launch an app on each, a few times in turn: every
    launch works and each device only gets its own tunnel ports (Technical details).
    Then both at once, 15 rounds: every launch works and both stay Ready.
    `for i in $(seq 15); do for u in <udid1> <udid2>; do xcrun devicectl device process launch --device $u --terminate-existing <bundle id> & done; wait; done`
@@ -36,16 +41,16 @@ screen on.
 
 ## Home
 
-9. Put the device on this Mac's Wi‑Fi: the bridge shows "On this Wi‑Fi" within
+10. Put the device on this Mac's Wi‑Fi: the bridge shows "On this Wi‑Fi" within
    ~10 s, and Xcode still runs on it. Back on the hotspot: Ready again within ~40 s.
 
 ## Install paths
 
-10. Download the release dmg in a browser, install, open: Gatekeeper blocks it
+11. Download the release dmg in a browser, install, open: Gatekeeper blocks it
     once; Open Anyway works; the first screen offers the CLI.
-11. `brew upgrade --cask roamrun` from the previous version: the app quits,
+12. `brew upgrade --cask roamrun` from the previous version: the app quits,
     is replaced and reopens without another Gatekeeper prompt.
-12. Tap: `brew style --cask mh-mobile/tap/roamrun` and
+13. Tap: `brew style --cask mh-mobile/tap/roamrun` and
     `brew audit --cask --online mh-mobile/tap/roamrun`. The audit sometimes
     hangs on the download; if so, compare `shasum -a 256` of the published dmg
     with the cask by hand.

@@ -38,7 +38,7 @@ enum Entry {
 }
 
 extension Bundle {
-    /// "0.1.9" — as in the release notes and `roamrun --version`.
+    /// The marketing version, as in the release notes and `roamrun --version`.
     var versionText: String { infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev" }
 }
 

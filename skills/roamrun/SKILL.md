@@ -41,17 +41,26 @@ not match the installed CLI until then (`roamrun --help` is authoritative).
 ```sh
 roamrun devices                       # saved devices + UDID
 roamrun up iPhone -d                  # bridge in the background; returns when ready (exit 1 after 60 s if not — it keeps trying)
-roamrun status iPhone --wait 60 --json > /tmp/rr.json || roamrun doctor iPhone
-UDID=$(jq -r '.[0].udid' /tmp/rr.json)       # for xcodebuild AND devicectl
-jq -e '.[0].locked != true' /tmp/rr.json >/dev/null || echo "ask the user to unlock the iPhone"
+# Stop here unless all three pass — don't build or install on a device that isn't ready.
+roamrun status iPhone --wait 60 --json > /tmp/rr.json || { roamrun doctor iPhone; exit 1; }   # act on doctor's first fail
+UDID=$(jq -er '.[0].udid // empty' /tmp/rr.json) || exit 1         # for xcodebuild AND devicectl
+jq -e '.[0].locked == false' /tmp/rr.json >/dev/null || { echo "ask the user to unlock the iPhone"; exit 1; }
 ```
+
+`status --json` prints the JSON even when the device isn't ready (exit 1), so
+check the exit code, not just the file. `locked` is `null` when it couldn't be
+read — treat that like locked.
 
 If the bridge already runs in the menu bar app, just use it — `status` shows
 the owner, and `up` exits 0 when another process already has it ready (exit 1
 if that one is still coming up). Status "On this Wi‑Fi" means the iPhone is on
 the Mac's own network: no bridge is needed, Xcode sees it directly, and it
 counts as ready. After a long build, check `roamrun status iPhone` again before
-installing. `roamrun down iPhone` when finished (optional).
+installing.
+
+Leave the bridge running when you're done. Run `roamrun down iPhone` only if
+the user asks: it also stops a bridge the menu bar app runs and takes the
+device off the app's list of bridges to restore.
 
 ## 4. Build, install, launch
 
