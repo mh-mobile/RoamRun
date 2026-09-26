@@ -127,17 +127,27 @@ struct AddDeviceView: View {
                 .foregroundStyle(.secondary)
             }
         } else {
-            VStack(spacing: 0) {
-                ForEach(visibleServices) { s in
-                    ServiceRow(service: s, live: liveness[s.host],
-                               selected: selectedHost == s.host,
-                               symbol: DeviceProfile.symbol(for: deviceType(ofHost: s.host)))
-                        .contentShape(Rectangle())
-                        .onTapGesture { selectedHost = s.host }
-                    if s.id != visibleServices.last?.id { Divider() }
-                }
+            // A busy network (an office Wi‑Fi) can show dozens: scroll rather than grow off screen.
+            if visibleServices.count > 5 {
+                ScrollView { serviceList }
+                    .frame(height: 250)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.4)))
+            } else {
+                serviceList.background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.4)))
             }
-            .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.4)))
+        }
+    }
+
+    private var serviceList: some View {
+        VStack(spacing: 0) {
+            ForEach(visibleServices) { s in
+                ServiceRow(service: s, live: liveness[s.host],
+                           selected: selectedHost == s.host,
+                           symbol: DeviceProfile.symbol(for: deviceType(ofHost: s.host)))
+                    .contentShape(Rectangle())
+                    .onTapGesture { selectedHost = s.host }
+                if s.id != visibleServices.last?.id { Divider() }
+            }
         }
     }
 
