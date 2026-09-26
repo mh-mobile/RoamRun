@@ -338,6 +338,8 @@ private let t0 = Date(timeIntervalSinceReferenceDate: 800_000_000)
 
 // MARK: - Argument parsing
 
+private extension Result { var isSuccess: Bool { if case .success = self { true } else { false } } }
+
 private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> { CLI.parse(s.split(separator: " ").map(String.init)) }
 
 @Test func argumentsPerCommand() throws {
@@ -351,6 +353,32 @@ private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> { CLI.
 @Test func argumentsThatAreRejected() {
     for bad in ["devices -d", "status --wait=", "run x --scheme=", "status --scheme X", "up a b", "status x --wait", "status x --wait inf",
                 "status x --wait -1", "run x --scheme", "run x --scheme --logs", "screenshot x a.png b"] {
+        #expect((try? parsed(bad).get()) == nil, "\(bad)")
+    }
+}
+
+@Test func launchOptionsReachDevicectl() throws {
+    let p = try parsed("run iPhone --arg -ShowScreen --arg settings --env DEMO=1 --env EMPTY= --url myapp://settings/a=b").get()
+    #expect(p.words == ["iPhone"])
+    #expect(p.launch == CLI.Launch(args: ["-ShowScreen", "settings"], env: ["DEMO=1", "EMPTY="], url: "myapp://settings/a=b"))
+    #expect(p.launch.argv(udid: "U", bundleID: "com.x", console: false) == [
+        "/usr/bin/xcrun", "devicectl", "device", "process", "launch", "--terminate-existing", "--device", "U",
+        "--payload-url", "myapp://settings/a=b", "com.x", "--", "-ShowScreen", "settings"])
+    // logs takes them too, and without any the command is the plain launch.
+    #expect(try parsed("logs iPhone com.x --arg -v").get().launch.args == ["-v"])
+    #expect(CLI.Launch().argv(udid: "U", bundleID: "com.x", console: true) == [
+        "/usr/bin/xcrun", "devicectl", "device", "process", "launch", "--console", "--terminate-existing", "--device", "U", "com.x"])
+    // With the console and a URL: devicectl's own options first, the app's after "--".
+    let both = CLI.Launch(args: ["-h"], url: "myapp://x").argv(udid: "U", bundleID: "com.x", console: true)
+    #expect(both.suffix(8) == ["--terminate-existing", "--device", "U", "--payload-url", "myapp://x", "com.x", "--", "-h"])
+    // Split at the first "=", values may hold more (and newlines).
+    let env = CLI.Launch(env: ["A=b=c", "E=", "J=line1\nline2"]).environment
+    #expect(env.map(\.name) == ["A", "E", "J"] && env.map(\.value) == ["b=c", "", "line1\nline2"])
+    #expect(CLI.parse(["run", "x", "--env", "J={\n\"a\": 1\n}"]).isSuccess)
+    // "--arg -h" is for the app, not our help.
+    #expect(!CLI.wantsHelp(["run", "x", "--arg", "-h"]) && CLI.wantsHelp(["run", "x", "-h"]) && CLI.wantsHelp(["help"]))
+    for bad in ["run x --env DEMO", "run x --env 1A=2", "run x --env", "run x --env -X=1", "run x --url settings",
+                "run x --url -x", "run x --arg", "screenshot x --arg a", "install x a.ipa --url myapp://x"] {
         #expect((try? parsed(bad).get()) == nil, "\(bad)")
     }
 }

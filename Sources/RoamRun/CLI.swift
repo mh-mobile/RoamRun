@@ -25,14 +25,19 @@ enum CLI {
                                      (--wait: wait up to N seconds for ready)
       doctor [name] [--json]         Check each step from this Mac to the device and say what to fix
                                      (without a name: devices with a running bridge, or all if none runs)
-      run <name> [--scheme S] [--workspace W | --project P] [--configuration C] [--logs]
+      run <name> [--scheme S] [--workspace W | --project P] [--configuration C] [--logs] [launch options]
                                      Build the project in this folder for the device, install and launch it
                                      (--logs: then stream its output like `logs`)
       install <name> <App.ipa|App.app>
                                      Install an .ipa or .app signed for the device (Debugging, Release
                                      Testing / Ad Hoc or Enterprise); checks the signing first
-      logs <name> <bundle-id>        Relaunch the app with its console attached (print and os_log)
+      logs <name> <bundle-id> [launch options]
+                                     Relaunch the app with its console attached (print and os_log)
                                      until Ctrl-C — it restarts the app; it can't join one already running
+      launch options (run, logs), e.g. to open one screen before a screenshot:
+        --arg A                      pass A to the app (repeat for more; may start with “-”)
+        --env NAME=value             set an environment variable for the app (repeatable)
+        --url URL                    open URL in the app (its URL scheme or a universal link)
       screenshot <name> [file.png]   Save the device's screen as PNG (default: ./<name>-<time>.png) and
                                      print its path — to check what an app shows (Xcode 27)
       version                        Print the version (also --version)
@@ -56,9 +61,7 @@ enum CLI {
                 FileHandle.standardError.write(Data("roamrun: unknown command “\(args[0])”\n\n\(usage)\n".utf8))
                 exit(2)
             }
-            if ["help", "--help", "-h"].contains(args[0]) || args.dropFirst().contains(where: { $0 == "--help" || $0 == "-h" }) {
-                print(usage); exit(0)
-            }
+            if wantsHelp(args) { print(usage); exit(0) }
             if args[0] == "version" || args[0] == "--version" {
                 // Through the /usr/local/bin link, Bundle.main isn't the app: resolve it.
                 let app = Bundle.main.executableURL?.resolvingSymlinksInPath()
@@ -107,12 +110,12 @@ enum CLI {
                 guard name != nil, let p = targets.first, words.count >= 2 else {
                     fail("usage: roamrun logs <name> <bundle-id>. " + names(profiles))
                 }
-                logs(p, bundleID: words[words.startIndex + 1])
+                logs(p, bundleID: words[words.startIndex + 1], launch: parsed.launch)
             case "run":
                 guard name != nil, let p = targets.first else { fail("usage: roamrun run <name> [--scheme S]. " + names(profiles)) }
                 let v = parsed.values
                 runApp(p, scheme: v["--scheme"], workspace: v["--workspace"], project: v["--project"],
-                       configuration: v["--configuration"] ?? "Debug", logs: parsed.flags.contains("--logs"))
+                       configuration: v["--configuration"] ?? "Debug", logs: parsed.flags.contains("--logs"), launch: parsed.launch)
             case "screenshot":
                 guard name != nil, let p = targets.first else {
                     fail("usage: roamrun screenshot <name> [file.png]. " + names(profiles))
@@ -140,8 +143,8 @@ enum CLI {
         "doctor": (["--json"], 0...1),
         "down": ([], 0...1),
         "up": (["-v", "-d", detachedFlag], 0...1),
-        "logs": ([], 0...2),
-        "run": (["--scheme=", "--workspace=", "--project=", "--configuration=", "--logs"], 0...1),
+        "logs": (["--arg=", "--env=", "--url="], 0...2),
+        "run": (["--scheme=", "--workspace=", "--project=", "--configuration=", "--logs", "--arg=", "--env=", "--url="], 0...1),
         "screenshot": ([], 0...2),
         "install": ([], 0...2),
     ]
@@ -150,10 +153,45 @@ enum CLI {
         var words: [String] = []
         var flags: Set<String> = []
         var values: [String: String] = [:]
+        /// Every value of an option given more than once (--arg, --env), in order.
+        var lists: [String: [String]] = [:]
         var wait: Double?
+        var launch: Launch { Launch(args: lists["--arg"] ?? [], env: lists["--env"] ?? [], url: values["--url"]) }
+    }
+
+    /// What the app is launched with: arguments after the bundle id, environment
+    /// (NAME=value) and a URL it opens — e.g. to go straight to one screen.
+    struct Launch: Equatable {
+        var args: [String] = []
+        var env: [String] = []
+        var url: String?
+
+        /// devicectl's launch command; the environment goes through DEVICECTL_CHILD_*.
+        func argv(udid: String, bundleID: String, console: Bool) -> [String] {
+            ["/usr/bin/xcrun", "devicectl", "device", "process", "launch"] + (console ? ["--console"] : [])
+                + ["--terminate-existing", "--device", udid] + (url.map { ["--payload-url", $0] } ?? [])
+                + [bundleID] + (args.isEmpty ? [] : ["--"] + args)   // "--": devicectl would read "-Flag" as its own
+        }
+
+        /// NAME=value pairs split at the first "=": a value may contain more.
+        var environment: [(name: String, value: String)] {
+            env.compactMap { pair in
+                pair.firstIndex(of: "=").map { (String(pair[..<$0]), String(pair[pair.index(after: $0)...])) }
+            }
+        }
+
+        func exportEnvironment() {
+            for (name, value) in environment { setenv("DEVICECTL_CHILD_" + name, value, 1) }
+        }
     }
 
     struct ArgumentError: Error, Equatable { let message: String }
+
+    /// `--help` anywhere, except as the value of `--arg` (`--arg -h` is for the app).
+    nonisolated static func wantsHelp(_ args: [String]) -> Bool {
+        ["help", "--help", "-h"].contains(args[0])
+            || args.indices.dropFirst().contains { ["--help", "-h"].contains(args[$0]) && args[$0 - 1] != "--arg" }
+    }
 
     /// Too few words is left to each command (its message lists the saved devices).
     nonisolated static func parse(_ args: [String]) -> Result<Parsed, ArgumentError> {
@@ -163,10 +201,12 @@ enum CLI {
         while i < args.count {
             let a = args[i]
             if spec.options.contains(a + "=") {
-                guard i + 1 < args.count, !args[i + 1].hasPrefix("-") || a == "--wait" else {
+                // --arg values are often flags themselves (-ShowScreen), --wait may be negative (refused below).
+                guard i + 1 < args.count, !args[i + 1].hasPrefix("-") || a == "--wait" || a == "--arg" else {
                     return .failure(.init(message: a == "--wait" ? "--wait needs a number of seconds" : "\(a) needs a value"))
                 }
                 p.values[a] = args[i + 1]
+                p.lists[a, default: []].append(args[i + 1])
                 i += 2
                 continue
             }
@@ -183,6 +223,13 @@ enum CLI {
                 p.words.append(a)
             }
             i += 1
+        }
+        // Only the name is checked: a value may be anything, even several lines.
+        for pair in p.lists["--env"] ?? [] where pair.prefixMatch(of: #/[A-Za-z_][A-Za-z0-9_]*=/#) == nil {
+            return .failure(.init(message: "--env takes NAME=value, not \(shellName(pair))"))
+        }
+        if let u = p.values["--url"], URL(string: u)?.scheme == nil {
+            return .failure(.init(message: "--url needs a URL with a scheme, e.g. myapp://settings"))
         }
         if let w = p.values["--wait"] {
             guard let n = Double(w), n.isFinite, n >= 0 else { return .failure(.init(message: "--wait needs a number of seconds")) }
@@ -413,7 +460,7 @@ enum CLI {
 
     /// Build → install → launch, for the project in the current folder.
     private static func runApp(_ profile: DeviceProfile, scheme: String?, workspace: String?, project: String?,
-                               configuration: String, logs: Bool) -> Never {
+                               configuration: String, logs: Bool, launch: Launch) -> Never {
         let udid = reachableUDID(profile)
         let container: [String]
         if let workspace { container = ["-workspace", workspace] }
@@ -461,8 +508,9 @@ enum CLI {
             stop("the install failed (see above)")
         }
         print("Launching \(bundleID)…")
-        if logs { launchWithConsole(udid: udid, bundleID: bundleID) }
-        exec(["/usr/bin/xcrun", "devicectl", "device", "process", "launch", "--terminate-existing", "--device", udid, bundleID])
+        if logs { launchWithConsole(udid: udid, bundleID: bundleID, launch: launch) }
+        launch.exportEnvironment()
+        exec(launch.argv(udid: udid, bundleID: bundleID, console: false))
     }
 
     /// The target `run` installs: an application (not an App Clip, extension or
@@ -518,15 +566,15 @@ enum CLI {
 
     /// devicectl can't attach to a running process, so this relaunches the app
     /// with `--console`. OS_ACTIVITY_DT_MODE mirrors os_log to stderr, as Xcode does.
-    private static func logs(_ profile: DeviceProfile, bundleID: String) -> Never {
-        launchWithConsole(udid: reachableUDID(profile), bundleID: bundleID)
+    private static func logs(_ profile: DeviceProfile, bundleID: String, launch: Launch) -> Never {
+        launchWithConsole(udid: reachableUDID(profile), bundleID: bundleID, launch: launch)
     }
 
     /// Relaunch with print / os_log streamed here until Ctrl-C.
-    private static func launchWithConsole(udid: String, bundleID: String) -> Never {
+    private static func launchWithConsole(udid: String, bundleID: String, launch: Launch) -> Never {
         setenv("DEVICECTL_CHILD_OS_ACTIVITY_DT_MODE", "enable", 1)
-        exec(["/usr/bin/xcrun", "devicectl", "device", "process", "launch", "--console",
-              "--terminate-existing", "--device", udid, bundleID])
+        launch.exportEnvironment()   // after: the caller's --env OS_ACTIVITY_DT_MODE=… wins
+        exec(launch.argv(udid: udid, bundleID: bundleID, console: true))
     }
 
     private static func down(_ profile: DeviceProfile) -> Never {
