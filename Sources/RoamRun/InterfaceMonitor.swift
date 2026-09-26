@@ -89,7 +89,7 @@ final class InterfaceMonitor: @unchecked Sendable {
             guard let sa = addr.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET) else { continue }
             var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             getnameinfo(sa, socklen_t(sa.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
-            let ip = String(cString: host)
+            let ip = host.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
             if !ip.hasPrefix("127.") { result[String(cString: addr.ifa_name)] = ip }
         }
         return result

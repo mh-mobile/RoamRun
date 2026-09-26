@@ -102,7 +102,7 @@ enum StatusFile {
         guard proc_pidpath(pid, &buf, UInt32(buf.count)) > 0 else { return false }
         // Any RoamRun.app copy (proc_pidpath resolves symlinks, so a
         // `.build/…` path never shows here); a recycled PID is ignored.
-        let path = String(cString: buf)
+        let path = buf.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
         return path.hasSuffix(".app/Contents/MacOS/RoamRun")
     }
 }
