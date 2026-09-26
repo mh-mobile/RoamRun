@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RoamRun</title>
+<meta name="description" content="Run your iOS apps wherever your device is. Xcode wireless debugging for iPhone, iPad and Apple Vision Pro on another network, over Tailscale.">
+<meta property="og:title" content="RoamRun">
+<meta property="og:description" content="Run your iOS apps wherever your device is — Xcode wireless debugging over Tailscale.">
+<meta property="og:image" content="https://mh-mobile.github.io/RoamRun/main.png">
+<meta property="og:url" content="https://mh-mobile.github.io/RoamRun/">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="icon.png">
+<script>
+  // Before the page renders, so Japanese readers don't see English first.
+  (function () {
+    var l = null;
+    try { l = localStorage.getItem("lang"); } catch (e) {}
+    document.documentElement.lang = l || ((navigator.language || "").indexOf("ja") === 0 ? "ja" : "en");
+  })();
+</script>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1d1d1f; --muted: #6e6e73; --card: #f5f5f7; --line: #e3e3e8;
+    --accent: #2c5bd8; --accent-fg: #ffffff; --code: #f0f1f4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111114; --fg: #f2f2f5; --muted: #a1a1a8; --card: #1c1c21; --line: #2c2c33;
+            --accent: #6b93ff; --accent-fg: #0b0b0f; --code: #1f2027; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Segoe UI", sans-serif; }
+  main { max-width: 880px; margin: 0 auto; padding: 0 16px 64px; }
+  a { color: var(--accent); }
+  .lang { position: absolute; top: 16px; right: 16px; font-size: 14px; }
+  .lang button { background: none; border: 1px solid var(--line); color: var(--fg); border-radius: 999px;
+                 padding: 4px 12px; cursor: pointer; font: inherit; }
+  .lang button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
+  header { text-align: center; padding: 64px 0 24px; }
+  header img.icon { width: 112px; height: 112px; }
+  h1 { font-size: 44px; margin: 8px 0 4px; letter-spacing: -0.02em; }
+  .tagline { font-size: 22px; font-weight: 600; margin: 0 0 8px; }
+  .sub { color: var(--muted); margin: 0 auto 24px; max-width: 620px; }
+  .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .btn { display: inline-block; padding: 10px 20px; border-radius: 999px; text-decoration: none; font-weight: 600; }
+  .btn.primary { background: var(--accent); color: var(--accent-fg); }
+  .btn.ghost { border: 1px solid var(--line); color: var(--fg); }
+  .shot { display: block; width: 100%; height: auto; border-radius: 12px; border: 1px solid var(--line); margin: 32px 0 8px; }
+  h2 { font-size: 26px; margin: 56px 0 16px; letter-spacing: -0.01em; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+  .card { background: var(--card); border-radius: 12px; padding: 20px; }
+  .card h3 { margin: 0 0 6px; font-size: 17px; }
+  .card p { margin: 0; color: var(--muted); font-size: 15px; }
+  ol.steps { padding-left: 20px; } ol.steps li { margin-bottom: 8px; }
+  pre { background: var(--code); border-radius: 10px; padding: 14px 16px; overflow-x: auto; position: relative; margin: 0; }
+  code { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .copy { position: absolute; top: 8px; right: 8px; font-size: 12px; padding: 4px 10px; border-radius: 6px;
+          border: 1px solid var(--line); background: var(--bg); color: var(--fg); cursor: pointer; }
+  ul.req { padding-left: 20px; } ul.req li { margin-bottom: 6px; }
+  .note { color: var(--muted); font-size: 14px; }
+  footer { border-top: 1px solid var(--line); margin-top: 64px; padding-top: 20px; color: var(--muted); font-size: 14px;
+           display: flex; gap: 16px; flex-wrap: wrap; justify-content: space-between; }
+  [data-l="ja"] { display: none; }
+  html[lang="ja"] [data-l="en"] { display: none; }
+  html[lang="ja"] [data-l="ja"] { display: revert; }
+  @media (max-width: 520px) { h1 { font-size: 36px; } .tagline { font-size: 19px; } header { padding-top: 56px; } }
+</style>
+</head>
+<body>
+<div class="lang" role="group" aria-label="Language">
+  <button type="button" data-set="en" aria-pressed="true">English</button>
+  <button type="button" data-set="ja" aria-pressed="false">日本語</button>
+</div>
+<main>
+  <header>
+    <img class="icon" src="icon.png" alt="" width="112" height="112">
+    <h1>RoamRun</h1>
+    <p class="tagline" data-l="en">Run your iOS apps wherever your device is.</p>
+    <p class="tagline" data-l="ja">デバイスがどこにあっても、iOS アプリを実機で。</p>
+    <p class="sub" data-l="en">A macOS menu bar app that makes Xcode's wireless debugging work over Tailscale. Your iPhone, iPad or Apple Vision Pro can be on another network — a café, a hotel, your phone's tethering — and Xcode still sees it as a local device.</p>
+    <p class="sub" data-l="ja">Xcode のワイヤレスデバッグを Tailscale 越しに使えるようにする、macOS のメニューバーアプリです。iPhone・iPad・Apple Vision Pro が別のネットワーク（カフェ、ホテル、テザリングなど）にあっても、Xcode からは手元のデバイスとして見えます。</p>
+    <div class="cta">
+      <a class="btn primary" href="#install"><span data-l="en">Install</span><span data-l="ja">インストール</span></a>
+      <a class="btn ghost" href="https://github.com/mh-mobile/RoamRun">GitHub</a>
+    </div>
+  </header>
+
+  <img class="shot" src="main.png" width="1600" height="1002" alt="RoamRun main window: an iPad ready for Xcode over Tailscale">
+
+  <h2 data-l="en">What you get</h2>
+  <h2 data-l="ja">できること</h2>
+  <div class="grid">
+    <div class="card">
+      <h3 data-l="en">Xcode, as usual</h3><h3 data-l="ja">いつもの Xcode のまま</h3>
+      <p data-l="en">Run, install and stop at breakpoints on a device that is miles away. No Xcode plug-ins or project changes.</p>
+      <p data-l="ja">遠く離れたデバイスで、実行・インストール・ブレークポイントでの停止まで。Xcode のプラグインやプロジェクトの変更は不要です。</p>
+    </div>
+    <div class="card">
+      <h3 data-l="en">A CLI for you and your agent</h3><h3 data-l="ja">人にも AI エージェントにも CLI</h3>
+      <p data-l="en"><code>roamrun up</code>, <code>status</code>, <code>run</code>, <code>screenshot</code> — over SSH too. An agent skill teaches Claude Code, Codex and others how to use it.</p>
+      <p data-l="ja"><code>roamrun up</code>・<code>status</code>・<code>run</code>・<code>screenshot</code> を SSH 越しでも。Claude Code や Codex などに使い方を教えるスキルも入れられます。</p>
+    </div>
+    <div class="card">
+      <h3 data-l="en">Hands off your traffic</h3><h3 data-l="ja">通信の中身には触れません</h3>
+      <p data-l="en">RoamRun only relays bytes; pairing and encryption stay end to end between the Mac and the device. Developer ID signed, notarized by Apple.</p>
+      <p data-l="ja">RoamRun はバイト列を運ぶだけで、ペアリングと暗号化は Mac とデバイスの間で完結します。Apple の公証済みです。</p>
+    </div>
+  </div>
+
+  <h2 data-l="en">How it works</h2>
+  <h2 data-l="ja">仕組み</h2>
+  <ol class="steps" data-l="en">
+    <li>Xcode looks for devices with Bonjour on the local network. RoamRun publishes your device's record there, pointing at the Mac itself.</li>
+    <li>Xcode connects to the Mac; RoamRun's relay accepts only connections from this Mac.</li>
+    <li>The relay forwards the traffic to the device over Tailscale.</li>
+  </ol>
+  <ol class="steps" data-l="ja">
+    <li>Xcode は、LAN 上のデバイスを Bonjour で探します。RoamRun は、デバイスの情報を「この Mac が相手」として LAN に出します。</li>
+    <li>Xcode は Mac 自身に接続し、RoamRun の中継がそれを受けます（この Mac からの接続だけ）。</li>
+    <li>中継が、その通信を Tailscale 経由でデバイスに届けます。</li>
+  </ol>
+
+  <div id="install"></div>
+  <h2 data-l="en">Install</h2>
+  <h2 data-l="ja">インストール</h2>
+  <pre><code>brew install --cask mh-mobile/tap/roamrun</code><button class="copy" type="button"><span data-l="en">Copy</span><span data-l="ja">コピー</span></button></pre>
+  <p class="note" data-l="en">Or download the dmg from <a href="https://github.com/mh-mobile/RoamRun/releases/latest">GitHub Releases</a>. Then add your device once in the app, while it's on the Mac's Wi‑Fi (or USB), and start a bridge. Full guide: <a href="https://github.com/mh-mobile/RoamRun#readme">README</a>.</p>
+  <p class="note" data-l="ja"><a href="https://github.com/mh-mobile/RoamRun/releases/latest">GitHub Releases</a> から dmg をダウンロードしても構いません。インストール後、デバイスを Mac と同じ Wi‑Fi（または USB）につないだ状態でアプリから一度登録し、ブリッジを開始します。詳しくは <a href="https://github.com/mh-mobile/RoamRun/blob/main/README.ja.md">README</a> をどうぞ。</p>
+
+  <h2 data-l="en">Requirements</h2>
+  <h2 data-l="ja">必要なもの</h2>
+  <ul class="req" data-l="en">
+    <li>macOS 13 or later on Apple Silicon, with an administrator account</li>
+    <li>Xcode, and Tailscale on both the Mac and the device</li>
+    <li>iOS 17.4 or later; the device paired with the Mac once, with Developer Mode on</li>
+    <li>While away, the device on some Wi‑Fi with internet access (another device's hotspot is fine; cellular alone isn't)</li>
+  </ul>
+  <ul class="req" data-l="ja">
+    <li>Apple シリコンの Mac（macOS 13 以降）と管理者アカウント</li>
+    <li>Xcode、Mac とデバイスの両方で Tailscale</li>
+    <li>iOS 17.4 以降。デバイスを一度 Mac とペアリングし、デベロッパモードをオンに</li>
+    <li>外出先では、インターネットにつながった Wi‑Fi にデバイスを接続（別の端末のテザリング可。モバイル回線だけは不可）</li>
+  </ul>
+
+  <footer>
+    <span>RoamRun · MIT License</span>
+    <span>
+      <a href="https://github.com/mh-mobile/RoamRun">GitHub</a> ·
+      <a href="https://github.com/mh-mobile/RoamRun/releases">Releases</a> ·
+      <a href="https://github.com/mh-mobile/RoamRun/blob/main/SECURITY.md">Security</a>
+    </span>
+  </footer>
+</main>
+<script>
+  const root = document.documentElement;
+  function setLang(l, remember) {
+    root.lang = l;
+    document.querySelectorAll(".lang button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.set === l)));
+    if (remember) { try { localStorage.setItem("lang", l); } catch (e) {} }
+  }
+  setLang(root.lang, false);
+  document.querySelectorAll(".lang button").forEach(b => b.addEventListener("click", () => setLang(b.dataset.set, true)));
+  document.querySelectorAll(".copy").forEach(b => b.addEventListener("click", () => {
+    const label = b.innerHTML, done = root.lang === "ja" ? "コピーしました" : "Copied";
+    const show = t => { b.textContent = t; setTimeout(() => (b.innerHTML = label), 1500); };
+    if (!navigator.clipboard) { show(root.lang === "ja" ? "選択してコピーしてください" : "Select and copy"); return; }
+    navigator.clipboard.writeText(b.previousElementSibling.textContent).then(() => show(done), () => show("—"));
+  }));
+</script>
+</body>
+</html>
