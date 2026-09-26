@@ -242,7 +242,7 @@ RoamRun が書き込むのは次の場所だけです（システム設定や他
 
 ブリッジ中に起動する補助プロセス（`dns-sd` / `log stream`）は、RoamRun が強制終了しても通常 1 秒ほどで自動で終了し、LAN への広告も消えます。
 
-まず `roamrun up -d` で始めたブリッジを止めます（`roamrun down <name>`）。アプリを消しても動き続けるためです。Homebrew なら、そのあと `brew uninstall --zap --cask roamrun` でアプリ・CLI のリンク・設定・ログを削除します（スキルは先に `roamrun init --uninstall`）。それ以外で完全に削除するには:
+まず `roamrun up -d` で始めたブリッジを止めます（`roamrun down <name>`）。アプリを消しても動き続けるためです。Homebrew なら、そのあと `brew uninstall --zap --cask roamrun` でアプリ・CLI のリンク・設定・ログ・保存済みデバイスを削除します（スキルは先に `roamrun init --uninstall`）。それ以外で完全に削除するには:
 
 ```sh
 roamrun init --uninstall                  # スキルを入れた場合（他のツールで入れたならそのツールで削除）

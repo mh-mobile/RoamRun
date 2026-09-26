@@ -723,7 +723,7 @@ enum CLI {
                 all[i].remotePairingPort = moved.remotePairingPort
                 all[i].providerHostName = moved.providerHostName
             }
-            guard found else { return }
+            guard found || !saved else { return }   // a lock we couldn't take never ran the closure
             print("  \(moved.displayName) now answers at \(moved.providerIP):\(moved.remotePairingPort)\(saved ? " (saved)" : " (couldn't save it)")")
         }
 

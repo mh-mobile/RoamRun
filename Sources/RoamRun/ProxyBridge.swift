@@ -442,7 +442,11 @@ final class ProxyBridge: ObservableObject {
         }
         // Not an error: the bridge itself works over the mesh VPN. But the home
         // check is blind while this lasts, so say so wherever status is read.
-        if LocalNetwork.denied { detail = detail.isEmpty ? LocalNetwork.advice : detail + " — " + LocalNetwork.advice }
+        // Not while standing aside: getting to .local means the LAN answered, so the
+        // gate is open again and the flag is only waiting to age out.
+        if LocalNetwork.denied, s != .local {
+            detail = detail.isEmpty ? LocalNetwork.advice : detail + " — " + LocalNetwork.advice
+        }
         return StatusFile.write(profile.id, .init(pid: getpid(), cli: CLI.isRunning, udid: udid, status: s.title, detail: detail,
                                                   ready: s == .ready, tunnelPorts: ports, updated: .now,
                                                   state: s.rawValue, started: StatusFile.myStart))

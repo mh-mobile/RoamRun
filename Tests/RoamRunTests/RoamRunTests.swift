@@ -924,7 +924,7 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(CLI.probeSeconds(by: now.addingTimeInterval(1e19), now: now) == 10)
 }
 
-@Test func changingTheListUnderTheLockKeepsWhatAnotherProcessAdded() {
+@Test func updateRoundTripsTheListAndIgnoresAnUnknownID() {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-test-\(UUID().uuidString)")
     defer { try? FileManager.default.removeItem(at: dir) }
     let store = ProfileStore(directory: dir)

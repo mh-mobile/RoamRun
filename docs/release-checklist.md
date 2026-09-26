@@ -44,18 +44,20 @@ screen on.
 10. Put the device on this Mac's Wi‑Fi: the bridge shows "On this Wi‑Fi" within
    ~10 s, and Xcode still runs on it. Back on the hotspot: Ready again within ~40 s.
 
+11. With the bridge run **from the app** (the checks below read the app's own
+   state), turn RoamRun off in System Settings › Privacy & Security › Local Network
+   and put the device on this Mac's Wi‑Fi: within ~10 s the window, the activity log,
+   `roamrun status` and `roamrun doctor` (a `!` line) all say the local network is
+   blocked, and the bridge keeps running. Turn it back on: the notice is gone within
+   ~2 minutes and "On this Wi‑Fi" comes back.
+
 ## Install paths
 
-11. Download the release dmg in a browser, install, open: it opens with no
+12. Download the release dmg in a browser, install, open: it opens with no
     Gatekeeper block (notarized; `spctl -a -vv /Applications/RoamRun.app` says
     "Notarized Developer ID"); the first screen offers the CLI.
-12. `brew upgrade --cask roamrun` from the previous version: the app quits,
+13. `brew upgrade --cask roamrun` from the previous version: the app quits,
     is replaced and reopens without another Gatekeeper prompt.
-13. Turn RoamRun off in System Settings › Privacy & Security › Local Network with a
-    bridge up, and put the device on this Mac's Wi‑Fi: within ~10 s the window, the
-    activity log, `roamrun status` and `roamrun doctor` (a `!` line) all say the local
-    network is blocked, and the bridge keeps running. Turn it back on: the notice is
-    gone within ~2 minutes and "On this Wi‑Fi" comes back.
 14. Tap: `brew style --cask mh-mobile/tap/roamrun` and
     `brew audit --cask --online mh-mobile/tap/roamrun`. The audit sometimes
     hangs on the download; if so, compare `shasum -a 256` of the published dmg
