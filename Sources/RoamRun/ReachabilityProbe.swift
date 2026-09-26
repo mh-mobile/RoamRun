@@ -13,6 +13,11 @@ enum LocalNetwork {
 
     static var denied: Bool { isDenied(last: lock.withLock { lastDenial }, now: .now) }
 
+    /// The bridge's own detail, for callers that show the advice separately.
+    static func withoutAdvice(_ detail: String) -> String {
+        detail.replacingOccurrences(of: " — " + advice, with: "").replacingOccurrences(of: advice, with: "")
+    }
+
     static func note(_ path: NWPath?) {
         guard let path, path.status == .unsatisfied, path.unsatisfiedReason == .localNetworkDenied else { return }
         lock.withLock { lastDenial = .now }

@@ -286,6 +286,8 @@ enum CLI {
             status = BridgeStatus.waiting.title
             kind = .waiting
             detail = "The bridge is up but Xcode can't reach the device (asleep, locked, off Wi-Fi, or Tailscale stuck on the device). Run `roamrun doctor` for the cause."
+            // Exactly the state a blocked local network produces, so don't lose the reason.
+            if e?.detail.contains(LocalNetwork.advice) == true { detail! += " — " + LocalNetwork.advice }
         }
         return Row(name: p.displayName, state: kind.rawValue, id: p.id.uuidString, vpnAddress: p.providerIP, udid: udid,
                    status: status, ready: ready,
@@ -314,7 +316,8 @@ enum CLI {
     /// refuses a --timeout below 5, which is the floor here too.
     nonisolated static func probeSeconds(by deadline: Date?, now: Date = .now) -> Int {
         guard let deadline else { return 10 }
-        return max(5, min(10, Int(deadline.timeIntervalSince(now).rounded(.up))))
+        // Clamped as a Double first: --wait only has to be finite, and Int(1e19) traps.
+        return Int(max(5, min(10, deadline.timeIntervalSince(now))).rounded(.up))
     }
 
     /// From `devicectl list devices` JSON's result; UDIDs compared in any case.
@@ -712,14 +715,15 @@ enum CLI {
             exit(0)
         }
         bridge.onProfileChange = { moved in   // save where the device answers now, as the app does
-            let store = ProfileStore()
-            let loaded = store.load()
-            var all = loaded
-            guard let i = all.firstIndex(where: { $0.id == moved.id }) else { return }
-            all[i].providerIP = moved.providerIP
-            all[i].remotePairingPort = moved.remotePairingPort
-            all[i].providerHostName = moved.providerHostName
-            let saved = store.save(base: loaded, wanted: all) != nil
+            var found = false
+            let saved = ProfileStore().update { all in
+                guard let i = all.firstIndex(where: { $0.id == moved.id }) else { return }
+                found = true
+                all[i].providerIP = moved.providerIP
+                all[i].remotePairingPort = moved.remotePairingPort
+                all[i].providerHostName = moved.providerHostName
+            }
+            guard found else { return }
             print("  \(moved.displayName) now answers at \(moved.providerIP):\(moved.remotePairingPort)\(saved ? " (saved)" : " (couldn't save it)")")
         }
 
@@ -925,8 +929,8 @@ enum CLI {
                 note("Pairing not checked — no advert of this device was matched in the last 15 minutes")
             }
             if let e = live[p.id] {
-                check(e.ready || e.kind == .local, "Mac-side bridge: \(e.status) (\(owner(e)))", fix: e.detail.isEmpty ? "Wait a few seconds and run doctor again." : e.detail)
-                // A ready bridge passes the check above, so its detail is never shown.
+                let own = LocalNetwork.withoutAdvice(e.detail)   // it gets its own line below
+                check(e.ready || e.kind == .local, "Mac-side bridge: \(e.status) (\(owner(e)))", fix: own.isEmpty ? "Wait a few seconds and run doctor again." : own)
                 if e.detail.contains(LocalNetwork.advice) {
                     check(false, "macOS is blocking RoamRun's local network access, so it can't tell whether the device is on this Wi-Fi",
                           fix: LocalNetwork.advice, warnOnly: true)

@@ -24,7 +24,7 @@ final class ProfileStore {
         }
         // The next save would replace it with an empty list: keep a copy, once per distinct content.
         let fm = FileManager.default
-        let kept = (try? fm.contentsOfDirectory(at: Self.directory, includingPropertiesForKeys: nil)) ?? []
+        let kept = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
         if let same = kept.first(where: { $0.lastPathComponent.hasPrefix("profiles.json.unreadable") && (try? Data(contentsOf: $0)) == data }) {
             keptUnreadable = same
         } else {
@@ -34,18 +34,38 @@ final class ProfileStore {
         return salvaged ?? []
     }
 
+    /// Reads, changes and writes the list under the lock, so nothing another
+    /// process wrote in between is lost. For a caller that reads the file only
+    /// to change it — as `roamrun up` does when a device has moved — this is the
+    /// one to use: reading first and merging afterwards would still drop a
+    /// device the app added in between, since membership follows the caller.
+    func update(_ change: (inout [DeviceProfile]) -> Void) -> Bool {
+        withLock {
+            var all = load()
+            change(&all)
+            return save(all)
+        } ?? false
+    }
+
     /// Saves `wanted` without dropping what another process wrote since `base`
     /// was read. The app keeps its list in memory for as long as it runs, so a
     /// plain whole-list write would undo the endpoint `roamrun up` had saved
     /// meanwhile. nil if it couldn't be written; otherwise what is on disk now.
     func save(base: [DeviceProfile], wanted: [DeviceProfile]) -> [DeviceProfile]? {
+        withLock { () -> [DeviceProfile]? in
+            let merged = Self.merge(base: base, wanted: wanted, disk: load())
+            return save(merged) ? merged : nil
+        } ?? nil   // the outer nil is a lock that couldn't be taken; both mean "not saved"
+    }
+
+    /// nil when the lock itself couldn't be taken.
+    private func withLock<T>(_ body: () -> T) -> T? {
         let fd = open(dir.appendingPathComponent("profiles.lock").path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
         guard fd >= 0 else { return nil }
         defer { close(fd) }
         guard flock(fd, LOCK_EX) == 0 else { return nil }
         defer { flock(fd, LOCK_UN) }
-        let merged = Self.merge(base: base, wanted: wanted, disk: load())
-        return save(merged) ? merged : nil
+        return body()
     }
 
     /// Membership follows this process — it is the one that added or deleted a
@@ -68,9 +88,9 @@ final class ProfileStore {
         profiles.reduce(into: [:]) { $0[$1.id] = $1 }
     }
 
-    /// False if it couldn't be written (disk full, permissions): the caller must say so.
-    @discardableResult
-    func save(_ profiles: [DeviceProfile]) -> Bool {
+    /// False if it couldn't be written (disk full, permissions). Private so that
+    /// every write goes through the lock above.
+    private func save(_ profiles: [DeviceProfile]) -> Bool {
         guard let data = try? JSONEncoder().encode(profiles), (try? data.write(to: url, options: .atomic)) != nil else { return false }
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         return true

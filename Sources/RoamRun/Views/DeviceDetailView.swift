@@ -196,7 +196,9 @@ private struct StatusCard: View {
         case .off:
             return "Start the bridge when the device is away from this Mac's Wi‑Fi. While it's on the same network, Xcode reaches it directly."
         case .starting:
-            if let external, !external.detail.isEmpty { return external.detail + "…" }
+            if let external, !external.detail.isEmpty {
+                return external.detail.contains(LocalNetwork.advice) ? external.detail : external.detail + "…"
+            }
             if case .starting(let step) = bridge.state { return step + "…" }
             return "Setting things up…"
         case .waiting:

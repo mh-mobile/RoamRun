@@ -907,8 +907,9 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     let without = ProfileStore.merge(base: base, wanted: [pad], disk: onDisk)
     #expect(without.map(\.id) == [pad.id])
     // Added here: kept, even though the disk has never seen it.
-    let added = ProfileStore.merge(base: base, wanted: base + [profile("Vision")], disk: onDisk)
-    #expect(added.count == 3)
+    let vision = profile("Vision")
+    let added = ProfileStore.merge(base: base, wanted: base + [vision], disk: onDisk)
+    #expect(added.map(\.id) == [phone.id, pad.id, vision.id])
 }
 
 @Test func aStatusProbeGetsOnlyTheTimeTheWaitHasLeft() {
@@ -919,6 +920,36 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     // devicectl refuses a --timeout below 5 with a usage error, so that's the floor.
     #expect(CLI.probeSeconds(by: now.addingTimeInterval(1), now: now) == 5)
     #expect(CLI.probeSeconds(by: now.addingTimeInterval(-5), now: now) == 5)             // past: still one try
+    // --wait is only checked for being finite and non-negative, and Int(1e19) traps.
+    #expect(CLI.probeSeconds(by: now.addingTimeInterval(1e19), now: now) == 10)
+}
+
+@Test func changingTheListUnderTheLockKeepsWhatAnotherProcessAdded() {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-test-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let store = ProfileStore(directory: dir)
+    var phone = profile("iPhone")
+    phone.providerIP = "100.64.0.10"
+    #expect(store.save(base: [], wanted: [phone]) != nil)
+    // What `roamrun up` does. Reading the file first and merging afterwards would
+    // drop a device the app added in between, since membership follows the caller.
+    #expect(store.update { all in
+        guard let i = all.firstIndex(where: { $0.id == phone.id }) else { return }
+        all[i].providerIP = "100.64.0.99"
+    })
+    #expect(store.load().first?.providerIP == "100.64.0.99")
+    // An id it doesn't know: nothing is changed, and nothing is lost either.
+    #expect(store.update { all in
+        guard let i = all.firstIndex(where: { $0.id == UUID() }) else { return }
+        all[i].displayName = "never"
+    })
+    #expect(store.load().map(\.displayName) == ["iPhone"])
+}
+
+@Test func theBridgesOwnDetailIsSeparateFromTheLocalNetworkAdvice() {
+    #expect(LocalNetwork.withoutAdvice("Opening relays") == "Opening relays")
+    #expect(LocalNetwork.withoutAdvice(LocalNetwork.advice).isEmpty)
+    #expect(LocalNetwork.withoutAdvice("Opening relays — " + LocalNetwork.advice) == "Opening relays")
 }
 
 @Test func aBlockedLocalNetworkAgesOutInsteadOfBeingCleared() {
