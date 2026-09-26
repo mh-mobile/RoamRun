@@ -239,7 +239,7 @@ RoamRun writes only to these places (it never touches system settings or other a
 | `/usr/local/bin/roamrun` | Only if you installed the CLI from the app or `make install-cli` (never overwrites an existing file or another tool's link); Homebrew links `/opt/homebrew/bin/roamrun` instead |
 | `~/.claude/skills/roamrun/` etc. | Only if you ran `roamrun init` (never touches other skills or links) |
 
-The helper processes started while bridging (`dns-sd` / `log stream`) exit within a second even if RoamRun is force-quit, and the LAN advertisement goes away with them.
+The helper processes started while bridging (`dns-sd` / `log stream`) typically exit within about a second even if RoamRun is force-quit, and the LAN advertisement goes away with them.
 
 First stop bridges started with `roamrun up -d` (`roamrun down <name>`): they keep running without the app. With Homebrew, `brew uninstall --zap --cask roamrun` then removes the app, the CLI link, settings and logs (skills: `roamrun init --uninstall` first). Otherwise, to remove everything:
 

@@ -60,8 +60,9 @@ bounded.
   uses an unauthenticated distributed notification); it can't start one.
 - The system log gets RoamRun's messages with device identifiers and addresses
   marked private; the in-app activity log shows them in full.
-- Helper processes (`dns-sd`, `log stream`) are tied to RoamRun and exit within
-  a second if it quits or is killed, taking the advertisement with them.
+- Helper processes (`dns-sd`, `log stream`) are tied to RoamRun and typically
+  exit within about a second if it quits or is killed, taking the advertisement
+  with them.
 
 See the README's *Limitations and known issues* for the full list, and *What
 it creates on your Mac, and uninstalling* for how to remove everything.

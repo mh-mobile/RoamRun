@@ -94,6 +94,8 @@ final class ProxyBridge: ObservableObject {
         setState(.starting("Checking local interface"))
         // One bridge per iPhone across processes — checked here so every
         // path (Start, retries, restore, network change, CLI) goes through it.
+        // No check-then-act race: the .starting above already claimed the entry
+        // under status.lock, or was refused because another process holds it.
         if let pid = StatusFile.otherOwner(of: profile.id) {
             setState(.error("Another RoamRun process (pid \(pid)) is already bridging \(profile.displayName). Stop it there first."))
             return

@@ -611,6 +611,54 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
         #expect(await roundTrip(port: relay.localPort, payload: Data("x".utf8), timeout: 3) == nil)
     }
 
+    /// Opens `n` connections to the relay and keeps them until cancelled.
+    private func hold(_ n: Int, to relay: Relay) -> [NWConnection] {
+        (0..<n).map { _ in
+            let c = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: relay.localPort)!, using: .tcp)
+            c.start(queue: .global()); return c
+        }
+    }
+
+    /// A close races the relay's callbacks: wait (up to 5 s) for the count to settle.
+    private func pairsSettleToZero() async throws -> Bool {
+        for _ in 0..<50 where Relay.openPairs != 0 { try await Task.sleep(for: .milliseconds(100)) }
+        return Relay.openPairs == 0
+    }
+
+    /// The process-wide pair count must come back to zero whichever side ends a
+    /// connection first — stop(), the client, or a failing upstream — or relays
+    /// slowly lose capacity until they refuse everything.
+    @Test func pairCountSurvivesStopAndCloseRaces() async throws {
+        let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
+        #expect(Relay.openPairs == 0)
+
+        // Stop with connections open, then the clients' late closes arrive.
+        let a = try await startedRelay(upstream: upstream)
+        var held = hold(64, to: a)
+        try await Task.sleep(for: .seconds(1))
+        a.stop()
+        held.forEach { $0.cancel() }
+        #expect(try await pairsSettleToZero())
+
+        // Upstream refusing while stop() runs.
+        let dead = try EchoServer(); let deadPort = await dead.start(); dead.stop()
+        let b = try await startedRelay(upstream: deadPort)
+        held = hold(40, to: b)
+        try await Task.sleep(for: .milliseconds(30))
+        b.stop()
+        held.forEach { $0.cancel() }
+        #expect(try await pairsSettleToZero())
+
+        // Full, all closed by the clients: new connections get through again.
+        let c = try await startedRelay(upstream: upstream); defer { c.stop() }
+        held = hold(64, to: c)
+        try await Task.sleep(for: .seconds(2))   // let all 64 be accepted and tracked
+        #expect(await roundTrip(port: c.localPort, payload: Data("x".utf8), timeout: 2) == nil)
+        held.forEach { $0.cancel() }
+        #expect(try await pairsSettleToZero())
+        #expect(await roundTrip(port: c.localPort, payload: Data("x".utf8)) == Data("x".utf8))
+    }
+
     @Test func stopFreesThePort() async throws {
         let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
         let first = try await startedRelay(upstream: upstream)

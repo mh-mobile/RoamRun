@@ -47,6 +47,8 @@ final class Relay: @unchecked Sendable {
     private static let maxTotal = 256
     private static let totalLock = NSLock()
     nonisolated(unsafe) private static var total = 0
+    /// Connection pairs open across all relays (tests check it returns to zero).
+    static var openPairs: Int { totalLock.withLock { total } }
 
     init(localIP: String, localPort: UInt16, remoteIP: String, remotePort: UInt16) {
         self.localIP = localIP

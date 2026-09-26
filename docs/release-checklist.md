@@ -22,6 +22,8 @@ screen on.
 
 8. Bridge both from the app. Launch an app on each, a few times in turn: every
    launch works and each device only gets its own tunnel ports (Technical details).
+   Then both at once, 15 rounds: every launch works and both stay Ready.
+   `for i in $(seq 15); do for u in <udid1> <udid2>; do xcrun devicectl device process launch --device $u --terminate-existing <bundle id> & done; wait; done`
 
 ## Home
 
