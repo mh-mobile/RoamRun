@@ -10,7 +10,7 @@ enum Proc {
 
     /// Its own queue gets a thread even while callers (e.g. runAsync) block
     /// every Swift concurrency / global-queue thread.
-    private static let timers = DispatchQueue(label: "com.roamrun.app.proc-timers")
+    private static let timers = DispatchQueue(label: AppID.bundle + ".proc-timers")
 
     /// Runs to completion. Both pipes are drained while it runs — waiting
     /// first deadlocks once a tool writes more than the ~64KB pipe buffer.

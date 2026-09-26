@@ -47,8 +47,7 @@ struct TailscaleClient {
     /// The client with the CLI path from Settings. The app owns the defaults
     /// domain; the CLI reads it by suite name.
     static func fromSettings() -> TailscaleClient {
-        let defaults = Bundle.main.bundleIdentifier == "com.roamrun.app" ? .standard : UserDefaults(suiteName: "com.roamrun.app")
-        let path = defaults?.string(forKey: "tailscaleCLIPath") ?? ""
+        let path = AppID.settings?.string(forKey: "tailscaleCLIPath") ?? ""
         return TailscaleClient(binaryPath: path.isEmpty ? nil : path)
     }
 

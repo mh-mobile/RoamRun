@@ -402,6 +402,15 @@ private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> { CLI.
     #expect(CLI.staleSkills(home: home, bundled: current) == [home.appendingPathComponent(".claude/skills/roamrun").path])
 }
 
+@Test func settingsCarryOverFromTheOldBundleID() {
+    let old: [String: Any] = ["networkInterface": "en1", "wasActiveIDs": ["A"]]
+    #expect(AppID.carriedOver(old: nil, new: nil) == nil)                         // nothing saved yet
+    #expect(AppID.carriedOver(old: [:], new: nil) == nil)
+    #expect(AppID.carriedOver(old: old, new: nil)?["networkInterface"] as? String == "en1")
+    #expect(AppID.carriedOver(old: old, new: [:])?["networkInterface"] as? String == "en1")   // an empty domain file
+    #expect(AppID.carriedOver(old: old, new: ["networkInterface": "en0"]) == nil)             // never overwrites
+}
+
 @Test func deviceLookup() {
     let a = profile("iPhone"), b = profile("iPad")
     #expect(CLI.matches("IPHONE", in: [a, b]).map(\.id) == [a.id])

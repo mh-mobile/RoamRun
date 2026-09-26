@@ -238,7 +238,7 @@ RoamRun が書き込むのは次の場所だけです（システム設定や他
 |---|---|
 | `~/Library/Application Support/RoamRun/` | 登録した iPhone（`profiles.json`）とブリッジの状態 |
 | `~/Library/Logs/RoamRun/` | `roamrun up -d` のログ |
-| `com.roamrun.app`（defaults） | 設定・前回動いていたブリッジ |
+| `io.github.mh-mobile.roamrun`（defaults。0.1.12 より前は `com.roamrun.app`） | 設定・前回動いていたブリッジ |
 | `/usr/local/bin/roamrun` | アプリか `make install-cli` で CLI を入れた場合のみ（既存のファイルや他のツールのリンクは上書きしません）。Homebrew は代わりに `/opt/homebrew/bin/roamrun` にリンクします |
 | `~/.claude/skills/roamrun/` など | `roamrun init` を実行した場合のみ（既存の他のスキルやリンクには触れません） |
 
@@ -250,7 +250,8 @@ RoamRun が書き込むのは次の場所だけです（システム設定や他
 roamrun init --uninstall                  # スキルを入れた場合（他のツールで入れたならそのツールで削除）
 rm /usr/local/bin/roamrun                 # CLI を入れた場合
 rm -rf ~/Library/Application\ Support/RoamRun ~/Library/Logs/RoamRun
-defaults delete com.roamrun.app
+defaults delete io.github.mh-mobile.roamrun
+defaults delete com.roamrun.app 2>/dev/null   # 0.1.12 より前の版が残したもの
 # 最後に /Applications/RoamRun.app を削除（「ログイン時に開く」を有効にしていた場合は先に無効化）
 ```
 

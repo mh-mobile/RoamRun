@@ -2,7 +2,7 @@ import Foundation
 import Network
 import OSLog
 
-private let relayLog = Logger(subsystem: "com.roamrun.app", category: "relay")
+private let relayLog = Logger(subsystem: AppID.bundle, category: "relay")
 
 enum RelayError: LocalizedError {
     case bindFailed(String)

@@ -57,6 +57,6 @@ screen on.
 
 ## Debug logs worth a look after an iOS or Xcode update
 
-- Home/away decisions: `log stream --level debug --predicate 'subsystem == "com.roamrun.app" AND category == "home"'`
+- Home/away decisions: `log stream --level debug --predicate 'subsystem == "io.github.mh-mobile.roamrun" AND category == "home"'`
 - Tunnel lookahead hits and port jumps: same with `category == "tunnel"` — misses
   or large jumps mean the relay window (+16 / −32) needs retuning.

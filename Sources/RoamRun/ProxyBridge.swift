@@ -64,10 +64,10 @@ final class ProxyBridge: ObservableObject {
     private var unrecognizedSince: Date?
     /// A port scan that found nothing isn't repeated for a while (e.g. device on cellular).
     private var noScanUntil = Date.distantPast
-    private static let homeLog = Logger(subsystem: "com.roamrun.app", category: "home")
+    private static let homeLog = Logger(subsystem: AppID.bundle, category: "home")
     /// Lookahead hit/miss and port jumps (debug level): the data to retune +16 / -32
     /// if a future iOS allocates tunnel ports differently.
-    private static let tunnelLog = Logger(subsystem: "com.roamrun.app", category: "tunnel")
+    private static let tunnelLog = Logger(subsystem: AppID.bundle, category: "tunnel")
     private var lastTunnelPort: UInt16?
 
     /// Spoofed SRV target whose A record we publish pointing at this Mac.

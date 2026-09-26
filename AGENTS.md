@@ -37,14 +37,14 @@ code bug.
 
 Home/away decisions (bridge vs. "On this Wi-Fi") are logged at debug level,
 one line each with the signal that decided: `log stream --level debug
---predicate 'subsystem == "com.roamrun.app" AND category == "home"'`. The rules
+--predicate 'subsystem == "io.github.mh-mobile.roamrun" AND category == "home"'`. The rules
 live in `HomeRule` (ProxyBridge.swift) and are unit-tested — change them there.
 
 Tunnel ports are the most Apple-dependent part: relays open for newest…newest+16
 and are reaped outside newest−32…newest+16. Each discovered port is logged at
 debug level with whether a lookahead relay was already there (hit/miss) and the
 jump from the previous one: `log stream --level debug --predicate
-'subsystem == "com.roamrun.app" AND category == "tunnel"'`. Misses or large
+'subsystem == "io.github.mh-mobile.roamrun" AND category == "tunnel"'`. Misses or large
 jumps after an iOS update mean the window needs retuning.
 
 ## Releasing

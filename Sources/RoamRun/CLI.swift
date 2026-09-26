@@ -8,7 +8,7 @@ enum CLI {
     nonisolated static var isRunning: Bool { commands.contains(CommandLine.arguments.dropFirst().first ?? "") }
     nonisolated static let commands: Set<String> = ["devices", "up", "down", "status", "doctor", "run", "install", "logs", "screenshot", "init", "version", "--version", "help", "--help", "-h"]
     /// Posted by `roamrun down`; the app stops the bridge whose id is `object`.
-    static let stopNotification = Notification.Name("com.roamrun.app.stopBridge")
+    static let stopNotification = Notification.Name(AppID.bundle + ".stopBridge")
 
     private static let usage = """
     Usage: roamrun <command>

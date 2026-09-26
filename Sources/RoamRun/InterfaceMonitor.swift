@@ -14,7 +14,7 @@ final class InterfaceMonitor: @unchecked Sendable {
     private let fixedInterface: String?
     private var monitor: NWPathMonitor?
     /// Path updates and the initial check run here, never concurrently.
-    private let queue = DispatchQueue(label: "com.roamrun.app.interface-monitor")
+    private let queue = DispatchQueue(label: AppID.bundle + ".interface-monitor")
     private(set) var lastKnownIP: String?
 
     init(interfaceName: String? = nil) {
@@ -59,9 +59,7 @@ final class InterfaceMonitor: @unchecked Sendable {
     }
 
     /// The app's defaults; the CLI reads the app's domain by suite name.
-    static var settings: UserDefaults? {
-        Bundle.main.bundleIdentifier == "com.roamrun.app" ? .standard : UserDefaults(suiteName: "com.roamrun.app")
-    }
+    static var settings: UserDefaults? { AppID.settings }
 
     /// The LAN interface Xcode's Bonjour sees and the relays listen on: the one
     /// chosen in Settings; else en0 whenever it has an address (every setup so far);

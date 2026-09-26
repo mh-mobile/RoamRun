@@ -3,9 +3,36 @@ import AppKit
 
 /// One binary, two faces: `roamrun <command>` runs the CLI, anything else
 /// (Finder, `open`, login item) starts the menu bar app.
+/// The bundle identifier, also the defaults domain, log subsystem and notification prefix.
+enum AppID {
+    static let bundle = "io.github.mh-mobile.roamrun"
+    /// Before 0.1.12. roamrun.com isn't ours, so the id moved to our GitHub namespace.
+    static let legacy = "com.roamrun.app"
+
+    /// The app's defaults, from the app or from the CLI (which may not run as the app bundle).
+    static var settings: UserDefaults? {
+        Bundle.main.bundleIdentifier == bundle ? .standard : UserDefaults(suiteName: bundle)
+    }
+
+    /// Settings saved under the old id carry over once, the first time either the app or the CLI runs.
+    static func migrateDefaults() {
+        let d = UserDefaults.standard
+        if let moved = carriedOver(old: d.persistentDomain(forName: legacy), new: d.persistentDomain(forName: bundle)) {
+            d.setPersistentDomain(moved, forName: bundle)
+        }
+    }
+
+    /// What the new domain should become, or nil to leave it: only an empty one takes the old settings.
+    static func carriedOver(old: [String: Any]?, new: [String: Any]?) -> [String: Any]? {
+        guard new?.isEmpty ?? true, let old, !old.isEmpty else { return nil }
+        return old
+    }
+}
+
 @main
 enum Entry {
     static func main() {
+        AppID.migrateDefaults()
         // GUI apps start with 256 file descriptors; relays use two per connection.
         var limit = rlimit()
         if getrlimit(RLIMIT_NOFILE, &limit) == 0, limit.rlim_cur < 4096 {
@@ -69,7 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor static var openMain: (() -> Void)?
 
     /// Posted by a second launch; the running app opens its window.
-    static let showNotification = Notification.Name("com.roamrun.app.showWindow")
+    static let showNotification = Notification.Name(AppID.bundle + ".showWindow")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Snapshot.scheduleIfRequested()

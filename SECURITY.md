@@ -52,8 +52,9 @@ bounded.
 - No kernel or network-configuration changes, no daemons. Admin rights only
   if you install the CLI and `/usr/local/bin` isn't writable (a password prompt).
 - Files: `~/Library/Application Support/RoamRun/` (device profiles, mode 0600,
-  and bridge status), `~/Library/Logs/RoamRun/`, and the `com.roamrun.app`
-  defaults. The CLI link and agent skills are installed only on request and
+  and bridge status), `~/Library/Logs/RoamRun/`, and the
+  `io.github.mh-mobile.roamrun` defaults (`com.roamrun.app` before 0.1.12).
+  The CLI link and agent skills are installed only on request and
   never overwrite other files (they do replace an existing RoamRun link or
   RoamRun skill).
 - Any process of your user can ask the app to stop a bridge (`roamrun down`

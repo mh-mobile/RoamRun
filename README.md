@@ -238,7 +238,7 @@ RoamRun writes only to these places (it never touches system settings or other a
 |---|---|
 | `~/Library/Application Support/RoamRun/` | Saved devices (`profiles.json`) and bridge status |
 | `~/Library/Logs/RoamRun/` | Logs of `roamrun up -d` |
-| `com.roamrun.app` (defaults) | Settings and which bridges were running |
+| `io.github.mh-mobile.roamrun` (defaults; `com.roamrun.app` before 0.1.12) | Settings and which bridges were running |
 | `/usr/local/bin/roamrun` | Only if you installed the CLI from the app or `make install-cli` (never overwrites an existing file or another tool's link); Homebrew links `/opt/homebrew/bin/roamrun` instead |
 | `~/.claude/skills/roamrun/` etc. | Only if you ran `roamrun init` (never touches other skills or links) |
 
@@ -250,7 +250,8 @@ First stop bridges started with `roamrun up -d` (`roamrun down <name>`): they ke
 roamrun init --uninstall                  # if you installed the skill (with another tool: remove it there)
 rm /usr/local/bin/roamrun                 # if you installed the CLI
 rm -rf ~/Library/Application\ Support/RoamRun ~/Library/Logs/RoamRun
-defaults delete com.roamrun.app
+defaults delete io.github.mh-mobile.roamrun
+defaults delete com.roamrun.app 2>/dev/null   # left by versions before 0.1.12
 # finally delete /Applications/RoamRun.app (turn off "Open at login" first if you enabled it)
 ```
 
