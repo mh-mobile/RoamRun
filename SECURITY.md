@@ -40,6 +40,16 @@ bounded.
   network can replay the advertised record to make a bridge believe the device
   is home and stand aside; a local process can flood the relay (connections are
   capped) or ask the app to stop a bridge. None of this gives access to the device.
+- **A device saved before its UDID was known can learn the wrong one.** RoamRun
+  takes a profile's UDID from what `remotepairingd` reports for the advert the
+  device was added from. Someone on the same network as the Mac can publish a
+  record under that instance name carrying another device's identifier, and the
+  profile then saves that device's UDID — so `run`, `install` and `screenshot`
+  would address the wrong one. It only works between devices already paired with
+  this Mac, and only until the UDID is saved (after that a different one is
+  refused). Profiles whose UDID was already known when they were added, which is
+  the usual case, aren't affected. Check the UDID in `roamrun devices` if it
+  matters.
 - **`roamrun run` builds the project in the current folder.** Its build scripts
   and package plugins run as you, and like Xcode it may create provisioning
   profiles in your team. Use it (or let an agent use it) on projects you trust.

@@ -153,7 +153,7 @@ roamrun logs <name> <bundle-id>   # アプリを起動し直し、print / os_log
 roamrun screenshot <name> [file.png]   # 実機の画面を PNG で保存し、パスを表示（Xcode 26.3 以降。それより前は未確認）
 ```
 
-オプション: `--json`（`devices`、`status`、`doctor`）、`--wait N`（`status`: 最大 N 秒 Ready を待つ）、`-v`（`up`: アクティビティログを表示）、`--workspace W` / `--project P` / `--configuration C`（`run`）。一覧は `roamrun --help` で表示されます。コマンドが受け付けないオプションはエラーになります（exit 2）。
+オプション: `--json`（`devices`、`status`、`doctor`）、`--wait N`（`status`: 最大 N 秒 Ready を待つ。数秒おきの各回のあいだで判定するため、N を少し過ぎて返ることがあります）、`-v`（`up`: アクティビティログを表示）、`--workspace W` / `--project P` / `--configuration C`（`run`）。一覧は `roamrun --help` で表示されます。コマンドが受け付けないオプションはエラーになります（exit 2）。
 
 `<name>` は iPhone 本体の名前ではなく、**RoamRun に登録した名前**です（大文字小文字は区別しません。`roamrun devices` で確認、アプリの詳細画面の ✏️ で変更可。名前は重複できません）。iPhone の登録（Add Device）はアプリで一度だけ行ってください。アプリと CLI が同じ iPhone を同時にブリッジしないよう、後から起動した側は起動を拒否します（相手がすでに Ready なら `up` は exit 0）。ただし、待機中（On this Wi‑Fi）やエラーのブリッジは引き継げます。`logs` はアプリを起動し直します（`devicectl` は、すでに動いているアプリにコンソールをつなげないため）。ブリッジ経由でも、同じ Wi-Fi でも使えます。
 
@@ -186,7 +186,7 @@ roamrun init --client claude                  # 指定したものだけに配�
 
 `init` は、入っている RoamRun に同梱されたスキルを配置するので、CLI と版が必ず一致します。RoamRun を更新したら `roamrun init` をもう一度実行してください（入っているスキルの版が違うと、`roamrun status` と `doctor` が知らせます）。他のツールでスキルを管理する場合は、入っている RoamRun と同じリリースに固定してください（例: `gh skill install mh-mobile/RoamRun roamrun --pin "v$(roamrun --version | cut -d" " -f2)"`。main ブランチのスキルには、入っている版にまだ無いオプションが書かれていることがあります）。
 
-スキルには、デバイスをつなぐ手順（`roamrun up -d` → `status --wait 60 --json` で UDID 取得）、「iPhone のロック解除など人間にしかできないこと」、スクリーンショットの撮り方が書かれています。ビルドや起動はエージェントのいつもの手順に任せ、`roamrun run` は 1 コマンドで済ませたいとき用です。CLI は `--json` と終了コード（0 準備完了 / 1 未準備・失敗 / 2 使い方の誤り）に対応しています。
+スキルには、デバイスをつなぐ手順（`roamrun up -d` → `status --wait 60 --json` で UDID 取得）、「iPhone のロック解除など人間にしかできないこと」、スクリーンショットの撮り方が書かれています。ビルドや起動はエージェントのいつもの手順に任せ、`roamrun run` は 1 コマンドで済ませたいとき用です。CLI は `--json` と終了コード（0 準備完了 / 1 未準備・失敗 / 2 使い方の誤り）に対応しています。デバイス名を省いた `status` は保存済みの全デバイスを一覧し、どれか 1 台でも Ready なら 0 を返すので、スクリプトで特定の 1 台を判定したいときはデバイス名を指定してください。
 
 ## 外出先で iPhone だけで使う
 

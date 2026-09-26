@@ -24,8 +24,10 @@ enum CLI {
       down <name>                    Stop a bridge, whether the app or another `roamrun up` runs it
       status [name] [--wait N] [--json]
                                      Bridge status, UDID and lock state; exits 0 only if Xcode can use
-                                     the device (bridged and ready, or a bridge standing aside on this Wi-Fi)
-                                     (--wait: wait up to N seconds for ready)
+                                     the device (bridged and ready, or a bridge standing aside on this Wi-Fi);
+                                     without a name it lists every saved device and exits 0 if any one of
+                                     them is ready (--wait: wait up to N seconds for ready, checked between
+                                     rounds a few seconds apart, so it can return a little after N)
       doctor [name] [--json]         Check each step from this Mac to the device and say what to fix
                                      (without a name: devices with a running bridge, or all if none runs)
       run <name> [--scheme S] [--workspace W | --project P] [--configuration C] [--logs] [launch options]
@@ -48,6 +50,7 @@ enum CLI {
                                      Install the agent skill (clients: claude, codex, cursor, gemini, copilot)
 
     Exit codes: 0 ok/ready, 1 not ready or a check failed, 2 usage error.
+    Name a device when a script needs the answer to be about that one.
 
     Add devices (iPhone, iPad, Vision Pro) in the RoamRun app first (one-time, with the device on this
     Wi-Fi or USB).
@@ -333,7 +336,7 @@ enum CLI {
             let live = StatusFile.read()
             rows = targets.map { row($0, live[$0.id], deep: true) }
             if rows.contains(where: \.ready) || Date.now >= deadline { break }
-            usleep(3_000_000)   // each round spawns devicectl
+            usleep(useconds_t(min(3, max(0.1, deadline.timeIntervalSinceNow)) * 1_000_000))   // each round spawns devicectl
         } while true
         if json {
             printJSON(rows)

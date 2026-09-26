@@ -153,7 +153,7 @@ roamrun logs <name> <bundle-id>   # relaunch the app and stream its print / os_l
 roamrun screenshot <name> [file.png]   # save the device's screen as PNG and print the path (Xcode 26.3+; earlier untested)
 ```
 
-Options: `--json` (`devices`, `status`, `doctor`), `--wait N` (`status`: wait up to N seconds for Ready), `-v` (`up`: show the activity log), `--workspace W` / `--project P` / `--configuration C` (`run`). `roamrun --help` lists everything; a command rejects options it doesn't take (exit 2).
+Options: `--json` (`devices`, `status`, `doctor`), `--wait N` (`status`: wait up to N seconds for Ready, checked between rounds a few seconds apart, so it can return a little after N), `-v` (`up`: show the activity log), `--workspace W` / `--project P` / `--configuration C` (`run`). `roamrun --help` lists everything; a command rejects options it doesn't take (exit 2).
 
 `<name>` is **the name you gave the device in RoamRun**, not the iPhone's own name (case-insensitive; see `roamrun devices`, rename with ✏️ in the app's detail view; names must be unique). Add each device once in the app (Add Device). The app and the CLI never bridge the same iPhone at once: whichever starts second refuses (`up` exits 0 if the other one already has it ready), except that a bridge that is standing aside ("On this Wi‑Fi") or has an error can be taken over. `logs` relaunches the app, since `devicectl` can't attach a console to one already running; it works over a bridge and on the same Wi-Fi alike.
 
@@ -186,7 +186,7 @@ roamrun init --client claude                  # or only to the ones you name (re
 
 `init` installs the skill shipped with your RoamRun, so it always matches the CLI. After updating RoamRun, run `roamrun init` again — `roamrun status` and `doctor` remind you when an installed skill is from another version. If you manage skills with another tool instead, pin it to your RoamRun's release so skill and CLI agree, e.g. `gh skill install mh-mobile/RoamRun roamrun --pin "v$(roamrun --version | cut -d" " -f2)"` (the repo's main branch may describe options your installed version doesn't have yet).
 
-The skill covers getting the device connected (`roamrun up -d` → `status --wait 60 --json` for the UDID), what only a human can do, such as unlocking the iPhone, and screenshots; building and launching are left to the agent's usual tools, with `roamrun run` as a one-command fallback. The CLI supports `--json` and exit codes (0 ready / 1 not ready or failed / 2 usage error).
+The skill covers getting the device connected (`roamrun up -d` → `status --wait 60 --json` for the UDID), what only a human can do, such as unlocking the iPhone, and screenshots; building and launching are left to the agent's usual tools, with `roamrun run` as a one-command fallback. The CLI supports `--json` and exit codes (0 ready / 1 not ready or failed / 2 usage error); `status` without a device name lists every saved device and exits 0 if any one of them is ready, so name the device when a script needs the answer to be about that one.
 
 ## Working from just your iPhone, away from home
 
