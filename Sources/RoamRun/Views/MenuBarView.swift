@@ -22,6 +22,7 @@ struct MenuBarView: View {
                 .disabled(coordinator.runningProfiles.isEmpty && coordinator.externalBridges.isEmpty)
         }
         Divider()
+        Text("RoamRun \(Bundle.main.versionText)")
         Button("Open RoamRun") { openMain() }
             .keyboardShortcut("o")
         Button("Quit RoamRun") { AppDelegate.quit() }

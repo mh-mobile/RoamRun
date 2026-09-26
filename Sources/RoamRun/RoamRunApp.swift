@@ -37,6 +37,11 @@ enum Entry {
     }
 }
 
+extension Bundle {
+    /// "0.1.9" — as in the release notes and `roamrun --version`.
+    var versionText: String { infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev" }
+}
+
 struct RoamRunApp: App {
     @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
     @StateObject private var coordinator = AppCoordinator()

@@ -12,7 +12,11 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Settings").font(.title2)
+            HStack(alignment: .firstTextBaseline) {
+                Text("Settings").font(.title2)
+                Spacer()
+                Text("RoamRun \(Bundle.main.versionText)").foregroundStyle(.secondary).textSelection(.enabled)
+            }
 
             GroupBox("Tailscale CLI") {
                 VStack(alignment: .leading, spacing: 8) {
