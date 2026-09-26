@@ -182,12 +182,13 @@ UDID は `roamrun status <name>` で表示されます。UI テストが動く�
 Claude Code・Codex・Cursor などのエージェントに、ビルド〜実機インストール〜デバッグを任せられます。エージェントに使い方を教えるスキルを入れてください:
 
 ```sh
-roamrun init                                  # 入っているエージェントを検出してスキルを配置
-# または
-npx skills add mh-mobile/RoamRun             # skills CLI 経由
+roamrun init                                  # ~ にあるエージェントすべて（.claude .codex .cursor .gemini .copilot）にスキルを配置
+roamrun init --client claude                  # 指定したものだけに配置（--client は複数指定可）
 ```
 
-スキルには手順（`roamrun up -d` → `status --wait 60 --json` で UDID 取得 → `xcodebuild` / `devicectl`）と、「iPhone のロック解除など人間にしかできないこと」が書かれています。CLI は `--json` と終了コード（0 準備完了 / 1 未準備・失敗 / 2 使い方の誤り）に対応しています。
+`init` は、入っている RoamRun に同梱されたスキルを配置するので、CLI と版が必ず一致します。RoamRun を更新したら `roamrun init` をもう一度実行してください（入っているスキルの版が違うと、`roamrun status` と `doctor` が知らせます）。他のツールでスキルを管理する場合は、入っている RoamRun と同じリリースに固定してください（例: `gh skill install mh-mobile/RoamRun roamrun --pin "v$(roamrun --version | cut -d" " -f2)"`。main ブランチのスキルには、入っている版にまだ無いオプションが書かれていることがあります）。
+
+スキルには、デバイスをつなぐ手順（`roamrun up -d` → `status --wait 60 --json` で UDID 取得）、「iPhone のロック解除など人間にしかできないこと」、スクリーンショットの撮り方が書かれています。ビルドや起動はエージェントのいつもの手順に任せ、`roamrun run` は 1 コマンドで済ませたいとき用です。CLI は `--json` と終了コード（0 準備完了 / 1 未準備・失敗 / 2 使い方の誤り）に対応しています。
 
 ## 外出先で iPhone だけで使う
 
@@ -246,7 +247,7 @@ RoamRun が書き込むのは次の場所だけです（システム設定や他
 まず `roamrun up -d` で始めたブリッジを止めます（`roamrun down <name>`）。アプリを消しても動き続けるためです。Homebrew なら、そのあと `brew uninstall --zap --cask roamrun` でアプリ・CLI のリンク・設定・ログを削除します（スキルは先に `roamrun init --uninstall`）。それ以外で完全に削除するには:
 
 ```sh
-roamrun init --uninstall                  # スキルを入れた場合（npx で入れたなら npx skills remove roamrun）
+roamrun init --uninstall                  # スキルを入れた場合（他のツールで入れたならそのツールで削除）
 rm /usr/local/bin/roamrun                 # CLI を入れた場合
 rm -rf ~/Library/Application\ Support/RoamRun ~/Library/Logs/RoamRun
 defaults delete com.roamrun.app

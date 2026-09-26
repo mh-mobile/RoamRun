@@ -90,8 +90,11 @@ enum CLI {
             }
             switch args[0] {
             case "devices": devices(profiles, json: json)
-            case "status": status(targets, json: json, wait: wait)
+            case "status":
+                noteStaleSkills()
+                status(targets, json: json, wait: wait)
             case "doctor":
+                noteStaleSkills()
                 // No name and nothing running: check every device rather than report "All good." unchecked.
                 let running = StatusFile.read()
                 let checkAll = name != nil || !targets.contains { running[$0.id] != nil }
@@ -924,10 +927,46 @@ enum CLI {
     }
 
     /// Global skill directories of agents that follow the Agent Skills layout.
-    private static let skillClients: [(name: String, home: String)] = [
+    nonisolated private static let skillClients: [(name: String, home: String)] = [
         ("claude", ".claude"), ("codex", ".codex"), ("cursor", ".cursor"),
         ("gemini", ".gemini"), ("copilot", ".copilot"),
     ]
+
+    /// The skill shipped in this app, which matches this CLI.
+    nonisolated static func bundledSkill() -> Data? {
+        let exe = Bundle.main.executableURL?.resolvingSymlinksInPath()
+        return exe.flatMap { try? Data(contentsOf: $0.deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Resources/roamrun-skill.md")) }
+    }
+
+    nonisolated static var homeDir: URL {
+        // $HOME first, like other CLIs (homeDirectoryForCurrentUser ignores it).
+        ProcessInfo.processInfo.environment["HOME"].map { URL(fileURLWithPath: $0) }
+            ?? FileManager.default.homeDirectoryForCurrentUser
+    }
+
+    /// Skills `roamrun init` put there that differ from this version's (links belong to other tools).
+    nonisolated static func staleSkills(home: URL, bundled: Data) -> [String] {
+        let fm = FileManager.default
+        return skillClients.compactMap { c in
+            let dir = home.appendingPathComponent("\(c.home)/skills/roamrun")
+            let file = dir.appendingPathComponent("SKILL.md")
+            guard ![dir, file].contains(where: { (try? fm.destinationOfSymbolicLink(atPath: $0.path)) != nil }),
+                  let data = try? Data(contentsOf: file), data.starts(with: Data("---\nname: roamrun\n".utf8)),
+                  data != bundled else { return nil }
+            return dir.path
+        }
+    }
+
+    /// One line on stderr (JSON output stays clean) when an installed skill is from another version.
+    private static func noteStaleSkills() {
+        guard let bundled = bundledSkill() else { return }
+        let stale = staleSkills(home: homeDir, bundled: bundled)
+        guard !stale.isEmpty else { return }
+        let home = homeDir.path
+        let shown = stale.map { $0.hasPrefix(home) ? "~" + $0.dropFirst(home.count) : $0 }.joined(separator: ", ")
+        FileHandle.standardError.write(Data("roamrun: the agent skill in \(shown) is from another RoamRun version — run `roamrun init` to update it\n".utf8))
+    }
 
     /// Installs the bundled SKILL.md for every detected (or named) agent.
     private static func initSkill(_ args: [String]) -> Never {
@@ -941,17 +980,12 @@ enum CLI {
         if let i = args.lastIndex(of: "--client"), !args.indices.contains(i + 1) || args[i + 1].hasPrefix("-") {
             fail("--client needs a value (\(skillClients.map(\.name).joined(separator: ", ")))")
         }
-        let exe = Bundle.main.executableURL?.resolvingSymlinksInPath()
-        let bundled = exe?.deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Resources/roamrun-skill.md")
-        guard let bundled, let skill = try? Data(contentsOf: bundled) else {
+        guard let skill = bundledSkill() else {
             stop("skill not found in the app bundle — build with `make app`")
         }
         if args.contains("--print") { FileHandle.standardOutput.write(skill); exit(0) }
 
-        // $HOME first, like other CLIs (homeDirectoryForCurrentUser ignores it).
-        let home = ProcessInfo.processInfo.environment["HOME"].map { URL(fileURLWithPath: $0) }
-            ?? FileManager.default.homeDirectoryForCurrentUser
+        let home = homeDir
         let named = args.indices.filter { args[$0] == "--client" && args.indices.contains($0 + 1) }.map { args[$0 + 1] }
         if let unknown = named.first(where: { n in !skillClients.contains { $0.name == n } }) {
             fail("unknown client “\(unknown)”. Known: \(skillClients.map(\.name).joined(separator: ", "))")

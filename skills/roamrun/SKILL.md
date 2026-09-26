@@ -22,7 +22,9 @@ roamrun --help
 If missing, the user installs RoamRun (`brew install --cask mh-mobile/tap/roamrun`
 links the command too; or https://github.com/mh-mobile/RoamRun) and installs the command from the app's
 first screen or Open RoamRun › ⚙ Settings › Command line tool › Install (or `make install-cli`
-from the repo).
+from the repo). If `roamrun status` or `doctor` says this skill is from another
+RoamRun version, tell the user `roamrun init` updates it; some options here may
+not match the installed CLI until then (`roamrun --help` is authoritative).
 
 ## 2. Things only the user can do — ask, don't retry
 

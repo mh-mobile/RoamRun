@@ -182,12 +182,13 @@ xcrun devicectl device info files --device <udid> --domain-type systemCrashLogs 
 Claude Code, Codex, Cursor and other agents can take over building, installing on the device and debugging. Install the skill that teaches them how:
 
 ```sh
-roamrun init                                  # detect installed agents and add the skill
-# or
-npx skills add mh-mobile/RoamRun             # via the skills CLI
+roamrun init                                  # add the skill to every agent found in ~ (.claude, .codex, .cursor, .gemini, .copilot)
+roamrun init --client claude                  # or only to the ones you name (repeat --client)
 ```
 
-The skill describes the steps (`roamrun up -d` → `status --wait 60 --json` for the UDID → `xcodebuild` / `devicectl`) and what only a human can do, such as unlocking the iPhone. The CLI supports `--json` and exit codes (0 ready / 1 not ready or failed / 2 usage error).
+`init` installs the skill shipped with your RoamRun, so it always matches the CLI. After updating RoamRun, run `roamrun init` again — `roamrun status` and `doctor` remind you when an installed skill is from another version. If you manage skills with another tool instead, pin it to your RoamRun's release so skill and CLI agree, e.g. `gh skill install mh-mobile/RoamRun roamrun --pin "v$(roamrun --version | cut -d" " -f2)"` (the repo's main branch may describe options your installed version doesn't have yet).
+
+The skill covers getting the device connected (`roamrun up -d` → `status --wait 60 --json` for the UDID), what only a human can do, such as unlocking the iPhone, and screenshots; building and launching are left to the agent's usual tools, with `roamrun run` as a one-command fallback. The CLI supports `--json` and exit codes (0 ready / 1 not ready or failed / 2 usage error).
 
 ## Working from just your iPhone, away from home
 
@@ -246,7 +247,7 @@ The helper processes started while bridging (`dns-sd` / `log stream`) typically 
 First stop bridges started with `roamrun up -d` (`roamrun down <name>`): they keep running without the app. With Homebrew, `brew uninstall --zap --cask roamrun` then removes the app, the CLI link, settings and logs (skills: `roamrun init --uninstall` first). Otherwise, to remove everything:
 
 ```sh
-roamrun init --uninstall                  # if you installed the skill (with npx: npx skills remove roamrun)
+roamrun init --uninstall                  # if you installed the skill (with another tool: remove it there)
 rm /usr/local/bin/roamrun                 # if you installed the CLI
 rm -rf ~/Library/Application\ Support/RoamRun ~/Library/Logs/RoamRun
 defaults delete com.roamrun.app

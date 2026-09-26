@@ -383,6 +383,25 @@ private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> { CLI.
     }
 }
 
+@Test func onlyOurOutdatedSkillsAreReported() throws {
+    let home = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-home-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: home) }
+    let current = Data("---\nname: roamrun\ndescription: now\n---\n".utf8)
+    func put(_ client: String, _ text: String) throws {
+        let dir = home.appendingPathComponent("\(client)/skills/roamrun")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data(text.utf8).write(to: dir.appendingPathComponent("SKILL.md"))
+    }
+    try put(".claude", "---\nname: roamrun\ndescription: older\n---\n")   // ours, another version
+    try put(".codex", String(decoding: current, as: UTF8.self))              // ours, this version
+    try put(".cursor", "---\nname: something-else\n---\n")                // not ours
+    let linked = home.appendingPathComponent(".gemini/skills")                  // managed by another tool
+    try FileManager.default.createDirectory(at: linked, withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(at: linked.appendingPathComponent("roamrun"),
+                                               withDestinationURL: home.appendingPathComponent(".claude/skills/roamrun"))
+    #expect(CLI.staleSkills(home: home, bundled: current) == [home.appendingPathComponent(".claude/skills/roamrun").path])
+}
+
 @Test func deviceLookup() {
     let a = profile("iPhone"), b = profile("iPad")
     #expect(CLI.matches("IPHONE", in: [a, b]).map(\.id) == [a.id])
