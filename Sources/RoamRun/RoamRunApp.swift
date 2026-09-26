@@ -1,8 +1,6 @@
 import SwiftUI
 import AppKit
 
-/// One binary, two faces: `roamrun <command>` runs the CLI, anything else
-/// (Finder, `open`, login item) starts the menu bar app.
 /// The bundle identifier, also the defaults domain, log subsystem and notification prefix.
 enum AppID {
     static let bundle = "io.github.mh-mobile.roamrun"
@@ -17,18 +15,25 @@ enum AppID {
     /// Settings saved under the old id carry over once, the first time either the app or the CLI runs.
     static func migrateDefaults() {
         let d = UserDefaults.standard
-        if let moved = carriedOver(old: d.persistentDomain(forName: legacy), new: d.persistentDomain(forName: bundle)) {
-            d.setPersistentDomain(moved, forName: bundle)
-        }
+        guard var old = d.persistentDomain(forName: legacy),
+              let moved = carriedOver(old: old, new: d.persistentDomain(forName: bundle)) else { return }
+        d.setPersistentDomain(moved, forName: bundle)
+        old[movedKey] = bundle   // once: settings deleted later mustn't come back from here
+        d.setPersistentDomain(old, forName: legacy)
     }
 
-    /// What the new domain should become, or nil to leave it: only an empty one takes the old settings.
+    static let movedKey = "RoamRunMovedTo"
+
+    /// What the new domain should become, or nil to leave it: only an empty one takes the old
+    /// settings, and only if they haven't been carried over before.
     static func carriedOver(old: [String: Any]?, new: [String: Any]?) -> [String: Any]? {
-        guard new?.isEmpty ?? true, let old, !old.isEmpty else { return nil }
+        guard new?.isEmpty ?? true, let old, !old.isEmpty, old[movedKey] == nil else { return nil }
         return old
     }
 }
 
+/// One binary, two faces: `roamrun <command>` runs the CLI, anything else
+/// (Finder, `open`, login item) starts the menu bar app.
 @main
 enum Entry {
     static func main() {
@@ -47,6 +52,15 @@ enum Entry {
         if invokedAsCLI || args.first.map({ first in !["-psn_", "-NS", "-Apple"].contains(where: first.hasPrefix) }) == true {
             CLI.run(args.isEmpty ? ["help"] : args)
         } else {
+            // A RoamRun from before 0.1.12 (the old bundle id) would restore the same
+            // bridges and ignore this version's stop requests: ask it to quit first.
+            let old = NSRunningApplication.runningApplications(withBundleIdentifier: AppID.legacy)
+            if !old.isEmpty, Snapshot.path == nil {
+                old.forEach { $0.terminate() }
+                for _ in 0..<100 where old.contains(where: { !$0.isTerminated }) {
+                    RunLoop.current.run(until: .now + 0.1)   // isTerminated updates on the run loop
+                }
+            }
             // One app at a time: macOS only checks this for Finder/open launches,
             // not when the binary is run directly. A second copy would restore
             // the same bridges and show a second menu bar icon.

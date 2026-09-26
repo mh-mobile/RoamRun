@@ -53,7 +53,13 @@ jumps after an iOS update mean the window needs retuning.
 1. Bump `CFBundleShortVersionString` (shown by `roamrun --version`) and
    `CFBundleVersion` (+1 each release) in `Info.plist`; commit, push, wait for CI.
 2. Build the dmg from a fresh clone of that commit (a working copy can hold
-   uncommitted changes): `make dmg` → `RoamRun-<version>.dmg`.
+   uncommitted changes), signed and notarized:
+   `make dmg SIGN_ID="Developer ID Application" NOTARY_PROFILE=roamrun-notary` → `RoamRun-<version>.dmg`
+   (the profile is `xcrun notarytool store-credentials roamrun-notary`; the short
+   SIGN_ID works while the keychain holds one Developer ID Application identity,
+   else give its full name). Check
+   `xcrun stapler validate` on the dmg and `spctl -a -vv -t exec` on the app
+   inside: "Notarized Developer ID".
 3. `gh release create v<version> RoamRun-<version>.dmg --target <that commit's full sha> --title "RoamRun <version>" --notes …`
    — the tag must point at the commit the dmg was built from. Keep the notes'
    claims in line with the README.

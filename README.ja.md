@@ -89,7 +89,7 @@ sequenceDiagram
 brew install --cask mh-mobile/tap/roamrun
 ```
 
-`RoamRun.app` を `/Applications` に入れ、`roamrun` コマンドもリンクします。公証がないため、初回起動時に macOS に止められます（`brew upgrade` 後は不要）。一度開こうとした後、**システム設定 → プライバシーとセキュリティ → 「このまま開く」**で許可してください。
+`RoamRun.app` を `/Applications` に入れ、`roamrun` コマンドもリンクします。Developer ID で署名し Apple の公証を受けている（0.1.12 から）ので、普通のアプリと同じように開けます。
 
 ### ソースからビルド
 
@@ -105,10 +105,7 @@ Xcode プロジェクト不要。SwiftPM + Makefile で `.app` を組み立て�
 
 ### ビルド済み dmg（GitHub Releases）
 
-Releases の dmg は**アドホック署名のみ（公証なし）**です。初回起動時に macOS に止められるので、次のどちらかで許可してください:
-
-- 一度開こうとした後、**システム設定 → プライバシーとセキュリティ → 「このまま開く」**
-- または `xattr -dr com.apple.quarantine /Applications/RoamRun.app`
+Releases の dmg は **Developer ID で署名し、Apple の公証を受けています**（0.1.12 から）。RoamRun をアプリケーションフォルダにドラッグして開くだけです（0.1.11 まではアドホック署名のみで、初回起動時に「システム設定 → プライバシーとセキュリティ → このまま開く」での許可が必要でした）。
 
 最初の画面から `roamrun` コマンドも入れられます。
 
@@ -116,7 +113,7 @@ dmg は `make dmg` で作れます（`SIGN_ID` / `NOTARY_PROFILE` を渡すと D
 
 ### アップデート
 
-自動アップデートはありません。Homebrew なら `brew upgrade --cask roamrun`（RoamRun を終了してから置き換えます）。それ以外は RoamRun を終了し、`/Applications/RoamRun.app` を新しいものに置き換えて起動します（ソースからの場合は先に `git pull` と `make app`）。登録済みデバイスと CLI のリンクはそのまま残り、動いていたブリッジも再開します。dmg で更新した場合は初回インストールと同じく起動時に止められるので、もう一度「このまま開く」で許可してください。
+自動アップデートはありません。Homebrew なら `brew upgrade --cask roamrun`（RoamRun を終了してから置き換えます）。それ以外は RoamRun を終了し、`/Applications/RoamRun.app` を新しいものに置き換えて起動します（ソースからの場合は先に `git pull` と `make app`）。登録済みデバイスと CLI のリンクはそのまま残り、動いていたブリッジも再開します。
 
 ## 使い方
 

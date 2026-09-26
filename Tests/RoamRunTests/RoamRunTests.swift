@@ -409,6 +409,8 @@ private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> { CLI.
     #expect(AppID.carriedOver(old: old, new: nil)?["networkInterface"] as? String == "en1")
     #expect(AppID.carriedOver(old: old, new: [:])?["networkInterface"] as? String == "en1")   // an empty domain file
     #expect(AppID.carriedOver(old: old, new: ["networkInterface": "en0"]) == nil)             // never overwrites
+    var marked = old; marked[AppID.movedKey] = AppID.bundle                                     // already carried over once:
+    #expect(AppID.carriedOver(old: marked, new: nil) == nil)                                   // deleted settings stay deleted
 }
 
 @Test func deviceLookup() {

@@ -46,8 +46,9 @@ screen on.
 
 ## Install paths
 
-11. Download the release dmg in a browser, install, open: Gatekeeper blocks it
-    once; Open Anyway works; the first screen offers the CLI.
+11. Download the release dmg in a browser, install, open: it opens with no
+    Gatekeeper block (notarized; `spctl -a -vv /Applications/RoamRun.app` says
+    "Notarized Developer ID"); the first screen offers the CLI.
 12. `brew upgrade --cask roamrun` from the previous version: the app quits,
     is replaced and reopens without another Gatekeeper prompt.
 13. Tap: `brew style --cask mh-mobile/tap/roamrun` and

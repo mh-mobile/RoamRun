@@ -89,7 +89,7 @@ sequenceDiagram
 brew install --cask mh-mobile/tap/roamrun
 ```
 
-Installs `RoamRun.app` in `/Applications` and links the `roamrun` command. RoamRun isn't notarized, so macOS blocks it on first launch (not after `brew upgrade`): try to open it once, then **System Settings → Privacy & Security → "Open Anyway"**.
+Installs `RoamRun.app` in `/Applications` and links the `roamrun` command. RoamRun is signed with a Developer ID and notarized by Apple (from 0.1.12), so it opens like any other app.
 
 ### Build from source
 
@@ -105,10 +105,7 @@ No Xcode project needed: SwiftPM and a Makefile assemble the `.app`. An app you 
 
 ### Prebuilt dmg (GitHub Releases)
 
-The dmg on Releases is **ad-hoc signed only (not notarized)**. macOS blocks it on first launch; allow it in either way:
-
-- After trying to open it once, **System Settings → Privacy & Security → "Open Anyway"**
-- Or `xattr -dr com.apple.quarantine /Applications/RoamRun.app`
+The dmg on Releases is **signed with a Developer ID and notarized by Apple** (from 0.1.12): drag RoamRun to Applications and open it. (Up to 0.1.11 it was only ad-hoc signed and needed System Settings → Privacy & Security → "Open Anyway" on first launch.)
 
 The first screen offers to install the `roamrun` command.
 
@@ -116,7 +113,7 @@ Build the dmg with `make dmg` (pass `SIGN_ID` / `NOTARY_PROFILE` to sign with a 
 
 ### Updating
 
-There's no auto-update. With Homebrew, `brew upgrade --cask roamrun` (it quits RoamRun first). Otherwise quit RoamRun, replace `/Applications/RoamRun.app` with the new version (from source: `git pull` and `make app` first), and open it. Saved devices and the CLI link stay as they are, and bridges that were running start again. A new dmg is blocked on first launch like the first install: allow it again with "Open Anyway".
+There's no auto-update. With Homebrew, `brew upgrade --cask roamrun` (it quits RoamRun first). Otherwise quit RoamRun, replace `/Applications/RoamRun.app` with the new version (from source: `git pull` and `make app` first), and open it. Saved devices and the CLI link stay as they are, and bridges that were running start again.
 
 ## Usage
 

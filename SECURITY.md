@@ -43,8 +43,9 @@ bounded.
 - **`roamrun run` builds the project in the current folder.** Its build scripts
   and package plugins run as you, and like Xcode it may create provisioning
   profiles in your team. Use it (or let an agent use it) on projects you trust.
-- **Integrity of releases.** Releases are ad-hoc signed and not notarized; the
-  Homebrew cask checks the dmg's SHA-256, and building from source avoids the
+- **Integrity of releases.** From 0.1.12, releases are signed with a Developer
+  ID and notarized by Apple (earlier ones were ad-hoc signed); the Homebrew
+  cask also checks the dmg's SHA-256, and building from source avoids the
   question entirely.
 
 ## What it touches on the Mac

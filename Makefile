@@ -43,6 +43,15 @@ run: app
 
 dmg: app
 	@if [ -n "$(SNAPSHOT)" ]; then echo "SNAPSHOT builds are for development only"; exit 1; fi
+	@if [ -n "$(NOTARY_PROFILE)" ] && [ "$(SIGN_ID)" = "-" ]; then echo "NOTARY_PROFILE needs SIGN_ID (a Developer ID Application identity)"; exit 1; fi
+ifneq ($(NOTARY_PROFILE),)
+	# The app gets its own ticket too: a Homebrew install never opens the dmg, and
+	# a stapled app passes Gatekeeper even offline.
+	ditto -c -k --keepParent $(BUNDLE) $(APP_NAME)-notarize.zip
+	xcrun notarytool submit $(APP_NAME)-notarize.zip --keychain-profile $(NOTARY_PROFILE) --wait
+	rm -f $(APP_NAME)-notarize.zip
+	xcrun stapler staple $(BUNDLE)
+endif
 	rm -rf dmg-root $(DMG)
 	mkdir dmg-root
 	cp -R $(BUNDLE) dmg-root/
@@ -77,4 +86,4 @@ icon:
 	cp .build/AppIcon.iconset/icon_256x256@2x.png docs/icon.png
 
 clean:
-	rm -rf .build $(BUNDLE) dmg-root $(APP_NAME)-*.dmg
+	rm -rf .build $(BUNDLE) dmg-root $(APP_NAME)-*.dmg $(APP_NAME)-notarize.zip
