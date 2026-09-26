@@ -6,6 +6,9 @@ import Combine
 @MainActor
 final class AppCoordinator: ObservableObject {
     @Published private(set) var profiles: [DeviceProfile] = []
+    /// `profiles` as it was last read from or written to disk, so a save can tell
+    /// which fields this process changed from ones `roamrun up` changed meanwhile.
+    private var savedProfiles: [DeviceProfile] = []
     @Published private(set) var bridges: [UUID: ProxyBridge] = [:]
     @Published private(set) var tailscaleDevices: [MeshDevice] = []
     @Published private(set) var tailscaleError: String?
@@ -59,6 +62,7 @@ final class AppCoordinator: ObservableObject {
         tailscaleCLIPath = savedCLIPath
 
         profiles = Snapshot.fakeProfiles ?? store.load()
+        savedProfiles = profiles
         if let copy = store.keptUnreadable {
             logStore.log("couldn't read saved devices; kept the file as \(copy.path)")
             launchWarning = "RoamRun couldn't read its saved devices, so the list starts empty. The file was kept as \(copy.path)."
@@ -156,7 +160,12 @@ final class AppCoordinator: ObservableObject {
         bridges[id]?.stop()
         // The status file, not the 2s-polled copy: a bridge started a moment ago counts too.
         guard let e = StatusFile.read()[id] ?? externalBridges[id], e.pid != getpid() else { return }
-        if e.cli == true { kill(e.pid, SIGTERM) }   // its handler cleans up
+        if e.cli == true {
+            // The cached entry above was validated when it was polled, not now: a PID
+            // that has been reused since would get the signal meant for the bridge.
+            guard StatusFile.isRoamRun(e) else { externalBridges[id] = nil; return }
+            kill(e.pid, SIGTERM)   // its handler cleans up
+        }
         else {
             DistributedNotificationCenter.default().postNotificationName(
                 CLI.stopNotification, object: id.uuidString, userInfo: nil, deliverImmediately: true)
@@ -491,7 +500,11 @@ final class AppCoordinator: ObservableObject {
     /// Saves the device list; a failed write would lose changes at the next launch, so say so.
     private func persist() {
         guard Snapshot.fakeProfiles == nil else { return }   // screenshot mode's fake devices never reach disk
-        guard !store.save(profiles) else { return }
+        if let saved = store.save(base: savedProfiles, wanted: profiles) {
+            savedProfiles = saved
+            if saved != profiles { profiles = saved }   // `roamrun up` had saved a newer endpoint
+            return
+        }
         logStore.log("couldn't save the device list to \(ProfileStore.directory.path)")
         launchWarning = "RoamRun couldn't save your devices (\(ProfileStore.directory.path)). Changes will be lost when it quits — check the disk and folder permissions."
     }

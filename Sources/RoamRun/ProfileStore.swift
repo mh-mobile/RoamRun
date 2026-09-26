@@ -3,10 +3,13 @@ import Foundation
 final class ProfileStore {
     static let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("RoamRun", isDirectory: true)
-    private let url = directory.appendingPathComponent("profiles.json")
+    private let dir: URL
+    private let url: URL
 
-    init() {
-        try? FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true)
+    init(directory: URL = ProfileStore.directory) {
+        dir = directory
+        url = directory.appendingPathComponent("profiles.json")
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
     /// Set when profiles.json couldn't be read and was kept aside under this name.
@@ -29,6 +32,40 @@ final class ProfileStore {
             if (try? fm.copyItem(at: url, to: copy)) != nil { keptUnreadable = copy }
         }
         return salvaged ?? []
+    }
+
+    /// Saves `wanted` without dropping what another process wrote since `base`
+    /// was read. The app keeps its list in memory for as long as it runs, so a
+    /// plain whole-list write would undo the endpoint `roamrun up` had saved
+    /// meanwhile. nil if it couldn't be written; otherwise what is on disk now.
+    func save(base: [DeviceProfile], wanted: [DeviceProfile]) -> [DeviceProfile]? {
+        let fd = open(dir.appendingPathComponent("profiles.lock").path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        guard flock(fd, LOCK_EX) == 0 else { return nil }
+        defer { flock(fd, LOCK_UN) }
+        let merged = Self.merge(base: base, wanted: wanted, disk: load())
+        return save(merged) ? merged : nil
+    }
+
+    /// Membership follows this process — it is the one that added or deleted a
+    /// device. For the endpoint fields, which `roamrun up` also writes, a value
+    /// this process left alone keeps whatever is on disk.
+    static func merge(base: [DeviceProfile], wanted: [DeviceProfile], disk: [DeviceProfile]) -> [DeviceProfile] {
+        let was = byID(base), onDisk = byID(disk)
+        return wanted.map { mine in
+            guard let old = was[mine.id], let theirs = onDisk[mine.id] else { return mine }
+            var out = mine
+            if mine.providerIP == old.providerIP { out.providerIP = theirs.providerIP }
+            if mine.remotePairingPort == old.remotePairingPort { out.remotePairingPort = theirs.remotePairingPort }
+            if mine.providerHostName == old.providerHostName { out.providerHostName = theirs.providerHostName }
+            return out
+        }
+    }
+
+    /// Last one wins: a duplicated id would trap `Dictionary(uniqueKeysWithValues:)`.
+    private static func byID(_ profiles: [DeviceProfile]) -> [UUID: DeviceProfile] {
+        profiles.reduce(into: [:]) { $0[$1.id] = $1 }
     }
 
     /// False if it couldn't be written (disk full, permissions): the caller must say so.

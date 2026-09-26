@@ -272,10 +272,10 @@ enum CLI {
     /// `ready` means Xcode can use the device right now: the bridge is up *and*
     /// CoreDevice sees the iPhone. The bridge alone can look ready for a while
     /// after the iPhone falls asleep (its relayed connections linger).
-    private static func row(_ p: DeviceProfile, _ e: StatusFile.Entry?, deep: Bool) -> Row {
+    private static func row(_ p: DeviceProfile, _ e: StatusFile.Entry?, deep: Bool, by deadline: Date? = nil) -> Row {
         let udid = e?.udid ?? p.udid
         let usable = e?.ready == true || e?.kind == .local   // on this Wi-Fi: Xcode sees it directly
-        let core = deep && usable ? udid.flatMap(coreDeviceState) : nil
+        let core = deep && usable ? udid.flatMap { coreDeviceState($0, by: deadline) } : nil
         // No UDID yet (standing aside before it ever connected): nothing to ask CoreDevice, trust the bridge.
         let ready = usable && (!deep || udid == nil || core.map { $0 != "unavailable" } ?? false)
         var status = e?.status ?? BridgeStatus.off.title
@@ -290,12 +290,22 @@ enum CLI {
                    status: status, ready: ready,
                    owner: e.map(owner), pid: e?.pid, tunnelPorts: e?.tunnelPorts ?? [],
                    coreDevice: core, detail: detail,
-                   locked: deep && ready ? udid.flatMap(isLocked) : nil)
+                   locked: deep && ready ? udid.flatMap { isLocked($0, by: deadline) } : nil)
     }
 
     /// devicectl's tunnelState for this UDID; nil if devicectl failed.
-    nonisolated static func coreDeviceState(_ udid: String) -> String? {
-        Proc.devicectl(["--timeout", "10", "list", "devices"]).flatMap { tunnelState(in: $0, udid: udid) }
+    nonisolated static func coreDeviceState(_ udid: String, by deadline: Date? = nil) -> String? {
+        let secs = probeSeconds(by: deadline)
+        return Proc.devicectl(["--timeout", "\(secs)", "list", "devices"], timeout: Double(secs) + 5)
+            .flatMap { tunnelState(in: $0, udid: udid) }
+    }
+
+    /// How long a `status` probe may take. Each round of `--wait N` runs two
+    /// devicectl calls per device before the deadline is looked at again, so
+    /// without this a `--wait 1` could sit for ~20s per device.
+    nonisolated static func probeSeconds(by deadline: Date?, now: Date = .now) -> Int {
+        guard let deadline else { return 10 }
+        return max(1, min(10, Int(deadline.timeIntervalSince(now).rounded(.up))))
     }
 
     /// From `devicectl list devices` JSON's result; UDIDs compared in any case.
@@ -332,9 +342,10 @@ enum CLI {
         if targets.isEmpty && !json { stop(noDevices) }
         var rows: [Row]
         let deadline = Date.now.addingTimeInterval(wait ?? 0)
+        let budget = wait == nil ? nil : deadline   // no --wait: the probes keep their own timeouts
         repeat {
             let live = StatusFile.read()
-            rows = targets.map { row($0, live[$0.id], deep: true) }
+            rows = targets.map { row($0, live[$0.id], deep: true, by: budget) }
             if rows.contains(where: \.ready) || Date.now >= deadline { break }
             usleep(useconds_t(min(3, max(0.1, deadline.timeIntervalSinceNow)) * 1_000_000))   // each round spawns devicectl
         } while true
@@ -355,8 +366,10 @@ enum CLI {
     }
 
     /// Needs the tunnel; nil when devicectl can't reach the device.
-    private static func isLocked(_ udid: String) -> Bool? {
-        Proc.devicectl(["--timeout", "10", "device", "info", "lockState", "--device", udid])?["passcodeRequired"] as? Bool
+    private static func isLocked(_ udid: String, by deadline: Date? = nil) -> Bool? {
+        let secs = probeSeconds(by: deadline)
+        return Proc.devicectl(["--timeout", "\(secs)", "device", "info", "lockState", "--device", udid],
+                              timeout: Double(secs) + 5)?["passcodeRequired"] as? Bool
     }
 
     /// A runtime failure (exit 1). `fail` is for usage errors (exit 2).
@@ -693,12 +706,13 @@ enum CLI {
         }
         bridge.onProfileChange = { moved in   // save where the device answers now, as the app does
             let store = ProfileStore()
-            var all = store.load()
+            let loaded = store.load()
+            var all = loaded
             guard let i = all.firstIndex(where: { $0.id == moved.id }) else { return }
             all[i].providerIP = moved.providerIP
             all[i].remotePairingPort = moved.remotePairingPort
             all[i].providerHostName = moved.providerHostName
-            let saved = store.save(all)
+            let saved = store.save(base: loaded, wanted: all) != nil
             print("  \(moved.displayName) now answers at \(moved.providerIP):\(moved.remotePairingPort)\(saved ? " (saved)" : " (couldn't save it)")")
         }
 

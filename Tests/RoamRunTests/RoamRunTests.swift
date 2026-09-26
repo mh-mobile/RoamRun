@@ -864,3 +864,57 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(InterfaceMonitor.pickLAN(chosen: "en5", available: ["en0"]) == "en5")                  // Settings wins
     #expect(InterfaceMonitor.pickLAN(chosen: nil, available: []) == "en0")
 }
+
+// MARK: - Profiles saved from two processes
+
+@Test func theAppDoesntUndoAnEndpointRoamrunUpSaved() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-test-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let app = ProfileStore(directory: dir), cli = ProfileStore(directory: dir)
+    var phone = profile("iPhone"), pad = profile("iPad")
+    phone.providerIP = "100.64.0.10"
+    pad.providerIP = "100.64.0.11"
+    #expect(app.save(base: [], wanted: [phone, pad]) != nil)
+
+    // The app keeps its list in memory from here on; `roamrun up` moves the phone.
+    let held = [phone, pad]
+    var moved = cli.load()
+    moved[0].providerIP = "100.64.0.99"
+    moved[0].remotePairingPort = 50000
+    #expect(cli.save(base: cli.load(), wanted: moved) != nil)
+
+    // Now the app saves for an unrelated reason: a rename of the *other* device.
+    var stale = held
+    stale[1].displayName = "iPad Pro"
+    let saved = app.save(base: held, wanted: stale)
+    #expect(saved?.first(where: { $0.id == phone.id })?.providerIP == "100.64.0.99")
+    #expect(saved?.first(where: { $0.id == phone.id })?.remotePairingPort == 50000)
+    #expect(saved?.first(where: { $0.id == pad.id })?.displayName == "iPad Pro")
+    #expect(app.load() == saved)
+}
+
+@Test func thisProcessStillOwnsWhatItChangedAndWhoIsInTheList() {
+    var phone = profile("iPhone"), pad = profile("iPad")
+    phone.providerIP = "old"
+    let base = [phone, pad]
+    var onDisk = base
+    onDisk[0].providerIP = "theirs"
+    // Changed here too: ours wins, it is the newer intent.
+    var mine = base
+    mine[0].providerIP = "mine"
+    #expect(ProfileStore.merge(base: base, wanted: mine, disk: onDisk)[0].providerIP == "mine")
+    // Deleted here: the disk's copy doesn't come back.
+    let without = ProfileStore.merge(base: base, wanted: [pad], disk: onDisk)
+    #expect(without.map(\.id) == [pad.id])
+    // Added here: kept, even though the disk has never seen it.
+    let added = ProfileStore.merge(base: base, wanted: base + [profile("Vision")], disk: onDisk)
+    #expect(added.count == 3)
+}
+
+@Test func aStatusProbeGetsOnlyTheTimeTheWaitHasLeft() {
+    let now = Date.now
+    #expect(CLI.probeSeconds(by: nil, now: now) == 10)                                  // no --wait: unchanged
+    #expect(CLI.probeSeconds(by: now.addingTimeInterval(60), now: now) == 10)            // plenty: capped
+    #expect(CLI.probeSeconds(by: now.addingTimeInterval(1), now: now) == 1)
+    #expect(CLI.probeSeconds(by: now.addingTimeInterval(-5), now: now) == 1)             // past: still one try
+}
