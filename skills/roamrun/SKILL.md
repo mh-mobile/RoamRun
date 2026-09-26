@@ -34,7 +34,10 @@ not match the installed CLI until then (`roamrun --help` is authoritative).
   + iOS 27, Device Hub › + › Pair Nearby Device on the same Wi-Fi), turn on
   Developer Mode, then add it in the RoamRun app while
   it is on the Mac's Wi-Fi.
-- Keep the iPhone on some Wi-Fi (tethering is fine; cellular alone is not).
+- Keep the iPhone on some Wi-Fi with internet access. Joining another
+  device's hotspot is fine — a second iPhone's Personal Hotspot, a pocket
+  router, café Wi-Fi. Cellular alone is not, and neither is the iPhone sharing
+  its *own* Personal Hotspot (then it isn't on Wi-Fi itself).
 
 ## 3. Get the device ready
 
@@ -55,8 +58,11 @@ If the bridge already runs in the menu bar app, just use it — `status` shows
 the owner, and `up` exits 0 when another process already has it ready (exit 1
 if that one is still coming up). Status "On this Wi‑Fi" means the iPhone is on
 the Mac's own network: no bridge is needed, Xcode sees it directly, and it
-counts as ready. After a long build, check `roamrun status iPhone` again before
-installing.
+counts as ready. So when the user wants to know that it works *over
+Tailscale* (e.g. trying it at home before going out), "Ready for Xcode"
+(`state` ready) is that; "On this Wi‑Fi" (`state` local) means it didn't use
+Tailscale — have them move the iPhone to another network first. After a long
+build, check `roamrun status iPhone` again before installing.
 
 Leave the bridge running when you're done. Run `roamrun down iPhone` only if
 the user asks: it also stops a bridge the menu bar app runs and takes the
