@@ -169,6 +169,7 @@ xcrun devicectl device process launch --device <udid> <bundle-id>
 xcodebuild test -destination id=<udid> …                                           # UI テスト（XCUITest）も実機で動く
 xcrun devicectl device info files --device <udid> --domain-type appDataContainer --domain-identifier <bundle-id>   # アプリのファイル一覧
 xcrun devicectl device copy from --device <udid> --domain-type appDataContainer --domain-identifier <bundle-id> --source <path> --destination <保存先>   # 取り出し（copy to で送り込み）
+xcrun devicectl device pasteboard copy --file image.png --type public.png --device <udid>   # 実機のクリップボードへ（アプリ不要。paste で取り出せる）
 xcrun devicectl device info files --device <udid> --domain-type systemCrashLogs     # クラッシュログ（.ips）。取り出し方は同じ
 ```
 

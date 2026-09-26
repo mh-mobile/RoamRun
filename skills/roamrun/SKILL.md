@@ -110,6 +110,19 @@ DEVICECTL_CHILD_DEMO_ACCOUNT=1 xcrun devicectl device process launch --terminate
 roamrun screenshot iPhone /tmp/profile.png
 ```
 
+To put a file **on** the device — a fixture to import, an image to test with —
+use the app's own container, or the clipboard, which needs no app at all:
+
+```sh
+xcrun devicectl device copy to --device "$UDID" --source local.png \
+  --domain-type appDataContainer --domain-identifier com.example.App --destination Documents/in.png
+xcrun devicectl device pasteboard copy --file local.png --type public.png --device "$UDID"
+```
+
+`copy from` brings one back and `info files` lists them (nothing deletes).
+`pasteboard paste` reads the clipboard, and looks for text unless given `--type`.
+Neither reaches the photo library.
+
 `roamrun run` and `roamrun logs` take these as options: `--url URL`,
 `--arg A` once per word (a UserDefaults override `-Key value` is
 `--arg -Key --arg value`) and `--env NAME=value`. With devicectl, `-e`

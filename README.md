@@ -169,6 +169,7 @@ xcrun devicectl device process launch --device <udid> <bundle-id>
 xcodebuild test -destination id=<udid> …                                           # UI tests (XCUITest) run on the device
 xcrun devicectl device info files --device <udid> --domain-type appDataContainer --domain-identifier <bundle-id>   # list an app's files
 xcrun devicectl device copy from --device <udid> --domain-type appDataContainer --domain-identifier <bundle-id> --source <path> --destination <local path>   # pull one (copy to: push)
+xcrun devicectl device pasteboard copy --file image.png --type public.png --device <udid>   # onto the device's clipboard — no app needed (paste reads it back)
 xcrun devicectl device info files --device <udid> --domain-type systemCrashLogs     # crash logs (.ips); copy them the same way
 ```
 
