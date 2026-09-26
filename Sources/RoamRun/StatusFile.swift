@@ -71,6 +71,8 @@ enum StatusFile {
         defer { flock(fd, LOCK_UN) }
         var all = read(in: dir, live: live)
         if let held = all[id], !mayReplace(held, with: entry, by: getpid()) { return .heldBy(held) }
+        // One bridge per device, not per profile: two saved profiles can name the same iPhone.
+        if let twin = entry.flatMap({ sameDevice(as: $0, id: id, in: all) }) { return .heldBy(twin) }
         all[id] = entry
         do {
             try JSONEncoder().encode(all).write(to: url, options: .atomic)
@@ -80,6 +82,13 @@ enum StatusFile {
         // Every atomic write makes a new file: umask would decide its mode otherwise.
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         return .written
+    }
+
+    /// Another profile's healthy bridge for the same (known) UDID.
+    static func sameDevice(as entry: Entry, id: UUID, in all: [UUID: Entry]) -> Entry? {
+        guard entry.holdsDevice, let udid = entry.udid else { return nil }
+        return all.first { $0.key != id && $0.value.holdsDevice
+            && $0.value.udid?.caseInsensitiveCompare(udid) == .orderedSame }?.value
     }
 
     /// Only the owner clears or changes an entry; another process may take a

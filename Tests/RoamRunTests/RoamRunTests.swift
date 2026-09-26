@@ -533,6 +533,12 @@ private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> { CLI.
     let errored = UUID()
     #expect(StatusFile.write(errored, e(other, .error), in: dir, live: live) == .written)
     #expect(StatusFile.write(errored, e(getpid(), .starting), in: dir, live: live) == .written)
+    // A second profile for the same iPhone (same UDID) can't bridge it too; standing aside is fine.
+    func withUDID(_ x: StatusFile.Entry) -> StatusFile.Entry { var x = x; x.udid = "00008130-000c1c5c307a8d3a"; return x }
+    let first = UUID(), second = UUID()
+    #expect(StatusFile.write(first, withUDID(e(other, .ready)), in: dir, live: live) == .written)
+    #expect(holder(StatusFile.write(second, withUDID(e(getpid(), .starting)), in: dir, live: live)) == other)
+    #expect(StatusFile.write(second, withUDID(e(getpid(), .local)), in: dir, live: live) == .written)
     // Can't write at all: a failure, not a silent success.
     let file = dir.appendingPathComponent("not-a-dir"); try Data().write(to: file)
     if case .failed = StatusFile.write(id, e(getpid(), .starting), in: file, live: live) {} else { Issue.record("expected .failed") }

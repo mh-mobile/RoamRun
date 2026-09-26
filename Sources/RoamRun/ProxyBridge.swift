@@ -98,10 +98,7 @@ final class ProxyBridge: ObservableObject {
         switch publishStatus() {
         case .written: break
         case .heldBy(let other):
-            // The app keeps retrying (it shows the error, and takes over once the other ends).
-            // `roamrun up` gives up: refused, it isn't in status.json, so `down` couldn't stop it.
-            if CLI.isRunning { autoRetry = false }
-            setState(.error("Another RoamRun process (pid \(other.pid)) is already bridging \(profile.displayName). Stop it there first."))
+            yieldClaim(to: other, "is already bridging")
             return
         case .failed(let why):
             setState(.error("Couldn't record this bridge, so another RoamRun could start it too: \(why)"))
@@ -235,7 +232,12 @@ final class ProxyBridge: ObservableObject {
         waitingSince = .now
         renewTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.publishStatus()   // restores our entry if status.json was lost or rewritten
+                // Restores our entry if status.json was lost — unless another process
+                // claimed the device meanwhile (e.g. the file was deleted): then it's theirs.
+                if case .heldBy(let other) = self?.publishStatus() {
+                    self?.stop()
+                    self?.yieldClaim(to: other, "took over")
+                }
                 self?.renewIfStuck()
                 self?.standAsideIfHome()
             }
@@ -678,6 +680,14 @@ final class ProxyBridge: ObservableObject {
 
     /// Surface a refusal the coordinator decided on (e.g. same-LAN conflict).
     func fail(_ message: String) { setState(.error(message)) }
+
+    /// Another process holds the device. The app keeps retrying (it shows the error, and
+    /// takes over once the other ends); `roamrun up` gives up: refused, it isn't in
+    /// status.json, so `down` couldn't stop it.
+    private func yieldClaim(to other: StatusFile.Entry, _ what: String) {
+        if CLI.isRunning { autoRetry = false }
+        setState(.error("Another RoamRun process (pid \(other.pid)) \(what) \(profile.displayName). Stop it there first."))
+    }
 
     private func setState(_ s: BridgeState) { state = s }
     private func log(_ m: String) { onLog?("[\(profile.displayName)] \(m)") }
