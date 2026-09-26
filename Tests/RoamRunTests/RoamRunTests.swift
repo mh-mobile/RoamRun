@@ -142,6 +142,16 @@ private func entry(pid: Int32, _ status: BridgeStatus) -> StatusFile.Entry {
     }
 }
 
+@Test func aReusedPIDIsNotTheProcessThatWroteTheEntry() {
+    let mine = StatusFile.startTime(of: getpid())
+    #expect(mine != nil)                                              // the kernel knows when we started
+    #expect(StatusFile.sameProcess(entry: mine, live: mine))
+    #expect(StatusFile.sameProcess(entry: nil, live: mine))           // written before 0.1.13: can't tell, allow it
+    #expect(!StatusFile.sameProcess(entry: mine, live: nil))          // that PID is gone
+    #expect(!StatusFile.sameProcess(entry: mine, live: mine! + 60))   // same PID, a process that started later
+    #expect(StatusFile.startTime(of: Int32.max) == nil)               // no such process
+}
+
 @Test func otherProcessNeverClearsAnEntry() {
     for s in [BridgeStatus.ready, .error, .local] {
         #expect(!StatusFile.mayReplace(entry(pid: 100, s), with: nil, by: 200))

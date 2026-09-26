@@ -75,6 +75,8 @@ RELEASE_NOTARY_PROFILE ?= roamrun-notary
 # Built under a -pending name; the release name appears only once every check passed.
 PENDING_DMG = $(APP_NAME)-$(VERSION)-pending.dmg
 release-dmg:
+	@if git rev-parse --is-inside-work-tree >/dev/null 2>&1 && [ -n "$$(git status --porcelain)" ]; then \
+		echo "working tree has uncommitted changes — release from a fresh clone (AGENTS.md)"; exit 1; fi
 	rm -f $(DMG) $(PENDING_DMG)
 	$(MAKE) dmg DMG="$(PENDING_DMG)" SIGN_ID="$(RELEASE_SIGN_ID)" NOTARY_PROFILE="$(RELEASE_NOTARY_PROFILE)"
 	xcrun stapler validate $(BUNDLE)

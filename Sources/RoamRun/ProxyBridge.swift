@@ -162,7 +162,9 @@ final class ProxyBridge: ObservableObject {
         let first = profile.remotePairingPort
         for port in first...UInt16(min(Int(first) + 20, Int(UInt16.max))) {
             do {
-                control = try await bindRelay(localIP: localIP, localPort: port, remotePort: first)
+                control = try await bindRelay(localIP: localIP, localPort: port, remotePort: first) { [weak self] _ in
+                    Task { @MainActor in self?.controlConnectionsChanged(gen: gen) }
+                }
                 break
             } catch {
                 lastError = error.localizedDescription
@@ -176,9 +178,6 @@ final class ProxyBridge: ObservableObject {
         controlRelay = control
         localPort = control.localPort
         coveredPorts.insert(localPort)
-        control.onOpenCountChange = { [weak self] _ in
-            Task { @MainActor in self?.controlConnectionsChanged(gen: gen) }
-        }
 
         // Watch before publishing: remotepairingd resolves the record (and
         // logs the UDID the warm-up needs) within ~1s of it appearing.
@@ -278,8 +277,10 @@ final class ProxyBridge: ObservableObject {
         tunnelReady = false
     }
 
-    private func bindRelay(localIP: String, localPort: UInt16, remotePort: UInt16) async throws -> Relay {
-        let relay = Relay(localIP: localIP, localPort: localPort, remoteIP: profile.providerIP, remotePort: remotePort)
+    private func bindRelay(localIP: String, localPort: UInt16, remotePort: UInt16,
+                           onOpenCountChange: ((Int) -> Void)? = nil) async throws -> Relay {
+        let relay = Relay(localIP: localIP, localPort: localPort, remoteIP: profile.providerIP,
+                          remotePort: remotePort, onOpenCountChange: onOpenCountChange)
         try await relay.start()
         return relay
     }
@@ -440,7 +441,8 @@ final class ProxyBridge: ObservableObject {
         case .off, .local: break
         }
         return StatusFile.write(profile.id, .init(pid: getpid(), cli: CLI.isRunning, udid: udid, status: s.title, detail: detail,
-                                                  ready: s == .ready, tunnelPorts: ports, updated: .now, state: s.rawValue))
+                                                  ready: s == .ready, tunnelPorts: ports, updated: .now,
+                                                  state: s.rawValue, started: StatusFile.myStart))
     }
 
     /// The device answers nowhere we know: it may have a new Tailscale address

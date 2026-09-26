@@ -68,8 +68,13 @@ final class AppCoordinator: ObservableObject {
         capture.onLog = { [weak self] m in self?.logStore.log(m) }
         capture.ownedHosts = Set(profiles.map { ProxyBridge(profile: $0).spoofHost })
 
-        // Remove helpers orphaned by a previous launch *before* starting ours.
-        DNSServiceProxy.killOrphanedHelpers { [weak self] m in self?.logStore.log(m) }
+        // Helpers orphaned by a previous launch. Off the main actor: `ps` can take a
+        // while, and every bridge start sweeps them again before it publishes anything.
+        Task.detached { [weak self] in
+            let killed = DNSServiceProxy.killOrphanedHelpers()
+            guard killed > 0 else { return }
+            await MainActor.run { self?.logStore.log("killed \(killed) leftover helper process(es)") }
+        }
 
         // After sleep, relayed connections can look open while dead: re-announce right away.
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification,
@@ -356,7 +361,7 @@ final class AppCoordinator: ObservableObject {
         // Stepped back for a `roamrun up` watching the same device: take over again once it's gone.
         bridge.onYield = { [weak self] other in
             Task { @MainActor in
-                while StatusFile.isRoamRun(other.pid) { try? await Task.sleep(for: .seconds(5)) }
+                while StatusFile.isRoamRun(other) { try? await Task.sleep(for: .seconds(5)) }   // that process, not just its PID
                 guard let self, self.wasActiveIDs.contains(id), let p = self.profile(id),
                       self.bridges[id]?.state == .off else { return }
                 self.startBridge(p)

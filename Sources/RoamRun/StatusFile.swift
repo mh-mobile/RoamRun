@@ -17,6 +17,8 @@ enum StatusFile {
         /// BridgeStatus raw value ("local", …): the stable key. `status` stays the display
         /// title for older RoamRun versions, which ignore this field.
         var state: String? = nil
+        /// When the owner's process started, so a reused PID can't pass for it. Written from 0.1.13.
+        var started: Double? = nil
 
         /// From `state`, else from the title an older version wrote.
         var kind: BridgeStatus { state.flatMap(BridgeStatus.init(rawValue:)) ?? BridgeStatus(title: status) }
@@ -27,14 +29,14 @@ enum StatusFile {
 
     static let url = ProfileStore.directory.appendingPathComponent("status.json")
     /// `dir` and `live` are for tests: a scratch folder, and owners that aren't RoamRun.app.
-    typealias Liveness = (Int32) -> Bool
+    typealias Liveness = (Entry) -> Bool
 
     /// Entries whose owner is still a live RoamRun process. Checking the
     /// executable, not just liveness, guards against recycled PIDs — these
     /// PIDs get SIGTERM from `roamrun down` and the app's Stop button.
     static func read(in dir: URL = ProfileStore.directory, live: Liveness = isRoamRun) -> [UUID: Entry] {
         guard let data = try? Data(contentsOf: dir.appendingPathComponent("status.json")) else { return [:] }
-        return decode(data).filter { live($0.value.pid) }
+        return decode(data).filter { live($0.value) }
     }
 
     /// Entry by entry: one bad entry (e.g. from another version) mustn't hide the others.
@@ -105,13 +107,34 @@ enum StatusFile {
     }
 
 
-    static func isRoamRun(_ pid: Int32) -> Bool {
-        guard pid > 1 else { return false }
+    static func isRoamRun(_ e: Entry) -> Bool {
+        guard e.pid > 1 else { return false }
         var buf = [CChar](repeating: 0, count: 4096)
-        guard proc_pidpath(pid, &buf, UInt32(buf.count)) > 0 else { return false }
-        // Any RoamRun.app copy (proc_pidpath resolves symlinks, so a
-        // `.build/…` path never shows here); a recycled PID is ignored.
+        guard proc_pidpath(e.pid, &buf, UInt32(buf.count)) > 0 else { return false }
+        // Any RoamRun.app copy (proc_pidpath resolves symlinks, so a `.build/…` path
+        // never shows here). The path alone isn't enough: PIDs are reused, and every
+        // `roamrun` command is a RoamRun too, so a dead owner's entry could point at
+        // an innocent one — which `down` would then SIGTERM.
         let path = buf.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
-        return path.hasSuffix(".app/Contents/MacOS/RoamRun")
+        return path.hasSuffix(".app/Contents/MacOS/RoamRun") && sameProcess(entry: e.started, live: startTime(of: e.pid))
+    }
+
+    /// This process's start time, written into every entry we own.
+    static let myStart = startTime(of: getpid())
+
+    /// Seconds since the epoch, from the kernel; nil when there's no such process.
+    static func startTime(of pid: Int32) -> Double? {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+        return Double(info.pbi_start_tvsec) + Double(info.pbi_start_tvusec) / 1_000_000
+    }
+
+    /// Is the process holding that PID now the one that wrote the entry? Both times come
+    /// from the kernel, so they match exactly; entries from before 0.1.13 carry none.
+    static func sameProcess(entry: Double?, live: Double?) -> Bool {
+        guard let entry else { return true }
+        guard let live else { return false }
+        return abs(live - entry) < 1
     }
 }

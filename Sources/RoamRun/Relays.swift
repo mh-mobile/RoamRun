@@ -31,7 +31,7 @@ final class Relay: @unchecked Sendable {
     let remoteIP: String
     let remotePort: UInt16
     /// Number of connections that actually reached the iPhone (called off-main).
-    var onOpenCountChange: ((Int) -> Void)?
+    let onOpenCountChange: ((Int) -> Void)?
 
     private var listener: NWListener?
     private var connections: [NWConnection] = []
@@ -50,7 +50,11 @@ final class Relay: @unchecked Sendable {
     /// Connection pairs open across all relays (tests check it returns to zero).
     static var openPairs: Int { totalLock.withLock { total } }
 
-    init(localIP: String, localPort: UInt16, remoteIP: String, remotePort: UInt16) {
+    /// The callback is given here, not assigned afterwards: start() returns with the
+    /// listener already accepting, and the calls that read it run off the main actor.
+    init(localIP: String, localPort: UInt16, remoteIP: String, remotePort: UInt16,
+         onOpenCountChange: ((Int) -> Void)? = nil) {
+        self.onOpenCountChange = onOpenCountChange
         self.localIP = localIP
         self.localPort = localPort
         self.remoteIP = remoteIP
