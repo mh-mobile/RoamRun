@@ -150,7 +150,7 @@ roamrun install <name> <App.ipa|App.app>   # install a build signed for the devi
 roamrun logs <name> <bundle-id>   # relaunch the app and stream its print / os_log output (Ctrl-C to stop)
 # run and logs also take launch options, e.g. to open one screen before a screenshot:
 #   --arg A (one per word, repeatable; may start with "-")   --env NAME=value (repeatable)   --url myapp://settings
-roamrun screenshot <name> [file.png]   # save the device's screen as PNG and print the path (Xcode 27)
+roamrun screenshot <name> [file.png]   # save the device's screen as PNG and print the path (Xcode 26.3+; earlier untested)
 ```
 
 Options: `--json` (`devices`, `status`, `doctor`), `--wait N` (`status`: wait up to N seconds for Ready), `-v` (`up`: show the activity log), `--workspace W` / `--project P` / `--configuration C` (`run`). `roamrun --help` lists everything; a command rejects options it doesn't take (exit 2).

@@ -42,7 +42,7 @@ enum CLI {
         --env NAME=value             set an environment variable for the app (repeatable)
         --url URL                    open URL in the app (its URL scheme or a universal link)
       screenshot <name> [file.png]   Save the device's screen as PNG (default: ./<name>-<time>.png) and
-                                     print its path — to check what an app shows (Xcode 27)
+                                     print its path — to check what an app shows (Xcode 26.3+)
       version                        Print the version (also --version)
       init [--client <name>] [--print] [--uninstall]
                                      Install the agent skill (clients: claude, codex, cursor, gemini, copilot)

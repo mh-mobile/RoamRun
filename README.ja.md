@@ -150,7 +150,7 @@ roamrun install <name> <App.ipa|App.app>   # その端末用に署名された�
 roamrun logs <name> <bundle-id>   # アプリを起動し直し、print / os_log の出力を流す（Ctrl-C で停止）
 # run と logs は起動オプションも取る（例：スクリーンショットの前に特定の画面を開く）:
 #   --arg A（1 語ずつ、複数可。「-」で始まってもよい）  --env NAME=value（複数可）  --url myapp://settings
-roamrun screenshot <name> [file.png]   # 実機の画面を PNG で保存し、パスを表示（Xcode 27）
+roamrun screenshot <name> [file.png]   # 実機の画面を PNG で保存し、パスを表示（Xcode 26.3 以降。それより前は未確認）
 ```
 
 オプション: `--json`（`devices`、`status`、`doctor`）、`--wait N`（`status`: 最大 N 秒 Ready を待つ）、`-v`（`up`: アクティビティログを表示）、`--workspace W` / `--project P` / `--configuration C`（`run`）。一覧は `roamrun --help` で表示されます。コマンドが受け付けないオプションはエラーになります（exit 2）。
