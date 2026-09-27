@@ -72,8 +72,13 @@ bounded.
   uses an unauthenticated distributed notification); it can't start one.
 - The system log gets RoamRun's messages with device identifiers and addresses
   marked private; the in-app activity log shows them in full.
-- **RoamRun makes no network requests of its own** — no telemetry, no analytics,
-  no update check. It only relays bytes between this Mac and your device.
+- **Nothing about you is sent anywhere** — no telemetry, no analytics, no update
+  check; there is no code in RoamRun that talks to a server of ours or anyone
+  else's. It does open connections of its own, all of them to your device and
+  all of them part of bridging it: a TCP probe to see whether it answers, the
+  RemotePairing handshake to confirm the answer really comes from it, and a scan
+  for its RemotePairing port when that has changed. The bridge itself forwards
+  bytes without reading them.
 - Helper processes (`dns-sd`, `log stream`) are tied to RoamRun and typically
   exit within about a second if it quits or is killed, taking the advertisement
   with them.
