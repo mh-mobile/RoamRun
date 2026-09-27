@@ -28,8 +28,6 @@ enum OTA {
         var size: Int64
         /// UDIDs the profile covers; nil for Enterprise, which covers every device.
         var devices: [String]?
-        /// Short commit of the tree it was exported from, when there was one.
-        var commit: String?
 
         /// `1.2.0 (45)`, the way Xcode shows it.
         var label: String { build.isEmpty || build == version ? version : "\(version) (\(build))" }
@@ -69,7 +67,7 @@ enum OTA {
     // MARK: - Reading an archive
 
     /// What the .ipa says about itself, or why it can't be served.
-    static func read(ipa path: String, commit: String?) throws -> Build {
+    static func read(ipa path: String) throws -> Build {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-ota-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: dir) }
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -86,8 +84,7 @@ enum OTA {
                      title: (info["CFBundleDisplayName"] as? String) ?? (info["CFBundleName"] as? String) ?? bundleID,
                      version: (info["CFBundleShortVersionString"] as? String) ?? "0",
                      build: (info["CFBundleVersion"] as? String) ?? "",
-                     added: .now, size: size,
-                     devices: nil, commit: commit)
+                     added: .now, size: size, devices: nil)
     }
 
     /// Only a build iOS will accept over the air, and for this device if the
@@ -161,12 +158,5 @@ enum OTA {
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
         try? url.setResourceValues(values)
-    }
-
-    /// The tree the build was exported from, for telling two builds apart.
-    static func commitOfCurrentDirectory() -> String? {
-        let out = Proc.run("/usr/bin/git", ["rev-parse", "--short", "HEAD"], timeout: 5).out
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return out.isEmpty || out.contains(" ") ? nil : out
     }
 }

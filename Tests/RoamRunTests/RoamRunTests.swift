@@ -1018,7 +1018,7 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
 
 @Test func theManifestPointsAtTheBuildItDescribes() throws {
     let build = OTA.Build(bundleID: "com.example.App", title: "App & Co", version: "1.2.0", build: "45",
-                          added: .now, size: 3_200_000, devices: nil, commit: "abc1234")
+                          added: .now, size: 3_200_000, devices: nil)
     let data = OTA.manifest(for: build, base: "https://mac.tail1234.ts.net/roamrun")
     let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
     let item = (plist?["items"] as? [[String: Any]])?.first
@@ -1030,7 +1030,7 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
 
 @Test func thePageEscapesWhatCameFromTheArchive() {
     let build = OTA.Build(bundleID: "com.example.App", title: "<script>alert(1)</script>", version: "1.0", build: "1",
-                          added: .now, size: 1, devices: nil, commit: nil)
+                          added: .now, size: 1, devices: nil)
     let html = OTA.indexHTML([(bundleID: "com.example.App", builds: [build])], base: "https://x/p")
     #expect(!html.contains("<script>alert"))
     #expect(html.contains("&lt;script&gt;"))

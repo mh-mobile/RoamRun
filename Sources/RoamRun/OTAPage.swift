@@ -89,7 +89,7 @@ extension OTA {
     }
 
     private static func row(_ build: Build, base: String, now: Date, newest: Bool) -> String {
-        let bits = [when(build.added, now: now), size(build.size), build.commit].compactMap { $0 }
+        let bits = [when(build.added, now: now), size(build.size)]
         return """
             <div class="build\(newest ? " newest" : "")">
               <div class="top"><span class="ver">\(escape(build.label))</span>\(newest ? #"<span class="tag">NEWEST</span>"# : "")</div>

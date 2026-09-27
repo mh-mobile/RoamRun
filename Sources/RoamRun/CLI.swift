@@ -405,7 +405,7 @@ enum CLI {
         }
         let udid = profile.udid
         do {
-            var build = try OTA.read(ipa: path, commit: OTA.commitOfCurrentDirectory())
+            var build = try OTA.read(ipa: path)
             build.devices = try OTA.check(CLI.profilePlist(of: path), against: udid, name: profile.displayName)
             try OTA.add(ipa: path, build)
 
