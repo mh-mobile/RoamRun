@@ -192,6 +192,9 @@ private struct StatusCard: View {
 
     private func message(for status: BridgeStatus) -> String {
         let vpn = MeshProvider(rawValue: profile.providerID) == .tailscale ? "Tailscale" : "the VPN"
+        // A bridge run by `roamrun up` detects this in its own process, so the
+        // window's alert never fires for it: the only way here is its detail.
+        if let external, external.detail.contains(LocalNetwork.advice) { return external.detail }
         switch status {
         case .off:
             return "Start the bridge when the device is away from this Mac's Wi‑Fi. While it's on the same network, Xcode reaches it directly."

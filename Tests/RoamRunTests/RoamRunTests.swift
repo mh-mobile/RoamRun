@@ -981,3 +981,16 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(TunnelPortWatcher.message(inJSON: "") == nil)
     #expect(TunnelPortWatcher.message(inJSON: #"{"eventMessage":"Got tunnel endpoint"}"#) == "Got tunnel endpoint")
 }
+
+@Test func tailscaleBeingSignedOutIsThisMacsProblemNotTheDevices() {
+    #expect(TailscaleClient.stateProblem("Running") == nil)
+    #expect(TailscaleClient.stateProblem("NeedsLogin")?.contains("sign in") == true)
+    #expect(TailscaleClient.stateProblem("Stopped")?.contains("connect") == true)
+    #expect(TailscaleClient.stateProblem("Starting") != nil)
+    // Signed out still prints valid JSON with no peers, which used to read as
+    // "running, 0 peers" and sent every later check after the device instead.
+    #expect(TailscaleClient.stateProblem(inStatusJSON: #"{"BackendState":"NeedsLogin","Peer":null}"#) != nil)
+    #expect(TailscaleClient.stateProblem(inStatusJSON: #"{"BackendState":"Running"}"#) == nil)
+    #expect(TailscaleClient.stateProblem(inStatusJSON: "{}") == nil)          // older tailscale: leave it be
+    #expect(TailscaleClient.stateProblem(inStatusJSON: "not json") == nil)
+}
