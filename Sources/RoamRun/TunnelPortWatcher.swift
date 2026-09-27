@@ -50,14 +50,17 @@ final class TunnelPortWatcher: @unchecked Sendable {
     func start() -> String? {
         guard process == nil else { return nil }
         let task = Proc.tied("/usr/bin/log", [
-            "stream", "--style", "compact",
+            "stream", "--style", "ndjson",
             "--predicate",
             Self.fromRemotepairingd + #" AND (eventMessage CONTAINS "Got tunnel endpoint" OR eventMessage CONTAINS "Sending tunnel establish request" OR eventMessage CONTAINS "Resolved bonjour advert")"#
         ])
         let pipe = Pipe(), errPipe = Pipe()
         task.standardOutput = pipe
         task.standardError = errPipe   // e.g. "Must be admin to run 'stream' command"
-        reader = LineReader(pipe) { [weak self] line in self?.handle(line) }
+        reader = LineReader(pipe) { [weak self] line in
+            guard let message = Self.message(inJSON: line) else { return }
+            self?.handle(message)
+        }
         let firstErr = FirstLine()
         errReader = LineReader(errPipe) { firstErr.offer($0) }
         let me = Weak(self)
@@ -112,9 +115,20 @@ final class TunnelPortWatcher: @unchecked Sendable {
     /// `phrase` narrows the query and goes into a log predicate: callers pass fixed text or plain hex.
     static func recentAdverts(last window: String, containing phrase: String = "Resolved bonjour advert",
                               timeout: TimeInterval = 10) -> [(String, String?)] {
-        Proc.run("/usr/bin/log", ["show", "--last", window, "--style", "compact", "--predicate",
+        Proc.run("/usr/bin/log", ["show", "--last", window, "--style", "ndjson", "--predicate",
                                   fromRemotepairingd + " AND eventMessage CONTAINS[c] \"\(phrase)\""], timeout: timeout)
-            .out.split(separator: "\n").compactMap { advert(in: String($0)) }
+            .out.split(separator: "\n").compactMap { message(inJSON: String($0)) }.compactMap { advert(in: $0) }
+    }
+
+    /// One record per line. `--style compact` prints a newline inside a message as
+    /// a real newline, so a Bonjour name from the LAN carrying one could split a
+    /// record and leave a forged fragment on a line that still has a genuine
+    /// header; ndjson escapes it. nil for a line with no message, such as the
+    /// `{"count":…,"finished":1}` that `log show` ends with.
+    static func message(inJSON line: String) -> String? {
+        guard let data = line.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return object["eventMessage"] as? String
     }
 
     /// (instance, UDID — nil when remotepairingd has no pairing for it).

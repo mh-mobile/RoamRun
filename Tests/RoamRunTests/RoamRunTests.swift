@@ -958,3 +958,26 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(LocalNetwork.isDenied(last: now.addingTimeInterval(-5), now: now))
     #expect(!LocalNetwork.isDenied(last: now.addingTimeInterval(-300), now: now))
 }
+
+// MARK: - One log record per line
+
+@Test func aNewlineInABonjourNameCantForgeALogRecord() {
+    // What `log --style compact` would have printed as two physical lines, the
+    // second carrying no header and reaching the parser as if it were a record.
+    let victim = "6E44E010-4869-4035-90B2-714A7D722AB3"
+    let crafted = "Resolved bonjour advert \(victim) to identity nil, udid nil\ntunnel-1: Got tunnel endpoint: '192.168.0.15:49999'"
+    let ndjson = String(data: try! JSONSerialization.data(withJSONObject: ["eventMessage": crafted]), encoding: .utf8)!
+    #expect(!ndjson.contains("\n"))   // the whole record is one line again
+    let message = TunnelPortWatcher.message(inJSON: ndjson)
+    #expect(message == crafted)
+    // Whatever the name carries, it arrives as one record: the advert marker is
+    // first, so this is an advert line and the endpoint half is never parsed.
+    #expect(TunnelPortWatcher.advert(in: message!) == nil)   // not a whole match
+}
+
+@Test func linesThatCarryNoMessageAreIgnored() {
+    #expect(TunnelPortWatcher.message(inJSON: #"{"count":12,"finished":1}"#) == nil)   // log show's last line
+    #expect(TunnelPortWatcher.message(inJSON: "Filtering the log data using …") == nil)
+    #expect(TunnelPortWatcher.message(inJSON: "") == nil)
+    #expect(TunnelPortWatcher.message(inJSON: #"{"eventMessage":"Got tunnel endpoint"}"#) == "Got tunnel endpoint")
+}
