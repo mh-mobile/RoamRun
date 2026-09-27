@@ -145,6 +145,10 @@ final class AppCoordinator: ObservableObject {
             MainActor.assumeIsolated { self?.refreshExternalBridges() }
         }
         refreshExternalBridges()
+        startOTAIfNeeded()
+        Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.startOTAIfNeeded() }   // the CLI may have added the first build
+        }
     }
 
     private func refreshExternalBridges() {
@@ -157,6 +161,55 @@ final class AppCoordinator: ObservableObject {
             launchWarning = LocalNetwork.advice
             logStore.log(LocalNetwork.advice)
         }
+    }
+
+    // MARK: - Over the air
+
+    /// Serves the OTA page while the app runs. Started only when there is
+    /// something to serve, so a user who never uses it never has a listener or a
+    /// `tailscale serve` entry.
+    private var otaServer: OTAServer?
+    static let otaPathKey = "otaPath"
+    var otaPath: String { UserDefaults.standard.string(forKey: Self.otaPathKey) ?? "/roamrun" }
+
+    func startOTAIfNeeded() {
+        guard otaServer == nil, !OTA.builds().isEmpty else { return }
+        let server = OTAServer(prefix: otaPath)
+        guard let port = server.start() else {
+            logStore.log("couldn't start the over-the-air server")
+            return
+        }
+        otaServer = server
+        let path = otaPath
+        Task.detached { [weak self] in
+            let mine = "http://127.0.0.1:\(port)"
+            let taken = TailscaleClient.servedPaths().contains(path)
+            let out = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
+                               ["serve", "--bg", "--set-path", path, mine], timeout: 20)
+            await MainActor.run {
+                guard let self else { return }
+                if out.status == 0 {
+                    self.logStore.log("serving builds over the air at \(path)\(taken ? " (replacing what was there)" : "")")
+                } else {
+                    // Someone else's path, no HTTPS in this tailnet, or no Tailscale.
+                    self.logStore.log("couldn't publish \(path) with `tailscale serve`: \(Self.firstLine(out.err) ?? "failed")")
+                }
+            }
+        }
+    }
+
+    private func stopOTA() {
+        guard let server = otaServer else { return }
+        otaServer = nil
+        server.stop()
+        // Synchronously: this runs from willTerminate, and a detached task would
+        // not outlive the process.
+        _ = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
+                     ["serve", "--set-path", otaPath, "off"], timeout: 10)
+    }
+
+    private static func firstLine(_ s: String) -> String? {
+        s.split(separator: "\n").first.map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
     /// The alert is shown once a run; the activity log and `roamrun status` keep saying it.
@@ -466,6 +519,7 @@ final class AppCoordinator: ObservableObject {
     /// watchers, relays) so nothing is orphaned when the app quits.
     func shutdown() {
         capture.stop()
+        stopOTA()   // the serve entry would otherwise point at a dead port
         for bridge in bridges.values { bridge.stop() }
     }
 

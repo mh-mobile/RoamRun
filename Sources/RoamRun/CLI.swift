@@ -1,3 +1,4 @@
+import CoreImage
 import Foundation
 
 /// `roamrun devices | up <name> | status [name]` — the same bridge as the menu
@@ -6,7 +7,7 @@ import Foundation
 enum CLI {
     /// This process was started as the CLI (vs. the menu bar app).
     nonisolated static var isRunning: Bool { commands.contains(CommandLine.arguments.dropFirst().first ?? "") }
-    nonisolated static let commands: Set<String> = ["devices", "up", "down", "status", "doctor", "run", "install", "logs", "screenshot", "init", "version", "--version", "help", "--help", "-h"]
+    nonisolated static let commands: Set<String> = ["devices", "up", "down", "status", "doctor", "run", "install", "ota", "logs", "screenshot", "init", "version", "--version", "help", "--help", "-h"]
     /// Posted by `roamrun down`; the app stops the bridge whose id is `object`.
     static let stopNotification = Notification.Name(AppID.bundle + ".stopBridge")
     /// What a RoamRun before 0.1.12 listens for, should it still run next to this CLI.
@@ -47,6 +48,10 @@ enum CLI {
         --url URL                    open URL in the app (its URL scheme or a universal link)
       screenshot <name> [file.png]   Save the device's screen as PNG (default: ./<name>-<time>.png) and
                                      print its path — to check what an app shows (Xcode 26.3+)
+      ota <name> <App.ipa>           Keep a build for installing over the air, for when the device can't
+                                     be on Wi-Fi (walking, cellular only) and so can't be bridged. Needs an
+                                     Ad Hoc or Enterprise .ipa, and `tailscale serve` for HTTPS. Prints the
+                                     page's address; open it on the device and tap Install
       version                        Print the version (also --version)
       init [--client <name>] [--print] [--uninstall]
                                      Install the agent skill (clients: claude, codex, cursor, gemini, copilot)
@@ -137,6 +142,11 @@ enum CLI {
                     fail("usage: roamrun install <name> <path to .ipa or .app>. " + names(profiles))
                 }
                 install(p, path: words[words.startIndex + 1])
+            case "ota":
+                guard name != nil, let p = targets.first, words.count >= 2 else {
+                    fail("usage: roamrun ota <name> <path to .ipa>. " + names(profiles))
+                }
+                ota(p, path: words[words.startIndex + 1])
             default: print(usage); exit(0)
             }
         }
@@ -158,6 +168,7 @@ enum CLI {
         "run": (["--scheme=", "--workspace=", "--project=", "--configuration=", "--logs", "--arg=", "--env=", "--url="], 0...1),
         "screenshot": ([], 0...2),
         "install": ([], 0...2),
+        "ota": ([], 0...2),
     ]
 
     struct Parsed: Equatable {
@@ -383,6 +394,72 @@ enum CLI {
         devicectl(["device", "info", "lockState", "--device", udid], by: deadline)?["passcodeRequired"] as? Bool
     }
 
+    /// Keeps a build where the device can fetch it over HTTPS. Nothing is built
+    /// here: exporting an .ipa needs the project's own signing settings, and the
+    /// interesting part is that this path works when the bridge can't.
+    private static func ota(_ profile: DeviceProfile, path: String) -> Never {
+        guard FileManager.default.fileExists(atPath: path) else { stop("\(path) doesn't exist") }
+        // A trailing slash is how a shell completes a directory; .ipa is a file either way.
+        guard path.lowercased().trimmingCharacters(in: ["/"]).hasSuffix(".ipa") else {
+            stop("\(path) isn't an .ipa — over-the-air installs need an archive, not an .app bundle")
+        }
+        let udid = profile.udid
+        do {
+            var build = try OTA.read(ipa: path, commit: OTA.commitOfCurrentDirectory())
+            build.devices = try OTA.check(CLI.profilePlist(of: path), against: udid, name: profile.displayName)
+            try OTA.add(ipa: path, build)
+
+            let host = (try? TailscaleClient.fromSettings().selfDNSName()) ?? nil
+            let prefix = UserDefaults.standard.string(forKey: "otaPath") ?? "/roamrun"
+            print("\(build.title) \(build.label) is ready to install (\(OTA.size(build.size))).")
+            guard let host else {
+                print("  Tailscale couldn't say what this Mac is called, so there's no address to open yet.")
+                exit(1)
+            }
+            let url = "https://\(host)\(prefix)/"
+            if !TailscaleClient.servedPaths().contains(prefix) {
+                print("""
+                  `tailscale serve` isn't carrying \(prefix) yet, so the page isn't reachable.
+                  Open RoamRun — it publishes the page while it runs.
+                """)
+            }
+            print("  Open on the device: \(url)")
+            print(qr(url))
+            exit(0)
+        } catch {
+            stop(error.localizedDescription)
+        }
+    }
+
+    /// The address, for pointing the device's camera at instead of typing it.
+    /// Two rows of pixels per line, so it fits a terminal.
+    static func qr(_ text: String) -> String {
+        guard let filter = CIFilter(name: "CIQRCodeGenerator") else { return "" }
+        filter.setValue(Data(text.utf8), forKey: "inputMessage")
+        filter.setValue("L", forKey: "inputCorrectionLevel")
+        guard let image = filter.outputImage else { return "" }
+        let context = CIContext()
+        guard let cg = context.createCGImage(image, from: image.extent) else { return "" }
+        let w = cg.width, h = cg.height
+        var pixels = [UInt8](repeating: 0, count: w * h)
+        guard let gray = CGContext(data: &pixels, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w,
+                                   space: CGColorSpaceCreateDeviceGray(), bitmapInfo: 0) else { return "" }
+        gray.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        func dark(_ x: Int, _ y: Int) -> Bool { y < 0 || y >= h ? false : pixels[y * w + x] < 128 }
+        let quiet = 2
+        var out = ""
+        for row in stride(from: -quiet * 2, to: h + quiet * 2, by: 2) {
+            out += String(repeating: " ", count: quiet)
+            for x in -quiet..<(w + quiet) {
+                let top = x < 0 || x >= w ? false : dark(x, row)
+                let bottom = x < 0 || x >= w ? false : dark(x, row + 1)
+                out += top && bottom ? "\u{2588}" : top ? "\u{2580}" : bottom ? "\u{2584}" : " "
+            }
+            out += "\n"
+        }
+        return out
+    }
+
     /// A runtime failure (exit 1). `fail` is for usage errors (exit 2).
     private static func stop(_ why: String) -> Never {
         FileHandle.standardError.write(Data("roamrun: \(why)\n".utf8))
@@ -564,6 +641,12 @@ enum CLI {
 
     /// Reads embedded.mobileprovision from an .app or (unzipping) an .ipa.
     static func provisioning(of path: String) -> Provisioning {
+        profilePlist(of: path).map(parseProvisioning) ?? .unknown
+    }
+
+    /// The whole profile: OTA also needs the entitlements, which tell a
+    /// Development build (installs only through the bridge) from an Ad Hoc one.
+    static func profilePlist(of path: String) -> [String: Any]? {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-install-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: dir) }
         var profile = URL(fileURLWithPath: path).appendingPathComponent("embedded.mobileprovision")
@@ -572,14 +655,12 @@ enum CLI {
             _ = Proc.run("/usr/bin/unzip", ["-qo", path, "Payload/*.app/embedded.mobileprovision", "-d", dir.path], timeout: 30)
             let payload = dir.appendingPathComponent("Payload")
             guard let app = try? FileManager.default.contentsOfDirectory(atPath: payload.path).first(where: { $0.hasSuffix(".app") })
-            else { return .unknown }
+            else { return nil }
             profile = payload.appendingPathComponent(app).appendingPathComponent("embedded.mobileprovision")
         }
         let decoded = Proc.run("/usr/bin/security", ["cms", "-D", "-i", profile.path], timeout: 10).out
-        guard let data = decoded.data(using: .utf8),
-              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
-        else { return .unknown }
-        return parseProvisioning(plist)
+        guard let data = decoded.data(using: .utf8) else { return nil }
+        return (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any]
     }
 
     nonisolated static func parseProvisioning(_ plist: [String: Any]) -> Provisioning {

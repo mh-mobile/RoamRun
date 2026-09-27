@@ -82,6 +82,30 @@ struct TailscaleClient {
         return devices
     }
 
+    /// This Mac's MagicDNS name, which is the host OTA links are built on.
+    func selfDNSName() throws -> String? {
+        guard let path = resolvedPath() else { throw TailscaleClientError.cliNotFound }
+        let out = try run(path, ["status", "--json"])
+        if let problem = Self.stateProblem(inStatusJSON: out) { throw TailscaleClientError.commandFailed(problem) }
+        guard let data = out.data(using: .utf8),
+              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let name = (root["Self"] as? [String: Any])?["DNSName"] as? String, !name.isEmpty else { return nil }
+        return name.hasSuffix(".") ? String(name.dropLast()) : name
+    }
+
+    /// The paths `tailscale serve` is proxying, so the CLI can say whether the
+    /// OTA page is actually reachable without asking the app.
+    static func servedPaths() -> [String] {
+        let client = fromSettings()
+        guard let path = client.resolvedPath() else { return [] }
+        let out = Proc.run(path, ["serve", "status"], timeout: 10).out
+        return out.split(separator: "\n").compactMap { line in
+            let t = line.trimmingCharacters(in: .whitespaces)
+            guard t.hasPrefix("|--") else { return nil }
+            return t.dropFirst(3).trimmingCharacters(in: .whitespaces).split(separator: " ").first.map(String.init)
+        }
+    }
+
     /// nil while Tailscale is up; otherwise what to tell the user.
     static func stateProblem(inStatusJSON out: String) -> String? {
         guard let data = out.data(using: .utf8),

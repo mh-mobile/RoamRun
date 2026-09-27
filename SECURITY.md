@@ -50,6 +50,14 @@ bounded.
   refused). Profiles whose UDID was already known when they were added, which is
   the usual case, aren't affected. Check the UDID in `roamrun devices` if it
   matters.
+- **Builds kept for over-the-air installs are readable by your whole tailnet.**
+  `roamrun ota` stores an .ipa under `~/Library/Application Support/RoamRun/ota/`
+  and, while RoamRun runs, publishes a page for it through `tailscale serve` on
+  one path (`/roamrun` by default). Serve is tailnet-only — it is not on the
+  internet — but every member of the tailnet can open that page and install those
+  builds. On a shared tailnet, restrict it with Tailscale Grants / ACLs, or don't
+  use the feature. The path is registered when there is something to serve and
+  given back when RoamRun quits.
 - **`roamrun run` builds the project in the current folder.** Its build scripts
   and package plugins run as you, and like Xcode it may create provisioning
   profiles in your team. Use it (or let an agent use it) on projects you trust.

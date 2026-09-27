@@ -994,3 +994,58 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(TailscaleClient.stateProblem(inStatusJSON: "{}") == nil)          // older tailscale: leave it be
     #expect(TailscaleClient.stateProblem(inStatusJSON: "not json") == nil)
 }
+
+// MARK: - Over-the-air builds
+
+@Test func onlyBuildsIOSWillInstallOverTheAirAreAccepted() throws {
+    func profile(_ entitlements: [String: Any], _ devices: [String]?) -> [String: Any] {
+        var p: [String: Any] = ["Entitlements": entitlements]
+        if let devices { p["ProvisionedDevices"] = devices }
+        return p
+    }
+    let udid = "00008130-000C1C5C307A8D3A"
+    // Enterprise: no device list, installs anywhere.
+    #expect(try OTA.check(["ProvisionsAllDevices": true, "Entitlements": [:]], against: udid, name: "iPhone") == nil)
+    // Ad Hoc for this device.
+    #expect(try OTA.check(profile(["get-task-allow": false], [udid]), against: udid, name: "iPhone") == [udid])
+    // Development names devices too, but iOS won't install it over the air.
+    #expect(throws: OTA.Problem.self) { try OTA.check(profile(["get-task-allow": true], [udid]), against: udid, name: "iPhone") }
+    // Ad Hoc for someone else's device.
+    #expect(throws: OTA.Problem.self) { try OTA.check(profile(["get-task-allow": false], ["OTHER"]), against: udid, name: "iPhone") }
+    // App Store / TestFlight.
+    #expect(throws: OTA.Problem.self) { try OTA.check(["Entitlements": [:]], against: udid, name: "iPhone") }
+}
+
+@Test func theManifestPointsAtTheBuildItDescribes() throws {
+    let build = OTA.Build(bundleID: "com.example.App", title: "App & Co", version: "1.2.0", build: "45",
+                          added: .now, size: 3_200_000, devices: nil, commit: "abc1234")
+    let data = OTA.manifest(for: build, base: "https://mac.tail1234.ts.net/roamrun")
+    let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+    let item = (plist?["items"] as? [[String: Any]])?.first
+    let url = ((item?["assets"] as? [[String: String]])?.first)?["url"]
+    #expect(url == "https://mac.tail1234.ts.net/roamrun/com.example.App/\(build.slug)/app.ipa")
+    #expect((item?["metadata"] as? [String: String])?["bundle-identifier"] == "com.example.App")
+    #expect(OTA.installLink(for: build, base: "https://x/p").hasPrefix("itms-services://?action=download-manifest&url=https://x/p/"))
+}
+
+@Test func thePageEscapesWhatCameFromTheArchive() {
+    let build = OTA.Build(bundleID: "com.example.App", title: "<script>alert(1)</script>", version: "1.0", build: "1",
+                          added: .now, size: 1, devices: nil, commit: nil)
+    let html = OTA.indexHTML([(bundleID: "com.example.App", builds: [build])], base: "https://x/p")
+    #expect(!html.contains("<script>alert"))
+    #expect(html.contains("&lt;script&gt;"))
+    #expect(html.contains("NEWEST"))
+    #expect(OTA.indexHTML([], base: "https://x/p").contains("No builds yet"))
+}
+
+@Test func theServerWontServeAnythingOutsideItsOwnDirectory() {
+    #expect(OTAServer.segments("/") == [])
+    #expect(OTAServer.segments("/com.example.App/1.0-1-x/app.ipa") == ["com.example.App", "1.0-1-x", "app.ipa"])
+    // A climb out has its dots dropped, so the path can no longer name a parent.
+    #expect(OTAServer.segments("/../../etc/passwd") == ["etc", "passwd"])
+    #expect(OTAServer.segments("/a/./b") == ["a", "b"])
+    let (method, path, host) = OTAServer.request("GET /x/y?z=1 HTTP/1.1\r\nHost: mac.ts.net\r\n\r\n")
+    #expect(method == "GET")
+    #expect(path == "/x/y")
+    #expect(host == "mac.ts.net")
+}

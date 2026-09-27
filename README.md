@@ -189,6 +189,41 @@ roamrun init --client claude                  # or only to the ones you name (re
 
 The skill covers getting the device connected (`roamrun up -d` → `status --wait 60 --json` for the UDID), what only a human can do, such as unlocking the iPhone, and screenshots; building and launching are left to the agent's usual tools, with `roamrun run` as a one-command fallback. The CLI supports `--json` and exit codes (0 ready / 1 not ready or failed / 2 usage error); `status` without a device name lists every saved device and exits 0 if any one of them is ready, so name the device when a script needs the answer to be about that one.
 
+## When the device can't be on Wi-Fi: over the air
+
+Out for a walk, with the phone on cellular and no Wi-Fi to join? Then there is
+no bridge — `remotepairingd` only listens while the device is on Wi-Fi. What
+still works is an over-the-air install, because that is the device fetching a
+file over HTTPS, and the mesh VPN carries that on cellular perfectly well.
+
+```sh
+roamrun ota iPhone build/MyApp.ipa
+```
+
+RoamRun keeps the build, and while the app runs it publishes a page through
+`tailscale serve`. Open the address it prints (or point the camera at the QR
+code it draws) on the device and tap Install. The page lists the last 5 builds
+of each app, newest first, so you can also go back a version when the one you
+just installed turns out to be broken.
+
+What you give up: this is **install only**. No debugger, no `roamrun logs`, no
+`roamrun screenshot` — none of that exists without the bridge. Use it to try a
+build, not to work on one.
+
+What it needs:
+
+- An **.ipa signed for Release Testing (Ad Hoc) or Enterprise**. A Development
+  build can only be installed through the bridge, and `roamrun ota` says so
+  rather than letting iOS fail cryptically. Ad Hoc means the device has to be in
+  the provisioning profile; add it once while the device is bridged and Xcode
+  registers it like any local device.
+- **HTTPS in your tailnet** — MagicDNS and HTTPS certificates turned on. RoamRun
+  registers one path (`/roamrun` by default) and gives it back when it quits.
+- RoamRun **running**, since it is the app that serves the page.
+
+**Anyone on your tailnet can open that page and install those builds.** On a
+tailnet you share, restrict it with Tailscale Grants / ACLs.
+
 ## Working from just your iPhone, away from home
 
 Leave the Mac at home and run the whole build-and-try loop from the iPhone in your hand.
@@ -235,7 +270,7 @@ RoamRun writes only to these places (it never touches system settings or other a
 
 | Location | Contents |
 |---|---|
-| `~/Library/Application Support/RoamRun/` | Saved devices (`profiles.json`) and bridge status |
+| `~/Library/Application Support/RoamRun/` | Saved devices (`profiles.json`), bridge status, and `ota/` — the last 5 builds per app kept for over-the-air installs (excluded from Time Machine; delete the folder to reclaim the space) |
 | `~/Library/Logs/RoamRun/` | Logs of `roamrun up -d` |
 | `io.github.mh-mobile.roamrun` (defaults; `com.roamrun.app` before 0.1.12) | Settings and which bridges were running |
 | `/usr/local/bin/roamrun` | Only if you installed the CLI from the app or `make install-cli` (never overwrites an existing file or another tool's link); Homebrew links `/opt/homebrew/bin/roamrun` instead |
