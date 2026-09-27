@@ -213,6 +213,8 @@ roamrun ota iPhone build/MyApp.ipa
 
 必要なもの:
 
+- **有料の Apple Developer アカウント**。無料アカウントでは Ad Hoc も Enterprise も
+  作れず、Development 署名は OTA では入りません
 - **Release Testing (Ad Hoc) か Enterprise 署名の .ipa**。Development 署名はブリッジ
   経由でしか入らないので、`roamrun ota` が先に弾きます。Ad Hoc の場合は端末がプロビジョ
   ニングプロファイルに含まれている必要がありますが、ブリッジが繋がっていれば Xcode が
@@ -223,6 +225,11 @@ roamrun ota iPhone build/MyApp.ipa
 
 **tailnet 上の誰でもこのページを開いてインストールできます。**共有 tailnet では
 Tailscale の Grants / ACL で絞ってください。
+
+端末側で「原因不明の失敗」になる典型が 2 つあるので、RoamRun が先に弾きます:
+**プロビジョニングプロファイルの失効**（有効期限は 1 年で、過ぎたビルドは保管しません）と、
+**Ad Hoc なのにその端末が含まれていない**場合です。Enterprise 署名の場合は、端末側で
+設定 › 一般 › VPN とデバイス管理から開発者を一度信頼する必要があります。
 
 ## 外出先で iPhone だけで使う
 
@@ -270,7 +277,7 @@ RoamRun が書き込むのは次の場所だけです（システム設定や他
 
 | 場所 | 内容 |
 |---|---|
-| `~/Library/Application Support/RoamRun/` | 登録した iPhone（`profiles.json`）とブリッジの状態 |
+| `~/Library/Application Support/RoamRun/` | 登録済みデバイス（`profiles.json`）、ブリッジの状態、および `ota/` — OTA 用にアプリごと直近 5 件のビルドを保管（Time Machine の対象外。容量を戻すにはフォルダごと削除） |
 | `~/Library/Logs/RoamRun/` | `roamrun up -d` のログ |
 | `io.github.mh-mobile.roamrun`（defaults。0.1.12 より前は `com.roamrun.app`） | 設定・前回動いていたブリッジ |
 | `/usr/local/bin/roamrun` | アプリか `make install-cli` で CLI を入れた場合のみ（既存のファイルや他のツールのリンクは上書きしません）。Homebrew は代わりに `/opt/homebrew/bin/roamrun` にリンクします |

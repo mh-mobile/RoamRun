@@ -399,11 +399,14 @@ enum CLI {
     /// Keeps a build where the device can fetch it over HTTPS. Nothing is built
     /// here: exporting an .ipa needs the project's own signing settings, and the
     /// interesting part is that this path works when the bridge can't.
-    private static func ota(_ profile: DeviceProfile, path: String, replacing: Bool) -> Never {
-        guard FileManager.default.fileExists(atPath: path) else { stop("\(path) doesn't exist") }
+    private static func ota(_ profile: DeviceProfile, path given: String, replacing: Bool) -> Never {
+        guard FileManager.default.fileExists(atPath: given) else { stop("\(given) doesn't exist") }
+        // A build script's `latest.ipa -> MyApp-1.2.ipa` would otherwise be stored
+        // as the link itself: a few bytes, and nothing to serve.
+        let path = URL(fileURLWithPath: given).resolvingSymlinksInPath().path
         // A trailing slash is how a shell completes a directory; .ipa is a file either way.
         guard path.lowercased().trimmingCharacters(in: ["/"]).hasSuffix(".ipa") else {
-            stop("\(path) isn't an .ipa — over-the-air installs need an archive, not an .app bundle")
+            stop("\(given) isn't an .ipa — over-the-air installs need an archive, not an .app bundle")
         }
         let udid = profile.udid
         do {
@@ -411,19 +414,19 @@ enum CLI {
             build.devices = try OTA.check(CLI.profilePlist(of: path), against: udid, name: profile.displayName)
             try OTA.add(ipa: path, build, replacing: replacing)
 
-            let host = (try? TailscaleClient.fromSettings().selfDNSName()) ?? nil
-            let prefix = UserDefaults.standard.string(forKey: "otaPath") ?? "/roamrun"
             print("\(build.title) \(build.label) is ready to install (\(OTA.size(build.size))).")
+            let prefix = AppID.settings?.string(forKey: AppCoordinator.otaPathKey) ?? "/roamrun"
+            let host: String?
+            do { host = try TailscaleClient.fromSettings().selfDNSName() } catch {
+                stop("\(error.localizedDescription). The build is stored; run this again once Tailscale can answer.")
+            }
             guard let host else {
-                print("  Tailscale couldn't say what this Mac is called, so there's no address to open yet.")
-                exit(1)
+                stop("Tailscale didn't give this Mac a name — turn MagicDNS on for your tailnet. The build is stored.")
             }
             let url = "https://\(host)\(prefix)/"
-            if !TailscaleClient.servedPaths().contains(prefix) {
-                print("""
-                  `tailscale serve` isn't carrying \(prefix) yet, so the page isn't reachable.
-                  Open RoamRun — it publishes the page while it runs.
-                """)
+            if TailscaleClient.servedPaths()[prefix] == nil {
+                print("  RoamRun publishes the page while it runs; it can take half a minute to appear.")
+                print("  If the address doesn't open, check RoamRun is running and see its activity log.")
             }
             print("  Open on the device: \(url)")
             print(qr(url))
@@ -443,10 +446,10 @@ enum CLI {
         let context = CIContext()
         guard let cg = context.createCGImage(image, from: image.extent) else { return "" }
         let w = cg.width, h = cg.height
-        var pixels = [UInt8](repeating: 0, count: w * h)
-        guard let gray = CGContext(data: &pixels, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w,
+        guard let gray = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w,
                                    space: CGColorSpaceCreateDeviceGray(), bitmapInfo: 0) else { return "" }
         gray.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        guard let pixels = gray.data?.assumingMemoryBound(to: UInt8.self) else { return "" }
         func dark(_ x: Int, _ y: Int) -> Bool { y < 0 || y >= h ? false : pixels[y * w + x] < 128 }
         let quiet = 2
         var out = ""
@@ -1034,7 +1037,32 @@ enum CLI {
                 check(false, "Bridge is off", fix: "roamrun up \(shellName(p.displayName)) -d  (or Start Bridge in the app)")
             }
         }
+        otaSection(section: section, check: check, note: note)
         return finish()
+    }
+
+    /// Only when there is something stored: the address to reopen, what is kept,
+    /// and whether the page is actually being served. Nothing to say otherwise.
+    private static func otaSection(section: (String, String) -> Void,
+                                   check: (Bool, String, String, Bool) -> Void,
+                                   note: (String) -> Void) {
+        let apps = OTA.builds()
+        guard !apps.isEmpty else { return }
+        section("\nOver the air", "ota")
+        let builds = apps.flatMap(\.builds)
+        let bytes = builds.reduce(Int64(0)) { $0 + $1.size }
+        note("\(builds.count) build\(builds.count == 1 ? "" : "s") of \(apps.count) app\(apps.count == 1 ? "" : "s"), " +
+             "\(OTA.size(bytes)) in \(OTA.directory.path)")
+        let prefix = AppID.settings?.string(forKey: AppCoordinator.otaPathKey) ?? "/roamrun"
+        let served = TailscaleClient.servedPaths()[prefix]
+        check(served?.hasPrefix("http://127.0.0.1:") == true, "The install page is published at \(prefix)",
+              served == nil
+                  ? "RoamRun publishes it while it runs — open RoamRun, and check its activity log if it doesn't appear."
+                  : "\(prefix) is serving \(served ?? "") instead. Give RoamRun another path: defaults write \(AppID.bundle) otaPath -string /some/path",
+              true)
+        if let host = (try? TailscaleClient.fromSettings().selfDNSName()) ?? nil {
+            note("Open on the device: https://\(host)\(prefix)/")
+        }
     }
 
     /// A name as it must be typed in a shell: 'iPhone mh', 'it'\''s'.

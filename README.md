@@ -217,6 +217,9 @@ build, not to work on one.
 
 What it needs:
 
+- A **paid Apple Developer account**. Neither Ad Hoc nor Enterprise signing
+  exists on a free one, and iOS installs neither a Development build nor an
+  unsigned one this way.
 - An **.ipa signed for Release Testing (Ad Hoc) or Enterprise**. A Development
   build can only be installed through the bridge, and `roamrun ota` says so
   rather than letting iOS fail cryptically. Ad Hoc means the device has to be in
@@ -228,6 +231,13 @@ What it needs:
 
 **Anyone on your tailnet can open that page and install those builds.** On a
 tailnet you share, restrict it with Tailscale Grants / ACLs.
+
+Two things that end with iOS refusing the install and no clue why, so RoamRun
+checks them first: a **provisioning profile that has expired** (they last a
+year, and `roamrun ota` won't store a build past that date) and an **Ad Hoc
+build that doesn't name this device**. An Enterprise build also needs the
+developer trusted once on the device, under Settings › General › VPN & Device
+Management.
 
 ## Working from just your iPhone, away from home
 
@@ -264,6 +274,9 @@ Main files in `Sources/RoamRun/`:
 | `InterfaceMonitor.swift` | Picks the LAN interface (en0 unless set in Settings) and notices its IP changes (getifaddrs + NWPathMonitor) |
 | `ReachabilityProbe.swift` | TCP reachability and the RemotePairing handshake check |
 | `ProxyBridge.swift` | Orchestrates the above (one instance per device) |
+| `OTA.swift` | Builds kept for over-the-air installs: storage, signing checks, icons |
+| `OTAPage.swift` | The install page and the `itms-services` manifest, made per request |
+| `OTAServer.swift` | Loopback HTTP server `tailscale serve` puts behind HTTPS |
 | `TailscaleClient.swift` | Parses `tailscale status --json` and `tailscale ping` |
 | `AppCoordinator.swift` | Profiles, bridge control, presence checks |
 | `StatusFile.swift` | Bridge status shared by the app and the CLI (who owns which device) |
@@ -280,6 +293,11 @@ RoamRun writes only to these places (it never touches system settings or other a
 | `io.github.mh-mobile.roamrun` (defaults; `com.roamrun.app` before 0.1.12) | Settings and which bridges were running |
 | `/usr/local/bin/roamrun` | Only if you installed the CLI from the app or `make install-cli` (never overwrites an existing file or another tool's link); Homebrew links `/opt/homebrew/bin/roamrun` instead |
 | `~/.claude/skills/roamrun/` etc. | Only if you ran `roamrun init` (never touches other skills or links) |
+
+If you used `roamrun ota`, one more thing lives outside that table: RoamRun asks
+`tailscale serve` to carry a path (`/roamrun`) and gives it back when it quits —
+but not if it is force-quit or crashes. `tailscale serve --set-path /roamrun off`
+clears it.
 
 The helper processes started while bridging (`dns-sd` / `log stream`) typically exit within about a second even if RoamRun is force-quit, and the LAN advertisement goes away with them.
 

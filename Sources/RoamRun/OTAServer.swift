@@ -9,6 +9,9 @@ import Network
 /// is iOS installing a build from the tailnet.
 final class OTAServer: @unchecked Sendable {
     private let lock = NSLock()
+    private var open = 0
+
+    private func closed() { lock.withLock { open = max(0, open - 1) } }
     private let queue = DispatchQueue(label: "roamrun.ota")
     private var _listener: NWListener?
     private var listener: NWListener? {
@@ -58,7 +61,25 @@ final class OTAServer: @unchecked Sendable {
 
     // MARK: - One request
 
+    /// Enough for a phone and a laptop at once; past that something is wrong and
+    /// the menu bar app's descriptors matter more than the extra download.
+    private static let maxConnections = 8
+    private static let idleLimit: TimeInterval = 600
+
     private func serve(_ conn: NWConnection) {
+        guard lock.withLock({ open < Self.maxConnections ? { open += 1; return true }() : false }) else {
+            conn.cancel()
+            return
+        }
+        conn.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .cancelled, .failed: self?.closed()
+            default: break
+            }
+        }
+        // A peer that stops reading would otherwise hold a file handle and a
+        // chunk of an .ipa until the app quits.
+        queue.asyncAfter(deadline: .now() + Self.idleLimit) { conn.cancel() }
         conn.start(queue: queue)
         conn.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, _, _ in
             guard let self, let data, let head = String(data: data, encoding: .utf8) else { conn.cancel(); return }
@@ -136,7 +157,7 @@ final class OTAServer: @unchecked Sendable {
             return send(conn, status: "200 OK", type: "application/octet-stream", length: size)
         }
         let head = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n" +
-            "Content-Length: \(size)\r\nConnection: close\r\n\r\n"
+            "Content-Length: \(size)\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
         conn.send(content: Data(head.utf8), completion: .contentProcessed { [weak self] error in
             guard error == nil else { try? handle.close(); conn.cancel(); return }
             self?.pump(conn, handle)

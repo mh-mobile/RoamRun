@@ -38,6 +38,13 @@ not match the installed CLI until then (`roamrun --help` is authoritative).
   device's hotspot is fine — a second iPhone's Personal Hotspot, a pocket
   router, café Wi-Fi. Cellular alone is not, and neither is the iPhone sharing
   its *own* Personal Hotspot (then it isn't on Wi-Fi itself).
+- If the user really has no Wi-Fi to join, there is no bridge and none of the
+  commands below work. `roamrun ota <name> <App.ipa>` is the one thing that
+  still does: it publishes the build so the user can install it from the device
+  over cellular. It installs only — no debugging, no logs, no screenshots — and
+  it needs an .ipa signed for Release Testing (Ad Hoc) or Enterprise, which
+  needs a paid Apple Developer account. Tell the user what they'll get and let
+  them decide; don't offer it as a substitute for the bridge.
 
 ## 3. Get the device ready
 

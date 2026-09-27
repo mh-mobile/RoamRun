@@ -1018,7 +1018,7 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
 
 @Test func theManifestPointsAtTheBuildItDescribes() throws {
     let build = OTA.Build(bundleID: "com.example.App", title: "App & Co", version: "1.2.0", build: "45",
-                          added: .now, size: 3_200_000, devices: nil)
+                          added: .now, size: 3_200_000, devices: nil, slug: "1.2.0-45-20260928-0730")
     let data = OTA.manifest(for: build, base: "https://mac.tail1234.ts.net/roamrun")
     let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
     let item = (plist?["items"] as? [[String: Any]])?.first
@@ -1084,4 +1084,69 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(build("1.2.0", "").label == "1.2.0")          // no build number to show
     #expect(build("1.2.0", "1.2.0").label == "1.2.0")     // Xcode's default, not worth repeating
     #expect(build("1.2.0", "45").label != build("1.2.0", "46").label)
+}
+
+@Test func aSlugSurvivesBeingPutInAURLAndAFileName() {
+    let when = Date(timeIntervalSince1970: 1_790_000_000)
+    // A version with a space would come back percent-encoded and match nothing.
+    #expect(OTA.Build.slug(version: "1.0 beta", build: "45", at: when).allSatisfy {
+        $0.isLetter || $0.isNumber || $0 == "." || $0 == "-"
+    })
+    #expect(OTA.Build.slug(version: "1.2.0", build: "45", at: when).hasPrefix("1.2.0-45-"))
+    #expect(!OTA.Build.slug(version: "a/b", build: "#", at: when).contains("/"))
+    // UTC, so the name doesn't move when the Mac changes time zone.
+    #expect(OTA.Build.slug(version: "1", build: "1", at: when) == "1-1-20260921-1413")
+}
+
+@Test func aBundleIdThatCouldNameSomewhereElseIsRefused() {
+    #expect(OTA.isPlainName("com.example.App"))
+    #expect(!OTA.isPlainName("../../../../tmp/x"))
+    #expect(!OTA.isPlainName(".hidden"))          // invisible to everything that walks the directory
+    #expect(!OTA.isPlainName("a/b"))
+    #expect(!OTA.isPlainName(""))
+}
+
+@Test func onlyTheDefaultHttpsBlockCountsAsTheOTAPagesAddress() {
+    // The same path can be mounted on another port, and that one isn't the page.
+    let out = """
+    https://mac.tail1.ts.net (tailnet only)
+    |-- /        proxy http://127.0.0.1:8788
+    |-- /roamrun proxy http://127.0.0.1:61816
+
+    https://mac.tail1.ts.net:8790 (tailnet only)
+    |-- /other proxy http://127.0.0.1:8790
+    """
+    let served = TailscaleClient.served(in: out)
+    #expect(served["/roamrun"] == "http://127.0.0.1:61816")
+    #expect(served["/"] == "http://127.0.0.1:8788")
+    #expect(served["/other"] == nil)   // :8790, not the page's address
+}
+
+@Test func anExpiredProfileOrAnUnknownUdidIsRefusedBeforeTheDeviceSeesIt() throws {
+    let udid = "00008130-000C1C5C307A8D3A"
+    let live: [String: Any] = ["ProvisionedDevices": [udid], "Entitlements": ["get-task-allow": false]]
+    #expect(try OTA.check(live, against: udid, name: "iPhone") == [udid])
+    // Expired: iOS would refuse it on the device with nothing to go on.
+    var stale = live
+    stale["ExpirationDate"] = Date(timeIntervalSinceNow: -86_400)
+    #expect(throws: OTA.Problem.self) { try OTA.check(stale, against: udid, name: "iPhone") }
+    // No UDID learned yet: the question can't be answered, so don't pretend it was.
+    #expect(throws: OTA.Problem.self) { try OTA.check(live, against: nil, name: "iPhone") }
+    // Enterprise covers every device, so a missing UDID doesn't matter there.
+    #expect(try OTA.check(["ProvisionsAllDevices": true], against: nil, name: "iPhone") == nil)
+}
+
+@Test func aStoredBuildSurvivesThisStructGainingAField() throws {
+    // What an older RoamRun wrote: no `slug`, no `devices`. Losing someone's
+    // build because the schema moved is not an acceptable upgrade.
+    let older = #"{"bundleID":"com.example.App","title":"App","version":"1.0","build":"7","added":760000000,"size":123}"#
+    let build = try JSONDecoder().decode(OTA.Build.self, from: Data(older.utf8))
+    #expect(build.bundleID == "com.example.App")
+    #expect(build.label == "1.0 (7)")
+    #expect(build.devices == nil)
+    #expect(build.slug.isEmpty)   // the directory it was found in replaces this
+    // And the other way: nothing but the bundle id is actually required.
+    #expect(throws: Never.self) {
+        try JSONDecoder().decode(OTA.Build.self, from: Data(#"{"bundleID":"com.example.App"}"#.utf8))
+    }
 }

@@ -169,12 +169,16 @@ final class AppCoordinator: ObservableObject {
     /// something to serve, so a user who never uses it never has a listener or a
     /// `tailscale serve` entry.
     private var otaServer: OTAServer?
+    /// Whether `tailscale serve` actually carries the page. Separate from having
+    /// a listener: serve fails on its own (no HTTPS in the tailnet, tailscaled
+    /// still coming up), and that must be retried, not treated as done.
+    private var otaPublished = false
     static let otaPathKey = "otaPath"
     var otaPath: String { UserDefaults.standard.string(forKey: Self.otaPathKey) ?? "/roamrun" }
 
     func startOTAIfNeeded() {
-        guard otaServer == nil, !OTA.builds().isEmpty else { return }
-        let server = OTAServer(prefix: otaPath)
+        guard !otaPublished, !OTA.builds().isEmpty else { return }
+        let server = otaServer ?? OTAServer(prefix: otaPath)
         guard let port = server.start() else {
             logStore.log("couldn't start the over-the-air server")
             return
@@ -183,16 +187,28 @@ final class AppCoordinator: ObservableObject {
         let path = otaPath
         Task.detached { [weak self] in
             let mine = "http://127.0.0.1:\(port)"
-            let taken = TailscaleClient.servedPaths().contains(path)
+            let existing = TailscaleClient.servedPaths()[path]
+            // Only ever take over something we recognise as ours. Anything else at
+            // that path is the user's own, and `tailscale serve` has no undo.
+            if let existing, !existing.hasPrefix("http://127.0.0.1:") {
+                await MainActor.run {
+                    self?.logStore.log("\(path) is already serving \(existing) — not taking it over. " +
+                        "Set another path with `defaults write \(AppID.bundle) otaPath -string /some/path`.")
+                }
+                return
+            }
             let out = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
                                ["serve", "--bg", "--set-path", path, mine], timeout: 20)
             await MainActor.run {
                 guard let self else { return }
                 if out.status == 0 {
-                    self.logStore.log("serving builds over the air at \(path)\(taken ? " (replacing what was there)" : "")")
+                    self.otaPublished = true
+                    self.logStore.log("serving builds over the air at \(path)")
                 } else {
-                    // Someone else's path, no HTTPS in this tailnet, or no Tailscale.
-                    self.logStore.log("couldn't publish \(path) with `tailscale serve`: \(Self.firstLine(out.err) ?? "failed")")
+                    // No HTTPS in this tailnet, tailscaled still coming up, or no
+                    // Tailscale at all. The timer tries again, so this recovers.
+                    self.logStore.log("couldn't publish \(path) with `tailscale serve`, will retry: " +
+                        out.err.trimmingCharacters(in: .whitespacesAndNewlines))
                 }
             }
         }
@@ -202,6 +218,10 @@ final class AppCoordinator: ObservableObject {
         guard let server = otaServer else { return }
         otaServer = nil
         server.stop()
+        // Only give back a registration we made. Otherwise quitting would delete
+        // whatever the user had at that path.
+        guard otaPublished else { return }
+        otaPublished = false
         // Synchronously: this runs from willTerminate, and a detached task would
         // not outlive the process.
         _ = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",

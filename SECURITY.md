@@ -57,7 +57,10 @@ bounded.
   internet — but every member of the tailnet can open that page and install those
   builds. On a shared tailnet, restrict it with Tailscale Grants / ACLs, or don't
   use the feature. The path is registered when there is something to serve and
-  given back when RoamRun quits.
+  given back when RoamRun quits — but not if it is force-quit or crashes, so
+  `tailscale serve --set-path /roamrun off` is how you make sure it's gone.
+  RoamRun only ever replaces a path already pointing at a loopback port, so it
+  won't take over something else you serve there.
 - **`roamrun run` builds the project in the current folder.** Its build scripts
   and package plugins run as you, and like Xcode it may create provisioning
   profiles in your team. Use it (or let an agent use it) on projects you trust.

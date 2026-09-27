@@ -39,7 +39,7 @@ extension OTA {
                 </details>
                 """
             let icon = OTA.hasIcon(newest)
-                ? #"<img class="icon" src="\#(escape(app.bundleID))/\#(escape(newest.slug))/icon.png" alt="">"# : ""
+                ? #"<img class="icon" src="\#(escape(base))/\#(escape(app.bundleID))/\#(escape(newest.slug))/icon.png" alt="">"# : ""
             return """
                 <section>
                   <div class="app">\(icon)<div>
@@ -64,13 +64,15 @@ extension OTA {
           :root { --bg: #000; --fg: #f2f2f7; --dim: #98989f; --card: #1c1c1e; --line: #2c2c2e; }
         }
         * { box-sizing: border-box; }
-        body { margin: 0; padding: max(24px, env(safe-area-inset-top)) 16px calc(24px + env(safe-area-inset-bottom));
+        body { margin: 0;
+               padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+                        calc(24px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
                background: var(--bg); color: var(--fg); font: 17px/1.5 -apple-system, BlinkMacSystemFont, sans-serif; }
         header { margin: 0 0 28px; font-size: 15px; color: var(--dim); }
         section { margin: 0 0 36px; }
         .app { display: flex; align-items: center; gap: 14px; margin: 0 0 16px; }
         .icon { width: 60px; height: 60px; border-radius: 13px; flex: none; background: var(--card); }
-        h2 { margin: 0; font-size: 26px; letter-spacing: -0.02em; }
+        h2 { margin: 0; font-size: 26px; letter-spacing: -0.02em; overflow-wrap: anywhere; }
         .bundle { margin: 2px 0 0; font-size: 13px; color: var(--dim); word-break: break-all; }
         .build { background: var(--card); border-radius: 14px; padding: 14px 16px; margin: 0 0 10px; }
         .build .top { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
@@ -89,13 +91,15 @@ extension OTA {
         </head><body>
         <header>RoamRun</header>
         \(body)
-        <footer>Tapping Install adds the app to your Home Screen. Safari shows no progress — watch the icon there.</footer>
+        <footer>Tapping Install adds the app to your Home Screen. Safari shows no progress — watch the icon
+        there, and keep the screen on until it finishes: the VPN pauses when the device sleeps.</footer>
         </body></html>
         """
     }
 
     private static func row(_ build: Build, base: String, now: Date, newest: Bool) -> String {
-        let bits = [when(build.added, now: now), size(build.size)]
+        var bits = [when(build.added, now: now), size(build.size)]
+        if let devices = build.devices { bits.append("\(devices.count) device\(devices.count == 1 ? "" : "s")") }
         return """
             <div class="build\(newest ? " newest" : "")">
               <div class="top"><span class="ver">\(escape(build.label))</span>\(newest ? #"<span class="tag">NEWEST</span>"# : "")</div>
