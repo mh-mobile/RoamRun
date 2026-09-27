@@ -113,7 +113,7 @@ Build the dmg with `make dmg` (pass `SIGN_ID` / `NOTARY_PROFILE` to sign with a 
 
 ### Updating
 
-There's no auto-update. With Homebrew, `brew upgrade --cask roamrun` (it quits RoamRun first). Otherwise quit RoamRun, replace `/Applications/RoamRun.app` with the new version (from source: `git pull` and `make app` first), and open it. Saved devices and the CLI link stay as they are, and bridges that were running start again.
+Release notes: <https://github.com/mh-mobile/RoamRun/releases>. There's no auto-update. With Homebrew, `brew upgrade --cask roamrun` (it quits RoamRun first). Otherwise quit RoamRun, replace `/Applications/RoamRun.app` with the new version (from source: `git pull` and `make app` first), and open it. Saved devices and the CLI link stay as they are, and bridges that were running start again.
 
 ## Usage
 
@@ -142,6 +142,7 @@ The app binary doubles as a CLI (handy over SSH or in scripts). To put `roamrun`
 roamrun devices               # saved devices (name, UDID) and their status
 roamrun up <name>             # start a bridge and show progress until Ready; Ctrl-C stops and cleans up
 roamrun up <name> -d          # start in the background (survives closing the terminal; log in ~/Library/Logs/RoamRun/)
+                              #   waits up to 60s for Ready and exits 1 if it isn't — the bridge keeps trying either way
 roamrun status <name>         # exits 0 when Ready (for waiting in scripts; without a name: when any device is)
 roamrun down <name>           # stop a bridge, whether the app or another terminal's `up` runs it
 roamrun doctor                # check Mac → Tailscale → iPhone step by step and say how to fix
@@ -271,6 +272,12 @@ defaults delete com.roamrun.app 2>/dev/null   # left by versions before 0.1.12
 - When you're not developing, turning off the iPhone's Developer Mode or removing pairings you don't need is safer (Apple's recommendation)
 - Other members of your tailnet can reach the iPhone's RemotePairing port too (they can connect, but pair verification rejects them). On a shared tailnet, use Tailscale Grants / ACLs so only your Mac can reach the iPhone
 - If another Mac is on the same network, this iPhone may briefly show up in that Mac's Xcode as well (the relay refuses its connections, so it can't do anything with it)
+
+## Getting help
+
+Something broken, or the docs unclear? Open an issue:
+<https://github.com/mh-mobile/RoamRun/issues>. Please include `roamrun --version`,
+your macOS / Xcode / iOS versions and the output of `roamrun doctor --json`.
 
 ## Security
 

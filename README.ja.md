@@ -113,7 +113,7 @@ dmg は `make dmg` で作れます（`SIGN_ID` / `NOTARY_PROFILE` を渡すと D
 
 ### アップデート
 
-自動アップデートはありません。Homebrew なら `brew upgrade --cask roamrun`（RoamRun を終了してから置き換えます）。それ以外は RoamRun を終了し、`/Applications/RoamRun.app` を新しいものに置き換えて起動します（ソースからの場合は先に `git pull` と `make app`）。登録済みデバイスと CLI のリンクはそのまま残り、動いていたブリッジも再開します。
+リリースノート: <https://github.com/mh-mobile/RoamRun/releases>。自動アップデートはありません。Homebrew なら `brew upgrade --cask roamrun`（RoamRun を終了してから置き換えます）。それ以外は RoamRun を終了し、`/Applications/RoamRun.app` を新しいものに置き換えて起動します（ソースからの場合は先に `git pull` と `make app`）。登録済みデバイスと CLI のリンクはそのまま残り、動いていたブリッジも再開します。
 
 ## 使い方
 
@@ -142,6 +142,7 @@ Mac の IP が変わるとブリッジは自動再起動します。
 roamrun devices               # 登録済み iPhone（名前・UDID）と状態
 roamrun up <name>             # ブリッジを起動し、Ready まで表示。Ctrl-C で停止・後片付け
 roamrun up <name> -d          # バックグラウンドで起動（ターミナルを閉じても継続。ログは ~/Library/Logs/RoamRun/）
+                              #   最大 60 秒 Ready を待ち、間に合わなければ exit 1（ブリッジはそのまま試し続けます）
 roamrun status <name>         # Ready なら exit 0（スクリプトの待ち合わせ用。名前なしならどれか 1 台が Ready で 0）
 roamrun down <name>           # ブリッジを停止（アプリ側・別ターミナルの up どちらでも）
 roamrun doctor                # Mac → Tailscale → iPhone を順に診断し、直し方を表示
@@ -271,6 +272,12 @@ defaults delete com.roamrun.app 2>/dev/null   # 0.1.12 より前の版が残し�
 - 開発しない期間は、iPhone のデベロッパモードをオフにする、または不要なペアリングを解除すると安全です（Apple の推奨）
 - iPhone の RemotePairing のポートには、tailnet の他のメンバーからも到達できます（接続はできても、ペアリングの確認で弾かれます）。共有の tailnet では、Tailscale の Grants / ACL で iPhone に届く相手を自分の Mac に絞ることをおすすめします
 - 同じネットワークに別の Mac がいると、その Mac の Xcode にもこの iPhone が一瞬表示されることがあります（接続は中継が拒否するため、操作や通信はできません）
+
+## 困ったときは
+
+うまく動かない、説明が分かりにくいときは issue を立ててください:
+<https://github.com/mh-mobile/RoamRun/issues>。`roamrun --version`、macOS / Xcode / iOS の
+バージョン、`roamrun doctor --json` の出力を添えてもらえると早く分かります。
 
 ## セキュリティ
 
