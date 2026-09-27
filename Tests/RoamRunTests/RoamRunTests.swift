@@ -1059,3 +1059,29 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(OTA.biggestIcon(["AppIcon40x40@2x.png", "AppIcon60x60@2x.png"]) == "AppIcon60x60@2x.png")
     #expect(OTA.biggestIcon([]) == nil)
 }
+
+@Test func twoFilesAreTheSameArchiveOnlyIfEveryByteMatches() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-test-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let a = dir.appendingPathComponent("a"), b = dir.appendingPathComponent("b"), c = dir.appendingPathComponent("c")
+    // Bigger than the 1 MB read, so the whole file is really hashed.
+    let payload = Data(repeating: 0x41, count: 3_000_000)
+    try payload.write(to: a)
+    try payload.write(to: b)
+    try (payload + Data([0x42])).write(to: c)
+    #expect(OTA.digest(of: a) == OTA.digest(of: b))
+    #expect(OTA.digest(of: a) != OTA.digest(of: c))
+    #expect(OTA.digest(of: dir.appendingPathComponent("missing")) == nil)
+}
+
+@Test func replacingClearsWhatIsAlreadyUnderThatVersion() {
+    // The label is what a reader sees, so it is what --replace collapses.
+    func build(_ v: String, _ b: String) -> OTA.Build {
+        .init(bundleID: "com.example.App", title: "App", version: v, build: b, added: .now, size: 1, devices: nil)
+    }
+    #expect(build("1.2.0", "45").label == "1.2.0 (45)")
+    #expect(build("1.2.0", "").label == "1.2.0")          // no build number to show
+    #expect(build("1.2.0", "1.2.0").label == "1.2.0")     // Xcode's default, not worth repeating
+    #expect(build("1.2.0", "45").label != build("1.2.0", "46").label)
+}

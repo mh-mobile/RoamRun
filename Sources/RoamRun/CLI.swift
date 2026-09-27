@@ -48,10 +48,12 @@ enum CLI {
         --url URL                    open URL in the app (its URL scheme or a universal link)
       screenshot <name> [file.png]   Save the device's screen as PNG (default: ./<name>-<time>.png) and
                                      print its path — to check what an app shows (Xcode 26.3+)
-      ota <name> <App.ipa>           Keep a build for installing over the air, for when the device can't
+      ota <name> <App.ipa> [--replace]
+                                     Keep a build for installing over the air, for when the device can't
                                      be on Wi-Fi (walking, cellular only) and so can't be bridged. Needs an
                                      Ad Hoc or Enterprise .ipa, and `tailscale serve` for HTTPS. Prints the
                                      page's address; open it on the device and tap Install
+                                     (--replace: drop builds already listed under the same version)
       version                        Print the version (also --version)
       init [--client <name>] [--print] [--uninstall]
                                      Install the agent skill (clients: claude, codex, cursor, gemini, copilot)
@@ -146,7 +148,7 @@ enum CLI {
                 guard name != nil, let p = targets.first, words.count >= 2 else {
                     fail("usage: roamrun ota <name> <path to .ipa>. " + names(profiles))
                 }
-                ota(p, path: words[words.startIndex + 1])
+                ota(p, path: words[words.startIndex + 1], replacing: parsed.flags.contains("--replace"))
             default: print(usage); exit(0)
             }
         }
@@ -168,7 +170,7 @@ enum CLI {
         "run": (["--scheme=", "--workspace=", "--project=", "--configuration=", "--logs", "--arg=", "--env=", "--url="], 0...1),
         "screenshot": ([], 0...2),
         "install": ([], 0...2),
-        "ota": ([], 0...2),
+        "ota": (["--replace"], 0...2),
     ]
 
     struct Parsed: Equatable {
@@ -397,7 +399,7 @@ enum CLI {
     /// Keeps a build where the device can fetch it over HTTPS. Nothing is built
     /// here: exporting an .ipa needs the project's own signing settings, and the
     /// interesting part is that this path works when the bridge can't.
-    private static func ota(_ profile: DeviceProfile, path: String) -> Never {
+    private static func ota(_ profile: DeviceProfile, path: String, replacing: Bool) -> Never {
         guard FileManager.default.fileExists(atPath: path) else { stop("\(path) doesn't exist") }
         // A trailing slash is how a shell completes a directory; .ipa is a file either way.
         guard path.lowercased().trimmingCharacters(in: ["/"]).hasSuffix(".ipa") else {
@@ -407,7 +409,7 @@ enum CLI {
         do {
             var build = try OTA.read(ipa: path)
             build.devices = try OTA.check(CLI.profilePlist(of: path), against: udid, name: profile.displayName)
-            try OTA.add(ipa: path, build)
+            try OTA.add(ipa: path, build, replacing: replacing)
 
             let host = (try? TailscaleClient.fromSettings().selfDNSName()) ?? nil
             let prefix = UserDefaults.standard.string(forKey: "otaPath") ?? "/roamrun"

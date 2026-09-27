@@ -206,6 +206,11 @@ code it draws) on the device and tap Install. The page lists the last 5 builds
 of each app, newest first, so you can also go back a version when the one you
 just installed turns out to be broken.
 
+Rebuilds usually keep the same version number, so builds stack up under it and
+the time tells them apart; handing over the very same .ipa twice doesn't add a
+second row. Pass `--replace` when a build supersedes what is already listed
+under its version and you'd rather keep one row per version.
+
 What you give up: this is **install only**. No debugger, no `roamrun logs`, no
 `roamrun screenshot` — none of that exists without the bridge. Use it to try a
 build, not to work on one.

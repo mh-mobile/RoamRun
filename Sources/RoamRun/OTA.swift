@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
@@ -151,7 +152,15 @@ enum OTA {
     // MARK: - Storing
 
     @discardableResult
-    static func add(ipa path: String, _ build: Build) throws -> URL {
+    static func add(ipa path: String, _ build: Build, replacing: Bool = false) throws -> URL {
+        // The same archive handed over twice: two rows the eye can't tell apart,
+        // and one fewer slot for a build that is actually different. A rebuild
+        // that kept its version number is not the same archive and still stacks,
+        // unless the caller says it is a redo of the one already there.
+        // Dropping first: otherwise handing back the identical archive already
+        // stored would return before --replace got a chance to clear the rest.
+        if replacing { drop(build.bundleID, labelled: build.label) }
+        if let same = sameArchive(as: path, bundleID: build.bundleID) { return same }
         let dir = directory.appendingPathComponent(build.bundleID, isDirectory: true)
             .appendingPathComponent(build.slug, isDirectory: true)
         do {
@@ -172,6 +181,34 @@ enum OTA {
     static func hasIcon(_ build: Build) -> Bool {
         FileManager.default.fileExists(atPath: directory.appendingPathComponent(build.bundleID)
             .appendingPathComponent(build.slug).appendingPathComponent("icon.png").path)
+    }
+
+    /// Everything already stored under the same `1.2.0 (45)`.
+    private static func drop(_ bundleID: String, labelled label: String) {
+        let app = directory.appendingPathComponent(bundleID, isDirectory: true)
+        for old in builds(of: bundleID) where old.label == label {
+            try? FileManager.default.removeItem(at: app.appendingPathComponent(old.slug))
+        }
+    }
+
+    /// Where an identical .ipa already sits, if it does.
+    private static func sameArchive(as path: String, bundleID: String) -> URL? {
+        guard let incoming = digest(of: URL(fileURLWithPath: path)) else { return nil }
+        let app = directory.appendingPathComponent(bundleID, isDirectory: true)
+        for build in builds(of: bundleID) {
+            let dir = app.appendingPathComponent(build.slug)
+            if digest(of: dir.appendingPathComponent("app.ipa")) == incoming { return dir }
+        }
+        return nil
+    }
+
+    /// Read in pieces: an .ipa can be hundreds of megabytes.
+    static func digest(of url: URL) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while let chunk = try? handle.read(upToCount: 1 << 20), !chunk.isEmpty { hasher.update(data: chunk) }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     /// Newest first, per app.
