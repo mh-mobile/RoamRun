@@ -140,7 +140,7 @@ enum OTA {
 
     /// nil when the archive made that name a link to somewhere else on this Mac.
     /// `install` guards its own extraction the same way.
-    private static func inside(_ url: URL, _ root: URL) -> URL? {
+    static func inside(_ url: URL, _ root: URL) -> URL? {
         url.resolvingSymlinksInPath().path.hasPrefix(root.resolvingSymlinksInPath().path + "/") ? url : nil
     }
 
@@ -227,8 +227,10 @@ enum OTA {
             if replacing { drop(build.bundleID, labelled: build.label, keeping: same.lastPathComponent) }
             return same
         }
+        guard !build.slug.isEmpty else { throw Problem.unreadable(path) }
         let app = directory.appendingPathComponent(build.bundleID, isDirectory: true)
         let dir = app.appendingPathComponent(build.slug, isDirectory: true)
+        sweepStaging(app)   // a previous add that was killed mid-copy
         // Built somewhere else first: a copy that runs out of disk halfway must
         // not leave a half-written build in the list, and with --replace it must
         // not have taken the working one away before it got there.
@@ -239,9 +241,11 @@ enum OTA {
             try FileManager.default.copyItem(at: URL(fileURLWithPath: path), to: staging.appendingPathComponent("app.ipa"))
             try JSONEncoder().encode(build).write(to: staging.appendingPathComponent("meta.json"), options: .atomic)
             if let png = icon(ipa: path) { try? png.write(to: staging.appendingPathComponent("icon.png"), options: .atomic) }
-            if replacing { drop(build.bundleID, labelled: build.label) }
             try? FileManager.default.removeItem(at: dir)
             try FileManager.default.moveItem(at: staging, to: dir)
+            // Only now: until the new build is in place, the old one is what the
+            // user has, and taking it away first would leave nothing installable.
+            if replacing { drop(build.bundleID, labelled: build.label, keeping: build.slug) }
         } catch {
             try? FileManager.default.removeItem(at: staging)
             throw Problem.failed("couldn't store the build in \(dir.path): \(error.localizedDescription)")
@@ -260,6 +264,18 @@ enum OTA {
         let app = directory.appendingPathComponent(bundleID, isDirectory: true)
         for old in builds(of: bundleID) where old.label == label && old.slug != keeping {
             try? FileManager.default.removeItem(at: app.appendingPathComponent(old.slug))
+        }
+    }
+
+    /// `.adding-*` is hidden from `builds(of:)` so a running add is safe from it,
+    /// which also means nothing ever reaps one left by a kill. An hour is longer
+    /// than any copy.
+    private static func sweepStaging(_ app: URL) {
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: app.path)) ?? []
+        where name.hasPrefix(".adding-") {
+            let url = app.appendingPathComponent(name)
+            let made = (try? url.resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? .distantPast
+            if made < Date.now.addingTimeInterval(-3600) { try? FileManager.default.removeItem(at: url) }
         }
     }
 
@@ -295,17 +311,36 @@ enum OTA {
         }
     }
 
+    /// Names of the directories removed for having no metadata at all, so the
+    /// difference between "unreadable" and "not there" can be checked.
+    @discardableResult
+    static func sweep(_ app: URL) -> [String] {
+        var gone: [String] = []
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: app.path)) ?? [] where !name.hasPrefix(".") {
+            let meta = app.appendingPathComponent(name).appendingPathComponent("meta.json")
+            guard !FileManager.default.fileExists(atPath: meta.path) else { continue }
+            try? FileManager.default.removeItem(at: app.appendingPathComponent(name))
+            gone.append(name)
+        }
+        return gone.sorted()
+    }
+
     static func builds(of bundleID: String) -> [Build] {
         let app = directory.appendingPathComponent(bundleID, isDirectory: true)
         let slugs = (try? FileManager.default.contentsOfDirectory(atPath: app.path)) ?? []
         return slugs.compactMap { slug -> Build? in
             guard !slug.hasPrefix(".") else { return nil }
             let dir = app.appendingPathComponent(slug)
-            guard let data = try? Data(contentsOf: dir.appendingPathComponent("meta.json")) else {
-                // An add that died before writing its metadata: nothing can show
-                // it and nothing would ever remove it. One that merely fails to
-                // decode is left alone — a later version may understand it.
-                try? FileManager.default.removeItem(at: dir)
+            let meta = dir.appendingPathComponent("meta.json")
+            guard let data = try? Data(contentsOf: meta) else {
+                // Only when it truly isn't there: an add that died before writing
+                // it, which nothing can show and nothing would ever remove. A read
+                // that failed for another reason (out of descriptors, say) must not
+                // cost someone their build, and one that fails to decode may be
+                // readable by a later version.
+                if !FileManager.default.fileExists(atPath: meta.path) {
+                    try? FileManager.default.removeItem(at: dir)
+                }
                 return nil
             }
             guard var build = try? JSONDecoder().decode(Build.self, from: data) else { return nil }

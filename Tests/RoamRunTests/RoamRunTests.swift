@@ -1150,3 +1150,21 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
         try JSONDecoder().decode(OTA.Build.self, from: Data(#"{"bundleID":"com.example.App"}"#.utf8))
     }
 }
+
+@Test func metadataThatCantBeReadIsNotTheSameAsMetadataThatIsntThere() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-test-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let app = dir.appendingPathComponent("com.example.App")
+    let kept = app.appendingPathComponent("1.0-1-20260101-0000")
+    try FileManager.default.createDirectory(at: kept, withIntermediateDirectories: true)
+    // Present but not decodable: a later version may understand it, so it stays.
+    try Data("{".utf8).write(to: kept.appendingPathComponent("meta.json"))
+    // Absent: an add that died before writing it, and nothing else would ever
+    // remove the .ipa beside it.
+    let gone = app.appendingPathComponent("1.0-2-20260101-0000")
+    try FileManager.default.createDirectory(at: gone, withIntermediateDirectories: true)
+    try Data("ipa".utf8).write(to: gone.appendingPathComponent("app.ipa"))
+
+    #expect(OTA.sweep(app) == [gone.lastPathComponent])
+    #expect(FileManager.default.fileExists(atPath: kept.path))
+}

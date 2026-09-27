@@ -408,7 +408,7 @@ enum CLI {
         guard path.lowercased().trimmingCharacters(in: ["/"]).hasSuffix(".ipa") else {
             stop("\(given) isn't an .ipa — over-the-air installs need an archive, not an .app bundle")
         }
-        let udid = profile.udid
+        let udid = StatusFile.read()[profile.id]?.udid ?? profile.udid
         do {
             var build = try OTA.read(ipa: path)
             build.devices = try OTA.check(CLI.profilePlist(of: path), against: udid, name: profile.displayName)
@@ -661,7 +661,9 @@ enum CLI {
             let payload = dir.appendingPathComponent("Payload")
             guard let app = try? FileManager.default.contentsOfDirectory(atPath: payload.path).first(where: { $0.hasSuffix(".app") })
             else { return nil }
-            profile = payload.appendingPathComponent(app).appendingPathComponent("embedded.mobileprovision")
+            guard let real = OTA.inside(payload.appendingPathComponent(app)
+                .appendingPathComponent("embedded.mobileprovision"), dir) else { return nil }
+            profile = real
         }
         let decoded = Proc.run("/usr/bin/security", ["cms", "-D", "-i", profile.path], timeout: 10).out
         guard let data = decoded.data(using: .utf8) else { return nil }
@@ -1055,7 +1057,8 @@ enum CLI {
              "\(OTA.size(bytes)) in \(OTA.directory.path)")
         let prefix = AppID.settings?.string(forKey: AppCoordinator.otaPathKey) ?? "/roamrun"
         let served = TailscaleClient.servedPaths()[prefix]
-        check(served?.hasPrefix("http://127.0.0.1:") == true, "The install page is published at \(prefix)",
+        let live = served?.hasPrefix("http://127.0.0.1:") == true
+        check(live, live ? "The install page is published at \(prefix)" : "The install page isn't published at \(prefix)",
               served == nil
                   ? "RoamRun publishes it while it runs — open RoamRun, and check its activity log if it doesn't appear."
                   : "\(prefix) is serving \(served ?? "") instead. Give RoamRun another path: defaults write \(AppID.bundle) otaPath -string /some/path",

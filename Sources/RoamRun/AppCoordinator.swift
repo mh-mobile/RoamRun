@@ -169,15 +169,24 @@ final class AppCoordinator: ObservableObject {
     /// something to serve, so a user who never uses it never has a listener or a
     /// `tailscale serve` entry.
     private var otaServer: OTAServer?
-    /// Whether `tailscale serve` actually carries the page. Separate from having
-    /// a listener: serve fails on its own (no HTTPS in the tailnet, tailscaled
-    /// still coming up), and that must be retried, not treated as done.
-    private var otaPublished = false
+    /// The path `tailscale serve` was actually given, and whether nothing was
+    /// there before. Separate from having a listener: serve fails on its own (no
+    /// HTTPS in the tailnet, tailscaled still coming up) and must be retried; and
+    /// on quit only a registration we made, at the path we made it at, may go.
+    private var otaPublished: (path: String, wasFree: Bool)?
+    /// Said once per reason: the retry runs every 30s and the log is a person's.
+    private var otaComplaint = ""
     static let otaPathKey = "otaPath"
     var otaPath: String { UserDefaults.standard.string(forKey: Self.otaPathKey) ?? "/roamrun" }
 
     func startOTAIfNeeded() {
-        guard !otaPublished, !OTA.builds().isEmpty else { return }
+        guard otaPublished == nil, !OTA.builds().isEmpty else { return }
+        // The path can change between attempts, and the server puts it into every
+        // link it writes, so a stale one would send the device somewhere else.
+        if let running = otaServer, running.prefix != otaPath {
+            running.stop()
+            otaServer = nil
+        }
         let server = otaServer ?? OTAServer(prefix: otaPath)
         guard let port = server.start() else {
             logStore.log("couldn't start the over-the-air server")
@@ -192,7 +201,7 @@ final class AppCoordinator: ObservableObject {
             // that path is the user's own, and `tailscale serve` has no undo.
             if let existing, !existing.hasPrefix("http://127.0.0.1:") {
                 await MainActor.run {
-                    self?.logStore.log("\(path) is already serving \(existing) — not taking it over. " +
+                    self?.complainOnce("\(path) is already serving \(existing) — not taking it over. " +
                         "Set another path with `defaults write \(AppID.bundle) otaPath -string /some/path`.")
                 }
                 return
@@ -202,30 +211,39 @@ final class AppCoordinator: ObservableObject {
             await MainActor.run {
                 guard let self else { return }
                 if out.status == 0 {
-                    self.otaPublished = true
+                    self.otaPublished = (path, existing == nil)
+                    self.otaComplaint = ""
                     self.logStore.log("serving builds over the air at \(path)")
                 } else {
                     // No HTTPS in this tailnet, tailscaled still coming up, or no
                     // Tailscale at all. The timer tries again, so this recovers.
-                    self.logStore.log("couldn't publish \(path) with `tailscale serve`, will retry: " +
+                    self.complainOnce("couldn't publish \(path) with `tailscale serve`, will retry: " +
                         out.err.trimmingCharacters(in: .whitespacesAndNewlines))
                 }
             }
         }
     }
 
+    private func complainOnce(_ line: String) {
+        guard line != otaComplaint else { return }
+        otaComplaint = line
+        logStore.log(line)
+    }
+
     private func stopOTA() {
         guard let server = otaServer else { return }
         otaServer = nil
         server.stop()
-        // Only give back a registration we made. Otherwise quitting would delete
-        // whatever the user had at that path.
-        guard otaPublished else { return }
-        otaPublished = false
+        // Only a registration we made, at the path we made it at, and only when
+        // nothing of the user's was there: "points at loopback" is how we recover
+        // from our own crash, not proof that it was ours.
+        guard let published = otaPublished else { return }
+        otaPublished = nil
+        guard published.wasFree else { return }
         // Synchronously: this runs from willTerminate, and a detached task would
         // not outlive the process.
         _ = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
-                     ["serve", "--set-path", otaPath, "off"], timeout: 10)
+                     ["serve", "--set-path", published.path, "off"], timeout: 10)
     }
 
     private static func firstLine(_ s: String) -> String? {

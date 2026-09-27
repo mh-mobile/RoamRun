@@ -1,6 +1,29 @@
 import Foundation
 import Network
 
+/// Cancels after a stretch with nothing sent, rearmed by every chunk that gets
+/// through, so a slow download isn't mistaken for a stalled one.
+private final class IdleTimer: @unchecked Sendable {
+    private let lock = NSLock()
+    private let queue: DispatchQueue
+    private let fire: () -> Void
+    private var pending: DispatchWorkItem?
+
+    init(queue: DispatchQueue, fire: @escaping () -> Void) {
+        self.queue = queue
+        self.fire = fire
+    }
+
+    func arm(_ seconds: TimeInterval) {
+        let work = DispatchWorkItem { [fire] in fire() }
+        lock.withLock {
+            pending?.cancel()
+            pending = work
+        }
+        queue.asyncAfter(deadline: .now() + seconds, execute: work)
+    }
+}
+
 /// Serves the OTA page, the manifests and the .ipa files on loopback, for
 /// `tailscale serve` to put behind HTTPS. Tailscale can serve a directory
 /// itself, but only as root; proxying to a port needs no privilege.
@@ -21,7 +44,7 @@ final class OTAServer: @unchecked Sendable {
     /// What the device sees in front of us, e.g. `/roamrun`. Requests arrive
     /// without it (tailscale strips the mount), but the manifest has to hand iOS
     /// an absolute URL, so it goes back on.
-    private let prefix: String
+    let prefix: String
     private var _port: UInt16 = 0
     private(set) var port: UInt16 {
         get { lock.withLock { _port } }
@@ -64,29 +87,35 @@ final class OTAServer: @unchecked Sendable {
     /// Enough for a phone and a laptop at once; past that something is wrong and
     /// the menu bar app's descriptors matter more than the extra download.
     private static let maxConnections = 8
-    private static let idleLimit: TimeInterval = 600
+    private static let idleLimit: TimeInterval = 120
 
     private func serve(_ conn: NWConnection) {
-        guard lock.withLock({ open < Self.maxConnections ? { open += 1; return true }() : false }) else {
-            conn.cancel()
-            return
+        let accepted = lock.withLock { () -> Bool in
+            guard open < Self.maxConnections else { return false }
+            open += 1
+            return true
         }
+        guard accepted else { conn.cancel(); return }
         conn.stateUpdateHandler = { [weak self] state in
             switch state {
-            case .cancelled, .failed: self?.closed()
+            case .failed: conn.cancel()         // always ends at .cancelled, so `closed` runs once
+            case .cancelled: self?.closed()
             default: break
             }
         }
         // A peer that stops reading would otherwise hold a file handle and a
-        // chunk of an .ipa until the app quits.
-        queue.asyncAfter(deadline: .now() + Self.idleLimit) { conn.cancel() }
+        // chunk of an .ipa until the app quits. Time without progress, not time
+        // altogether: this exists for slow cellular, where a big .ipa legitimately
+        // takes a long while.
+        let idle = IdleTimer(queue: queue) { conn.cancel() }
+        idle.arm(Self.idleLimit)
         conn.start(queue: queue)
         conn.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, _, _ in
             guard let self, let data, let head = String(data: data, encoding: .utf8) else { conn.cancel(); return }
             let (method, path, host) = Self.request(head)
             guard method == "GET" || method == "HEAD" else { return self.send(conn, status: "405 Method Not Allowed") }
             let base = "https://\(host)\(self.prefix)"
-            self.route(conn, path: path, base: base, bodyWanted: method == "GET")
+            self.route(conn, path: path, base: base, bodyWanted: method == "GET", idle: idle)
         }
     }
 
@@ -102,7 +131,7 @@ final class OTAServer: @unchecked Sendable {
         return (parts.first.map(String.init) ?? "", path, host)
     }
 
-    private func route(_ conn: NWConnection, path: String, base: String, bodyWanted: Bool) {
+    private func route(_ conn: NWConnection, path: String, base: String, bodyWanted: Bool, idle: IdleTimer) {
         let parts = Self.segments(path)
         switch parts.count {
         case 0:
@@ -123,7 +152,7 @@ final class OTAServer: @unchecked Sendable {
                 send(conn, status: "200 OK", type: "application/xml", body: bodyWanted ? data : nil, length: Int64(data.count))
             } else {
                 sendIPA(conn, at: OTA.directory.appendingPathComponent(parts[0]).appendingPathComponent(parts[1])
-                    .appendingPathComponent("app.ipa"), bodyWanted: bodyWanted)
+                    .appendingPathComponent("app.ipa"), bodyWanted: bodyWanted, idle: idle)
             }
         default:
             send(conn, status: "404 Not Found")
@@ -149,7 +178,7 @@ final class OTAServer: @unchecked Sendable {
 
     /// Sent in pieces: an .ipa can be hundreds of megabytes and this runs inside
     /// the menu bar app.
-    private func sendIPA(_ conn: NWConnection, at url: URL, bodyWanted: Bool) {
+    private func sendIPA(_ conn: NWConnection, at url: URL, bodyWanted: Bool, idle: IdleTimer) {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return send(conn, status: "404 Not Found") }
         let size = ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int64) ?? 0
         guard bodyWanted else {
@@ -160,11 +189,12 @@ final class OTAServer: @unchecked Sendable {
             "Content-Length: \(size)\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
         conn.send(content: Data(head.utf8), completion: .contentProcessed { [weak self] error in
             guard error == nil else { try? handle.close(); conn.cancel(); return }
-            self?.pump(conn, handle)
+            self?.pump(conn, handle, idle)
         })
     }
 
-    private func pump(_ conn: NWConnection, _ handle: FileHandle) {
+    private func pump(_ conn: NWConnection, _ handle: FileHandle, _ idle: IdleTimer) {
+        idle.arm(Self.idleLimit)   // it is moving, so it isn't idle
         let chunk = (try? handle.read(upToCount: 256 * 1024)) ?? Data()
         guard !chunk.isEmpty else {
             try? handle.close()
@@ -173,7 +203,7 @@ final class OTAServer: @unchecked Sendable {
         }
         conn.send(content: chunk, completion: .contentProcessed { [weak self] error in
             guard error == nil else { try? handle.close(); conn.cancel(); return }
-            self?.pump(conn, handle)
+            self?.pump(conn, handle, idle)
         })
     }
 }
