@@ -449,6 +449,17 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
+    /// Swaps a running bridge's profile by rebuilding it: `ProxyBridge` holds the
+    /// profile by value, so otherwise the new endpoint only takes effect at the
+    /// next launch — and the bridge spends a retry finding it out for itself.
+    private func replaceBridge(with profile: DeviceProfile) {
+        guard let old = bridges[profile.id], old.profile != profile else { return }
+        let wasOn = old.state != .off
+        old.stop()
+        let bridge = install(ProxyBridge(profile: profile))
+        if wasOn { bridge.requestStart() }
+    }
+
     // MARK: - Internals
 
     /// Terminate all helper children (zone dump, proxy registrations, log
@@ -512,7 +523,11 @@ final class AppCoordinator: ObservableObject {
         guard Snapshot.fakeProfiles == nil else { return }   // screenshot mode's fake devices never reach disk
         if let saved = store.save(base: savedProfiles, wanted: profiles) {
             savedProfiles = saved
-            if saved != profiles { profiles = saved }   // `roamrun up` had saved a newer endpoint
+            if saved != profiles {   // `roamrun up` had saved a newer endpoint
+                let stale = zip(profiles, saved).filter { $0 != $1 }.map(\.1)
+                profiles = saved
+                for p in stale { replaceBridge(with: p) }   // it holds its profile by value
+            }
             return
         }
         logStore.log("couldn't save the device list to \(ProfileStore.directory.path)")

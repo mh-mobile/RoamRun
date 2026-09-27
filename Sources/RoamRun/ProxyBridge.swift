@@ -321,7 +321,9 @@ final class ProxyBridge: ObservableObject {
                     tunnelReady = true
                 } catch {
                     coveredPorts.remove(p)
-                    log("failed to open relay for tunnel port \(p): \(error.localizedDescription)")
+                    // Every bridge listens on the same address, so the usual cause is
+                    // another device's bridge whose lookahead window covers this port.
+                    log("failed to open relay for tunnel port \(p) — another device's bridge may already hold it: \(error.localizedDescription)")
                 }
             }
             guard gen == generation else { return }   // restarted meanwhile: these ports aren't the new bridge's

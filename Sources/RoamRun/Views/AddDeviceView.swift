@@ -20,6 +20,10 @@ struct AddDeviceView: View {
     @State private var showUnresponsive = false
     @State private var added = false
     @State private var advertsKnown = false
+    /// The list stays empty for a few seconds while this Mac's own log and
+    /// devicectl are read, so the hints below would blame the device for a wait
+    /// the app is causing.
+    @State private var showHints = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -72,6 +76,10 @@ struct AddDeviceView: View {
         .onDisappear { coordinator.capture.stop() }
         .task { await probeLoop() }
         .task {
+            try? await Task.sleep(for: .seconds(8))
+            showHints = true
+        }
+        .task {
             while !Task.isCancelled {
                 await coordinator.learnAdvertTypes()
                 advertsKnown = true
@@ -117,15 +125,18 @@ struct AddDeviceView: View {
                     ProgressView().controlSize(.small)
                     Text("Looking for devices on this network…").foregroundStyle(.secondary)
                 }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Not showing up? Check that:").font(.callout.weight(.medium))
-                    Text("• The device is unlocked and on the same Wi‑Fi as this Mac (or on USB)")
-                    Text("• Developer Mode is on (Settings › Privacy & Security)")
-                    Text("• It has been paired with this Mac (USB, or Xcode 27 Device Hub › Pair Nearby Device)")
+                if showHints {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Not showing up? Check that:").font(.callout.weight(.medium))
+                        Text("• The device is unlocked and on the same Wi‑Fi as this Mac (or on USB)")
+                        Text("• Developer Mode is on (Settings › Privacy & Security)")
+                        Text("• It has been paired with this Mac (USB, or Xcode 27 Device Hub › Pair Nearby Device)")
+                        Text("• RoamRun is allowed in System Settings › Privacy & Security › Local Network — without it this Mac can't see the device at all")
+                    }
+                    .fixedSize(horizontal: false, vertical: true)   // wrap instead of truncating
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
                 }
-                .fixedSize(horizontal: false, vertical: true)   // wrap instead of truncating
-                .font(.callout)
-                .foregroundStyle(.secondary)
             }
         } else {
             // A busy network (an office Wi‑Fi) can show dozens: scroll rather than grow off screen.
