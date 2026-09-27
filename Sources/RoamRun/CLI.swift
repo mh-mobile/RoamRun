@@ -20,7 +20,8 @@ enum CLI {
     Cursor, Gemini CLI and Copilot (`roamrun init --print` to read it now).
 
       devices [--json]               List saved devices (with UDID) and their bridge status
-      up <name> [-v] [-d]            Bridge a device until Ctrl-C (-v: activity log, -d: run in the background)
+      up <name> [-v] [-d]            Bridge a device until Ctrl-C (-v: activity log; -d: run in the background —
+                                     waits up to 60s for Ready and exits 1 if it isn't, but keeps trying)
       down <name>                    Stop a bridge, whether the app or another `roamrun up` runs it
       status [name] [--wait N] [--json]
                                      Bridge status, UDID and lock state; exits 0 only if Xcode can use
