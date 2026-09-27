@@ -38,10 +38,14 @@ extension OTA {
                 \(older.map { row($0, base: base, now: now, newest: false) }.joined(separator: "\n"))
                 </details>
                 """
+            let icon = OTA.hasIcon(newest)
+                ? #"<img class="icon" src="\#(escape(app.bundleID))/\#(escape(newest.slug))/icon.png" alt="">"# : ""
             return """
                 <section>
-                  <h2>\(escape(newest.title))</h2>
-                  <p class="bundle">\(escape(app.bundleID))</p>
+                  <div class="app">\(icon)<div>
+                    <h2>\(escape(newest.title))</h2>
+                    <p class="bundle">\(escape(app.bundleID))</p>
+                  </div></div>
                   \(row(newest, base: base, now: now, newest: true))
                   \(olderHTML)
                 </section>
@@ -64,8 +68,10 @@ extension OTA {
                background: var(--bg); color: var(--fg); font: 17px/1.5 -apple-system, BlinkMacSystemFont, sans-serif; }
         header { margin: 0 0 28px; font-size: 15px; color: var(--dim); }
         section { margin: 0 0 36px; }
+        .app { display: flex; align-items: center; gap: 14px; margin: 0 0 16px; }
+        .icon { width: 60px; height: 60px; border-radius: 13px; flex: none; background: var(--card); }
         h2 { margin: 0; font-size: 26px; letter-spacing: -0.02em; }
-        .bundle { margin: 2px 0 16px; font-size: 13px; color: var(--dim); word-break: break-all; }
+        .bundle { margin: 2px 0 0; font-size: 13px; color: var(--dim); word-break: break-all; }
         .build { background: var(--card); border-radius: 14px; padding: 14px 16px; margin: 0 0 10px; }
         .build .top { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
         .ver { font-size: 19px; font-weight: 600; }

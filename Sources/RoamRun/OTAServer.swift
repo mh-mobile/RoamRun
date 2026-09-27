@@ -88,6 +88,11 @@ final class OTAServer: @unchecked Sendable {
             let html = OTA.indexHTML(OTA.builds(), base: base)
             send(conn, status: "200 OK", type: "text/html; charset=utf-8", body: bodyWanted ? Data(html.utf8) : nil,
                  length: Int64(Data(html.utf8).count))
+        case 3 where parts[2] == "icon.png":
+            let url = OTA.directory.appendingPathComponent(parts[0]).appendingPathComponent(parts[1])
+                .appendingPathComponent("icon.png")
+            guard let png = try? Data(contentsOf: url) else { return send(conn, status: "404 Not Found") }
+            send(conn, status: "200 OK", type: "image/png", body: bodyWanted ? png : nil, length: Int64(png.count))
         case 3 where parts[2] == "manifest.plist" || parts[2] == "app.ipa":
             guard let build = OTA.builds(of: parts[0]).first(where: { $0.slug == parts[1] }) else {
                 return send(conn, status: "404 Not Found")

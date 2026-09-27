@@ -1,4 +1,6 @@
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 
 /// Builds kept for installing over the air, when the device can't be on Wi-Fi
 /// and so can't be bridged. iOS fetches a manifest over HTTPS and installs from
@@ -105,6 +107,47 @@ enum OTA {
         }
     }
 
+    // MARK: - Icon
+
+    /// The app's icon, re-encoded as a PNG a browser will draw. Xcode rewrites
+    /// icons into Apple's CgBI variant, which only Apple's decoders understand —
+    /// CoreGraphics reads it here and writes an ordinary PNG back out.
+    /// nil when the archive has no icon; the page just shows the name then.
+    static func icon(ipa path: String) -> Data? {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-icon-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        _ = Proc.run("/usr/bin/unzip", ["-qo", path, "Payload/*.app/AppIcon*.png", "-d", dir.path], timeout: 60)
+        let payload = dir.appendingPathComponent("Payload")
+        guard let app = (try? FileManager.default.contentsOfDirectory(atPath: payload.path))?.first(where: { $0.hasSuffix(".app") })
+        else { return nil }
+        let appDir = payload.appendingPathComponent(app)
+        let icons = (try? FileManager.default.contentsOfDirectory(atPath: appDir.path))?.filter { $0.hasPrefix("AppIcon") } ?? []
+        guard let best = biggestIcon(icons) else { return nil }
+        return repack(appDir.appendingPathComponent(best))
+    }
+
+    /// iPhone icons before iPad ones, then the highest scale: the page is read on
+    /// a phone, and a larger source only ever looks better scaled down.
+    static func biggestIcon(_ names: [String]) -> String? {
+        func score(_ n: String) -> (Int, Int) {
+            let scale = n.contains("@3x") ? 3 : n.contains("@2x") ? 2 : 1
+            let size = Int(n.drop(while: { !$0.isNumber }).prefix(while: { $0.isNumber })) ?? 0
+            return (n.contains("~ipad") ? 0 : 1, size * scale)
+        }
+        return names.sorted { score($0) > score($1) }.first
+    }
+
+    private static func repack(_ url: URL) -> Data? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+        let out = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(out, "public.png" as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(dest, image, nil)
+        guard CGImageDestinationFinalize(dest) else { return nil }
+        return out as Data
+    }
+
     // MARK: - Storing
 
     @discardableResult
@@ -118,11 +161,17 @@ enum OTA {
             try? FileManager.default.removeItem(at: ipa)
             try FileManager.default.copyItem(at: URL(fileURLWithPath: path), to: ipa)
             try JSONEncoder().encode(build).write(to: dir.appendingPathComponent("meta.json"), options: .atomic)
+            if let png = icon(ipa: path) { try? png.write(to: dir.appendingPathComponent("icon.png"), options: .atomic) }
         } catch {
             throw Problem.failed("couldn't store the build in \(dir.path): \(error.localizedDescription)")
         }
         prune(build.bundleID)
         return dir
+    }
+
+    static func hasIcon(_ build: Build) -> Bool {
+        FileManager.default.fileExists(atPath: directory.appendingPathComponent(build.bundleID)
+            .appendingPathComponent(build.slug).appendingPathComponent("icon.png").path)
     }
 
     /// Newest first, per app.

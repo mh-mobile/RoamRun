@@ -1049,3 +1049,13 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(path == "/x/y")
     #expect(host == "mac.ts.net")
 }
+
+@Test func theBiggestIconIsPickedAndTheIpadOneOnlyIfItIsAllThereIs() {
+    // The page is read on a phone, so an iPad icon is the last resort.
+    #expect(OTA.biggestIcon(["AppIcon60x60@2x.png", "AppIcon76x76@2x~ipad.png"]) == "AppIcon60x60@2x.png")
+    #expect(OTA.biggestIcon(["AppIcon76x76@2x~ipad.png"]) == "AppIcon76x76@2x~ipad.png")
+    // Higher scale wins at the same size, and a bigger source scales down well.
+    #expect(OTA.biggestIcon(["AppIcon60x60@2x.png", "AppIcon60x60@3x.png"]) == "AppIcon60x60@3x.png")
+    #expect(OTA.biggestIcon(["AppIcon40x40@2x.png", "AppIcon60x60@2x.png"]) == "AppIcon60x60@2x.png")
+    #expect(OTA.biggestIcon([]) == nil)
+}
