@@ -643,6 +643,97 @@ import Network
 
 /// Echoes everything back (or, `silent`, accepts and never answers). Keeps its
 /// connections, so a test can close them all at a moment of its choosing.
+/// One request over a real socket, because `readHead`, the connection count and
+/// `stop()` are the parts of OTAServer that only exist at runtime — and they are
+/// the parts that were rewritten with nothing exercising them.
+/// Sends `request` raw, reads until the server closes, returns what came back.
+private func ask(_ port: UInt16, _ request: String, hold: TimeInterval = 0) async -> String? {
+    let conn = NWConnection(host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+    defer { conn.cancel() }
+    conn.start(queue: .global())
+    if hold > 0 { try? await Task.sleep(for: .seconds(hold)) }
+    if !request.isEmpty {
+        conn.send(content: Data(request.utf8), completion: .contentProcessed { _ in })
+    }
+    var got = Data()
+    while got.count < 1 << 20 {
+        let (chunk, done): (Data?, Bool) = await withCheckedContinuation { c in
+            conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { d, _, isDone, err in
+                c.resume(returning: (d, isDone || err != nil))
+            }
+        }
+        if let chunk { got.append(chunk) }
+        if done { break }
+    }
+    return got.isEmpty ? nil : String(decoding: got, as: UTF8.self)
+}
+
+@Suite(.serialized) struct OTAServerOverASocket {
+    private func started() throws -> (OTAServer, UInt16) {
+        let server = OTAServer(tailnetPort: 41443)
+        let port = try #require(server.start())
+        return (server, port)
+    }
+
+    @Test func itAnswersOnlyTheMethodsAndRequestsItServes() async throws {
+        let (server, port) = try started()
+        defer { server.stop() }
+        // A path it doesn't serve: nothing here touches stored builds.
+        #expect(await ask(port, "GET /nope HTTP/1.1\r\nHost: m:41443\r\n\r\n")?.hasPrefix("HTTP/1.1 404") == true)
+        #expect(await ask(port, "POST / HTTP/1.1\r\nHost: m:41443\r\n\r\n")?.hasPrefix("HTTP/1.1 405") == true)
+        // Without a Host every link in the manifest would point the device at itself.
+        #expect(await ask(port, "GET /nope HTTP/1.1\r\n\r\n")?.hasPrefix("HTTP/1.1 400") == true)
+        #expect(await ask(port, "GET /nope HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n")?
+            .hasPrefix("HTTP/1.1 400") == true)
+        // A head that never ends.
+        let huge = "GET /nope HTTP/1.1\r\nHost: m\r\nX: " + String(repeating: "y", count: 40_000) + "\r\n"
+        #expect(await ask(port, huge)?.hasPrefix("HTTP/1.1 431") == true)
+        // Still answering afterwards: none of those wedged it.
+        #expect(await ask(port, "HEAD /nope HTTP/1.1\r\nHost: m:41443\r\n\r\n")?
+            .hasPrefix("HTTP/1.1 404") == true)
+    }
+
+    @Test func aPeerThatSaysNothingLetsGoOfItsSlot() async throws {
+        let (server, port) = try started()
+        defer { server.stop() }
+        // Eight is every connection there is, and a peer that connects and stays
+        // quiet produces no callback to check a deadline in — which is why the
+        // deadline is on the idle timer rather than inside the read loop.
+        let silent = (0..<8).map { _ in
+            Task { _ = await ask(port, "", hold: 30) }
+        }
+        try await Task.sleep(for: .seconds(1))
+        // The ninth is refused outright rather than queued behind them.
+        #expect(await ask(port, "GET /nope HTTP/1.1\r\nHost: m\r\n\r\n") == nil)
+        // And they are let go of well inside the idle limit, not held for 120 s.
+        try await Task.sleep(for: .seconds(16))
+        #expect(await ask(port, "GET /nope HTTP/1.1\r\nHost: m\r\n\r\n")?.hasPrefix("HTTP/1.1 404") == true)
+        for t in silent { t.cancel() }
+    }
+
+    @Test func stoppingTakesTheConnectionsWithIt() async throws {
+        let (server, port) = try started()
+        // Connected and waiting to be told something — and reading, so it can see
+        // the close when it comes.
+        let quiet = Task { await ask(port, "") }
+        try await Task.sleep(for: .seconds(1))
+        // Cancelling the listener only stops new ones; a connection in flight used
+        // to sit there until the idle timer, because the pump holds the server
+        // weakly and the chain simply stops when the server goes.
+        server.stop()
+        let closed = await withTaskGroup(of: Bool.self) { group in
+            group.addTask { _ = await quiet.value; return true }
+            // Well inside the 15 s the head deadline would take, so a pass here is
+            // `stop` having done it rather than the timer.
+            group.addTask { try? await Task.sleep(for: .seconds(5)); return false }
+            defer { group.cancelAll() }
+            return await group.next() ?? false
+        }
+        #expect(closed)
+        #expect(server.port == 0)
+    }
+}
+
 private final class EchoServer: @unchecked Sendable {
     let listener: NWListener
     private let lock = NSLock()
