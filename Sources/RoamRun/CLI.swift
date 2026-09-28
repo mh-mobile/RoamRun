@@ -421,17 +421,22 @@ enum CLI {
         let devices = profiles.map { OTA.Device(name: $0.displayName, udid: running[$0.id]?.udid ?? $0.udid) }
         do {
             var build = try OTA.read(ipa: path)
-            let (expires, covers) = try OTA.check(CLI.profilePlist(of: path), against: devices)
-            build.expires = expires
+            let checked = try OTA.check(CLI.profilePlist(of: path), against: devices)
+            build.expires = checked.expires
             try OTA.add(ipa: path, build, replacing: replacing)
 
             print("Stored \(build.title) \(build.label) (\(OTA.size(build.size))).")
             // Which devices, not whether: an Ad Hoc profile covers the ones it
             // names, and the page offers the build to all of them at once.
-            if covers.isEmpty {
+            if checked.covers.isEmpty {
                 print("  Enterprise signing — it installs on any device.")
             } else {
-                print("  Installs on: \(covers.joined(separator: ", ")).")
+                print("  Installs on: \(checked.covers.joined(separator: ", ")).")
+                // Said out loud, or the line above reads as "and on no others".
+                if !checked.unchecked.isEmpty {
+                    print("  Can't tell for \(checked.unchecked.joined(separator: ", ")) — " +
+                          "bridge one once and RoamRun learns its UDID.")
+                }
             }
             let tailnetPort = AppCoordinator.otaPort
             let host: String?
@@ -444,16 +449,24 @@ enum CLI {
             let url = "https://\(host):\(tailnetPort)/"
             let state = TailscaleClient.serving(port: tailnetPort)
             let here = state.root(on: host)
-            if case .mounted = state, !(state.untouched(by: host).isEmpty && AppCoordinator.isOurs(here ?? "")) {
-                let what = state.described
-                // Which of the two it is decides what the user should do about it.
-                let advice = AppCoordinator.abandoned(state.untouched(by: host).isEmpty ? here : nil)
-                    ? "  Nothing is behind it, so a run was killed before it gave the port back:\n" +
-                      "    tailscale serve --https=\(tailnetPort) --set-path=/ off"
-                    : "  Give RoamRun another port:\n" +
-                      "    defaults write \(AppID.bundle) otaPort -int 41444"
-                stop("the build is stored, but port \(tailnetPort) is serving \(what), which isn't\n" +
-                     "  RoamRun's, so that address won't reach it.\n" + advice)
+            let beside = state.alongside(host)
+            if case .mounted = state, !(beside.isEmpty && AppCoordinator.isOurs(here ?? "")) {
+                // Same three situations the app distinguishes, same three answers.
+                let why: String
+                if !beside.isEmpty {
+                    why = "port \(tailnetPort) also carries \(beside.joined(separator: ", ")), and RoamRun keeps\n" +
+                          "  a port to itself. Give it another one:\n" +
+                          "    defaults write \(AppID.bundle) otaPort -int 41444"
+                } else if AppCoordinator.abandoned(here) {
+                    why = "port \(tailnetPort) is serving \(state.described) with nothing behind it, so a run\n" +
+                          "  was killed before it gave the port back:\n" +
+                          "    tailscale serve --https=\(tailnetPort) --set-path=/ off"
+                } else {
+                    why = "port \(tailnetPort) is serving \(state.described), which isn't RoamRun's, so that\n" +
+                          "  address won't reach it. Give RoamRun another port:\n" +
+                          "    defaults write \(AppID.bundle) otaPort -int 41444"
+                }
+                stop("the build is stored, but \(why)")
             }
             if !TailscaleClient.servingLive(port: tailnetPort, host: host) {
                 print("  RoamRun publishes the page while it runs, so it has to be open; it can take")

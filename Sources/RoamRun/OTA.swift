@@ -191,10 +191,12 @@ enum OTA {
     }
 
     /// Only a build iOS will accept over the air, and only if one of `devices`
-    /// can take it. Returns when the signing expires, and which of them it covers
-    /// — empty means every device there is (Enterprise).
+    /// can take it. Returns when the signing expires, which of them it covers —
+    /// empty means every device there is (Enterprise) — and the ones the question
+    /// couldn't be asked about, so a "covers" list isn't read as "and no others".
     static func check(_ plist: [String: Any]?, against devices: [Device],
-                      path: String = "That build") throws -> (expires: Date?, covers: [String]) {
+                      path: String = "That build") throws
+        -> (expires: Date?, covers: [String], unchecked: [String]) {
         guard let plist else {
             throw Problem.unreadable("the provisioning profile in \(path) — the archive may be unsigned. " +
                                      "Export it for Release Testing (Ad Hoc) or Enterprise.")
@@ -204,7 +206,7 @@ enum OTA {
         let entitlements = plist["Entitlements"] as? [String: Any]
         switch CLI.parseProvisioning(plist) {
         case .appStore: throw Problem.appStore(path)
-        case .allDevices: return (expiry, [])   // Enterprise covers every device
+        case .allDevices: return (expiry, [], [])   // Enterprise covers every device
         case .unknown: throw Problem.unreadable("the provisioning profile in \(path)")
         case .devices(let list):
             // Development and Ad Hoc both name devices; only the debuggable one is
@@ -218,7 +220,7 @@ enum OTA {
                 list.contains { $0.caseInsensitiveCompare(d.udid) == .orderedSame }
             }.map(\.name)
             guard !covers.isEmpty else { throw Problem.notForDevice(path: path, names: known.map(\.name)) }
-            return (expiry, covers)
+            return (expiry, covers, devices.filter { $0.udid == nil }.map(\.name))
         }
     }
 

@@ -102,8 +102,8 @@ struct TailscaleClient {
         case nothing
         /// Every `/` proxy on that port, each with the host key it sits under —
         /// a tailnet rename leaves the old name behind, so there can be more than
-        /// one — and the other mount paths.
-        case mounted(roots: [Root], others: [String])
+        /// one — and the other mounts.
+        case mounted(roots: [Root], others: [Mount])
 
         /// A root and the name it is registered under. The name is half the
         /// identity: `tailscale serve --https=P …` and `… off` both act on
@@ -121,11 +121,25 @@ struct TailscaleClient {
             return roots.first { $0.host == host }?.target
         }
 
-        /// What is on that port that they would leave alone: other mounts, and
-        /// roots under names the node used to have.
-        func untouched(by host: String) -> [String] {
-            guard case .mounted(let roots, let others) = self else { return [] }
-            return others + roots.filter { $0.host != host }.map { "\($0.host)/" }
+        /// A mount that isn't a root. `host` is nil for one that isn't tied to a
+        /// name at all — a TCP forward belongs to the port itself, and `tailscale`
+        /// refuses to serve web on a port carrying one whatever it is called.
+        struct Mount: Equatable {
+            let host: String?
+            let path: String
+        }
+
+        /// What else is on that port under this name, and so would sit beside the
+        /// page. RoamRun keeps a port to itself, so anything here means it stays
+        /// away — not because sharing would break something, but because a port of
+        /// its own is the whole reason it doesn't use your `:443`.
+        ///
+        /// What sits under a name the node used to have is not here and not
+        /// anyone's problem: `serve` can't reach it and the name no longer
+        /// resolves, so it is inert config, not a port in use.
+        func alongside(_ host: String) -> [String] {
+            guard case .mounted(_, let others) = self else { return [] }
+            return others.filter { $0.host == nil || $0.host == host }.map(\.path)
         }
 
         /// For the one sentence every caller has to write about a port it can't have.
@@ -134,7 +148,7 @@ struct TailscaleClient {
             case .unknown: return "something RoamRun couldn't read"
             case .nothing: return "nothing"
             case .mounted(let roots, let others):
-                let all = roots.map { $0.target.isEmpty ? "\($0.host)/" : $0.target } + others
+                let all = roots.map { $0.target.isEmpty ? "\($0.host)/" : $0.target } + others.map(\.path)
                 return all.count > 3 ? "\(all.count) mounts" : all.joined(separator: ", ")
             }
         }
@@ -162,14 +176,14 @@ struct TailscaleClient {
         if parsed is NSNull { return .nothing }
         guard let root = parsed as? [String: Any] else { return .unknown }
         var roots: [Serving.Root] = []
-        var others: [String] = []
+        var others: [Serving.Mount] = []
         // Not only `Web`: `tailscale serve --tcp=P` puts a forward in `TCP` with no
         // Web entry at all, and a port carrying one is not an empty port. Reading
         // a section we don't look at as "nothing here" is the same mistake one
         // layer down.
         if let tcp = (root["TCP"] as? [String: Any])?["\(port)"] as? [String: Any],
            tcp["TCPForward"] != nil || tcp["TLSTerminatedTCP"] != nil {
-            others.append("TCP forwarding")   // no Web entry of its own
+            others.append(.init(host: nil, path: "TCP forwarding"))   // no Web entry of its own
         }
         // Every host key for that port, not the first the dictionary happens to
         // yield: a tailnet rename leaves the old name behind.
@@ -178,14 +192,15 @@ struct TailscaleClient {
             guard let handlers = (value as? [String: Any])?["Handlers"] as? [String: Any] else { continue }
             // Every host's root, not the first one found: the second would
             // otherwise be invisible, and invisible is what gets overwritten.
+            let host = String(hostPort.dropLast(":\(port)".count))
             if let here = handlers["/"] as? [String: Any] {
-                roots.append(.init(host: String(hostPort.dropLast(":\(port)".count)),
-                                   target: (here["Proxy"] as? String) ?? ""))
+                roots.append(.init(host: host, target: (here["Proxy"] as? String) ?? ""))
             }
-            others += handlers.keys.filter { $0 != "/" }
+            others += handlers.keys.filter { $0 != "/" }.map { .init(host: host, path: $0) }
         }
         guard !roots.isEmpty || !others.isEmpty else { return .nothing }
-        return .mounted(roots: roots.sorted { $0.host < $1.host }, others: others.sorted())
+        return .mounted(roots: roots.sorted { $0.host < $1.host },
+                        others: others.sorted { $0.path < $1.path })
     }
 
     /// Whether RoamRun's own entry is there *and* something is listening behind

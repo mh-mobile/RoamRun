@@ -1033,7 +1033,10 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(throws: OTA.Problem.self) { try OTA.check(other, against: devices) }
     // A device whose UDID isn't known yet can't answer either way, and shouldn't
     // stop a build that another device can take.
-    #expect(try OTA.check(adHoc, against: [devices[0], devices[2]]).covers == ["iPhone"])
+    let partial = try OTA.check(adHoc, against: [devices[0], devices[2]])
+    #expect(partial.covers == ["iPhone"])
+    // And said so: "Installs on: iPhone" alone would read as "and on no others".
+    #expect(partial.unchecked == ["Vision Pro"])
     #expect(throws: OTA.Problem.self) { try OTA.check(adHoc, against: [devices[2]]) }
     // Enterprise needs no device at all — not even a saved one.
     #expect(try OTA.check(["ProvisionsAllDevices": true], against: []).covers == [])
@@ -1160,7 +1163,7 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     // The user's own port comes back with its other mounts named, so RoamRun can
     // tell "free" from "carrying something I must not remove".
     #expect(TailscaleClient.serving(port: 443, inJSON: json).root(on: me) == "http://127.0.0.1:8788")
-    #expect(TailscaleClient.serving(port: 443, inJSON: json).untouched(by: me) == ["/roamrun"])
+    #expect(TailscaleClient.serving(port: 443, inJSON: json).alongside(me) == ["/roamrun"])
     #expect(TailscaleClient.serving(port: 9999, inJSON: json) == .nothing)
     // Not "nothing": a status we couldn't read is the moment RoamRun would
     // otherwise decide the port is free and overwrite an entry of the user's.
@@ -1169,11 +1172,14 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(TailscaleClient.serving(port: 41443, inJSON: "null") == .nothing)   // no serve config at all
     // A port with only a sub-path of the user's on it is not an empty port.
     #expect(TailscaleClient.serving(port: 41443, inJSON: #"{"Web":{"m:41443":{"Handlers":{"/mine":{}}}}}"#)
-            == .mounted(roots: [], others: ["/mine"]))
+            == .mounted(roots: [], others: [.init(host: "m", path: "/mine")]))
     // Nor is one carrying a TCP forward, which has no Web entry at all: reading a
     // section we don't look at as "nothing here" is the same mistake one layer down.
-    #expect(TailscaleClient.serving(port: 41443, inJSON: #"{"TCP":{"41443":{"TCPForward":"localhost:22"}}}"#)
-            == .mounted(roots: [], others: ["TCP forwarding"]))
+    let forwarded = TailscaleClient.serving(port: 41443, inJSON: #"{"TCP":{"41443":{"TCPForward":"localhost:22"}}}"#)
+    #expect(forwarded == .mounted(roots: [], others: [.init(host: nil, path: "TCP forwarding")]))
+    // It belongs to the port, not to a name, so it is in the way whatever the
+    // node is called — `tailscale` refuses to serve web on such a port at all.
+    #expect(forwarded.alongside("any") == ["TCP forwarding"])
     // `{"HTTPS": true}` is what a plain https serve puts beside its Web entry.
     #expect(TailscaleClient.serving(port: 41443, inJSON: #"{"TCP":{"41443":{"HTTPS":true}}}"#) == .nothing)
 }
@@ -1192,14 +1198,13 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     // Ours is visible, but `off` would take the other one: that is not "ours is
     // still there", and answering yes is how the user's service gets deleted.
     #expect(state.root(on: "new") == "http://127.0.0.1:9999")
-    #expect(state.untouched(by: "new") == ["old/"])
-    // And from the old name's side, the new one is the untouchable leftover.
     #expect(state.root(on: "old") == "http://127.0.0.1:61816")
-    #expect(state.untouched(by: "old") == ["new/"])
-    // A name with nothing under it: free as far as these commands go, but the
-    // other host's root still counts as something not to disturb.
-    #expect(state.root(on: "third") == nil)
-    #expect(state.untouched(by: "third").count == 2)
+    // What sits under the old name blocks nothing: `serve` can't reach it and the
+    // name no longer resolves, so it is inert config rather than a port in use.
+    // Refusing to publish because of it would end the feature at a rename.
+    #expect(state.alongside("new").isEmpty)
+    #expect(state.alongside("old").isEmpty)
+    #expect(state.root(on: "third") == nil)   // a name with nothing of its own
 }
 
 @Test func aPortThatCantWorkIsIgnoredRatherThanRetriedForEver() {

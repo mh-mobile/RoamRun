@@ -343,21 +343,26 @@ final class AppCoordinator: ObservableObject {
                 break
             case .mounted:
                 let here = state.root(on: host)
-                guard state.untouched(by: host).isEmpty,
-                      here.map({ $0 == mine || Self.isOurs($0) }) ?? true else {
-                    // Still not taken over — but which of the two it is decides what
-                    // the user should do, and the settings that named our own
-                    // registrations are the first thing a reinstall deletes.
-                    let advice = Self.abandoned(state.untouched(by: host).isEmpty ? here : nil)
-                        ? "nothing is behind it, so it is left over from a run that was killed: " +
-                          "`tailscale serve --https=\(tailnetPort) --set-path=/ off` clears it and " +
-                          "RoamRun publishes again within half a minute"
-                        : "not taking it over. Give RoamRun another port: " +
-                          "defaults write \(AppID.bundle) otaPort -int 41444"
-                    let what = state.described
-                    await MainActor.run {
-                        self?.complainOnce("port \(tailnetPort) is already serving \(what), which isn't RoamRun's — " + advice)
+                let beside = state.alongside(host)
+                guard beside.isEmpty, here.map({ $0 == mine || Self.isOurs($0) }) ?? true else {
+                    // Three different situations, and the user's next move differs
+                    // in each: a port they use for something else, one carrying a
+                    // registration of ours that outlived its run, or one where the
+                    // settings naming our registrations were deleted with the app.
+                    let why: String
+                    if !beside.isEmpty {
+                        why = "port \(tailnetPort) also carries \(beside.joined(separator: ", ")), and RoamRun keeps " +
+                              "a port to itself. Give it another one: defaults write \(AppID.bundle) otaPort -int 41444"
+                    } else if Self.abandoned(here) {
+                        why = "port \(tailnetPort) is serving \(state.described) with nothing behind it, so it is " +
+                              "left over from a run that was killed: `tailscale serve --https=\(tailnetPort) " +
+                              "--set-path=/ off` clears it and RoamRun publishes again within half a minute"
+                    } else {
+                        why = "port \(tailnetPort) is serving \(state.described), which isn't RoamRun's — not " +
+                              "taking it over. Give RoamRun another port: " +
+                              "defaults write \(AppID.bundle) otaPort -int 41444"
                     }
+                    await MainActor.run { self?.complainOnce(why) }
                     return
                 }
             }
