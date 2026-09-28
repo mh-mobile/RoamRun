@@ -1,6 +1,6 @@
 ---
 name: roamrun
-description: Reach a physical iPhone, iPad or Apple Vision Pro that is on another network than this Mac (the user is away, the Mac is at home) over Tailscale with RoamRun, so Xcode, xcodebuild, devicectl and lldb can use it as if it were local. Use when the device isn't visible to Xcode/devicectl because it's elsewhere, when the user mentions RoamRun, or to take a screenshot of such a device's screen. Also when the device has no Wi-Fi at all (cellular only) and the user wants to install a build on it anyway.
+description: Reach a physical iPhone, iPad or Apple Vision Pro that is on another network than this Mac (the user is away, the Mac is at home) over Tailscale with RoamRun, so Xcode, xcodebuild, devicectl and lldb can use it as if it were local. Use when the device isn't visible to Xcode/devicectl because it's elsewhere, when the user mentions RoamRun, or to take a screenshot of such a device's screen. Also to install a build on a device without the bridge — over cellular or Wi-Fi, and on devices never paired with this Mac — when installing is all that is needed.
 ---
 
 # RoamRun
