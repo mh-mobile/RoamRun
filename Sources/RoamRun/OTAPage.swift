@@ -96,8 +96,10 @@ extension OTA {
         \(body)
         <footer>Tapping Install adds the app to your Home Screen. Safari shows no progress — watch the icon
         there, and keep the screen on until it finishes: the VPN pauses when the device sleeps.
-        An Enterprise build also needs its developer trusted once, under Settings › General ›
-        VPN &amp; Device Management. Everyone on this tailnet can open this page and install these builds.</footer>
+        If it installs but won't open: an Ad Hoc build needs Developer Mode on, under Settings ›
+        Privacy &amp; Security, where the switch appears once the app is there; an Enterprise one needs
+        its developer trusted, under Settings › General › VPN &amp; Device Management.
+        Everyone on this tailnet can open this page and install these builds.</footer>
         </body></html>
         """
     }

@@ -1155,11 +1155,12 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
                                           "/roamrun":{"Proxy":"http://127.0.0.1:1"}}},
             "mac.ts.net:41443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:61816"}}}}}
     """#
-    #expect(TailscaleClient.serving(port: 41443, inJSON: json) == .mounted(roots: ["http://127.0.0.1:61816"], others: []))
+    let me = "mac.ts.net"
+    #expect(TailscaleClient.serving(port: 41443, inJSON: json).root(on: me) == "http://127.0.0.1:61816")
     // The user's own port comes back with its other mounts named, so RoamRun can
     // tell "free" from "carrying something I must not remove".
-    #expect(TailscaleClient.serving(port: 443, inJSON: json)
-            == .mounted(roots: ["http://127.0.0.1:8788"], others: ["/roamrun"]))
+    #expect(TailscaleClient.serving(port: 443, inJSON: json).root(on: me) == "http://127.0.0.1:8788")
+    #expect(TailscaleClient.serving(port: 443, inJSON: json).untouched(by: me) == ["/roamrun"])
     #expect(TailscaleClient.serving(port: 9999, inJSON: json) == .nothing)
     // Not "nothing": a status we couldn't read is the moment RoamRun would
     // otherwise decide the port is free and overwrite an entry of the user's.
@@ -1175,17 +1176,30 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
             == .mounted(roots: [], others: ["TCP forwarding"]))
     // `{"HTTPS": true}` is what a plain https serve puts beside its Web entry.
     #expect(TailscaleClient.serving(port: 41443, inJSON: #"{"TCP":{"41443":{"HTTPS":true}}}"#) == .nothing)
-    // A tailnet rename leaves the old host key behind; both are that port's.
-    #expect(TailscaleClient.serving(port: 41443, inJSON:
-        #"{"Web":{"old:41443":{"Handlers":{"/a":{}}},"new:41443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:1"}}}}}"#)
-            == .mounted(roots: ["http://127.0.0.1:1"], others: ["/a"]))
-    // Two hosts each with a root: the second used to vanish, and invisible is what
-    // gets overwritten. Two roots is never a port RoamRun will publish onto.
-    let twoRoots = TailscaleClient.serving(port: 41443, inJSON:
-        #"{"Web":{"a-old:41443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:1"}}},"z-new:41443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:2"}}}}}"#)
-    #expect(twoRoots == .mounted(roots: ["http://127.0.0.1:1", "http://127.0.0.1:2"], others: []))
-    #expect(twoRoots.soleRoot == nil)                          // so nothing claims the port
-    #expect(twoRoots.has(root: "http://127.0.0.1:2"))          // but ours is still findable to give back
+}
+
+@Test func onlyTheMountUnderTheNameThisNodeAnswersToNowIsOurs() {
+    // `tailscale serve` adds and removes under st.Self.DNSName and nothing else,
+    // so after a rename our old entry is neither ours to replace nor ours to
+    // remove — and the root sitting under the *current* name is someone else's.
+    let renamed = #"""
+    {"Web":{"old:41443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:61816"}}},
+            "new:41443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:9999"}}}}}
+    """#
+    let state = TailscaleClient.serving(port: 41443, inJSON: renamed)
+    #expect(state == .mounted(roots: [.init(host: "new", target: "http://127.0.0.1:9999"),
+                                      .init(host: "old", target: "http://127.0.0.1:61816")], others: []))
+    // Ours is visible, but `off` would take the other one: that is not "ours is
+    // still there", and answering yes is how the user's service gets deleted.
+    #expect(state.root(on: "new") == "http://127.0.0.1:9999")
+    #expect(state.untouched(by: "new") == ["old/"])
+    // And from the old name's side, the new one is the untouchable leftover.
+    #expect(state.root(on: "old") == "http://127.0.0.1:61816")
+    #expect(state.untouched(by: "old") == ["new/"])
+    // A name with nothing under it: free as far as these commands go, but the
+    // other host's root still counts as something not to disturb.
+    #expect(state.root(on: "third") == nil)
+    #expect(state.untouched(by: "third").count == 2)
 }
 
 @Test func aPortThatCantWorkIsIgnoredRatherThanRetriedForEver() {

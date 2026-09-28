@@ -100,24 +100,32 @@ struct TailscaleClient {
     enum Serving: Equatable {
         case unknown
         case nothing
-        /// Every `/` proxy target on that port — one per host key, and a tailnet
-        /// rename leaves the old name behind, so there can be more than one —
-        /// with the other mount paths beside them. A list rather than "the root",
-        /// because picking one of several is how the others get overwritten.
-        case mounted(roots: [String], others: [String])
+        /// Every `/` proxy on that port, each with the host key it sits under —
+        /// a tailnet rename leaves the old name behind, so there can be more than
+        /// one — and the other mount paths.
+        case mounted(roots: [Root], others: [String])
 
-        /// The single target there, when it is the only thing on the port: the
-        /// one shape RoamRun will publish onto.
-        var soleRoot: String? {
-            guard case .mounted(let roots, let others) = self, others.isEmpty, roots.count == 1 else { return nil }
-            return roots[0]
+        /// A root and the name it is registered under. The name is half the
+        /// identity: `tailscale serve --https=P …` and `… off` both act on
+        /// `st.Self.DNSName` and nothing else, so a root under a name the node
+        /// used to have is neither ours to replace nor ours to remove.
+        struct Root: Equatable {
+            let host: String
+            let target: String
         }
 
-        /// Whether our registration is still one of them. Other mounts don't
-        /// matter here — the question is only whether ours survived.
-        func has(root target: String) -> Bool {
-            guard case .mounted(let roots, _) = self else { return false }
-            return roots.contains(target)
+        /// What those two commands would replace or remove, under the name the
+        /// node has now.
+        func root(on host: String) -> String? {
+            guard case .mounted(let roots, _) = self else { return nil }
+            return roots.first { $0.host == host }?.target
+        }
+
+        /// What is on that port that they would leave alone: other mounts, and
+        /// roots under names the node used to have.
+        func untouched(by host: String) -> [String] {
+            guard case .mounted(let roots, let others) = self else { return [] }
+            return others + roots.filter { $0.host != host }.map { "\($0.host)/" }
         }
 
         /// For the one sentence every caller has to write about a port it can't have.
@@ -126,7 +134,7 @@ struct TailscaleClient {
             case .unknown: return "something RoamRun couldn't read"
             case .nothing: return "nothing"
             case .mounted(let roots, let others):
-                let all = roots.map { $0.isEmpty ? "/" : $0 } + others
+                let all = roots.map { $0.target.isEmpty ? "\($0.host)/" : $0.target } + others
                 return all.count > 3 ? "\(all.count) mounts" : all.joined(separator: ", ")
             }
         }
@@ -153,7 +161,7 @@ struct TailscaleClient {
         else { return .unknown }
         if parsed is NSNull { return .nothing }
         guard let root = parsed as? [String: Any] else { return .unknown }
-        var roots: [String] = []
+        var roots: [Serving.Root] = []
         var others: [String] = []
         // Not only `Web`: `tailscale serve --tcp=P` puts a forward in `TCP` with no
         // Web entry at all, and a port carrying one is not an empty port. Reading
@@ -170,18 +178,22 @@ struct TailscaleClient {
             guard let handlers = (value as? [String: Any])?["Handlers"] as? [String: Any] else { continue }
             // Every host's root, not the first one found: the second would
             // otherwise be invisible, and invisible is what gets overwritten.
-            if let here = handlers["/"] as? [String: Any] { roots.append((here["Proxy"] as? String) ?? "") }
+            if let here = handlers["/"] as? [String: Any] {
+                roots.append(.init(host: String(hostPort.dropLast(":\(port)".count)),
+                                   target: (here["Proxy"] as? String) ?? ""))
+            }
             others += handlers.keys.filter { $0 != "/" }
         }
         guard !roots.isEmpty || !others.isEmpty else { return .nothing }
-        return .mounted(roots: roots.sorted(), others: others.sorted())
+        return .mounted(roots: roots.sorted { $0.host < $1.host }, others: others.sorted())
     }
 
     /// Whether RoamRun's own entry is there *and* something is listening behind
     /// it. A crash leaves the entry pointing at a port nothing holds any more, and
     /// then `serve status` alone says the page works when it 502s.
-    static func servingLive(port: Int) -> Bool {
-        guard let target = serving(port: port).soleRoot,
+    static func servingLive(port: Int, host: String? = nil) -> Bool {
+        guard let host = host ?? AppCoordinator.currentHost(),
+              let target = serving(port: port).root(on: host),
               AppCoordinator.isOurs(target),
               let port = UInt16(target.split(separator: ":").last ?? "") else { return false }
         return listening(on: port)

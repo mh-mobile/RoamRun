@@ -326,8 +326,9 @@ final class AppCoordinator: ObservableObject {
             // that ended without releasing it. Anything else on that port is the
             // user's, and `tailscale serve` has no undo.
             let state = TailscaleClient.serving(port: tailnetPort)
-            switch state {
-            case .unknown:
+            // Both halves or neither: `serve` acts on this name's key alone, so
+            // without it we don't know which entry we would be replacing.
+            guard state != .unknown, let host = Self.currentHost() else {
                 // tailscaled didn't answer, or there is no tailscale here at all.
                 // Publishing now would be deciding the port is free without having
                 // looked; the timer asks again — but say so, or this is silent.
@@ -336,14 +337,18 @@ final class AppCoordinator: ObservableObject {
                                        "\(tailnetPort) — is Tailscale installed and running? Retrying.")
                 }
                 return
-            case .nothing:
+            }
+            switch state {
+            case .unknown, .nothing:
                 break
-            case .mounted(let roots, let others):
-                guard let sole = state.soleRoot, sole == mine || Self.isOurs(sole) else {
+            case .mounted:
+                let here = state.root(on: host)
+                guard state.untouched(by: host).isEmpty,
+                      here.map({ $0 == mine || Self.isOurs($0) }) ?? true else {
                     // Still not taken over — but which of the two it is decides what
                     // the user should do, and the settings that named our own
                     // registrations are the first thing a reinstall deletes.
-                    let advice = Self.abandoned(roots, others: others)
+                    let advice = Self.abandoned(state.untouched(by: host).isEmpty ? here : nil)
                         ? "nothing is behind it, so it is left over from a run that was killed: " +
                           "`tailscale serve --https=\(tailnetPort) --set-path=/ off` clears it and " +
                           "RoamRun publishes again within half a minute"
@@ -369,7 +374,7 @@ final class AppCoordinator: ObservableObject {
             var strayRecord = false
             if out.status != 0 {
                 let after = TailscaleClient.serving(port: tailnetPort)
-                strayRecord = after != .unknown && !after.has(root: mine)
+                strayRecord = after != .unknown && after.root(on: host) != mine
             }
             await MainActor.run {
                 guard let self else { return }
@@ -406,7 +411,9 @@ final class AppCoordinator: ObservableObject {
             switch state {
             case .unknown: gone = false
             case .nothing: gone = true
-            case .mounted: gone = !state.has(root: published.target)
+            // Under this node's name only: the entry we made under a name it has
+            // since stopped answering to is one `serve` can no longer reach.
+            case .mounted: gone = Self.currentHost().map { state.root(on: $0) != published.target } ?? false
             }
             await MainActor.run {
                 guard let self else { return }
@@ -428,9 +435,12 @@ final class AppCoordinator: ObservableObject {
         case .unknown: return false            // couldn't look; saying it's gone is how one survives
         case .nothing: forgetServing(published.target); return true
         case .mounted:
-            // Any of the roots, not one picked out of several: ours can be under a
-            // host key that sorts after someone else's.
-            guard state.has(root: published.target) else { forgetServing(published.target); return true }
+            // `off` removes this node's current name's mount and nothing else, so
+            // that is the only entry we may claim — a root of ours under a name the
+            // node has since changed would make us delete whatever took its place.
+            // Asked only now: nothing to give back needs no name.
+            guard let host = currentHost() else { return false }
+            guard state.root(on: host) == published.target else { forgetServing(published.target); return true }
         }
         // `--set-path=/` names the one mount to remove. Without it `off` means
         // every mount on the port, and `tailscale` then asks for confirmation on
@@ -449,10 +459,16 @@ final class AppCoordinator: ObservableObject {
     /// service of anyone's: some run was killed before it gave the port back.
     /// Reported, not reclaimed — "only replace what we can prove is ours" is worth
     /// more than saving the user one command.
-    nonisolated static func abandoned(_ roots: [String], others: [String]) -> Bool {
-        guard others.isEmpty, roots.count == 1, roots[0].hasPrefix("http://127.0.0.1:"),
-              let port = UInt16(roots[0].dropFirst("http://127.0.0.1:".count)) else { return false }
+    nonisolated static func abandoned(_ target: String?) -> Bool {
+        guard let target, target.hasPrefix("http://127.0.0.1:"),
+              let port = UInt16(target.dropFirst("http://127.0.0.1:".count)) else { return false }
         return !TailscaleClient.listening(on: port)
+    }
+
+    /// The name this node answers to now. `tailscale serve` writes and removes
+    /// under it and no other, so it is half of every question about that port.
+    nonisolated static func currentHost() -> String? {
+        (try? TailscaleClient.fromSettings().selfDNSName()) ?? nil
     }
 
     private func complainOnce(_ line: String) {

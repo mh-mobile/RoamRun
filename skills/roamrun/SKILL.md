@@ -41,9 +41,12 @@ not match the installed CLI until then (`roamrun --help` is authoritative).
 - If the user really has no Wi-Fi to join, there is no bridge and none of the
   commands below work. `roamrun ota [<name>] <App.ipa> [--replace]` is the one
   that still does: it publishes the build so the user can install it from the
-  device itself. It doesn't need Wi-Fi, pairing or Developer Mode, so it is also
-  the way onto a device that has none of those — but when the bridge is available
-  the bridge is better, and this is not a substitute for it. It installs only — no debugging, no logs, no screenshots — and
+  device itself. It needs neither Wi-Fi nor pairing with this Mac, so it is also
+  the way onto a device that has neither — but when the bridge is available the
+  bridge is better, and this is not a substitute for it. An Ad Hoc build still
+  needs Developer Mode on to *launch* (iOS 16+): the switch appears under
+  Settings › Privacy & Security once it is installed, so tell the user that
+  before they think the build is broken. It installs only — no debugging, no logs, no screenshots — and
   it needs an .ipa signed for Release Testing (Ad Hoc) or Enterprise, which
   needs a paid Apple Developer account. You can't produce that .ipa from a
   Development signing setup: export one with `xcodebuild -exportArchive`

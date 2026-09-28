@@ -194,16 +194,16 @@ The skill covers getting the device connected (`roamrun up -d` → `status --wai
 ## Installing without the bridge: over the air
 
 The bridge needs the device on Wi-Fi — `remotepairingd` only listens there — and
-it needs the device paired with this Mac, with Developer Mode on. An over-the-air
-install needs none of that: it is the device fetching a file over HTTPS, which
-the mesh VPN carries over Wi-Fi and cellular alike.
+paired with this Mac. An over-the-air install needs neither: it is the device
+fetching a file over HTTPS, which the mesh VPN carries over Wi-Fi and cellular
+alike.
 
 So this is the way in when the bridge isn't available or isn't the right tool:
 
 - **No Wi-Fi to join** — out for a walk, phone on cellular. There is no bridge at
   all then, and this is the only thing that still works.
-- **A device that was never paired**, or has Developer Mode off. Someone else's
-  phone, a device you borrowed for an afternoon.
+- **A device that was never paired with this Mac**, and never has to be.
+  Someone else's phone, one you borrowed for an afternoon.
 - **The build you actually ship.** `roamrun run` installs a Development build;
   this takes the Ad Hoc archive, which is the signing your testers will get.
 - **Someone else on your tailnet.** They open the page and install — no Mac, no
@@ -264,6 +264,13 @@ What it needs:
 
 **Anyone on your tailnet can open that page and install those builds.** On a
 tailnet you share, restrict it with Tailscale Grants / ACLs.
+
+One thing RoamRun can't check, because it happens on the device: an Ad Hoc build
+needs **Developer Mode** on to *launch* on iOS 16 and later. Nothing is needed
+from a Mac for that — the switch appears under Settings › Privacy & Security once
+the app is installed, and the device restarts once. An Enterprise build doesn't
+need it, but does need its developer trusted under Settings › General › VPN &
+Device Management.
 
 Two things that end with iOS refusing the install and no clue why, so RoamRun
 checks them first: a **provisioning profile that has expired** (they last a
