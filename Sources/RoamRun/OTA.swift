@@ -528,13 +528,11 @@ enum OTA {
     /// Only from `add`, which holds the lock — a half-written build is exactly
     /// what this would delete if it ran while one was being made.
     private static func reapOrphans(_ app: URL) {
-        for slug in (try? FileManager.default.contentsOfDirectory(atPath: app.path)) ?? []
-        where !slug.hasPrefix(".") {
+        for slug in entries(of: app) ?? [] where !slug.hasPrefix(".") {
             let dir = app.appendingPathComponent(slug)
-            var isDir: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue,
-                  !FileManager.default.fileExists(atPath: dir.appendingPathComponent("meta.json").path)
-            else { continue }
+            // From the listing, not `fileExists`: this decides a delete, and a
+            // folder that can't be entered answers the same as one that is empty.
+            guard let inside = entries(of: dir), !inside.contains("meta.json") else { continue }
             try? FileManager.default.removeItem(at: dir)
         }
     }

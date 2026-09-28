@@ -5,7 +5,7 @@ import Foundation
 /// goes stale when the tailnet name or the served path changes.
 extension OTA {
     /// `itms-services` fetches this, reads where the .ipa is, and installs it.
-    static func manifest(for build: Build, base: String) -> Data {
+    static func manifest(for build: Build, base: String) -> Data? {
         let plist: [String: Any] = [
             "items": [[
                 "assets": [["kind": "software-package", "url": "\(base)/\(build.bundleID)/\(build.slug)/app.ipa"]],
@@ -19,7 +19,9 @@ extension OTA {
                 ],
             ]],
         ]
-        return (try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)) ?? Data()
+        // nil, not empty: a 200 carrying no manifest is an install that fails
+        // with nothing to go on, which is the failure this whole path avoids.
+        return try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
     }
 
     static func installLink(for build: Build, base: String) -> String {

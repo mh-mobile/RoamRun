@@ -1149,7 +1149,7 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
 @Test func theManifestPointsAtTheBuildItDescribes() throws {
     let build = OTA.Build(bundleID: "com.example.App", title: "App & Co", version: "1.2.0", build: "45",
                           added: .now, size: 3_200_000, slug: "1.2.0-45-20260928-0730")
-    let data = OTA.manifest(for: build, base: "https://mac.tail1234.ts.net/roamrun")
+    let data = try #require(OTA.manifest(for: build, base: "https://mac.tail1234.ts.net/roamrun"))
     let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
     let item = (plist?["items"] as? [[String: Any]])?.first
     let url = ((item?["assets"] as? [[String: String]])?.first)?["url"]
@@ -1160,6 +1160,24 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(metadata?["bundle-version"] == "45")      // CFBundleVersion, not the marketing one
     #expect(metadata?["title"] == "App & Co")
     #expect(OTA.installLink(for: build, base: "https://x/p").hasPrefix("itms-services://?action=download-manifest&url=https://x/p/"))
+}
+
+@Test func aTitleXmlCantHoldIsRefusedRatherThanServedEmpty() {
+    // `title` is CFBundleDisplayName, straight out of someone's .ipa. XML 1.0
+    // has no way to carry most control characters, so this is the one input
+    // that can make the manifest unserialisable — and a 200 with an empty body
+    // is exactly the silent failure the whole feature exists to avoid.
+    let odd = OTA.Build(bundleID: "com.example.App", title: "App\u{0}Name", version: "1.0", build: "1",
+                        added: .now, size: 1, slug: "1.0-1-x")
+    // Measured: Foundation refuses it, which is what makes the 500 reachable
+    // rather than theoretical. If this ever starts serialising, check that what
+    // comes out parses back before relaxing it — XML iOS can't read is the same
+    // silent failure by another route.
+    #expect(OTA.manifest(for: odd, base: "https://m.ts.net:41443") == nil)
+    // An ordinary title is unaffected.
+    let fine = OTA.Build(bundleID: "com.example.App", title: "App", version: "1.0", build: "1",
+                         added: .now, size: 1, slug: "1.0-1-x")
+    #expect(OTA.manifest(for: fine, base: "https://m.ts.net:41443") != nil)
 }
 
 @Test func thePageEscapesWhatCameFromTheArchive() {
@@ -1615,6 +1633,34 @@ private func sized(_ path: String, _ b: OTA.Build) -> OTA.Build {
                     build("1.0", "2", "1.0-2-x"), in: root)
     #expect(!FileManager.default.fileExists(atPath: orphan.path))
     #expect(!FileManager.default.fileExists(atPath: stale.path))
+}
+
+@Test func theOneDeleteInHereIsNotDecidedByFileExists() throws {
+    // `reapOrphans` removes a build folder with no `meta.json`. Asking
+    // `fileExists` for that answers the same for a folder that can't be entered,
+    // and this is the only place in the feature that deletes someone's build.
+    let root = otaScratch()
+    let app = root.appendingPathComponent("com.example.App")
+    let shut = app.appendingPathComponent("1.0-9-locked")
+    defer {
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: shut.path)
+        try? FileManager.default.removeItem(at: root)
+    }
+    // One that really has no metadata, and one that can't be looked into.
+    let orphan = app.appendingPathComponent("1.0-8-orphan")
+    try FileManager.default.createDirectory(at: orphan, withIntermediateDirectories: true)
+    try Data("ipa".utf8).write(to: orphan.appendingPathComponent("app.ipa"))
+    try FileManager.default.createDirectory(at: shut, withIntermediateDirectories: true)
+    try JSONEncoder().encode(build("1.0", "9", "1.0-9-locked"))
+        .write(to: shut.appendingPathComponent("meta.json"))
+    try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: shut.path)
+    try #require(!FileManager.default.isReadableFile(atPath: shut.appendingPathComponent("meta.json").path))
+
+    // `add` is what runs the reap, under the lock.
+    _ = try? OTA.add(ipa: try fakeIPA(root.appendingPathComponent("src"), "x"),
+                     build("2.0", "1", "2.0-1-x"), in: root)
+    #expect(!FileManager.default.fileExists(atPath: orphan.path))   // never finished: reaped
+    #expect(FileManager.default.fileExists(atPath: shut.path))      // unreadable: left alone
 }
 
 @Test func aFolderWithNoBuildsInItIsNotSomethingToPublish() throws {

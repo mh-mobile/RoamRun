@@ -239,7 +239,9 @@ final class OTAServer: @unchecked Sendable {
                 return send(conn, status: "404 Not Found")
             }
             if parts[2] == "manifest.plist" {
-                let data = OTA.manifest(for: build, base: base)
+                guard let data = OTA.manifest(for: build, base: base) else {
+                    return send(conn, status: "500 Internal Server Error")
+                }
                 send(conn, status: "200 OK", type: "application/xml", body: bodyWanted ? data : nil, length: Int64(data.count))
             } else {
                 sendIPA(conn, at: OTA.directory.appendingPathComponent(parts[0]).appendingPathComponent(parts[1])

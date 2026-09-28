@@ -102,6 +102,8 @@ struct TailscaleClient {
         let out = Proc.run(fromSettings().resolvedPath() ?? "/usr/bin/false", ["status", "--json"], timeout: 5)
         guard out.status == 0, let data = out.out.data(using: .utf8),
               let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        // Absent and empty mean the same thing here: the field is `omitempty`,
+        // so an empty list simply isn't in the JSON.
         return !((root["CertDomains"] as? [String] ?? []).isEmpty)
     }
 
