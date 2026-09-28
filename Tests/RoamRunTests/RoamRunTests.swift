@@ -1119,19 +1119,17 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(OTA.isPlainName("com.example.my_app"))
 }
 
-@Test func onlyTheDefaultHttpsHostCountsAsTheOTAPagesAddress() {
-    // From the JSON: a change to the display output would read as "nothing is
-    // mounted here", which is exactly when RoamRun would overwrite someone else.
+@Test func onlyTheRootOfRoamRunsOwnPortCounts() {
+    // One port, one handler. Everything else the user serves is untouched.
     let json = #"""
     {"Web":{"mac.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8788"},
-                                          "/roamrun":{"Proxy":"http://127.0.0.1:61816"}}},
-            "mac.ts.net:8790":{"Handlers":{"/other":{"Proxy":"http://127.0.0.1:8790"}}}}}
+                                          "/roamrun":{"Proxy":"http://127.0.0.1:1"}}},
+            "mac.ts.net:41112":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:61816"}}}}}
     """#
-    let served = TailscaleClient.served(inJSON: json)
-    #expect(served["/roamrun"] == "http://127.0.0.1:61816")
-    #expect(served["/"] == "http://127.0.0.1:8788")
-    #expect(served["/other"] == nil)   // :8790, not the page's address
-    #expect(TailscaleClient.served(inJSON: "not json").isEmpty)
+    #expect(TailscaleClient.serving(port: 41112, inJSON: json) == "http://127.0.0.1:61816")
+    #expect(TailscaleClient.serving(port: 443, inJSON: json) == "http://127.0.0.1:8788")
+    #expect(TailscaleClient.serving(port: 9999, inJSON: json) == nil)
+    #expect(TailscaleClient.serving(port: 41112, inJSON: "not json") == nil)
 }
 
 @Test func anExpiredProfileOrAnUnknownUdidIsRefusedBeforeTheDeviceSeesIt() throws {
@@ -1231,13 +1229,11 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(!page(nil).contains("EXPIRED"))   // Enterprise profiles carry no date we act on
 }
 
-@Test func aFunnelOnThatPortIsSomethingToLeaveAlone() {
-    // `serve` and `funnel` write the same config, and a serve call can switch a
-    // funnel off — taking someone's public service private.
-    #expect(TailscaleClient.funnelled(inJSON: #"{"AllowFunnel":{"mac.ts.net:443":true}}"#) == ["443"])
-    #expect(TailscaleClient.funnelled(inJSON: #"{"AllowFunnel":{"mac.ts.net:443":false}}"#).isEmpty)
-    #expect(TailscaleClient.funnelled(inJSON: #"{"TCP":{"443":{}}}"#).isEmpty)
-    #expect(TailscaleClient.funnelled(inJSON: "not json").isEmpty)
+@Test func aPortOutsideFunnelsThreeCanNeverReachTheInternet() {
+    // Funnel only publishes 443, 8443 and 10000, so a port outside them can't be
+    // put on the internet by anyone — which is why RoamRun uses one.
+    #expect(!AppCoordinator.funnelCapable.contains(AppCoordinator.otaPort))
+    #expect(AppCoordinator.funnelCapable == [443, 8443, 10000])
 }
 
 @Test func aSlugNeverStartsWithADotOrTheBuildDisappears() {

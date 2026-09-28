@@ -44,14 +44,17 @@ final class OTAServer: @unchecked Sendable {
     /// What the device sees in front of us, e.g. `/roamrun`. Requests arrive
     /// without it (tailscale strips the mount), but the manifest has to hand iOS
     /// an absolute URL, so it goes back on.
-    let prefix: String
+    /// The tailnet port `tailscale serve` publishes us on. Kept only so the
+    /// coordinator can tell whether a running server is on the port configured
+    /// now; URLs come from each request's Host header, which carries the port.
+    let tailnetPort: Int
     private var _port: UInt16 = 0
     private(set) var port: UInt16 {
         get { lock.withLock { _port } }
         set { lock.withLock { _port = newValue } }
     }
 
-    init(prefix: String) { self.prefix = prefix }
+    init(tailnetPort: Int) { self.tailnetPort = tailnetPort }
 
     /// The port it ended up on; nil if it couldn't listen at all.
     @discardableResult
@@ -128,7 +131,7 @@ final class OTAServer: @unchecked Sendable {
             }
             let (method, path, host) = Self.request(text)
             guard method == "GET" || method == "HEAD" else { return self.send(conn, status: "405 Method Not Allowed") }
-            let base = "https://\(host)\(self.prefix)"
+            let base = "https://\(host)"   // Host carries the port serve published us on
             self.route(conn, path: path, base: base, bodyWanted: method == "GET", idle: idle)
         }
     }

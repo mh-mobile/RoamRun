@@ -416,7 +416,7 @@ enum CLI {
             try OTA.add(ipa: path, build, replacing: replacing)
 
             print("Stored \(build.title) \(build.label) (\(OTA.size(build.size))).")
-            let prefix = AppID.settings?.string(forKey: AppCoordinator.otaPathKey) ?? "/roamrun"
+            let tailnetPort = AppCoordinator.otaPort
             let host: String?
             do { host = try TailscaleClient.fromSettings().selfDNSName() } catch {
                 stop("\(error.localizedDescription). The build is stored; run this again once Tailscale can answer.")
@@ -424,15 +424,15 @@ enum CLI {
             guard let host else {
                 stop("Tailscale didn't give this Mac a name — turn MagicDNS on for your tailnet. The build is stored.")
             }
-            let url = "https://\(host)\(prefix)/"
-            let mounted = TailscaleClient.servedPaths()[prefix]
+            let url = "https://\(host):\(tailnetPort)/"
+            let mounted = TailscaleClient.serving(port: tailnetPort)
             if let mounted, !AppCoordinator.isOurs(mounted) {
-                print("  \(prefix) is serving \(mounted), which isn't RoamRun's, so that address won't")
-                print("  reach this build. Give RoamRun another path and restart it:")
-                print("    defaults write \(AppID.bundle) otaPath -string /some/path")
+                print("  port \(tailnetPort) is serving \(mounted), which isn't RoamRun's, so that address")
+                print("  won't reach this build. Give RoamRun another port and restart it:")
+                print("    defaults write \(AppID.bundle) otaPort -int 41113")
                 exit(1)
             }
-            if !TailscaleClient.servingLive(prefix) {
+            if !TailscaleClient.servingLive(port: tailnetPort) {
                 print("  RoamRun publishes the page while it runs, so it has to be open; it can take")
                 print("  half a minute to appear. If it doesn't, look in Open RoamRun › ⚙ Settings ›")
                 print("  Troubleshooting › Recent messages.")
@@ -1070,16 +1070,17 @@ enum CLI {
         let bytes = builds.reduce(Int64(0)) { $0 + $1.size }
         note("\(builds.count) build\(builds.count == 1 ? "" : "s") of \(apps.count) app\(apps.count == 1 ? "" : "s"), " +
              "\(OTA.size(bytes)) in \(OTA.directory.path)")
-        let prefix = AppID.settings?.string(forKey: AppCoordinator.otaPathKey) ?? "/roamrun"
-        let served = TailscaleClient.servedPaths()[prefix]
-        let live = TailscaleClient.servingLive(prefix)
-        check(live, live ? "The install page is published at \(prefix)" : "The install page isn't published at \(prefix)",
+        let tailnetPort = AppCoordinator.otaPort
+        let served = TailscaleClient.serving(port: tailnetPort)
+        let live = TailscaleClient.servingLive(port: tailnetPort)
+        check(live, live ? "The install page is published on port \(tailnetPort)"
+                         : "The install page isn't published on port \(tailnetPort)",
               served == nil || AppCoordinator.isOurs(served ?? "")
                   ? "RoamRun publishes it while it runs — open RoamRun, then look in ⚙ Settings › Troubleshooting › Recent messages if it doesn't appear."
-                  : "\(prefix) is serving \(served ?? "something else") instead. Give RoamRun another path: defaults write \(AppID.bundle) otaPath -string /some/path",
+                  : "port \(tailnetPort) is serving \(served ?? "something else") instead. Give RoamRun another port: defaults write \(AppID.bundle) otaPort -int 41113",
               true)
         if live, let host = (try? TailscaleClient.fromSettings().selfDNSName()) ?? nil {
-            note("Open on the device: https://\(host)\(prefix)/")
+            note("Open on the device: https://\(host):\(tailnetPort)/")
         }
     }
 

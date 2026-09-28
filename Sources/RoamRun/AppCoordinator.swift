@@ -170,12 +170,11 @@ final class AppCoordinator: ObservableObject {
     /// something to serve, so a user who never uses it never has a listener or a
     /// `tailscale serve` entry.
     private var otaServer: OTAServer?
-    /// The path and the exact target `tailscale serve` was given. Recorded because
-    /// nothing else identifies the entry as ours: on this kind of Mac every path
-    /// people serve points at a loopback port, so "loopback" proves nothing. Only
-    /// an entry matching this exactly is replaced, re-registered or given back.
-    private var otaPublished: (path: String, target: String)?
-    /// Every address RoamRun has registered for the path lately, not just the
+    /// The tailnet port and the exact target `tailscale serve` was given. Recorded
+    /// because nothing else identifies the entry as ours, and `tailscale serve`
+    /// has no undo: only an entry matching this exactly is replaced or released.
+    private var otaPublished: (port: Int, target: String)?
+    /// Every address RoamRun has registered lately, not just the
     /// last one. A run that crashed, and an attempt that failed, both leave one
     /// behind; recognising any of them is what lets the next run take its own
     /// registration back instead of calling it someone else's.
@@ -211,15 +210,23 @@ final class AppCoordinator: ObservableObject {
     /// Said once per reason: the retry runs every 30s and the log is a person's.
     private var otaComplaint = ""
     private var verifyingOTA = false
-    static let otaPathKey = "otaPath"
-    var otaPath: String { UserDefaults.standard.string(forKey: Self.otaPathKey) ?? "/roamrun" }
+    nonisolated static let otaPortKey = "otaPort"
+    /// A port of RoamRun's own, rather than a path on the tailnet's `:443`.
+    /// 443 carries whatever else the user serves, so a mistake there is theirs,
+    /// not ours — and Funnel can only publish 443, 8443 and 10000, so a port
+    /// outside those three cannot be put on the internet at all, by anyone.
+    nonisolated static var otaPort: Int {
+        let set = AppID.settings?.integer(forKey: otaPortKey) ?? 0
+        return set > 0 && !funnelCapable.contains(set) ? set : 41112
+    }
+    nonisolated static let funnelCapable: Set<Int> = [443, 8443, 10000]
 
     func startOTAIfNeeded() {
-        // The path can be changed while we run; the advice for a clash says to do
-        // exactly that, so it has to take effect without a restart.
-        if let published = otaPublished, published.path != otaPath {
+        // The port can be changed while we run, so it has to take effect without
+        // a restart — and the old one has to be given back, not forgotten.
+        if let published = otaPublished, published.port != Self.otaPort {
             otaPublished = nil
-            Task.detached { Self.releaseServe(published) }   // or the old path 502s for ever
+            Task.detached { Self.releaseServe(published) }
         }
         guard !OTA.builds().isEmpty else {
             // Deleting the folder is the off switch, whether or not the page ever
@@ -236,39 +243,28 @@ final class AppCoordinator: ObservableObject {
             verifyOTAStillServed()
             return
         }
-        // The path can change between attempts, and the server puts it into every
-        // link it writes, so a stale one would send the device somewhere else.
-        if let running = otaServer, running.prefix != otaPath {
+        let tailnetPort = Self.otaPort
+        if let running = otaServer, running.tailnetPort != tailnetPort {
             running.stop()
             otaServer = nil
         }
-        let server = otaServer ?? OTAServer(prefix: otaPath)
+        let server = otaServer ?? OTAServer(tailnetPort: tailnetPort)
         guard let port = server.start() else {
             complainOnce("couldn't start the over-the-air server")
             return
         }
         otaServer = server
-        let path = otaPath
         Task.detached { [weak self] in
             let mine = "http://127.0.0.1:\(port)"
-            let existing = TailscaleClient.servedPaths()[path]
-
-            // A serve call on a port that carries a funnel can switch the funnel
-            // off, taking a public service private. Not worth any feature.
-            if TailscaleClient.funnelPorts().contains("443") {
-                await MainActor.run {
-                    self?.complainOnce("not publishing the install page: this Mac serves something on 443 " +
-                        "through Tailscale Funnel, and registering a path there could turn that off.")
-                }
-                return
-            }
+            let existing = TailscaleClient.serving(port: tailnetPort)
             // Only ever replace an entry we can prove we made — ours from a run
-            // that ended without releasing it. Anything else there is the user's,
-            // and `tailscale serve` has no undo.
+            // that ended without releasing it. Anything else on that port is the
+            // user's, and `tailscale serve` has no undo.
             if let existing, existing != mine, !Self.isOurs(existing) {
                 await MainActor.run {
-                    self?.complainOnce("\(path) is already serving \(existing), which isn't RoamRun's — not taking it over. " +
-                        "Give RoamRun another path: defaults write \(AppID.bundle) otaPath -string /some/path")
+                    self?.complainOnce("port \(tailnetPort) is already serving \(existing), which isn't RoamRun's — " +
+                        "not taking it over. Give RoamRun another port: " +
+                        "defaults write \(AppID.bundle) otaPort -int 41113")
                 }
                 return
             }
@@ -277,17 +273,17 @@ final class AppCoordinator: ObservableObject {
             // that outlived us, with nothing left to say it was ours.
             Self.rememberServing(mine)
             let out = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
-                               ["serve", "--bg", "--yes", "--set-path", path, mine], timeout: 20)
+                               ["serve", "--bg", "--yes", "--https=\(tailnetPort)", mine], timeout: 20)
             await MainActor.run {
                 guard let self else { return }
                 if out.status == 0 {
-                    self.otaPublished = (path, mine)
+                    self.otaPublished = (tailnetPort, mine)
                     self.otaComplaint = ""
-                    self.logStore.log("serving builds over the air at \(path)")
+                    self.logStore.log("serving builds over the air on port \(tailnetPort)")
                 } else {
                     // No HTTPS in this tailnet, tailscaled still coming up, or no
                     // Tailscale at all. The timer tries again, so this recovers.
-                    self.complainOnce("couldn't publish \(path) with tailscale serve, will retry: " +
+                    self.complainOnce("couldn't publish port \(tailnetPort) with tailscale serve, will retry: " +
                         out.err.trimmingCharacters(in: .whitespacesAndNewlines))
                 }
             }
@@ -301,26 +297,11 @@ final class AppCoordinator: ObservableObject {
         guard let published = otaPublished, !verifyingOTA else { return }
         verifyingOTA = true
         Task.detached { [weak self] in
-            let status = TailscaleClient.statusJSON()   // one read; both answers are in it
-            let live = TailscaleClient.served(inJSON: status)[published.path] == published.target
-            // Funnel can be turned on after we published, and then these builds
-            // are on the internet rather than the tailnet. Take the page down.
-            let funnelled = TailscaleClient.funnelled(inJSON: status).contains("443")
-            let released = funnelled && live ? Self.releaseServe(published) : true
+            let live = TailscaleClient.serving(port: published.port) == published.target
             await MainActor.run {
                 guard let self else { return }
                 self.verifyingOTA = false
-                if funnelled {
-                    // Whatever tailscaled does, nothing can be fetched once the
-                    // listener is gone — that part doesn't depend on a command
-                    // succeeding.
-                    self.otaServer?.stop()
-                    self.otaServer = nil
-                    self.complainOnce("took the install page down: 443 is published to the internet with " +
-                        "Tailscale Funnel, and these builds are meant for your tailnet only.")
-                }
-                // Kept until the entry is really gone, so the next tick tries again.
-                if !live || released, self.otaPublished?.target == published.target { self.otaPublished = nil }
+                if !live, self.otaPublished?.target == published.target { self.otaPublished = nil }
             }
         }
     }
@@ -332,10 +313,10 @@ final class AppCoordinator: ObservableObject {
     /// has to try again — reporting it released when it isn't is how builds stay
     /// reachable while the log says otherwise.
     @discardableResult
-    nonisolated static func releaseServe(_ published: (path: String, target: String)) -> Bool {
-        guard TailscaleClient.servedPaths()[published.path] == published.target else { return true }
+    nonisolated static func releaseServe(_ published: (port: Int, target: String)) -> Bool {
+        guard TailscaleClient.serving(port: published.port) == published.target else { return true }
         let out = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
-                           ["serve", "--set-path", published.path, "off"], timeout: 10)
+                           ["serve", "--https=\(published.port)", "off"], timeout: 10)
         // Only once it's really gone. Forgetting it while the entry survives
         // would leave the next run unable to recognise its own registration.
         guard out.status == 0 else { return false }

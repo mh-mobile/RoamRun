@@ -222,8 +222,11 @@ roamrun ota iPhone build/MyApp.ipa
   経由でしか入らないので、`roamrun ota` が先に弾きます。Ad Hoc の場合は端末がプロビジョ
   ニングプロファイルに含まれている必要がありますが、ブリッジが繋がっていれば Xcode が
   ローカル端末として登録してくれるので、自宅で一度やれば済みます
-- **tailnet で HTTPS が有効なこと**（MagicDNS と HTTPS 証明書）。RoamRun はパスを 1 つ
-  （既定 `/roamrun`）だけ登録し、終了時に返します
+- **tailnet で HTTPS が有効なこと**（MagicDNS と HTTPS 証明書）。RoamRun は**専用ポート**を
+  1 つだけ使い（既定 41112。変更は `defaults write io.github.mh-mobile.roamrun otaPort -int …`）、
+  終了時に返します。あなたが他に serve しているものが載る `:443` には**一切触りません**。
+  また Tailscale Funnel が公開できるのは 443 / 8443 / 10000 の 3 つだけなので、
+  **それ以外のポートはインターネットに出しようがありません**
 - **RoamRun が起動していること**（ページを配信しているのはアプリです）
 
 **tailnet 上の誰でもこのページを開いてインストールできます。**共有 tailnet では
@@ -279,7 +282,7 @@ iPhone から Mac を操作する方法は 3 つあります。どの方法で�
 
 ## Mac に作るもの・アンインストール
 
-RoamRun が書き込むのは次の場所だけです（システム設定や他のアプリには触れません。`roamrun ota` を使う場合は、これに加えて `tailscale serve` にパスが 1 つ登録されます。下記参照）。
+RoamRun が書き込むのは次の場所だけです（システム設定や他のアプリには触れません。`roamrun ota` を使う場合は、これに加えて `tailscale serve` にポートが 1 つ登録されます。下記参照）。
 
 | 場所 | 内容 |
 |---|---|
@@ -299,14 +302,13 @@ rm /usr/local/bin/roamrun                 # CLI を入れた場合
 rm -rf ~/Library/Application\ Support/RoamRun ~/Library/Logs/RoamRun
 defaults delete io.github.mh-mobile.roamrun
 defaults delete com.roamrun.app 2>/dev/null   # 0.1.12 より前の版が残したもの
-tailscale serve --set-path /roamrun off       # roamrun ota を使った場合
+tailscale serve --https=41112 off            # roamrun ota を使った場合
 # 最後に /Applications/RoamRun.app を削除（「ログイン時に開く」を有効にしていた場合は先に無効化）
 ```
 
 `roamrun ota` を使った場合、上の表の外にもう 1 つ残るものがあります。RoamRun は
-`tailscale serve` にパス（既定 `/roamrun`）を持たせ、正常終了時には返しますが、
-強制終了やクラッシュでは返りません。上の `tailscale serve --set-path /roamrun off`
-で消せます。
+`tailscale serve` にポート（既定 41112）を持たせ、正常終了時には返しますが、
+強制終了やクラッシュでは返りません。上の `tailscale serve --https=41112 off` で消せます。
 
 ## 制限・既知の課題
 

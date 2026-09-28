@@ -93,58 +93,38 @@ struct TailscaleClient {
         return name.hasSuffix(".") ? String(name.dropLast()) : name
     }
 
-    /// The paths `tailscale serve` is proxying, so the CLI can say whether the
-    /// OTA page is actually reachable without asking the app.
-    static func servedPaths() -> [String: String] {
-        served(inJSON: statusJSON())
+    /// What `tailscale serve` proxies at the root of `port`, or nil if nothing
+    /// does. A port of RoamRun's own rather than a path on `:443`: that port
+    /// carries whatever else the user serves, and Funnel can only publish 443,
+    /// 8443 and 10000 — so a port outside those cannot reach the internet at all.
+    static func serving(port: Int) -> String? {
+        serving(port: port, inJSON: statusJSON())
     }
 
-    /// path → what it proxies to, for the default `:443` host only: the same path
-    /// can also be mounted on another port, and that one isn't the page's address.
-    /// From the JSON, not the display output: a wording change there would read as
-    /// "nothing is mounted", which is exactly when RoamRun would overwrite someone.
-    static func served(inJSON out: String) -> [String: String] {
+    /// From the JSON, not the display output: a wording change there would read
+    /// as "nothing is here", which is exactly when RoamRun would overwrite
+    /// something of the user's.
+    static func serving(port: Int, inJSON out: String) -> String? {
         guard let data = out.data(using: .utf8),
               let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let web = root["Web"] as? [String: Any] else { return [:] }
-        var result: [String: String] = [:]
-        for (hostPort, value) in web where hostPort.hasSuffix(":443") {
-            guard let handlers = (value as? [String: Any])?["Handlers"] as? [String: Any] else { continue }
-            for (path, handler) in handlers {
-                result[path] = ((handler as? [String: Any])?["Proxy"] as? String) ?? ""
-            }
+              let web = root["Web"] as? [String: Any] else { return nil }
+        for (hostPort, value) in web where hostPort.hasSuffix(":\(port)") {
+            guard let handlers = (value as? [String: Any])?["Handlers"] as? [String: Any],
+                  let handler = handlers["/"] as? [String: Any] else { continue }
+            return (handler["Proxy"] as? String) ?? ""
         }
-        return result
+        return nil
     }
 
-    /// Ports whose serve config is published to the internet. `tailscale serve`
-    /// and `tailscale funnel` write the same config, and a serve call can turn
-    /// funnel off for the port it touches — which would quietly take someone's
-    /// public service private. RoamRun stays away from such a port entirely.
-    static func funnelPorts() -> Set<String> {
-        funnelled(inJSON: statusJSON())
-    }
-
-    /// `serve status --json` once: the paths and the funnel flags are both in it,
-    /// and each call forks a process.
     static func statusJSON() -> String {
         Proc.run(fromSettings().resolvedPath() ?? "/usr/bin/false", ["serve", "status", "--json"], timeout: 10).out
-    }
-
-    static func funnelled(inJSON out: String) -> Set<String> {
-        guard let data = out.data(using: .utf8),
-              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let allow = root["AllowFunnel"] as? [String: Any] else { return [] }
-        // Keys are "host:port"; only the port matters to us.
-        return Set(allow.filter { ($0.value as? Bool) == true }
-            .keys.compactMap { $0.split(separator: ":").last.map(String.init) })
     }
 
     /// Whether RoamRun's own entry is there *and* something is listening behind
     /// it. A crash leaves the entry pointing at a port nothing holds any more, and
     /// then `serve status` alone says the page works when it 502s.
-    static func servingLive(_ path: String) -> Bool {
-        guard let target = servedPaths()[path],
+    static func servingLive(port: Int) -> Bool {
+        guard let target = serving(port: port),
               AppCoordinator.isOurs(target),
               let port = UInt16(target.split(separator: ":").last ?? "") else { return false }
         return listening(on: port)
