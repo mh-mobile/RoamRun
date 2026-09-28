@@ -45,7 +45,10 @@ enum OTA {
         /// `1.0 beta` would otherwise be percent-encoded on the way back in.
         static func slug(version: String, build: String, at date: Date) -> String {
             let plain = "\(version)-\(build)-\(stamp.string(from: date))"
-            return String(plain.map { urlSafe($0) ? $0 : "-" })
+            let safe = String(plain.map { urlSafe($0) ? $0 : "-" })
+            // A leading dot would make a directory that everything walking the
+            // folder skips, so the build would vanish the moment it was stored.
+            return safe.hasPrefix(".") ? "v" + safe : safe
         }
 
         /// Field by field, like `DeviceProfile`: a build people are relying on
@@ -239,6 +242,9 @@ enum OTA {
         guard !build.slug.isEmpty else { throw Problem.unreadable(path) }
         let app = directory.appendingPathComponent(build.bundleID, isDirectory: true)
         try? FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        excludeFromBackup(directory)   // .ipa files are big and can be rebuilt
+        // Signed builds of the user's own apps; no other account here needs them.
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
         // One writer per app, taken before anything is looked at: two of these at
         // once could each delete what the other had just put in place, and both
         // report success. That includes the same-archive path below, which also
@@ -270,7 +276,6 @@ enum OTA {
         let staging = app.appendingPathComponent(".adding-\(UUID().uuidString)", isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
-            excludeFromBackup(directory)   // .ipa files are big and can be rebuilt
             try FileManager.default.copyItem(at: URL(fileURLWithPath: path), to: staging.appendingPathComponent("app.ipa"))
             try JSONEncoder().encode(build).write(to: staging.appendingPathComponent("meta.json"), options: .atomic)
             if let png = icon(ipa: path) { try? png.write(to: staging.appendingPathComponent("icon.png"), options: .atomic) }

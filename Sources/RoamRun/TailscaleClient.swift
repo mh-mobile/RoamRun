@@ -96,7 +96,26 @@ struct TailscaleClient {
     /// The paths `tailscale serve` is proxying, so the CLI can say whether the
     /// OTA page is actually reachable without asking the app.
     static func servedPaths() -> [String: String] {
-        served(in: Proc.run(fromSettings().resolvedPath() ?? "/usr/bin/false", ["serve", "status"], timeout: 10).out)
+        served(inJSON: Proc.run(fromSettings().resolvedPath() ?? "/usr/bin/false",
+                                ["serve", "status", "--json"], timeout: 10).out)
+    }
+
+    /// path → what it proxies to, for the default `:443` host only: the same path
+    /// can also be mounted on another port, and that one isn't the page's address.
+    /// From the JSON, not the display output: a wording change there would read as
+    /// "nothing is mounted", which is exactly when RoamRun would overwrite someone.
+    static func served(inJSON out: String) -> [String: String] {
+        guard let data = out.data(using: .utf8),
+              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let web = root["Web"] as? [String: Any] else { return [:] }
+        var result: [String: String] = [:]
+        for (hostPort, value) in web where hostPort.hasSuffix(":443") {
+            guard let handlers = (value as? [String: Any])?["Handlers"] as? [String: Any] else { continue }
+            for (path, handler) in handlers {
+                result[path] = ((handler as? [String: Any])?["Proxy"] as? String) ?? ""
+            }
+        }
+        return result
     }
 
     /// Ports whose serve config is published to the internet. `tailscale serve`
@@ -142,30 +161,6 @@ struct TailscaleClient {
             }
         }
         return ok
-    }
-
-    /// path → what it proxies to, for the default https block only: the same path
-    /// can also be mounted on another port, and that one isn't the page's address.
-    static func served(in out: String) -> [String: String] {
-        var result: [String: String] = [:]
-        var inDefault = false
-        for raw in out.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = raw.trimmingCharacters(in: .whitespaces)
-            if line.hasPrefix("http://") || line.hasPrefix("tcp://") {
-                inDefault = false   // another block, not the page's address
-                continue
-            }
-            if line.hasPrefix("https://") {
-                // `https://host (tailnet only)` is :443; `https://host:8790` is not.
-                let host = line.split(separator: " ").first.map(String.init) ?? ""
-                inDefault = !host.dropFirst("https://".count).contains(":")
-                continue
-            }
-            guard inDefault, line.hasPrefix("|--") else { continue }
-            let parts = line.dropFirst(3).trimmingCharacters(in: .whitespaces).split(separator: " ").map(String.init)
-            if let path = parts.first { result[path] = parts.count > 2 ? parts[2] : "" }
-        }
-        return result
     }
 
     /// nil while Tailscale is up; otherwise what to tell the user.

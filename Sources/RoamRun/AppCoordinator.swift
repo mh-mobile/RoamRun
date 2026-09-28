@@ -145,9 +145,10 @@ final class AppCoordinator: ObservableObject {
             MainActor.assumeIsolated { self?.refreshExternalBridges() }
         }
         refreshExternalBridges()
-        startOTAIfNeeded()
+        if Snapshot.fakeProfiles == nil { startOTAIfNeeded() }
         Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.startOTAIfNeeded() }   // the CLI may have added the first build
+            // The CLI may have added the first build.
+            MainActor.assumeIsolated { if Snapshot.fakeProfiles == nil { self?.startOTAIfNeeded() } }
         }
     }
 
@@ -189,7 +190,16 @@ final class AppCoordinator: ObservableObject {
             otaPublished = nil
         }
         guard !OTA.builds().isEmpty else {
-            stopOTA()   // nothing left to serve; deleting the folder is the off switch
+            // Deleting the folder is the off switch. Off the main actor, unlike
+            // the one at quit: this runs from a timer and shells out twice.
+            if let published = otaPublished {
+                otaPublished = nil
+                otaServer?.stop()
+                otaServer = nil
+                Task.detached { [weak self] in
+                    await MainActor.run { self?.release(published) }
+                }
+            }
             return
         }
         guard otaPublished == nil else {
@@ -232,13 +242,16 @@ final class AppCoordinator: ObservableObject {
                 }
                 return
             }
+            // Written before the call, not after: quitting while `tailscale` is
+            // still working would otherwise leave an entry finished by a child
+            // that outlived us, with nothing left to say it was ours.
+            AppID.settings?.set(mine, forKey: Self.otaServingKey)
             let out = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
                                ["serve", "--bg", "--yes", "--set-path", path, mine], timeout: 20)
             await MainActor.run {
                 guard let self else { return }
                 if out.status == 0 {
                     self.otaPublished = (path, mine)
-                    AppID.settings?.set(mine, forKey: Self.otaServingKey)
                     self.otaComplaint = ""
                     self.logStore.log("serving builds over the air at \(path)")
                 } else {

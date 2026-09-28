@@ -62,9 +62,9 @@ final class OTAServer: @unchecked Sendable {
         guard let listener = try? NWListener(using: params) else { return nil }
         listener.newConnectionHandler = { [weak self] conn in self?.serve(conn) }
         let ready = DispatchSemaphore(value: 0)
-        listener.stateUpdateHandler = { [weak self] state in
+        listener.stateUpdateHandler = { [weak self, weak listener] state in
             switch state {
-            case .ready: self?.port = listener.port?.rawValue ?? 0; ready.signal()
+            case .ready: self?.port = listener?.port?.rawValue ?? 0; ready.signal()
             case .failed, .cancelled: ready.signal()
             default: break
             }
@@ -96,9 +96,9 @@ final class OTAServer: @unchecked Sendable {
             return true
         }
         guard accepted else { conn.cancel(); return }
-        conn.stateUpdateHandler = { [weak self] state in
+        conn.stateUpdateHandler = { [weak self, weak conn] state in
             switch state {
-            case .failed: conn.cancel()         // always ends at .cancelled, so `closed` runs once
+            case .failed: conn?.cancel()        // always ends at .cancelled, so `closed` runs once
             case .cancelled: self?.closed()
             default: break
             }

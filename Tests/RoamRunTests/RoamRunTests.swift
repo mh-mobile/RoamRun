@@ -1119,24 +1119,19 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(OTA.isPlainName("com.example.my_app"))
 }
 
-@Test func onlyTheDefaultHttpsBlockCountsAsTheOTAPagesAddress() {
-    // The same path can be mounted on another port, and that one isn't the page.
-    let out = """
-    https://mac.tail1.ts.net (tailnet only)
-    |-- /        proxy http://127.0.0.1:8788
-    |-- /roamrun proxy http://127.0.0.1:61816
-
-    https://mac.tail1.ts.net:8790 (tailnet only)
-    |-- /other proxy http://127.0.0.1:8790
-
-    http://mac.tail1.ts.net (tailnet only)
-    |-- /plain proxy http://127.0.0.1:8080
-    """
-    let served = TailscaleClient.served(in: out)
+@Test func onlyTheDefaultHttpsHostCountsAsTheOTAPagesAddress() {
+    // From the JSON: a change to the display output would read as "nothing is
+    // mounted here", which is exactly when RoamRun would overwrite someone else.
+    let json = #"""
+    {"Web":{"mac.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8788"},
+                                          "/roamrun":{"Proxy":"http://127.0.0.1:61816"}}},
+            "mac.ts.net:8790":{"Handlers":{"/other":{"Proxy":"http://127.0.0.1:8790"}}}}}
+    """#
+    let served = TailscaleClient.served(inJSON: json)
     #expect(served["/roamrun"] == "http://127.0.0.1:61816")
     #expect(served["/"] == "http://127.0.0.1:8788")
     #expect(served["/other"] == nil)   // :8790, not the page's address
-    #expect(served["/plain"] == nil)   // the http:// block, not the page's address either
+    #expect(TailscaleClient.served(inJSON: "not json").isEmpty)
 }
 
 @Test func anExpiredProfileOrAnUnknownUdidIsRefusedBeforeTheDeviceSeesIt() throws {
@@ -1243,4 +1238,14 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(TailscaleClient.funnelled(inJSON: #"{"AllowFunnel":{"mac.ts.net:443":false}}"#).isEmpty)
     #expect(TailscaleClient.funnelled(inJSON: #"{"TCP":{"443":{}}}"#).isEmpty)
     #expect(TailscaleClient.funnelled(inJSON: "not json").isEmpty)
+}
+
+@Test func aSlugNeverStartsWithADotOrTheBuildDisappears() {
+    let when = Date(timeIntervalSince1970: 1_790_000_000)
+    // `builds(of:)` skips dot-directories to keep a running add safe, so a
+    // version like `.5` would store a build nothing could ever see again.
+    for version in [".5", "..", ".", "-1"] {
+        #expect(!OTA.Build.slug(version: version, build: "1", at: when).hasPrefix("."))
+    }
+    #expect(OTA.Build.slug(version: "1.0", build: "1", at: when).hasPrefix("1.0-"))
 }
