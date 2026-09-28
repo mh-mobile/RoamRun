@@ -56,10 +56,11 @@ bounded.
   port of its own (41443 by default), never on your tailnet's `:443`. Serve is tailnet-only — it is not on the
   internet — but every member of the tailnet can open that page and install those
   builds. On a shared tailnet, restrict it with Tailscale Grants / ACLs, or don't
-  use the feature. It cannot reach the internet: Tailscale Funnel only publishes
-  443, 8443 and 10000, and RoamRun's port is deliberately none of those. The path is registered when there is something to serve and
+  use the feature. It cannot reach the internet: Tailscale Funnel currently publishes
+  only 443, 8443 and 10000, and RoamRun's port is deliberately none of those. The port is registered when there is something to serve and
   given back when RoamRun quits — but not if it is force-quit or crashes, so
-  `tailscale serve --https=41443 off` is how you make sure it's gone.
+  `tailscale serve --https=<the port> --set-path=/ off` is how you make sure it's
+  gone — `--set-path` names the one mount, so nothing else you serve is touched.
   RoamRun records the exact address it registered and only ever replaces an entry
   matching it — its own, from a run that didn't get to release it — so it won't
   take over something else you serve on that port either. Deleting `ota/` takes the page down
@@ -78,7 +79,7 @@ bounded.
   asks `tailscale serve` to carry one port of its own, which tailscaled remembers. Admin rights only
   if you install the CLI and `/usr/local/bin` isn't writable (a password prompt).
 - Files: `~/Library/Application Support/RoamRun/` (device profiles, mode 0600,
-  and bridge status), `~/Library/Logs/RoamRun/`, and the
+  bridge status, and `ota/` — the .ipa files you stored, 5 per app), `~/Library/Logs/RoamRun/`, and the
   `io.github.mh-mobile.roamrun` defaults (`com.roamrun.app` before 0.1.12).
   The CLI link and agent skills are installed only on request and
   never overwrite other files (they do replace an existing RoamRun link or
@@ -89,10 +90,10 @@ bounded.
   marked private; the in-app activity log shows them in full.
 - **Nothing about you is sent anywhere** — no telemetry, no analytics, no update
   check; there is no code in RoamRun that talks to a server of ours or anyone
-  else's. It does open connections of its own — to your device, and
-  to its own loopback port to check the install page is up: a TCP probe to see whether it answers, the
-  RemotePairing handshake to confirm the answer really comes from it, and a scan
-  for its RemotePairing port when that has changed. The bridge itself forwards
+  else's. It does open connections of its own — to your device: a TCP probe to see
+  whether it answers, the RemotePairing handshake to confirm the answer really
+  comes from it, and a scan for its RemotePairing port when that has changed. It
+  also connects to its own loopback port to check the install page still answers. The bridge itself forwards
   bytes without reading them.
 - Helper processes (`dns-sd`, `log stream`) are tied to RoamRun and typically
   exit within about a second if it quits or is killed, taking the advertisement

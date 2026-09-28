@@ -1052,6 +1052,12 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(method == "GET")
     #expect(path == "/x/y")
     #expect(host == "mac.ts.net")
+    // Percent-encoding doesn't get a second chance to climb: appendingPathComponent
+    // encodes rather than decodes, so these are ordinary names and miss everything.
+    #expect(OTAServer.segments("/%2e%2e/%2e%2e/etc") == ["%2e%2e", "%2e%2e", "etc"])
+    // No Host, or two of them, and the manifest would send the device to itself.
+    #expect(OTAServer.request("GET / HTTP/1.0\r\n").2 == nil)
+    #expect(OTAServer.request("GET / HTTP/1.1\r\nHost: a\r\nHost: b\r\n").2 == nil)
 }
 
 @Test func theBiggestIconIsPickedAndTheIpadOneOnlyIfItIsAllThereIs() {
@@ -1126,10 +1132,37 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
                                           "/roamrun":{"Proxy":"http://127.0.0.1:1"}}},
             "mac.ts.net:41443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:61816"}}}}}
     """#
-    #expect(TailscaleClient.serving(port: 41443, inJSON: json) == "http://127.0.0.1:61816")
-    #expect(TailscaleClient.serving(port: 443, inJSON: json) == "http://127.0.0.1:8788")
-    #expect(TailscaleClient.serving(port: 9999, inJSON: json) == nil)
-    #expect(TailscaleClient.serving(port: 41443, inJSON: "not json") == nil)
+    #expect(TailscaleClient.serving(port: 41443, inJSON: json) == .mounted(root: "http://127.0.0.1:61816", others: []))
+    // The user's own port comes back with its other mounts named, so RoamRun can
+    // tell "free" from "carrying something I must not remove".
+    #expect(TailscaleClient.serving(port: 443, inJSON: json)
+            == .mounted(root: "http://127.0.0.1:8788", others: ["/roamrun"]))
+    #expect(TailscaleClient.serving(port: 9999, inJSON: json) == .nothing)
+    // Not "nothing": a status we couldn't read is the moment RoamRun would
+    // otherwise decide the port is free and overwrite an entry of the user's.
+    #expect(TailscaleClient.serving(port: 41443, inJSON: "not json") == .unknown)
+    #expect(TailscaleClient.serving(port: 41443, inJSON: "") == .unknown)
+    #expect(TailscaleClient.serving(port: 41443, inJSON: "null") == .nothing)   // no serve config at all
+    // A port with only a sub-path of the user's on it is not an empty port.
+    #expect(TailscaleClient.serving(port: 41443, inJSON: #"{"Web":{"m:41443":{"Handlers":{"/mine":{}}}}}"#)
+            == .mounted(root: nil, others: ["/mine"]))
+}
+
+@Test func aPortThatCantWorkIsIgnoredRatherThanRetriedForEver() {
+    #expect(AppCoordinator.otaPort(0) == 41443)         // unset
+    #expect(AppCoordinator.otaPort(41444) == 41443 + 1)
+    #expect(AppCoordinator.otaPort(8443) == 41443)      // Funnel could publish it
+    #expect(AppCoordinator.otaPort(80) == 41443)        // tailscaled is root and would take it
+    #expect(AppCoordinator.otaPort(70000) == 41443)     // `tailscale serve` refuses it
+}
+
+@Test func aFolderThatCantBeReadIsNotAnEmptyOne() throws {
+    // Deleting ota/ is the off switch; failing to read it is not, and treating
+    // the two alike takes the page down under a download.
+    #expect(OTA.appDirectories()?.isEmpty != nil || OTA.appDirectories() == nil)
+    let gone = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-absent-\(UUID().uuidString)")
+    #expect((try? FileManager.default.contentsOfDirectory(atPath: gone.path)) == nil)
+    #expect(!FileManager.default.fileExists(atPath: gone.path))   // so appDirectories would say []
 }
 
 @Test func anExpiredProfileOrAnUnknownUdidIsRefusedBeforeTheDeviceSeesIt() throws {

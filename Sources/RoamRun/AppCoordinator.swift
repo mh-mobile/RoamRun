@@ -210,6 +210,21 @@ final class AppCoordinator: ObservableObject {
     /// Said once per reason: the retry runs every 30s and the log is a person's.
     private var otaComplaint = ""
     private var verifyingOTA = false
+    /// A publish can outlast the timer that started it: `serving` waits up to 10 s
+    /// and `serve` up to 20. Off the actor so the detached task can clear it
+    /// without capturing us.
+    nonisolated static let publishLock = NSLock()
+    nonisolated(unsafe) private static var publishingOTA = false
+
+    nonisolated static func beginPublish() -> Bool {
+        publishLock.withLock {
+            guard !publishingOTA else { return false }
+            publishingOTA = true
+            return true
+        }
+    }
+
+    nonisolated static func endPublish() { publishLock.withLock { publishingOTA = false } }
     nonisolated static let otaPortKey = "otaPort"
     /// A port of RoamRun's own, rather than a path on the tailnet's `:443`.
     /// 443 carries whatever else the user serves, so a mistake there is theirs,
@@ -218,8 +233,15 @@ final class AppCoordinator: ObservableObject {
     /// 41443 is in IANA's unassigned 41112-41793 block, below the ephemeral
     /// range macOS hands out, and says what it is for.
     nonisolated static var otaPort: Int {
-        let set = AppID.settings?.integer(forKey: otaPortKey) ?? 0
-        return set > 0 && !funnelCapable.contains(set) ? set : 41443
+        otaPort(AppID.settings?.integer(forKey: otaPortKey) ?? 0)
+    }
+
+    /// A setting that can't work is ignored rather than retried every 30 s: a
+    /// privileged port would put the page on the tailnet's `:22` or `:80`
+    /// (tailscaled is root and would take it), and one over 65535 is refused by
+    /// `tailscale serve` for ever.
+    nonisolated static func otaPort(_ set: Int) -> Int {
+        (1024...65535).contains(set) && !funnelCapable.contains(set) ? set : 41443
     }
     nonisolated static let funnelCapable: Set<Int> = [443, 8443, 10000]
 
@@ -227,17 +249,30 @@ final class AppCoordinator: ObservableObject {
         // The port can be changed while we run, so it has to take effect without
         // a restart — and the old one has to be given back, not forgotten.
         if let published = otaPublished, published.port != Self.otaPort {
-            otaPublished = nil
-            Task.detached { Self.releaseServe(published) }
+            Task.detached { [weak self] in
+                guard Self.releaseServe(published) else { return }   // else the next tick tries again
+                await MainActor.run { if self?.otaPublished?.port == published.port { self?.otaPublished = nil } }
+            }
+            return
         }
-        guard !OTA.builds().isEmpty else {
+        guard let apps = OTA.appDirectories() else {
+            // Couldn't read the folder — a descriptor limit, a permission change.
+            // Taking the page down here would cut a download in flight and make
+            // the address dead until the next tick; leaving it up costs nothing.
+            return
+        }
+        guard !apps.isEmpty else {
             // Deleting the folder is the off switch, whether or not the page ever
             // got published: the listener goes either way.
             otaServer?.stop()
             otaServer = nil
             if let published = otaPublished {
-                otaPublished = nil
-                Task.detached { Self.releaseServe(published) }   // shells out twice; not on the main actor
+                // Not cleared until it is really gone: an entry left pointing at a
+                // port nothing holds any more would otherwise be unfindable.
+                Task.detached { [weak self] in                     // shells out twice; not on the main actor
+                    guard Self.releaseServe(published) else { return }
+                    await MainActor.run { if self?.otaPublished?.port == published.port { self?.otaPublished = nil } }
+                }
             }
             return
         }
@@ -245,30 +280,68 @@ final class AppCoordinator: ObservableObject {
             verifyOTAStillServed()
             return
         }
+        // One of these can still be running when the 30 s timer comes round:
+        // without the guard the same address is registered twice and the later
+        // failure overwrites the earlier success in the log.
+        guard Self.beginPublish() else { return }
         let tailnetPort = Self.otaPort
+        // Said out loud rather than just ignored: otherwise `defaults write` looks
+        // as if it did nothing.
+        if let set = AppID.settings?.integer(forKey: Self.otaPortKey), set != 0, set != tailnetPort {
+            complainOnce("otaPort \(set) can't be used — it has to be 1024-65535 and not one of " +
+                         "\(Self.funnelCapable.sorted().map(String.init).joined(separator: ", ")), " +
+                         "which Tailscale Funnel could publish. Serving on \(tailnetPort).")
+        }
         if let running = otaServer, running.tailnetPort != tailnetPort {
             running.stop()
             otaServer = nil
         }
         let server = otaServer ?? OTAServer(tailnetPort: tailnetPort)
+        // ponytail: opening the listener waits on the network stack, so this can
+        // hold the main actor for up to 5 s if it never comes up. Moving it off
+        // needs OTAServer out of this actor's region; do that if it ever shows.
         guard let port = server.start() else {
+            Self.endPublish()
             complainOnce("couldn't start the over-the-air server")
             return
         }
         otaServer = server
         Task.detached { [weak self] in
+            defer { Self.endPublish() }
             let mine = "http://127.0.0.1:\(port)"
-            let existing = TailscaleClient.serving(port: tailnetPort)
             // Only ever replace an entry we can prove we made — ours from a run
             // that ended without releasing it. Anything else on that port is the
             // user's, and `tailscale serve` has no undo.
-            if let existing, existing != mine, !Self.isOurs(existing) {
+            switch TailscaleClient.serving(port: tailnetPort) {
+            case .unknown:
+                // tailscaled didn't answer, or there is no tailscale here at all.
+                // Publishing now would be deciding the port is free without having
+                // looked; the timer asks again — but say so, or this is silent.
                 await MainActor.run {
-                    self?.complainOnce("port \(tailnetPort) is already serving \(existing), which isn't RoamRun's — " +
-                        "not taking it over. Give RoamRun another port: " +
-                        "defaults write \(AppID.bundle) otaPort -int 41444")
+                    self?.complainOnce("can't read `tailscale serve status`, so RoamRun won't touch port " +
+                                       "\(tailnetPort) — is Tailscale installed and running? Retrying.")
                 }
                 return
+            case .nothing:
+                break
+            case .mounted(let root, let others):
+                guard others.isEmpty, let root, root == mine || Self.isOurs(root) else {
+                    // Still not taken over — but which of the two it is decides what
+                    // the user should do, and the settings that named our own
+                    // registrations are the first thing a reinstall deletes.
+                    let advice = Self.abandoned(root, others: others)
+                        ? "nothing is behind it, so it is left over from a run that was killed: " +
+                          "`tailscale serve --https=\(tailnetPort) --set-path=/ off` clears it and " +
+                          "RoamRun publishes again within half a minute"
+                        : "not taking it over. Give RoamRun another port: " +
+                          "defaults write \(AppID.bundle) otaPort -int 41444"
+                    let what = others.isEmpty ? (root ?? "something else")
+                        : "\(others.count + (root == nil ? 0 : 1)) paths"
+                    await MainActor.run {
+                        self?.complainOnce("port \(tailnetPort) is already serving \(what), which isn't RoamRun's — " + advice)
+                    }
+                    return
+                }
             }
             // Written before the call, not after: quitting while `tailscale` is
             // still working would otherwise leave an entry finished by a child
@@ -287,6 +360,10 @@ final class AppCoordinator: ObservableObject {
                     // Tailscale at all. The timer tries again, so this recovers.
                     self.complainOnce("couldn't publish port \(tailnetPort) with tailscale serve, will retry: " +
                         out.err.trimmingCharacters(in: .whitespacesAndNewlines))
+                    // Remembered before the call in case we died during it. It
+                    // didn't take, so drop it: a window full of addresses that
+                    // were never registered can't recognise one that was.
+                    if TailscaleClient.serving(port: tailnetPort).root != mine { Self.forgetServing(mine) }
                 }
             }
         }
@@ -299,7 +376,7 @@ final class AppCoordinator: ObservableObject {
         guard let published = otaPublished, !verifyingOTA else { return }
         verifyingOTA = true
         Task.detached { [weak self] in
-            let live = TailscaleClient.serving(port: published.port) == published.target
+            let live = TailscaleClient.serving(port: published.port).root == published.target
             await MainActor.run {
                 guard let self else { return }
                 self.verifyingOTA = false
@@ -314,16 +391,33 @@ final class AppCoordinator: ObservableObject {
     /// Whether the entry is gone. False means it is still there and the caller
     /// has to try again — reporting it released when it isn't is how builds stay
     /// reachable while the log says otherwise.
-    @discardableResult
     nonisolated static func releaseServe(_ published: (port: Int, target: String)) -> Bool {
-        guard TailscaleClient.serving(port: published.port) == published.target else { return true }
+        switch TailscaleClient.serving(port: published.port) {
+        case .unknown: return false            // couldn't look; saying it's gone is how one survives
+        case .nothing: forgetServing(published.target); return true
+        case .mounted(let root, _): guard root == published.target else { return true }
+        }
+        // `--set-path=/` names the one mount to remove. Without it `off` means
+        // every mount on the port, and `tailscale` then asks for confirmation on
+        // a stdin that is /dev/null here: it removes nothing and still exits 0,
+        // so this would report a release that never happened.
         let out = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
-                           ["serve", "--https=\(published.port)", "off"], timeout: 10)
+                           ["serve", "--https=\(published.port)", "--set-path=/", "off"], timeout: 10)
         // Only once it's really gone. Forgetting it while the entry survives
         // would leave the next run unable to recognise its own registration.
         guard out.status == 0 else { return false }
         forgetServing(published.target)
         return true
+    }
+
+    /// An entry proxying to a loopback port nothing is listening on can't be a
+    /// service of anyone's: some run was killed before it gave the port back.
+    /// Reported, not reclaimed — "only replace what we can prove is ours" is worth
+    /// more than saving the user one command.
+    nonisolated static func abandoned(_ root: String?, others: [String]) -> Bool {
+        guard others.isEmpty, let root, root.hasPrefix("http://127.0.0.1:"),
+              let port = UInt16(root.dropFirst("http://127.0.0.1:".count)) else { return false }
+        return !TailscaleClient.listening(on: port)
     }
 
     private func complainOnce(_ line: String) {
@@ -333,15 +427,21 @@ final class AppCoordinator: ObservableObject {
     }
 
     private func stopOTA() {
-        guard let server = otaServer else { return }
+        // Not guarded on the listener: the off switch clears it first and leaves
+        // the registration until the release succeeds, so at quit there can be one
+        // to give back with no server left.
+        let server = otaServer
         otaServer = nil
-        server.stop()
-        
-        guard let published = otaPublished else { return }
-        otaPublished = nil
-        // Synchronously here: this runs from willTerminate, where a detached task
-        // would not outlive the process.
-        Self.releaseServe(published)
+        if let published = otaPublished {
+            otaPublished = nil
+            // Before the listener, not after: in between, the address answers 502
+            // rather than stopping. Synchronously here, because this runs from
+            // willTerminate where a detached task would not outlive the process.
+            if !Self.releaseServe(published) {
+                logStore.log("couldn't give port \(published.port) back; `tailscale serve --https=\(published.port) --set-path=/ off` clears it")
+            }
+        }
+        server?.stop()
     }
 
     /// The alert is shown once a run; the activity log and `roamrun status` keep saying it.

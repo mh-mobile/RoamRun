@@ -52,9 +52,9 @@ enum CLI {
                                      Keep a build for installing over the air, for when the device can't
                                      be on Wi-Fi (walking, cellular only) and so can't be bridged. Needs an
                                      Ad Hoc or Enterprise .ipa, `tailscale serve` for HTTPS, and RoamRun.app
-                                     running — it serves the page. Prints the
-                                     page's address; open it on the device and tap Install
-                                     (--replace: drop builds under the same version and build number)
+                                     running — it serves the page. Prints the page's address; open it on
+                                     the device and tap Install. Anyone on your tailnet can install from
+                                     that page (--replace: drop builds under the same version and build)
       version                        Print the version (also --version)
       init [--client <name>] [--print] [--uninstall]
                                      Install the agent skill (clients: claude, codex, cursor, gemini, copilot)
@@ -425,12 +425,17 @@ enum CLI {
                 stop("Tailscale didn't give this Mac a name — turn MagicDNS on for your tailnet. The build is stored.")
             }
             let url = "https://\(host):\(tailnetPort)/"
-            let mounted = TailscaleClient.serving(port: tailnetPort)
-            if let mounted, !AppCoordinator.isOurs(mounted) {
-                print("  port \(tailnetPort) is serving \(mounted), which isn't RoamRun's, so that address")
-                print("  won't reach this build. Give RoamRun another port and restart it:")
-                print("    defaults write \(AppID.bundle) otaPort -int 41444")
-                exit(1)
+            if case .mounted(let root, let others) = TailscaleClient.serving(port: tailnetPort),
+               !(others.isEmpty && AppCoordinator.isOurs(root ?? "")) {
+                let what = others.isEmpty ? (root ?? "something else") : "\(others.count) other paths"
+                // Which of the two it is decides what the user should do about it.
+                let advice = AppCoordinator.abandoned(root, others: others)
+                    ? "  Nothing is behind it, so a run was killed before it gave the port back:\n" +
+                      "    tailscale serve --https=\(tailnetPort) --set-path=/ off"
+                    : "  Give RoamRun another port:\n" +
+                      "    defaults write \(AppID.bundle) otaPort -int 41444"
+                stop("the build is stored, but port \(tailnetPort) is serving \(what), which isn't\n" +
+                     "  RoamRun's, so that address won't reach it.\n" + advice)
             }
             if !TailscaleClient.servingLive(port: tailnetPort) {
                 print("  RoamRun publishes the page while it runs, so it has to be open; it can take")
@@ -438,6 +443,7 @@ enum CLI {
                 print("  Troubleshooting › Recent messages.")
             }
             print("  Open on the device: \(url)")
+            print("  Anyone on your tailnet can open that page and install these builds.")
             if isatty(STDOUT_FILENO) != 0 { print(qr(url)) }
             exit(0)
         } catch {
@@ -461,15 +467,19 @@ enum CLI {
         guard let pixels = gray.data?.assumingMemoryBound(to: UInt8.self) else { return "" }
         func dark(_ x: Int, _ y: Int) -> Bool { y < 0 || y >= h ? false : pixels[y * w + x] < 128 }
         let quiet = 2
+        // Black on white, said explicitly: a block character takes the terminal's
+        // own foreground colour, so on a dark theme the code would come out
+        // inverted — which a camera won't read.
+        let paper = "\u{1b}[30;47m", plain = "\u{1b}[0m"
         var out = ""
         for row in stride(from: -quiet * 2, to: h + quiet * 2, by: 2) {
-            out += String(repeating: " ", count: quiet)
+            out += paper + String(repeating: " ", count: quiet)
             for x in -quiet..<(w + quiet) {
                 let top = x < 0 || x >= w ? false : dark(x, row)
                 let bottom = x < 0 || x >= w ? false : dark(x, row + 1)
                 out += top && bottom ? "\u{2588}" : top ? "\u{2580}" : bottom ? "\u{2584}" : " "
             }
-            out += "\n"
+            out += String(repeating: " ", count: quiet) + plain + "\n"
         }
         return out
     }
@@ -1065,6 +1075,8 @@ enum CLI {
                                    note: (String) -> Void) {
         let apps = OTA.builds()
         guard !apps.isEmpty else { return }
+        let mine: Bool
+        var stray = false
         section("\nOver the air", "ota")
         let builds = apps.flatMap(\.builds)
         let bytes = builds.reduce(Int64(0)) { $0 + $1.size }
@@ -1073,11 +1085,19 @@ enum CLI {
         let tailnetPort = AppCoordinator.otaPort
         let served = TailscaleClient.serving(port: tailnetPort)
         let live = TailscaleClient.servingLive(port: tailnetPort)
+        switch served {
+        case .unknown, .nothing: mine = true   // nothing of the user's to get in the way
+        case .mounted(let root, let others):
+            mine = others.isEmpty && AppCoordinator.isOurs(root ?? "")
+            stray = !mine && AppCoordinator.abandoned(root, others: others)
+        }
         check(live, live ? "The install page is published on port \(tailnetPort)"
                          : "The install page isn't published on port \(tailnetPort)",
-              served == nil || AppCoordinator.isOurs(served ?? "")
+              mine
                   ? "RoamRun publishes it while it runs — open RoamRun, then look in ⚙ Settings › Troubleshooting › Recent messages if it doesn't appear."
-                  : "port \(tailnetPort) is serving \(served ?? "something else") instead. Give RoamRun another port: defaults write \(AppID.bundle) otaPort -int 41444",
+                  : stray
+                  ? "port \(tailnetPort) carries an entry with nothing behind it, left by a run that was killed: tailscale serve --https=\(tailnetPort) --set-path=/ off"
+                  : "port \(tailnetPort) is serving something else. Give RoamRun another port: defaults write \(AppID.bundle) otaPort -int 41444",
               true)
         if live, let host = (try? TailscaleClient.fromSettings().selfDNSName()) ?? nil {
             note("Open on the device: https://\(host):\(tailnetPort)/")

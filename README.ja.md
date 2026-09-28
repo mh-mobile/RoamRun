@@ -203,12 +203,14 @@ roamrun ota iPhone build/MyApp.ipa
 
 ビルドを保管し、アプリが動いている間 `tailscale serve` でページを公開します。
 表示されたアドレス（またはターミナルに描画される QR）を実機で開き、Install を
-タップするだけです。ページはアプリごとに**直近 5 件**を新しい順に並べるので、
+タップするだけです。アプリ起動から公開まで 30 秒ほどかかることがあります。
+アドレスを忘れたら `roamrun doctor` が再表示します。ページはアプリごとに**直近 5 件**を新しい順に並べるので、
 入れた版が壊れていたら 1 つ前に戻せます。
 
 再ビルドでバージョン番号を上げないことが多いので、同じバージョンのまま積み上がり、
-時刻で見分ける形になります（まったく同じ `.ipa` を 2 回渡した場合は増えません）。
-バージョンごとに 1 件だけ残したいときは `--replace` を付けてください。
+時刻で見分ける形になります（まったく同じ `.ipa` を 2 回渡した場合は増えず、代わりに先頭に戻ります。
+もう一度渡すのは「その版に戻る」ことなので）。
+同じバージョン・ビルド番号で 1 件だけ残したいときは `--replace` を付けてください。
 
 **できるのはインストールだけです。** デバッガも `roamrun logs` も `roamrun screenshot`
 も使えません（どれもブリッジが前提のため）。触って確かめる用で、作業する用ではありません。
@@ -220,14 +222,16 @@ roamrun ota iPhone build/MyApp.ipa
 - **Release Testing (Ad Hoc) か Enterprise 署名の .ipa**。Xcode なら
   Product › Archive › Distribute App › Release Testing で書き出せます
   （スクリプトからは `xcodebuild -exportArchive` に `"method": "release-testing"`）。
-  `roamrun run` では作れません（Development 署名になり、ブリッジ経由でしか入りません）。Development 署名はブリッジ
-  経由でしか入らないので、`roamrun ota` が先に弾きます。Ad Hoc の場合は端末がプロビジョ
-  ニングプロファイルに含まれている必要がありますが、ブリッジが繋がっていれば Xcode が
-  ローカル端末として登録してくれるので、自宅で一度やれば済みます
+  `roamrun run` では作れません（Development 署名になり、ブリッジ経由でしか入りません）。
+  Development 署名の .ipa は `roamrun ota` が先に弾きます。Ad Hoc の場合は端末がプロビジョ
+  ニングプロファイルに含まれ、かつ RoamRun 側でも UDID を把握している必要があります。
+  自宅で一度ブリッジすれば（`roamrun up <name> -d`）Xcode がローカル端末として登録し、
+  RoamRun も UDID を覚えるので、それで済みます。Enterprise 署名ならどちらも不要です
 - **tailnet で HTTPS が有効なこと**（MagicDNS と HTTPS 証明書）。RoamRun は**専用ポート**を
-  1 つだけ使い（既定 41443。変更は `defaults write io.github.mh-mobile.roamrun otaPort -int …`）、
+  1 つだけ使い（既定 41443。変更は `defaults write io.github.mh-mobile.roamrun otaPort -int …`。
+  443 / 8443 / 10000 は Funnel で公開できてしまうポートなので受け付けず、41443 のままになります）、
   終了時に返します。あなたが他に serve しているものが載る `:443` には**一切触りません**。
-  また Tailscale Funnel が公開できるのは 443 / 8443 / 10000 の 3 つだけなので、
+  また Tailscale Funnel が現在公開できるのは 443 / 8443 / 10000 の 3 つだけなので、
   **それ以外のポートはインターネットに出しようがありません**
 - **RoamRun が起動していること**（ページを配信しているのはアプリです）
 
@@ -302,15 +306,17 @@ RoamRun が書き込むのは次の場所だけです（システム設定や他
 roamrun init --uninstall                  # スキルを入れた場合（他のツールで入れたならそのツールで削除）
 rm /usr/local/bin/roamrun                 # CLI を入れた場合
 rm -rf ~/Library/Application\ Support/RoamRun ~/Library/Logs/RoamRun
-defaults delete io.github.mh-mobile.roamrun
-defaults delete com.roamrun.app 2>/dev/null   # 0.1.12 より前の版が残したもの
-tailscale serve --https=41443 off            # roamrun ota を使った場合
+tailscale serve --https=41443 --set-path=/ off   # roamrun ota を使った場合（otaPort のポート）
+defaults delete io.github.mh-mobile.roamrun      # 上の行の後で（otaPort がここにあります）
+defaults delete com.roamrun.app 2>/dev/null      # 0.1.12 より前の版が残したもの
 # 最後に /Applications/RoamRun.app を削除（「ログイン時に開く」を有効にしていた場合は先に無効化）
 ```
 
 `roamrun ota` を使った場合、上の表の外にもう 1 つ残るものがあります。RoamRun は
-`tailscale serve` にポート（既定 41443）を持たせ、正常終了時には返しますが、
-強制終了やクラッシュでは返りません。上の `tailscale serve --https=41443 off` で消せます。
+`tailscale serve` にポート（`otaPort` で指定したもの。既定 41443）を持たせ、正常終了時には
+返しますが、強制終了やクラッシュでは返りません。上の `tailscale serve --https=41443 --set-path=/ off` で消せます。
+RoamRun は自分が残したものを見つけると消し方を案内しますが、アプリを止めている間に
+`otaPort` を変えた場合の「別ポートに残ったもの」は対象外です（見るのは現在の設定ポートだけ）。
 
 ## 制限・既知の課題
 

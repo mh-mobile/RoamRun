@@ -89,12 +89,15 @@ extension OTA {
         footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 14px; color: var(--dim); }
         code { font-size: 14px; }
         .empty { color: var(--dim); }
+        .gone { margin: 0; font-size: 15px; }
         </style>
         </head><body>
         <header>RoamRun</header>
         \(body)
         <footer>Tapping Install adds the app to your Home Screen. Safari shows no progress — watch the icon
-        there, and keep the screen on until it finishes: the VPN pauses when the device sleeps.</footer>
+        there, and keep the screen on until it finishes: the VPN pauses when the device sleeps.
+        An Enterprise build also needs its developer trusted once, under Settings › General ›
+        VPN &amp; Device Management. Everyone on this tailnet can open this page and install these builds.</footer>
         </body></html>
         """
     }
@@ -103,14 +106,18 @@ extension OTA {
         var bits = [when(build.added, now: now), size(build.size)]
         // Checked when it was stored, but a profile only lasts a year and these
         // are kept for months: the device would just refuse it with nothing said.
-        if let expires = build.expires, expires < now {
+        let expired = (build.expires ?? .distantFuture) < now
+        if expired, let expires = build.expires {
             bits.append("EXPIRED \(expires.formatted(date: .abbreviated, time: .omitted))")
         }
+        let action = expired
+            ? #"<p class="gone">Can't be installed any more — its provisioning profile expired. Export the build again on the Mac.</p>"#
+            : #"<a class="install" href="\#(escape(installLink(for: build, base: base)))">Install</a>"#
         return """
             <div class="build\(newest ? " newest" : "")">
               <div class="top"><span class="ver">\(escape(build.label))</span>\(newest ? #"<span class="tag">NEWEST</span>"# : "")</div>
               <div class="meta">\(escape(bits.joined(separator: " · ")))</div>
-              <a class="install" href="\(escape(installLink(for: build, base: base)))">Install</a>
+              \(action)
             </div>
             """
     }

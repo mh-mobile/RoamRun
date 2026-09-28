@@ -39,7 +39,7 @@ not match the installed CLI until then (`roamrun --help` is authoritative).
   router, café Wi-Fi. Cellular alone is not, and neither is the iPhone sharing
   its *own* Personal Hotspot (then it isn't on Wi-Fi itself).
 - If the user really has no Wi-Fi to join, there is no bridge and none of the
-  commands below work. `roamrun ota <name> <App.ipa>` is the one thing that
+  commands below work. `roamrun ota <name> <App.ipa> [--replace]` is the one that
   still does: it publishes the build so the user can install it from the device
   over cellular. It installs only — no debugging, no logs, no screenshots — and
   it needs an .ipa signed for Release Testing (Ad Hoc) or Enterprise, which
@@ -50,8 +50,12 @@ not match the installed CLI until then (`roamrun --help` is authoritative).
   running on the Mac — it serves the page, the CLI only stores the build.
   **Anyone on the tailnet can open that page and install the build** — say so
   before suggesting it. Give the user the address it prints: the QR code is only
-  drawn on a terminal, so it won't reach them through you. Tell them what they'll
-  get and let them decide; don't offer it as a substitute for the bridge.
+  drawn on a terminal, so it won't reach them through you — `roamrun doctor`
+  prints it again. Its "Over the air" check is a `warning`, not a `fail`, when the
+  page isn't published (the app isn't open, or it needs up to half a minute), so
+  read that section rather than only doctor's first fail. `--replace` keeps one row
+  per version and build number instead of stacking one per rebuild. Tell them what
+  they'll get and let them decide; don't offer it as a substitute for the bridge.
 
 ## 3. Get the device ready
 

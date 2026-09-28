@@ -60,7 +60,7 @@ enum OTA {
             title = try c.decodeIfPresent(String.self, forKey: .title) ?? bundleID
             version = try c.decodeIfPresent(String.self, forKey: .version) ?? "0"
             build = try c.decodeIfPresent(String.self, forKey: .build) ?? ""
-            added = try c.decodeIfPresent(Date.self, forKey: .added) ?? .now
+            added = try c.decodeIfPresent(Date.self, forKey: .added) ?? .distantPast
             size = try c.decodeIfPresent(Int64.self, forKey: .size) ?? 0
             expires = try c.decodeIfPresent(Date.self, forKey: .expires)
             slug = try c.decodeIfPresent(String.self, forKey: .slug) ?? ""   // the directory name replaces it
@@ -136,7 +136,7 @@ enum OTA {
         let unzip = Proc.run("/usr/bin/unzip", ["-qo", path, "Payload/*.app/Info.plist", "-d", dir.path], timeout: 60)
         // 1 is "warnings, but it worked" and 11 is "nothing matched", which the
         // guard below reports better. Anything above that is a broken archive.
-        if unzip.status > 1 && unzip.status != 11 {
+        if unzip.status < 0 || (unzip.status > 1 && unzip.status != 11) {
             throw Problem.failed("couldn't unpack \(path): \(unzip.err.trimmingCharacters(in: .whitespacesAndNewlines))")
         }
         let payload = dir.appendingPathComponent("Payload")
@@ -176,16 +176,23 @@ enum OTA {
     /// profile names devices at all.
     @discardableResult
     static func check(_ plist: [String: Any]?, against udid: String?, name: String, path: String = "That build") throws -> Date? {
-        guard let plist else { throw Problem.unreadable("the provisioning profile") }
+        guard let plist else {
+            throw Problem.unreadable("the provisioning profile in \(path) — the archive may be unsigned. " +
+                                     "Export it for Release Testing (Ad Hoc) or Enterprise.")
+        }
         let expiry = plist["ExpirationDate"] as? Date
         if let expiry, expiry < .now { throw Problem.expired(path: path, on: expiry) }
         let entitlements = plist["Entitlements"] as? [String: Any]
         switch CLI.parseProvisioning(plist) {
         case .appStore: throw Problem.appStore(path)
-        case .allDevices, .unknown: return expiry   // Enterprise covers every device
+        case .allDevices: return expiry   // Enterprise covers every device
+        case .unknown: throw Problem.unreadable("the provisioning profile in \(path)")
         case .devices(let list):
-            // Development and Ad Hoc both name devices; only the debuggable one is Development.
-            if entitlements?["get-task-allow"] as? Bool == true { throw Problem.development(path) }
+            // Development and Ad Hoc both name devices; only the debuggable one is
+            // Development. Without entitlements there is nothing to tell them
+            // apart by, and guessing Ad Hoc means iOS refuses it with no reason given.
+            guard let entitlements else { throw Problem.unreadable("the entitlements in \(path)'s provisioning profile") }
+            if entitlements["get-task-allow"] as? Bool == true { throw Problem.development(path) }
             guard let udid else { throw Problem.udidUnknown(name) }
             guard list.contains(where: { $0.caseInsensitiveCompare(udid) == .orderedSame }) else {
                 throw Problem.notForDevice(path: path, name: name, udid: udid)
@@ -250,8 +257,12 @@ enum OTA {
         // report success. That includes the same-archive path below, which also
         // writes and deletes.
         let lock = open(app.appendingPathComponent(".lock").path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
-        defer { if lock >= 0 { flock(lock, LOCK_UN); close(lock) } }
-        if lock >= 0 { flock(lock, LOCK_EX) }
+        guard lock >= 0 else {
+            throw Problem.failed("couldn't lock \(app.path) (\(String(cString: strerror(errno)))) — " +
+                                 "storing without it could lose a build another roamrun is writing")
+        }
+        defer { flock(lock, LOCK_UN); close(lock) }
+        flock(lock, LOCK_EX)
 
         // The same archive handed over twice: two rows the eye can't tell apart,
         // and one fewer slot for a build that is actually different. A rebuild
@@ -268,7 +279,16 @@ enum OTA {
             if replacing { drop(build.bundleID, labelled: build.label, keeping: again.slug) }
             return same
         }
-        let dir = app.appendingPathComponent(build.slug, isDirectory: true)
+        // The slug counts in seconds, so a script adding two different archives
+        // back to back can land on a name that exists. `moveItem` would fail with
+        // "File exists", which says nothing about what happened.
+        var stored = build
+        var n = 1
+        while FileManager.default.fileExists(atPath: app.appendingPathComponent(stored.slug).path) {
+            n += 1
+            stored.slug = "\(build.slug)-\(n)"
+        }
+        let dir = app.appendingPathComponent(stored.slug, isDirectory: true)
         sweepStaging(app)   // a previous add that was killed mid-copy
         // Built somewhere else first: a copy that runs out of disk halfway must
         // not leave a half-written build in the list, and with --replace it must
@@ -277,17 +297,17 @@ enum OTA {
         do {
             try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
             try FileManager.default.copyItem(at: URL(fileURLWithPath: path), to: staging.appendingPathComponent("app.ipa"))
-            try JSONEncoder().encode(build).write(to: staging.appendingPathComponent("meta.json"), options: .atomic)
+            try JSONEncoder().encode(stored).write(to: staging.appendingPathComponent("meta.json"), options: .atomic)
             if let png = icon(ipa: path) { try? png.write(to: staging.appendingPathComponent("icon.png"), options: .atomic) }
             try FileManager.default.moveItem(at: staging, to: dir)
             // Only now: until the new build is in place, the old one is what the
             // user has, and taking it away first would leave nothing installable.
-            if replacing { drop(build.bundleID, labelled: build.label, keeping: build.slug) }
+            if replacing { drop(stored.bundleID, labelled: stored.label, keeping: stored.slug) }
         } catch {
             try? FileManager.default.removeItem(at: staging)
             throw Problem.failed("couldn't store the build in \(dir.path): \(error.localizedDescription)")
         }
-        prune(build.bundleID, keeping: build.slug)
+        prune(stored.bundleID, keeping: stored.slug)
         return dir
     }
 
@@ -335,13 +355,25 @@ enum OTA {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
         var hasher = SHA256()
-        while let chunk = try? handle.read(upToCount: 1 << 20), !chunk.isEmpty { hasher.update(data: chunk) }
+        // Not `try?`: a read that fails halfway would return a well-formed digest
+        // of a prefix, and two of those can match archives that don't.
+        do {
+            while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty { hasher.update(data: chunk) }
+        } catch { return nil }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The app folders, or nil when the directory is there but couldn't be read —
+    /// a descriptor limit or a permission change. Callers treat nil as "ask again
+    /// later": reading it as "nothing stored" is what takes a live page down.
+    static func appDirectories() -> [String]? {
+        do { return try FileManager.default.contentsOfDirectory(atPath: directory.path) }
+        catch { return FileManager.default.fileExists(atPath: directory.path) ? nil : [] }
     }
 
     /// Newest first, per app.
     static func builds() -> [(bundleID: String, builds: [Build])] {
-        let apps = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        let apps = appDirectories() ?? []
         return apps.sorted().compactMap { app in
             let list = builds(of: app)
             return list.isEmpty ? nil : (app, list)
@@ -367,7 +399,8 @@ enum OTA {
                 return nil
             }
             guard var build = try? JSONDecoder().decode(Build.self, from: data) else { return nil }
-            build.slug = slug   // where it actually is, whatever the name was built from
+            build.slug = slug              // where it actually is, whatever the name was built from
+            build.bundleID = bundleID      // and under which folder; the manifest's URLs are made from both
             return build
         }.sorted { $0.added > $1.added }
     }

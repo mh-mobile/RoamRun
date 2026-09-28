@@ -93,38 +93,63 @@ struct TailscaleClient {
         return name.hasSuffix(".") ? String(name.dropLast()) : name
     }
 
-    /// What `tailscale serve` proxies at the root of `port`, or nil if nothing
-    /// does. A port of RoamRun's own rather than a path on `:443`: that port
-    /// carries whatever else the user serves, and Funnel can only publish 443,
-    /// 8443 and 10000 — so a port outside those cannot reach the internet at all.
-    static func serving(port: Int) -> String? {
-        serving(port: port, inJSON: statusJSON())
+    /// What `tailscale serve` has on one port. `unknown` is a case of its own on
+    /// purpose: tailscaled not answering is not the same as the port being free,
+    /// and reading one as the other is how RoamRun would overwrite an entry of
+    /// the user's — which `tailscale serve` cannot undo.
+    enum Serving: Equatable {
+        case unknown
+        case nothing
+        /// What is proxied at `/` (nil when only sub-paths are mounted, "" when
+        /// the root handler isn't a proxy), and the other mounts on that port.
+        /// RoamRun stays off a port carrying anything else: `serve … off` for one
+        /// mount is scoped with `--set-path`, but the user's paths are still
+        /// theirs to arrange, and sharing a port only invites the collision.
+        case mounted(root: String?, others: [String])
+
+        var root: String? {
+            guard case .mounted(let root, _) = self else { return nil }
+            return root
+        }
+    }
+
+    /// A port of RoamRun's own rather than a path on `:443`: that port carries
+    /// whatever else the user serves, and Funnel can only publish 443, 8443 and
+    /// 10000 — so a port outside those cannot reach the internet at all.
+    static func serving(port: Int) -> Serving {
+        let out = Proc.run(fromSettings().resolvedPath() ?? "/usr/bin/false",
+                           ["serve", "status", "--json"], timeout: 10)
+        guard out.status == 0 else { return .unknown }
+        return serving(port: port, inJSON: out.out)
     }
 
     /// From the JSON, not the display output: a wording change there would read
     /// as "nothing is here", which is exactly when RoamRun would overwrite
-    /// something of the user's.
-    static func serving(port: Int, inJSON out: String) -> String? {
+    /// something of the user's. A bare `null` is what tailscale marshals when
+    /// there is no serve config at all — the one case where "nothing" is right,
+    /// and it needs `fragmentsAllowed` to parse as JSON.
+    static func serving(port: Int, inJSON out: String) -> Serving {
         guard let data = out.data(using: .utf8),
-              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let web = root["Web"] as? [String: Any] else { return nil }
+              let parsed = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
+        else { return .unknown }
+        if parsed is NSNull { return .nothing }
+        guard let root = parsed as? [String: Any] else { return .unknown }
+        guard let web = root["Web"] as? [String: Any] else { return .nothing }
         for (hostPort, value) in web where hostPort.hasSuffix(":\(port)") {
-            guard let handlers = (value as? [String: Any])?["Handlers"] as? [String: Any],
-                  let handler = handlers["/"] as? [String: Any] else { continue }
-            return (handler["Proxy"] as? String) ?? ""
+            guard let handlers = (value as? [String: Any])?["Handlers"] as? [String: Any] else { continue }
+            let target = (handlers["/"] as? [String: Any]).map { ($0["Proxy"] as? String) ?? "" }
+            let others = handlers.keys.filter { $0 != "/" }.sorted()
+            guard target != nil || !others.isEmpty else { continue }
+            return .mounted(root: target, others: others)
         }
-        return nil
-    }
-
-    static func statusJSON() -> String {
-        Proc.run(fromSettings().resolvedPath() ?? "/usr/bin/false", ["serve", "status", "--json"], timeout: 10).out
+        return .nothing
     }
 
     /// Whether RoamRun's own entry is there *and* something is listening behind
     /// it. A crash leaves the entry pointing at a port nothing holds any more, and
     /// then `serve status` alone says the page works when it 502s.
     static func servingLive(port: Int) -> Bool {
-        guard let target = serving(port: port),
+        guard let target = serving(port: port).root,
               AppCoordinator.isOurs(target),
               let port = UInt16(target.split(separator: ":").last ?? "") else { return false }
         return listening(on: port)

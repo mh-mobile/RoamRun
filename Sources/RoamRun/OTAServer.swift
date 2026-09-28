@@ -41,9 +41,6 @@ final class OTAServer: @unchecked Sendable {
         get { lock.withLock { _listener } }
         set { lock.withLock { _listener = newValue } }
     }
-    /// What the device sees in front of us, e.g. `/roamrun`. Requests arrive
-    /// without it (tailscale strips the mount), but the manifest has to hand iOS
-    /// an absolute URL, so it goes back on.
     /// The tailnet port `tailscale serve` publishes us on. Kept only so the
     /// coordinator can tell whether a running server is on the port configured
     /// now; URLs come from each request's Host header, which carries the port.
@@ -68,7 +65,12 @@ final class OTAServer: @unchecked Sendable {
         listener.stateUpdateHandler = { [weak self, weak listener] state in
             switch state {
             case .ready: self?.port = listener?.port?.rawValue ?? 0; ready.signal()
-            case .failed, .cancelled: ready.signal()
+            case .failed, .cancelled:
+                // Also after it was ready: leaving the port set would make start()
+                // hand back a dead one for ever, with `tailscale serve` still
+                // pointing at it. Cleared, the next check builds a new listener.
+                self?.forget(listener)
+                ready.signal()
             default: break
             }
         }
@@ -85,12 +87,25 @@ final class OTAServer: @unchecked Sendable {
         port = 0
     }
 
+    /// Only if it is still the one we are using: a cancelled listener's late
+    /// callback must not wipe the replacement.
+    private func forget(_ gone: NWListener?) {
+        lock.withLock {
+            guard _listener === gone else { return }
+            _listener = nil
+            _port = 0
+        }
+    }
+
     // MARK: - One request
 
     /// Enough for a phone and a laptop at once; past that something is wrong and
     /// the menu bar app's descriptors matter more than the extra download.
     private static let maxConnections = 8
     private static let idleLimit: TimeInterval = 120
+    /// The whole head, not time between bytes: one byte every 119 s would keep an
+    /// idle timer happy for ever, and eight of those are every connection there is.
+    private static let headLimit: TimeInterval = 15
 
     private func serve(_ conn: NWConnection) {
         let accepted = lock.withLock { () -> Bool in
@@ -113,24 +128,31 @@ final class OTAServer: @unchecked Sendable {
         let idle = IdleTimer(queue: queue) { conn.cancel() }
         idle.arm(Self.idleLimit)
         conn.start(queue: queue)
-        readHead(conn, soFar: Data(), idle: idle)
+        readHead(conn, soFar: Data(), idle: idle, by: DispatchTime.now() + Self.headLimit)
     }
 
     /// Until the blank line that ends the head. One `receive` can stop in the
     /// middle of it, and a request line without its `Host` would make every link
     /// in the manifest point the device at itself.
-    private func readHead(_ conn: NWConnection, soFar: Data, idle: IdleTimer) {
+    private func readHead(_ conn: NWConnection, soFar: Data, idle: IdleTimer, by deadline: DispatchTime) {
         conn.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, done, _ in
             guard let self, let data, !data.isEmpty else { conn.cancel(); return }
             let head = soFar + data
             guard head.count <= 32 * 1024 else { return self.send(conn, status: "431 Request Header Fields Too Large") }
-            guard let text = String(data: head, encoding: .utf8), text.contains("\r\n\r\n") else {
+            // Lossy on purpose: one byte that isn't UTF-8 used to mean the request
+            // was never answered and the slot was held until the idle timer.
+            let text = String(decoding: head, as: UTF8.self)
+            guard let end = text.range(of: "\r\n\r\n") else {
                 guard !done else { conn.cancel(); return }
+                guard DispatchTime.now() < deadline else { return self.send(conn, status: "408 Request Timeout") }
                 idle.arm(Self.idleLimit)
-                return self.readHead(conn, soFar: head, idle: idle)
+                return self.readHead(conn, soFar: head, idle: idle, by: deadline)
             }
-            let (method, path, host) = Self.request(text)
+            let (method, path, host) = Self.request(String(text[text.startIndex..<end.lowerBound]))
             guard method == "GET" || method == "HEAD" else { return self.send(conn, status: "405 Method Not Allowed") }
+            // Without it every link in the manifest would point the device at
+            // itself, and the install would fail with nothing to go on.
+            guard let host else { return self.send(conn, status: "400 Bad Request") }
             let base = "https://\(host)"   // Host carries the port serve published us on
             self.route(conn, path: path, base: base, bodyWanted: method == "GET", idle: idle)
         }
@@ -138,21 +160,23 @@ final class OTAServer: @unchecked Sendable {
 
     /// (method, path, host). The path is whatever came in; `resolve` decides
     /// whether it names anything we serve.
-    static func request(_ head: String) -> (String, String, String) {
+    static func request(_ head: String) -> (String, String, String?) {
         let lines = head.split(separator: "\r\n", omittingEmptySubsequences: false)
         let parts = (lines.first ?? "").split(separator: " ")
-        let host = lines.dropFirst()
-            .first { $0.lowercased().hasPrefix("host:") }?
-            .dropFirst("host:".count).trimmingCharacters(in: .whitespaces) ?? "localhost"
+        let hosts = lines.dropFirst().filter { $0.lowercased().hasPrefix("host:") }
+        // Two of them is a request two proxies would read differently; neither is
+        // iOS, so refuse rather than pick.
+        let host = hosts.count == 1
+            ? hosts[0].dropFirst("host:".count).trimmingCharacters(in: .whitespaces) : nil
         let path = parts.count > 1 ? String(parts[1]).split(separator: "?").first.map(String.init) ?? "/" : "/"
-        return (parts.first.map(String.init) ?? "", path, host)
+        return (parts.first.map(String.init) ?? "", path, (host?.isEmpty ?? true) ? nil : host)
     }
 
     private func route(_ conn: NWConnection, path: String, base: String, bodyWanted: Bool, idle: IdleTimer) {
         let parts = Self.segments(path)
         switch parts.count {
         case 0:
-            let html = OTA.indexHTML(OTA.builds(), base: base)
+            let html = OTA.indexHTML(OTA.builds(), base: base)   // [] when unreadable: the page says so
             send(conn, status: "200 OK", type: "text/html; charset=utf-8", body: bodyWanted ? Data(html.utf8) : nil,
                  length: Int64(Data(html.utf8).count))
         case 3 where parts[2] == "icon.png":
@@ -179,7 +203,7 @@ final class OTAServer: @unchecked Sendable {
     /// Path components, with anything that could climb out of the directory gone.
     static func segments(_ path: String) -> [String] {
         path.split(separator: "/").map(String.init)
-            .filter { $0 != "." && $0 != ".." && !$0.contains("\0") && !$0.contains("/") }
+            .filter { $0 != "." && $0 != ".." && !$0.contains("\0") }
     }
 
     // MARK: - Writing

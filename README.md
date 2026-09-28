@@ -204,14 +204,17 @@ roamrun ota iPhone build/MyApp.ipa
 
 RoamRun keeps the build, and while the app runs it publishes a page through
 `tailscale serve`. Open the address it prints (or point the camera at the QR
-code it draws) on the device and tap Install. The page lists the last 5 builds
+code it draws) on the device and tap Install. The page can take half a minute
+to appear after the app starts, and `roamrun doctor` prints the address again if
+you lose it. The page lists the last 5 builds
 of each app, newest first, so you can also go back a version when the one you
 just installed turns out to be broken.
 
 Rebuilds usually keep the same version number, so builds stack up under it and
 the time tells them apart; handing over the very same .ipa twice doesn't add a
-second row. Pass `--replace` when a build supersedes what is already listed
-under its version and you'd rather keep one row per version.
+second row (it moves back to the top instead — asking for it again is what going
+back to it means). Pass `--replace` when a build supersedes what is already listed
+under its version and you'd rather keep one row per version and build number.
 
 What you give up: this is **install only**. No debugger, no `roamrun logs`, no
 `roamrun screenshot` — none of that exists without the bridge. Use it to try a
@@ -224,16 +227,19 @@ What it needs:
   unsigned one this way.
 - An **.ipa signed for Release Testing (Ad Hoc) or Enterprise**. Xcode makes one
   with Product › Archive › Distribute App › Release Testing (`xcodebuild
-  -exportArchive` with `"method": "release-testing"` does the same from a script).
-    `roamrun ota` refuses one rather than letting iOS fail cryptically. Ad Hoc means the device has to be in
-  the provisioning profile; add it once while the device is bridged and Xcode
-  registers it like any local device.
+  -exportArchive` with `"method": "release-testing"` does the same from a script). `roamrun run` can't make one — it signs for
+  Development, which only installs through the bridge, and `roamrun ota` refuses
+  it rather than letting iOS fail cryptically. Ad Hoc also means the device has to
+  be in the provisioning profile *and* known to RoamRun: bridge it once
+  (`roamrun up <name> -d`) and Xcode registers it like any local device, while
+  RoamRun learns its UDID. Enterprise signing needs neither.
 - **HTTPS in your tailnet** — MagicDNS and HTTPS certificates turned on. RoamRun
   serves on a port of its own (41443 by default, `defaults write
-  io.github.mh-mobile.roamrun otaPort -int …` to change it) and gives it back
-  when it quits. It never touches your tailnet's `:443`, where whatever else you
-  serve lives — and because Tailscale Funnel can only publish 443, 8443 and
-  10000, a port outside those three can't be put on the internet at all.
+  io.github.mh-mobile.roamrun otaPort -int …` to change it; 443, 8443 and 10000
+  are refused and fall back to 41443, since Funnel could publish those) and gives
+  it back when it quits. It never touches your tailnet's `:443`, where whatever else you
+  serve lives — and because Tailscale Funnel currently publishes only 443, 8443
+  and 10000, a port outside those three can't be put on the internet.
 - RoamRun **running**, since it is the app that serves the page.
 
 **Anyone on your tailnet can open that page and install those builds.** On a
@@ -241,7 +247,8 @@ tailnet you share, restrict it with Tailscale Grants / ACLs.
 
 Two things that end with iOS refusing the install and no clue why, so RoamRun
 checks them first: a **provisioning profile that has expired** (they last a
-year, and `roamrun ota` won't store a build past that date) and an **Ad Hoc
+year, `roamrun ota` won't store a build past that date, and one that expires
+after it was stored is marked EXPIRED on the page) and an **Ad Hoc
 build that doesn't name this device**. An Enterprise build also needs the
 developer trusted once on the device, under Settings › General › VPN & Device
 Management.
@@ -302,8 +309,12 @@ RoamRun writes only to these places (it never touches system settings or other a
 | `~/.claude/skills/roamrun/` etc. | Only if you ran `roamrun init` (never touches other skills or links) |
 
 If you used `roamrun ota`, one more thing lives outside that table: RoamRun asks
-`tailscale serve` to carry one port (41443) and gives it back when it quits —
-but not if it is force-quit or crashes. `tailscale serve --https=41443 off` clears it.
+`tailscale serve` to carry one port — whichever `otaPort` names, 41443 by
+default — and gives it back when it quits, but not if it is force-quit or
+crashes. `tailscale serve --https=41443 --set-path=/ off` clears it. RoamRun
+notices such a leftover of its own and says which command clears it — except one
+it made on a *different* port, if `otaPort` was changed while the app wasn't
+running: it only ever looks at the port configured now.
 
 The helper processes started while bridging (`dns-sd` / `log stream`) typically exit within about a second even if RoamRun is force-quit, and the LAN advertisement goes away with them.
 
@@ -313,9 +324,9 @@ First stop bridges started with `roamrun up -d` (`roamrun down <name>`): they ke
 roamrun init --uninstall                  # if you installed the skill (with another tool: remove it there)
 rm /usr/local/bin/roamrun                 # if you installed the CLI
 rm -rf ~/Library/Application\ Support/RoamRun ~/Library/Logs/RoamRun
-defaults delete io.github.mh-mobile.roamrun
-defaults delete com.roamrun.app 2>/dev/null   # left by versions before 0.1.12
-tailscale serve --https=41443 off            # if you used roamrun ota
+tailscale serve --https=41443 --set-path=/ off   # if you used roamrun ota (the port otaPort names)
+defaults delete io.github.mh-mobile.roamrun      # after the line above: it holds otaPort
+defaults delete com.roamrun.app 2>/dev/null      # left by versions before 0.1.12
 # finally delete /Applications/RoamRun.app (turn off "Open at login" first if you enabled it)
 ```
 

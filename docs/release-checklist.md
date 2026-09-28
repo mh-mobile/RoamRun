@@ -51,6 +51,13 @@ screen on.
    blocked, and the bridge keeps running. Turn it back on: the notice is gone within
    ~2 minutes and "On this Wi‑Fi" comes back.
 
+## Over the air
+
+If `roamrun ota` changed, on a real device: store a build, open the printed
+address on it and install. Then check `tailscale serve status` shows one entry on
+the OTA port and nothing else moved, that quitting RoamRun gives it back, and
+that force-quitting leaves it behind (that one is documented, not a bug).
+
 ## Install paths
 
 12. Download the release dmg in a browser, install, open: it opens with no
