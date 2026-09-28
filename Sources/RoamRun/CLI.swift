@@ -429,7 +429,7 @@ enum CLI {
             if let mounted, !AppCoordinator.isOurs(mounted) {
                 print("  port \(tailnetPort) is serving \(mounted), which isn't RoamRun's, so that address")
                 print("  won't reach this build. Give RoamRun another port and restart it:")
-                print("    defaults write \(AppID.bundle) otaPort -int 41113")
+                print("    defaults write \(AppID.bundle) otaPort -int 41444")
                 exit(1)
             }
             if !TailscaleClient.servingLive(port: tailnetPort) {
@@ -1077,7 +1077,7 @@ enum CLI {
                          : "The install page isn't published on port \(tailnetPort)",
               served == nil || AppCoordinator.isOurs(served ?? "")
                   ? "RoamRun publishes it while it runs — open RoamRun, then look in ⚙ Settings › Troubleshooting › Recent messages if it doesn't appear."
-                  : "port \(tailnetPort) is serving \(served ?? "something else") instead. Give RoamRun another port: defaults write \(AppID.bundle) otaPort -int 41113",
+                  : "port \(tailnetPort) is serving \(served ?? "something else") instead. Give RoamRun another port: defaults write \(AppID.bundle) otaPort -int 41444",
               true)
         if live, let host = (try? TailscaleClient.fromSettings().selfDNSName()) ?? nil {
             note("Open on the device: https://\(host):\(tailnetPort)/")

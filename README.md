@@ -227,7 +227,7 @@ What it needs:
   the provisioning profile; add it once while the device is bridged and Xcode
   registers it like any local device.
 - **HTTPS in your tailnet** — MagicDNS and HTTPS certificates turned on. RoamRun
-  serves on a port of its own (41112 by default, `defaults write
+  serves on a port of its own (41443 by default, `defaults write
   io.github.mh-mobile.roamrun otaPort -int …` to change it) and gives it back
   when it quits. It never touches your tailnet's `:443`, where whatever else you
   serve lives — and because Tailscale Funnel can only publish 443, 8443 and
@@ -300,8 +300,8 @@ RoamRun writes only to these places (it never touches system settings or other a
 | `~/.claude/skills/roamrun/` etc. | Only if you ran `roamrun init` (never touches other skills or links) |
 
 If you used `roamrun ota`, one more thing lives outside that table: RoamRun asks
-`tailscale serve` to carry one port (41112) and gives it back when it quits —
-but not if it is force-quit or crashes. `tailscale serve --https=41112 off` clears it.
+`tailscale serve` to carry one port (41443) and gives it back when it quits —
+but not if it is force-quit or crashes. `tailscale serve --https=41443 off` clears it.
 
 The helper processes started while bridging (`dns-sd` / `log stream`) typically exit within about a second even if RoamRun is force-quit, and the LAN advertisement goes away with them.
 
@@ -313,7 +313,7 @@ rm /usr/local/bin/roamrun                 # if you installed the CLI
 rm -rf ~/Library/Application\ Support/RoamRun ~/Library/Logs/RoamRun
 defaults delete io.github.mh-mobile.roamrun
 defaults delete com.roamrun.app 2>/dev/null   # left by versions before 0.1.12
-tailscale serve --https=41112 off            # if you used roamrun ota
+tailscale serve --https=41443 off            # if you used roamrun ota
 # finally delete /Applications/RoamRun.app (turn off "Open at login" first if you enabled it)
 ```
 

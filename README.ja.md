@@ -223,7 +223,7 @@ roamrun ota iPhone build/MyApp.ipa
   ニングプロファイルに含まれている必要がありますが、ブリッジが繋がっていれば Xcode が
   ローカル端末として登録してくれるので、自宅で一度やれば済みます
 - **tailnet で HTTPS が有効なこと**（MagicDNS と HTTPS 証明書）。RoamRun は**専用ポート**を
-  1 つだけ使い（既定 41112。変更は `defaults write io.github.mh-mobile.roamrun otaPort -int …`）、
+  1 つだけ使い（既定 41443。変更は `defaults write io.github.mh-mobile.roamrun otaPort -int …`）、
   終了時に返します。あなたが他に serve しているものが載る `:443` には**一切触りません**。
   また Tailscale Funnel が公開できるのは 443 / 8443 / 10000 の 3 つだけなので、
   **それ以外のポートはインターネットに出しようがありません**
@@ -302,13 +302,13 @@ rm /usr/local/bin/roamrun                 # CLI を入れた場合
 rm -rf ~/Library/Application\ Support/RoamRun ~/Library/Logs/RoamRun
 defaults delete io.github.mh-mobile.roamrun
 defaults delete com.roamrun.app 2>/dev/null   # 0.1.12 より前の版が残したもの
-tailscale serve --https=41112 off            # roamrun ota を使った場合
+tailscale serve --https=41443 off            # roamrun ota を使った場合
 # 最後に /Applications/RoamRun.app を削除（「ログイン時に開く」を有効にしていた場合は先に無効化）
 ```
 
 `roamrun ota` を使った場合、上の表の外にもう 1 つ残るものがあります。RoamRun は
-`tailscale serve` にポート（既定 41112）を持たせ、正常終了時には返しますが、
-強制終了やクラッシュでは返りません。上の `tailscale serve --https=41112 off` で消せます。
+`tailscale serve` にポート（既定 41443）を持たせ、正常終了時には返しますが、
+強制終了やクラッシュでは返りません。上の `tailscale serve --https=41443 off` で消せます。
 
 ## 制限・既知の課題
 

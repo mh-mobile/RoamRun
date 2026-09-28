@@ -215,9 +215,11 @@ final class AppCoordinator: ObservableObject {
     /// 443 carries whatever else the user serves, so a mistake there is theirs,
     /// not ours — and Funnel can only publish 443, 8443 and 10000, so a port
     /// outside those three cannot be put on the internet at all, by anyone.
+    /// 41443 is in IANA's unassigned 41112-41793 block, below the ephemeral
+    /// range macOS hands out, and says what it is for.
     nonisolated static var otaPort: Int {
         let set = AppID.settings?.integer(forKey: otaPortKey) ?? 0
-        return set > 0 && !funnelCapable.contains(set) ? set : 41112
+        return set > 0 && !funnelCapable.contains(set) ? set : 41443
     }
     nonisolated static let funnelCapable: Set<Int> = [443, 8443, 10000]
 
@@ -264,7 +266,7 @@ final class AppCoordinator: ObservableObject {
                 await MainActor.run {
                     self?.complainOnce("port \(tailnetPort) is already serving \(existing), which isn't RoamRun's — " +
                         "not taking it over. Give RoamRun another port: " +
-                        "defaults write \(AppID.bundle) otaPort -int 41113")
+                        "defaults write \(AppID.bundle) otaPort -int 41444")
                 }
                 return
             }

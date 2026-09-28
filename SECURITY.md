@@ -53,13 +53,13 @@ bounded.
 - **Builds kept for over-the-air installs are readable by your whole tailnet.**
   `roamrun ota` stores an .ipa under `~/Library/Application Support/RoamRun/ota/`
   and, while RoamRun runs, publishes a page for it through `tailscale serve` on a
-  port of its own (41112 by default), never on your tailnet's `:443`. Serve is tailnet-only — it is not on the
+  port of its own (41443 by default), never on your tailnet's `:443`. Serve is tailnet-only — it is not on the
   internet — but every member of the tailnet can open that page and install those
   builds. On a shared tailnet, restrict it with Tailscale Grants / ACLs, or don't
   use the feature. It cannot reach the internet: Tailscale Funnel only publishes
   443, 8443 and 10000, and RoamRun's port is deliberately none of those. The path is registered when there is something to serve and
   given back when RoamRun quits — but not if it is force-quit or crashes, so
-  `tailscale serve --https=41112 off` is how you make sure it's gone.
+  `tailscale serve --https=41443 off` is how you make sure it's gone.
   RoamRun records the exact address it registered and only ever replaces an entry
   matching it — its own, from a run that didn't get to release it — so it won't
   take over something else you serve on that port either. Deleting `ota/` takes the page down
