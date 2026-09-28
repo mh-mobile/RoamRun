@@ -1343,6 +1343,61 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(!TailscaleClient.Serving.nothing.isRegistered("http://127.0.0.1:61816"))
 }
 
+@Test func anOwnershipTokenNamesThePortAsWellAsTheTarget() {
+    // A loopback address on its own is recycled, and a registration made on a
+    // port the app is no longer configured for can't be found to give back.
+    #expect(AppCoordinator.token(41443, "http://127.0.0.1:61949") == "41443 http://127.0.0.1:61949")
+    #expect(AppCoordinator.pair("41443 http://127.0.0.1:61949").port == 41443)
+    #expect(AppCoordinator.pair("41443 http://127.0.0.1:61949").target == "http://127.0.0.1:61949")
+    // Written before the port was part of it: still recognised, on any port.
+    #expect(AppCoordinator.pair("http://127.0.0.1:61949").port == nil)
+    #expect(AppCoordinator.pair("http://127.0.0.1:61949").target == "http://127.0.0.1:61949")
+    // Not a token at all.
+    #expect(AppCoordinator.pair("").target == "")
+    #expect(AppCoordinator.pair("notaport http://x").port == nil)
+}
+
+@Test func aHostThatIsNotAHostNameNeverReachesAURL() {
+    // It goes into the manifest's asset URL and the install link, where `%`,
+    // `\` and `@` all mean something.
+    #expect(OTAServer.hostLike("mac.ts.net") == "mac.ts.net")
+    #expect(OTAServer.hostLike("mac.ts.net:41443") == "mac.ts.net:41443")
+    #expect(OTAServer.hostLike("MAC-1.ts.net:80") == "MAC-1.ts.net:80")
+    #expect(OTAServer.hostLike("evil.example/../x") == nil)
+    #expect(OTAServer.hostLike("user@evil.example") == nil)
+    #expect(OTAServer.hostLike("mac.ts.net:notaport") == nil)
+    #expect(OTAServer.hostLike("mac.ts.net:99999") == nil)   // not a port
+    #expect(OTAServer.hostLike("a%2f.ts.net") == nil)
+    #expect(OTAServer.hostLike(":41443") == nil)
+    #expect(OTAServer.hostLike(String(repeating: "a", count: 300)) == nil)
+    // And the request parser is what applies it.
+    #expect(OTAServer.request("GET / HTTP/1.1\r\nHost: user@evil.example\r\n").2 == nil)
+}
+
+@Test func aBuildWhoseMetadataCantBeReadIsNotABuildThatIsGone() throws {
+    // The folder lists fine and only the metadata is unreadable: dropping it
+    // silently serves "No builds yet" while the .ipa sits right there, and the
+    // manifest URL a device already has answers 404.
+    let root = otaScratch()
+    let dir = root.appendingPathComponent("com.example.App/1.0-1-x")
+    let meta = dir.appendingPathComponent("meta.json")
+    defer {
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: meta.path)
+        try? FileManager.default.removeItem(at: root)
+    }
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    try JSONEncoder().encode(build("1.0", "1", "1.0-1-x")).write(to: meta)
+    #expect(OTA.builds(of: "com.example.App", in: root)?.count == 1)
+
+    try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: meta.path)
+    try #require(!FileManager.default.isReadableFile(atPath: meta.path))
+    #expect(OTA.builds(of: "com.example.App", in: root) == nil)
+    #expect(OTA.builds(in: root) == nil)
+    // Absent is still a build that was never finished, and still skipped.
+    try FileManager.default.removeItem(at: meta)
+    #expect(OTA.builds(of: "com.example.App", in: root)?.isEmpty == true)
+}
+
 @Test func aPublishIsJudgedByTheConfigNotByTheExitCode() {
     // `tailscale serve --https` writes nothing and exits 0 when the tailnet has
     // no HTTPS certificates: it prints the admin link and calls os.Exit(0) before

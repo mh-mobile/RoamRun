@@ -184,17 +184,32 @@ final class AppCoordinator: ObservableObject {
     /// both read this list, change it and write it back.
     nonisolated static let servingLock = NSLock()
 
-    nonisolated static func rememberServing(_ target: String) {
+    /// `<tailnet port> <target>`. The port is half of it: a loopback address on
+    /// its own is recycled, and a registration made on a port the app is no
+    /// longer configured for can't be found to give back without it.
+    nonisolated static func token(_ port: Int, _ target: String) -> String { "\(port) \(target)" }
+
+    /// The pair an entry names. Entries written before the port was part of it
+    /// are bare targets, and still match on the target alone.
+    nonisolated static func pair(_ entry: String) -> (port: Int?, target: String) {
+        let parts = entry.split(separator: " ", maxSplits: 1)
+        guard parts.count == 2, let port = Int(parts[0]) else { return (nil, entry) }
+        return (port, String(parts[1]))
+    }
+
+    nonisolated static func rememberServing(_ target: String, on port: Int) {
         servingLock.withLock {
-            AppID.settings?.set(remembering(AppID.settings?.stringArray(forKey: otaServingKey) ?? [], target),
-                                forKey: otaServingKey)
+            AppID.settings?.set(remembering(AppID.settings?.stringArray(forKey: otaServingKey) ?? [],
+                                            token(port, target)), forKey: otaServingKey)
         }
     }
 
-    nonisolated static func forgetServing(_ target: String) {
+    nonisolated static func forgetServing(_ target: String, on port: Int) {
         servingLock.withLock {
-            AppID.settings?.set((AppID.settings?.stringArray(forKey: otaServingKey) ?? []).filter { $0 != target },
-                                forKey: otaServingKey)
+            AppID.settings?.set((AppID.settings?.stringArray(forKey: otaServingKey) ?? []).filter {
+                let p = pair($0)
+                return !(p.target == target && (p.port == nil || p.port == port))
+            }, forKey: otaServingKey)
         }
     }
 
@@ -204,7 +219,9 @@ final class AppCoordinator: ObservableObject {
         Array((seen.filter { $0 != target } + [target]).suffix(keep))
     }
 
-    nonisolated static func isOurs(_ target: String) -> Bool { remembered().contains(target) }
+    nonisolated static func isOurs(_ target: String, on port: Int) -> Bool {
+        remembered().contains { let p = pair($0); return p.target == target && (p.port == nil || p.port == port) }
+    }
 
     nonisolated static func remembered() -> [String] {
         servingLock.withLock { AppID.settings?.stringArray(forKey: otaServingKey) ?? [] }
@@ -214,15 +231,23 @@ final class AppCoordinator: ObservableObject {
     /// was killed, or quit while `tailscale` was still thinking. Nothing else
     /// looks: `otaPublished` is this run's, and when `ota/` is empty the rest of
     /// `startOTAIfNeeded` returns before it would.
-    /// True once the question has been answered, whatever the answer: nil means
-    /// Tailscale couldn't be asked, which at launch is ordinary — tailscaled is
-    /// often still coming up — and must not count as "there was nothing".
-    nonisolated static func reclaimStray(on port: Int) -> Bool? {
+    /// Gives back registrations this Mac made and never released. Every port the
+    /// record names, not only the one configured now: a run that was killed after
+    /// `otaPort` changed — or one whose registration was never confirmed — left
+    /// an entry where nothing else here would look again.
+    ///
+    /// nil when Tailscale couldn't be asked, which at launch is ordinary;
+    /// false when it was asked and a release didn't take.
+    nonisolated static func reclaimStrays() -> Bool? {
         guard let host = currentHost() else { return nil }
-        let state = TailscaleClient.serving(port: port)
-        guard state != .unknown else { return nil }
-        guard let target = state.root(on: host), isOurs(target) else { return true }
-        return releaseServe((port: port, target: target))
+        var asked = true, released = true
+        for port in Set(remembered().compactMap { pair($0).port } + [otaPort]).sorted() {
+            let state = TailscaleClient.serving(port: port)
+            guard state != .unknown else { asked = false; continue }
+            guard let target = state.root(on: host), isOurs(target, on: port) else { continue }
+            if !releaseServe((port: port, target: target)) { released = false }
+        }
+        return asked ? released : nil
     }
     /// Said once per reason: the retry runs every 30s and the log is a person's.
     private var otaComplaint = ""
@@ -281,36 +306,33 @@ final class AppCoordinator: ObservableObject {
             }
             return
         }
-        // Before the off switch, not after it: with `ota/` deleted the branch below
-        // returns, and a registration from a previous run would never be looked for.
-        //
-        // Only while this run has registered nothing. The record holds our own
-        // address once we publish, and `isOurs` would then be true of the entry we
-        // are serving from — this would give away the live one.
+        guard let apps = OTA.appDirectories() else {
+            // Couldn't read the folder — a descriptor limit, a permission change.
+            // Taking the page down here would cut a download in flight and make
+            // the address dead until the next tick; leaving it up costs nothing.
+            return
+        }
+        // Before the off switch below returns, and only while this run has
+        // registered nothing: once we publish, the record holds our own address
+        // and this would give the live one away.
         if !lookedForStrays, otaPublished == nil, otaServer == nil, !Self.remembered().isEmpty {
             lookedForStrays = true
-            let port = Self.otaPort
+            let nothingToPublish = apps.isEmpty
             if Self.beginServeChange() {
                 Task.detached { [weak self] in
                     defer { Self.endServeChange() }
-                    // Only when Tailscale couldn't be asked: at launch it is often
-                    // still starting. A release that was asked for and failed must
-                    // not re-arm — this block takes the flag before the publish
-                    // below can, so retrying it every tick starves the page for
-                    // good, and publishing over our own entry recovers anyway.
-                    if Self.reclaimStray(on: port) == nil {
+                    let done = Self.reclaimStrays()
+                    // Couldn't ask: ordinary at launch, so ask again. Asked and a
+                    // release failed: only worth retrying when there is nothing to
+                    // publish, because this block takes the flag before the publish
+                    // below can, and publishing over our own entry recovers anyway.
+                    if done == nil || (done == false && nothingToPublish) {
                         await MainActor.run { self?.lookedForStrays = false }
                     }
                 }
             } else {
                 lookedForStrays = false   // busy; the timer comes round again
             }
-        }
-        guard let apps = OTA.appDirectories() else {
-            // Couldn't read the folder — a descriptor limit, a permission change.
-            // Taking the page down here would cut a download in flight and make
-            // the address dead until the next tick; leaving it up costs nothing.
-            return
         }
         guard !apps.isEmpty else {
             // Deleting the folder is the off switch, whether or not the page ever
@@ -407,7 +429,7 @@ final class AppCoordinator: ObservableObject {
             case .mounted:
                 let here = state.root(on: host)
                 let beside = state.alongside(host)
-                guard beside.isEmpty, here.map({ $0 == mine || Self.isOurs($0) }) ?? true else {
+                guard beside.isEmpty, here.map({ $0 == mine || Self.isOurs($0, on: tailnetPort) }) ?? true else {
                     // Three different situations, and the user's next move differs
                     // in each: a port they use for something else, one carrying a
                     // registration of ours that outlived its run, or one where the
@@ -432,7 +454,7 @@ final class AppCoordinator: ObservableObject {
             // Written before the call, not after: quitting while `tailscale` is
             // still working would otherwise leave an entry finished by a child
             // that outlived us, with nothing left to say it was ours.
-            Self.rememberServing(mine)
+            Self.rememberServing(mine, on: tailnetPort)
             let out = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
                                ["serve", "--bg", "--yes", "--https=\(tailnetPort)", mine], timeout: 20)
             // The exit code is not the answer; the config is. `tailscale serve`
@@ -471,7 +493,7 @@ final class AppCoordinator: ObservableObject {
                     // Remembered before the call in case we died during it. It
                     // didn't take, so drop it: a window full of addresses that
                     // were never registered can't recognise one that was.
-                    Self.forgetServing(mine)
+                    Self.forgetServing(mine, on: tailnetPort)
                 }
             }
         }
@@ -515,14 +537,17 @@ final class AppCoordinator: ObservableObject {
         let state = TailscaleClient.serving(port: published.port, timeout: timeout)
         switch state {
         case .unknown: return false            // couldn't look; saying it's gone is how one survives
-        case .nothing: forgetServing(published.target); return true
+        case .nothing: forgetServing(published.target, on: published.port); return true
         case .mounted:
             // `off` removes this node's current name's mount and nothing else, so
             // that is the only entry we may claim — a root of ours under a name the
             // node has since changed would make us delete whatever took its place.
             // Asked only now: nothing to give back needs no name.
             guard let host = currentHost(timeout: timeout) else { return false }
-            guard state.root(on: host) == published.target else { forgetServing(published.target); return true }
+            guard state.root(on: host) == published.target else {
+                forgetServing(published.target, on: published.port)
+                return true
+            }
         }
         // `--set-path=/` names the one mount to remove. Without it `off` means
         // every mount on the port, and `tailscale` then asks for confirmation on
@@ -533,7 +558,7 @@ final class AppCoordinator: ObservableObject {
         // Only once it's really gone. Forgetting it while the entry survives
         // would leave the next run unable to recognise its own registration.
         guard out.status == 0 else { return false }
-        forgetServing(published.target)
+        forgetServing(published.target, on: published.port)
         return true
     }
 
@@ -577,9 +602,9 @@ final class AppCoordinator: ObservableObject {
                 logStore.log("port \(published.port) is already being changed; leaving it to that")
             } else {
                 // Short here, unlike the background paths: this runs on the thread
-                // the app quits on, and the long wait only happens when tailscaled
-                // isn't answering — which is exactly when `off` fails anyway. The
-                // record stays, so the next launch reclaims it.
+                // the app quits on. Three calls in a row, so ~6 s at worst, and only
+                // when tailscaled isn't answering — which is when `off` fails anyway.
+                // The record stays, so the next launch reclaims it.
                 let gone = Self.releaseServe(published, timeout: 2)
                 Self.endServeChange()   // both callers terminate, but a leak here would wedge every later change
                 if !gone {

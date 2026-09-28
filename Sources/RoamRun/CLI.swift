@@ -485,7 +485,8 @@ enum CLI {
             }
             // `here == nil` is a free port under this name, the same reading the app
             // uses: a root left under a name the tailnet no longer knows is inert.
-            if case .mounted = state, !(beside.isEmpty && (here == nil || AppCoordinator.isOurs(here!))) {
+            if case .mounted = state,
+               !(beside.isEmpty && (here == nil || AppCoordinator.isOurs(here!, on: tailnetPort))) {
                 // Same three situations the app distinguishes, same three answers.
                 let why: String
                 if !beside.isEmpty {
@@ -1182,7 +1183,7 @@ enum CLI {
             let beside = host.map { served.alongside($0) } ?? []
             // The same reading the app and `roamrun ota` use: no root under this
             // name is a free port, but anything else sharing it is not.
-            mine = host != nil && beside.isEmpty && (here == nil || AppCoordinator.isOurs(here!))
+            mine = host != nil && beside.isEmpty && (here == nil || AppCoordinator.isOurs(here!, on: tailnetPort))
             stray = !mine && beside.isEmpty && AppCoordinator.abandoned(here)
         }
         check(live, live ? "The install page is published on port \(tailnetPort)"

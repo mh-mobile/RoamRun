@@ -101,17 +101,9 @@ enum OTA {
         case development(String)
         case appStore(String)
         case unreadable(String)
-        case notForDevice(path: String, names: [String])
-        case udidUnknown([String])
         case oddBundleID(path: String, id: String)
         case expired(path: String, on: Date)
         case failed(String)
-
-        /// "a, b and c" — a list a person reads, not an array printed.
-        private func list(_ names: [String]) -> String {
-            names.count < 2 ? (names.first ?? "")
-                : names.dropLast().joined(separator: ", ") + " and " + names[names.count - 1]
-        }
 
         var errorDescription: String? {
             switch self {
@@ -121,16 +113,8 @@ enum OTA {
             case .appStore(let path):
                 return "\(path) is signed for App Store / TestFlight and can't be installed over the air. Export it for Release Testing (Ad Hoc) or Enterprise."
             case .unreadable(let p): return "couldn't read \(p)"
-            case .notForDevice(let path, let names):
-                let who = names.count == 1 ? names[0] : "any of \(list(names))"
-                return "\(path) isn't signed for \(who) — its provisioning profile doesn't name \(names.count == 1 ? "that device" : "them"). Add the device in Apple's developer account and export again; bridging it once (roamrun up <name> -d) lets Xcode register it for you."
             case .oddBundleID(let path, let id):
                 return "\(path)'s bundle identifier (\(id)) has characters that can't go in a web address, so the device couldn't fetch it. Apple's own rule is letters, digits, hyphens and dots; RoamRun also allows underscores."
-            case .udidUnknown(let names):
-                let who = names.isEmpty ? "any device" : (names.count == 1 ? names[0] : "any of \(list(names))")
-                let how = names.count == 1 ? "Bridge it once from any Wi-Fi (roamrun up \(CLI.shellName(names[0])) -d)"
-                                           : "Bridge one once from any Wi-Fi (roamrun up <name> -d)"
-                return "RoamRun doesn't know the UDID of \(who) yet, so it can't tell whether that Ad Hoc build covers \(names.count == 1 ? "it" : "one") — and iOS would just refuse it on the device. \(how) and the UDID is saved; roamrun devices shows it. An Enterprise build needs none of this."
             case .expired(let path, let date):
                 return "\(path)'s provisioning profile expired on \(date.formatted(date: .abbreviated, time: .omitted)) — iOS won't install it. Export it again with a current profile."
             case .failed(let why): return why
@@ -452,13 +436,8 @@ enum OTA {
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
-    /// The app folders with something in them, or nil when the directory is there
-    /// but couldn't be read — a descriptor limit, a permission change anywhere
-    /// above it. Callers treat nil as "ask again later": reading it as "nothing
-    /// stored" is what takes a live page down mid-download.
-    ///
-    /// The error says which it is. `fileExists` can't: it is false both for a
-    /// path that isn't there and for one whose parent you can't get into.
+    /// The app folders with something in them; nil when something couldn't be
+    /// read, which callers treat as "ask again later" (FINDINGS.md).
     static func appDirectories(in root: URL? = nil) -> [String]? {
         let store = root ?? directory
         guard let found = entries(of: store) else { return nil }
@@ -476,10 +455,9 @@ enum OTA {
         return apps
     }
 
-    /// What is in a directory: `[]` when it isn't there, nil when it is but
-    /// couldn't be read. `fileExists` can't tell those apart — it is false for a
-    /// path that is absent and for one whose parent you can't get into — and
-    /// reading the second as the first is what takes a live page down.
+    /// `[]` when it isn't there, nil when it is but couldn't be read. Not
+    /// `fileExists`: that is false for both, and reading the second as the first
+    /// takes a live page down mid-download.
     private static func entries(of url: URL) -> [String]? {
         do { return try FileManager.default.contentsOfDirectory(atPath: url.path) }
         catch CocoaError.fileReadNoSuchFile { return [] }   // deleting it is the off switch
@@ -507,18 +485,25 @@ enum OTA {
     static func builds(of bundleID: String, in root: URL? = nil) -> [Build]? {
         let app = (root ?? directory).appendingPathComponent(bundleID, isDirectory: true)
         guard let slugs = entries(of: app) else { return nil }
-        return slugs.compactMap { slug -> Build? in
+        var unreadable = false
+        let found = slugs.compactMap { slug -> Build? in
             guard !slug.hasPrefix(".") else { return nil }
             let dir = app.appendingPathComponent(slug)
-            // A read that failed for another reason (out of descriptors, say) must
-            // not cost someone their build, and one that fails to decode may be
-            // readable by a later version.
-            guard let data = try? Data(contentsOf: dir.appendingPathComponent("meta.json")),
-                  var build = try? JSONDecoder().decode(Build.self, from: data) else { return nil }
+            // Absent is a build that was never finished; unreadable is this
+            // process's problem and belongs to the caller, or one app's permissions
+            // would take every build it holds off the page.
+            let meta = dir.appendingPathComponent("meta.json")
+            guard let data = try? Data(contentsOf: meta) else {
+                if FileManager.default.fileExists(atPath: meta.path) { unreadable = true }
+                return nil
+            }
+            // Undecodable may be readable by a later version, so it stays.
+            guard var build = try? JSONDecoder().decode(Build.self, from: data) else { return nil }
             build.slug = slug              // where it actually is, whatever the name was built from
             build.bundleID = bundleID      // and under which folder; the manifest's URLs are made from both
             return build
-        }.sorted { $0.added > $1.added }
+        }
+        return unreadable ? nil : found.sorted { $0.added > $1.added }
     }
 
     /// Build folders whose `meta.json` is there but no version here can decode —

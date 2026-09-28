@@ -29,7 +29,8 @@ extension OTA {
     /// One page for everything, so the URL can be a bookmark: the newest build of
     /// each app is open, older ones fold away. Read one-handed, so the newest
     /// build's button is the big one.
-    static func indexHTML(_ groups: [(bundleID: String, builds: [Build])], base: String, now: Date = .now) -> String {
+    static func indexHTML(_ groups: [(bundleID: String, builds: [Build])], base: String,
+                          now: Date = .now, in root: URL? = nil) -> String {
         let body = groups.isEmpty ? """
             <p class="empty">No builds yet. Run <code>roamrun ota &lt;name&gt; &lt;App.ipa&gt;</code> on the Mac.</p>
             """ : groups.map { app in
@@ -40,7 +41,7 @@ extension OTA {
                 \(older.map { row($0, base: base, now: now, newest: false) }.joined(separator: "\n"))
                 </details>
                 """
-            let icon = OTA.hasIcon(newest)
+            let icon = OTA.hasIcon(newest, in: root)
                 ? #"<img class="icon" width="60" height="60" src="\#(escape(base))/\#(escape(app.bundleID))/\#(escape(newest.slug))/icon.png" alt="">"# : ""
             return """
                 <section>

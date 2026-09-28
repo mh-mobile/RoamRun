@@ -194,7 +194,19 @@ final class OTAServer: @unchecked Sendable {
         let host = hosts.count == 1
             ? hosts[0].dropFirst("host:".count).trimmingCharacters(in: .whitespaces) : nil
         let path = parts.count > 1 ? String(parts[1]).split(separator: "?").first.map(String.init) ?? "/" : "/"
-        return (parts.first.map(String.init) ?? "", path, (host?.isEmpty ?? true) ? nil : host)
+        return (parts.first.map(String.init) ?? "", path, host.flatMap(hostLike))
+    }
+
+    /// A name and maybe a port, and nothing else. It goes into the URLs the
+    /// device is told to fetch, where `%`, `\` and `@` all mean something.
+    static func hostLike(_ s: String) -> String? {
+        // Not omitting empties: ":41443" would otherwise split to just the port
+        // and pass as a name.
+        let name = s.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+        guard !s.isEmpty, s.count < 256, let first = name.first, !first.isEmpty,
+              first.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "." || $0 == "-") }),
+              name.count == 1 || UInt16(name[1]) != nil else { return nil }
+        return s
     }
 
     private func route(_ conn: NWConnection, path: String, base: String, bodyWanted: Bool, idle: IdleTimer) {

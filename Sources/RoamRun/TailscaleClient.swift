@@ -247,9 +247,9 @@ struct TailscaleClient {
     static func servingLive(port: Int, host: String? = nil) -> Bool {
         guard let host = host ?? AppCoordinator.currentHost(),
               let target = serving(port: port).root(on: host),
-              AppCoordinator.isOurs(target),
-              let port = UInt16(target.split(separator: ":").last ?? "") else { return false }
-        return listening(on: port)
+              AppCoordinator.isOurs(target, on: port),
+              let local = UInt16(target.split(separator: ":").last ?? "") else { return false }
+        return listening(on: local)
     }
 
     /// One connect to loopback; refused comes back at once.
