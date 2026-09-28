@@ -1251,20 +1251,15 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
 }
 
 @Test func everyAddressRoamRunRegisteredStaysRecognisable() {
-    let key = AppCoordinator.otaServingKey
-    let saved = AppID.settings?.stringArray(forKey: key)
-    defer { AppID.settings?.set(saved, forKey: key) }
-    AppID.settings?.removeObject(forKey: key)
-
-    AppCoordinator.rememberServing("http://127.0.0.1:1")
-    // A registration that failed leaves the one before it still ours — otherwise
-    // one bad command turns into a page that never comes back.
-    AppCoordinator.rememberServing("http://127.0.0.1:2")
-    #expect(AppCoordinator.isOurs("http://127.0.0.1:1"))
-    #expect(AppCoordinator.isOurs("http://127.0.0.1:2"))
-    #expect(!AppCoordinator.isOurs("http://127.0.0.1:3"))
-    // Bounded, and the newest survives.
-    for port in 3...9 { AppCoordinator.rememberServing("http://127.0.0.1:\(port)") }
-    #expect(!AppCoordinator.isOurs("http://127.0.0.1:1"))
-    #expect(AppCoordinator.isOurs("http://127.0.0.1:9"))
+    // A registration that failed must leave the one before it still ours —
+    // otherwise one bad command turns into a page that never comes back.
+    var seen = AppCoordinator.remembering([], "port1")
+    seen = AppCoordinator.remembering(seen, "port2")
+    #expect(seen == ["port1", "port2"])
+    // Asking again for one already there moves it to the end, it doesn't repeat.
+    #expect(AppCoordinator.remembering(seen, "port1") == ["port2", "port1"])
+    // Bounded, newest kept.
+    var many: [String] = []
+    for port in 1...9 { many = AppCoordinator.remembering(many, "port\(port)", keep: 5) }
+    #expect(many == ["port5", "port6", "port7", "port8", "port9"])
 }

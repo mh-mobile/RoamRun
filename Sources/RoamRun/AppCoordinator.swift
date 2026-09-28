@@ -181,14 +181,32 @@ final class AppCoordinator: ObservableObject {
     /// registration back instead of calling it someone else's.
     nonisolated static let otaServingKey = "otaServing"
 
+    /// Releasing an old path and registering a new one run at the same time, and
+    /// both read this list, change it and write it back.
+    nonisolated static let servingLock = NSLock()
+
     nonisolated static func rememberServing(_ target: String) {
-        var seen = (AppID.settings?.stringArray(forKey: otaServingKey) ?? []).filter { $0 != target }
-        seen.append(target)
-        AppID.settings?.set(seen.suffix(5).map { $0 }, forKey: otaServingKey)
+        servingLock.withLock {
+            AppID.settings?.set(remembering(AppID.settings?.stringArray(forKey: otaServingKey) ?? [], target),
+                                forKey: otaServingKey)
+        }
+    }
+
+    nonisolated static func forgetServing(_ target: String) {
+        servingLock.withLock {
+            AppID.settings?.set((AppID.settings?.stringArray(forKey: otaServingKey) ?? []).filter { $0 != target },
+                                forKey: otaServingKey)
+        }
+    }
+
+    /// Newest last, no repeats, and only the last few: an address is worth
+    /// recognising for as long as an entry using it could still be lying around.
+    nonisolated static func remembering(_ seen: [String], _ target: String, keep: Int = 5) -> [String] {
+        Array((seen.filter { $0 != target } + [target]).suffix(keep))
     }
 
     nonisolated static func isOurs(_ target: String) -> Bool {
-        (AppID.settings?.stringArray(forKey: otaServingKey) ?? []).contains(target)
+        servingLock.withLock { (AppID.settings?.stringArray(forKey: otaServingKey) ?? []).contains(target) }
     }
     /// Said once per reason: the retry runs every 30s and the log is a person's.
     private var otaComplaint = ""
@@ -283,19 +301,26 @@ final class AppCoordinator: ObservableObject {
         guard let published = otaPublished, !verifyingOTA else { return }
         verifyingOTA = true
         Task.detached { [weak self] in
-            let live = TailscaleClient.servedPaths()[published.path] == published.target
+            let status = TailscaleClient.statusJSON()   // one read; both answers are in it
+            let live = TailscaleClient.served(inJSON: status)[published.path] == published.target
             // Funnel can be turned on after we published, and then these builds
             // are on the internet rather than the tailnet. Take the page down.
-            let funnelled = TailscaleClient.funnelPorts().contains("443")
-            if live, funnelled { Self.releaseServe(published) }
+            let funnelled = TailscaleClient.funnelled(inJSON: status).contains("443")
+            let released = funnelled && live ? Self.releaseServe(published) : true
             await MainActor.run {
                 guard let self else { return }
                 self.verifyingOTA = false
                 if funnelled {
+                    // Whatever tailscaled does, nothing can be fetched once the
+                    // listener is gone — that part doesn't depend on a command
+                    // succeeding.
+                    self.otaServer?.stop()
+                    self.otaServer = nil
                     self.complainOnce("took the install page down: 443 is published to the internet with " +
                         "Tailscale Funnel, and these builds are meant for your tailnet only.")
                 }
-                if !live || funnelled, self.otaPublished?.target == published.target { self.otaPublished = nil }
+                // Kept until the entry is really gone, so the next tick tries again.
+                if !live || released, self.otaPublished?.target == published.target { self.otaPublished = nil }
             }
         }
     }
@@ -303,15 +328,19 @@ final class AppCoordinator: ObservableObject {
     /// Gives a registration back, but only while it is still exactly ours.
     /// `nonisolated` so it can run off the main actor: it shells out twice, and
     /// only the call at quit has to be synchronous.
-    nonisolated static func releaseServe(_ published: (path: String, target: String)) {
-        guard TailscaleClient.servedPaths()[published.path] == published.target else { return }
+    /// Whether the entry is gone. False means it is still there and the caller
+    /// has to try again — reporting it released when it isn't is how builds stay
+    /// reachable while the log says otherwise.
+    @discardableResult
+    nonisolated static func releaseServe(_ published: (path: String, target: String)) -> Bool {
+        guard TailscaleClient.servedPaths()[published.path] == published.target else { return true }
         let out = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
                            ["serve", "--set-path", published.path, "off"], timeout: 10)
         // Only once it's really gone. Forgetting it while the entry survives
         // would leave the next run unable to recognise its own registration.
-        guard out.status == 0 else { return }
-        let seen = (AppID.settings?.stringArray(forKey: otaServingKey) ?? []).filter { $0 != published.target }
-        AppID.settings?.set(seen, forKey: otaServingKey)
+        guard out.status == 0 else { return false }
+        forgetServing(published.target)
+        return true
     }
 
     private func complainOnce(_ line: String) {

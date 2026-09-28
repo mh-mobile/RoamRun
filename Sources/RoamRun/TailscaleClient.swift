@@ -96,8 +96,7 @@ struct TailscaleClient {
     /// The paths `tailscale serve` is proxying, so the CLI can say whether the
     /// OTA page is actually reachable without asking the app.
     static func servedPaths() -> [String: String] {
-        served(inJSON: Proc.run(fromSettings().resolvedPath() ?? "/usr/bin/false",
-                                ["serve", "status", "--json"], timeout: 10).out)
+        served(inJSON: statusJSON())
     }
 
     /// path → what it proxies to, for the default `:443` host only: the same path
@@ -123,8 +122,13 @@ struct TailscaleClient {
     /// funnel off for the port it touches — which would quietly take someone's
     /// public service private. RoamRun stays away from such a port entirely.
     static func funnelPorts() -> Set<String> {
-        funnelled(inJSON: Proc.run(fromSettings().resolvedPath() ?? "/usr/bin/false",
-                                   ["serve", "status", "--json"], timeout: 10).out)
+        funnelled(inJSON: statusJSON())
+    }
+
+    /// `serve status --json` once: the paths and the funnel flags are both in it,
+    /// and each call forks a process.
+    static func statusJSON() -> String {
+        Proc.run(fromSettings().resolvedPath() ?? "/usr/bin/false", ["serve", "status", "--json"], timeout: 10).out
     }
 
     static func funnelled(inJSON out: String) -> Set<String> {
