@@ -93,6 +93,18 @@ struct TailscaleClient {
         return name.hasSuffix(".") ? String(name.dropLast()) : name
     }
 
+    /// Whether this tailnet issues HTTPS certificates. Off by default, and
+    /// without it `tailscale serve --https=…` writes nothing at all: it prints a
+    /// link to the page that turns it on and exits 0 (serve_legacy.go,
+    /// `enableFeatureInteractive`). So it is worth naming before anything else.
+    /// nil when Tailscale couldn't be asked.
+    static func httpsEnabled() -> Bool? {
+        let out = Proc.run(fromSettings().resolvedPath() ?? "/usr/bin/false", ["status", "--json"], timeout: 5)
+        guard out.status == 0, let data = out.out.data(using: .utf8),
+              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        return !((root["CertDomains"] as? [String] ?? []).isEmpty)
+    }
+
     /// What `tailscale serve` has on one port. `unknown` is a case of its own on
     /// purpose: tailscaled not answering is not the same as the port being free,
     /// and reading one as the other is how RoamRun would overwrite an entry of

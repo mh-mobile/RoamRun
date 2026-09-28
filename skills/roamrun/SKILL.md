@@ -63,8 +63,9 @@ not match the installed CLI until then (`roamrun --help` is authoritative).
   they'll get and let them decide. The name is optional: without one the build is
   checked against every device RoamRun knows and it says which are covered, which
   is what you want when you don't know which device the user has to hand. A build
-  covering none of them is stored with a warning rather than refused — relay that
-  warning, because then nobody on this tailnet can install it.
+  covering none of the devices it knows is stored with a warning rather than
+  refused, because the profile may name one this Mac has never seen — relay the
+  warning as it is written, including which devices it could not check.
 
 ## 3. Get the device ready
 

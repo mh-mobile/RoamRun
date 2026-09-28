@@ -292,11 +292,12 @@ enum OTA {
 
     // MARK: - Storing
 
-    /// Where it landed, and any build `--replace` was meant to remove but couldn't:
-    /// storing succeeded and the replacing didn't, which are different answers.
+    /// Where it landed, and how many builds `--replace` was meant to remove but
+    /// couldn't (nil: couldn't even look). Storing succeeded and the replacing
+    /// didn't are different answers, and only one of them is in the return value.
     @discardableResult
     static func add(ipa path: String, _ build: Build, replacing: Bool = false,
-                    in root: URL? = nil) throws -> (dir: URL, notReplaced: [String]) {
+                    in root: URL? = nil) throws -> (dir: URL, notReplaced: Int?) {
         guard !build.slug.isEmpty else { throw Problem.unreadable(path) }
         let store = root ?? directory
         let app = store.appendingPathComponent(build.bundleID, isDirectory: true)
@@ -351,7 +352,7 @@ enum OTA {
                 // first in line to be pruned.
                 throw Problem.failed("couldn't update \(same.path): \(error.localizedDescription)")
             }
-            let missed = replacing ? drop(build.bundleID, labelled: build.label, keeping: again.slug, in: store) : []
+            let missed = replacing ? drop(build.bundleID, labelled: build.label, keeping: again.slug, in: store) : 0
             return (same, missed)
         }
         // The slug counts in seconds, so a script adding two different archives
@@ -368,7 +369,7 @@ enum OTA {
         // not leave a half-written build in the list, and with --replace it must
         // not have taken the working one away before it got there.
         let staging = app.appendingPathComponent(".adding-\(UUID().uuidString)", isDirectory: true)
-        var missed: [String] = []
+        var missed: Int?
         do {
             try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
             try FileManager.default.copyItem(at: URL(fileURLWithPath: path), to: staging.appendingPathComponent("app.ipa"))
@@ -377,15 +378,13 @@ enum OTA {
             try FileManager.default.moveItem(at: staging, to: dir)
             // Only now: until the new build is in place, the old one is what the
             // user has, and taking it away first would leave nothing installable.
-            missed = replacing ? drop(stored.bundleID, labelled: stored.label, keeping: stored.slug, in: store) : []
+            missed = replacing ? drop(stored.bundleID, labelled: stored.label, keeping: stored.slug, in: store) : 0
         } catch {
             try? FileManager.default.removeItem(at: staging)
-            // The app folder may be one this call made: an empty one left behind
-            // would keep the page published with nothing on it.
-            if (try? FileManager.default.contentsOfDirectory(atPath: app.path))?
-                .allSatisfy({ $0.hasPrefix(".") }) == true {
-                try? FileManager.default.removeItem(at: app)
-            }
+            // The app folder stays, empty or not: it holds the `.lock` this call
+            // is holding, and removing it would let the next two writers take
+            // locks on different inodes. `appDirectories` already refuses to
+            // publish a folder with nothing but dot files in it.
             throw Problem.failed("couldn't store the build in \(dir.path): \(error.localizedDescription)")
         }
         prune(stored.bundleID, keeping: stored.slug, in: store)
@@ -397,17 +396,19 @@ enum OTA {
             .appendingPathComponent(build.slug).appendingPathComponent("icon.png").path)
     }
 
-    /// Everything already stored under the same `1.2.0 (45)`. Returns what it
+    /// Everything already stored under the same `1.2.0 (45)`. Returns how many it
     /// couldn't remove — a locked folder means `--replace` didn't replace, and
-    /// reporting success then leaves the old build on the page.
+    /// reporting success then leaves the old build on the page — or nil when the
+    /// folder couldn't be read, where "nothing to remove" would be a guess.
     @discardableResult
     static func drop(_ bundleID: String, labelled label: String, keeping: String? = nil,
-                     in root: URL? = nil) -> [String] {
+                     in root: URL? = nil) -> Int? {
         let app = (root ?? directory).appendingPathComponent(bundleID, isDirectory: true)
-        var missed: [String] = []
-        for old in builds(of: bundleID, in: root) ?? [] where old.label == label && old.slug != keeping {
+        guard let all = builds(of: bundleID, in: root) else { return nil }
+        var missed = 0
+        for old in all where old.label == label && old.slug != keeping {
             do { try FileManager.default.removeItem(at: app.appendingPathComponent(old.slug)) }
-            catch { missed.append(old.label) }
+            catch { missed += 1 }
         }
         return missed
     }
@@ -460,22 +461,32 @@ enum OTA {
     /// path that isn't there and for one whose parent you can't get into.
     static func appDirectories(in root: URL? = nil) -> [String]? {
         let store = root ?? directory
-        let found: [String]
-        do { found = try FileManager.default.contentsOfDirectory(atPath: store.path) }
+        guard let found = entries(of: store) else { return nil }
+        var apps: [String] = []
+        for name in found where !name.hasPrefix(".") {
+            // Every level, not just the top one: `try?` here would have said "no
+            // such app" for a folder that was merely unreadable, which is the
+            // whole defect this function exists to avoid.
+            guard let inside = entries(of: store.appendingPathComponent(name)) else { return nil }
+            // A folder holding nothing but `.lock` is one an add made and then
+            // failed in, or one whose builds were removed by hand. Counting it
+            // keeps the page published with nothing on it.
+            if inside.contains(where: { !$0.hasPrefix(".") }) { apps.append(name) }
+        }
+        return apps
+    }
+
+    /// What is in a directory: `[]` when it isn't there, nil when it is but
+    /// couldn't be read. `fileExists` can't tell those apart — it is false for a
+    /// path that is absent and for one whose parent you can't get into — and
+    /// reading the second as the first is what takes a live page down.
+    private static func entries(of url: URL) -> [String]? {
+        do { return try FileManager.default.contentsOfDirectory(atPath: url.path) }
         catch CocoaError.fileReadNoSuchFile { return [] }   // deleting it is the off switch
         catch let error as NSError where error.domain == NSPOSIXErrorDomain && error.code == Int(ENOENT) {
             return []
         }
         catch { return nil }
-        return found.filter { name in
-            guard !name.hasPrefix(".") else { return false }
-            // A folder holding nothing but `.lock` is one an add made and then
-            // failed in, or one whose builds were removed by hand. Counting it
-            // keeps the page published with nothing on it.
-            guard let inside = try? FileManager.default.contentsOfDirectory(
-                atPath: store.appendingPathComponent(name).path) else { return false }
-            return inside.contains { !$0.hasPrefix(".") }
-        }
     }
 
     /// Newest first, per app. nil when something couldn't be read, at any level —
@@ -495,13 +506,7 @@ enum OTA {
     /// tailnet sent is not the place to delete anything. `add` reaps them.
     static func builds(of bundleID: String, in root: URL? = nil) -> [Build]? {
         let app = (root ?? directory).appendingPathComponent(bundleID, isDirectory: true)
-        let slugs: [String]
-        do { slugs = try FileManager.default.contentsOfDirectory(atPath: app.path) }
-        catch CocoaError.fileReadNoSuchFile { return [] }
-        catch let error as NSError where error.domain == NSPOSIXErrorDomain && error.code == Int(ENOENT) {
-            return []
-        }
-        catch { return nil }
+        guard let slugs = entries(of: app) else { return nil }
         return slugs.compactMap { slug -> Build? in
             guard !slug.hasPrefix(".") else { return nil }
             let dir = app.appendingPathComponent(slug)

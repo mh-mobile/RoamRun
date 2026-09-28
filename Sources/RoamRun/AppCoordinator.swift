@@ -293,11 +293,14 @@ final class AppCoordinator: ObservableObject {
             if Self.beginServeChange() {
                 Task.detached { [weak self] in
                     defer { Self.endServeChange() }
-                    let answered = Self.reclaimStray(on: port) ?? false
-                    // Ask again next tick when Tailscale couldn't answer: at launch
-                    // it is often still starting, and giving up there would leave
-                    // the entry exactly as unreclaimed as before.
-                    if !answered { await MainActor.run { self?.lookedForStrays = false } }
+                    // Only when Tailscale couldn't be asked: at launch it is often
+                    // still starting. A release that was asked for and failed must
+                    // not re-arm — this block takes the flag before the publish
+                    // below can, so retrying it every tick starves the page for
+                    // good, and publishing over our own entry recovers anyway.
+                    if Self.reclaimStray(on: port) == nil {
+                        await MainActor.run { self?.lookedForStrays = false }
+                    }
                 }
             } else {
                 lookedForStrays = false   // busy; the timer comes round again
@@ -432,30 +435,43 @@ final class AppCoordinator: ObservableObject {
             Self.rememberServing(mine)
             let out = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
                                ["serve", "--bg", "--yes", "--https=\(tailnetPort)", mine], timeout: 20)
-            // Before hopping back: `serving` waits on `tailscale` for up to 10 s,
-            // and the main actor is where the menu bar lives. A status we couldn't
-            // read says nothing about whether the registration landed, so it is
-            // not a reason to drop the one record that can find it again.
-            var strayRecord = false
-            if out.status != 0 {
-                let after = TailscaleClient.serving(port: tailnetPort)
-                strayRecord = after != .unknown && !after.isRegistered(mine)
-            }
+            // The exit code is not the answer; the config is. `tailscale serve`
+            // exits 0 without writing anything when the tailnet has no HTTPS
+            // certificates: it prints the admin page's link to stdout and calls
+            // `os.Exit(0)` (serve_legacy.go, enableFeatureInteractive, reached
+            // from serve_v2.go:259 before any config is touched). Reading that as
+            // success logged "serving builds over the air" every minute while
+            // nothing was served — and `doctor` sent people to that log to find
+            // out why the page was missing.
+            //
+            // Before hopping back, too: `serving` waits on `tailscale` for up to
+            // 10 s and the main actor is where the menu bar lives.
+            let after = TailscaleClient.serving(port: tailnetPort)
+            let landed = after.isRegistered(mine)
+            // A status we couldn't read says nothing either way, so it is neither
+            // a success nor a reason to drop the one record that can find it again.
+            let unsure = after == .unknown
             await MainActor.run {
                 guard let self else { return }
-                if out.status == 0 {
+                if landed {
                     self.otaPublished = (tailnetPort, mine)
                     self.otaComplaint = ""
                     self.logStore.log("serving builds over the air on port \(tailnetPort)")
+                } else if unsure {
+                    self.complainOnce("published port \(tailnetPort), but `tailscale serve status` didn't " +
+                                      "answer, so RoamRun can't confirm it. Checking again shortly.")
                 } else {
-                    // No HTTPS in this tailnet, tailscaled still coming up, or no
-                    // Tailscale at all. The timer tries again, so this recovers.
-                    self.complainOnce("couldn't publish port \(tailnetPort) with tailscale serve, will retry: " +
-                        out.err.trimmingCharacters(in: .whitespacesAndNewlines))
+                    // Whatever `tailscale` said, the entry isn't there. Its stdout
+                    // carries the only thing that explains the silent case — a link
+                    // to the page where HTTPS certificates are turned on.
+                    let said = (out.err + "\n" + out.out).trimmingCharacters(in: .whitespacesAndNewlines)
+                    self.complainOnce("port \(tailnetPort) isn't served after asking tailscale to, will retry" +
+                                      (said.isEmpty ? ". Does your tailnet have HTTPS certificates turned on?"
+                                                    : ": \(said)"))
                     // Remembered before the call in case we died during it. It
                     // didn't take, so drop it: a window full of addresses that
                     // were never registered can't recognise one that was.
-                    if strayRecord { Self.forgetServing(mine) }
+                    Self.forgetServing(mine)
                 }
             }
         }

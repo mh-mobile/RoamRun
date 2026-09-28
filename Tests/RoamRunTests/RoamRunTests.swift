@@ -1343,6 +1343,23 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(!TailscaleClient.Serving.nothing.isRegistered("http://127.0.0.1:61816"))
 }
 
+@Test func aPublishIsJudgedByTheConfigNotByTheExitCode() {
+    // `tailscale serve --https` writes nothing and exits 0 when the tailnet has
+    // no HTTPS certificates: it prints the admin link and calls os.Exit(0) before
+    // touching any config. Reading that as success logged "serving builds over
+    // the air" once a minute while nothing was served.
+    let mine = "http://127.0.0.1:61816"
+    let landed = TailscaleClient.serving(port: 41443, inJSON:
+        #"{"Web":{"m:41443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:61816"}}}}}"#)
+    #expect(landed.isRegistered(mine))
+    // What that path actually leaves behind: no serve config at all.
+    #expect(!TailscaleClient.serving(port: 41443, inJSON: "null").isRegistered(mine))
+    #expect(TailscaleClient.serving(port: 41443, inJSON: "null") != .unknown)   // so it is a failure, not a maybe
+    // And a status we couldn't read is neither.
+    #expect(!TailscaleClient.serving(port: 41443, inJSON: "not json").isRegistered(mine))
+    #expect(TailscaleClient.serving(port: 41443, inJSON: "not json") == .unknown)
+}
+
 @Test func aPortThatCantWorkIsIgnoredRatherThanRetriedForEver() {
     #expect(AppCoordinator.otaPort(0) == 41443)         // unset
     #expect(AppCoordinator.otaPort(41444) == 41443 + 1)
@@ -1553,6 +1570,32 @@ private func sized(_ path: String, _ b: OTA.Build) -> OTA.Build {
     #expect(OTA.builds(in: root) == nil)                 // the page answers 503, not "no builds yet"
 }
 
+@Test func anAppFolderThatCantBeOpenedIsNotAnAppThatIsGone() throws {
+    // One level down, where `try?` used to turn "couldn't read it" back into
+    // "there is no such app" — and an app vanishing from the list is how the
+    // coordinator decides the off switch was pressed and takes the page down
+    // under a download.
+    let root = otaScratch()
+    let app = root.appendingPathComponent("com.example.App")
+    defer {
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: app.path)
+        try? FileManager.default.removeItem(at: root)
+    }
+    try FileManager.default.createDirectory(at: app.appendingPathComponent("1.0-1-x"),
+                                            withIntermediateDirectories: true)
+    try JSONEncoder().encode(build("1.0", "1", "1.0-1-x"))
+        .write(to: app.appendingPathComponent("1.0-1-x/meta.json"))
+    #expect(OTA.appDirectories(in: root) == ["com.example.App"])
+
+    try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: app.path)
+    try #require(!FileManager.default.isReadableFile(atPath: app.path))
+    #expect(OTA.appDirectories(in: root) == nil)         // not `[]`, which reads as the off switch
+    #expect(OTA.builds(in: root) == nil)
+    #expect(OTA.builds(of: "com.example.App", in: root) == nil)
+    // And `drop` says it couldn't look, rather than "there was nothing to remove".
+    #expect(OTA.drop("com.example.App", labelled: "1.0 (1)", in: root) == nil)
+}
+
 @Test func replaceSaysSoWhenItCouldntReplace() throws {
     let root = otaScratch()
     defer {
@@ -1568,7 +1611,7 @@ private func sized(_ path: String, _ b: OTA.Build) -> OTA.Build {
     // reporting success would leave it on the page under the same version.
     try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: app.path)
     try #require(!FileManager.default.isWritableFile(atPath: app.path))
-    #expect(OTA.drop("com.example.App", labelled: "1.0 (1)", keeping: nil, in: root) == ["1.0 (1)"])
+    #expect(OTA.drop("com.example.App", labelled: "1.0 (1)", keeping: nil, in: root) == 1)
 }
 
 @Test func replaceDropsTheOtherBuildsOfThatVersionAndNothingElse() throws {
@@ -1587,7 +1630,7 @@ private func sized(_ path: String, _ b: OTA.Build) -> OTA.Build {
     try store("1.1", "1", "1.1-1-a", added: .now)
     #expect(OTA.builds(of: "com.example.App", in: dir)?.count == 3)
     // What --replace does: everything under that one label except the new build.
-    #expect(OTA.drop("com.example.App", labelled: "1.0 (1)", keeping: "1.0-1-b", in: dir).isEmpty)
+    #expect(OTA.drop("com.example.App", labelled: "1.0 (1)", keeping: "1.0-1-b", in: dir) == 0)
     #expect(OTA.builds(of: "com.example.App", in: dir)?.map(\.slug).sorted() == ["1.0-1-b", "1.1-1-a"])
 }
 

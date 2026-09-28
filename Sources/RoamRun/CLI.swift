@@ -423,7 +423,12 @@ enum CLI {
             var build = try OTA.read(ipa: path)
             let checked = try OTA.check(CLI.profilePlist(of: path), against: devices, path: given)
             build.expires = checked.expires
-            let added = try OTA.add(ipa: path, build, replacing: replacing)
+            // Not while nothing of yours can take it: `--replace` would remove the
+            // build people are running to make room for one they can't install,
+            // and there would be no way back to it.
+            var noneOfYours = false
+            if case .noneOfYours = checked.coverage { noneOfYours = true }
+            let added = try OTA.add(ipa: path, build, replacing: replacing && !noneOfYours)
 
             print("Stored \(build.title) \(build.label) (\(OTA.size(build.size))).")
             // Which devices, not whether: an Ad Hoc profile covers the ones it
@@ -441,15 +446,26 @@ enum CLI {
             case .noneOfYours(let known, let unchecked):
                 // Stored, not refused: the page is open to the whole tailnet and
                 // the profile may name a device this Mac has never seen. But
-                // nobody here can install it, and that has to be said plainly.
-                let mine = (known + unchecked).joined(separator: ", ")
+                // nobody here can install it, and that has to be said plainly —
+                // without claiming anything about the ones it couldn't check.
                 print("  WARNING: its provisioning profile doesn't name " +
-                      (mine.isEmpty ? "any device RoamRun knows" : mine) + ".")
+                      (known.isEmpty ? "any device RoamRun has a UDID for" : known.joined(separator: ", ")) + ".")
+                if !unchecked.isEmpty {
+                    print("  Can't tell for \(unchecked.joined(separator: ", ")) — " +
+                          "bridge one once and RoamRun learns its UDID.")
+                }
                 print("  Whoever installs it needs a device that is in the profile; iOS refuses the rest.")
+                if replacing {
+                    print("  --replace was ignored: it would have removed a build that does install.")
+                }
             }
-            if !added.notReplaced.isEmpty {
-                print("  Couldn't remove \(added.notReplaced.joined(separator: ", ")) — " +
-                      "--replace left \(added.notReplaced.count == 1 ? "that build" : "those builds") on the page.")
+            switch added.notReplaced {
+            case nil:
+                print("  Couldn't read the folder, so --replace may not have removed the older builds.")
+            case .some(let n) where n > 0:
+                print("  Couldn't remove \(n) older build\(n == 1 ? "" : "s") under that version — " +
+                      "--replace left \(n == 1 ? "it" : "them") on the page.")
+            default: break
             }
             let tailnetPort = AppCoordinator.otaPort
             let host: String?
@@ -488,9 +504,17 @@ enum CLI {
                 stop("the build is stored, but \(why)")
             }
             if !TailscaleClient.servingLive(port: tailnetPort, host: host) {
-                print("  RoamRun publishes the page while it runs, so it has to be open; it can take")
-                print("  half a minute to appear. If it doesn't, look in Open RoamRun › ⚙ Settings ›")
-                print("  Troubleshooting › Recent messages.")
+                // Named first when it is the cause: without certificates
+                // `tailscale serve` writes nothing and still exits 0, so waiting
+                // for the page is waiting for something that will never appear.
+                if TailscaleClient.httpsEnabled() == false {
+                    print("  Your tailnet doesn't issue HTTPS certificates, so the page can't be served.")
+                    print("  Turn them on for the tailnet (Tailscale admin console › DNS › HTTPS Certificates).")
+                } else {
+                    print("  RoamRun publishes the page while it runs, so it has to be open; it can take")
+                    print("  half a minute to appear. If it doesn't, look in Open RoamRun › ⚙ Settings ›")
+                    print("  Troubleshooting › Recent messages.")
+                }
             }
             print("  Open on the device: \(url)")
             print("  Anyone on your tailnet can open that page and install these builds.")
@@ -1128,7 +1152,11 @@ enum CLI {
                   "The install page answers 503 while this is true. Check the folder's permissions.", true)
             return
         }
-        guard !apps.isEmpty else { return }
+        // Counted over the folders, not over `apps`: an app whose every build has
+        // metadata this version can't decode has no entry in `apps` at all, and
+        // that is precisely the app this count exists for.
+        let undecodable = (OTA.appDirectories() ?? []).reduce(0) { $0 + OTA.unreadableBuilds(of: $1) }
+        guard !apps.isEmpty || undecodable > 0 else { return }
         let mine: Bool
         var stray = false
         section("\nOver the air", "ota")
@@ -1136,9 +1164,7 @@ enum CLI {
         let bytes = builds.reduce(Int64(0)) { $0 + $1.size }
         note("\(builds.count) build\(builds.count == 1 ? "" : "s") of \(apps.count) app\(apps.count == 1 ? "" : "s"), " +
              "\(OTA.size(bytes)) in \(OTA.directory.path)")
-        // Metadata no version here can decode: shown nowhere, pruned never, in no
-        // total. It can't be listed, so at least say it is there.
-        let undecodable = apps.reduce(0) { $0 + OTA.unreadableBuilds(of: $1.bundleID) }
+        // Shown nowhere, pruned never, in no total: at least say it is there.
         if undecodable > 0 {
             note("\(undecodable) more with metadata this version can't read — a later one may; " +
                  "delete the folder to be rid of it")
@@ -1153,22 +1179,29 @@ enum CLI {
         case .nothing: mine = true             // nothing of the user's to get in the way
         case .mounted:
             let here = host.flatMap { served.root(on: $0) }
-            // No root under this name is a free port, exactly as the app reads it.
-            // Treating nil as "someone else's" told people to change ports when a
-            // tailnet rename had left an inert entry under the old name.
-            mine = host == nil || here == nil || AppCoordinator.isOurs(here!)
-            stray = !mine && AppCoordinator.abandoned(here)
+            let beside = host.map { served.alongside($0) } ?? []
+            // The same reading the app and `roamrun ota` use: no root under this
+            // name is a free port, but anything else sharing it is not.
+            mine = host != nil && beside.isEmpty && (here == nil || AppCoordinator.isOurs(here!))
+            stray = !mine && beside.isEmpty && AppCoordinator.abandoned(here)
         }
         check(live, live ? "The install page is published on port \(tailnetPort)"
                          : "The install page isn't published on port \(tailnetPort)",
               unreadable
                   ? "`tailscale serve status` didn't answer, so this can't be checked — is Tailscale running?"
+                  : host == nil
+                  ? "Tailscale didn't give this Mac a name — turn MagicDNS on for your tailnet."
                   : mine
                   ? "RoamRun publishes it while it runs — open RoamRun, then look in ⚙ Settings › Troubleshooting › Recent messages if it doesn't appear."
                   : stray
                   ? "port \(tailnetPort) carries an entry with nothing behind it, left by a run that was killed: tailscale serve --https=\(tailnetPort) --set-path=/ off"
                   : "port \(tailnetPort) is serving \(served.described), which isn't RoamRun's. Give RoamRun another port: defaults write \(AppID.bundle) otaPort -int 41444",
               true)
+        if !live, TailscaleClient.httpsEnabled() == false {
+            check(false, "This tailnet doesn't issue HTTPS certificates",
+                  "`tailscale serve --https` writes nothing without them and still exits 0. Turn them on in the Tailscale admin console › DNS › HTTPS Certificates.",
+                  false)
+        }
         if let host, served.funnelled(on: host) {
             check(false, "Tailscale Funnel is on for port \(tailnetPort)",
                   "The install page is on the public internet. tailscale funnel --https=\(tailnetPort) off", false)
