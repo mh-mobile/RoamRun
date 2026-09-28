@@ -62,7 +62,9 @@ not match the installed CLI until then (`roamrun --help` is authoritative).
   per version and build number instead of stacking one per rebuild. Tell them what
   they'll get and let them decide. The name is optional: without one the build is
   checked against every device RoamRun knows and it says which are covered, which
-  is what you want when you don't know which device the user has to hand.
+  is what you want when you don't know which device the user has to hand. A build
+  covering none of them is stored with a warning rather than refused — relay that
+  warning, because then nobody on this tailnet can install it.
 
 ## 3. Get the device ready
 

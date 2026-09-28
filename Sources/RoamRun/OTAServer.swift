@@ -32,9 +32,9 @@ private final class IdleTimer: @unchecked Sendable {
 /// is iOS installing a build from the tailnet.
 final class OTAServer: @unchecked Sendable {
     private let lock = NSLock()
-    private var open = 0
+    private var live: [ObjectIdentifier: NWConnection] = [:]
 
-    private func closed() { lock.withLock { open = max(0, open - 1) } }
+    private func closed(_ conn: NWConnection) { lock.withLock { live[ObjectIdentifier(conn)] = nil } }
     private let queue = DispatchQueue(label: "roamrun.ota")
     private var _listener: NWListener?
     private var listener: NWListener? {
@@ -85,6 +85,10 @@ final class OTAServer: @unchecked Sendable {
         listener?.cancel()
         listener = nil
         port = 0
+        // Cancelling the listener only stops new ones. A download in flight would
+        // otherwise sit there until the idle timer, because `pump` holds `self`
+        // weakly and the chain simply stops when the server goes.
+        for conn in lock.withLock({ Array(live.values) }) { conn.cancel() }
     }
 
     /// Whether there is still a listener behind the port `tailscale serve` was
@@ -113,15 +117,15 @@ final class OTAServer: @unchecked Sendable {
 
     private func serve(_ conn: NWConnection) {
         let accepted = lock.withLock { () -> Bool in
-            guard open < Self.maxConnections else { return false }
-            open += 1
+            guard live.count < Self.maxConnections else { return false }
+            live[ObjectIdentifier(conn)] = conn
             return true
         }
         guard accepted else { conn.cancel(); return }
         conn.stateUpdateHandler = { [weak self, weak conn] state in
             switch state {
             case .failed: conn?.cancel()        // always ends at .cancelled, so `closed` runs once
-            case .cancelled: self?.closed()
+            case .cancelled: if let conn { self?.closed(conn) }
             default: break
             }
         }
@@ -136,28 +140,32 @@ final class OTAServer: @unchecked Sendable {
         // limit once a body is going out, where slow really is only slow.
         idle.arm(Self.headLimit)
         conn.start(queue: queue)
-        readHead(conn, soFar: Data(), idle: idle, by: DispatchTime.now() + Self.headLimit)
+        readHead(conn, soFar: Data(), scanned: 0, idle: idle, by: DispatchTime.now() + Self.headLimit)
     }
 
     /// Until the blank line that ends the head. One `receive` can stop in the
     /// middle of it, and a request line without its `Host` would make every link
     /// in the manifest point the device at itself.
-    private func readHead(_ conn: NWConnection, soFar: Data, idle: IdleTimer, by deadline: DispatchTime) {
+    private func readHead(_ conn: NWConnection, soFar: Data, scanned: Int,
+                          idle: IdleTimer, by deadline: DispatchTime) {
         conn.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, done, _ in
             guard let self, let data, !data.isEmpty else { conn.cancel(); return }
             let head = soFar + data
             guard head.count <= 32 * 1024 else { return self.send(conn, status: "431 Request Header Fields Too Large") }
-            // Lossy on purpose: one byte that isn't UTF-8 used to mean the request
-            // was never answered and the slot was held until the idle timer.
-            let text = String(decoding: head, as: UTF8.self)
-            guard let end = text.range(of: "\r\n\r\n") else {
+            // Only the bytes that are new, less the three the terminator could
+            // straddle. A peer sending one byte at a time would otherwise have the
+            // whole buffer rescanned each time, which is quadratic in what it sends.
+            let from = max(0, scanned - 3)
+            guard let cut = Self.endOfHead(head, from: from) else {
                 guard !done else { conn.cancel(); return }
                 let now = DispatchTime.now()
                 guard now < deadline else { return self.send(conn, status: "408 Request Timeout") }
                 idle.arm(Double(deadline.uptimeNanoseconds - now.uptimeNanoseconds) / 1e9)
-                return self.readHead(conn, soFar: head, idle: idle, by: deadline)
+                return self.readHead(conn, soFar: head, scanned: head.count, idle: idle, by: deadline)
             }
-            let (method, path, host) = Self.request(String(text[text.startIndex..<end.lowerBound]))
+            // Lossy on purpose: one byte that isn't UTF-8 used to mean the request
+            // was never answered and the slot was held until the idle timer.
+            let (method, path, host) = Self.request(String(decoding: head[head.startIndex..<cut], as: UTF8.self))
             guard method == "GET" || method == "HEAD" else { return self.send(conn, status: "405 Method Not Allowed") }
             // Without it every link in the manifest would point the device at
             // itself, and the install would fail with nothing to go on.
@@ -165,6 +173,14 @@ final class OTAServer: @unchecked Sendable {
             let base = "https://\(host)"   // Host carries the port serve published us on
             self.route(conn, path: path, base: base, bodyWanted: method == "GET", idle: idle)
         }
+    }
+
+    /// Where the blank line that ends the head begins, searching only from `from`.
+    static func endOfHead(_ head: Data, from: Int = 0) -> Data.Index? {
+        let marker = Data("\r\n\r\n".utf8)
+        guard head.count >= marker.count, from <= head.count - marker.count else { return nil }
+        let start = head.index(head.startIndex, offsetBy: from)
+        return head[start...].firstRange(of: marker)?.lowerBound
     }
 
     /// (method, path, host). The path is whatever came in; `resolve` decides
@@ -188,21 +204,26 @@ final class OTAServer: @unchecked Sendable {
         let parts = Self.segments(path)
         switch parts.count {
         case 0:
-            guard OTA.appDirectories() != nil else {
+            // At any level, not just the top one: an empty page is a lie about a
+            // folder the Mac simply couldn't open.
+            guard let groups = OTA.builds() else {
                 let why = Data("Can't read the builds folder on the Mac.\n".utf8)
                 return send(conn, status: "503 Service Unavailable",
                             body: bodyWanted ? why : nil, length: Int64(why.count))
             }
-            let html = OTA.indexHTML(OTA.builds(), base: base)
-            send(conn, status: "200 OK", type: "text/html; charset=utf-8", body: bodyWanted ? Data(html.utf8) : nil,
-                 length: Int64(Data(html.utf8).count))
+            let html = Data(OTA.indexHTML(groups, base: base).utf8)
+            send(conn, status: "200 OK", type: "text/html; charset=utf-8",
+                 body: bodyWanted ? html : nil, length: Int64(html.count))
         case 3 where parts[2] == "icon.png":
             let url = OTA.directory.appendingPathComponent(parts[0]).appendingPathComponent(parts[1])
                 .appendingPathComponent("icon.png")
             guard let png = try? Data(contentsOf: url) else { return send(conn, status: "404 Not Found") }
             send(conn, status: "200 OK", type: "image/png", body: bodyWanted ? png : nil, length: Int64(png.count))
         case 3 where parts[2] == "manifest.plist" || parts[2] == "app.ipa":
-            guard let build = OTA.builds(of: parts[0]).first(where: { $0.slug == parts[1] }) else {
+            guard let known = OTA.builds(of: parts[0]) else {
+                return send(conn, status: "503 Service Unavailable")
+            }
+            guard let build = known.first(where: { $0.slug == parts[1] }) else {
                 return send(conn, status: "404 Not Found")
             }
             if parts[2] == "manifest.plist" {
@@ -239,9 +260,14 @@ final class OTAServer: @unchecked Sendable {
     private func sendIPA(_ conn: NWConnection, at url: URL, bodyWanted: Bool, idle: IdleTimer) {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return send(conn, status: "404 Not Found") }
         // From the handle, so it describes the bytes this connection will send
-        // even if the file is replaced a moment later.
-        let size = Int64((try? handle.seekToEnd()) ?? 0)
-        try? handle.seek(toOffset: 0)
+        // even if the file is replaced a moment later. `try?` here would promise
+        // a length of 0 and then send the whole file, or promise the length and
+        // send from the end — a body that doesn't match its header either way.
+        guard let end = try? handle.seekToEnd(), (try? handle.seek(toOffset: 0)) != nil else {
+            try? handle.close()
+            return send(conn, status: "500 Internal Server Error")
+        }
+        let size = Int64(end)
         guard bodyWanted else {
             try? handle.close()
             return send(conn, status: "200 OK", type: "application/octet-stream", length: size)

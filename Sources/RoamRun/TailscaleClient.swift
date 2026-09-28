@@ -83,9 +83,9 @@ struct TailscaleClient {
     }
 
     /// This Mac's MagicDNS name, which is the host OTA links are built on.
-    func selfDNSName() throws -> String? {
+    func selfDNSName(timeout: TimeInterval = 5) throws -> String? {
         guard let path = resolvedPath() else { throw TailscaleClientError.cliNotFound }
-        let out = try run(path, ["status", "--json"])
+        let out = try run(path, ["status", "--json"], timeout: timeout)
         if let problem = Self.stateProblem(inStatusJSON: out) { throw TailscaleClientError.commandFailed(problem) }
         guard let data = out.data(using: .utf8),
               let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
@@ -103,7 +103,7 @@ struct TailscaleClient {
         /// Every `/` proxy on that port, each with the host key it sits under —
         /// a tailnet rename leaves the old name behind, so there can be more than
         /// one — and the other mounts.
-        case mounted(roots: [Root], others: [Mount])
+        case mounted(roots: [Root], others: [Mount], funnelled: [String] = [])
 
         /// A root and the name it is registered under. The name is half the
         /// identity: `tailscale serve --https=P …` and `… off` both act on
@@ -117,7 +117,7 @@ struct TailscaleClient {
         /// What those two commands would replace or remove, under the name the
         /// node has now.
         func root(on host: String) -> String? {
-            guard case .mounted(let roots, _) = self else { return nil }
+            guard case .mounted(let roots, _, _) = self else { return nil }
             return roots.first { $0.host == host }?.target
         }
 
@@ -129,6 +129,22 @@ struct TailscaleClient {
             let path: String
         }
 
+        /// Whether `target` is registered under any name at all. For "did my
+        /// registration land", where the name it landed under doesn't matter and
+        /// scoping to one would read a rename as a failure.
+        func isRegistered(_ target: String) -> Bool {
+            guard case .mounted(let roots, _, _) = self else { return false }
+            return roots.contains { $0.target == target }
+        }
+        /// Whether Tailscale Funnel is on for that port under this name. RoamRun
+        /// never turns it on and picks a port Funnel can't publish — but that list
+        /// is Tailscale's current policy, not a law, and a page of unreleased
+        /// builds on the public internet is worth checking rather than assuming.
+        func funnelled(on host: String) -> Bool {
+            guard case .mounted(_, _, let funnel) = self else { return false }
+            return funnel.contains(host)
+        }
+
         /// What else is on that port under this name, and so would sit beside the
         /// page. RoamRun keeps a port to itself, so anything here means it stays
         /// away — not because sharing would break something, but because a port of
@@ -138,7 +154,7 @@ struct TailscaleClient {
         /// anyone's problem: `serve` can't reach it and the name no longer
         /// resolves, so it is inert config, not a port in use.
         func alongside(_ host: String) -> [String] {
-            guard case .mounted(_, let others) = self else { return [] }
+            guard case .mounted(_, let others, _) = self else { return [] }
             return others.filter { $0.host == nil || $0.host == host }.map(\.path)
         }
 
@@ -147,7 +163,7 @@ struct TailscaleClient {
             switch self {
             case .unknown: return "something RoamRun couldn't read"
             case .nothing: return "nothing"
-            case .mounted(let roots, let others):
+            case .mounted(let roots, let others, _):
                 let all = roots.map { $0.target.isEmpty ? "\($0.host)/" : $0.target } + others.map(\.path)
                 return all.count > 3 ? "\(all.count) mounts" : all.joined(separator: ", ")
             }
@@ -157,9 +173,9 @@ struct TailscaleClient {
     /// A port of RoamRun's own rather than a path on `:443`: that port carries
     /// whatever else the user serves, and Funnel can only publish 443, 8443 and
     /// 10000 — so a port outside those cannot reach the internet at all.
-    static func serving(port: Int) -> Serving {
+    static func serving(port: Int, timeout: TimeInterval = 10) -> Serving {
         let out = Proc.run(fromSettings().resolvedPath() ?? "/usr/bin/false",
-                           ["serve", "status", "--json"], timeout: 10)
+                           ["serve", "status", "--json"], timeout: timeout)
         guard out.status == 0 else { return .unknown }
         return serving(port: port, inJSON: out.out)
     }
@@ -187,20 +203,30 @@ struct TailscaleClient {
         }
         // Every host key for that port, not the first the dictionary happens to
         // yield: a tailnet rename leaves the old name behind.
+        var funnelled: [String] = []
+        for (hostPort, on) in (root["AllowFunnel"] as? [String: Any] ?? [:])
+        where hostPort.hasSuffix(":\(port)") && (on as? Bool) == true {
+            funnelled.append(String(hostPort.dropLast(":\(port)".count)))
+        }
         for (hostPort, value) in (root["Web"] as? [String: Any] ?? [:]).sorted(by: { $0.key < $1.key })
         where hostPort.hasSuffix(":\(port)") {
-            guard let handlers = (value as? [String: Any])?["Handlers"] as? [String: Any] else { continue }
             // Every host's root, not the first one found: the second would
             // otherwise be invisible, and invisible is what gets overwritten.
             let host = String(hostPort.dropLast(":\(port)".count))
+            guard let handlers = (value as? [String: Any])?["Handlers"] as? [String: Any] else {
+                // An entry for this port whose inside we can't read. Not nothing:
+                // reading it that way is how RoamRun would take a port in use.
+                others.append(.init(host: host, path: "\(host) (unreadable)"))
+                continue
+            }
             if let here = handlers["/"] as? [String: Any] {
                 roots.append(.init(host: host, target: (here["Proxy"] as? String) ?? ""))
             }
             others += handlers.keys.filter { $0 != "/" }.map { .init(host: host, path: $0) }
         }
-        guard !roots.isEmpty || !others.isEmpty else { return .nothing }
+        guard !roots.isEmpty || !others.isEmpty || !funnelled.isEmpty else { return .nothing }
         return .mounted(roots: roots.sorted { $0.host < $1.host },
-                        others: others.sorted { $0.path < $1.path })
+                        others: others.sorted { $0.path < $1.path }, funnelled: funnelled.sorted())
     }
 
     /// Whether RoamRun's own entry is there *and* something is listening behind
@@ -293,8 +319,8 @@ struct TailscaleClient {
         return line[via..<port].trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
     }
 
-    private func run(_ path: String, _ args: [String]) throws -> String {
-        let r = Proc.run(path, args, timeout: 5)   // a wedged tailscaled must not hang a bridge start
+    private func run(_ path: String, _ args: [String], timeout: TimeInterval = 5) throws -> String {
+        let r = Proc.run(path, args, timeout: timeout)   // a wedged tailscaled must not hang a bridge start
         guard r.status == 0 else {
             throw TailscaleClientError.commandFailed("tailscale \(args.joined(separator: " ")): \(r.err)")
         }

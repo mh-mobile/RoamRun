@@ -241,16 +241,19 @@ roamrun ota iPhone build/MyApp.ipa     # 1台だけ確認したいときは名�
   （スクリプトからは `xcodebuild -exportArchive` に `"method": "release-testing"`）。
   `roamrun run` では作れません（Development 署名になり、ブリッジ経由でしか入りません）。
   Development 署名の .ipa は `roamrun ota` が先に弾きます。Ad Hoc の場合は端末がプロビジョ
-  ニングプロファイルに含まれている必要があり、それを確認するために RoamRun がどれか 1 台の
-  UDID を知っている必要があります。自宅で一度ブリッジすれば（`roamrun up <name> -d`）
-  Xcode がローカル端末として登録し、RoamRun も UDID を覚えます。Enterprise 署名なら
-  どちらも不要です（保存済みデバイスすら要りません）
+  ニングプロファイルに含まれている必要があり、RoamRun はどれが対象かを表示します。一度
+  ブリッジすれば（`roamrun up <name> -d`）Xcode がローカル端末として登録し、RoamRun も
+  UDID を覚えます。**どれも含まれていない場合も警告付きで保管します** — ページは tailnet
+  全体に出るので、この Mac が見たことのない端末向けのビルドかもしれないからです。
+  Enterprise 署名ならどれも不要です
 - **tailnet で HTTPS が有効なこと**（MagicDNS と HTTPS 証明書）。RoamRun は**専用ポート**を
   1 つだけ使い（既定 41443。変更は `defaults write io.github.mh-mobile.roamrun otaPort -int …`。
   443 / 8443 / 10000 は Funnel で公開できてしまうポートなので受け付けず、41443 のままになります）、
   終了時に返します。あなたが他に serve しているものが載る `:443` には**一切触りません**。
   また Tailscale Funnel が現在公開できるのは 443 / 8443 / 10000 の 3 つだけなので、
-  **それ以外のポートはインターネットに出しようがありません**
+  **それ以外のポートはインターネットに出しようがありません**。RoamRun が Funnel を
+  有効にすることはありませんが、それでも有効になっていたら大きく警告します
+  （このポート一覧は Tailscale のポリシーであって、約束ではないため）
 - **RoamRun が起動していること**（ページを配信しているのはアプリです）
 
 **tailnet 上の誰でもこのページを開いてインストールできます。**共有 tailnet では

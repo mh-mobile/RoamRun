@@ -69,8 +69,11 @@ final class ProfileStore {
     }
 
     /// Membership follows this process — it is the one that added or deleted a
-    /// device. For the endpoint fields, which `roamrun up` also writes, a value
-    /// this process left alone keeps whatever is on disk.
+    /// device. For the fields `roamrun up` also writes — where the device is, and
+    /// the UDID it learned while bridging — a value this process left alone keeps
+    /// whatever is on disk. Without the UDID here, an app that loaded a profile
+    /// before the CLI learned one writes its own `nil` back over it, and `roamrun
+    /// ota` goes back to not knowing the device.
     static func merge(base: [DeviceProfile], wanted: [DeviceProfile], disk: [DeviceProfile]) -> [DeviceProfile] {
         let was = byID(base), onDisk = byID(disk)
         return wanted.map { mine in
@@ -79,6 +82,7 @@ final class ProfileStore {
             if mine.providerIP == old.providerIP { out.providerIP = theirs.providerIP }
             if mine.remotePairingPort == old.remotePairingPort { out.remotePairingPort = theirs.remotePairingPort }
             if mine.providerHostName == old.providerHostName { out.providerHostName = theirs.providerHostName }
+            if mine.udid == old.udid { out.udid = theirs.udid }
             return out
         }
     }

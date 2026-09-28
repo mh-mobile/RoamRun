@@ -101,8 +101,9 @@ enum CLI {
             }
             let (json, wait, words) = (parsed.flags.contains("--json"), parsed.wait, parsed.words)
             // `ota` is the one command whose first word may be the path: it does
-            // nothing to a device, so naming one is optional there.
-            let name = args[0] == "ota" && words.first?.lowercased().hasSuffix(".ipa") == true ? nil : words.first
+            // nothing to a device, so naming one is optional there. By the count,
+            // not the extension — a device may well be called "iPhone.ipa".
+            let name = args[0] == "ota" && words.count < 2 ? nil : words.first
             var targets = profiles
             if let name {
                 guard let p = find(name, in: profiles) else { fail("no device named \(shellName(name)). " + names(profiles)) }
@@ -153,8 +154,7 @@ enum CLI {
                 // The name is optional here, unlike every command above: nothing is
                 // done *to* a device, so the .ipa is the only required argument and
                 // the check runs against every device RoamRun knows.
-                guard let path = words.last, path.lowercased().hasSuffix(".ipa"),
-                      words.count == 1 || name != nil else {   // two paths is a typo, not a name
+                guard let path = words.last, path.lowercased().hasSuffix(".ipa") else {
                     fail("usage: roamrun ota [<name>] <path to .ipa>")
                 }
                 ota(targets, path: path, replacing: parsed.flags.contains("--replace"))
@@ -405,9 +405,9 @@ enum CLI {
         devicectl(["device", "info", "lockState", "--device", udid], by: deadline)?["passcodeRequired"] as? Bool
     }
 
-    /// Keeps a build where the device can fetch it over HTTPS. Nothing is built
-    /// here: exporting an .ipa needs the project's own signing settings, and the
-    /// interesting part is that this path works when the bridge can't.
+    /// Keeps a build where the device can fetch it over HTTPS, bridge or no
+    /// bridge. Nothing is built here: exporting an .ipa needs the project's own
+    /// signing settings.
     private static func ota(_ profiles: [DeviceProfile], path given: String, replacing: Bool) -> Never {
         guard FileManager.default.fileExists(atPath: given) else { stop("\(given) doesn't exist") }
         // A build script's `latest.ipa -> MyApp-1.2.ipa` would otherwise be stored
@@ -421,22 +421,35 @@ enum CLI {
         let devices = profiles.map { OTA.Device(name: $0.displayName, udid: running[$0.id]?.udid ?? $0.udid) }
         do {
             var build = try OTA.read(ipa: path)
-            let checked = try OTA.check(CLI.profilePlist(of: path), against: devices)
+            let checked = try OTA.check(CLI.profilePlist(of: path), against: devices, path: given)
             build.expires = checked.expires
-            try OTA.add(ipa: path, build, replacing: replacing)
+            let added = try OTA.add(ipa: path, build, replacing: replacing)
 
             print("Stored \(build.title) \(build.label) (\(OTA.size(build.size))).")
             // Which devices, not whether: an Ad Hoc profile covers the ones it
             // names, and the page offers the build to all of them at once.
-            if checked.covers.isEmpty {
+            switch checked.coverage {
+            case .everyDevice:
                 print("  Enterprise signing — it installs on any device.")
-            } else {
-                print("  Installs on: \(checked.covers.joined(separator: ", ")).")
+            case .devices(let covers, let unchecked):
+                print("  Installs on: \(covers.joined(separator: ", ")).")
                 // Said out loud, or the line above reads as "and on no others".
-                if !checked.unchecked.isEmpty {
-                    print("  Can't tell for \(checked.unchecked.joined(separator: ", ")) — " +
+                if !unchecked.isEmpty {
+                    print("  Can't tell for \(unchecked.joined(separator: ", ")) — " +
                           "bridge one once and RoamRun learns its UDID.")
                 }
+            case .noneOfYours(let known, let unchecked):
+                // Stored, not refused: the page is open to the whole tailnet and
+                // the profile may name a device this Mac has never seen. But
+                // nobody here can install it, and that has to be said plainly.
+                let mine = (known + unchecked).joined(separator: ", ")
+                print("  WARNING: its provisioning profile doesn't name " +
+                      (mine.isEmpty ? "any device RoamRun knows" : mine) + ".")
+                print("  Whoever installs it needs a device that is in the profile; iOS refuses the rest.")
+            }
+            if !added.notReplaced.isEmpty {
+                print("  Couldn't remove \(added.notReplaced.joined(separator: ", ")) — " +
+                      "--replace left \(added.notReplaced.count == 1 ? "that build" : "those builds") on the page.")
             }
             let tailnetPort = AppCoordinator.otaPort
             let host: String?
@@ -450,7 +463,13 @@ enum CLI {
             let state = TailscaleClient.serving(port: tailnetPort)
             let here = state.root(on: host)
             let beside = state.alongside(host)
-            if case .mounted = state, !(beside.isEmpty && AppCoordinator.isOurs(here ?? "")) {
+            if state.funnelled(on: host) {
+                print("  WARNING: Tailscale Funnel is on for port \(tailnetPort), so that page is on the")
+                print("  public internet. Turn it off: tailscale funnel --https=\(tailnetPort) off")
+            }
+            // `here == nil` is a free port under this name, the same reading the app
+            // uses: a root left under a name the tailnet no longer knows is inert.
+            if case .mounted = state, !(beside.isEmpty && (here == nil || AppCoordinator.isOurs(here!))) {
                 // Same three situations the app distinguishes, same three answers.
                 let why: String
                 if !beside.isEmpty {
@@ -709,8 +728,7 @@ enum CLI {
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             _ = Proc.run("/usr/bin/unzip", ["-qo", path, "Payload/*.app/embedded.mobileprovision", "-d", dir.path], timeout: 30)
             let payload = dir.appendingPathComponent("Payload")
-            guard let app = try? FileManager.default.contentsOfDirectory(atPath: payload.path).first(where: { $0.hasSuffix(".app") })
-            else { return nil }
+            guard let app = OTA.appBundle(in: payload) else { return nil }
             guard let real = OTA.inside(payload.appendingPathComponent(app)
                 .appendingPathComponent("embedded.mobileprovision"), dir) else { return nil }
             profile = real
@@ -1104,7 +1122,12 @@ enum CLI {
     private static func otaSection(section: (String, String) -> Void,
                                    check: (Bool, String, String, Bool) -> Void,
                                    note: (String) -> Void) {
-        let apps = OTA.builds()
+        guard let apps = OTA.builds() else {
+            section("\nOver the air", "ota")
+            check(false, "Can't read \(OTA.directory.path)",
+                  "The install page answers 503 while this is true. Check the folder's permissions.", true)
+            return
+        }
         guard !apps.isEmpty else { return }
         let mine: Bool
         var stray = false
@@ -1123,7 +1146,10 @@ enum CLI {
         case .nothing: mine = true             // nothing of the user's to get in the way
         case .mounted:
             let here = host.flatMap { served.root(on: $0) }
-            mine = AppCoordinator.isOurs(here ?? "")
+            // No root under this name is a free port, exactly as the app reads it.
+            // Treating nil as "someone else's" told people to change ports when a
+            // tailnet rename had left an inert entry under the old name.
+            mine = host == nil || here == nil || AppCoordinator.isOurs(here!)
             stray = !mine && AppCoordinator.abandoned(here)
         }
         check(live, live ? "The install page is published on port \(tailnetPort)"
@@ -1136,6 +1162,10 @@ enum CLI {
                   ? "port \(tailnetPort) carries an entry with nothing behind it, left by a run that was killed: tailscale serve --https=\(tailnetPort) --set-path=/ off"
                   : "port \(tailnetPort) is serving \(served.described), which isn't RoamRun's. Give RoamRun another port: defaults write \(AppID.bundle) otaPort -int 41444",
               true)
+        if let host, served.funnelled(on: host) {
+            check(false, "Tailscale Funnel is on for port \(tailnetPort)",
+                  "The install page is on the public internet. tailscale funnel --https=\(tailnetPort) off", false)
+        }
         if live, let host {
             note("Open on the device: https://\(host):\(tailnetPort)/")
         }

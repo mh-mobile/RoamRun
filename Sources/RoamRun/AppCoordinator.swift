@@ -204,12 +204,28 @@ final class AppCoordinator: ObservableObject {
         Array((seen.filter { $0 != target } + [target]).suffix(keep))
     }
 
-    nonisolated static func isOurs(_ target: String) -> Bool {
-        servingLock.withLock { (AppID.settings?.stringArray(forKey: otaServingKey) ?? []).contains(target) }
+    nonisolated static func isOurs(_ target: String) -> Bool { remembered().contains(target) }
+
+    nonisolated static func remembered() -> [String] {
+        servingLock.withLock { AppID.settings?.stringArray(forKey: otaServingKey) ?? [] }
+    }
+
+    /// Gives back a registration this Mac made and never released — the last run
+    /// was killed, or quit while `tailscale` was still thinking. Nothing else
+    /// looks: `otaPublished` is this run's, and when `ota/` is empty the rest of
+    /// `startOTAIfNeeded` returns before it would.
+    @discardableResult
+    nonisolated static func reclaimStray(on port: Int) -> Bool {
+        guard let host = currentHost() else { return false }
+        guard let target = TailscaleClient.serving(port: port).root(on: host), isOurs(target) else { return false }
+        return releaseServe((port: port, target: target))
     }
     /// Said once per reason: the retry runs every 30s and the log is a person's.
     private var otaComplaint = ""
     private var verifyingOTA = false
+    /// Once a launch: an entry left by a run that didn't give it back is invisible
+    /// to `otaPublished`, which only ever exists in memory.
+    private var lookedForStrays = false
     /// One change to `tailscale serve` at a time, publish or release. Each takes
     /// up to 35 s of shelling out and the timer comes round every 30, so without
     /// this they overlap — and two overlapping releases can each read "the entry
@@ -260,6 +276,20 @@ final class AppCoordinator: ObservableObject {
                 await MainActor.run { if self?.otaPublished?.port == published.port { self?.otaPublished = nil } }
             }
             return
+        }
+        // Before the off switch, not after it: with `ota/` deleted the branch below
+        // returns, and a registration from a previous run would never be looked for.
+        if !lookedForStrays, !Self.remembered().isEmpty {
+            lookedForStrays = true
+            let port = Self.otaPort
+            if Self.beginServeChange() {
+                Task.detached {
+                    defer { Self.endServeChange() }
+                    _ = Self.reclaimStray(on: port)
+                }
+            } else {
+                lookedForStrays = false   // busy; the timer comes round again
+            }
         }
         guard let apps = OTA.appDirectories() else {
             // Couldn't read the folder — a descriptor limit, a permission change.
@@ -345,6 +375,17 @@ final class AppCoordinator: ObservableObject {
                 }
                 return
             }
+            // Never set by RoamRun and not possible on a port Funnel can publish —
+            // but that list is Tailscale's policy, and this page would be on the
+            // open internet. Loud, and it does not stop us serving: the entry is
+            // the user's to turn off.
+            if state.funnelled(on: host) {
+                await MainActor.run {
+                    self?.complainOnce("port \(tailnetPort) has Tailscale Funnel switched on, so the install " +
+                                       "page is reachable from the public internet. " +
+                                       "`tailscale funnel --https=\(tailnetPort) off` turns it off.")
+                }
+            }
             switch state {
             case .nothing, .unknown:   // unknown is ruled out above; the switch has to name it
                 break
@@ -386,7 +427,7 @@ final class AppCoordinator: ObservableObject {
             var strayRecord = false
             if out.status != 0 {
                 let after = TailscaleClient.serving(port: tailnetPort)
-                strayRecord = after != .unknown && after.root(on: host) != mine
+                strayRecord = after != .unknown && !after.isRegistered(mine)
             }
             await MainActor.run {
                 guard let self else { return }
@@ -441,8 +482,9 @@ final class AppCoordinator: ObservableObject {
     /// Whether the entry is gone. False means it is still there and the caller
     /// has to try again — reporting it released when it isn't is how builds stay
     /// reachable while the log says otherwise.
-    nonisolated static func releaseServe(_ published: (port: Int, target: String)) -> Bool {
-        let state = TailscaleClient.serving(port: published.port)
+    nonisolated static func releaseServe(_ published: (port: Int, target: String),
+                                         timeout: TimeInterval = 10) -> Bool {
+        let state = TailscaleClient.serving(port: published.port, timeout: timeout)
         switch state {
         case .unknown: return false            // couldn't look; saying it's gone is how one survives
         case .nothing: forgetServing(published.target); return true
@@ -451,7 +493,7 @@ final class AppCoordinator: ObservableObject {
             // that is the only entry we may claim — a root of ours under a name the
             // node has since changed would make us delete whatever took its place.
             // Asked only now: nothing to give back needs no name.
-            guard let host = currentHost() else { return false }
+            guard let host = currentHost(timeout: timeout) else { return false }
             guard state.root(on: host) == published.target else { forgetServing(published.target); return true }
         }
         // `--set-path=/` names the one mount to remove. Without it `off` means
@@ -459,7 +501,7 @@ final class AppCoordinator: ObservableObject {
         // a stdin that is /dev/null here: it removes nothing and still exits 0,
         // so this would report a release that never happened.
         let out = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
-                           ["serve", "--https=\(published.port)", "--set-path=/", "off"], timeout: 10)
+                           ["serve", "--https=\(published.port)", "--set-path=/", "off"], timeout: timeout)
         // Only once it's really gone. Forgetting it while the entry survives
         // would leave the next run unable to recognise its own registration.
         guard out.status == 0 else { return false }
@@ -479,8 +521,8 @@ final class AppCoordinator: ObservableObject {
 
     /// The name this node answers to now. `tailscale serve` writes and removes
     /// under it and no other, so it is half of every question about that port.
-    nonisolated static func currentHost() -> String? {
-        (try? TailscaleClient.fromSettings().selfDNSName()) ?? nil
+    nonisolated static func currentHost(timeout: TimeInterval = 5) -> String? {
+        (try? TailscaleClient.fromSettings().selfDNSName(timeout: timeout)) ?? nil
     }
 
     private func complainOnce(_ line: String) {
@@ -506,7 +548,11 @@ final class AppCoordinator: ObservableObject {
                 // so the next run recognises the entry and gives it back.
                 logStore.log("a release of port \(published.port) was already running; leaving it to that one")
             } else {
-                let gone = Self.releaseServe(published)
+                // Short here, unlike the background paths: this runs on the thread
+                // the app quits on, and the long wait only happens when tailscaled
+                // isn't answering — which is exactly when `off` fails anyway. The
+                // record stays, so the next launch reclaims it.
+                let gone = Self.releaseServe(published, timeout: 2)
                 Self.endServeChange()   // both callers terminate, but a leak here would wedge every later change
                 if !gone {
                     logStore.log("couldn't give port \(published.port) back; `tailscale serve --https=\(published.port) --set-path=/ off` clears it")

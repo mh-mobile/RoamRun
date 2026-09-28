@@ -1005,16 +1005,26 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     }
     let udid = "00008130-000C1C5C307A8D3A"
     let mine = [OTA.Device(name: "iPhone", udid: udid)]
-    // Enterprise: no device list, installs anywhere — and says so with no names.
-    #expect(try OTA.check(["ProvisionsAllDevices": true, "Entitlements": [:]], against: mine).covers == [])
+    // Enterprise: no device list, installs anywhere.
+    #expect(try OTA.check(["ProvisionsAllDevices": true, "Entitlements": [:]], against: mine).coverage == .everyDevice)
     // Ad Hoc for this device.
-    #expect(try OTA.check(profile(["get-task-allow": false], [udid]), against: mine).covers == ["iPhone"])
-    // Development names devices too, but iOS won't install it over the air.
-    #expect(throws: OTA.Problem.self) { try OTA.check(profile(["get-task-allow": true], [udid]), against: mine) }
-    // Ad Hoc for someone else's device.
-    #expect(throws: OTA.Problem.self) { try OTA.check(profile(["get-task-allow": false], ["OTHER"]), against: mine) }
-    // App Store / TestFlight.
-    #expect(throws: OTA.Problem.self) { try OTA.check(["Entitlements": [:]], against: mine) }
+    #expect(try OTA.check(profile(["get-task-allow": false], [udid]), against: mine).coverage
+            == .devices(covers: ["iPhone"], unchecked: []))
+    // Which problem, not just "a problem": every one of these used to pass if the
+    // build were rejected for some entirely different reason.
+    #expect(throws: OTA.Problem.development("That build")) {
+        try OTA.check(profile(["get-task-allow": true], [udid]), against: mine)
+    }
+    #expect(throws: OTA.Problem.appStore("That build")) { try OTA.check(["Entitlements": [:]], against: mine) }
+    // A device list with no entitlements can't be told from a Development profile.
+    #expect(throws: OTA.Problem.unreadable("the entitlements in That build's provisioning profile")) {
+        try OTA.check(["ProvisionedDevices": [udid]], against: mine)
+    }
+    #expect(throws: OTA.Problem.unreadable(
+        "the provisioning profile in That build — the archive may be unsigned. " +
+        "Export it for Release Testing (Ad Hoc) or Enterprise.")) {
+        try OTA.check(nil, against: mine)
+    }
 }
 
 @Test func aBuildIsCheckedAgainstEveryDeviceBecauseThePageOffersItToAll() throws {
@@ -1025,21 +1035,23 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
                    OTA.Device(name: "iPad", udid: b),
                    OTA.Device(name: "Vision Pro", udid: nil)]   // never bridged, so unknown
     let adHoc: [String: Any] = ["ProvisionedDevices": [a], "Entitlements": ["get-task-allow": false]]
-    #expect(try OTA.check(adHoc, against: devices).covers == ["iPhone"])
+    #expect(try OTA.check(adHoc, against: devices).coverage
+            == .devices(covers: ["iPhone"], unchecked: ["Vision Pro"]))
     let both: [String: Any] = ["ProvisionedDevices": [a, b], "Entitlements": ["get-task-allow": false]]
-    #expect(try OTA.check(both, against: devices).covers == ["iPhone", "iPad"])
-    // None of them: nobody could install it, so it isn't stored.
+    #expect(try OTA.check(both, against: devices).coverage
+            == .devices(covers: ["iPhone", "iPad"], unchecked: ["Vision Pro"]))
+    // None of yours is an answer, not a refusal: the page is open to the whole
+    // tailnet, and the profile may name a device this Mac has never seen.
     let other: [String: Any] = ["ProvisionedDevices": ["OTHER"], "Entitlements": ["get-task-allow": false]]
-    #expect(throws: OTA.Problem.self) { try OTA.check(other, against: devices) }
-    // A device whose UDID isn't known yet can't answer either way, and shouldn't
-    // stop a build that another device can take.
-    let partial = try OTA.check(adHoc, against: [devices[0], devices[2]])
-    #expect(partial.covers == ["iPhone"])
-    // And said so: "Installs on: iPhone" alone would read as "and on no others".
-    #expect(partial.unchecked == ["Vision Pro"])
-    #expect(throws: OTA.Problem.self) { try OTA.check(adHoc, against: [devices[2]]) }
+    #expect(try OTA.check(other, against: devices).coverage
+            == .noneOfYours(known: ["iPhone", "iPad"], unchecked: ["Vision Pro"]))
+    // Same when RoamRun knows no UDID at all, and when nothing is saved: neither
+    // is a reason to refuse a build someone else's device can take.
+    #expect(try OTA.check(adHoc, against: [devices[2]]).coverage
+            == .noneOfYours(known: [], unchecked: ["Vision Pro"]))
+    #expect(try OTA.check(adHoc, against: []).coverage == .noneOfYours(known: [], unchecked: []))
     // Enterprise needs no device at all — not even a saved one.
-    #expect(try OTA.check(["ProvisionsAllDevices": true], against: []).covers == [])
+    #expect(try OTA.check(["ProvisionsAllDevices": true], against: []).coverage == .everyDevice)
 }
 
 @Test func theManifestPointsAtTheBuildItDescribes() throws {
@@ -1081,6 +1093,15 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     // Percent-encoding doesn't get a second chance to climb: appendingPathComponent
     // encodes rather than decodes, so these are ordinary names and miss everything.
     #expect(OTAServer.segments("/%2e%2e/%2e%2e/etc") == ["%2e%2e", "%2e%2e", "etc"])
+    // The head is found from where the last receive stopped, less the three bytes
+    // the terminator can straddle: a peer sending one byte at a time would
+    // otherwise have the whole buffer rescanned on every one of them.
+    let whole = Data("GET / HTTP/1.1\r\nHost: m\r\n\r\nbody".utf8)
+    #expect(OTAServer.endOfHead(whole) == 23)
+    #expect(OTAServer.endOfHead(whole, from: 20) == 23)        // straddling the boundary
+    #expect(OTAServer.endOfHead(whole, from: 24) == nil)       // already past it
+    #expect(OTAServer.endOfHead(Data("GET / HTTP/1.1\r\nHost: m\r\n".utf8)) == nil)
+    #expect(OTAServer.endOfHead(Data()) == nil)
     // No Host, or two of them, and the manifest would send the device to itself.
     #expect(OTAServer.request("GET / HTTP/1.0\r\n").2 == nil)
     #expect(OTAServer.request("GET / HTTP/1.1\r\nHost: a\r\nHost: b\r\n").2 == nil)
@@ -1182,6 +1203,18 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(forwarded.alongside("any") == ["TCP forwarding"])
     // `{"HTTPS": true}` is what a plain https serve puts beside its Web entry.
     #expect(TailscaleClient.serving(port: 41443, inJSON: #"{"TCP":{"41443":{"HTTPS":true}}}"#) == .nothing)
+    // An entry for the port whose inside we can't read is not an empty port —
+    // reading it that way is how RoamRun would take one that is in use.
+    #expect(TailscaleClient.serving(port: 41443, inJSON: #"{"Web":{"m:41443":{"Handlers":"?"}}}"#)
+            .alongside("m") == ["m (unreadable)"])
+    // Funnel is never something RoamRun turns on, and the port it picks can't be
+    // published today — but that list is Tailscale's policy, and being wrong
+    // about it means unreleased builds on the open internet.
+    let funnelled = TailscaleClient.serving(port: 41443, inJSON:
+        #"{"AllowFunnel":{"m:41443":true},"Web":{"m:41443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:1"}}}}}"#)
+    #expect(funnelled.funnelled(on: "m"))
+    #expect(!funnelled.funnelled(on: "other"))
+    #expect(!TailscaleClient.serving(port: 41443, inJSON: #"{"AllowFunnel":{"m:41443":false}}"#).funnelled(on: "m"))
 }
 
 @Test func onlyTheMountUnderTheNameThisNodeAnswersToNowIsOurs() {
@@ -1205,6 +1238,18 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(state.alongside("new").isEmpty)
     #expect(state.alongside("old").isEmpty)
     #expect(state.root(on: "third") == nil)   // a name with nothing of its own
+}
+
+@Test func whetherOurRegistrationLandedIsNotAQuestionAboutOneName() {
+    // `serve` writes under the name the node has when it runs, which need not be
+    // the one we read a moment earlier. Asking only about the old name reads a
+    // rename as "it didn't take" and throws away the proof of ownership.
+    let state = TailscaleClient.serving(port: 41443, inJSON:
+        #"{"Web":{"new:41443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:61816"}}}}}"#)
+    #expect(state.root(on: "old") == nil)                      // the question we must not ask here
+    #expect(state.isRegistered("http://127.0.0.1:61816"))      // the one we must
+    #expect(!state.isRegistered("http://127.0.0.1:1"))
+    #expect(!TailscaleClient.Serving.nothing.isRegistered("http://127.0.0.1:61816"))
 }
 
 @Test func aPortThatCantWorkIsIgnoredRatherThanRetriedForEver() {
@@ -1238,10 +1283,28 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     var stale = live
     stale["ExpirationDate"] = Date(timeIntervalSinceNow: -86_400)
     #expect(throws: OTA.Problem.self) { try OTA.check(stale, against: mine) }
-    // No UDID learned yet: the question can't be answered, so don't pretend it was.
-    #expect(throws: OTA.Problem.self) { try OTA.check(live, against: [OTA.Device(name: "iPhone", udid: nil)]) }
+    // No UDID learned yet: the question can't be answered, so it comes back as
+    // unanswered rather than as a refusal — the build may still be someone else's.
+    #expect(try OTA.check(live, against: [OTA.Device(name: "iPhone", udid: nil)]).coverage
+            == .noneOfYours(known: [], unchecked: ["iPhone"]))
     // Enterprise covers every device, so a missing UDID doesn't matter there.
     #expect(try OTA.check(["ProvisionsAllDevices": true], against: []).expires == nil)
+}
+
+@Test func aUdidTheCommandLineLearnedSurvivesTheAppSavingOverIt() {
+    // The app can hold a profile it loaded before `roamrun up` learned the UDID.
+    // Writing its own nil back leaves `roamrun ota` unable to say what a build
+    // covers, on a device that has been bridged.
+    let loaded = profile("iPhone")                     // what the app read: no UDID yet
+    var onDisk = loaded
+    onDisk.udid = "00008130-000C1C5C307A8D3A"          // what `roamrun up` wrote after that
+    var renamed = loaded
+    renamed.displayName = "iPhone mh"                  // the app changed something else
+    #expect(ProfileStore.merge(base: [loaded], wanted: [renamed], disk: [onDisk]).first?.udid == onDisk.udid)
+    // A UDID this process did change is this process's answer.
+    var cleared = renamed
+    cleared.udid = "OTHER"
+    #expect(ProfileStore.merge(base: [loaded], wanted: [cleared], disk: [onDisk]).first?.udid == "OTHER")
 }
 
 @Test func aStoredBuildSurvivesThisStructGainingAField() throws {
@@ -1273,9 +1336,149 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     try Data("ipa".utf8).write(to: gone.appendingPathComponent("app.ipa"))
 
     // Through the production path, not a helper written for the test.
-    #expect(OTA.builds(of: "com.example.App", in: dir).isEmpty)   // neither decodes
-    #expect(FileManager.default.fileExists(atPath: kept.path))    // unreadable, kept
-    #expect(!FileManager.default.fileExists(atPath: gone.path))   // no metadata at all
+    #expect(OTA.builds(of: "com.example.App", in: dir)?.isEmpty == true)   // neither decodes
+    // A read never deletes: it is answering a request from the tailnet, and a
+    // build being written is exactly what it would take away.
+    #expect(FileManager.default.fileExists(atPath: kept.path))
+    #expect(FileManager.default.fileExists(atPath: gone.path))
+    // A folder that isn't there at all is empty, not unreadable: deleting it is
+    // the documented off switch.
+    #expect(OTA.builds(of: "com.example.App", in: dir.appendingPathComponent("nope"))?.isEmpty == true)
+    #expect(OTA.appDirectories(in: dir.appendingPathComponent("nope")) == [])
+}
+
+/// The write path had no tests at all, which is why every round of fixes here
+/// arrived with a new fault. `in:` exists so these can run somewhere harmless.
+private func otaScratch() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-ota-test-\(UUID().uuidString)")
+}
+
+private func fakeIPA(_ root: URL, _ bytes: String) throws -> String {
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let at = root.appendingPathComponent("\(UUID().uuidString).ipa")
+    try Data(bytes.utf8).write(to: at)
+    return at.path
+}
+
+private func build(_ version: String, _ number: String, _ slug: String,
+                   added: Date = .now, size: Int64 = 1) -> OTA.Build {
+    OTA.Build(bundleID: "com.example.App", title: "App", version: version, build: number,
+              added: added, size: size, expires: nil, slug: slug)
+}
+
+/// `sameArchive` filters on size before it hashes, so a Build whose size doesn't
+/// describe the file it names can never match one — which is what `OTA.read`
+/// guarantees in production and a test has to do for itself.
+private func sized(_ path: String, _ b: OTA.Build) -> OTA.Build {
+    var b = b
+    b.size = ((try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int64) ?? 0
+    return b
+}
+
+@Test func storingTheSameArchiveTwiceMovesItBackUpInsteadOfStacking() throws {
+    let root = otaScratch()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let ipa = try fakeIPA(root.appendingPathComponent("src"), "one")
+    let first = try OTA.add(ipa: ipa, sized(ipa, build("1.0", "1", "1.0-1-a", added: .distantPast)), in: root)
+    #expect(OTA.builds(of: "com.example.App", in: root)?.count == 1)
+    // Byte for byte the same: the row it already has, re-dated, not a second one.
+    let again = try OTA.add(ipa: ipa, sized(ipa, build("1.0", "1", "1.0-1-b")), in: root)
+    #expect(again.dir == first.dir)
+    #expect(OTA.builds(of: "com.example.App", in: root)?.count == 1)
+    #expect((OTA.builds(of: "com.example.App", in: root)?.first?.added ?? .distantPast) > .distantPast)
+    // The same size, different bytes: the digest is what decides, so it stacks.
+    let other = try fakeIPA(root.appendingPathComponent("src"), "two")
+    _ = try OTA.add(ipa: other, sized(other, build("1.0", "1", "1.0-1-c")), in: root)
+    #expect(OTA.builds(of: "com.example.App", in: root)?.count == 2)
+}
+
+@Test func nothingIsKeptBeyondTheLimitEvenWhenTheNewBuildSortsLast() throws {
+    let root = otaScratch()
+    defer { try? FileManager.default.removeItem(at: root) }
+    // `added` is taken before the lock, so a build that waited its turn can sort
+    // behind every other one. Dropping it from the tail used to leave six.
+    for i in 0..<OTA.keepPerApp {
+        _ = try OTA.add(ipa: try fakeIPA(root.appendingPathComponent("src"), "n\(i)"),
+                        build("1.\(i)", "1", "1.\(i)-1-x", added: .now), in: root)
+    }
+    #expect(OTA.builds(of: "com.example.App", in: root)?.count == OTA.keepPerApp)
+    let late = try OTA.add(ipa: try fakeIPA(root.appendingPathComponent("src"), "late"),
+                           build("0.9", "1", "0.9-1-x", added: .distantPast), in: root)
+    let after = OTA.builds(of: "com.example.App", in: root) ?? []
+    #expect(after.count == OTA.keepPerApp)
+    #expect(after.contains { $0.slug == late.dir.lastPathComponent })   // the one just asked for stays
+}
+
+@Test func aBuildThatWasNeverFinishedIsReapedByTheNextWriteNotByAReader() throws {
+    let root = otaScratch()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let app = root.appendingPathComponent("com.example.App")
+    let orphan = app.appendingPathComponent("1.0-1-dead")
+    try FileManager.default.createDirectory(at: orphan, withIntermediateDirectories: true)
+    try Data("ipa".utf8).write(to: orphan.appendingPathComponent("app.ipa"))
+    let stale = app.appendingPathComponent(".adding-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: stale, withIntermediateDirectories: true)
+    try FileManager.default.setAttributes([.creationDate: Date(timeIntervalSinceNow: -7200)],
+                                          ofItemAtPath: stale.path)
+    // A reader leaves both alone: it is answering a request from the tailnet.
+    _ = OTA.builds(of: "com.example.App", in: root)
+    #expect(FileManager.default.fileExists(atPath: orphan.path))
+    // The next add holds the lock, so it is the one that can safely clear them.
+    _ = try OTA.add(ipa: try fakeIPA(root.appendingPathComponent("src"), "x"),
+                    build("1.0", "2", "1.0-2-x"), in: root)
+    #expect(!FileManager.default.fileExists(atPath: orphan.path))
+    #expect(!FileManager.default.fileExists(atPath: stale.path))
+}
+
+@Test func aFolderWithNoBuildsInItIsNotSomethingToPublish() throws {
+    let root = otaScratch()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let app = root.appendingPathComponent("com.example.App")
+    try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+    // What a failed first add leaves: the folder and the lock it took, nothing else.
+    try Data().write(to: app.appendingPathComponent(".lock"))
+    #expect(OTA.appDirectories(in: root) == [])          // so the page isn't published for it
+    try FileManager.default.createDirectory(at: app.appendingPathComponent("1.0-1-x"),
+                                            withIntermediateDirectories: true)
+    #expect(OTA.appDirectories(in: root) == ["com.example.App"])
+}
+
+@Test func aFolderThatCantBeOpenedIsNotAnEmptyOne() throws {
+    let root = otaScratch()
+    defer {
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+        try? FileManager.default.removeItem(at: root)
+    }
+    let app = root.appendingPathComponent("com.example.App")
+    try FileManager.default.createDirectory(at: app.appendingPathComponent("1.0-1-x"),
+                                            withIntermediateDirectories: true)
+    try JSONEncoder().encode(build("1.0", "1", "1.0-1-x"))
+        .write(to: app.appendingPathComponent("1.0-1-x/meta.json"))
+    #expect(OTA.builds(in: root)?.count == 1)
+    // `fileExists` is false both for a path that isn't there and for one whose
+    // parent you can't get into, so it can't be what tells these apart.
+    try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: root.path)
+    try #require(!FileManager.default.isReadableFile(atPath: root.path))   // not running as root
+    #expect(OTA.appDirectories(in: root) == nil)
+    #expect(OTA.builds(in: root) == nil)                 // the page answers 503, not "no builds yet"
+}
+
+@Test func replaceSaysSoWhenItCouldntReplace() throws {
+    let root = otaScratch()
+    defer {
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700],
+                                               ofItemAtPath: root.appendingPathComponent("com.example.App").path)
+        try? FileManager.default.removeItem(at: root)
+    }
+    let app = root.appendingPathComponent("com.example.App")
+    let old = app.appendingPathComponent("1.0-1-old")
+    try FileManager.default.createDirectory(at: old, withIntermediateDirectories: true)
+    try JSONEncoder().encode(build("1.0", "1", "1.0-1-old")).write(to: old.appendingPathComponent("meta.json"))
+    // A folder the old build can't be removed from: --replace didn't replace, and
+    // reporting success would leave it on the page under the same version.
+    try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: app.path)
+    try #require(!FileManager.default.isWritableFile(atPath: app.path))
+    #expect(OTA.drop("com.example.App", labelled: "1.0 (1)", keeping: nil, in: root) == ["1.0 (1)"])
 }
 
 @Test func replaceDropsTheOtherBuildsOfThatVersionAndNothingElse() throws {
@@ -1292,10 +1495,10 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     try store("1.0", "1", "1.0-1-a", added: .now.addingTimeInterval(-60))
     try store("1.0", "1", "1.0-1-b", added: .now.addingTimeInterval(-30))
     try store("1.1", "1", "1.1-1-a", added: .now)
-    #expect(OTA.builds(of: "com.example.App", in: dir).count == 3)
+    #expect(OTA.builds(of: "com.example.App", in: dir)?.count == 3)
     // What --replace does: everything under that one label except the new build.
-    OTA.drop("com.example.App", labelled: "1.0 (1)", keeping: "1.0-1-b", in: dir)
-    #expect(OTA.builds(of: "com.example.App", in: dir).map(\.slug).sorted() == ["1.0-1-b", "1.1-1-a"])
+    #expect(OTA.drop("com.example.App", labelled: "1.0 (1)", keeping: "1.0-1-b", in: dir).isEmpty)
+    #expect(OTA.builds(of: "com.example.App", in: dir)?.map(\.slug).sorted() == ["1.0-1-b", "1.1-1-a"])
 }
 
 @Test func aServeEntryOnlyCountsWhenSomethingIsBehindIt() async throws {

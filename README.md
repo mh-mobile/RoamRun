@@ -249,17 +249,21 @@ What it needs:
   -exportArchive` with `"method": "release-testing"` does the same from a script). `roamrun run` can't make one — it signs for
   Development, which only installs through the bridge, and `roamrun ota` refuses
   it rather than letting iOS fail cryptically. Ad Hoc also means the device has to
-  be in the provisioning profile, and RoamRun has to know at least one device's
-  UDID to check that: bridge one once (`roamrun up <name> -d`) and Xcode registers
-  it like any local device, while RoamRun learns its UDID. Enterprise signing needs
-  neither — not even a saved device.
+  be in the provisioning profile. RoamRun says which of your devices it names —
+  it knows the UDID of every device it has bridged, so bridge one once
+  (`roamrun up <name> -d`) and Xcode registers it like any local device while
+  RoamRun learns its UDID. A build that names none of them is still stored, with a
+  warning: the page is open to your whole tailnet, and the profile may name a
+  device this Mac has never seen. Enterprise signing needs none of this.
 - **HTTPS in your tailnet** — MagicDNS and HTTPS certificates turned on. RoamRun
   serves on a port of its own (41443 by default, `defaults write
   io.github.mh-mobile.roamrun otaPort -int …` to change it; 443, 8443 and 10000
   are refused and fall back to 41443, since Funnel could publish those) and gives
   it back when it quits. It never touches your tailnet's `:443`, where whatever else you
   serve lives — and because Tailscale Funnel currently publishes only 443, 8443
-  and 10000, a port outside those three can't be put on the internet.
+  and 10000, a port outside those three can't be put on the internet. RoamRun
+  never turns Funnel on, and says so loudly if it finds it on for that port
+  anyway — that list is Tailscale's policy, not a promise.
 - RoamRun **running**, since it is the app that serves the page.
 
 **Anyone on your tailnet can open that page and install those builds.** On a

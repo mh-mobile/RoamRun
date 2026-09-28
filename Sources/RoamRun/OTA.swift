@@ -3,15 +3,17 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-/// Builds kept for installing over the air, when the device can't be on Wi-Fi
-/// and so can't be bridged. iOS fetches a manifest over HTTPS and installs from
-/// it, which works on cellular — the Wi-Fi requirement belongs to RemotePairing,
-/// not to the mesh VPN.
+/// Builds a device can install by itself, without the bridge. iOS fetches a
+/// manifest over HTTPS and installs from it, which the mesh VPN carries over
+/// Wi-Fi and cellular alike — the Wi-Fi requirement belongs to RemotePairing,
+/// not to this.
 ///
-/// Layout, one directory per build:
+/// Layout, one directory per build, plus a lock the writers share:
 ///
-///     ota/<bundle id>/<version>-<build>-<yyyyMMdd-HHmmss>/app.ipa
-///                                                      /meta.json
+///     ota/<bundle id>/.lock
+///                    /<version>-<build>-<yyyyMMdd-HHmmss>/app.ipa
+///                                                        /meta.json
+///                                                        /icon.png   (if it has one)
 ///
 /// The manifest and the page are generated when they're asked for, so a build
 /// keeps working when the tailnet name changes.
@@ -94,7 +96,7 @@ enum OTA {
         }()
     }
 
-    enum Problem: Error, LocalizedError {
+    enum Problem: Error, LocalizedError, Equatable {
         case notAnArchive(String)
         case development(String)
         case appStore(String)
@@ -123,7 +125,7 @@ enum OTA {
                 let who = names.count == 1 ? names[0] : "any of \(list(names))"
                 return "\(path) isn't signed for \(who) — its provisioning profile doesn't name \(names.count == 1 ? "that device" : "them"). Add the device in Apple's developer account and export again; bridging it once (roamrun up <name> -d) lets Xcode register it for you."
             case .oddBundleID(let path, let id):
-                return "\(path)'s bundle identifier (\(id)) has characters that can't go in a web address, so the device couldn't fetch it. Apple's own rule is letters, digits, hyphens and dots."
+                return "\(path)'s bundle identifier (\(id)) has characters that can't go in a web address, so the device couldn't fetch it. Apple's own rule is letters, digits, hyphens and dots; RoamRun also allows underscores."
             case .udidUnknown(let names):
                 let who = names.isEmpty ? "any device" : (names.count == 1 ? names[0] : "any of \(list(names))")
                 let how = names.count == 1 ? "Bridge it once from any Wi-Fi (roamrun up \(CLI.shellName(names[0])) -d)"
@@ -142,7 +144,9 @@ enum OTA {
     static func read(ipa path: String) throws -> Build {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-ota-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: dir) }
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        do { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
+        // `try?` here would surface as "couldn't unpack", which names the wrong thing.
+        catch { throw Problem.failed("couldn't make \(dir.path): \(error.localizedDescription)") }
         let unzip = Proc.run("/usr/bin/unzip", ["-qo", path, "Payload/*.app/Info.plist", "-d", dir.path], timeout: 60)
         // 1 is "warnings, but it worked" and 11 is "nothing matched", which the
         // guard below reports better. Anything above that is a broken archive.
@@ -150,7 +154,7 @@ enum OTA {
             throw Problem.failed("couldn't unpack \(path): \(unzip.err.trimmingCharacters(in: .whitespacesAndNewlines))")
         }
         let payload = dir.appendingPathComponent("Payload")
-        guard let app = (try? FileManager.default.contentsOfDirectory(atPath: payload.path))?.first(where: { $0.hasSuffix(".app") }),
+        guard let app = appBundle(in: payload),
               let plist = inside(payload.appendingPathComponent(app).appendingPathComponent("Info.plist"), dir),
               let info = NSDictionary(contentsOf: plist) as? [String: Any]
         else { throw Problem.notAnArchive(path) }
@@ -166,6 +170,15 @@ enum OTA {
                      title: (info["CFBundleDisplayName"] as? String) ?? (info["CFBundleName"] as? String) ?? bundleID,
                      version: version, build: number, added: now, size: size,
                      slug: Build.slug(version: version, build: number, at: now))
+    }
+
+    /// The one `.app` an archive's `Payload/` is about. Sorted, because
+    /// `contentsOfDirectory` isn't: `CLI.profilePlist` unpacks the same archive
+    /// separately and has to land on the same bundle, or the identifier and the
+    /// provisioning profile would come from two different apps.
+    static func appBundle(in payload: URL) -> String? {
+        ((try? FileManager.default.contentsOfDirectory(atPath: payload.path)) ?? [])
+            .filter { $0.hasSuffix(".app") }.sorted().first
     }
 
     /// nil when the archive made that name a link to somewhere else on this Mac.
@@ -190,13 +203,24 @@ enum OTA {
         let udid: String?
     }
 
-    /// Only a build iOS will accept over the air, and only if one of `devices`
-    /// can take it. Returns when the signing expires, which of them it covers —
-    /// empty means every device there is (Enterprise) — and the ones the question
-    /// couldn't be asked about, so a "covers" list isn't read as "and no others".
+    /// Which of your devices a build will install on.
+    enum Coverage: Equatable {
+        /// Enterprise: every device there is, yours or not.
+        case everyDevice
+        /// Ad Hoc, and it names these of yours. `unchecked` are the ones RoamRun
+        /// hasn't learned a UDID for, so a `covers` list isn't read as "and no others".
+        case devices(covers: [String], unchecked: [String])
+        /// It names devices and none of them are yours — or RoamRun knows no UDID
+        /// at all. Still storable: the page is open to the whole tailnet and the
+        /// build may be for a device this Mac has never seen. The caller says so.
+        case noneOfYours(known: [String], unchecked: [String])
+    }
+
+    /// Only a build iOS will accept over the air at all. What it will *not*
+    /// install — App Store signing, Development signing, an expired profile — is
+    /// an error; which of your devices it covers is an answer, not a verdict.
     static func check(_ plist: [String: Any]?, against devices: [Device],
-                      path: String = "That build") throws
-        -> (expires: Date?, covers: [String], unchecked: [String]) {
+                      path: String = "That build") throws -> (expires: Date?, coverage: Coverage) {
         guard let plist else {
             throw Problem.unreadable("the provisioning profile in \(path) — the archive may be unsigned. " +
                                      "Export it for Release Testing (Ad Hoc) or Enterprise.")
@@ -206,7 +230,7 @@ enum OTA {
         let entitlements = plist["Entitlements"] as? [String: Any]
         switch CLI.parseProvisioning(plist) {
         case .appStore: throw Problem.appStore(path)
-        case .allDevices: return (expiry, [], [])   // Enterprise covers every device
+        case .allDevices: return (expiry, .everyDevice)
         case .unknown: throw Problem.unreadable("the provisioning profile in \(path)")
         case .devices(let list):
             // Development and Ad Hoc both name devices; only the debuggable one is
@@ -215,12 +239,14 @@ enum OTA {
             guard let entitlements else { throw Problem.unreadable("the entitlements in \(path)'s provisioning profile") }
             if entitlements["get-task-allow"] as? Bool == true { throw Problem.development(path) }
             let known = devices.compactMap { d in d.udid.map { (name: d.name, udid: $0) } }
-            guard !known.isEmpty else { throw Problem.udidUnknown(devices.map(\.name)) }
+            let unchecked = devices.filter { $0.udid == nil }.map(\.name)
             let covers = known.filter { d in
                 list.contains { $0.caseInsensitiveCompare(d.udid) == .orderedSame }
             }.map(\.name)
-            guard !covers.isEmpty else { throw Problem.notForDevice(path: path, names: known.map(\.name)) }
-            return (expiry, covers, devices.filter { $0.udid == nil }.map(\.name))
+            guard !covers.isEmpty else {
+                return (expiry, .noneOfYours(known: known.map(\.name), unchecked: unchecked))
+            }
+            return (expiry, .devices(covers: covers, unchecked: unchecked))
         }
     }
 
@@ -236,8 +262,7 @@ enum OTA {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         _ = Proc.run("/usr/bin/unzip", ["-qo", path, "Payload/*.app/AppIcon*.png", "-d", dir.path], timeout: 60)
         let payload = dir.appendingPathComponent("Payload")
-        guard let app = (try? FileManager.default.contentsOfDirectory(atPath: payload.path))?.first(where: { $0.hasSuffix(".app") })
-        else { return nil }
+        guard let app = appBundle(in: payload) else { return nil }
         let appDir = payload.appendingPathComponent(app)
         let icons = (try? FileManager.default.contentsOfDirectory(atPath: appDir.path))?.filter { $0.hasPrefix("AppIcon") } ?? []
         guard let best = biggestIcon(icons), let png = inside(appDir.appendingPathComponent(best), dir) else { return nil }
@@ -267,10 +292,14 @@ enum OTA {
 
     // MARK: - Storing
 
+    /// Where it landed, and any build `--replace` was meant to remove but couldn't:
+    /// storing succeeded and the replacing didn't, which are different answers.
     @discardableResult
-    static func add(ipa path: String, _ build: Build, replacing: Bool = false) throws -> URL {
+    static func add(ipa path: String, _ build: Build, replacing: Bool = false,
+                    in root: URL? = nil) throws -> (dir: URL, notReplaced: [String]) {
         guard !build.slug.isEmpty else { throw Problem.unreadable(path) }
-        let app = directory.appendingPathComponent(build.bundleID, isDirectory: true)
+        let store = root ?? directory
+        let app = store.appendingPathComponent(build.bundleID, isDirectory: true)
         do {
             // Not `try?`: when this fails, the `open` below fails too, and
             // "couldn't lock" is a strange thing to tell someone whose disk is full.
@@ -278,9 +307,9 @@ enum OTA {
         } catch {
             throw Problem.failed("couldn't make \(app.path): \(error.localizedDescription)")
         }
-        excludeFromBackup(directory)   // .ipa files are big and can be rebuilt
+        excludeFromBackup(store)   // .ipa files are big and can be rebuilt
         // Signed builds of the user's own apps; no other account here needs them.
-        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: store.path)
         // One writer per app, taken before anything is looked at: two of these at
         // once could each delete what the other had just put in place, and both
         // report success. That includes the same-archive path below, which also
@@ -298,11 +327,16 @@ enum OTA {
                                  "storing without it could lose a build another roamrun is writing")
         }
 
+        // Under the lock and before anything else: the read paths no longer reap,
+        // and a run whose adds are all duplicates used to reach neither sweep.
+        sweepStaging(app)
+        reapOrphans(app)
+
         // The same archive handed over twice: two rows the eye can't tell apart,
         // and one fewer slot for a build that is actually different. A rebuild
         // that kept its version number is not the same archive and still stacks,
         // unless the caller says it is a redo of the one already there.
-        if let same = sameArchive(as: path, bundleID: build.bundleID) {
+        if let same = sameArchive(as: path, bundleID: build.bundleID, in: store) {
             // Already here byte for byte, so the archive doesn't need storing
             // again — but asking for it now is what going back to it means, and
             // the page puts the most recently added build on top.
@@ -317,8 +351,8 @@ enum OTA {
                 // first in line to be pruned.
                 throw Problem.failed("couldn't update \(same.path): \(error.localizedDescription)")
             }
-            if replacing { drop(build.bundleID, labelled: build.label, keeping: again.slug) }
-            return same
+            let missed = replacing ? drop(build.bundleID, labelled: build.label, keeping: again.slug, in: store) : []
+            return (same, missed)
         }
         // The slug counts in seconds, so a script adding two different archives
         // back to back can land on a name that exists. `moveItem` would fail with
@@ -330,11 +364,11 @@ enum OTA {
             stored.slug = "\(build.slug)-\(n)"
         }
         let dir = app.appendingPathComponent(stored.slug, isDirectory: true)
-        sweepStaging(app)   // a previous add that was killed mid-copy
         // Built somewhere else first: a copy that runs out of disk halfway must
         // not leave a half-written build in the list, and with --replace it must
         // not have taken the working one away before it got there.
         let staging = app.appendingPathComponent(".adding-\(UUID().uuidString)", isDirectory: true)
+        var missed: [String] = []
         do {
             try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
             try FileManager.default.copyItem(at: URL(fileURLWithPath: path), to: staging.appendingPathComponent("app.ipa"))
@@ -343,32 +377,45 @@ enum OTA {
             try FileManager.default.moveItem(at: staging, to: dir)
             // Only now: until the new build is in place, the old one is what the
             // user has, and taking it away first would leave nothing installable.
-            if replacing { drop(stored.bundleID, labelled: stored.label, keeping: stored.slug) }
+            missed = replacing ? drop(stored.bundleID, labelled: stored.label, keeping: stored.slug, in: store) : []
         } catch {
             try? FileManager.default.removeItem(at: staging)
+            // The app folder may be one this call made: an empty one left behind
+            // would keep the page published with nothing on it.
+            if (try? FileManager.default.contentsOfDirectory(atPath: app.path))?
+                .allSatisfy({ $0.hasPrefix(".") }) == true {
+                try? FileManager.default.removeItem(at: app)
+            }
             throw Problem.failed("couldn't store the build in \(dir.path): \(error.localizedDescription)")
         }
-        prune(stored.bundleID, keeping: stored.slug)
-        return dir
+        prune(stored.bundleID, keeping: stored.slug, in: store)
+        return (dir, missed)
     }
 
-    static func hasIcon(_ build: Build) -> Bool {
-        FileManager.default.fileExists(atPath: directory.appendingPathComponent(build.bundleID)
+    static func hasIcon(_ build: Build, in root: URL? = nil) -> Bool {
+        FileManager.default.fileExists(atPath: (root ?? directory).appendingPathComponent(build.bundleID)
             .appendingPathComponent(build.slug).appendingPathComponent("icon.png").path)
     }
 
-    /// Everything already stored under the same `1.2.0 (45)`.
-    static func drop(_ bundleID: String, labelled label: String, keeping: String? = nil, in root: URL? = nil) {
+    /// Everything already stored under the same `1.2.0 (45)`. Returns what it
+    /// couldn't remove — a locked folder means `--replace` didn't replace, and
+    /// reporting success then leaves the old build on the page.
+    @discardableResult
+    static func drop(_ bundleID: String, labelled label: String, keeping: String? = nil,
+                     in root: URL? = nil) -> [String] {
         let app = (root ?? directory).appendingPathComponent(bundleID, isDirectory: true)
-        for old in builds(of: bundleID, in: root) where old.label == label && old.slug != keeping {
-            try? FileManager.default.removeItem(at: app.appendingPathComponent(old.slug))
+        var missed: [String] = []
+        for old in builds(of: bundleID, in: root) ?? [] where old.label == label && old.slug != keeping {
+            do { try FileManager.default.removeItem(at: app.appendingPathComponent(old.slug)) }
+            catch { missed.append(old.label) }
         }
+        return missed
     }
 
     /// `.adding-*` is hidden from `builds(of:)` so a running add is safe from it,
     /// which also means nothing ever reaps one left by a kill. An hour is longer
     /// than any copy.
-    private static func sweepStaging(_ app: URL) {
+    static func sweepStaging(_ app: URL) {
         for name in (try? FileManager.default.contentsOfDirectory(atPath: app.path)) ?? []
         where name.hasPrefix(".adding-") {
             let url = app.appendingPathComponent(name)
@@ -378,11 +425,11 @@ enum OTA {
     }
 
     /// Where an identical .ipa already sits, if it does.
-    private static func sameArchive(as path: String, bundleID: String) -> URL? {
+    private static func sameArchive(as path: String, bundleID: String, in root: URL) -> URL? {
         let incomingURL = URL(fileURLWithPath: path)
         let size = ((try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int64) ?? -1
-        let app = directory.appendingPathComponent(bundleID, isDirectory: true)
-        let candidates = builds(of: bundleID).filter { $0.size == size }   // the cheap half first
+        let app = root.appendingPathComponent(bundleID, isDirectory: true)
+        let candidates = (builds(of: bundleID, in: root) ?? []).filter { $0.size == size }   // the cheap half first
         guard !candidates.isEmpty, let incoming = digest(of: incomingURL) else { return nil }
         for build in candidates {
             let dir = app.appendingPathComponent(build.slug)
@@ -404,59 +451,95 @@ enum OTA {
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
-    /// The app folders, or nil when the directory is there but couldn't be read —
-    /// a descriptor limit or a permission change. Callers treat nil as "ask again
-    /// later": reading it as "nothing stored" is what takes a live page down.
-    static func appDirectories() -> [String]? {
+    /// The app folders with something in them, or nil when the directory is there
+    /// but couldn't be read — a descriptor limit, a permission change anywhere
+    /// above it. Callers treat nil as "ask again later": reading it as "nothing
+    /// stored" is what takes a live page down mid-download.
+    ///
+    /// The error says which it is. `fileExists` can't: it is false both for a
+    /// path that isn't there and for one whose parent you can't get into.
+    static func appDirectories(in root: URL? = nil) -> [String]? {
+        let store = root ?? directory
         let found: [String]
-        do { found = try FileManager.default.contentsOfDirectory(atPath: directory.path) }
-        catch { return FileManager.default.fileExists(atPath: directory.path) ? nil : [] }
+        do { found = try FileManager.default.contentsOfDirectory(atPath: store.path) }
+        catch CocoaError.fileReadNoSuchFile { return [] }   // deleting it is the off switch
+        catch let error as NSError where error.domain == NSPOSIXErrorDomain && error.code == Int(ENOENT) {
+            return []
+        }
+        catch { return nil }
         return found.filter { name in
             guard !name.hasPrefix(".") else { return false }
-            var isDir: ObjCBool = false
-            return FileManager.default.fileExists(atPath: directory.appendingPathComponent(name).path,
-                                                  isDirectory: &isDir) && isDir.boolValue
+            // A folder holding nothing but `.lock` is one an add made and then
+            // failed in, or one whose builds were removed by hand. Counting it
+            // keeps the page published with nothing on it.
+            guard let inside = try? FileManager.default.contentsOfDirectory(
+                atPath: store.appendingPathComponent(name).path) else { return false }
+            return inside.contains { !$0.hasPrefix(".") }
         }
     }
 
-    /// Newest first, per app.
-    static func builds() -> [(bundleID: String, builds: [Build])] {
-        let apps = appDirectories() ?? []
-        return apps.sorted().compactMap { app in
-            let list = builds(of: app)
-            return list.isEmpty ? nil : (app, list)
+    /// Newest first, per app. nil when something couldn't be read, at any level —
+    /// an empty page is a lie about a folder we simply couldn't open.
+    static func builds(in root: URL? = nil) -> [(bundleID: String, builds: [Build])]? {
+        guard let apps = appDirectories(in: root) else { return nil }
+        var out: [(bundleID: String, builds: [Build])] = []
+        for app in apps.sorted() {
+            guard let list = builds(of: app, in: root) else { return nil }
+            if !list.isEmpty { out.append((app, list)) }
         }
+        return out
     }
 
-    static func builds(of bundleID: String, in root: URL? = nil) -> [Build] {
+    /// nil when the folder couldn't be enumerated. Purely a read: a build with no
+    /// `meta.json` is left where it is, because deciding that from a request the
+    /// tailnet sent is not the place to delete anything. `add` reaps them.
+    static func builds(of bundleID: String, in root: URL? = nil) -> [Build]? {
         let app = (root ?? directory).appendingPathComponent(bundleID, isDirectory: true)
-        let slugs = (try? FileManager.default.contentsOfDirectory(atPath: app.path)) ?? []
+        let slugs: [String]
+        do { slugs = try FileManager.default.contentsOfDirectory(atPath: app.path) }
+        catch CocoaError.fileReadNoSuchFile { return [] }
+        catch let error as NSError where error.domain == NSPOSIXErrorDomain && error.code == Int(ENOENT) {
+            return []
+        }
+        catch { return nil }
         return slugs.compactMap { slug -> Build? in
             guard !slug.hasPrefix(".") else { return nil }
             let dir = app.appendingPathComponent(slug)
-            let meta = dir.appendingPathComponent("meta.json")
-            guard let data = try? Data(contentsOf: meta) else {
-                // Only when it truly isn't there: an add that died before writing
-                // it, which nothing can show and nothing would ever remove. A read
-                // that failed for another reason (out of descriptors, say) must not
-                // cost someone their build, and one that fails to decode may be
-                // readable by a later version.
-                if !FileManager.default.fileExists(atPath: meta.path) {
-                    try? FileManager.default.removeItem(at: dir)
-                }
-                return nil
-            }
-            guard var build = try? JSONDecoder().decode(Build.self, from: data) else { return nil }
+            // A read that failed for another reason (out of descriptors, say) must
+            // not cost someone their build, and one that fails to decode may be
+            // readable by a later version.
+            guard let data = try? Data(contentsOf: dir.appendingPathComponent("meta.json")),
+                  var build = try? JSONDecoder().decode(Build.self, from: data) else { return nil }
             build.slug = slug              // where it actually is, whatever the name was built from
             build.bundleID = bundleID      // and under which folder; the manifest's URLs are made from both
             return build
         }.sorted { $0.added > $1.added }
     }
 
-    /// Keeps the newest `keepPerApp`; the rest go with their .ipa.
-    static func prune(_ bundleID: String, keeping: String? = nil) {
-        let app = directory.appendingPathComponent(bundleID, isDirectory: true)
-        for old in builds(of: bundleID).dropFirst(keepPerApp) where old.slug != keeping {
+    /// A build directory with no `meta.json` at all: an add that died before
+    /// writing it. Nothing can show it and nothing else would ever remove it.
+    /// Only from `add`, which holds the lock — a half-written build is exactly
+    /// what this would delete if it ran while one was being made.
+    private static func reapOrphans(_ app: URL) {
+        for slug in (try? FileManager.default.contentsOfDirectory(atPath: app.path)) ?? []
+        where !slug.hasPrefix(".") {
+            let dir = app.appendingPathComponent(slug)
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue,
+                  !FileManager.default.fileExists(atPath: dir.appendingPathComponent("meta.json").path)
+            else { continue }
+            try? FileManager.default.removeItem(at: dir)
+        }
+    }
+
+    /// Keeps the newest `keepPerApp`; the rest go with their .ipa. The one being
+    /// kept counts towards the limit: `added` is taken before the lock, so a build
+    /// that waited can sort last, and dropping it from the tail left six.
+    static func prune(_ bundleID: String, keeping: String? = nil, in root: URL? = nil) {
+        let app = (root ?? directory).appendingPathComponent(bundleID, isDirectory: true)
+        let all = builds(of: bundleID, in: root) ?? []
+        let kept = all.filter { $0.slug == keeping } + all.filter { $0.slug != keeping }
+        for old in kept.dropFirst(keepPerApp) {
             try? FileManager.default.removeItem(at: app.appendingPathComponent(old.slug))
         }
     }
