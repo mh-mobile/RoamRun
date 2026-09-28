@@ -262,7 +262,12 @@ enum OTA {
                                  "storing without it could lose a build another roamrun is writing")
         }
         defer { flock(lock, LOCK_UN); close(lock) }
-        flock(lock, LOCK_EX)
+        var held = flock(lock, LOCK_EX)
+        while held != 0 && errno == EINTR { held = flock(lock, LOCK_EX) }
+        guard held == 0 else {
+            throw Problem.failed("couldn't lock \(app.path) (\(String(cString: strerror(errno)))) — " +
+                                 "storing without it could lose a build another roamrun is writing")
+        }
 
         // The same archive handed over twice: two rows the eye can't tell apart,
         // and one fewer slot for a build that is actually different. A rebuild
@@ -275,7 +280,14 @@ enum OTA {
             var again = build
             again.slug = same.lastPathComponent
             again.added = .now
-            try? JSONEncoder().encode(again).write(to: same.appendingPathComponent("meta.json"), options: .atomic)
+            do {
+                try JSONEncoder().encode(again).write(to: same.appendingPathComponent("meta.json"), options: .atomic)
+            } catch {
+                // Nothing else happens on this path, so a swallowed failure here is
+                // "Stored." for a build that didn't move, still the oldest row, and
+                // first in line to be pruned.
+                throw Problem.failed("couldn't update \(same.path): \(error.localizedDescription)")
+            }
             if replacing { drop(build.bundleID, labelled: build.label, keeping: again.slug) }
             return same
         }
@@ -367,8 +379,15 @@ enum OTA {
     /// a descriptor limit or a permission change. Callers treat nil as "ask again
     /// later": reading it as "nothing stored" is what takes a live page down.
     static func appDirectories() -> [String]? {
-        do { return try FileManager.default.contentsOfDirectory(atPath: directory.path) }
+        let found: [String]
+        do { found = try FileManager.default.contentsOfDirectory(atPath: directory.path) }
         catch { return FileManager.default.fileExists(atPath: directory.path) ? nil : [] }
+        return found.filter { name in
+            guard !name.hasPrefix(".") else { return false }
+            var isDir: ObjCBool = false
+            return FileManager.default.fileExists(atPath: directory.appendingPathComponent(name).path,
+                                                  isDirectory: &isDir) && isDir.boolValue
+        }
     }
 
     /// Newest first, per app.

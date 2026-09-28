@@ -276,9 +276,22 @@ final class AppCoordinator: ObservableObject {
             }
             return
         }
-        guard otaPublished == nil else {
+        // Not just "is it published": a listener that failed after it was ready
+        // leaves the registration pointing at a port nothing holds, and this is
+        // the only place that builds a new one. Published *and* listening is the
+        // state that needs nothing done.
+        if otaPublished != nil, otaServer?.listening == true {
             verifyOTAStillServed()
             return
+        }
+        if otaPublished != nil {
+            // Not released first: the new listener gets a new ephemeral port, and
+            // registering that replaces the root handler on the same tailnet port.
+            // Releasing in parallel would race the re-registration for it.
+            logStore.log("the over-the-air server stopped; starting it again")
+            otaPublished = nil
+            otaServer?.stop()
+            otaServer = nil
         }
         // One of these can still be running when the 30 s timer comes round:
         // without the guard the same address is registered twice and the later
@@ -335,8 +348,7 @@ final class AppCoordinator: ObservableObject {
                           "RoamRun publishes again within half a minute"
                         : "not taking it over. Give RoamRun another port: " +
                           "defaults write \(AppID.bundle) otaPort -int 41444"
-                    let what = others.isEmpty ? (root ?? "something else")
-                        : "\(others.count + (root == nil ? 0 : 1)) paths"
+                    let what = TailscaleClient.Serving.mounted(root: root, others: others).described
                     await MainActor.run {
                         self?.complainOnce("port \(tailnetPort) is already serving \(what), which isn't RoamRun's — " + advice)
                     }
@@ -349,6 +361,9 @@ final class AppCoordinator: ObservableObject {
             Self.rememberServing(mine)
             let out = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
                                ["serve", "--bg", "--yes", "--https=\(tailnetPort)", mine], timeout: 20)
+            // Before hopping back: `serving` waits on `tailscale` for up to 10 s,
+            // and the main actor is where the menu bar lives.
+            let landed = out.status != 0 && TailscaleClient.serving(port: tailnetPort).root == mine
             await MainActor.run {
                 guard let self else { return }
                 if out.status == 0 {
@@ -363,7 +378,7 @@ final class AppCoordinator: ObservableObject {
                     // Remembered before the call in case we died during it. It
                     // didn't take, so drop it: a window full of addresses that
                     // were never registered can't recognise one that was.
-                    if TailscaleClient.serving(port: tailnetPort).root != mine { Self.forgetServing(mine) }
+                    if !landed { Self.forgetServing(mine) }
                 }
             }
         }
@@ -376,11 +391,19 @@ final class AppCoordinator: ObservableObject {
         guard let published = otaPublished, !verifyingOTA else { return }
         verifyingOTA = true
         Task.detached { [weak self] in
-            let live = TailscaleClient.serving(port: published.port).root == published.target
+            // `unknown` says nothing about the entry. Forgetting it on a status we
+            // couldn't read would leave it registered with nothing tracking it —
+            // and the next port change would have no old port to give back.
+            let gone: Bool
+            switch TailscaleClient.serving(port: published.port) {
+            case .unknown: gone = false
+            case .nothing: gone = true
+            case .mounted(let root, _): gone = root != published.target
+            }
             await MainActor.run {
                 guard let self else { return }
                 self.verifyingOTA = false
-                if !live, self.otaPublished?.target == published.target { self.otaPublished = nil }
+                if gone, self.otaPublished?.target == published.target { self.otaPublished = nil }
             }
         }
     }
@@ -395,7 +418,8 @@ final class AppCoordinator: ObservableObject {
         switch TailscaleClient.serving(port: published.port) {
         case .unknown: return false            // couldn't look; saying it's gone is how one survives
         case .nothing: forgetServing(published.target); return true
-        case .mounted(let root, _): guard root == published.target else { return true }
+        case .mounted(let root, _):
+            guard root == published.target else { forgetServing(published.target); return true }
         }
         // `--set-path=/` names the one mount to remove. Without it `off` means
         // every mount on the port, and `tailscale` then asks for confirmation on

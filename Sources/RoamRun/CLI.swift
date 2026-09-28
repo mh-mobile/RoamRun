@@ -427,7 +427,7 @@ enum CLI {
             let url = "https://\(host):\(tailnetPort)/"
             if case .mounted(let root, let others) = TailscaleClient.serving(port: tailnetPort),
                !(others.isEmpty && AppCoordinator.isOurs(root ?? "")) {
-                let what = others.isEmpty ? (root ?? "something else") : "\(others.count) other paths"
+                let what = TailscaleClient.Serving.mounted(root: root, others: others).described
                 // Which of the two it is decides what the user should do about it.
                 let advice = AppCoordinator.abandoned(root, others: others)
                     ? "  Nothing is behind it, so a run was killed before it gave the port back:\n" +
@@ -1085,19 +1085,23 @@ enum CLI {
         let tailnetPort = AppCoordinator.otaPort
         let served = TailscaleClient.serving(port: tailnetPort)
         let live = TailscaleClient.servingLive(port: tailnetPort)
+        var unreadable = false
         switch served {
-        case .unknown, .nothing: mine = true   // nothing of the user's to get in the way
+        case .unknown: mine = true; unreadable = true
+        case .nothing: mine = true             // nothing of the user's to get in the way
         case .mounted(let root, let others):
             mine = others.isEmpty && AppCoordinator.isOurs(root ?? "")
             stray = !mine && AppCoordinator.abandoned(root, others: others)
         }
         check(live, live ? "The install page is published on port \(tailnetPort)"
                          : "The install page isn't published on port \(tailnetPort)",
-              mine
+              unreadable
+                  ? "`tailscale serve status` didn't answer, so this can't be checked — is Tailscale running?"
+                  : mine
                   ? "RoamRun publishes it while it runs — open RoamRun, then look in ⚙ Settings › Troubleshooting › Recent messages if it doesn't appear."
                   : stray
                   ? "port \(tailnetPort) carries an entry with nothing behind it, left by a run that was killed: tailscale serve --https=\(tailnetPort) --set-path=/ off"
-                  : "port \(tailnetPort) is serving something else. Give RoamRun another port: defaults write \(AppID.bundle) otaPort -int 41444",
+                  : "port \(tailnetPort) is serving \(served.described), which isn't RoamRun's. Give RoamRun another port: defaults write \(AppID.bundle) otaPort -int 41444",
               true)
         if live, let host = (try? TailscaleClient.fromSettings().selfDNSName()) ?? nil {
             note("Open on the device: https://\(host):\(tailnetPort)/")

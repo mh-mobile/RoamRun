@@ -111,6 +111,17 @@ struct TailscaleClient {
             guard case .mounted(let root, _) = self else { return nil }
             return root
         }
+
+        /// For the one sentence every caller has to write about a port it can't have.
+        var described: String {
+            switch self {
+            case .unknown: return "something RoamRun couldn't read"
+            case .nothing: return "nothing"
+            case .mounted(let root, let others):
+                let all = (root.map { [$0.isEmpty ? "/" : $0] } ?? []) + others
+                return all.count > 3 ? "\(all.count) mounts" : all.joined(separator: ", ")
+            }
+        }
     }
 
     /// A port of RoamRun's own rather than a path on `:443`: that port carries
@@ -134,15 +145,26 @@ struct TailscaleClient {
         else { return .unknown }
         if parsed is NSNull { return .nothing }
         guard let root = parsed as? [String: Any] else { return .unknown }
-        guard let web = root["Web"] as? [String: Any] else { return .nothing }
-        for (hostPort, value) in web where hostPort.hasSuffix(":\(port)") {
-            guard let handlers = (value as? [String: Any])?["Handlers"] as? [String: Any] else { continue }
-            let target = (handlers["/"] as? [String: Any]).map { ($0["Proxy"] as? String) ?? "" }
-            let others = handlers.keys.filter { $0 != "/" }.sorted()
-            guard target != nil || !others.isEmpty else { continue }
-            return .mounted(root: target, others: others)
+        var target: String?
+        var others: [String] = []
+        // Not only `Web`: `tailscale serve --tcp=P` puts a forward in `TCP` with no
+        // Web entry at all, and a port carrying one is not an empty port. Reading
+        // a section we don't look at as "nothing here" is the same mistake one
+        // layer down.
+        if let tcp = (root["TCP"] as? [String: Any])?["\(port)"] as? [String: Any],
+           tcp["TCPForward"] != nil || tcp["TLSTerminatedTCP"] != nil {
+            others.append("TCP forwarding")
         }
-        return .nothing
+        // Every host key for that port, not the first the dictionary happens to
+        // yield: a tailnet rename leaves the old name behind.
+        for (hostPort, value) in (root["Web"] as? [String: Any] ?? [:]).sorted(by: { $0.key < $1.key })
+        where hostPort.hasSuffix(":\(port)") {
+            guard let handlers = (value as? [String: Any])?["Handlers"] as? [String: Any] else { continue }
+            if target == nil { target = (handlers["/"] as? [String: Any]).map { ($0["Proxy"] as? String) ?? "" } }
+            others += handlers.keys.filter { $0 != "/" }
+        }
+        guard target != nil || !others.isEmpty else { return .nothing }
+        return .mounted(root: target, others: others.sorted())
     }
 
     /// Whether RoamRun's own entry is there *and* something is listening behind

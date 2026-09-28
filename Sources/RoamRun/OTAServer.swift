@@ -87,6 +87,10 @@ final class OTAServer: @unchecked Sendable {
         port = 0
     }
 
+    /// Whether there is still a listener behind the port `tailscale serve` was
+    /// told about. False after one failed post-ready, which nothing else notices.
+    var listening: Bool { lock.withLock { _listener != nil && _port > 0 } }
+
     /// Only if it is still the one we are using: a cancelled listener's late
     /// callback must not wipe the replacement.
     private func forget(_ gone: NWListener?) {
@@ -126,7 +130,11 @@ final class OTAServer: @unchecked Sendable {
         // altogether: this exists for slow cellular, where a big .ipa legitimately
         // takes a long while.
         let idle = IdleTimer(queue: queue) { conn.cancel() }
-        idle.arm(Self.idleLimit)
+        // Armed to the head's deadline, not the idle limit: a peer that connects
+        // and never sends produces no callback to check a deadline in, and eight
+        // of those are every connection there is. `pump` re-arms it to the idle
+        // limit once a body is going out, where slow really is only slow.
+        idle.arm(Self.headLimit)
         conn.start(queue: queue)
         readHead(conn, soFar: Data(), idle: idle, by: DispatchTime.now() + Self.headLimit)
     }
@@ -144,8 +152,9 @@ final class OTAServer: @unchecked Sendable {
             let text = String(decoding: head, as: UTF8.self)
             guard let end = text.range(of: "\r\n\r\n") else {
                 guard !done else { conn.cancel(); return }
-                guard DispatchTime.now() < deadline else { return self.send(conn, status: "408 Request Timeout") }
-                idle.arm(Self.idleLimit)
+                let now = DispatchTime.now()
+                guard now < deadline else { return self.send(conn, status: "408 Request Timeout") }
+                idle.arm(Double(deadline.uptimeNanoseconds - now.uptimeNanoseconds) / 1e9)
                 return self.readHead(conn, soFar: head, idle: idle, by: deadline)
             }
             let (method, path, host) = Self.request(String(text[text.startIndex..<end.lowerBound]))
@@ -176,7 +185,12 @@ final class OTAServer: @unchecked Sendable {
         let parts = Self.segments(path)
         switch parts.count {
         case 0:
-            let html = OTA.indexHTML(OTA.builds(), base: base)   // [] when unreadable: the page says so
+            guard OTA.appDirectories() != nil else {
+                let why = Data("Can't read the builds folder on the Mac.\n".utf8)
+                return send(conn, status: "503 Service Unavailable",
+                            body: bodyWanted ? why : nil, length: Int64(why.count))
+            }
+            let html = OTA.indexHTML(OTA.builds(), base: base)
             send(conn, status: "200 OK", type: "text/html; charset=utf-8", body: bodyWanted ? Data(html.utf8) : nil,
                  length: Int64(Data(html.utf8).count))
         case 3 where parts[2] == "icon.png":
@@ -203,7 +217,7 @@ final class OTAServer: @unchecked Sendable {
     /// Path components, with anything that could climb out of the directory gone.
     static func segments(_ path: String) -> [String] {
         path.split(separator: "/").map(String.init)
-            .filter { $0 != "." && $0 != ".." && !$0.contains("\0") }
+            .filter { !$0.hasPrefix(".") && !$0.contains("\0") }
     }
 
     // MARK: - Writing

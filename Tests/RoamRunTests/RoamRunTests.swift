@@ -1146,6 +1146,16 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     // A port with only a sub-path of the user's on it is not an empty port.
     #expect(TailscaleClient.serving(port: 41443, inJSON: #"{"Web":{"m:41443":{"Handlers":{"/mine":{}}}}}"#)
             == .mounted(root: nil, others: ["/mine"]))
+    // Nor is one carrying a TCP forward, which has no Web entry at all: reading a
+    // section we don't look at as "nothing here" is the same mistake one layer down.
+    #expect(TailscaleClient.serving(port: 41443, inJSON: #"{"TCP":{"41443":{"TCPForward":"localhost:22"}}}"#)
+            == .mounted(root: nil, others: ["TCP forwarding"]))
+    // `{"HTTPS": true}` is what a plain https serve puts beside its Web entry.
+    #expect(TailscaleClient.serving(port: 41443, inJSON: #"{"TCP":{"41443":{"HTTPS":true}}}"#) == .nothing)
+    // A tailnet rename leaves the old host key behind; both are that port's.
+    #expect(TailscaleClient.serving(port: 41443, inJSON:
+        #"{"Web":{"old:41443":{"Handlers":{"/a":{}}},"new:41443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:1"}}}}}"#)
+            == .mounted(root: "http://127.0.0.1:1", others: ["/a"]))
 }
 
 @Test func aPortThatCantWorkIsIgnoredRatherThanRetriedForEver() {
