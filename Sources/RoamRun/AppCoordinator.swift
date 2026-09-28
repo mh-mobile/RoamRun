@@ -214,10 +214,14 @@ final class AppCoordinator: ObservableObject {
     /// was killed, or quit while `tailscale` was still thinking. Nothing else
     /// looks: `otaPublished` is this run's, and when `ota/` is empty the rest of
     /// `startOTAIfNeeded` returns before it would.
-    @discardableResult
-    nonisolated static func reclaimStray(on port: Int) -> Bool {
-        guard let host = currentHost() else { return false }
-        guard let target = TailscaleClient.serving(port: port).root(on: host), isOurs(target) else { return false }
+    /// True once the question has been answered, whatever the answer: nil means
+    /// Tailscale couldn't be asked, which at launch is ordinary — tailscaled is
+    /// often still coming up — and must not count as "there was nothing".
+    nonisolated static func reclaimStray(on port: Int) -> Bool? {
+        guard let host = currentHost() else { return nil }
+        let state = TailscaleClient.serving(port: port)
+        guard state != .unknown else { return nil }
+        guard let target = state.root(on: host), isOurs(target) else { return true }
         return releaseServe((port: port, target: target))
     }
     /// Said once per reason: the retry runs every 30s and the log is a person's.
@@ -279,13 +283,21 @@ final class AppCoordinator: ObservableObject {
         }
         // Before the off switch, not after it: with `ota/` deleted the branch below
         // returns, and a registration from a previous run would never be looked for.
-        if !lookedForStrays, !Self.remembered().isEmpty {
+        //
+        // Only while this run has registered nothing. The record holds our own
+        // address once we publish, and `isOurs` would then be true of the entry we
+        // are serving from — this would give away the live one.
+        if !lookedForStrays, otaPublished == nil, otaServer == nil, !Self.remembered().isEmpty {
             lookedForStrays = true
             let port = Self.otaPort
             if Self.beginServeChange() {
-                Task.detached {
+                Task.detached { [weak self] in
                     defer { Self.endServeChange() }
-                    _ = Self.reclaimStray(on: port)
+                    let answered = Self.reclaimStray(on: port) ?? false
+                    // Ask again next tick when Tailscale couldn't answer: at launch
+                    // it is often still starting, and giving up there would leave
+                    // the entry exactly as unreclaimed as before.
+                    if !answered { await MainActor.run { self?.lookedForStrays = false } }
                 }
             } else {
                 lookedForStrays = false   // busy; the timer comes round again
@@ -546,7 +558,7 @@ final class AppCoordinator: ObservableObject {
                 // One is already on its way out. Racing it is how the `off` that
                 // arrives second removes whatever took the port; the record stays,
                 // so the next run recognises the entry and gives it back.
-                logStore.log("a release of port \(published.port) was already running; leaving it to that one")
+                logStore.log("port \(published.port) is already being changed; leaving it to that")
             } else {
                 // Short here, unlike the background paths: this runs on the thread
                 // the app quits on, and the long wait only happens when tailscaled

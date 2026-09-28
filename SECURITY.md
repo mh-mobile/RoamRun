@@ -61,6 +61,11 @@ bounded.
   given back when RoamRun quits — but not if it is force-quit or crashes, so
   `tailscale serve --https=<the port> --set-path=/ off` is how you make sure it's
   gone — `--set-path` names the one mount, so nothing else you serve is touched.
+  RoamRun drives `tailscale serve` through its command line, which has no way to
+  say "change this only if it still looks the way I just read it". So between
+  RoamRun checking that the entry on that port is its own and `tailscale` acting
+  on it, something else changing that port would be missed — a fraction of a
+  second, and only if you are editing the same port by hand at that moment.
   RoamRun records the exact address it registered and only ever replaces an entry
   matching it — its own, from a run that didn't get to release it — so it won't
   take over something else you serve on that port either. Deleting `ota/` takes the page down

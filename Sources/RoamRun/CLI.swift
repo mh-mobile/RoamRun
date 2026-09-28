@@ -1136,6 +1136,13 @@ enum CLI {
         let bytes = builds.reduce(Int64(0)) { $0 + $1.size }
         note("\(builds.count) build\(builds.count == 1 ? "" : "s") of \(apps.count) app\(apps.count == 1 ? "" : "s"), " +
              "\(OTA.size(bytes)) in \(OTA.directory.path)")
+        // Metadata no version here can decode: shown nowhere, pruned never, in no
+        // total. It can't be listed, so at least say it is there.
+        let undecodable = apps.reduce(0) { $0 + OTA.unreadableBuilds(of: $1.bundleID) }
+        if undecodable > 0 {
+            note("\(undecodable) more with metadata this version can't read — a later one may; " +
+                 "delete the folder to be rid of it")
+        }
         let tailnetPort = AppCoordinator.otaPort
         let served = TailscaleClient.serving(port: tailnetPort)
         let host = AppCoordinator.currentHost()   // asked once; `serve` acts on this name alone

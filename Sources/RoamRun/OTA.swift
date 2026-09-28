@@ -516,6 +516,19 @@ enum OTA {
         }.sorted { $0.added > $1.added }
     }
 
+    /// Build folders whose `meta.json` is there but no version here can decode —
+    /// kept, because a later one may read it, and so invisible to everything else.
+    static func unreadableBuilds(of bundleID: String, in root: URL? = nil) -> Int {
+        let app = (root ?? directory).appendingPathComponent(bundleID, isDirectory: true)
+        return ((try? FileManager.default.contentsOfDirectory(atPath: app.path)) ?? [])
+            .filter { !$0.hasPrefix(".") }
+            .count { slug in
+                guard let data = try? Data(contentsOf: app.appendingPathComponent(slug)
+                    .appendingPathComponent("meta.json")) else { return false }
+                return (try? JSONDecoder().decode(Build.self, from: data)) == nil
+            }
+    }
+
     /// A build directory with no `meta.json` at all: an add that died before
     /// writing it. Nothing can show it and nothing else would ever remove it.
     /// Only from `add`, which holds the lock — a half-written build is exactly
