@@ -44,7 +44,7 @@ enum OTA {
         /// `1.0 beta` would otherwise be percent-encoded on the way back in.
         static func slug(version: String, build: String, at date: Date) -> String {
             let plain = "\(version)-\(build)-\(stamp.string(from: date))"
-            return String(plain.map { $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" ? $0 : "-" })
+            return String(plain.map { urlSafe($0) ? $0 : "-" })
         }
 
         /// Field by field, like `DeviceProfile`: a build people are relying on
@@ -74,9 +74,16 @@ enum OTA {
             self.slug = slug
         }
 
+        /// What goes into a URL without being re-encoded on the way back.
+        /// `Character.isLetter` is true for every script there is, and a version
+        /// like `1.0-テスト` would come back percent-encoded and match nothing.
+        static func urlSafe(_ c: Character) -> Bool {
+            c.isASCII && (c.isLetter || c.isNumber || c == "." || c == "-")
+        }
+
         static let stamp: DateFormatter = {
             let f = DateFormatter()
-            f.dateFormat = "yyyyMMdd-HHmm"
+            f.dateFormat = "yyyyMMdd-HHmmss"
             f.locale = Locale(identifier: "en_US_POSIX")
             f.timeZone = TimeZone(identifier: "UTC")
             return f
@@ -104,7 +111,7 @@ enum OTA {
             case .notForDevice(let name, let udid):
                 return "That build isn't signed for \(name) (UDID \(udid) is not in its provisioning profile). Add the device to the profile and export again."
             case .udidUnknown(let name):
-                return "RoamRun doesn't know \(name)'s UDID yet, so it can't tell whether that Ad Hoc build covers it — and iOS would just refuse it on the device. Bridge \(name) once (`roamrun up \(name) -d`) so the UDID is learned, then try again."
+                return "RoamRun doesn't know \(name)'s UDID yet, so it can't tell whether that Ad Hoc build covers it — and iOS would just refuse it on the device. Next time \(name) is back on a Wi-Fi this Mac can reach, bridge it once (`roamrun up \(CLI.shellName(name)) -d`) and the UDID is learned; `roamrun devices` shows it. An Enterprise build needs none of this."
             case .expired(let date):
                 return "That build's provisioning profile expired on \(date.formatted(date: .abbreviated, time: .omitted)) — iOS won't install it. Export it again with a current profile."
             case .failed(let why): return why
@@ -119,7 +126,10 @@ enum OTA {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-ota-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: dir) }
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        _ = Proc.run("/usr/bin/unzip", ["-qo", path, "Payload/*.app/Info.plist", "-d", dir.path], timeout: 60)
+        let unzip = Proc.run("/usr/bin/unzip", ["-qo", path, "Payload/*.app/Info.plist", "-d", dir.path], timeout: 60)
+        if unzip.status != 0 && unzip.status != 11 {   // 11 is "nothing matched", handled below
+            throw Problem.failed("couldn't unpack \(path): \(unzip.err.trimmingCharacters(in: .whitespacesAndNewlines))")
+        }
         let payload = dir.appendingPathComponent("Payload")
         guard let app = (try? FileManager.default.contentsOfDirectory(atPath: payload.path))?.first(where: { $0.hasSuffix(".app") }),
               let plist = inside(payload.appendingPathComponent(app).appendingPathComponent("Info.plist"), dir),
@@ -147,7 +157,9 @@ enum OTA {
     /// A bundle id becomes a directory name, so it may not climb out of `ota/`
     /// or hide the directory from everything that walks it.
     static func isPlainName(_ s: String) -> Bool {
-        !s.isEmpty && !s.hasPrefix(".") && !s.contains("/") && !s.contains("\0") && s.count < 200
+        // A directory name and a URL component both. An `&` would end the
+        // itms-services query early; anything non-ASCII comes back encoded.
+        !s.isEmpty && !s.hasPrefix(".") && s.count < 200 && s.allSatisfy { Build.urlSafe($0) || $0 == "_" }
     }
 
     /// Only a build iOS will accept over the air, and for this device if the
@@ -222,9 +234,14 @@ enum OTA {
         // that kept its version number is not the same archive and still stacks,
         // unless the caller says it is a redo of the one already there.
         if let same = sameArchive(as: path, bundleID: build.bundleID) {
-            // Already here byte for byte. --replace still means "one row for this
-            // version", so anything else under that label goes.
-            if replacing { drop(build.bundleID, labelled: build.label, keeping: same.lastPathComponent) }
+            // Already here byte for byte, so the archive doesn't need storing
+            // again — but asking for it now is what going back to it means, and
+            // the page puts the most recently added build on top.
+            var again = build
+            again.slug = same.lastPathComponent
+            again.added = .now
+            try? JSONEncoder().encode(again).write(to: same.appendingPathComponent("meta.json"), options: .atomic)
+            if replacing { drop(build.bundleID, labelled: build.label, keeping: again.slug) }
             return same
         }
         guard !build.slug.isEmpty else { throw Problem.unreadable(path) }
@@ -241,7 +258,6 @@ enum OTA {
             try FileManager.default.copyItem(at: URL(fileURLWithPath: path), to: staging.appendingPathComponent("app.ipa"))
             try JSONEncoder().encode(build).write(to: staging.appendingPathComponent("meta.json"), options: .atomic)
             if let png = icon(ipa: path) { try? png.write(to: staging.appendingPathComponent("icon.png"), options: .atomic) }
-            try? FileManager.default.removeItem(at: dir)
             try FileManager.default.moveItem(at: staging, to: dir)
             // Only now: until the new build is in place, the old one is what the
             // user has, and taking it away first would leave nothing installable.
@@ -260,9 +276,9 @@ enum OTA {
     }
 
     /// Everything already stored under the same `1.2.0 (45)`.
-    private static func drop(_ bundleID: String, labelled label: String, keeping: String? = nil) {
-        let app = directory.appendingPathComponent(bundleID, isDirectory: true)
-        for old in builds(of: bundleID) where old.label == label && old.slug != keeping {
+    static func drop(_ bundleID: String, labelled label: String, keeping: String? = nil, in root: URL? = nil) {
+        let app = (root ?? directory).appendingPathComponent(bundleID, isDirectory: true)
+        for old in builds(of: bundleID, in: root) where old.label == label && old.slug != keeping {
             try? FileManager.default.removeItem(at: app.appendingPathComponent(old.slug))
         }
     }
@@ -311,22 +327,8 @@ enum OTA {
         }
     }
 
-    /// Names of the directories removed for having no metadata at all, so the
-    /// difference between "unreadable" and "not there" can be checked.
-    @discardableResult
-    static func sweep(_ app: URL) -> [String] {
-        var gone: [String] = []
-        for name in (try? FileManager.default.contentsOfDirectory(atPath: app.path)) ?? [] where !name.hasPrefix(".") {
-            let meta = app.appendingPathComponent(name).appendingPathComponent("meta.json")
-            guard !FileManager.default.fileExists(atPath: meta.path) else { continue }
-            try? FileManager.default.removeItem(at: app.appendingPathComponent(name))
-            gone.append(name)
-        }
-        return gone.sorted()
-    }
-
-    static func builds(of bundleID: String) -> [Build] {
-        let app = directory.appendingPathComponent(bundleID, isDirectory: true)
+    static func builds(of bundleID: String, in root: URL? = nil) -> [Build] {
+        let app = (root ?? directory).appendingPathComponent(bundleID, isDirectory: true)
         let slugs = (try? FileManager.default.contentsOfDirectory(atPath: app.path)) ?? []
         return slugs.compactMap { slug -> Build? in
             guard !slug.hasPrefix(".") else { return nil }

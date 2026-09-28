@@ -11,7 +11,9 @@ extension OTA {
                 "assets": [["kind": "software-package", "url": "\(base)/\(build.bundleID)/\(build.slug)/app.ipa"]],
                 "metadata": [
                     "bundle-identifier": build.bundleID,
-                    "bundle-version": build.version,
+                    // CFBundleVersion, which is what Apple's key means; the page
+                    // shows the marketing version beside it.
+                    "bundle-version": build.build.isEmpty ? build.version : build.build,
                     "kind": "software",
                     "title": build.title,
                 ],
@@ -98,8 +100,7 @@ extension OTA {
     }
 
     private static func row(_ build: Build, base: String, now: Date, newest: Bool) -> String {
-        var bits = [when(build.added, now: now), size(build.size)]
-        if let devices = build.devices { bits.append("\(devices.count) device\(devices.count == 1 ? "" : "s")") }
+        let bits = [when(build.added, now: now), size(build.size)]
         return """
             <div class="build\(newest ? " newest" : "")">
               <div class="top"><span class="ver">\(escape(build.label))</span>\(newest ? #"<span class="tag">NEWEST</span>"# : "")</div>

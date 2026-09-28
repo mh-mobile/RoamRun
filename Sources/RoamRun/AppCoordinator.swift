@@ -169,17 +169,24 @@ final class AppCoordinator: ObservableObject {
     /// something to serve, so a user who never uses it never has a listener or a
     /// `tailscale serve` entry.
     private var otaServer: OTAServer?
-    /// The path `tailscale serve` was actually given, and whether nothing was
-    /// there before. Separate from having a listener: serve fails on its own (no
-    /// HTTPS in the tailnet, tailscaled still coming up) and must be retried; and
-    /// on quit only a registration we made, at the path we made it at, may go.
-    private var otaPublished: (path: String, wasFree: Bool)?
+    /// The path and the exact target `tailscale serve` was given. Recorded because
+    /// nothing else identifies the entry as ours: on this kind of Mac every path
+    /// people serve points at a loopback port, so "loopback" proves nothing. Only
+    /// an entry matching this exactly is replaced, re-registered or given back.
+    private var otaPublished: (path: String, target: String)?
+    nonisolated static let otaServingKey = "otaServing"
     /// Said once per reason: the retry runs every 30s and the log is a person's.
     private var otaComplaint = ""
     static let otaPathKey = "otaPath"
     var otaPath: String { UserDefaults.standard.string(forKey: Self.otaPathKey) ?? "/roamrun" }
 
     func startOTAIfNeeded() {
+        // Something else can take the path away — another `tailscale serve` call,
+        // or `serve reset`. Noticing costs one cheap read and saves a page that is
+        // dead until the app is restarted.
+        if let published = otaPublished, TailscaleClient.servedPaths()[published.path] != published.target {
+            otaPublished = nil
+        }
         guard otaPublished == nil, !OTA.builds().isEmpty else { return }
         // The path can change between attempts, and the server puts it into every
         // link it writes, so a stale one would send the device somewhere else.
@@ -189,7 +196,7 @@ final class AppCoordinator: ObservableObject {
         }
         let server = otaServer ?? OTAServer(prefix: otaPath)
         guard let port = server.start() else {
-            logStore.log("couldn't start the over-the-air server")
+            complainOnce("couldn't start the over-the-air server")
             return
         }
         otaServer = server
@@ -197,12 +204,14 @@ final class AppCoordinator: ObservableObject {
         Task.detached { [weak self] in
             let mine = "http://127.0.0.1:\(port)"
             let existing = TailscaleClient.servedPaths()[path]
-            // Only ever take over something we recognise as ours. Anything else at
-            // that path is the user's own, and `tailscale serve` has no undo.
-            if let existing, !existing.hasPrefix("http://127.0.0.1:") {
+            let ours = AppID.settings?.string(forKey: Self.otaServingKey)
+            // Only ever replace an entry we can prove we made — ours from a run
+            // that ended without releasing it. Anything else there is the user's,
+            // and `tailscale serve` has no undo.
+            if let existing, existing != ours, existing != mine {
                 await MainActor.run {
-                    self?.complainOnce("\(path) is already serving \(existing) — not taking it over. " +
-                        "Set another path with `defaults write \(AppID.bundle) otaPath -string /some/path`.")
+                    self?.complainOnce("\(path) is already serving \(existing), which isn't RoamRun's — not taking it over. " +
+                        "Give RoamRun another path: defaults write \(AppID.bundle) otaPath -string /some/path")
                 }
                 return
             }
@@ -211,7 +220,8 @@ final class AppCoordinator: ObservableObject {
             await MainActor.run {
                 guard let self else { return }
                 if out.status == 0 {
-                    self.otaPublished = (path, existing == nil)
+                    self.otaPublished = (path, mine)
+                    AppID.settings?.set(mine, forKey: Self.otaServingKey)
                     self.otaComplaint = ""
                     self.logStore.log("serving builds over the air at \(path)")
                 } else {
@@ -234,20 +244,16 @@ final class AppCoordinator: ObservableObject {
         guard let server = otaServer else { return }
         otaServer = nil
         server.stop()
-        // Only a registration we made, at the path we made it at, and only when
-        // nothing of the user's was there: "points at loopback" is how we recover
-        // from our own crash, not proof that it was ours.
+        
+        // Only the entry we made, and only while it is still exactly ours.
         guard let published = otaPublished else { return }
         otaPublished = nil
-        guard published.wasFree else { return }
+        guard TailscaleClient.servedPaths()[published.path] == published.target else { return }
+        AppID.settings?.removeObject(forKey: Self.otaServingKey)
         // Synchronously: this runs from willTerminate, and a detached task would
         // not outlive the process.
         _ = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
                      ["serve", "--set-path", published.path, "off"], timeout: 10)
-    }
-
-    private static func firstLine(_ s: String) -> String? {
-        s.split(separator: "\n").first.map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
     /// The alert is shown once a run; the activity log and `roamrun status` keep saying it.

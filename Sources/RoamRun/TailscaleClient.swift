@@ -99,6 +99,33 @@ struct TailscaleClient {
         served(in: Proc.run(fromSettings().resolvedPath() ?? "/usr/bin/false", ["serve", "status"], timeout: 10).out)
     }
 
+    /// Whether RoamRun's own entry is there *and* something is listening behind
+    /// it. A crash leaves the entry pointing at a port nothing holds any more, and
+    /// then `serve status` alone says the page works when it 502s.
+    static func servingLive(_ path: String) -> Bool {
+        guard let target = servedPaths()[path],
+              target == AppID.settings?.string(forKey: AppCoordinator.otaServingKey),
+              let port = UInt16(target.split(separator: ":").last ?? "") else { return false }
+        return listening(on: port)
+    }
+
+    /// One connect to loopback; refused comes back at once.
+    static func listening(on port: UInt16) -> Bool {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = port.bigEndian
+        addr.sin_addr.s_addr = INADDR_LOOPBACK.bigEndian
+        let ok = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0
+            }
+        }
+        return ok
+    }
+
     /// path → what it proxies to, for the default https block only: the same path
     /// can also be mounted on another port, and that one isn't the page's address.
     static func served(in out: String) -> [String: String] {
@@ -106,6 +133,10 @@ struct TailscaleClient {
         var inDefault = false
         for raw in out.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("http://") || line.hasPrefix("tcp://") {
+                inDefault = false   // another block, not the page's address
+                continue
+            }
             if line.hasPrefix("https://") {
                 // `https://host (tailnet only)` is :443; `https://host:8790` is not.
                 let host = line.split(separator: " ").first.map(String.init) ?? ""

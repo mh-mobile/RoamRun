@@ -215,7 +215,10 @@ roamrun ota iPhone build/MyApp.ipa
 
 - **有料の Apple Developer アカウント**。無料アカウントでは Ad Hoc も Enterprise も
   作れず、Development 署名は OTA では入りません
-- **Release Testing (Ad Hoc) か Enterprise 署名の .ipa**。Development 署名はブリッジ
+- **Release Testing (Ad Hoc) か Enterprise 署名の .ipa**。Xcode なら
+  Product › Archive › Distribute App › Release Testing で書き出せます
+  （スクリプトからは `xcodebuild -exportArchive` に `"method": "release-testing"`）。
+  `roamrun run` では作れません（Development 署名になり、ブリッジ経由でしか入りません）。Development 署名はブリッジ
   経由でしか入らないので、`roamrun ota` が先に弾きます。Ad Hoc の場合は端末がプロビジョ
   ニングプロファイルに含まれている必要がありますが、ブリッジが繋がっていれば Xcode が
   ローカル端末として登録してくれるので、自宅で一度やれば済みます
@@ -266,6 +269,9 @@ iPhone から Mac を操作する方法は 3 つあります。どの方法で�
 | `InterfaceMonitor.swift` | LAN インターフェースの選択（設定がなければ en0）と IP 変化の検知（getifaddrs + NWPathMonitor） |
 | `ReachabilityProbe.swift` | TCP の到達確認と RemotePairing のハンドシェイク確認 |
 | `ProxyBridge.swift` | 上記のオーケストレーション（1デバイス=1インスタンス） |
+| `OTA.swift` | OTA 用に保管するビルド: 保管・署名の検証・アイコン |
+| `OTAPage.swift` | インストールページと `itms-services` マニフェスト（リクエストごとに生成） |
+| `OTAServer.swift` | `tailscale serve` が HTTPS を被せるローカルの HTTP サーバ |
 | `TailscaleClient.swift` | `tailscale status --json` と `tailscale ping` の解析 |
 | `AppCoordinator.swift` | プロファイル管理・ブリッジ制御・プレゼンスチェック |
 | `StatusFile.swift` | アプリと CLI で共有するブリッジの状態（どの端末をどちらが動かしているか） |
@@ -293,8 +299,14 @@ rm /usr/local/bin/roamrun                 # CLI を入れた場合
 rm -rf ~/Library/Application\ Support/RoamRun ~/Library/Logs/RoamRun
 defaults delete io.github.mh-mobile.roamrun
 defaults delete com.roamrun.app 2>/dev/null   # 0.1.12 より前の版が残したもの
+tailscale serve --set-path /roamrun off       # roamrun ota を使った場合
 # 最後に /Applications/RoamRun.app を削除（「ログイン時に開く」を有効にしていた場合は先に無効化）
 ```
+
+`roamrun ota` を使った場合、上の表の外にもう 1 つ残るものがあります。RoamRun は
+`tailscale serve` にパス（既定 `/roamrun`）を持たせ、正常終了時には返しますが、
+強制終了やクラッシュでは返りません。上の `tailscale serve --set-path /roamrun off`
+で消せます。
 
 ## 制限・既知の課題
 

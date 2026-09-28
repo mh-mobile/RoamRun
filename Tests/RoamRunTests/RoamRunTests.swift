@@ -1088,14 +1088,17 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
 
 @Test func aSlugSurvivesBeingPutInAURLAndAFileName() {
     let when = Date(timeIntervalSince1970: 1_790_000_000)
-    // A version with a space would come back percent-encoded and match nothing.
-    #expect(OTA.Build.slug(version: "1.0 beta", build: "45", at: when).allSatisfy {
-        $0.isLetter || $0.isNumber || $0 == "." || $0 == "-"
-    })
+    // Whatever a version string contains, the slug has to go into a URL and come
+    // back unchanged. Asserted against ASCII directly, not against the same
+    // predicate the implementation uses.
+    let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-")
+    for version in ["1.0 beta", "1.0-テスト", "١٢", "a/b", "v#1", "100%"] {
+        #expect(OTA.Build.slug(version: version, build: "45", at: when).allSatisfy(allowed.contains))
+    }
     #expect(OTA.Build.slug(version: "1.2.0", build: "45", at: when).hasPrefix("1.2.0-45-"))
     #expect(!OTA.Build.slug(version: "a/b", build: "#", at: when).contains("/"))
     // UTC, so the name doesn't move when the Mac changes time zone.
-    #expect(OTA.Build.slug(version: "1", build: "1", at: when) == "1-1-20260921-1413")
+    #expect(OTA.Build.slug(version: "1", build: "1", at: when) == "1-1-20260921-141320")
 }
 
 @Test func aBundleIdThatCouldNameSomewhereElseIsRefused() {
@@ -1165,6 +1168,28 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     try FileManager.default.createDirectory(at: gone, withIntermediateDirectories: true)
     try Data("ipa".utf8).write(to: gone.appendingPathComponent("app.ipa"))
 
-    #expect(OTA.sweep(app) == [gone.lastPathComponent])
-    #expect(FileManager.default.fileExists(atPath: kept.path))
+    // Through the production path, not a helper written for the test.
+    #expect(OTA.builds(of: "com.example.App", in: dir).isEmpty)   // neither decodes
+    #expect(FileManager.default.fileExists(atPath: kept.path))    // unreadable, kept
+    #expect(!FileManager.default.fileExists(atPath: gone.path))   // no metadata at all
+}
+
+@Test func replaceDropsTheOtherBuildsOfThatVersionAndNothingElse() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-test-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let app = dir.appendingPathComponent("com.example.App")
+    func store(_ version: String, _ number: String, _ slug: String, added: Date) throws {
+        let at = app.appendingPathComponent(slug)
+        try FileManager.default.createDirectory(at: at, withIntermediateDirectories: true)
+        let build = OTA.Build(bundleID: "com.example.App", title: "App", version: version, build: number,
+                              added: added, size: 1, devices: nil, slug: slug)
+        try JSONEncoder().encode(build).write(to: at.appendingPathComponent("meta.json"))
+    }
+    try store("1.0", "1", "1.0-1-a", added: .now.addingTimeInterval(-60))
+    try store("1.0", "1", "1.0-1-b", added: .now.addingTimeInterval(-30))
+    try store("1.1", "1", "1.1-1-a", added: .now)
+    #expect(OTA.builds(of: "com.example.App", in: dir).count == 3)
+    // What --replace does: everything under that one label except the new build.
+    OTA.drop("com.example.App", labelled: "1.0 (1)", keeping: "1.0-1-b", in: dir)
+    #expect(OTA.builds(of: "com.example.App", in: dir).map(\.slug).sorted() == ["1.0-1-b", "1.1-1-a"])
 }

@@ -1,6 +1,6 @@
 ---
 name: roamrun
-description: Reach a physical iPhone, iPad or Apple Vision Pro that is on another network than this Mac (the user is away, the Mac is at home) over Tailscale with RoamRun, so Xcode, xcodebuild, devicectl and lldb can use it as if it were local. Use when the device isn't visible to Xcode/devicectl because it's elsewhere, when the user mentions RoamRun, or to take a screenshot of such a device's screen.
+description: Reach a physical iPhone, iPad or Apple Vision Pro that is on another network than this Mac (the user is away, the Mac is at home) over Tailscale with RoamRun, so Xcode, xcodebuild, devicectl and lldb can use it as if it were local. Use when the device isn't visible to Xcode/devicectl because it's elsewhere, when the user mentions RoamRun, or to take a screenshot of such a device's screen. Also when the device has no Wi-Fi at all (cellular only) and the user wants to install a build on it anyway.
 ---
 
 # RoamRun
@@ -43,8 +43,12 @@ not match the installed CLI until then (`roamrun --help` is authoritative).
   still does: it publishes the build so the user can install it from the device
   over cellular. It installs only — no debugging, no logs, no screenshots — and
   it needs an .ipa signed for Release Testing (Ad Hoc) or Enterprise, which
-  needs a paid Apple Developer account. Tell the user what they'll get and let
-  them decide; don't offer it as a substitute for the bridge.
+  needs a paid Apple Developer account. You can't produce that .ipa from a
+  Development signing setup: ask the user to export one (Xcode › Product ›
+  Archive › Distribute App › Release Testing). RoamRun.app also has to be
+  running on the Mac — it serves the page, the CLI only stores the build.
+  Tell the user what they'll get and let them decide; don't offer it as a
+  substitute for the bridge.
 
 ## 3. Get the device ready
 

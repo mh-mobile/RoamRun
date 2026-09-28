@@ -220,7 +220,11 @@ What it needs:
 - A **paid Apple Developer account**. Neither Ad Hoc nor Enterprise signing
   exists on a free one, and iOS installs neither a Development build nor an
   unsigned one this way.
-- An **.ipa signed for Release Testing (Ad Hoc) or Enterprise**. A Development
+- An **.ipa signed for Release Testing (Ad Hoc) or Enterprise**. Xcode makes one
+  with Product › Archive › Distribute App › Release Testing (`xcodebuild
+  -exportArchive` with `"method": "release-testing"` does the same from a script).
+  `roamrun run` won't: it builds for Development, which only installs through the
+  bridge. A Development
   build can only be installed through the bridge, and `roamrun ota` says so
   rather than letting iOS fail cryptically. Ad Hoc means the device has to be in
   the provisioning profile; add it once while the device is bridged and Xcode

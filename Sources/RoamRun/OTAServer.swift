@@ -180,7 +180,10 @@ final class OTAServer: @unchecked Sendable {
     /// the menu bar app.
     private func sendIPA(_ conn: NWConnection, at url: URL, bodyWanted: Bool, idle: IdleTimer) {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return send(conn, status: "404 Not Found") }
-        let size = ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int64) ?? 0
+        // From the handle, so it describes the bytes this connection will send
+        // even if the file is replaced a moment later.
+        let size = Int64((try? handle.seekToEnd()) ?? 0)
+        try? handle.seek(toOffset: 0)
         guard bodyWanted else {
             try? handle.close()
             return send(conn, status: "200 OK", type: "application/octet-stream", length: size)
@@ -195,7 +198,17 @@ final class OTAServer: @unchecked Sendable {
 
     private func pump(_ conn: NWConnection, _ handle: FileHandle, _ idle: IdleTimer) {
         idle.arm(Self.idleLimit)   // it is moving, so it isn't idle
-        let chunk = (try? handle.read(upToCount: 256 * 1024)) ?? Data()
+        let chunk: Data
+        do {
+            chunk = try handle.read(upToCount: 256 * 1024) ?? Data()
+        } catch {
+            // Not the end of the file: finishing cleanly here would hand iOS a
+            // body shorter than the length we promised, and it would fail with
+            // nothing to go on. Drop the connection instead.
+            try? handle.close()
+            conn.cancel()
+            return
+        }
         guard !chunk.isEmpty else {
             try? handle.close()
             conn.send(content: nil, isComplete: true, completion: .contentProcessed { _ in conn.cancel() })
