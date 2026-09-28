@@ -1369,20 +1369,120 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(!TailscaleClient.Serving.nothing.isRegistered("http://127.0.0.1:61816"))
 }
 
-@Test func lookingForLeftoversNeverStandsInFrontOfThePage() {
-    // Both share one flag, so whichever asks first wins the tick. Asking
-    // `otaServer == nil` had it backwards: at launch that is exactly the state
-    // before publishing, so a leftover whose release kept failing kept the page
-    // from ever going up.
-    #expect(!AppCoordinator.shouldSweep(straysLeft: true, published: false, hasBuilds: true))
-    // Published already: publishing won't run this tick, so looking is free.
-    #expect(AppCoordinator.shouldSweep(straysLeft: true, published: true, hasBuilds: true))
-    // Nothing to publish: same.
-    #expect(AppCoordinator.shouldSweep(straysLeft: true, published: false, hasBuilds: false))
-    #expect(AppCoordinator.shouldSweep(straysLeft: true, published: true, hasBuilds: false))
-    // Nothing left to find.
-    #expect(!AppCoordinator.shouldSweep(straysLeft: false, published: true, hasBuilds: false))
-    #expect(!AppCoordinator.shouldSweep(straysLeft: false, published: false, hasBuilds: false))
+@Test func everyServeChangeThisTickOwesComesBeforeLookingForLeftovers() {
+    typealias D = AppCoordinator.Due
+    func due(port: Bool = false, published: Bool, listening: Bool = true,
+             builds: Bool, failed: Bool = false) -> D {
+        AppCoordinator.due(portChanged: port, published: published, listening: listening,
+                           hasBuilds: builds, publishJustFailed: failed)
+    }
+    // The sweep shares one lock with all of these, so each has to come first.
+    #expect(due(port: true, published: true, builds: true) == .releaseOldPort)
+    #expect(due(published: true, builds: false) == .stopServing)            // `ota/` deleted
+    #expect(due(published: true, listening: false, builds: true) == .restartListener)
+    #expect(due(published: false, builds: true) == .publish)
+    // Both settled states, where nothing else wants it.
+    #expect(due(published: true, builds: true) == .nothing)
+    #expect(due(published: false, builds: false) == .nothing)
+    // `published == hasBuilds` was not this question: a registration with a dead
+    // listener behind it satisfies it and still needs work.
+    #expect(due(published: true, listening: false, builds: true) != .nothing)
+    // A publish that just failed yields the next turn, so a release it may be
+    // waiting on — the port taken by our own leftover, say — can happen.
+    #expect(due(published: false, builds: true, failed: true) == .nothing)
+    // Order: a port change outranks everything, a deletion outranks recovery.
+    #expect(due(port: true, published: true, listening: false, builds: false) == .releaseOldPort)
+    #expect(due(published: true, listening: false, builds: false) == .stopServing)
+}
+
+@Test func anAttemptThatReturnsEarlyStillGivesTheSweepATurn() {
+    var work = AppCoordinator.PublishWork()
+    func next(_ work: AppCoordinator.PublishWork) -> AppCoordinator.Due {
+        AppCoordinator.due(portChanged: false, published: false, listening: true,
+                           hasBuilds: true, publishJustFailed: work.yieldToSweep)
+    }
+    #expect(next(work) == .publish)
+
+    // Begun before opening the listener: any early return needs no extra failure callback.
+    work.began()
+    #expect(next(work) == .nothing)
+    // A tick while the attempt holds the lock must not consume the sweep's turn.
+    let whileRunning = work.offerSweep(due: next(work), changeInProgress: true,
+                                      wanted: true, hasRemembered: true)
+    #expect(!whileRunning)
+    #expect(work.yieldToSweep)
+
+    // The completed attempt yields once; even a failed sweep lets publishing retry.
+    let afterFinishing = work.offerSweep(due: next(work), changeInProgress: false,
+                                        wanted: true, hasRemembered: true)
+    #expect(afterFinishing)
+    #expect(next(work) == .publish)
+    work.began()
+    #expect(next(work) == .nothing)
+
+    // Both confirmed and unconfirmed registrations are tracked instead of retried.
+    work.registered()
+    #expect(!work.yieldToSweep)
+    #expect(AppCoordinator.due(portChanged: false, published: true, listening: true,
+                              hasBuilds: true, publishJustFailed: work.yieldToSweep) == .nothing)
+}
+
+@Test func offeringCleanupConsumesTheTurnEvenWhenNoSweepIsNeeded() {
+    for wanted in [false, true] {
+        for remembered in [false, true] {
+            var work = AppCoordinator.PublishWork()
+            work.began()
+            let due = AppCoordinator.due(portChanged: false, published: false, listening: true,
+                                         hasBuilds: true, publishJustFailed: work.yieldToSweep)
+            #expect(due == .nothing)
+            // The production decision consumes before checking these prerequisites.
+            let sweep = work.offerSweep(due: due, changeInProgress: false,
+                                        wanted: wanted, hasRemembered: remembered)
+            #expect(sweep == (wanted && remembered))
+            #expect(!work.yieldToSweep)
+            #expect(AppCoordinator.due(portChanged: false, published: false, listening: true,
+                                       hasBuilds: true, publishJustFailed: work.yieldToSweep) == .publish)
+        }
+    }
+}
+
+@Test func offeringCleanupDoesNotTakeTheTurnOfAnUrgentServeChange() {
+    for due: AppCoordinator.Due in [.releaseOldPort, .stopServing, .restartListener, .publish] {
+        var work = AppCoordinator.PublishWork()
+        work.began()
+        let sweep = work.offerSweep(due: due, changeInProgress: false,
+                                    wanted: true, hasRemembered: true)
+        #expect(!sweep)
+        #expect(work.yieldToSweep)
+    }
+}
+
+@Test func aSweepThatStartedEarlierCantCancelARequestMadeWhileItRan() {
+    var work = AppCoordinator.StrayWork()
+    #expect(work.wanted)                       // something may always be left from a previous run
+
+    // The ordinary case: it starts, finds nothing of ours, and stops asking.
+    let first = work.generation
+    work.finished(true, startedAt: first)
+    #expect(!work.wanted)
+
+    // A listener dying mid-sweep is the case this exists for: the request made
+    // while it ran points at the registration that sweep never saw.
+    work.askAgain()
+    let second = work.generation
+    work.askAgain()                            // e.g. recovery, after the sweep began
+    work.finished(true, startedAt: second)
+    #expect(work.wanted)
+
+    // The next sweep, started after it, may clear it.
+    let third = work.generation
+    work.finished(true, startedAt: third)
+    #expect(!work.wanted)
+
+    // A sweep that failed or couldn't ask leaves the request standing.
+    work.askAgain()
+    work.finished(false, startedAt: work.generation)
+    #expect(work.wanted)
 }
 
 @Test func anOwnershipTokenNamesThePortAsWellAsTheTarget() {

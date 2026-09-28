@@ -234,13 +234,28 @@ final class AppCoordinator: ObservableObject {
     ///
     /// nil when Tailscale couldn't be asked, which at launch is ordinary;
     /// false when it was asked and a release didn't take.
-    /// Whether to look for leftovers this tick. Publishing wants the same flag
-    /// and the page matters more, so not while one is about to happen — asking
-    /// `otaServer == nil` instead had it exactly backwards, because at launch
-    /// that *is* the state before publishing, and a release that kept failing
-    /// then kept the page from ever going up.
-    nonisolated static func shouldSweep(straysLeft: Bool, published: Bool, hasBuilds: Bool) -> Bool {
-        straysLeft && !(!published && hasBuilds)
+    /// What this tick owes `tailscale serve`, in the order the page depends on
+    /// it. Looking for leftovers wants the same lock as any of these and comes
+    /// last. `published == hasBuilds` was not the same question: a registration
+    /// with a dead listener behind it is both of those and still needs work.
+    enum Due: Equatable {
+        case releaseOldPort     // `otaPort` changed under a live registration
+        case stopServing        // `ota/` deleted while one stands
+        case restartListener    // registered, but nothing is listening
+        case publish            // builds, and nothing registered
+        case nothing
+    }
+
+    /// `publishJustFailed` gives the sweep a turn between retries: a publish that
+    /// can't succeed — the port taken, say — must not defer the release of an old
+    /// one for ever, and that release may well be what frees the port.
+    nonisolated static func due(portChanged: Bool, published: Bool, listening: Bool,
+                                hasBuilds: Bool, publishJustFailed: Bool) -> Due {
+        if published && portChanged { return .releaseOldPort }
+        if published && !hasBuilds { return .stopServing }
+        if published && !listening { return .restartListener }
+        if !published && hasBuilds { return publishJustFailed ? .nothing : .publish }
+        return .nothing
     }
 
     nonisolated static func reclaimStrays(keeping live: (port: Int, target: String)?) -> Bool? {
@@ -259,10 +274,45 @@ final class AppCoordinator: ObservableObject {
     /// Said once per reason: the retry runs every 30s and the log is a person's.
     private var otaComplaint = ""
     private var verifyingOTA = false
+    /// Whether to look for registrations a run left behind, and a generation so
+    /// a sweep that started earlier can't clear a request made while it ran.
     /// An entry left by a run that didn't give it back is invisible to
-    /// `otaPublished`, which only ever exists in memory. Cleared once nothing of
-    /// ours is left on any port the record names.
-    private var straysLeft = true
+    /// `otaPublished`, which only ever exists in memory.
+    struct StrayWork: Equatable {
+        private(set) var wanted = true
+        private(set) var generation = 0
+
+        mutating func askAgain() {
+            wanted = true
+            generation += 1
+        }
+
+        /// A sweep's result, applied only if nothing asked again while it ran.
+        mutating func finished(_ done: Bool, startedAt: Int) {
+            guard done, startedAt == generation else { return }
+            wanted = false
+        }
+    }
+
+    private var strays = StrayWork()
+    /// Every attempt owes the sweep a turn unless its registration is tracked.
+    struct PublishWork: Equatable {
+        private(set) var yieldToSweep = false
+
+        mutating func began() { yieldToSweep = true }
+        mutating func registered() { yieldToSweep = false }
+
+        mutating func offerSweep(due: Due, changeInProgress: Bool, wanted: Bool,
+                                 hasRemembered: @autoclosure () -> Bool) -> Bool {
+            guard due == .nothing, !changeInProgress else { return false }
+            // A running attempt still owes its turn when it finishes.
+            // Otherwise offering consumes it, even with nothing to sweep.
+            yieldToSweep = false
+            return wanted && hasRemembered()
+        }
+    }
+
+    private var publishWork = PublishWork()
     /// One change to `tailscale serve` at a time, publish or release. Each takes
     /// up to 35 s of shelling out and the timer comes round every 30, so without
     /// this they overlap — and two overlapping releases can each read "the entry
@@ -320,13 +370,20 @@ final class AppCoordinator: ObservableObject {
             // the address dead until the next tick; leaving it up costs nothing.
             return
         }
-        if Self.shouldSweep(straysLeft: straysLeft, published: otaPublished != nil, hasBuilds: !apps.isEmpty),
-           !Self.remembered().isEmpty, Self.beginServeChange() {
+        // Offer cleanup a turn before retrying a failed publish.
+        let due = Self.due(portChanged: otaPublished.map { $0.port != Self.otaPort } ?? false,
+                           published: otaPublished != nil, listening: otaServer?.listening == true,
+                           hasBuilds: !apps.isEmpty, publishJustFailed: publishWork.yieldToSweep)
+        let sweep = publishWork.offerSweep(due: due,
+                                          changeInProgress: Self.publishLock.withLock { Self.changingServe },
+                                          wanted: strays.wanted, hasRemembered: !Self.remembered().isEmpty)
+        if sweep, Self.beginServeChange() {
             let live = otaPublished
+            let startedAt = strays.generation
             Task.detached { [weak self] in
                 defer { Self.endServeChange() }
                 let done = Self.reclaimStrays(keeping: live) == true
-                await MainActor.run { if done { self?.straysLeft = false } }
+                await MainActor.run { self?.strays.finished(done, startedAt: startedAt) }
             }
         }
         guard !apps.isEmpty else {
@@ -362,7 +419,7 @@ final class AppCoordinator: ObservableObject {
             // The registration outlives the state we just cleared. If the publish
             // that follows doesn't land, nothing else would look for it again —
             // and a port change in between would walk past it entirely.
-            straysLeft = true
+            strays.askAgain()
             otaServer?.stop()
             otaServer = nil
         }
@@ -370,6 +427,7 @@ final class AppCoordinator: ObservableObject {
         // without the guard the same address is registered twice and the later
         // failure overwrites the earlier success in the log.
         guard Self.beginServeChange() else { return }
+        publishWork.began()   // before the listener and every preflight that can return early
         let tailnetPort = Self.otaPort
         // Said out loud rather than just ignored: otherwise `defaults write` looks
         // as if it did nothing.
@@ -475,6 +533,7 @@ final class AppCoordinator: ObservableObject {
             await MainActor.run {
                 guard let self else { return }
                 if landed {
+                    self.publishWork.registered()
                     self.otaPublished = (tailnetPort, mine)
                     self.otaComplaint = ""
                     self.logStore.log("serving builds over the air on port \(tailnetPort)")
@@ -482,6 +541,7 @@ final class AppCoordinator: ObservableObject {
                     // Tracked all the same: it may well be there, and an untracked
                     // registration is one the port-change branch walks past. The
                     // 30 s check either confirms it or clears it.
+                    self.publishWork.registered()
                     self.otaPublished = (tailnetPort, mine)
                     self.complainOnce("published port \(tailnetPort), but `tailscale serve status` didn't " +
                                       "answer, so RoamRun can't confirm it. Checking again shortly.")
