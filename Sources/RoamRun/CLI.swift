@@ -426,7 +426,7 @@ enum CLI {
             }
             let url = "https://\(host)\(prefix)/"
             let mounted = TailscaleClient.servedPaths()[prefix]
-            if let mounted, mounted != AppID.settings?.string(forKey: AppCoordinator.otaServingKey) {
+            if let mounted, !AppCoordinator.isOurs(mounted) {
                 print("  \(prefix) is serving \(mounted), which isn't RoamRun's, so that address won't")
                 print("  reach this build. Give RoamRun another path and restart it:")
                 print("    defaults write \(AppID.bundle) otaPath -string /some/path")
@@ -1074,7 +1074,7 @@ enum CLI {
         let served = TailscaleClient.servedPaths()[prefix]
         let live = TailscaleClient.servingLive(prefix)
         check(live, live ? "The install page is published at \(prefix)" : "The install page isn't published at \(prefix)",
-              served == nil || served == AppID.settings?.string(forKey: AppCoordinator.otaServingKey)
+              served == nil || AppCoordinator.isOurs(served ?? "")
                   ? "RoamRun publishes it while it runs — open RoamRun, then look in ⚙ Settings › Troubleshooting › Recent messages if it doesn't appear."
                   : "\(prefix) is serving \(served ?? "something else") instead. Give RoamRun another path: defaults write \(AppID.bundle) otaPath -string /some/path",
               true)

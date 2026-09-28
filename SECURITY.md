@@ -56,7 +56,9 @@ bounded.
   one path (`/roamrun` by default). Serve is tailnet-only — it is not on the
   internet — but every member of the tailnet can open that page and install those
   builds. On a shared tailnet, restrict it with Tailscale Grants / ACLs, or don't
-  use the feature. The path is registered when there is something to serve and
+  use the feature. RoamRun won't publish at all while Tailscale Funnel is on for
+  that port, and takes the page down if Funnel is turned on afterwards: Funnel
+  would put those builds on the open internet. The path is registered when there is something to serve and
   given back when RoamRun quits — but not if it is force-quit or crashes, so
   `tailscale serve --set-path /roamrun off` is how you make sure it's gone.
   RoamRun records the exact address it registered and only ever replaces an entry

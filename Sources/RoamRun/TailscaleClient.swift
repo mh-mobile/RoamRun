@@ -141,7 +141,7 @@ struct TailscaleClient {
     /// then `serve status` alone says the page works when it 502s.
     static func servingLive(_ path: String) -> Bool {
         guard let target = servedPaths()[path],
-              target == AppID.settings?.string(forKey: AppCoordinator.otaServingKey),
+              AppCoordinator.isOurs(target),
               let port = UInt16(target.split(separator: ":").last ?? "") else { return false }
         return listening(on: port)
     }

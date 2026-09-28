@@ -145,10 +145,10 @@ final class AppCoordinator: ObservableObject {
             MainActor.assumeIsolated { self?.refreshExternalBridges() }
         }
         refreshExternalBridges()
-        if Snapshot.fakeProfiles == nil { startOTAIfNeeded() }
+        if Snapshot.path == nil { startOTAIfNeeded() }
         Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             // The CLI may have added the first build.
-            MainActor.assumeIsolated { if Snapshot.fakeProfiles == nil { self?.startOTAIfNeeded() } }
+            MainActor.assumeIsolated { if Snapshot.path == nil { self?.startOTAIfNeeded() } }
         }
     }
 
@@ -175,7 +175,21 @@ final class AppCoordinator: ObservableObject {
     /// people serve points at a loopback port, so "loopback" proves nothing. Only
     /// an entry matching this exactly is replaced, re-registered or given back.
     private var otaPublished: (path: String, target: String)?
+    /// Every address RoamRun has registered for the path lately, not just the
+    /// last one. A run that crashed, and an attempt that failed, both leave one
+    /// behind; recognising any of them is what lets the next run take its own
+    /// registration back instead of calling it someone else's.
     nonisolated static let otaServingKey = "otaServing"
+
+    nonisolated static func rememberServing(_ target: String) {
+        var seen = (AppID.settings?.stringArray(forKey: otaServingKey) ?? []).filter { $0 != target }
+        seen.append(target)
+        AppID.settings?.set(seen.suffix(5).map { $0 }, forKey: otaServingKey)
+    }
+
+    nonisolated static func isOurs(_ target: String) -> Bool {
+        (AppID.settings?.stringArray(forKey: otaServingKey) ?? []).contains(target)
+    }
     /// Said once per reason: the retry runs every 30s and the log is a person's.
     private var otaComplaint = ""
     private var verifyingOTA = false
@@ -186,19 +200,17 @@ final class AppCoordinator: ObservableObject {
         // The path can be changed while we run; the advice for a clash says to do
         // exactly that, so it has to take effect without a restart.
         if let published = otaPublished, published.path != otaPath {
-            release(published)   // or the old path 502s for ever, with nothing left to claim it
             otaPublished = nil
+            Task.detached { Self.releaseServe(published) }   // or the old path 502s for ever
         }
         guard !OTA.builds().isEmpty else {
-            // Deleting the folder is the off switch. Off the main actor, unlike
-            // the one at quit: this runs from a timer and shells out twice.
+            // Deleting the folder is the off switch, whether or not the page ever
+            // got published: the listener goes either way.
+            otaServer?.stop()
+            otaServer = nil
             if let published = otaPublished {
                 otaPublished = nil
-                otaServer?.stop()
-                otaServer = nil
-                Task.detached { [weak self] in
-                    await MainActor.run { self?.release(published) }
-                }
+                Task.detached { Self.releaseServe(published) }   // shells out twice; not on the main actor
             }
             return
         }
@@ -222,7 +234,7 @@ final class AppCoordinator: ObservableObject {
         Task.detached { [weak self] in
             let mine = "http://127.0.0.1:\(port)"
             let existing = TailscaleClient.servedPaths()[path]
-            let ours = AppID.settings?.string(forKey: Self.otaServingKey)
+
             // A serve call on a port that carries a funnel can switch the funnel
             // off, taking a public service private. Not worth any feature.
             if TailscaleClient.funnelPorts().contains("443") {
@@ -235,7 +247,7 @@ final class AppCoordinator: ObservableObject {
             // Only ever replace an entry we can prove we made — ours from a run
             // that ended without releasing it. Anything else there is the user's,
             // and `tailscale serve` has no undo.
-            if let existing, existing != ours, existing != mine {
+            if let existing, existing != mine, !Self.isOurs(existing) {
                 await MainActor.run {
                     self?.complainOnce("\(path) is already serving \(existing), which isn't RoamRun's — not taking it over. " +
                         "Give RoamRun another path: defaults write \(AppID.bundle) otaPath -string /some/path")
@@ -245,7 +257,7 @@ final class AppCoordinator: ObservableObject {
             // Written before the call, not after: quitting while `tailscale` is
             // still working would otherwise leave an entry finished by a child
             // that outlived us, with nothing left to say it was ours.
-            AppID.settings?.set(mine, forKey: Self.otaServingKey)
+            Self.rememberServing(mine)
             let out = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
                                ["serve", "--bg", "--yes", "--set-path", path, mine], timeout: 20)
             await MainActor.run {
@@ -272,27 +284,34 @@ final class AppCoordinator: ObservableObject {
         verifyingOTA = true
         Task.detached { [weak self] in
             let live = TailscaleClient.servedPaths()[published.path] == published.target
+            // Funnel can be turned on after we published, and then these builds
+            // are on the internet rather than the tailnet. Take the page down.
+            let funnelled = TailscaleClient.funnelPorts().contains("443")
+            if live, funnelled { Self.releaseServe(published) }
             await MainActor.run {
                 guard let self else { return }
                 self.verifyingOTA = false
-                if !live, self.otaPublished?.target == published.target { self.otaPublished = nil }
+                if funnelled {
+                    self.complainOnce("took the install page down: 443 is published to the internet with " +
+                        "Tailscale Funnel, and these builds are meant for your tailnet only.")
+                }
+                if !live || funnelled, self.otaPublished?.target == published.target { self.otaPublished = nil }
             }
         }
     }
 
     /// Gives a registration back, but only while it is still exactly ours.
-    /// Synchronous: this also runs from willTerminate, where a detached task
-    /// would not outlive the process.
-    private func release(_ published: (path: String, target: String)) {
+    /// `nonisolated` so it can run off the main actor: it shells out twice, and
+    /// only the call at quit has to be synchronous.
+    nonisolated static func releaseServe(_ published: (path: String, target: String)) {
         guard TailscaleClient.servedPaths()[published.path] == published.target else { return }
         let out = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
                            ["serve", "--set-path", published.path, "off"], timeout: 10)
-        // Only once it's really gone. Forgetting the target while the entry
-        // survives would leave the next run unable to recognise its own
-        // registration, and it would refuse to take it back.
-        if out.status == 0, AppID.settings?.string(forKey: Self.otaServingKey) == published.target {
-            AppID.settings?.removeObject(forKey: Self.otaServingKey)
-        }
+        // Only once it's really gone. Forgetting it while the entry survives
+        // would leave the next run unable to recognise its own registration.
+        guard out.status == 0 else { return }
+        let seen = (AppID.settings?.stringArray(forKey: otaServingKey) ?? []).filter { $0 != published.target }
+        AppID.settings?.set(seen, forKey: otaServingKey)
     }
 
     private func complainOnce(_ line: String) {
@@ -308,7 +327,9 @@ final class AppCoordinator: ObservableObject {
         
         guard let published = otaPublished else { return }
         otaPublished = nil
-        release(published)
+        // Synchronously here: this runs from willTerminate, where a detached task
+        // would not outlive the process.
+        Self.releaseServe(published)
     }
 
     /// The alert is shown once a run; the activity log and `roamrun status` keep saying it.

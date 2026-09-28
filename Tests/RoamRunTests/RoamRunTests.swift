@@ -1249,3 +1249,22 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     }
     #expect(OTA.Build.slug(version: "1.0", build: "1", at: when).hasPrefix("1.0-"))
 }
+
+@Test func everyAddressRoamRunRegisteredStaysRecognisable() {
+    let key = AppCoordinator.otaServingKey
+    let saved = AppID.settings?.stringArray(forKey: key)
+    defer { AppID.settings?.set(saved, forKey: key) }
+    AppID.settings?.removeObject(forKey: key)
+
+    AppCoordinator.rememberServing("http://127.0.0.1:1")
+    // A registration that failed leaves the one before it still ours — otherwise
+    // one bad command turns into a page that never comes back.
+    AppCoordinator.rememberServing("http://127.0.0.1:2")
+    #expect(AppCoordinator.isOurs("http://127.0.0.1:1"))
+    #expect(AppCoordinator.isOurs("http://127.0.0.1:2"))
+    #expect(!AppCoordinator.isOurs("http://127.0.0.1:3"))
+    // Bounded, and the newest survives.
+    for port in 3...9 { AppCoordinator.rememberServing("http://127.0.0.1:\(port)") }
+    #expect(!AppCoordinator.isOurs("http://127.0.0.1:1"))
+    #expect(AppCoordinator.isOurs("http://127.0.0.1:9"))
+}
