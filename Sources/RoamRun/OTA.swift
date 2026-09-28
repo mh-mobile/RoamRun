@@ -414,7 +414,9 @@ enum OTA {
         let incomingURL = URL(fileURLWithPath: path)
         let size = ((try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int64) ?? -1
         let app = root.appendingPathComponent(bundleID, isDirectory: true)
-        let candidates = (builds(of: bundleID, in: root) ?? []).filter { $0.size == size }   // the cheap half first
+        // `?? []` deliberately: not recognising a duplicate stores a second copy,
+        // which is the harmless direction.
+        let candidates = (builds(of: bundleID, in: root) ?? []).filter { $0.size == size }   // size first, it is cheap
         guard !candidates.isEmpty, let incoming = digest(of: incomingURL) else { return nil }
         for build in candidates {
             let dir = app.appendingPathComponent(build.slug)
@@ -437,7 +439,7 @@ enum OTA {
     }
 
     /// The app folders with something in them; nil when something couldn't be
-    /// read, which callers treat as "ask again later" (FINDINGS.md).
+    /// read, which callers treat as "ask again later" rather than as empty.
     static func appDirectories(in root: URL? = nil) -> [String]? {
         let store = root ?? directory
         guard let found = entries(of: store) else { return nil }
@@ -542,6 +544,8 @@ enum OTA {
     /// that waited can sort last, and dropping it from the tail left six.
     static func prune(_ bundleID: String, keeping: String? = nil, in root: URL? = nil) {
         let app = (root ?? directory).appendingPathComponent(bundleID, isDirectory: true)
+        // `?? []` deliberately: a list we couldn't read in full is not one to
+        // delete from, so an unreadable build simply suspends the limit.
         let all = builds(of: bundleID, in: root) ?? []
         let kept = all.filter { $0.slug == keeping } + all.filter { $0.slug != keeping }
         for old in kept.dropFirst(keepPerApp) {

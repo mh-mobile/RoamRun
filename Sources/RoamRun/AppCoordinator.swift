@@ -227,10 +227,6 @@ final class AppCoordinator: ObservableObject {
         servingLock.withLock { AppID.settings?.stringArray(forKey: otaServingKey) ?? [] }
     }
 
-    /// Gives back a registration this Mac made and never released — the last run
-    /// was killed, or quit while `tailscale` was still thinking. Nothing else
-    /// looks: `otaPublished` is this run's, and when `ota/` is empty the rest of
-    /// `startOTAIfNeeded` returns before it would.
     /// Gives back registrations this Mac made and never released. Every port the
     /// record names, not only the one configured now: a run that was killed after
     /// `otaPort` changed — or one whose registration was never confirmed — left

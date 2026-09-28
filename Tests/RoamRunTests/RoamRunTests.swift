@@ -235,7 +235,8 @@ private func timed(_ path: String, _ args: [String]) -> (Proc.Result, TimeInterv
 
     @Test func quickToolReturnsItsOutput() {
         let (r, t) = timed("/bin/echo", ["hello"])
-        #expect(r.status == 0 && r.out == "hello\n" && t < 1)
+        #expect(r.status == 0 && r.out == "hello\n")
+        #expect(t < 2.5, "t=\(t)")   // it returns at once; the bound is for a busy machine
     }
 
     @Test func slowToolIsStoppedAtTheTimeout() {
