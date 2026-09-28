@@ -210,21 +210,25 @@ final class AppCoordinator: ObservableObject {
     /// Said once per reason: the retry runs every 30s and the log is a person's.
     private var otaComplaint = ""
     private var verifyingOTA = false
-    /// A publish can outlast the timer that started it: `serving` waits up to 10 s
-    /// and `serve` up to 20. Off the actor so the detached task can clear it
-    /// without capturing us.
+    /// One change to `tailscale serve` at a time, publish or release. Each takes
+    /// up to 35 s of shelling out and the timer comes round every 30, so without
+    /// this they overlap — and two overlapping releases can each read "the entry
+    /// is ours" before either runs `off`, so the second removes whatever took the
+    /// port in between. That is the deletion this whole path exists to avoid.
+    /// A flag rather than holding a lock: these run in detached tasks that hop
+    /// threads, and NSLock must be unlocked by the thread that took it.
     nonisolated static let publishLock = NSLock()
-    nonisolated(unsafe) private static var publishingOTA = false
+    nonisolated(unsafe) private static var changingServe = false
 
-    nonisolated static func beginPublish() -> Bool {
+    nonisolated static func beginServeChange() -> Bool {
         publishLock.withLock {
-            guard !publishingOTA else { return false }
-            publishingOTA = true
+            guard !changingServe else { return false }
+            changingServe = true
             return true
         }
     }
 
-    nonisolated static func endPublish() { publishLock.withLock { publishingOTA = false } }
+    nonisolated static func endServeChange() { publishLock.withLock { changingServe = false } }
     nonisolated static let otaPortKey = "otaPort"
     /// A port of RoamRun's own, rather than a path on the tailnet's `:443`.
     /// 443 carries whatever else the user serves, so a mistake there is theirs,
@@ -249,7 +253,9 @@ final class AppCoordinator: ObservableObject {
         // The port can be changed while we run, so it has to take effect without
         // a restart — and the old one has to be given back, not forgotten.
         if let published = otaPublished, published.port != Self.otaPort {
+            guard Self.beginServeChange() else { return }            // one of these is already running
             Task.detached { [weak self] in
+                defer { Self.endServeChange() }
                 guard Self.releaseServe(published) else { return }   // else the next tick tries again
                 await MainActor.run { if self?.otaPublished?.port == published.port { self?.otaPublished = nil } }
             }
@@ -266,10 +272,11 @@ final class AppCoordinator: ObservableObject {
             // got published: the listener goes either way.
             otaServer?.stop()
             otaServer = nil
-            if let published = otaPublished {
+            if let published = otaPublished, Self.beginServeChange() {
                 // Not cleared until it is really gone: an entry left pointing at a
                 // port nothing holds any more would otherwise be unfindable.
                 Task.detached { [weak self] in                     // shells out twice; not on the main actor
+                    defer { Self.endServeChange() }
                     guard Self.releaseServe(published) else { return }
                     await MainActor.run { if self?.otaPublished?.port == published.port { self?.otaPublished = nil } }
                 }
@@ -296,7 +303,7 @@ final class AppCoordinator: ObservableObject {
         // One of these can still be running when the 30 s timer comes round:
         // without the guard the same address is registered twice and the later
         // failure overwrites the earlier success in the log.
-        guard Self.beginPublish() else { return }
+        guard Self.beginServeChange() else { return }
         let tailnetPort = Self.otaPort
         // Said out loud rather than just ignored: otherwise `defaults write` looks
         // as if it did nothing.
@@ -314,13 +321,13 @@ final class AppCoordinator: ObservableObject {
         // hold the main actor for up to 5 s if it never comes up. Moving it off
         // needs OTAServer out of this actor's region; do that if it ever shows.
         guard let port = server.start() else {
-            Self.endPublish()
+            Self.endServeChange()
             complainOnce("couldn't start the over-the-air server")
             return
         }
         otaServer = server
         Task.detached { [weak self] in
-            defer { Self.endPublish() }
+            defer { Self.endServeChange() }
             let mine = "http://127.0.0.1:\(port)"
             // Only ever replace an entry we can prove we made — ours from a run
             // that ended without releasing it. Anything else on that port is the
@@ -339,7 +346,7 @@ final class AppCoordinator: ObservableObject {
                 return
             }
             switch state {
-            case .unknown, .nothing:
+            case .nothing, .unknown:   // unknown is ruled out above; the switch has to name it
                 break
             case .mounted:
                 let here = state.root(on: host)
@@ -493,8 +500,17 @@ final class AppCoordinator: ObservableObject {
             // Before the listener, not after: in between, the address answers 502
             // rather than stopping. Synchronously here, because this runs from
             // willTerminate where a detached task would not outlive the process.
-            if !Self.releaseServe(published) {
-                logStore.log("couldn't give port \(published.port) back; `tailscale serve --https=\(published.port) --set-path=/ off` clears it")
+            if !Self.beginServeChange() {
+                // One is already on its way out. Racing it is how the `off` that
+                // arrives second removes whatever took the port; the record stays,
+                // so the next run recognises the entry and gives it back.
+                logStore.log("a release of port \(published.port) was already running; leaving it to that one")
+            } else {
+                let gone = Self.releaseServe(published)
+                Self.endServeChange()   // both callers terminate, but a leak here would wedge every later change
+                if !gone {
+                    logStore.log("couldn't give port \(published.port) back; `tailscale serve --https=\(published.port) --set-path=/ off` clears it")
+                }
             }
         }
         server?.stop()

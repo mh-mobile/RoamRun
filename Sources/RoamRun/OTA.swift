@@ -271,7 +271,13 @@ enum OTA {
     static func add(ipa path: String, _ build: Build, replacing: Bool = false) throws -> URL {
         guard !build.slug.isEmpty else { throw Problem.unreadable(path) }
         let app = directory.appendingPathComponent(build.bundleID, isDirectory: true)
-        try? FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        do {
+            // Not `try?`: when this fails, the `open` below fails too, and
+            // "couldn't lock" is a strange thing to tell someone whose disk is full.
+            try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        } catch {
+            throw Problem.failed("couldn't make \(app.path): \(error.localizedDescription)")
+        }
         excludeFromBackup(directory)   // .ipa files are big and can be rebuilt
         // Signed builds of the user's own apps; no other account here needs them.
         try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
