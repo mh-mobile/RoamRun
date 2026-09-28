@@ -1235,3 +1235,12 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(!page(.now.addingTimeInterval(86_400)).contains("EXPIRED"))
     #expect(!page(nil).contains("EXPIRED"))   // Enterprise profiles carry no date we act on
 }
+
+@Test func aFunnelOnThatPortIsSomethingToLeaveAlone() {
+    // `serve` and `funnel` write the same config, and a serve call can switch a
+    // funnel off — taking someone's public service private.
+    #expect(TailscaleClient.funnelled(inJSON: #"{"AllowFunnel":{"mac.ts.net:443":true}}"#) == ["443"])
+    #expect(TailscaleClient.funnelled(inJSON: #"{"AllowFunnel":{"mac.ts.net:443":false}}"#).isEmpty)
+    #expect(TailscaleClient.funnelled(inJSON: #"{"TCP":{"443":{}}}"#).isEmpty)
+    #expect(TailscaleClient.funnelled(inJSON: "not json").isEmpty)
+}

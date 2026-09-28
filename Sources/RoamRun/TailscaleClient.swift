@@ -99,6 +99,24 @@ struct TailscaleClient {
         served(in: Proc.run(fromSettings().resolvedPath() ?? "/usr/bin/false", ["serve", "status"], timeout: 10).out)
     }
 
+    /// Ports whose serve config is published to the internet. `tailscale serve`
+    /// and `tailscale funnel` write the same config, and a serve call can turn
+    /// funnel off for the port it touches — which would quietly take someone's
+    /// public service private. RoamRun stays away from such a port entirely.
+    static func funnelPorts() -> Set<String> {
+        funnelled(inJSON: Proc.run(fromSettings().resolvedPath() ?? "/usr/bin/false",
+                                   ["serve", "status", "--json"], timeout: 10).out)
+    }
+
+    static func funnelled(inJSON out: String) -> Set<String> {
+        guard let data = out.data(using: .utf8),
+              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let allow = root["AllowFunnel"] as? [String: Any] else { return [] }
+        // Keys are "host:port"; only the port matters to us.
+        return Set(allow.filter { ($0.value as? Bool) == true }
+            .keys.compactMap { $0.split(separator: ":").last.map(String.init) })
+    }
+
     /// Whether RoamRun's own entry is there *and* something is listening behind
     /// it. A crash leaves the entry pointing at a port nothing holds any more, and
     /// then `serve status` alone says the page works when it 502s.

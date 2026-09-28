@@ -110,9 +110,23 @@ final class OTAServer: @unchecked Sendable {
         let idle = IdleTimer(queue: queue) { conn.cancel() }
         idle.arm(Self.idleLimit)
         conn.start(queue: queue)
-        conn.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, _, _ in
-            guard let self, let data, let head = String(data: data, encoding: .utf8) else { conn.cancel(); return }
-            let (method, path, host) = Self.request(head)
+        readHead(conn, soFar: Data(), idle: idle)
+    }
+
+    /// Until the blank line that ends the head. One `receive` can stop in the
+    /// middle of it, and a request line without its `Host` would make every link
+    /// in the manifest point the device at itself.
+    private func readHead(_ conn: NWConnection, soFar: Data, idle: IdleTimer) {
+        conn.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, done, _ in
+            guard let self, let data, !data.isEmpty else { conn.cancel(); return }
+            let head = soFar + data
+            guard head.count <= 32 * 1024 else { return self.send(conn, status: "431 Request Header Fields Too Large") }
+            guard let text = String(data: head, encoding: .utf8), text.contains("\r\n\r\n") else {
+                guard !done else { conn.cancel(); return }
+                idle.arm(Self.idleLimit)
+                return self.readHead(conn, soFar: head, idle: idle)
+            }
+            let (method, path, host) = Self.request(text)
             guard method == "GET" || method == "HEAD" else { return self.send(conn, status: "405 Method Not Allowed") }
             let base = "https://\(host)\(self.prefix)"
             self.route(conn, path: path, base: base, bodyWanted: method == "GET", idle: idle)

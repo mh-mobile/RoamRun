@@ -184,7 +184,10 @@ final class AppCoordinator: ObservableObject {
     func startOTAIfNeeded() {
         // The path can be changed while we run; the advice for a clash says to do
         // exactly that, so it has to take effect without a restart.
-        if let published = otaPublished, published.path != otaPath { otaPublished = nil }
+        if let published = otaPublished, published.path != otaPath {
+            release(published)   // or the old path 502s for ever, with nothing left to claim it
+            otaPublished = nil
+        }
         guard !OTA.builds().isEmpty else {
             stopOTA()   // nothing left to serve; deleting the folder is the off switch
             return
@@ -210,6 +213,15 @@ final class AppCoordinator: ObservableObject {
             let mine = "http://127.0.0.1:\(port)"
             let existing = TailscaleClient.servedPaths()[path]
             let ours = AppID.settings?.string(forKey: Self.otaServingKey)
+            // A serve call on a port that carries a funnel can switch the funnel
+            // off, taking a public service private. Not worth any feature.
+            if TailscaleClient.funnelPorts().contains("443") {
+                await MainActor.run {
+                    self?.complainOnce("not publishing the install page: this Mac serves something on 443 " +
+                        "through Tailscale Funnel, and registering a path there could turn that off.")
+                }
+                return
+            }
             // Only ever replace an entry we can prove we made — ours from a run
             // that ended without releasing it. Anything else there is the user's,
             // and `tailscale serve` has no undo.
@@ -255,6 +267,21 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
+    /// Gives a registration back, but only while it is still exactly ours.
+    /// Synchronous: this also runs from willTerminate, where a detached task
+    /// would not outlive the process.
+    private func release(_ published: (path: String, target: String)) {
+        guard TailscaleClient.servedPaths()[published.path] == published.target else { return }
+        let out = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
+                           ["serve", "--set-path", published.path, "off"], timeout: 10)
+        // Only once it's really gone. Forgetting the target while the entry
+        // survives would leave the next run unable to recognise its own
+        // registration, and it would refuse to take it back.
+        if out.status == 0, AppID.settings?.string(forKey: Self.otaServingKey) == published.target {
+            AppID.settings?.removeObject(forKey: Self.otaServingKey)
+        }
+    }
+
     private func complainOnce(_ line: String) {
         guard line != otaComplaint else { return }
         otaComplaint = line
@@ -266,18 +293,9 @@ final class AppCoordinator: ObservableObject {
         otaServer = nil
         server.stop()
         
-        // Only the entry we made, and only while it is still exactly ours.
         guard let published = otaPublished else { return }
         otaPublished = nil
-        guard TailscaleClient.servedPaths()[published.path] == published.target else { return }
-        // Synchronously: this runs from willTerminate, and a detached task would
-        // not outlive the process.
-        let out = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
-                           ["serve", "--set-path", published.path, "off"], timeout: 10)
-        // Only once it's really gone. Forgetting the target while the entry
-        // survives would leave the next run unable to recognise its own
-        // registration, and it would refuse to take it back.
-        if out.status == 0 { AppID.settings?.removeObject(forKey: Self.otaServingKey) }
+        release(published)
     }
 
     /// The alert is shown once a run; the activity log and `roamrun status` keep saying it.

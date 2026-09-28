@@ -236,6 +236,17 @@ enum OTA {
 
     @discardableResult
     static func add(ipa path: String, _ build: Build, replacing: Bool = false) throws -> URL {
+        guard !build.slug.isEmpty else { throw Problem.unreadable(path) }
+        let app = directory.appendingPathComponent(build.bundleID, isDirectory: true)
+        try? FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        // One writer per app, taken before anything is looked at: two of these at
+        // once could each delete what the other had just put in place, and both
+        // report success. That includes the same-archive path below, which also
+        // writes and deletes.
+        let lock = open(app.appendingPathComponent(".lock").path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
+        defer { if lock >= 0 { flock(lock, LOCK_UN); close(lock) } }
+        if lock >= 0 { flock(lock, LOCK_EX) }
+
         // The same archive handed over twice: two rows the eye can't tell apart,
         // and one fewer slot for a build that is actually different. A rebuild
         // that kept its version number is not the same archive and still stacks,
@@ -251,14 +262,6 @@ enum OTA {
             if replacing { drop(build.bundleID, labelled: build.label, keeping: again.slug) }
             return same
         }
-        guard !build.slug.isEmpty else { throw Problem.unreadable(path) }
-        let app = directory.appendingPathComponent(build.bundleID, isDirectory: true)
-        try? FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
-        // One writer per app. Two of these at once could each delete what the
-        // other had just put in place and both report success.
-        let lock = open(app.appendingPathComponent(".lock").path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
-        defer { if lock >= 0 { flock(lock, LOCK_UN); close(lock) } }
-        if lock >= 0 { flock(lock, LOCK_EX) }
         let dir = app.appendingPathComponent(build.slug, isDirectory: true)
         sweepStaging(app)   // a previous add that was killed mid-copy
         // Built somewhere else first: a copy that runs out of disk halfway must
