@@ -1173,7 +1173,9 @@ enum CLI {
             check(false, "Tailscale Funnel is on for port \(tailnetPort)",
                   "The install page is on the public internet. tailscale funnel --https=\(tailnetPort) off", false)
         }
-        if live, let host {
+        // Not only while it is live: forgetting the address and asking `doctor`
+        // for it is most likely exactly when RoamRun isn't open.
+        if let host {
             note("Open on the device: https://\(host):\(tailnetPort)/")
         }
     }

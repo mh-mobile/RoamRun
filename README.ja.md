@@ -235,7 +235,7 @@ roamrun ota iPhone build/MyApp.ipa     # 1台だけ確認したいときは名�
 必要なもの:
 
 - **有料の Apple Developer アカウント**。無料アカウントでは Ad Hoc も Enterprise も
-  作れず、Development 署名は OTA では入りません
+  作れず、Development 署名も未署名も OTA では入りません
 - **Release Testing (Ad Hoc) か Enterprise 署名の .ipa**。Xcode なら
   Product › Archive › Distribute App › Release Testing で書き出せます
   （スクリプトからは `xcodebuild -exportArchive` に `"method": "release-testing"`）。
@@ -267,8 +267,7 @@ Enterprise 署名なら不要ですが、代わりに 設定 › 一般 › VPN 
 
 端末側で「原因不明の失敗」になる典型が 2 つあるので、RoamRun が先に弾きます:
 **プロビジョニングプロファイルの失効**（有効期限は 1 年です。`roamrun ota` は失効済みのものを受け付けず、保管後に失効したものはページに EXPIRED と出します）と、
-**Ad Hoc なのにその端末が含まれていない**場合です。Enterprise 署名の場合は、端末側で
-設定 › 一般 › VPN とデバイス管理から開発者を一度信頼する必要があります。
+**Ad Hoc なのにその端末が含まれていない**場合です。
 
 ## 外出先で iPhone だけで使う
 
@@ -341,9 +340,14 @@ defaults delete com.roamrun.app 2>/dev/null      # 0.1.12 より前の版が残�
 
 `roamrun ota` を使った場合、上の表の外にもう 1 つ残るものがあります。RoamRun は
 `tailscale serve` にポート（`otaPort` で指定したもの。既定 41443）を持たせ、正常終了時には
-返しますが、強制終了やクラッシュでは返りません。上の `tailscale serve --https=41443 --set-path=/ off` で消せます。
-RoamRun は自分が残したものを見つけると消し方を案内しますが、アプリを止めている間に
-`otaPort` を変えた場合の「別ポートに残ったもの」は対象外です（見るのは現在の設定ポートだけ）。
+返しますが、強制終了やクラッシュでは返りません。上の `tailscale serve --https=41443 --set-path=/ off` で消せます。RoamRun をもう一度
+開いても消えます（そのポートに残った自分のものを認識して返します）。見つけられないのは、
+アプリを止めている間に `otaPort` を変えた場合の「別ポートに残ったもの」だけです
+（見るのは現在の設定ポートだけ）。
+
+**アンインストールの前に RoamRun を終了してください。** `brew uninstall --zap` は
+「どのエントリが RoamRun のものか」を記録した設定ごと消すため、終了を挟まずに消すと、
+残ったエントリを誰も認識できなくなります。先に終了するか、上の `off` を実行してください。
 
 ## 制限・既知の課題
 

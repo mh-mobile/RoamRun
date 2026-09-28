@@ -280,9 +280,7 @@ Two things that end with iOS refusing the install and no clue why, so RoamRun
 checks them first: a **provisioning profile that has expired** (they last a
 year, `roamrun ota` won't store a build past that date, and one that expires
 after it was stored is marked EXPIRED on the page) and an **Ad Hoc
-build that doesn't name this device**. An Enterprise build also needs the
-developer trusted once on the device, under Settings › General › VPN & Device
-Management.
+build that doesn't name this device**.
 
 ## Working from just your iPhone, away from home
 
@@ -342,10 +340,16 @@ RoamRun writes only to these places (it never touches system settings or other a
 If you used `roamrun ota`, one more thing lives outside that table: RoamRun asks
 `tailscale serve` to carry one port — whichever `otaPort` names, 41443 by
 default — and gives it back when it quits, but not if it is force-quit or
-crashes. `tailscale serve --https=41443 --set-path=/ off` clears it. RoamRun
-notices such a leftover of its own and says which command clears it — except one
-it made on a *different* port, if `otaPort` was changed while the app wasn't
-running: it only ever looks at the port configured now.
+crashes. `tailscale serve --https=41443 --set-path=/ off` clears it, and so does opening
+RoamRun again: it recognises a leftover of its own on that port and gives it
+back. The one it can't find is one it made on a *different* port, if `otaPort`
+was changed while the app wasn't running — it only ever looks at the port
+configured now.
+
+**Quit RoamRun before uninstalling.** `brew uninstall --zap` deletes the settings
+that record which entry was RoamRun's, so an entry left by an app that was never
+asked to quit becomes one nothing can recognise afterwards. Quitting first, or
+running the `off` command above, avoids it.
 
 The helper processes started while bridging (`dns-sd` / `log stream`) typically exit within about a second even if RoamRun is force-quit, and the LAN advertisement goes away with them.
 

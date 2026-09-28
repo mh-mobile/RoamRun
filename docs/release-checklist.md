@@ -53,10 +53,11 @@ screen on.
 
 ## Over the air
 
-If `roamrun ota` changed, on a real device: store a build, open the printed
-address on it and install. Then check `tailscale serve status` shows one entry on
-the OTA port and nothing else moved, that quitting RoamRun gives it back, and
-that force-quitting leaves it behind (that one is documented, not a bug).
+15. On a real device — required whenever `roamrun ota` changed, which includes
+    the release that introduced it. Store a build, open the printed address on it
+    and install. Then check `tailscale serve status` shows one entry on the OTA
+    port and nothing else moved, that quitting RoamRun gives it back, that
+    force-quitting leaves it behind, and that opening RoamRun again reclaims it.
 
 ## Install paths
 

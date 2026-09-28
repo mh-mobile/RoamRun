@@ -1354,7 +1354,6 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
 @Test func aFolderThatCantBeReadIsNotAnEmptyOne() throws {
     // Deleting ota/ is the off switch; failing to read it is not, and treating
     // the two alike takes the page down under a download.
-    #expect(OTA.appDirectories()?.isEmpty != nil || OTA.appDirectories() == nil)
     let gone = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-absent-\(UUID().uuidString)")
     #expect((try? FileManager.default.contentsOfDirectory(atPath: gone.path)) == nil)
     #expect(!FileManager.default.fileExists(atPath: gone.path))   // so appDirectories would say []
