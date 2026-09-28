@@ -15,13 +15,22 @@ extension OTA {
                     // shows the marketing version beside it.
                     "bundle-version": build.build.isEmpty ? build.version : build.build,
                     "kind": "software",
-                    "title": build.title,
+                    "title": printable(build.title),
                 ],
             ]],
         ]
         // nil, not empty: a 200 carrying no manifest is an install that fails
         // with nothing to go on, which is the failure this whole path avoids.
         return try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+    }
+
+    /// XML 1.0 can't carry most control characters, and the title comes out of
+    /// someone else's .ipa. Whether Foundation refuses them or emits them anyway
+    /// turns out to depend on the machine, so they don't get that far.
+    static func printable(_ s: String) -> String {
+        String(String.UnicodeScalarView(s.unicodeScalars.filter {
+            !(($0.value < 0x20 && $0 != "\t" && $0 != "\n" && $0 != "\r") || $0.value == 0xFFFE || $0.value == 0xFFFF)
+        }))
     }
 
     static func installLink(for build: Build, base: String) -> String {
@@ -142,7 +151,7 @@ extension OTA {
 
     /// The title comes from the .ipa, and the bundle id from its Info.plist.
     static func escape(_ s: String) -> String {
-        s.replacingOccurrences(of: "&", with: "&amp;")
+        printable(s).replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")
             .replacingOccurrences(of: "\"", with: "&quot;")

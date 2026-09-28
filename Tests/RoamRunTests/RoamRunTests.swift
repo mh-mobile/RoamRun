@@ -1162,18 +1162,25 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(OTA.installLink(for: build, base: "https://x/p").hasPrefix("itms-services://?action=download-manifest&url=https://x/p/"))
 }
 
-@Test func aTitleXmlCantHoldIsRefusedRatherThanServedEmpty() {
+@Test func aTitleXmlCantHoldNeverReachesTheManifest() throws {
     // `title` is CFBundleDisplayName, straight out of someone's .ipa. XML 1.0
     // has no way to carry most control characters, so this is the one input
     // that can make the manifest unserialisable — and a 200 with an empty body
     // is exactly the silent failure the whole feature exists to avoid.
     let odd = OTA.Build(bundleID: "com.example.App", title: "App\u{0}Name", version: "1.0", build: "1",
                         added: .now, size: 1, slug: "1.0-1-x")
-    // Measured: Foundation refuses it, which is what makes the 500 reachable
-    // rather than theoretical. If this ever starts serialising, check that what
-    // comes out parses back before relaxing it — XML iOS can't read is the same
-    // silent failure by another route.
-    #expect(OTA.manifest(for: odd, base: "https://m.ts.net:41443") == nil)
+    // Whether Foundation refuses such a title or emits it anyway depends on the
+    // machine — this assertion, pinned to one of them, went red on CI. So the
+    // characters don't reach it: the manifest is always produced and always
+    // parses back, everywhere.
+    let made = try #require(OTA.manifest(for: odd, base: "https://m.ts.net:41443"))
+    let back = try PropertyListSerialization.propertyList(from: made, format: nil) as? [String: Any]
+    let title = ((back?["items"] as? [[String: Any]])?.first?["metadata"] as? [String: String])?["title"]
+    #expect(title == "AppName")
+    #expect(OTA.printable("a\u{0}b\u{7}c") == "abc")
+    #expect(OTA.printable("tab\tnewline\nfine") == "tab\tnewline\nfine")
+    // And the page doesn't carry them either.
+    #expect(!OTA.escape("App\u{0}Name").contains("\u{0}"))
     // An ordinary title is unaffected.
     let fine = OTA.Build(bundleID: "com.example.App", title: "App", version: "1.0", build: "1",
                          added: .now, size: 1, slug: "1.0-1-x")
