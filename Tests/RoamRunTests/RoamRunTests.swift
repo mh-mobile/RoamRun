@@ -1394,8 +1394,32 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(OTA.builds(of: "com.example.App", in: root) == nil)
     #expect(OTA.builds(in: root) == nil)
     // Absent is still a build that was never finished, and still skipped.
+    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: meta.path)
     try FileManager.default.removeItem(at: meta)
     #expect(OTA.builds(of: "com.example.App", in: root)?.isEmpty == true)
+}
+
+@Test func aBuildFolderThatCantBeEnteredIsNotABuildThatIsGone() throws {
+    // One level further in, where `fileExists` was being asked to tell absent
+    // from unreadable — and it is false for both, which is why it was taken out
+    // of `appDirectories` in the first place.
+    let root = otaScratch()
+    let dir = root.appendingPathComponent("com.example.App/1.0-1-x")
+    defer {
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
+        try? FileManager.default.removeItem(at: root)
+    }
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    try JSONEncoder().encode(build("1.0", "1", "1.0-1-x"))
+        .write(to: dir.appendingPathComponent("meta.json"))
+    #expect(OTA.builds(of: "com.example.App", in: root)?.count == 1)
+
+    // The app folder still lists; only this one can't be entered.
+    try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: dir.path)
+    try #require(!FileManager.default.isReadableFile(atPath: dir.appendingPathComponent("meta.json").path))
+    #expect(OTA.appDirectories(in: root) == ["com.example.App"])
+    #expect(OTA.builds(of: "com.example.App", in: root) == nil)   // not `[]`, which serves "No builds yet"
+    #expect(OTA.builds(in: root) == nil)
 }
 
 @Test func aPublishIsJudgedByTheConfigNotByTheExitCode() {

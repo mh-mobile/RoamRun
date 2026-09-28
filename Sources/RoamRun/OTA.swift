@@ -489,14 +489,16 @@ enum OTA {
         let found = slugs.compactMap { slug -> Build? in
             guard !slug.hasPrefix(".") else { return nil }
             let dir = app.appendingPathComponent(slug)
-            // Absent is a build that was never finished; unreadable is this
-            // process's problem and belongs to the caller, or one app's permissions
-            // would take every build it holds off the page.
-            let meta = dir.appendingPathComponent("meta.json")
-            guard let data = try? Data(contentsOf: meta) else {
-                if FileManager.default.fileExists(atPath: meta.path) { unreadable = true }
+            // Absent is a build that was never finished; unreadable belongs to the
+            // caller, or one folder's permissions take every build off the page.
+            // From the error, never `fileExists` — that is false for both.
+            let data: Data
+            do { data = try Data(contentsOf: dir.appendingPathComponent("meta.json")) }
+            catch CocoaError.fileReadNoSuchFile { return nil }
+            catch let error as NSError where error.domain == NSPOSIXErrorDomain && error.code == Int(ENOENT) {
                 return nil
             }
+            catch { unreadable = true; return nil }
             // Undecodable may be readable by a later version, so it stays.
             guard var build = try? JSONDecoder().decode(Build.self, from: data) else { return nil }
             build.slug = slug              // where it actually is, whatever the name was built from

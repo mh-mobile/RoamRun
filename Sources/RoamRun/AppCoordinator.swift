@@ -238,13 +238,15 @@ final class AppCoordinator: ObservableObject {
     ///
     /// nil when Tailscale couldn't be asked, which at launch is ordinary;
     /// false when it was asked and a release didn't take.
-    nonisolated static func reclaimStrays() -> Bool? {
+    nonisolated static func reclaimStrays(keeping live: (port: Int, target: String)?) -> Bool? {
         guard let host = currentHost() else { return nil }
         var asked = true, released = true
         for port in Set(remembered().compactMap { pair($0).port } + [otaPort]).sorted() {
             let state = TailscaleClient.serving(port: port)
             guard state != .unknown else { asked = false; continue }
             guard let target = state.root(on: host), isOurs(target, on: port) else { continue }
+            // The one this run is serving from, confirmed or not.
+            if live?.port == port, live?.target == target { continue }
             if !releaseServe((port: port, target: target)) { released = false }
         }
         return asked ? released : nil
@@ -252,9 +254,10 @@ final class AppCoordinator: ObservableObject {
     /// Said once per reason: the retry runs every 30s and the log is a person's.
     private var otaComplaint = ""
     private var verifyingOTA = false
-    /// Once a launch: an entry left by a run that didn't give it back is invisible
-    /// to `otaPublished`, which only ever exists in memory.
-    private var lookedForStrays = false
+    /// An entry left by a run that didn't give it back is invisible to
+    /// `otaPublished`, which only ever exists in memory. Cleared once nothing of
+    /// ours is left on any port the record names.
+    private var straysLeft = true
     /// One change to `tailscale serve` at a time, publish or release. Each takes
     /// up to 35 s of shelling out and the timer comes round every 30, so without
     /// this they overlap — and two overlapping releases can each read "the entry
@@ -312,26 +315,17 @@ final class AppCoordinator: ObservableObject {
             // the address dead until the next tick; leaving it up costs nothing.
             return
         }
-        // Before the off switch below returns, and only while this run has
-        // registered nothing: once we publish, the record holds our own address
-        // and this would give the live one away.
-        if !lookedForStrays, otaPublished == nil, otaServer == nil, !Self.remembered().isEmpty {
-            lookedForStrays = true
-            let nothingToPublish = apps.isEmpty
-            if Self.beginServeChange() {
-                Task.detached { [weak self] in
-                    defer { Self.endServeChange() }
-                    let done = Self.reclaimStrays()
-                    // Couldn't ask: ordinary at launch, so ask again. Asked and a
-                    // release failed: only worth retrying when there is nothing to
-                    // publish, because this block takes the flag before the publish
-                    // below can, and publishing over our own entry recovers anyway.
-                    if done == nil || (done == false && nothingToPublish) {
-                        await MainActor.run { self?.lookedForStrays = false }
-                    }
-                }
-            } else {
-                lookedForStrays = false   // busy; the timer comes round again
+        // Not while this run is still trying to publish: that wants the same flag
+        // and the page matters more. Once it has, or with nothing to publish,
+        // retrying costs nothing — and a release that failed on a port we are not
+        // republishing has nothing else to recover it.
+        if straysLeft, otaPublished != nil || otaServer == nil, !Self.remembered().isEmpty,
+           Self.beginServeChange() {
+            let live = otaPublished
+            Task.detached { [weak self] in
+                defer { Self.endServeChange() }
+                let done = Self.reclaimStrays(keeping: live) == true
+                await MainActor.run { if done { self?.straysLeft = false } }
             }
         }
         guard !apps.isEmpty else {
@@ -480,6 +474,10 @@ final class AppCoordinator: ObservableObject {
                     self.otaComplaint = ""
                     self.logStore.log("serving builds over the air on port \(tailnetPort)")
                 } else if unsure {
+                    // Tracked all the same: it may well be there, and an untracked
+                    // registration is one the port-change branch walks past. The
+                    // 30 s check either confirms it or clears it.
+                    self.otaPublished = (tailnetPort, mine)
                     self.complainOnce("published port \(tailnetPort), but `tailscale serve status` didn't " +
                                       "answer, so RoamRun can't confirm it. Checking again shortly.")
                 } else {
