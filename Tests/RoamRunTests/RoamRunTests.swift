@@ -1369,6 +1369,22 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(!TailscaleClient.Serving.nothing.isRegistered("http://127.0.0.1:61816"))
 }
 
+@Test func lookingForLeftoversNeverStandsInFrontOfThePage() {
+    // Both share one flag, so whichever asks first wins the tick. Asking
+    // `otaServer == nil` had it backwards: at launch that is exactly the state
+    // before publishing, so a leftover whose release kept failing kept the page
+    // from ever going up.
+    #expect(!AppCoordinator.shouldSweep(straysLeft: true, published: false, hasBuilds: true))
+    // Published already: publishing won't run this tick, so looking is free.
+    #expect(AppCoordinator.shouldSweep(straysLeft: true, published: true, hasBuilds: true))
+    // Nothing to publish: same.
+    #expect(AppCoordinator.shouldSweep(straysLeft: true, published: false, hasBuilds: false))
+    #expect(AppCoordinator.shouldSweep(straysLeft: true, published: true, hasBuilds: false))
+    // Nothing left to find.
+    #expect(!AppCoordinator.shouldSweep(straysLeft: false, published: true, hasBuilds: false))
+    #expect(!AppCoordinator.shouldSweep(straysLeft: false, published: false, hasBuilds: false))
+}
+
 @Test func anOwnershipTokenNamesThePortAsWellAsTheTarget() {
     // A loopback address on its own is recycled, and a registration made on a
     // port the app is no longer configured for can't be found to give back.

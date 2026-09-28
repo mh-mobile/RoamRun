@@ -234,6 +234,15 @@ final class AppCoordinator: ObservableObject {
     ///
     /// nil when Tailscale couldn't be asked, which at launch is ordinary;
     /// false when it was asked and a release didn't take.
+    /// Whether to look for leftovers this tick. Publishing wants the same flag
+    /// and the page matters more, so not while one is about to happen — asking
+    /// `otaServer == nil` instead had it exactly backwards, because at launch
+    /// that *is* the state before publishing, and a release that kept failing
+    /// then kept the page from ever going up.
+    nonisolated static func shouldSweep(straysLeft: Bool, published: Bool, hasBuilds: Bool) -> Bool {
+        straysLeft && !(!published && hasBuilds)
+    }
+
     nonisolated static func reclaimStrays(keeping live: (port: Int, target: String)?) -> Bool? {
         guard let host = currentHost() else { return nil }
         var asked = true, released = true
@@ -311,12 +320,8 @@ final class AppCoordinator: ObservableObject {
             // the address dead until the next tick; leaving it up costs nothing.
             return
         }
-        // Not while this run is still trying to publish: that wants the same flag
-        // and the page matters more. Once it has, or with nothing to publish,
-        // retrying costs nothing — and a release that failed on a port we are not
-        // republishing has nothing else to recover it.
-        if straysLeft, otaPublished != nil || otaServer == nil, !Self.remembered().isEmpty,
-           Self.beginServeChange() {
+        if Self.shouldSweep(straysLeft: straysLeft, published: otaPublished != nil, hasBuilds: !apps.isEmpty),
+           !Self.remembered().isEmpty, Self.beginServeChange() {
             let live = otaPublished
             Task.detached { [weak self] in
                 defer { Self.endServeChange() }
@@ -354,6 +359,10 @@ final class AppCoordinator: ObservableObject {
             // Releasing in parallel would race the re-registration for it.
             logStore.log("the over-the-air server stopped; starting it again")
             otaPublished = nil
+            // The registration outlives the state we just cleared. If the publish
+            // that follows doesn't land, nothing else would look for it again —
+            // and a port change in between would walk past it entirely.
+            straysLeft = true
             otaServer?.stop()
             otaServer = nil
         }
