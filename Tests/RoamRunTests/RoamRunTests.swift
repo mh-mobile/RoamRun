@@ -1132,11 +1132,11 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
                                           "/roamrun":{"Proxy":"http://127.0.0.1:1"}}},
             "mac.ts.net:41443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:61816"}}}}}
     """#
-    #expect(TailscaleClient.serving(port: 41443, inJSON: json) == .mounted(root: "http://127.0.0.1:61816", others: []))
+    #expect(TailscaleClient.serving(port: 41443, inJSON: json) == .mounted(roots: ["http://127.0.0.1:61816"], others: []))
     // The user's own port comes back with its other mounts named, so RoamRun can
     // tell "free" from "carrying something I must not remove".
     #expect(TailscaleClient.serving(port: 443, inJSON: json)
-            == .mounted(root: "http://127.0.0.1:8788", others: ["/roamrun"]))
+            == .mounted(roots: ["http://127.0.0.1:8788"], others: ["/roamrun"]))
     #expect(TailscaleClient.serving(port: 9999, inJSON: json) == .nothing)
     // Not "nothing": a status we couldn't read is the moment RoamRun would
     // otherwise decide the port is free and overwrite an entry of the user's.
@@ -1145,17 +1145,24 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(TailscaleClient.serving(port: 41443, inJSON: "null") == .nothing)   // no serve config at all
     // A port with only a sub-path of the user's on it is not an empty port.
     #expect(TailscaleClient.serving(port: 41443, inJSON: #"{"Web":{"m:41443":{"Handlers":{"/mine":{}}}}}"#)
-            == .mounted(root: nil, others: ["/mine"]))
+            == .mounted(roots: [], others: ["/mine"]))
     // Nor is one carrying a TCP forward, which has no Web entry at all: reading a
     // section we don't look at as "nothing here" is the same mistake one layer down.
     #expect(TailscaleClient.serving(port: 41443, inJSON: #"{"TCP":{"41443":{"TCPForward":"localhost:22"}}}"#)
-            == .mounted(root: nil, others: ["TCP forwarding"]))
+            == .mounted(roots: [], others: ["TCP forwarding"]))
     // `{"HTTPS": true}` is what a plain https serve puts beside its Web entry.
     #expect(TailscaleClient.serving(port: 41443, inJSON: #"{"TCP":{"41443":{"HTTPS":true}}}"#) == .nothing)
     // A tailnet rename leaves the old host key behind; both are that port's.
     #expect(TailscaleClient.serving(port: 41443, inJSON:
         #"{"Web":{"old:41443":{"Handlers":{"/a":{}}},"new:41443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:1"}}}}}"#)
-            == .mounted(root: "http://127.0.0.1:1", others: ["/a"]))
+            == .mounted(roots: ["http://127.0.0.1:1"], others: ["/a"]))
+    // Two hosts each with a root: the second used to vanish, and invisible is what
+    // gets overwritten. Two roots is never a port RoamRun will publish onto.
+    let twoRoots = TailscaleClient.serving(port: 41443, inJSON:
+        #"{"Web":{"a-old:41443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:1"}}},"z-new:41443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:2"}}}}}"#)
+    #expect(twoRoots == .mounted(roots: ["http://127.0.0.1:1", "http://127.0.0.1:2"], others: []))
+    #expect(twoRoots.soleRoot == nil)                          // so nothing claims the port
+    #expect(twoRoots.has(root: "http://127.0.0.1:2"))          // but ours is still findable to give back
 }
 
 @Test func aPortThatCantWorkIsIgnoredRatherThanRetriedForEver() {

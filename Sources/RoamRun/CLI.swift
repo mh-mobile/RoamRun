@@ -425,11 +425,12 @@ enum CLI {
                 stop("Tailscale didn't give this Mac a name — turn MagicDNS on for your tailnet. The build is stored.")
             }
             let url = "https://\(host):\(tailnetPort)/"
-            if case .mounted(let root, let others) = TailscaleClient.serving(port: tailnetPort),
-               !(others.isEmpty && AppCoordinator.isOurs(root ?? "")) {
-                let what = TailscaleClient.Serving.mounted(root: root, others: others).described
+            let state = TailscaleClient.serving(port: tailnetPort)
+            if case .mounted(let roots, let others) = state,
+               !AppCoordinator.isOurs(state.soleRoot ?? "") {
+                let what = state.described
                 // Which of the two it is decides what the user should do about it.
-                let advice = AppCoordinator.abandoned(root, others: others)
+                let advice = AppCoordinator.abandoned(roots, others: others)
                     ? "  Nothing is behind it, so a run was killed before it gave the port back:\n" +
                       "    tailscale serve --https=\(tailnetPort) --set-path=/ off"
                     : "  Give RoamRun another port:\n" +
@@ -1089,9 +1090,9 @@ enum CLI {
         switch served {
         case .unknown: mine = true; unreadable = true
         case .nothing: mine = true             // nothing of the user's to get in the way
-        case .mounted(let root, let others):
-            mine = others.isEmpty && AppCoordinator.isOurs(root ?? "")
-            stray = !mine && AppCoordinator.abandoned(root, others: others)
+        case .mounted(let roots, let others):
+            mine = AppCoordinator.isOurs(served.soleRoot ?? "")
+            stray = !mine && AppCoordinator.abandoned(roots, others: others)
         }
         check(live, live ? "The install page is published on port \(tailnetPort)"
                          : "The install page isn't published on port \(tailnetPort)",

@@ -325,7 +325,8 @@ final class AppCoordinator: ObservableObject {
             // Only ever replace an entry we can prove we made — ours from a run
             // that ended without releasing it. Anything else on that port is the
             // user's, and `tailscale serve` has no undo.
-            switch TailscaleClient.serving(port: tailnetPort) {
+            let state = TailscaleClient.serving(port: tailnetPort)
+            switch state {
             case .unknown:
                 // tailscaled didn't answer, or there is no tailscale here at all.
                 // Publishing now would be deciding the port is free without having
@@ -337,18 +338,18 @@ final class AppCoordinator: ObservableObject {
                 return
             case .nothing:
                 break
-            case .mounted(let root, let others):
-                guard others.isEmpty, let root, root == mine || Self.isOurs(root) else {
+            case .mounted(let roots, let others):
+                guard let sole = state.soleRoot, sole == mine || Self.isOurs(sole) else {
                     // Still not taken over — but which of the two it is decides what
                     // the user should do, and the settings that named our own
                     // registrations are the first thing a reinstall deletes.
-                    let advice = Self.abandoned(root, others: others)
+                    let advice = Self.abandoned(roots, others: others)
                         ? "nothing is behind it, so it is left over from a run that was killed: " +
                           "`tailscale serve --https=\(tailnetPort) --set-path=/ off` clears it and " +
                           "RoamRun publishes again within half a minute"
                         : "not taking it over. Give RoamRun another port: " +
                           "defaults write \(AppID.bundle) otaPort -int 41444"
-                    let what = TailscaleClient.Serving.mounted(root: root, others: others).described
+                    let what = state.described
                     await MainActor.run {
                         self?.complainOnce("port \(tailnetPort) is already serving \(what), which isn't RoamRun's — " + advice)
                     }
@@ -362,8 +363,14 @@ final class AppCoordinator: ObservableObject {
             let out = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
                                ["serve", "--bg", "--yes", "--https=\(tailnetPort)", mine], timeout: 20)
             // Before hopping back: `serving` waits on `tailscale` for up to 10 s,
-            // and the main actor is where the menu bar lives.
-            let landed = out.status != 0 && TailscaleClient.serving(port: tailnetPort).root == mine
+            // and the main actor is where the menu bar lives. A status we couldn't
+            // read says nothing about whether the registration landed, so it is
+            // not a reason to drop the one record that can find it again.
+            var strayRecord = false
+            if out.status != 0 {
+                let after = TailscaleClient.serving(port: tailnetPort)
+                strayRecord = after != .unknown && !after.has(root: mine)
+            }
             await MainActor.run {
                 guard let self else { return }
                 if out.status == 0 {
@@ -378,7 +385,7 @@ final class AppCoordinator: ObservableObject {
                     // Remembered before the call in case we died during it. It
                     // didn't take, so drop it: a window full of addresses that
                     // were never registered can't recognise one that was.
-                    if !landed { Self.forgetServing(mine) }
+                    if strayRecord { Self.forgetServing(mine) }
                 }
             }
         }
@@ -395,10 +402,11 @@ final class AppCoordinator: ObservableObject {
             // couldn't read would leave it registered with nothing tracking it —
             // and the next port change would have no old port to give back.
             let gone: Bool
-            switch TailscaleClient.serving(port: published.port) {
+            let state = TailscaleClient.serving(port: published.port)
+            switch state {
             case .unknown: gone = false
             case .nothing: gone = true
-            case .mounted(let root, _): gone = root != published.target
+            case .mounted: gone = !state.has(root: published.target)
             }
             await MainActor.run {
                 guard let self else { return }
@@ -415,11 +423,14 @@ final class AppCoordinator: ObservableObject {
     /// has to try again — reporting it released when it isn't is how builds stay
     /// reachable while the log says otherwise.
     nonisolated static func releaseServe(_ published: (port: Int, target: String)) -> Bool {
-        switch TailscaleClient.serving(port: published.port) {
+        let state = TailscaleClient.serving(port: published.port)
+        switch state {
         case .unknown: return false            // couldn't look; saying it's gone is how one survives
         case .nothing: forgetServing(published.target); return true
-        case .mounted(let root, _):
-            guard root == published.target else { forgetServing(published.target); return true }
+        case .mounted:
+            // Any of the roots, not one picked out of several: ours can be under a
+            // host key that sorts after someone else's.
+            guard state.has(root: published.target) else { forgetServing(published.target); return true }
         }
         // `--set-path=/` names the one mount to remove. Without it `off` means
         // every mount on the port, and `tailscale` then asks for confirmation on
@@ -438,9 +449,9 @@ final class AppCoordinator: ObservableObject {
     /// service of anyone's: some run was killed before it gave the port back.
     /// Reported, not reclaimed — "only replace what we can prove is ours" is worth
     /// more than saving the user one command.
-    nonisolated static func abandoned(_ root: String?, others: [String]) -> Bool {
-        guard others.isEmpty, let root, root.hasPrefix("http://127.0.0.1:"),
-              let port = UInt16(root.dropFirst("http://127.0.0.1:".count)) else { return false }
+    nonisolated static func abandoned(_ roots: [String], others: [String]) -> Bool {
+        guard others.isEmpty, roots.count == 1, roots[0].hasPrefix("http://127.0.0.1:"),
+              let port = UInt16(roots[0].dropFirst("http://127.0.0.1:".count)) else { return false }
         return !TailscaleClient.listening(on: port)
     }
 

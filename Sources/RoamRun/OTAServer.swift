@@ -182,6 +182,9 @@ final class OTAServer: @unchecked Sendable {
     }
 
     private func route(_ conn: NWConnection, path: String, base: String, bodyWanted: Bool, idle: IdleTimer) {
+        // The head is read; what is left of its deadline isn't the budget for
+        // sending a reply. `pump` re-arms it per chunk for the long ones.
+        idle.arm(Self.idleLimit)
         let parts = Self.segments(path)
         switch parts.count {
         case 0:
