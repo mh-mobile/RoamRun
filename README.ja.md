@@ -152,8 +152,8 @@ roamrun logs <name> <bundle-id>   # アプリを起動し直し、print / os_log
 # run と logs は起動オプションも取る（例：スクリーンショットの前に特定の画面を開く）:
 #   --arg A（1 語ずつ、複数可。「-」で始まってもよい）  --env NAME=value（複数可）  --url myapp://settings
 roamrun screenshot <name> [file.png]   # 実機の画面を PNG で保存し、パスを表示（Xcode 26.3 以降。それより前は未確認）
-roamrun ota <name> <App.ipa> [--replace]   # 実機が Wi-Fi に繋げないとき、モバイル回線でインストールできるよう配信
-                              #   インストールのみ。Ad Hoc か Enterprise 署名が必要（下記参照）
+roamrun ota [<name>] <App.ipa> [--replace] # ブリッジを通さず、実機自身でインストールできるよう配信
+                                           #   インストールのみ。Ad Hoc か Enterprise 署名が必要（下記参照）
 ```
 
 オプション: `--json`（`devices`、`status`、`doctor`）、`--wait N`（`status`: 最大 N 秒 Ready を待つ。各回はデバイスごとに devicectl を 2 回実行してから次の判定に進むため、N を数秒過ぎて返ることがあります。N が 10 未満のときは各 devicectl 呼び出しも短くなります（下限 5 秒））、`-v`（`up`: アクティビティログを表示）、`--workspace W` / `--project P` / `--configuration C`（`run`）、`--replace`（`ota`: 同じバージョン・ビルド番号で既に並んでいるものを消す）。一覧は `roamrun --help` で表示されます。コマンドが受け付けないオプションはエラーになります（exit 2）。
@@ -191,15 +191,32 @@ roamrun init --client claude                  # 指定したものだけに配�
 
 スキルには、デバイスをつなぐ手順（`roamrun up -d` → `status --wait 60 --json` で UDID 取得）、「iPhone のロック解除など人間にしかできないこと」、スクリーンショットの撮り方が書かれています。ビルドや起動はエージェントのいつもの手順に任せ、`roamrun run` は 1 コマンドで済ませたいとき用です。CLI は `--json` と終了コード（0 準備完了 / 1 未準備・失敗 / 2 使い方の誤り）に対応しています。デバイス名を省いた `status` は保存済みの全デバイスを一覧し、どれか 1 台でも Ready なら 0 を返すので、スクリプトで特定の 1 台を判定したいときはデバイス名を指定してください。
 
-## 実機が Wi-Fi に繋げないとき: OTA
+## ブリッジを通さず入れる: OTA
 
-散歩中など、モバイル回線しかない場所ではブリッジは使えません（`remotepairingd` が
-Wi-Fi 接続時しか待ち受けないため）。ただし **OTA インストールは使えます**。端末が
-HTTPS でファイルを取りに行くだけなので、mesh VPN がモバイル回線でそのまま運びます。
+ブリッジは端末が Wi-Fi にいることを要求し（`remotepairingd` が Wi-Fi 接続時しか
+待ち受けないため）、さらに Mac とのペアリングとデベロッパモードも必要です。
+OTA はどれも要りません。端末が HTTPS でファイルを取りに行くだけなので、mesh VPN が
+Wi-Fi でもモバイル回線でもそのまま運びます。
+
+つまり、ブリッジが使えない/合わないときの入り口です。
+
+- **繋げる Wi-Fi が無い** — 散歩中でモバイル回線だけ。このときブリッジは存在せず、
+  動くのはこれだけです
+- **ペアリングしていない端末**、デベロッパモードがオフの端末。人から借りた端末など
+- **実際に配る構成そのもの**。`roamrun run` が入れるのは Development 署名ですが、
+  こちらはテスターに渡るのと同じ Ad Hoc の成果物です
+- **同じ tailnet の別の人**。相手はページを開くだけ。Mac も Xcode もケーブルも不要
+
+ブリッジが使える場面ではブリッジを選んでください。デバッガ・`roamrun logs`・
+`roamrun screenshot` が使え、有料アカウントも要らず、tailnet に何も公開しません。
 
 ```sh
-roamrun ota iPhone build/MyApp.ipa
+roamrun ota build/MyApp.ipa            # 保存済みデバイス全部と突き合わせる
+roamrun ota iPhone build/MyApp.ipa     # 1台だけ確認したいときは名前を指定
 ```
+
+どのデバイスが対象かを表示します。Ad Hoc プロファイルが名前を載せているのは一部だけで、
+ページはその全部に対して同時にビルドを出すためです。
 
 ビルドを保管し、アプリが動いている間 `tailscale serve` でページを公開します。
 表示されたアドレス（またはターミナルに描画される QR）を実機で開き、Install を
@@ -224,9 +241,10 @@ roamrun ota iPhone build/MyApp.ipa
   （スクリプトからは `xcodebuild -exportArchive` に `"method": "release-testing"`）。
   `roamrun run` では作れません（Development 署名になり、ブリッジ経由でしか入りません）。
   Development 署名の .ipa は `roamrun ota` が先に弾きます。Ad Hoc の場合は端末がプロビジョ
-  ニングプロファイルに含まれ、かつ RoamRun 側でも UDID を把握している必要があります。
-  自宅で一度ブリッジすれば（`roamrun up <name> -d`）Xcode がローカル端末として登録し、
-  RoamRun も UDID を覚えるので、それで済みます。Enterprise 署名ならどちらも不要です
+  ニングプロファイルに含まれている必要があり、それを確認するために RoamRun がどれか 1 台の
+  UDID を知っている必要があります。自宅で一度ブリッジすれば（`roamrun up <name> -d`）
+  Xcode がローカル端末として登録し、RoamRun も UDID を覚えます。Enterprise 署名なら
+  どちらも不要です（保存済みデバイスすら要りません）
 - **tailnet で HTTPS が有効なこと**（MagicDNS と HTTPS 証明書）。RoamRun は**専用ポート**を
   1 つだけ使い（既定 41443。変更は `defaults write io.github.mh-mobile.roamrun otaPort -int …`。
   443 / 8443 / 10000 は Funnel で公開できてしまうポートなので受け付けず、41443 のままになります）、

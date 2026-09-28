@@ -39,9 +39,11 @@ not match the installed CLI until then (`roamrun --help` is authoritative).
   router, café Wi-Fi. Cellular alone is not, and neither is the iPhone sharing
   its *own* Personal Hotspot (then it isn't on Wi-Fi itself).
 - If the user really has no Wi-Fi to join, there is no bridge and none of the
-  commands below work. `roamrun ota <name> <App.ipa> [--replace]` is the one that
-  still does: it publishes the build so the user can install it from the device
-  over cellular. It installs only — no debugging, no logs, no screenshots — and
+  commands below work. `roamrun ota [<name>] <App.ipa> [--replace]` is the one
+  that still does: it publishes the build so the user can install it from the
+  device itself. It doesn't need Wi-Fi, pairing or Developer Mode, so it is also
+  the way onto a device that has none of those — but when the bridge is available
+  the bridge is better, and this is not a substitute for it. It installs only — no debugging, no logs, no screenshots — and
   it needs an .ipa signed for Release Testing (Ad Hoc) or Enterprise, which
   needs a paid Apple Developer account. You can't produce that .ipa from a
   Development signing setup: export one with `xcodebuild -exportArchive`
@@ -55,7 +57,9 @@ not match the installed CLI until then (`roamrun --help` is authoritative).
   page isn't published (the app isn't open, or it needs up to half a minute), so
   read that section rather than only doctor's first fail. `--replace` keeps one row
   per version and build number instead of stacking one per rebuild. Tell them what
-  they'll get and let them decide; don't offer it as a substitute for the bridge.
+  they'll get and let them decide. The name is optional: without one the build is
+  checked against every device RoamRun knows and it says which are covered, which
+  is what you want when you don't know which device the user has to hand.
 
 ## 3. Get the device ready
 

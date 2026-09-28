@@ -1004,16 +1004,39 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
         return p
     }
     let udid = "00008130-000C1C5C307A8D3A"
-    // Enterprise: no device list, installs anywhere.
-    #expect(try OTA.check(["ProvisionsAllDevices": true, "Entitlements": [:]], against: udid, name: "iPhone") == nil)
+    let mine = [OTA.Device(name: "iPhone", udid: udid)]
+    // Enterprise: no device list, installs anywhere — and says so with no names.
+    #expect(try OTA.check(["ProvisionsAllDevices": true, "Entitlements": [:]], against: mine).covers == [])
     // Ad Hoc for this device.
-    #expect(throws: Never.self) { try OTA.check(profile(["get-task-allow": false], [udid]), against: udid, name: "iPhone") }
+    #expect(try OTA.check(profile(["get-task-allow": false], [udid]), against: mine).covers == ["iPhone"])
     // Development names devices too, but iOS won't install it over the air.
-    #expect(throws: OTA.Problem.self) { try OTA.check(profile(["get-task-allow": true], [udid]), against: udid, name: "iPhone") }
+    #expect(throws: OTA.Problem.self) { try OTA.check(profile(["get-task-allow": true], [udid]), against: mine) }
     // Ad Hoc for someone else's device.
-    #expect(throws: OTA.Problem.self) { try OTA.check(profile(["get-task-allow": false], ["OTHER"]), against: udid, name: "iPhone") }
+    #expect(throws: OTA.Problem.self) { try OTA.check(profile(["get-task-allow": false], ["OTHER"]), against: mine) }
     // App Store / TestFlight.
-    #expect(throws: OTA.Problem.self) { try OTA.check(["Entitlements": [:]], against: udid, name: "iPhone") }
+    #expect(throws: OTA.Problem.self) { try OTA.check(["Entitlements": [:]], against: mine) }
+}
+
+@Test func aBuildIsCheckedAgainstEveryDeviceBecauseThePageOffersItToAll() throws {
+    // The page has no idea which device is asking, so "does it cover the one you
+    // named" was never the question — this is which of yours can take it.
+    let a = "00008130-000C1C5C307A8D3A", b = "00008120-001A2B3C4D5E6F70"
+    let devices = [OTA.Device(name: "iPhone", udid: a),
+                   OTA.Device(name: "iPad", udid: b),
+                   OTA.Device(name: "Vision Pro", udid: nil)]   // never bridged, so unknown
+    let adHoc: [String: Any] = ["ProvisionedDevices": [a], "Entitlements": ["get-task-allow": false]]
+    #expect(try OTA.check(adHoc, against: devices).covers == ["iPhone"])
+    let both: [String: Any] = ["ProvisionedDevices": [a, b], "Entitlements": ["get-task-allow": false]]
+    #expect(try OTA.check(both, against: devices).covers == ["iPhone", "iPad"])
+    // None of them: nobody could install it, so it isn't stored.
+    let other: [String: Any] = ["ProvisionedDevices": ["OTHER"], "Entitlements": ["get-task-allow": false]]
+    #expect(throws: OTA.Problem.self) { try OTA.check(other, against: devices) }
+    // A device whose UDID isn't known yet can't answer either way, and shouldn't
+    // stop a build that another device can take.
+    #expect(try OTA.check(adHoc, against: [devices[0], devices[2]]).covers == ["iPhone"])
+    #expect(throws: OTA.Problem.self) { try OTA.check(adHoc, against: [devices[2]]) }
+    // Enterprise needs no device at all — not even a saved one.
+    #expect(try OTA.check(["ProvisionsAllDevices": true], against: []).covers == [])
 }
 
 @Test func theManifestPointsAtTheBuildItDescribes() throws {
@@ -1185,20 +1208,21 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
 @Test func anExpiredProfileOrAnUnknownUdidIsRefusedBeforeTheDeviceSeesIt() throws {
     let udid = "00008130-000C1C5C307A8D3A"
     let live: [String: Any] = ["ProvisionedDevices": [udid], "Entitlements": ["get-task-allow": false]]
-    #expect(throws: Never.self) { try OTA.check(live, against: udid, name: "iPhone") }
+    let mine = [OTA.Device(name: "iPhone", udid: udid)]
+    #expect(throws: Never.self) { try OTA.check(live, against: mine) }
     // The expiry comes back so the page can mark a build that ran out since.
     var dated = live
     let when = Date(timeIntervalSinceNow: 86_400)
     dated["ExpirationDate"] = when
-    #expect(try OTA.check(dated, against: udid, name: "iPhone") == when)
+    #expect(try OTA.check(dated, against: mine).expires == when)
     // Expired: iOS would refuse it on the device with nothing to go on.
     var stale = live
     stale["ExpirationDate"] = Date(timeIntervalSinceNow: -86_400)
-    #expect(throws: OTA.Problem.self) { try OTA.check(stale, against: udid, name: "iPhone") }
+    #expect(throws: OTA.Problem.self) { try OTA.check(stale, against: mine) }
     // No UDID learned yet: the question can't be answered, so don't pretend it was.
-    #expect(throws: OTA.Problem.self) { try OTA.check(live, against: nil, name: "iPhone") }
+    #expect(throws: OTA.Problem.self) { try OTA.check(live, against: [OTA.Device(name: "iPhone", udid: nil)]) }
     // Enterprise covers every device, so a missing UDID doesn't matter there.
-    #expect(try OTA.check(["ProvisionsAllDevices": true], against: nil, name: "iPhone") == nil)
+    #expect(try OTA.check(["ProvisionsAllDevices": true], against: []).expires == nil)
 }
 
 @Test func aStoredBuildSurvivesThisStructGainingAField() throws {

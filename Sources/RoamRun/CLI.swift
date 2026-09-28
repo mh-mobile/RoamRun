@@ -48,13 +48,15 @@ enum CLI {
         --url URL                    open URL in the app (its URL scheme or a universal link)
       screenshot <name> [file.png]   Save the device's screen as PNG (default: ./<name>-<time>.png) and
                                      print its path — to check what an app shows (Xcode 26.3+)
-      ota <name> <App.ipa> [--replace]
-                                     Keep a build for installing over the air, for when the device can't
-                                     be on Wi-Fi (walking, cellular only) and so can't be bridged. Needs an
-                                     Ad Hoc or Enterprise .ipa, `tailscale serve` for HTTPS, and RoamRun.app
-                                     running — it serves the page. Prints the page's address; open it on
-                                     the device and tap Install. Anyone on your tailnet can install from
-                                     that page (--replace: drop builds under the same version and build)
+      ota [<name>] <App.ipa> [--replace]
+                                     Publish a build for installing from the device itself, without the
+                                     bridge — over Wi-Fi or cellular, and on devices that were never paired.
+                                     Install only: no debugger, no logs, no screenshots. Needs an Ad Hoc or
+                                     Enterprise .ipa, `tailscale serve` for HTTPS, and RoamRun.app running —
+                                     it serves the page. Says which of your devices the build covers, and
+                                     prints the page's address. Anyone on your tailnet can install from it
+                                     (<name>: check one device rather than all; --replace: drop builds
+                                     already listed under the same version and build)
       version                        Print the version (also --version)
       init [--client <name>] [--print] [--uninstall]
                                      Install the agent skill (clients: claude, codex, cursor, gemini, copilot)
@@ -98,7 +100,9 @@ enum CLI {
             case .failure(let e): fail(e.message)
             }
             let (json, wait, words) = (parsed.flags.contains("--json"), parsed.wait, parsed.words)
-            let name = words.first
+            // `ota` is the one command whose first word may be the path: it does
+            // nothing to a device, so naming one is optional there.
+            let name = args[0] == "ota" && words.first?.lowercased().hasSuffix(".ipa") == true ? nil : words.first
             var targets = profiles
             if let name {
                 guard let p = find(name, in: profiles) else { fail("no device named \(shellName(name)). " + names(profiles)) }
@@ -146,10 +150,14 @@ enum CLI {
                 }
                 install(p, path: words[words.startIndex + 1])
             case "ota":
-                guard name != nil, let p = targets.first, words.count >= 2 else {
-                    fail("usage: roamrun ota <name> <path to .ipa>. " + names(profiles))
+                // The name is optional here, unlike every command above: nothing is
+                // done *to* a device, so the .ipa is the only required argument and
+                // the check runs against every device RoamRun knows.
+                guard let path = words.last, path.lowercased().hasSuffix(".ipa"),
+                      words.count == 1 || name != nil else {   // two paths is a typo, not a name
+                    fail("usage: roamrun ota [<name>] <path to .ipa>")
                 }
-                ota(p, path: words[words.startIndex + 1], replacing: parsed.flags.contains("--replace"))
+                ota(targets, path: path, replacing: parsed.flags.contains("--replace"))
             default: print(usage); exit(0)
             }
         }
@@ -400,7 +408,7 @@ enum CLI {
     /// Keeps a build where the device can fetch it over HTTPS. Nothing is built
     /// here: exporting an .ipa needs the project's own signing settings, and the
     /// interesting part is that this path works when the bridge can't.
-    private static func ota(_ profile: DeviceProfile, path given: String, replacing: Bool) -> Never {
+    private static func ota(_ profiles: [DeviceProfile], path given: String, replacing: Bool) -> Never {
         guard FileManager.default.fileExists(atPath: given) else { stop("\(given) doesn't exist") }
         // A build script's `latest.ipa -> MyApp-1.2.ipa` would otherwise be stored
         // as the link itself: a few bytes, and nothing to serve.
@@ -409,13 +417,22 @@ enum CLI {
         guard path.lowercased().trimmingCharacters(in: ["/"]).hasSuffix(".ipa") else {
             stop("\(given) isn't an .ipa — over-the-air installs need an archive, not an .app bundle")
         }
-        let udid = StatusFile.read()[profile.id]?.udid ?? profile.udid
+        let running = StatusFile.read()
+        let devices = profiles.map { OTA.Device(name: $0.displayName, udid: running[$0.id]?.udid ?? $0.udid) }
         do {
             var build = try OTA.read(ipa: path)
-            build.expires = try OTA.check(CLI.profilePlist(of: path), against: udid, name: profile.displayName)
+            let (expires, covers) = try OTA.check(CLI.profilePlist(of: path), against: devices)
+            build.expires = expires
             try OTA.add(ipa: path, build, replacing: replacing)
 
             print("Stored \(build.title) \(build.label) (\(OTA.size(build.size))).")
+            // Which devices, not whether: an Ad Hoc profile covers the ones it
+            // names, and the page offers the build to all of them at once.
+            if covers.isEmpty {
+                print("  Enterprise signing — it installs on any device.")
+            } else {
+                print("  Installs on: \(covers.joined(separator: ", ")).")
+            }
             let tailnetPort = AppCoordinator.otaPort
             let host: String?
             do { host = try TailscaleClient.fromSettings().selfDNSName() } catch {

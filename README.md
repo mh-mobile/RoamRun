@@ -152,8 +152,8 @@ roamrun logs <name> <bundle-id>   # relaunch the app and stream its print / os_l
 # run and logs also take launch options, e.g. to open one screen before a screenshot:
 #   --arg A (one per word, repeatable; may start with "-")   --env NAME=value (repeatable)   --url myapp://settings
 roamrun screenshot <name> [file.png]   # save the device's screen as PNG and print the path (Xcode 26.3+; earlier untested)
-roamrun ota <name> <App.ipa> [--replace]   # no Wi-Fi to join? publish the build so the device can install it over
-                              #   cellular — install only, needs Ad Hoc or Enterprise signing (see below)
+roamrun ota [<name>] <App.ipa> [--replace] # publish the build so a device can install it itself, without the
+                                           #   bridge — install only, needs Ad Hoc or Enterprise signing (see below)
 ```
 
 Options: `--json` (`devices`, `status`, `doctor`), `--wait N` (`status`: wait up to N seconds for Ready; each round runs two devicectl calls per device before the deadline is looked at again, so it can return several seconds after N; an N below 10 also shortens each of those calls, to a floor of 5 seconds), `-v` (`up`: show the activity log), `--workspace W` / `--project P` / `--configuration C` (`run`), `--replace` (`ota`: drop builds already listed under the same version and build number). `roamrun --help` lists everything; a command rejects options it doesn't take (exit 2).
@@ -191,16 +191,35 @@ roamrun init --client claude                  # or only to the ones you name (re
 
 The skill covers getting the device connected (`roamrun up -d` → `status --wait 60 --json` for the UDID), what only a human can do, such as unlocking the iPhone, and screenshots; building and launching are left to the agent's usual tools, with `roamrun run` as a one-command fallback. The CLI supports `--json` and exit codes (0 ready / 1 not ready or failed / 2 usage error); `status` without a device name lists every saved device and exits 0 if any one of them is ready, so name the device when a script needs the answer to be about that one.
 
-## When the device can't be on Wi-Fi: over the air
+## Installing without the bridge: over the air
 
-Out for a walk, with the phone on cellular and no Wi-Fi to join? Then there is
-no bridge — `remotepairingd` only listens while the device is on Wi-Fi. What
-still works is an over-the-air install, because that is the device fetching a
-file over HTTPS, and the mesh VPN carries that on cellular perfectly well.
+The bridge needs the device on Wi-Fi — `remotepairingd` only listens there — and
+it needs the device paired with this Mac, with Developer Mode on. An over-the-air
+install needs none of that: it is the device fetching a file over HTTPS, which
+the mesh VPN carries over Wi-Fi and cellular alike.
+
+So this is the way in when the bridge isn't available or isn't the right tool:
+
+- **No Wi-Fi to join** — out for a walk, phone on cellular. There is no bridge at
+  all then, and this is the only thing that still works.
+- **A device that was never paired**, or has Developer Mode off. Someone else's
+  phone, a device you borrowed for an afternoon.
+- **The build you actually ship.** `roamrun run` installs a Development build;
+  this takes the Ad Hoc archive, which is the signing your testers will get.
+- **Someone else on your tailnet.** They open the page and install — no Mac, no
+  Xcode, no cable at their end.
+
+When the bridge *is* available, prefer it: it gives you the debugger, `roamrun
+logs` and `roamrun screenshot`, wants no paid account, and puts nothing on your
+tailnet.
 
 ```sh
-roamrun ota iPhone build/MyApp.ipa
+roamrun ota build/MyApp.ipa            # checks it against every device RoamRun knows
+roamrun ota iPhone build/MyApp.ipa     # or name one, to check just that device
 ```
+
+It prints which of your devices the build covers — an Ad Hoc profile only names
+some of them, and the page offers the build to all of them at once.
 
 RoamRun keeps the build, and while the app runs it publishes a page through
 `tailscale serve`. Open the address it prints (or point the camera at the QR
@@ -230,9 +249,10 @@ What it needs:
   -exportArchive` with `"method": "release-testing"` does the same from a script). `roamrun run` can't make one — it signs for
   Development, which only installs through the bridge, and `roamrun ota` refuses
   it rather than letting iOS fail cryptically. Ad Hoc also means the device has to
-  be in the provisioning profile *and* known to RoamRun: bridge it once
-  (`roamrun up <name> -d`) and Xcode registers it like any local device, while
-  RoamRun learns its UDID. Enterprise signing needs neither.
+  be in the provisioning profile, and RoamRun has to know at least one device's
+  UDID to check that: bridge one once (`roamrun up <name> -d`) and Xcode registers
+  it like any local device, while RoamRun learns its UDID. Enterprise signing needs
+  neither — not even a saved device.
 - **HTTPS in your tailnet** — MagicDNS and HTTPS certificates turned on. RoamRun
   serves on a port of its own (41443 by default, `defaults write
   io.github.mh-mobile.roamrun otaPort -int …` to change it; 443, 8443 and 10000

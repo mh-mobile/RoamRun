@@ -99,11 +99,17 @@ enum OTA {
         case development(String)
         case appStore(String)
         case unreadable(String)
-        case notForDevice(path: String, name: String, udid: String)
-        case udidUnknown(String)
+        case notForDevice(path: String, names: [String])
+        case udidUnknown([String])
         case oddBundleID(path: String, id: String)
         case expired(path: String, on: Date)
         case failed(String)
+
+        /// "a, b and c" — a list a person reads, not an array printed.
+        private func list(_ names: [String]) -> String {
+            names.count < 2 ? (names.first ?? "")
+                : names.dropLast().joined(separator: ", ") + " and " + names[names.count - 1]
+        }
 
         var errorDescription: String? {
             switch self {
@@ -113,12 +119,16 @@ enum OTA {
             case .appStore(let path):
                 return "\(path) is signed for App Store / TestFlight and can't be installed over the air. Export it for Release Testing (Ad Hoc) or Enterprise."
             case .unreadable(let p): return "couldn't read \(p)"
-            case .notForDevice(let path, let name, let udid):
-                return "\(path) isn't signed for \(name) (UDID \(udid) is not in its provisioning profile). Add the device to the profile and export again."
+            case .notForDevice(let path, let names):
+                let who = names.count == 1 ? names[0] : "any of \(list(names))"
+                return "\(path) isn't signed for \(who) — its provisioning profile doesn't name \(names.count == 1 ? "that device" : "them"). Add the device in Apple's developer account and export again; bridging it once (roamrun up <name> -d) lets Xcode register it for you."
             case .oddBundleID(let path, let id):
                 return "\(path)'s bundle identifier (\(id)) has characters that can't go in a web address, so the device couldn't fetch it. Apple's own rule is letters, digits, hyphens and dots."
-            case .udidUnknown(let name):
-                return "RoamRun doesn't know \(name)'s UDID yet, so it can't tell whether that Ad Hoc build covers it — and iOS would just refuse it on the device. Bridge it once from any Wi-Fi (roamrun up \(CLI.shellName(name)) -d) and the UDID is saved; roamrun devices shows it. An Enterprise build needs none of this."
+            case .udidUnknown(let names):
+                let who = names.isEmpty ? "any device" : (names.count == 1 ? names[0] : "any of \(list(names))")
+                let how = names.count == 1 ? "Bridge it once from any Wi-Fi (roamrun up \(CLI.shellName(names[0])) -d)"
+                                           : "Bridge one once from any Wi-Fi (roamrun up <name> -d)"
+                return "RoamRun doesn't know the UDID of \(who) yet, so it can't tell whether that Ad Hoc build covers \(names.count == 1 ? "it" : "one") — and iOS would just refuse it on the device. \(how) and the UDID is saved; roamrun devices shows it. An Enterprise build needs none of this."
             case .expired(let path, let date):
                 return "\(path)'s provisioning profile expired on \(date.formatted(date: .abbreviated, time: .omitted)) — iOS won't install it. Export it again with a current profile."
             case .failed(let why): return why
@@ -172,10 +182,19 @@ enum OTA {
         !s.isEmpty && !s.hasPrefix(".") && s.count < 200 && s.allSatisfy { Build.urlSafe($0) || $0 == "_" }
     }
 
-    /// Only a build iOS will accept over the air, and for this device if the
-    /// profile names devices at all.
-    @discardableResult
-    static func check(_ plist: [String: Any]?, against udid: String?, name: String, path: String = "That build") throws -> Date? {
+    /// A device an Ad Hoc profile may or may not name. RoamRun knows the UDID of
+    /// every device it has bridged, and the page offers a build to all of them at
+    /// once, so the question is which of yours it covers — not which you named.
+    struct Device {
+        let name: String
+        let udid: String?
+    }
+
+    /// Only a build iOS will accept over the air, and only if one of `devices`
+    /// can take it. Returns when the signing expires, and which of them it covers
+    /// — empty means every device there is (Enterprise).
+    static func check(_ plist: [String: Any]?, against devices: [Device],
+                      path: String = "That build") throws -> (expires: Date?, covers: [String]) {
         guard let plist else {
             throw Problem.unreadable("the provisioning profile in \(path) — the archive may be unsigned. " +
                                      "Export it for Release Testing (Ad Hoc) or Enterprise.")
@@ -185,7 +204,7 @@ enum OTA {
         let entitlements = plist["Entitlements"] as? [String: Any]
         switch CLI.parseProvisioning(plist) {
         case .appStore: throw Problem.appStore(path)
-        case .allDevices: return expiry   // Enterprise covers every device
+        case .allDevices: return (expiry, [])   // Enterprise covers every device
         case .unknown: throw Problem.unreadable("the provisioning profile in \(path)")
         case .devices(let list):
             // Development and Ad Hoc both name devices; only the debuggable one is
@@ -193,11 +212,13 @@ enum OTA {
             // apart by, and guessing Ad Hoc means iOS refuses it with no reason given.
             guard let entitlements else { throw Problem.unreadable("the entitlements in \(path)'s provisioning profile") }
             if entitlements["get-task-allow"] as? Bool == true { throw Problem.development(path) }
-            guard let udid else { throw Problem.udidUnknown(name) }
-            guard list.contains(where: { $0.caseInsensitiveCompare(udid) == .orderedSame }) else {
-                throw Problem.notForDevice(path: path, name: name, udid: udid)
-            }
-            return expiry
+            let known = devices.compactMap { d in d.udid.map { (name: d.name, udid: $0) } }
+            guard !known.isEmpty else { throw Problem.udidUnknown(devices.map(\.name)) }
+            let covers = known.filter { d in
+                list.contains { $0.caseInsensitiveCompare(d.udid) == .orderedSame }
+            }.map(\.name)
+            guard !covers.isEmpty else { throw Problem.notForDevice(path: path, names: known.map(\.name)) }
+            return (expiry, covers)
         }
     }
 
