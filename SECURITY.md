@@ -59,8 +59,10 @@ bounded.
   use the feature. The path is registered when there is something to serve and
   given back when RoamRun quits — but not if it is force-quit or crashes, so
   `tailscale serve --set-path /roamrun off` is how you make sure it's gone.
-  RoamRun only ever replaces a path already pointing at a loopback port, so it
-  won't take over something else you serve there.
+  RoamRun records the exact address it registered and only ever replaces an entry
+  matching it — its own, from a run that didn't get to release it — so it won't
+  take over something else you serve there. Deleting `ota/` takes the page down
+  at the next check; deleting one build's folder inside it removes just that one.
 - **`roamrun run` builds the project in the current folder.** Its build scripts
   and package plugins run as you, and like Xcode it may create provisioning
   profiles in your team. Use it (or let an agent use it) on projects you trust.
@@ -71,7 +73,8 @@ bounded.
 
 ## What it touches on the Mac
 
-- No kernel or network-configuration changes, no daemons. Admin rights only
+- No kernel or network-configuration changes, no daemons — except that `roamrun ota`
+  asks `tailscale serve` to carry one path, which tailscaled then remembers. Admin rights only
   if you install the CLI and `/usr/local/bin` isn't writable (a password prompt).
 - Files: `~/Library/Application Support/RoamRun/` (device profiles, mode 0600,
   and bridge status), `~/Library/Logs/RoamRun/`, and the
@@ -85,8 +88,8 @@ bounded.
   marked private; the in-app activity log shows them in full.
 - **Nothing about you is sent anywhere** — no telemetry, no analytics, no update
   check; there is no code in RoamRun that talks to a server of ours or anyone
-  else's. It does open connections of its own, all of them to your device and
-  all of them part of bridging it: a TCP probe to see whether it answers, the
+  else's. It does open connections of its own — to your device, and
+  to its own loopback port to check the install page is up: a TCP probe to see whether it answers, the
   RemotePairing handshake to confirm the answer really comes from it, and a scan
   for its RemotePairing port when that has changed. The bridge itself forwards
   bytes without reading them.

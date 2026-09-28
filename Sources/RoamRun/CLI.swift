@@ -51,9 +51,10 @@ enum CLI {
       ota <name> <App.ipa> [--replace]
                                      Keep a build for installing over the air, for when the device can't
                                      be on Wi-Fi (walking, cellular only) and so can't be bridged. Needs an
-                                     Ad Hoc or Enterprise .ipa, and `tailscale serve` for HTTPS. Prints the
+                                     Ad Hoc or Enterprise .ipa, `tailscale serve` for HTTPS, and RoamRun.app
+                                     running — it serves the page. Prints the
                                      page's address; open it on the device and tap Install
-                                     (--replace: drop builds already listed under the same version)
+                                     (--replace: drop builds under the same version and build number)
       version                        Print the version (also --version)
       init [--client <name>] [--print] [--uninstall]
                                      Install the agent skill (clients: claude, codex, cursor, gemini, copilot)
@@ -411,7 +412,7 @@ enum CLI {
         let udid = StatusFile.read()[profile.id]?.udid ?? profile.udid
         do {
             var build = try OTA.read(ipa: path)
-            build.devices = try OTA.check(CLI.profilePlist(of: path), against: udid, name: profile.displayName)
+            build.expires = try OTA.check(CLI.profilePlist(of: path), against: udid, name: profile.displayName)
             try OTA.add(ipa: path, build, replacing: replacing)
 
             print("Stored \(build.title) \(build.label) (\(OTA.size(build.size))).")
@@ -424,6 +425,13 @@ enum CLI {
                 stop("Tailscale didn't give this Mac a name — turn MagicDNS on for your tailnet. The build is stored.")
             }
             let url = "https://\(host)\(prefix)/"
+            let mounted = TailscaleClient.servedPaths()[prefix]
+            if let mounted, mounted != AppID.settings?.string(forKey: AppCoordinator.otaServingKey) {
+                print("  \(prefix) is serving \(mounted), which isn't RoamRun's, so that address won't")
+                print("  reach this build. Give RoamRun another path and restart it:")
+                print("    defaults write \(AppID.bundle) otaPath -string /some/path")
+                exit(1)
+            }
             if !TailscaleClient.servingLive(prefix) {
                 print("  RoamRun publishes the page while it runs, so it has to be open; it can take")
                 print("  half a minute to appear. If it doesn't, look in Open RoamRun › ⚙ Settings ›")
@@ -804,6 +812,12 @@ enum CLI {
             print("\(profile.displayName): another roamrun up (pid \(other.pid)) is already handling it — exiting.")
             exit(0)
         }
+        bridge.onUDID = { udid in   // the app saves it too; without this, CLI-only use never learns it
+            _ = ProfileStore().update { all in
+                guard let i = all.firstIndex(where: { $0.id == profile.id }), all[i].udid == nil else { return }
+                all[i].udid = udid
+            }
+        }
         bridge.onProfileChange = { moved in   // save where the device answers now, as the app does
             var found = false
             let saved = ProfileStore().update { all in
@@ -1064,7 +1078,7 @@ enum CLI {
                   ? "RoamRun publishes it while it runs — open RoamRun, then look in ⚙ Settings › Troubleshooting › Recent messages if it doesn't appear."
                   : "\(prefix) is serving \(served ?? "something else") instead. Give RoamRun another path: defaults write \(AppID.bundle) otaPath -string /some/path",
               true)
-        if let host = (try? TailscaleClient.fromSettings().selfDNSName()) ?? nil {
+        if live, let host = (try? TailscaleClient.fromSettings().selfDNSName()) ?? nil {
             note("Open on the device: https://\(host)\(prefix)/")
         }
     }

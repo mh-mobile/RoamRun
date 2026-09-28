@@ -44,11 +44,14 @@ not match the installed CLI until then (`roamrun --help` is authoritative).
   over cellular. It installs only — no debugging, no logs, no screenshots — and
   it needs an .ipa signed for Release Testing (Ad Hoc) or Enterprise, which
   needs a paid Apple Developer account. You can't produce that .ipa from a
-  Development signing setup: ask the user to export one (Xcode › Product ›
-  Archive › Distribute App › Release Testing). RoamRun.app also has to be
+  Development signing setup: export one with `xcodebuild -exportArchive`
+  and `"method": "release-testing"` if the team already has an Ad Hoc profile,
+  or ask the user (Xcode › Product › Archive › Distribute App › Release Testing). RoamRun.app also has to be
   running on the Mac — it serves the page, the CLI only stores the build.
-  Tell the user what they'll get and let them decide; don't offer it as a
-  substitute for the bridge.
+  **Anyone on the tailnet can open that page and install the build** — say so
+  before suggesting it. Give the user the address it prints: the QR code is only
+  drawn on a terminal, so it won't reach them through you. Tell them what they'll
+  get and let them decide; don't offer it as a substitute for the bridge.
 
 ## 3. Get the device ready
 

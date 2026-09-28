@@ -1007,7 +1007,7 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     // Enterprise: no device list, installs anywhere.
     #expect(try OTA.check(["ProvisionsAllDevices": true, "Entitlements": [:]], against: udid, name: "iPhone") == nil)
     // Ad Hoc for this device.
-    #expect(try OTA.check(profile(["get-task-allow": false], [udid]), against: udid, name: "iPhone") == [udid])
+    #expect(throws: Never.self) { try OTA.check(profile(["get-task-allow": false], [udid]), against: udid, name: "iPhone") }
     // Development names devices too, but iOS won't install it over the air.
     #expect(throws: OTA.Problem.self) { try OTA.check(profile(["get-task-allow": true], [udid]), against: udid, name: "iPhone") }
     // Ad Hoc for someone else's device.
@@ -1018,19 +1018,23 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
 
 @Test func theManifestPointsAtTheBuildItDescribes() throws {
     let build = OTA.Build(bundleID: "com.example.App", title: "App & Co", version: "1.2.0", build: "45",
-                          added: .now, size: 3_200_000, devices: nil, slug: "1.2.0-45-20260928-0730")
+                          added: .now, size: 3_200_000, slug: "1.2.0-45-20260928-0730")
     let data = OTA.manifest(for: build, base: "https://mac.tail1234.ts.net/roamrun")
     let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
     let item = (plist?["items"] as? [[String: Any]])?.first
     let url = ((item?["assets"] as? [[String: String]])?.first)?["url"]
     #expect(url == "https://mac.tail1234.ts.net/roamrun/com.example.App/\(build.slug)/app.ipa")
-    #expect((item?["metadata"] as? [String: String])?["bundle-identifier"] == "com.example.App")
+    let metadata = item?["metadata"] as? [String: String]
+    #expect(metadata?["bundle-identifier"] == "com.example.App")
+    #expect(metadata?["kind"] == "software")          // iOS refuses the manifest without it
+    #expect(metadata?["bundle-version"] == "45")      // CFBundleVersion, not the marketing one
+    #expect(metadata?["title"] == "App & Co")
     #expect(OTA.installLink(for: build, base: "https://x/p").hasPrefix("itms-services://?action=download-manifest&url=https://x/p/"))
 }
 
 @Test func thePageEscapesWhatCameFromTheArchive() {
     let build = OTA.Build(bundleID: "com.example.App", title: "<script>alert(1)</script>", version: "1.0", build: "1",
-                          added: .now, size: 1, devices: nil)
+                          added: .now, size: 1)
     let html = OTA.indexHTML([(bundleID: "com.example.App", builds: [build])], base: "https://x/p")
     #expect(!html.contains("<script>alert"))
     #expect(html.contains("&lt;script&gt;"))
@@ -1075,10 +1079,10 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(OTA.digest(of: dir.appendingPathComponent("missing")) == nil)
 }
 
-@Test func replacingClearsWhatIsAlreadyUnderThatVersion() {
+@Test func theLabelReplaceMatchesOnIsVersionAndBuildNumber() {
     // The label is what a reader sees, so it is what --replace collapses.
     func build(_ v: String, _ b: String) -> OTA.Build {
-        .init(bundleID: "com.example.App", title: "App", version: v, build: b, added: .now, size: 1, devices: nil)
+        .init(bundleID: "com.example.App", title: "App", version: v, build: b, added: .now, size: 1)
     }
     #expect(build("1.2.0", "45").label == "1.2.0 (45)")
     #expect(build("1.2.0", "").label == "1.2.0")          // no build number to show
@@ -1107,6 +1111,12 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     #expect(!OTA.isPlainName(".hidden"))          // invisible to everything that walks the directory
     #expect(!OTA.isPlainName("a/b"))
     #expect(!OTA.isPlainName(""))
+    // A URL component too: `&` would end the itms-services query early, and
+    // anything non-ASCII comes back percent-encoded and matches nothing.
+    #expect(!OTA.isPlainName("com.foo&bar"))
+    #expect(!OTA.isPlainName("com.foo?bar"))
+    #expect(!OTA.isPlainName("com.フー"))
+    #expect(OTA.isPlainName("com.example.my_app"))
 }
 
 @Test func onlyTheDefaultHttpsBlockCountsAsTheOTAPagesAddress() {
@@ -1118,17 +1128,26 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
 
     https://mac.tail1.ts.net:8790 (tailnet only)
     |-- /other proxy http://127.0.0.1:8790
+
+    http://mac.tail1.ts.net (tailnet only)
+    |-- /plain proxy http://127.0.0.1:8080
     """
     let served = TailscaleClient.served(in: out)
     #expect(served["/roamrun"] == "http://127.0.0.1:61816")
     #expect(served["/"] == "http://127.0.0.1:8788")
     #expect(served["/other"] == nil)   // :8790, not the page's address
+    #expect(served["/plain"] == nil)   // the http:// block, not the page's address either
 }
 
 @Test func anExpiredProfileOrAnUnknownUdidIsRefusedBeforeTheDeviceSeesIt() throws {
     let udid = "00008130-000C1C5C307A8D3A"
     let live: [String: Any] = ["ProvisionedDevices": [udid], "Entitlements": ["get-task-allow": false]]
-    #expect(try OTA.check(live, against: udid, name: "iPhone") == [udid])
+    #expect(throws: Never.self) { try OTA.check(live, against: udid, name: "iPhone") }
+    // The expiry comes back so the page can mark a build that ran out since.
+    var dated = live
+    let when = Date(timeIntervalSinceNow: 86_400)
+    dated["ExpirationDate"] = when
+    #expect(try OTA.check(dated, against: udid, name: "iPhone") == when)
     // Expired: iOS would refuse it on the device with nothing to go on.
     var stale = live
     stale["ExpirationDate"] = Date(timeIntervalSinceNow: -86_400)
@@ -1146,7 +1165,6 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     let build = try JSONDecoder().decode(OTA.Build.self, from: Data(older.utf8))
     #expect(build.bundleID == "com.example.App")
     #expect(build.label == "1.0 (7)")
-    #expect(build.devices == nil)
     #expect(build.slug.isEmpty)   // the directory it was found in replaces this
     // And the other way: nothing but the bundle id is actually required.
     #expect(throws: Never.self) {
@@ -1182,7 +1200,7 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
         let at = app.appendingPathComponent(slug)
         try FileManager.default.createDirectory(at: at, withIntermediateDirectories: true)
         let build = OTA.Build(bundleID: "com.example.App", title: "App", version: version, build: number,
-                              added: added, size: 1, devices: nil, slug: slug)
+                              added: added, size: 1, expires: nil, slug: slug)
         try JSONEncoder().encode(build).write(to: at.appendingPathComponent("meta.json"))
     }
     try store("1.0", "1", "1.0-1-a", added: .now.addingTimeInterval(-60))
@@ -1192,4 +1210,28 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
     // What --replace does: everything under that one label except the new build.
     OTA.drop("com.example.App", labelled: "1.0 (1)", keeping: "1.0-1-b", in: dir)
     #expect(OTA.builds(of: "com.example.App", in: dir).map(\.slug).sorted() == ["1.0-1-b", "1.1-1-a"])
+}
+
+@Test func aServeEntryOnlyCountsWhenSomethingIsBehindIt() async throws {
+    // A crash leaves the serve entry pointing at a port nothing holds any more,
+    // and `serve status` alone can't tell that from a working page.
+    let server = try EchoServer()
+    let port = await server.start()
+    #expect(port > 0)
+    #expect(TailscaleClient.listening(on: port))
+    server.stop()
+    #expect(try await eventually { !TailscaleClient.listening(on: port) })
+}
+
+@Test func aBuildWhoseProfileRanOutWhileItSatThereSaysSo() {
+    // The check happens when it's stored; a profile lasts a year and builds are
+    // kept for months, so the page is the only place left to say it.
+    func page(_ expires: Date?) -> String {
+        let build = OTA.Build(bundleID: "com.example.App", title: "App", version: "1.0", build: "1",
+                              added: .now, size: 1, expires: expires, slug: "1.0-1-x")
+        return OTA.indexHTML([(bundleID: "com.example.App", builds: [build])], base: "https://x/p")
+    }
+    #expect(page(.now.addingTimeInterval(-86_400)).contains("EXPIRED"))
+    #expect(!page(.now.addingTimeInterval(86_400)).contains("EXPIRED"))
+    #expect(!page(nil).contains("EXPIRED"))   // Enterprise profiles carry no date we act on
 }

@@ -31,7 +31,7 @@ extension OTA {
     /// build's button is the big one.
     static func indexHTML(_ groups: [(bundleID: String, builds: [Build])], base: String, now: Date = .now) -> String {
         let body = groups.isEmpty ? """
-            <p class="empty">No builds yet. Run <code>roamrun ota &lt;device&gt; &lt;App.ipa&gt;</code> on the Mac.</p>
+            <p class="empty">No builds yet. Run <code>roamrun ota &lt;name&gt; &lt;App.ipa&gt;</code> on the Mac.</p>
             """ : groups.map { app in
             let newest = app.builds[0]
             let older = app.builds.dropFirst()
@@ -41,7 +41,7 @@ extension OTA {
                 </details>
                 """
             let icon = OTA.hasIcon(newest)
-                ? #"<img class="icon" src="\#(escape(base))/\#(escape(app.bundleID))/\#(escape(newest.slug))/icon.png" alt="">"# : ""
+                ? #"<img class="icon" width="60" height="60" src="\#(escape(base))/\#(escape(app.bundleID))/\#(escape(newest.slug))/icon.png" alt="">"# : ""
             return """
                 <section>
                   <div class="app">\(icon)<div>
@@ -61,12 +61,12 @@ extension OTA {
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
         <title>RoamRun</title>
         <style>
-        :root { color-scheme: light dark; --bg: #fff; --fg: #111; --dim: #666; --card: #f4f4f6; --line: #e3e3e8; --tint: #0a84ff; }
+        :root { color-scheme: light dark; --bg: #fff; --fg: #111; --dim: #666; --card: #f4f4f6; --line: #e3e3e8; --tint: #0060df; }
         @media (prefers-color-scheme: dark) {
-          :root { --bg: #000; --fg: #f2f2f7; --dim: #98989f; --card: #1c1c1e; --line: #2c2c2e; }
+          :root { --bg: #000; --fg: #f2f2f7; --dim: #98989f; --card: #1c1c1e; --line: #2c2c2e; --tint: #0a84ff; }
         }
         * { box-sizing: border-box; }
-        body { margin: 0;
+        body { margin: 0 auto; max-width: 34rem;
                padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
                         calc(24px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
                background: var(--bg); color: var(--fg); font: 17px/1.5 -apple-system, BlinkMacSystemFont, sans-serif; }
@@ -100,7 +100,12 @@ extension OTA {
     }
 
     private static func row(_ build: Build, base: String, now: Date, newest: Bool) -> String {
-        let bits = [when(build.added, now: now), size(build.size)]
+        var bits = [when(build.added, now: now), size(build.size)]
+        // Checked when it was stored, but a profile only lasts a year and these
+        // are kept for months: the device would just refuse it with nothing said.
+        if let expires = build.expires, expires < now {
+            bits.append("EXPIRED \(expires.formatted(date: .abbreviated, time: .omitted))")
+        }
         return """
             <div class="build\(newest ? " newest" : "")">
               <div class="top"><span class="ver">\(escape(build.label))</span>\(newest ? #"<span class="tag">NEWEST</span>"# : "")</div>

@@ -10,7 +10,7 @@ import UniformTypeIdentifiers
 ///
 /// Layout, one directory per build:
 ///
-///     ota/<bundle id>/<version>-<build>-<yyyyMMdd-HHmm>/app.ipa
+///     ota/<bundle id>/<version>-<build>-<yyyyMMdd-HHmmss>/app.ipa
 ///                                                      /meta.json
 ///
 /// The manifest and the page are generated when they're asked for, so a build
@@ -29,8 +29,9 @@ enum OTA {
         var build: String
         var added: Date
         var size: Int64
-        /// UDIDs the profile covers; nil for Enterprise, which covers every device.
-        var devices: [String]?
+        /// When the provisioning profile stops working. Checked when the build is
+        /// stored, but it is kept for months, so the page has to say it too.
+        var expires: Date?
 
         /// The directory this build lives in. Stored, not derived: it is in URLs
         /// the device already has, and recomputing it from a date would move it
@@ -58,19 +59,19 @@ enum OTA {
             build = try c.decodeIfPresent(String.self, forKey: .build) ?? ""
             added = try c.decodeIfPresent(Date.self, forKey: .added) ?? .now
             size = try c.decodeIfPresent(Int64.self, forKey: .size) ?? 0
-            devices = try c.decodeIfPresent([String].self, forKey: .devices)
+            expires = try c.decodeIfPresent(Date.self, forKey: .expires)
             slug = try c.decodeIfPresent(String.self, forKey: .slug) ?? ""   // the directory name replaces it
         }
 
         init(bundleID: String, title: String, version: String, build: String, added: Date, size: Int64,
-             devices: [String]?, slug: String = "") {
+             expires: Date? = nil, slug: String = "") {
             self.bundleID = bundleID
             self.title = title
             self.version = version
             self.build = build
             self.added = added
             self.size = size
-            self.devices = devices
+            self.expires = expires
             self.slug = slug
         }
 
@@ -92,28 +93,31 @@ enum OTA {
 
     enum Problem: Error, LocalizedError {
         case notAnArchive(String)
-        case development
-        case appStore
+        case development(String)
+        case appStore(String)
         case unreadable(String)
-        case notForDevice(name: String, udid: String)
+        case notForDevice(path: String, name: String, udid: String)
         case udidUnknown(String)
-        case expired(Date)
+        case oddBundleID(path: String, id: String)
+        case expired(path: String, on: Date)
         case failed(String)
 
         var errorDescription: String? {
             switch self {
             case .notAnArchive(let p): return "\(p) has no Payload/*.app inside — not an iOS app archive?"
-            case .development:
-                return "That build is signed for Development, which can only be installed through the bridge. Export it for Release Testing (Ad Hoc) or Enterprise to install it over the air."
-            case .appStore:
-                return "That build is signed for App Store / TestFlight and can't be installed over the air. Export it for Release Testing (Ad Hoc) or Enterprise."
+            case .development(let path):
+                return "\(path) is signed for Development, which can only be installed through the bridge. Export it for Release Testing (Ad Hoc) or Enterprise to install it over the air."
+            case .appStore(let path):
+                return "\(path) is signed for App Store / TestFlight and can't be installed over the air. Export it for Release Testing (Ad Hoc) or Enterprise."
             case .unreadable(let p): return "couldn't read \(p)"
-            case .notForDevice(let name, let udid):
-                return "That build isn't signed for \(name) (UDID \(udid) is not in its provisioning profile). Add the device to the profile and export again."
+            case .notForDevice(let path, let name, let udid):
+                return "\(path) isn't signed for \(name) (UDID \(udid) is not in its provisioning profile). Add the device to the profile and export again."
+            case .oddBundleID(let path, let id):
+                return "\(path)'s bundle identifier (\(id)) has characters that can't go in a web address, so the device couldn't fetch it. Apple's own rule is letters, digits, hyphens and dots."
             case .udidUnknown(let name):
-                return "RoamRun doesn't know \(name)'s UDID yet, so it can't tell whether that Ad Hoc build covers it — and iOS would just refuse it on the device. Next time \(name) is back on a Wi-Fi this Mac can reach, bridge it once (`roamrun up \(CLI.shellName(name)) -d`) and the UDID is learned; `roamrun devices` shows it. An Enterprise build needs none of this."
-            case .expired(let date):
-                return "That build's provisioning profile expired on \(date.formatted(date: .abbreviated, time: .omitted)) — iOS won't install it. Export it again with a current profile."
+                return "RoamRun doesn't know \(name)'s UDID yet, so it can't tell whether that Ad Hoc build covers it — and iOS would just refuse it on the device. Bridge it once from any Wi-Fi (roamrun up \(CLI.shellName(name)) -d) and the UDID is saved; roamrun devices shows it. An Enterprise build needs none of this."
+            case .expired(let path, let date):
+                return "\(path)'s provisioning profile expired on \(date.formatted(date: .abbreviated, time: .omitted)) — iOS won't install it. Export it again with a current profile."
             case .failed(let why): return why
             }
         }
@@ -127,7 +131,9 @@ enum OTA {
         defer { try? FileManager.default.removeItem(at: dir) }
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let unzip = Proc.run("/usr/bin/unzip", ["-qo", path, "Payload/*.app/Info.plist", "-d", dir.path], timeout: 60)
-        if unzip.status != 0 && unzip.status != 11 {   // 11 is "nothing matched", handled below
+        // 1 is "warnings, but it worked" and 11 is "nothing matched", which the
+        // guard below reports better. Anything above that is a broken archive.
+        if unzip.status > 1 && unzip.status != 11 {
             throw Problem.failed("couldn't unpack \(path): \(unzip.err.trimmingCharacters(in: .whitespacesAndNewlines))")
         }
         let payload = dir.appendingPathComponent("Payload")
@@ -136,7 +142,8 @@ enum OTA {
               let info = NSDictionary(contentsOf: plist) as? [String: Any]
         else { throw Problem.notAnArchive(path) }
 
-        guard let bundleID = info["CFBundleIdentifier"] as? String, isPlainName(bundleID) else { throw Problem.unreadable(path) }
+        guard let bundleID = info["CFBundleIdentifier"] as? String else { throw Problem.unreadable(path) }
+        guard isPlainName(bundleID) else { throw Problem.oddBundleID(path: path, id: bundleID) }
         let size = ((try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int64) ?? 0
 
         let version = (info["CFBundleShortVersionString"] as? String) ?? "0"
@@ -144,7 +151,7 @@ enum OTA {
         let now = Date.now
         return Build(bundleID: bundleID,
                      title: (info["CFBundleDisplayName"] as? String) ?? (info["CFBundleName"] as? String) ?? bundleID,
-                     version: version, build: number, added: now, size: size, devices: nil,
+                     version: version, build: number, added: now, size: size,
                      slug: Build.slug(version: version, build: number, at: now))
     }
 
@@ -164,23 +171,23 @@ enum OTA {
 
     /// Only a build iOS will accept over the air, and for this device if the
     /// profile names devices at all.
-    static func check(_ plist: [String: Any]?, against udid: String?, name: String) throws -> [String]? {
+    @discardableResult
+    static func check(_ plist: [String: Any]?, against udid: String?, name: String, path: String = "That build") throws -> Date? {
         guard let plist else { throw Problem.unreadable("the provisioning profile") }
-        if let expiry = plist["ExpirationDate"] as? Date, expiry < .now {
-            throw Problem.expired(expiry)
-        }
+        let expiry = plist["ExpirationDate"] as? Date
+        if let expiry, expiry < .now { throw Problem.expired(path: path, on: expiry) }
         let entitlements = plist["Entitlements"] as? [String: Any]
         switch CLI.parseProvisioning(plist) {
-        case .appStore: throw Problem.appStore
-        case .allDevices, .unknown: return nil   // Enterprise covers every device
+        case .appStore: throw Problem.appStore(path)
+        case .allDevices, .unknown: return expiry   // Enterprise covers every device
         case .devices(let list):
             // Development and Ad Hoc both name devices; only the debuggable one is Development.
-            if entitlements?["get-task-allow"] as? Bool == true { throw Problem.development }
+            if entitlements?["get-task-allow"] as? Bool == true { throw Problem.development(path) }
             guard let udid else { throw Problem.udidUnknown(name) }
             guard list.contains(where: { $0.caseInsensitiveCompare(udid) == .orderedSame }) else {
-                throw Problem.notForDevice(name: name, udid: udid)
+                throw Problem.notForDevice(path: path, name: name, udid: udid)
             }
-            return list
+            return expiry
         }
     }
 
@@ -246,6 +253,12 @@ enum OTA {
         }
         guard !build.slug.isEmpty else { throw Problem.unreadable(path) }
         let app = directory.appendingPathComponent(build.bundleID, isDirectory: true)
+        try? FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        // One writer per app. Two of these at once could each delete what the
+        // other had just put in place and both report success.
+        let lock = open(app.appendingPathComponent(".lock").path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
+        defer { if lock >= 0 { flock(lock, LOCK_UN); close(lock) } }
+        if lock >= 0 { flock(lock, LOCK_EX) }
         let dir = app.appendingPathComponent(build.slug, isDirectory: true)
         sweepStaging(app)   // a previous add that was killed mid-copy
         // Built somewhere else first: a copy that runs out of disk halfway must
@@ -266,7 +279,7 @@ enum OTA {
             try? FileManager.default.removeItem(at: staging)
             throw Problem.failed("couldn't store the build in \(dir.path): \(error.localizedDescription)")
         }
-        prune(build.bundleID)
+        prune(build.bundleID, keeping: build.slug)
         return dir
     }
 
@@ -352,9 +365,9 @@ enum OTA {
     }
 
     /// Keeps the newest `keepPerApp`; the rest go with their .ipa.
-    static func prune(_ bundleID: String) {
+    static func prune(_ bundleID: String, keeping: String? = nil) {
         let app = directory.appendingPathComponent(bundleID, isDirectory: true)
-        for old in builds(of: bundleID).dropFirst(keepPerApp) {
+        for old in builds(of: bundleID).dropFirst(keepPerApp) where old.slug != keeping {
             try? FileManager.default.removeItem(at: app.appendingPathComponent(old.slug))
         }
     }

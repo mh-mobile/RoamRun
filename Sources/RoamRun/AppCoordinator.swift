@@ -177,17 +177,22 @@ final class AppCoordinator: ObservableObject {
     nonisolated static let otaServingKey = "otaServing"
     /// Said once per reason: the retry runs every 30s and the log is a person's.
     private var otaComplaint = ""
+    private var verifyingOTA = false
     static let otaPathKey = "otaPath"
     var otaPath: String { UserDefaults.standard.string(forKey: Self.otaPathKey) ?? "/roamrun" }
 
     func startOTAIfNeeded() {
-        // Something else can take the path away — another `tailscale serve` call,
-        // or `serve reset`. Noticing costs one cheap read and saves a page that is
-        // dead until the app is restarted.
-        if let published = otaPublished, TailscaleClient.servedPaths()[published.path] != published.target {
-            otaPublished = nil
+        // The path can be changed while we run; the advice for a clash says to do
+        // exactly that, so it has to take effect without a restart.
+        if let published = otaPublished, published.path != otaPath { otaPublished = nil }
+        guard !OTA.builds().isEmpty else {
+            stopOTA()   // nothing left to serve; deleting the folder is the off switch
+            return
         }
-        guard otaPublished == nil, !OTA.builds().isEmpty else { return }
+        guard otaPublished == nil else {
+            verifyOTAStillServed()
+            return
+        }
         // The path can change between attempts, and the server puts it into every
         // link it writes, so a stale one would send the device somewhere else.
         if let running = otaServer, running.prefix != otaPath {
@@ -216,7 +221,7 @@ final class AppCoordinator: ObservableObject {
                 return
             }
             let out = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
-                               ["serve", "--bg", "--set-path", path, mine], timeout: 20)
+                               ["serve", "--bg", "--yes", "--set-path", path, mine], timeout: 20)
             await MainActor.run {
                 guard let self else { return }
                 if out.status == 0 {
@@ -227,9 +232,25 @@ final class AppCoordinator: ObservableObject {
                 } else {
                     // No HTTPS in this tailnet, tailscaled still coming up, or no
                     // Tailscale at all. The timer tries again, so this recovers.
-                    self.complainOnce("couldn't publish \(path) with `tailscale serve`, will retry: " +
+                    self.complainOnce("couldn't publish \(path) with tailscale serve, will retry: " +
                         out.err.trimmingCharacters(in: .whitespacesAndNewlines))
                 }
+            }
+        }
+    }
+
+    /// Something else can take the path away — another `tailscale serve` call, or
+    /// `serve reset` — and the page is then dead until the app restarts. Off the
+    /// main actor: reading the config shells out and blocks.
+    private func verifyOTAStillServed() {
+        guard let published = otaPublished, !verifyingOTA else { return }
+        verifyingOTA = true
+        Task.detached { [weak self] in
+            let live = TailscaleClient.servedPaths()[published.path] == published.target
+            await MainActor.run {
+                guard let self else { return }
+                self.verifyingOTA = false
+                if !live, self.otaPublished?.target == published.target { self.otaPublished = nil }
             }
         }
     }
@@ -249,11 +270,14 @@ final class AppCoordinator: ObservableObject {
         guard let published = otaPublished else { return }
         otaPublished = nil
         guard TailscaleClient.servedPaths()[published.path] == published.target else { return }
-        AppID.settings?.removeObject(forKey: Self.otaServingKey)
         // Synchronously: this runs from willTerminate, and a detached task would
         // not outlive the process.
-        _ = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
-                     ["serve", "--set-path", published.path, "off"], timeout: 10)
+        let out = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
+                           ["serve", "--set-path", published.path, "off"], timeout: 10)
+        // Only once it's really gone. Forgetting the target while the entry
+        // survives would leave the next run unable to recognise its own
+        // registration, and it would refuse to take it back.
+        if out.status == 0 { AppID.settings?.removeObject(forKey: Self.otaServingKey) }
     }
 
     /// The alert is shown once a run; the activity log and `roamrun status` keep saying it.

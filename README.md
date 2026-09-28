@@ -223,10 +223,7 @@ What it needs:
 - An **.ipa signed for Release Testing (Ad Hoc) or Enterprise**. Xcode makes one
   with Product › Archive › Distribute App › Release Testing (`xcodebuild
   -exportArchive` with `"method": "release-testing"` does the same from a script).
-  `roamrun run` won't: it builds for Development, which only installs through the
-  bridge. A Development
-  build can only be installed through the bridge, and `roamrun ota` says so
-  rather than letting iOS fail cryptically. Ad Hoc means the device has to be in
+    `roamrun ota` refuses one rather than letting iOS fail cryptically. Ad Hoc means the device has to be in
   the provisioning profile; add it once while the device is bridged and Xcode
   registers it like any local device.
 - **HTTPS in your tailnet** — MagicDNS and HTTPS certificates turned on. RoamRun
@@ -288,7 +285,7 @@ Main files in `Sources/RoamRun/`:
 
 ## What it creates on your Mac, and uninstalling
 
-RoamRun writes only to these places (it never touches system settings or other apps):
+RoamRun writes only to these places (it never touches system settings or other apps; `roamrun ota` also asks `tailscale serve` to carry one path, see below):
 
 | Location | Contents |
 |---|---|
@@ -313,6 +310,7 @@ rm /usr/local/bin/roamrun                 # if you installed the CLI
 rm -rf ~/Library/Application\ Support/RoamRun ~/Library/Logs/RoamRun
 defaults delete io.github.mh-mobile.roamrun
 defaults delete com.roamrun.app 2>/dev/null   # left by versions before 0.1.12
+tailscale serve --set-path /roamrun off       # if you used roamrun ota
 # finally delete /Applications/RoamRun.app (turn off "Open at login" first if you enabled it)
 ```
 
