@@ -32,6 +32,12 @@ final class Relay: @unchecked Sendable {
     let remotePort: UInt16
     /// Number of connections that actually reached the iPhone (called off-main).
     let onOpenCountChange: ((Int) -> Void)?
+    /// The listener died after it was up; called once, off-main. Without it nothing
+    /// would notice: the bridge keeps advertising a port nobody answers on.
+    let onFailure: ((Relay) -> Void)?
+    /// The start() waiting for the listener's first verdict.
+    private var starting: CheckedContinuation<Void, Error>?
+    private var failureReported = false
 
     private var listener: NWListener?
     private var connections: [NWConnection] = []
@@ -53,8 +59,9 @@ final class Relay: @unchecked Sendable {
     /// The callback is given here, not assigned afterwards: start() returns with the
     /// listener already accepting, and the calls that read it run off the main actor.
     init(localIP: String, localPort: UInt16, remoteIP: String, remotePort: UInt16,
-         onOpenCountChange: ((Int) -> Void)? = nil) {
+         onOpenCountChange: ((Int) -> Void)? = nil, onFailure: ((Relay) -> Void)? = nil) {
         self.onOpenCountChange = onOpenCountChange
+        self.onFailure = onFailure
         self.localIP = localIP
         self.localPort = localPort
         self.remoteIP = remoteIP
@@ -82,24 +89,28 @@ final class Relay: @unchecked Sendable {
 
     func start() async throws {
         guard let port = NWEndpoint.Port(rawValue: localPort) else { throw RelayError.invalidPort(localPort) }
-        lock.withLock { stopped = false }
+        lock.withLock { stopped = false; failureReported = false }
         let params = Self.tcpParams()
         params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(localIP), port: port)
         let listener = try NWListener(using: params)
-        self.listener = listener
+        // A relay started again drops the listener before: its late states must not
+        // end this start, and its port must not stay bound.
+        let older = lock.withLock { () -> NWListener? in
+            defer { self.listener = listener }
+            return self.listener
+        }
+        older?.stateUpdateHandler = nil
+        older?.cancel()
         listener.newConnectionHandler = { [weak self] conn in self?.accept(conn) }
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            let box = ReadyBox()
-            listener.stateUpdateHandler = { state in
-                switch state {
-                case .ready: box.resume { cont.resume() }
-                // .waiting (e.g. en0 lost its address mid-bind) would otherwise hang start().
-                case .failed(let e), .waiting(let e):
-                    box.resume { listener.cancel(); cont.resume(throwing: RelayError.bindFailed(e.localizedDescription)) }
-                case .cancelled: box.resume { cont.resume(throwing: RelayError.bindFailed("cancelled")) }
-                default: break
-                }
+            // A start still waiting (two at once) ends here rather than never.
+            let earlier = lock.withLock { () -> CheckedContinuation<Void, Error>? in
+                defer { starting = cont }
+                return starting
             }
+            earlier?.resume(throwing: RelayError.bindFailed("started again"))
+            // Weak: a relay dropped without stop() must still reach deinit, which stops it.
+            listener.stateUpdateHandler = { [weak self, weak listener] state in self?.listenerStateChanged(state, listener) }
             // start() only after the handler is installed — states only flow
             // once the listener is started, so awaiting before starting
             // deadlocks.
@@ -107,13 +118,57 @@ final class Relay: @unchecked Sendable {
         }
     }
 
+    /// The listener's state: the first verdict ends start(); a failure after it was
+    /// ready is reported once (internal for tests, which pass no listener).
+    func listenerStateChanged(_ state: NWListener.State, _ listener: NWListener?) {
+        // A listener this relay has since replaced or stopped speaks for nothing here.
+        if let listener, lock.withLock({ self.listener !== listener }) { return }
+        switch state {
+        case .ready: finishStart(nil)
+        // .waiting (e.g. en0 lost its address mid-bind) would otherwise hang start().
+        case .failed(let e), .waiting(let e):
+            let pending = lock.withLock { starting != nil }
+            // Once up, .waiting may still recover by itself (a Wi‑Fi roam): only .failed is the end.
+            if !pending, case .waiting = state { return }
+            listener?.stateUpdateHandler = nil   // the listener is done either way
+            listener?.cancel()
+            if finishStart(RelayError.bindFailed(e.localizedDescription)) { return }
+            let first = lock.withLock { () -> Bool in
+                guard !failureReported, !stopped else { return false }
+                failureReported = true
+                return true
+            }
+            if first { onFailure?(self) }
+        case .cancelled:
+            listener?.stateUpdateHandler = nil
+            finishStart(RelayError.bindFailed("cancelled"))
+        default: break
+        }
+    }
+
+    /// Resumes a waiting start(); false when none was waiting (it was ready already).
+    @discardableResult
+    private func finishStart(_ error: Error?) -> Bool {
+        let cont = lock.withLock { () -> CheckedContinuation<Void, Error>? in
+            defer { starting = nil }
+            return starting
+        }
+        guard let cont else { return false }
+        if let error { cont.resume(throwing: error) } else { cont.resume() }
+        return true
+    }
+
     func stop() {
+        let listener = lock.withLock { () -> NWListener? in
+            defer { self.listener = nil }
+            return self.listener
+        }
         listener?.stateUpdateHandler = nil
         listener?.cancel()
-        listener = nil
         lock.lock(); stopped = true; let open = connections; connections = []; established = []; lock.unlock()
         Self.totalLock.withLock { Self.total -= open.count / 2 }
         for c in open { c.cancel() }
+        finishStart(RelayError.bindFailed("stopped"))   // its handler is gone: nothing else would end a start in flight
     }
 
     var openCount: Int {
@@ -256,20 +311,5 @@ private final class ConnStats: @unchecked Sendable {
         guard !logged else { return }
         logged = true
         relayLog.log("\(message, privacy: .public)")
-    }
-}
-
-/// One-shot resume helper so listener state handlers can't double-resume.
-private final class ReadyBox: @unchecked Sendable {
-    private var didResume = false
-    private let lock = NSLock()
-    /// Runs `body` once; outside the lock, so what it calls can't re-enter it.
-    func resume(_ body: () -> Void) {
-        let first = lock.withLock { () -> Bool in
-            guard !didResume else { return false }
-            didResume = true
-            return true
-        }
-        if first { body() }
     }
 }

@@ -53,6 +53,15 @@ final class OTAServer: @unchecked Sendable {
 
     init(tailnetPort: Int) { self.tailnetPort = tailnetPort }
 
+    /// The MagicDNS name `tailscale serve` publishes us under; nil until it is known.
+    /// Anything else in Host is not a request from the tailnet: a page on this
+    /// Mac rebinding its own name to 127.0.0.1, say, would otherwise read the builds.
+    private var _servedName: String?
+    var servedName: String? {
+        get { lock.withLock { _servedName } }
+        set { lock.withLock { _servedName = newValue.map(Self.canonical) } }
+    }
+
     /// The port it ended up on; nil if it couldn't listen at all.
     @discardableResult
     func start() -> UInt16? {
@@ -170,6 +179,9 @@ final class OTAServer: @unchecked Sendable {
             // Without it every link in the manifest would point the device at
             // itself, and the install would fail with nothing to go on.
             guard let host else { return self.send(conn, status: "400 Bad Request") }
+            guard Self.isServedName(host, servedName: self.servedName) else {
+                return self.send(conn, status: "421 Misdirected Request")
+            }
             let base = "https://\(host)"   // Host carries the port serve published us on
             self.route(conn, path: path, base: base, bodyWanted: method == "GET", idle: idle)
         }
@@ -207,6 +219,18 @@ final class OTAServer: @unchecked Sendable {
               first.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "." || $0 == "-") }),
               name.count == 1 || UInt16(name[1]) != nil else { return nil }
         return s
+    }
+
+    /// Host's name part is the name we are served under (case and a trailing dot
+    /// aside); its port is whatever `serve` published.
+    static func isServedName(_ host: String, servedName: String?) -> Bool {
+        guard let servedName else { return false }
+        let name = host.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
+        return canonical(name) == servedName
+    }
+
+    private static func canonical(_ name: String) -> String {
+        (name.hasSuffix(".") ? String(name.dropLast()) : name).lowercased()
     }
 
     private func route(_ conn: NWConnection, path: String, base: String, bodyWanted: Bool, idle: IdleTimer) {

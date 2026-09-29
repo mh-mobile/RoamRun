@@ -212,7 +212,7 @@ struct TailscaleClient {
         // a section we don't look at as "nothing here" is the same mistake one
         // layer down.
         if let tcp = (root["TCP"] as? [String: Any])?["\(port)"] as? [String: Any],
-           tcp["TCPForward"] != nil || tcp["TLSTerminatedTCP"] != nil {
+           tcp["TCPForward"] != nil || tcp["TerminateTLS"] != nil {   // ipn.TCPPortHandler's keys
             others.append(.init(host: nil, path: "TCP forwarding"))   // no Web entry of its own
         }
         // Every host key for that port, not the first the dictionary happens to
@@ -313,8 +313,14 @@ struct TailscaleClient {
     /// Tailscale-level reachability (disco ping), independent of iPhone services.
     func ping(_ ip: String) -> Bool {
         guard let path = resolvedPath() else { return false }
-        let r = Proc.run(path, ["ping", "-c", "1", "--timeout", "3s", ip])
+        let r = Proc.run(path, Self.pingArgs(ip))
         return r.status == 0 && r.out.contains("pong")
+    }
+
+    /// `--until-direct` defaults to true: a pong via DERP then exits 1 ("direct
+    /// connection not established"), and a relayed device would read as down.
+    static func pingArgs(_ ip: String) -> [String] {
+        ["ping", "-c", "1", "--timeout", "3s", "--until-direct=false", ip]
     }
 
     /// Host of the peer's direct path ("192.168.1.42"), nil when relayed or

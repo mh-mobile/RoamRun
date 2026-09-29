@@ -14,9 +14,20 @@ final class ProfileStore {
 
     /// Set when profiles.json couldn't be read and was kept aside under this name.
     private(set) var keptUnreadable: URL?
+    /// profiles.json is there but couldn't be read at all (permissions, I/O), as of
+    /// the last load. Nothing may be written then: the list it would replace is unseen.
+    private(set) var unreadable = false
 
     func load() -> [DeviceProfile] {
-        guard let data = try? Data(contentsOf: url) else { return [] }
+        unreadable = false
+        let data: Data
+        do { data = try Data(contentsOf: url) }
+        catch CocoaError.fileReadNoSuchFile { return [] }
+        catch let error as NSError where error.domain == NSPOSIXErrorDomain && error.code == Int(ENOENT) { return [] }
+        catch {
+            unreadable = true
+            return []
+        }
         if let profiles = try? JSONDecoder().decode([DeviceProfile].self, from: data) { return profiles }
         // One malformed entry shouldn't cost the others: keep what decodes (and a copy of the file below).
         let salvaged = ((try? JSONSerialization.jsonObject(with: data)) as? [Any])?.compactMap { item in
@@ -42,8 +53,10 @@ final class ProfileStore {
     func update(_ change: (inout [DeviceProfile]) -> Void) -> Bool {
         withLock {
             var all = load()
+            guard !unreadable else { return false }
+            let before = all
             change(&all)
-            return save(all)
+            return all == before || save(all)   // nothing changed: nothing to write
         } ?? false
     }
 
@@ -53,7 +66,9 @@ final class ProfileStore {
     /// meanwhile. nil if it couldn't be written; otherwise what is on disk now.
     func save(base: [DeviceProfile], wanted: [DeviceProfile]) -> [DeviceProfile]? {
         withLock { () -> [DeviceProfile]? in
-            let merged = Self.merge(base: base, wanted: wanted, disk: load())
+            let disk = load()
+            guard !unreadable else { return nil }
+            let merged = Self.merge(base: base, wanted: wanted, disk: disk)
             return save(merged) ? merged : nil
         } ?? nil   // the outer nil is a lock that couldn't be taken; both mean "not saved"
     }

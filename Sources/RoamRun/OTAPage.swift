@@ -13,7 +13,8 @@ extension OTA {
                     "bundle-identifier": build.bundleID,
                     // CFBundleVersion, which is what Apple's key means; the page
                     // shows the marketing version beside it.
-                    "bundle-version": build.build.isEmpty ? build.version : build.build,
+                    // From the archive's Info.plist, like the title: no control characters in XML.
+                    "bundle-version": printable(build.build.isEmpty ? build.version : build.build),
                     "kind": "software",
                     "title": printable(build.title),
                 ],

@@ -86,7 +86,8 @@ If the bridge already runs in the menu bar app, just use it — `status` shows
 the owner, and `up` exits 0 when another process already has it ready (exit 1
 if that one is still coming up). Status "On this Wi‑Fi" means the iPhone is on
 the Mac's own network: no bridge is needed, Xcode sees it directly, and it
-counts as ready. So when the user wants to know that it works *over
+counts as ready while Xcode can reach it (`ready` true; asleep or locked it stays
+`state` local with `ready` false and a `detail`). So when the user wants to know that it works *over
 Tailscale* (e.g. trying it at home before going out), "Ready for Xcode"
 (`state` ready) is that; "On this Wi‑Fi" (`state` local) means it didn't use
 Tailscale — have them move the iPhone to another network first. After a long
@@ -180,4 +181,4 @@ already-running app, and never exits on its own — run it in the background:
   every 42 s; retry the command once, then run `doctor`.
 
 Exit codes: `0` ok/ready, `1` not ready or a check failed, `2` usage error.
-In `--json`, compare `ready` or `state` (off, starting, waiting, preparing, ready, error, local); `status` is display text.
+In `--json`, `ready` says whether Xcode can use the device now; `state` (off, starting, waiting, preparing, ready, error, local) says how RoamRun is handling it; `status` is display text.
