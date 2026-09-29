@@ -91,7 +91,15 @@ final class ProfileStore {
     /// ota` goes back to not knowing the device.
     static func merge(base: [DeviceProfile], wanted: [DeviceProfile], disk: [DeviceProfile]) -> [DeviceProfile] {
         let was = byID(base), onDisk = byID(disk)
-        return wanted.map { mine in
+        // A device this process never saw (not in `base`) isn't its to drop: the list
+        // it started from was unreadable, or someone else added it. Deleting one here
+        // means it was in `base`, so that still sticks.
+        let wantedIDs = Set(wanted.map(\.id))
+        // …unless it was added here again meanwhile (the list looked empty): that one wins.
+        let unseen = disk.filter { d in
+            was[d.id] == nil && !wantedIDs.contains(d.id) && !wanted.contains { Self.sameDevice($0, d) }
+        }
+        return unseen + wanted.map { mine in
             guard let old = was[mine.id], let theirs = onDisk[mine.id] else { return mine }
             var out = mine
             if mine.providerIP == old.providerIP { out.providerIP = theirs.providerIP }
@@ -100,6 +108,13 @@ final class ProfileStore {
             if mine.udid == old.udid { out.udid = theirs.udid }
             return out
         }
+    }
+
+    /// The checks Add Device refuses a second profile on: same address, advert or UDID.
+    static func sameDevice(_ a: DeviceProfile, _ b: DeviceProfile) -> Bool {
+        (!a.providerIP.isEmpty && a.providerIP == b.providerIP)
+            || (!a.instanceName.isEmpty && a.instanceName == b.instanceName)
+            || (a.udid != nil && a.udid?.caseInsensitiveCompare(b.udid ?? "") == .orderedSame)
     }
 
     /// Last one wins: a duplicated id would trap `Dictionary(uniqueKeysWithValues:)`.

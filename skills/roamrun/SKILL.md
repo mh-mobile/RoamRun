@@ -86,8 +86,12 @@ If the bridge already runs in the menu bar app, just use it — `status` shows
 the owner, and `up` exits 0 when another process already has it ready (exit 1
 if that one is still coming up). Status "On this Wi‑Fi" means the iPhone is on
 the Mac's own network: no bridge is needed, Xcode sees it directly, and it
-counts as ready while Xcode can reach it (`ready` true; asleep or locked it stays
-`state` local with `ready` false and a `detail`). So when the user wants to know that it works *over
+counts as ready while CoreDevice can reach it (`ready` true; when CoreDevice
+reports it unavailable or can't be asked, it stays `state` local with `ready`
+false and a `detail`; before the UDID is known CoreDevice isn't asked, and `ready`
+follows the bridge alone). `ready` says nothing about the lock: a reachable device
+can be `ready` true and `locked` true, so check `locked` separately, as above.
+So when the user wants to know that it works *over
 Tailscale* (e.g. trying it at home before going out), "Ready for Xcode"
 (`state` ready) is that; "On this Wi‑Fi" (`state` local) means it didn't use
 Tailscale — have them move the iPhone to another network first. After a long

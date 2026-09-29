@@ -132,13 +132,22 @@ private func entry(pid: Int32, _ status: BridgeStatus) -> StatusFile.Entry {
 
 @Test func otherProcessCannotTakeAHealthyBridge() {
     for s in [BridgeStatus.ready, .waiting, .starting, .preparing] {
-        #expect(!StatusFile.mayReplace(entry(pid: 100, s), with: entry(pid: 200, .starting), by: 200))
+        #expect(!StatusFile.mayReplace(entry(pid: 100, s), with: entry(pid: 200, .starting), by: 200, claim: true))
     }
 }
 
 @Test func otherProcessMayTakeOverErroredOrStandingAside() {
     for s in [BridgeStatus.error, .local] {
-        #expect(StatusFile.mayReplace(entry(pid: 100, s), with: entry(pid: 200, .starting), by: 200))
+        #expect(StatusFile.mayReplace(entry(pid: 100, s), with: entry(pid: 200, .starting), by: 200, claim: true))
+    }
+}
+
+@Test func ordinaryUpdatesNeverTakeAnotherOwnersEntry() {
+    for held in [BridgeStatus.error, .local, .ready, .starting] {
+        for next in [BridgeStatus.error, .local, .starting] {
+            #expect(!StatusFile.mayReplace(entry(pid: 100, held), with: entry(pid: 200, next), by: 200))
+        }
+        #expect(!StatusFile.mayReplace(entry(pid: 100, held), with: nil, by: 200, claim: true))
     }
 }
 
@@ -626,7 +635,7 @@ import ServiceManagement
     // Errored elsewhere: ours to take.
     let errored = UUID()
     #expect(StatusFile.write(errored, e(other, .error), in: dir, live: live) == .written)
-    #expect(StatusFile.write(errored, e(getpid(), .starting), in: dir, live: live) == .written)
+    #expect(StatusFile.write(errored, e(getpid(), .starting), in: dir, live: live, claim: true) == .written)
     // A second profile for the same iPhone (same UDID) can't bridge it too; standing aside is fine.
     func withUDID(_ x: StatusFile.Entry) -> StatusFile.Entry { var x = x; x.udid = "00008130-000c1c5c307a8d3a"; return x }
     let first = UUID(), second = UUID()
@@ -2200,6 +2209,26 @@ private final class Counter: @unchecked Sendable {
 /// In the serialized relay suite: they open relays, and `processWideCapSpansRelays`
 /// counts every pair in the process — run beside it, they made it flaky.
 extension RelayOnLocalhost {
+    /// A restart while a bind is in flight, then a discovery whose window reaches the
+    /// old port further down: what is counted as relayed is exactly what listens.
+    @MainActor @Test func coveredPortsMatchRelaysAfterARestartMidBind() async {
+        let dir = scratchDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var p = profile("A")
+        p.providerIP = "127.0.0.1"
+        let bridge = ProxyBridge(profile: p, statusDir: dir)
+        defer { bridge.stop() }
+        let base = freeBase(in: 36000...37999, count: 30)
+        bridge.onTunnelPortDiscovered(base + 8, localIP: "127.0.0.1")
+        for _ in 0..<1000 where bridge.bindsInFlight == 0 { await Task.yield() }
+        #expect(bridge.bindsInFlight > 0)   // the old start is mid-bind
+        bridge.stop()
+        bridge.onTunnelPortDiscovered(base, localIP: "127.0.0.1")
+        #expect(await eventuallyOnMain { bridge.bindsInFlight == 0 && !bridge.tunnelRelayPorts.isEmpty })
+        try? await Task.sleep(for: .milliseconds(300))   // the old start's last bind ends too
+        #expect(bridge.coveredPortsForTests == bridge.tunnelRelayPorts)
+    }
+
     @MainActor @Test func aTunnelPortInAnotherBridgesLookaheadGoesToItsDevice() async {
         let dir = scratchDir()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -2269,4 +2298,160 @@ extension RelayOnLocalhost {
         relay.listenerStateChanged(.failed(.posix(.ENETDOWN)), stranger)
         #expect(failures.value == 0)
     }
+}
+
+// MARK: - Third review round
+
+@Test func devicesThisProcessNeverSawStayOnDisk() {
+    let a = profile("A"), b = profile("B"), new = profile("New")
+    // Started from an unreadable list (nothing seen), then added one: the others stay.
+    #expect(Set(ProfileStore.merge(base: [], wanted: [new], disk: [a, b]).map(\.id)) == Set([a.id, b.id, new.id]))
+    // Deleted here — it was seen — so it doesn't come back.
+    #expect(ProfileStore.merge(base: [a, b], wanted: [b], disk: [a, b]).map(\.id) == [b.id])
+}
+
+@Test func aListThatBecomesReadableAgainIsntWrittenOverByTheEmptyOneWeStartedWith() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let store = ProfileStore(directory: dir)
+    let saved = [profile("iPhone"), profile("iPad")]
+    #expect(store.save(base: [], wanted: saved) == saved)
+    let file = dir.appendingPathComponent("profiles.json").path
+    chmod(file, 0)
+    let seen = store.load()   // the app at launch: nothing it can read
+    #expect(seen.isEmpty && store.unreadable)
+    chmod(file, 0o600)        // the permission comes back while it runs
+    let added = profile("New")
+    let after = try #require(store.save(base: seen, wanted: [added]))
+    #expect(Set(after.map(\.id)) == Set(saved.map(\.id) + [added.id]))
+    #expect(Set(store.load().map(\.id)) == Set(after.map(\.id)))
+}
+
+@Test func aPortScanStillSelectsItsDeviceAfterSavingRestoresOtherDevices() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let store = ProfileStore(directory: dir)
+    let restored = profile("A"), scanned = profile("B")
+    #expect(store.save(base: [], wanted: [restored]) == [restored])
+    // The app only knows B; this save is the first one after A becomes readable.
+    let updated = try #require(AppCoordinator.saveScannedPort(49160, for: scanned.id, in: [scanned]) { changed in
+        store.save(base: [], wanted: changed) ?? changed
+    })
+    #expect(store.load().map(\.id) == [restored.id, scanned.id])
+    #expect(store.load().first == restored)
+    #expect(updated.id == scanned.id)
+    #expect(updated.remotePairingPort == 49160)
+}
+
+@Test func anAutomaticClaimNeverTakesARunningRoamrunUpsDevice() {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let id = UUID(), cliPID: Int32 = 4242
+    func entry(_ pid: Int32, cli: Bool, _ s: BridgeStatus) -> StatusFile.Entry {
+        .init(pid: pid, cli: cli, udid: nil, status: s.title, detail: "", ready: false, tunnelPorts: [], updated: .now, state: s.rawValue)
+    }
+    let live: StatusFile.Liveness = { _ in true }
+    for held in [BridgeStatus.error, .local] {
+        #expect(StatusFile.write(id, entry(cliPID, cli: true, held), in: dir, live: live) == .written)
+        // The app on its own: refused, decided under the lock.
+        if case .heldBy = StatusFile.write(id, entry(getpid(), cli: false, .starting), in: dir, live: live, claim: true, deferToCLI: true) {} else {
+            Issue.record("an automatic start took a \(held) roamrun up's device")
+        }
+        // Start pressed by a person may still take an errored / standing-aside one, as README says.
+        #expect(StatusFile.write(id, entry(getpid(), cli: false, .starting), in: dir, live: live, claim: true) == .written)
+        StatusFile.write(id, nil, in: dir, live: live)
+    }
+    // Only a CLI is deferred to: another app copy's errored entry is taken as before.
+    #expect(StatusFile.write(id, entry(cliPID, cli: false, .error), in: dir, live: live) == .written)
+    #expect(StatusFile.write(id, entry(getpid(), cli: false, .starting), in: dir, live: live, claim: true, deferToCLI: true) == .written)
+}
+
+@MainActor @Test func aBridgeStartedAutomaticallyLeavesTheDeviceToRoamrunUp() async {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let p = profile("iPhone")
+    let live: StatusFile.Liveness = { _ in true }
+    let cli = StatusFile.Entry(pid: 4242, cli: true, udid: nil, status: BridgeStatus.error.title, detail: "", ready: false,
+                               tunnelPorts: [], updated: .now, state: BridgeStatus.error.rawValue)
+    #expect(StatusFile.write(p.id, cli, in: dir, live: live) == .written)
+    let bridge = ProxyBridge(profile: p, statusDir: dir, statusLive: live)
+    await bridge.start(automatic: true)   // what the app's restore, retry and resume paths now do
+    #expect(bridge.status == .error)
+    #expect(StatusFile.read(in: dir, live: live)[p.id]?.pid == 4242)   // still roamrun up's
+    bridge.stop()
+}
+
+@MainActor @Test func aManualClaimDoesntAuthorizeLaterUpdatesOrTeardownToTakeOver() {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let p = profile("iPhone")
+    let live: StatusFile.Liveness = { _ in true }
+    let bridge = ProxyBridge(profile: p, statusDir: dir, statusLive: live)
+    defer { bridge.stop() }
+
+    for held in [BridgeStatus.error, .local] {
+        #expect(bridge.claimDevice(automatic: false) == .written)
+        bridge.fail("the app's bridge is retryable")
+        let cli = StatusFile.Entry(pid: 4242, cli: true, udid: nil, status: held.title, detail: "CLI's entry",
+                                   ready: false, tunnelPorts: [], updated: .now, state: held.rawValue)
+        #expect(StatusFile.write(p.id, cli, in: dir, live: live, claim: true) == .written)
+
+        bridge.fail("a later status update")
+        #expect(StatusFile.read(in: dir, live: live)[p.id] == cli)
+        bridge.stop()   // teardown publishes changes before the state becomes Off
+        #expect(StatusFile.read(in: dir, live: live)[p.id] == cli)
+        #expect(bridge.claimDevice(automatic: true) == .heldBy(cli))
+        #expect(StatusFile.read(in: dir, live: live)[p.id] == cli)
+        // A new Start action may still take over. Its later updates stay ours too.
+        #expect(bridge.claimDevice(automatic: false) == .written)
+        bridge.fail("owned update")
+        #expect(StatusFile.read(in: dir, live: live)[p.id]?.detail == "owned update")
+        bridge.stop()
+        #expect(StatusFile.read(in: dir, live: live).isEmpty)
+    }
+}
+
+@MainActor @Test func aRefusedAutomaticClaimDoesntPublishStartingBeforeCheckingItsTwin() {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    var p = profile("iPhone")
+    p.udid = "00008130-000C1C5C307A8D3A"
+    let live: StatusFile.Liveness = { _ in true }
+    let twin = UUID()
+    let cli = StatusFile.Entry(pid: 4242, cli: true, udid: p.udid, status: BridgeStatus.error.title,
+                               detail: "", ready: false, tunnelPorts: [], updated: .now, state: BridgeStatus.error.rawValue)
+    #expect(StatusFile.write(twin, cli, in: dir, live: live) == .written)
+    let bridge = ProxyBridge(profile: p, statusDir: dir, statusLive: live)
+    defer { bridge.stop() }
+    #expect(bridge.claimDevice(automatic: true) == .heldBy(cli))
+    #expect(StatusFile.read(in: dir, live: live) == [twin: cli])
+}
+
+@Test func aDeviceAddedAgainWhileTheListWasUnreadableDoesntComeBackTwice() {
+    var old = profile("iPhone"), again = profile("iPhone")
+    old.udid = "00008130-000C1C5C307A8D3A"
+    again.udid = "00008130-000c1c5c307a8d3a"
+    let other = profile("iPad")
+    let merged = ProfileStore.merge(base: [], wanted: [again], disk: [old, other])
+    #expect(Set(merged.map(\.id)) == Set([again.id, other.id]))
+}
+
+@Test func anAutomaticStartLeavesATwinProfilesRoamrunUpAlone() {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let live: StatusFile.Liveness = { _ in true }
+    let udid = "00008130-000C1C5C307A8D3A", mine = UUID(), twin = UUID()
+    func entry(_ pid: Int32, cli: Bool, _ s: BridgeStatus) -> StatusFile.Entry {
+        .init(pid: pid, cli: cli, udid: udid, status: s.title, detail: "", ready: false, tunnelPorts: [], updated: .now, state: s.rawValue)
+    }
+    // `roamrun up` bridges the same iPhone through another saved profile, and is errored.
+    #expect(StatusFile.write(twin, entry(4242, cli: true, .error), in: dir, live: live) == .written)
+    if case .heldBy = StatusFile.write(mine, entry(getpid(), cli: false, .starting), in: dir, live: live, claim: true, deferToCLI: true) {} else {
+        Issue.record("an automatic start took a twin roamrun up's device")
+    }
+    #expect(StatusFile.write(mine, entry(getpid(), cli: false, .starting), in: dir, live: live, claim: true) == .written)   // Start pressed
+    // And the app waits for it rather than retrying into the refusal.
+    let entries = StatusFile.read(in: dir, live: live)
+    #expect(HomeRule.cliHolding(UUID(), udid: udid.lowercased(), in: entries, myPID: getpid())?.pid == 4242)
+    #expect(HomeRule.cliHolding(UUID(), udid: nil, in: entries, myPID: getpid()) == nil)
 }

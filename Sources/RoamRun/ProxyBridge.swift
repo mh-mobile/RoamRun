@@ -12,7 +12,7 @@ import OSLog
 /// onward to the iPhone over the mesh VPN.
 @MainActor
 final class ProxyBridge: ObservableObject {
-    @Published private(set) var state: BridgeState = .off { didSet { publishStatus() } }
+    @Published private(set) var state: BridgeState = .off
     /// remotepairingd holds a control channel to the iPhone through us.
     @Published private(set) var phoneConnected = false { didSet { publishStatus() } }
     /// A tunnel has been negotiated at least once, so relays are primed.
@@ -75,13 +75,17 @@ final class ProxyBridge: ObservableObject {
         "rr-\(profile.id.uuidString.prefix(8).lowercased()).roamrun.local"
     }
 
-    /// Where status.json lives; tests pass a scratch folder.
+    /// Where status.json lives, and which of its entries count as live; tests pass
+    /// a scratch folder and owners that aren't RoamRun.app.
     private let statusDir: URL
+    private let statusLive: StatusFile.Liveness
 
-    init(profile: DeviceProfile, statusDir: URL = ProfileStore.directory) {
+    init(profile: DeviceProfile, statusDir: URL = ProfileStore.directory,
+         statusLive: @escaping StatusFile.Liveness = StatusFile.isRoamRun) {
         self.profile = profile
         self.udid = profile.udid
         self.statusDir = statusDir
+        self.statusLive = statusLive
         Self.all.add(self)
         Self.listenForClaims()
     }
@@ -91,11 +95,14 @@ final class ProxyBridge: ObservableObject {
     private static let all = NSHashTable<ProxyBridge>.weakObjects()
     /// Ports given to another bridge here; a bind still in flight must not keep them.
     private var yielded = Set<UInt16>()
-    /// Binds under way, per port: one that fails must not uncover a port another is
-    /// still binding. Every increment is matched, across restarts too, so never reset.
+    /// This generation's binds under way, per port: one that fails must not uncover a
+    /// port another is still binding. Reset with the rest at teardown.
     private var binding: [UInt16: Int] = [:]
 
-    func start() async {
+    /// `automatic`: the app starting it by itself (restore, retry, network change,
+    /// leaving this Wi‑Fi). Such a start never takes the device from a live `roamrun up`
+    /// — decided when the claim is written, so it can't race a check made earlier.
+    func start(automatic: Bool = false) async {
         generation += 1
         let gen = generation
         teardown()   // a failed or repeated start must not leave relays/timers behind
@@ -108,11 +115,10 @@ final class ProxyBridge: ObservableObject {
         autoRetry = true
         phoneConnected = false
         tunnelReady = false
-        setState(.starting("Checking local interface"))
         // One bridge per iPhone across processes — claimed here so every path
         // (Start, retries, restore, network change, CLI) goes through it. The
         // claim is one step under status.lock; only `.written` means it's ours.
-        switch publishStatus() {
+        switch claimDevice(automatic: automatic) {
         case .written:
             claimTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.checkClaim() }
@@ -261,6 +267,13 @@ final class ProxyBridge: ObservableObject {
         }
     }
 
+    /// Takeover permission belongs to this claim, never to subsequent status updates.
+    @discardableResult
+    func claimDevice(automatic: Bool) -> StatusFile.WriteResult {
+        state = .starting("Checking local interface")   // publish only with the claim's policy
+        return publishStatus(claim: true, deferToCLI: automatic && !CLI.isRunning)
+    }
+
     /// A start's progress, unless that start was stopped or replaced while it
     /// awaited — writing then would put a stopped bridge back to Starting, or
     /// an active one back for good. False when stale.
@@ -272,9 +285,9 @@ final class ProxyBridge: ObservableObject {
     }
 
     /// Start from synchronous code. A stop() before the task gets to run wins.
-    func requestStart() {
+    func requestStart(automatic: Bool = false) {
         let g = generation
-        Task { guard g == generation else { return }; await start() }
+        Task { guard g == generation else { return }; await start(automatic: automatic) }
     }
 
     func stop() {
@@ -298,6 +311,7 @@ final class ProxyBridge: ObservableObject {
         tunnelRelays = [:]
         coveredPorts = []
         yielded = []
+        binding = [:]
         localPort = 0
         phoneConnected = false
         tunnelReady = false
@@ -394,6 +408,8 @@ final class ProxyBridge: ObservableObject {
 
     /// Tunnel ports whose relay is listening (tests).
     var tunnelRelayPorts: Set<UInt16> { Set(tunnelRelays.keys) }
+    /// Ports counted as relayed or being bound (tests check it matches reality).
+    var coveredPortsForTests: Set<UInt16> { coveredPorts }
     /// Relay binds still under way (tests wait for them to settle).
     var bindsInFlight: Int { binding.values.reduce(0, +) }
 
@@ -456,7 +472,9 @@ final class ProxyBridge: ObservableObject {
                     let bound: Result<Relay, Error>
                     do { bound = .success(try await bindRelay(localIP: localIP, localPort: p, remotePort: p, tries: tries, tunnelPort: p)) }
                     catch { bound = .failure(error) }
-                    binding[p] = binding[p, default: 1] > 1 ? binding[p]! - 1 : nil
+                    // Counted per generation: teardown resets it, and a bind from a start that is
+                    // gone touches neither the count nor coveredPorts (both are the new start's).
+                    if gen == generation { binding[p] = binding[p, default: 1] > 1 ? binding[p]! - 1 : nil }
                     do {
                         let pair = try bound.get()
                         guard gen == generation else { pair.stop(); return }   // bridge stopped meanwhile
@@ -583,9 +601,9 @@ final class ProxyBridge: ObservableObject {
     }
 
     @discardableResult
-    private func publishStatus() -> StatusFile.WriteResult {
+    private func publishStatus(claim: Bool = false, deferToCLI: Bool = false) -> StatusFile.WriteResult {
         let s = status
-        guard s != .off else { return StatusFile.write(profile.id, nil, in: statusDir) }
+        guard s != .off else { return StatusFile.write(profile.id, nil, in: statusDir, live: statusLive) }
         var detail = ""
         var ports: [UInt16] = []
         switch state {
@@ -603,7 +621,8 @@ final class ProxyBridge: ObservableObject {
         }
         return StatusFile.write(profile.id, .init(pid: getpid(), cli: CLI.isRunning, udid: udid, status: s.title, detail: detail,
                                                   ready: s == .ready, tunnelPorts: ports, updated: .now,
-                                                  state: s.rawValue, started: StatusFile.myStart), in: statusDir)
+                                                  state: s.rawValue, started: StatusFile.myStart), in: statusDir,
+                                 live: statusLive, claim: claim, deferToCLI: deferToCLI)
     }
 
     /// The device answers nowhere we know: it may have a new Tailscale address
@@ -715,7 +734,7 @@ final class ProxyBridge: ObservableObject {
         guard state == .local, !checkingLAN else { return }
         // Two processes standing aside for one device would keep overwriting each
         // other's status entry (and `down` could stop only one): one steps back.
-        if let other = StatusFile.read(in: statusDir)[profile.id], other.pid != getpid(),
+        if let other = StatusFile.read(in: statusDir, live: statusLive)[profile.id], other.pid != getpid(),
            HomeRule.yields(meCLI: CLI.isRunning, myPID: getpid(), to: other) {
             log("another RoamRun process (pid \(other.pid)) watches this device too — stopping here")
             stop()
@@ -733,7 +752,15 @@ final class ProxyBridge: ObservableObject {
         awayTicks = home ? 0 : awayTicks + 1
         guard HomeRule.shouldResume(awayTicks: awayTicks) else { return }
         awayTicks = 0
-        await start()
+        // Checked again after the wait: a `roamrun up` may have started meanwhile.
+        if let other = StatusFile.read(in: statusDir, live: statusLive)[profile.id], other.pid != getpid(),
+           HomeRule.yields(meCLI: CLI.isRunning, myPID: getpid(), to: other) {
+            log("another RoamRun process (pid \(other.pid)) watches this device too — stopping here")
+            stop()
+            onYield?(other)
+            return
+        }
+        await start(automatic: true)
     }
 
     /// Home if the iPhone itself advertises on this LAN — Tailscale may keep a
@@ -899,7 +926,7 @@ final class ProxyBridge: ObservableObject {
             : "Another RoamRun process (pid \(other.pid)) \(what) \(profile.displayName). Stop it there first."))
     }
 
-    private func setState(_ s: BridgeState) { state = s }
+    private func setState(_ s: BridgeState) { state = s; publishStatus() }
     private func log(_ m: String) { onLog?("[\(profile.displayName)] \(m)") }
 }
 
@@ -931,6 +958,15 @@ enum HomeRule {
     static func leftToCLI(_ entry: StatusFile.Entry?, myPID: Int32) -> Bool {
         guard let entry else { return false }
         return entry.cli == true && entry.pid != myPID
+    }
+
+    /// The `roamrun up` this device is left to: its own entry's, or one on another
+    /// saved profile for the same device (same UDID).
+    static func cliHolding(_ id: UUID, udid: String?, in live: [UUID: StatusFile.Entry], myPID: Int32) -> StatusFile.Entry? {
+        if let own = live[id], leftToCLI(own, myPID: myPID) { return own }
+        guard let udid else { return nil }
+        return live.first { $0.key != id && leftToCLI($0.value, myPID: myPID)
+            && $0.value.udid?.caseInsensitiveCompare(udid) == .orderedSame }?.value
     }
 
     /// Of two processes watching one device, which steps back: the app yields

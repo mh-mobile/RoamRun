@@ -59,11 +59,11 @@ enum StatusFile {
         case failed(String)
     }
 
-    /// Sets (or with nil, clears) this process's entry. Never touches an
-    /// entry a *different* live process holds for a healthy bridge — the
-    /// check sits under the lock, so a `.written` claim is exclusive.
+    /// Updates this process's entry, or restores a missing one. Only `claim` may
+    /// replace another owner; automatic app claims also defer to an errored/local CLI.
     @discardableResult
-    static func write(_ id: UUID, _ entry: Entry?, in dir: URL = ProfileStore.directory, live: Liveness = isRoamRun) -> WriteResult {
+    static func write(_ id: UUID, _ entry: Entry?, in dir: URL = ProfileStore.directory, live: Liveness = isRoamRun,
+                      claim: Bool = false, deferToCLI: Bool = false) -> WriteResult {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent("status.json")
         let fd = open(dir.appendingPathComponent("status.lock").path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
@@ -72,9 +72,9 @@ enum StatusFile {
         guard flock(fd, LOCK_EX) == 0 else { return .failed("can't lock status.lock: \(String(cString: strerror(errno)))") }
         defer { flock(fd, LOCK_UN) }
         var all = read(in: dir, live: live)
-        if let held = all[id], !mayReplace(held, with: entry, by: getpid()) { return .heldBy(held) }
+        if let held = all[id], !mayReplace(held, with: entry, by: getpid(), claim: claim, deferToCLI: deferToCLI) { return .heldBy(held) }
         // One bridge per device, not per profile: two saved profiles can name the same iPhone.
-        if let twin = entry.flatMap({ sameDevice(as: $0, id: id, in: all) }) { return .heldBy(twin) }
+        if let twin = entry.flatMap({ sameDevice(as: $0, id: id, in: all, deferToCLI: deferToCLI) }) { return .heldBy(twin) }
         all[id] = entry
         do {
             try JSONEncoder().encode(all).write(to: url, options: .atomic)
@@ -87,16 +87,17 @@ enum StatusFile {
     }
 
     /// Another profile's healthy bridge for the same (known) UDID.
-    static func sameDevice(as entry: Entry, id: UUID, in all: [UUID: Entry]) -> Entry? {
+    /// With `deferToCLI`, a live `roamrun up` on the twin counts in any state, as for the entry itself.
+    static func sameDevice(as entry: Entry, id: UUID, in all: [UUID: Entry], deferToCLI: Bool = false) -> Entry? {
         guard entry.holdsDevice, let udid = entry.udid else { return nil }
-        return all.first { $0.key != id && $0.value.holdsDevice
+        return all.first { $0.key != id && ($0.value.holdsDevice || (deferToCLI && $0.value.cli == true))
             && $0.value.udid?.caseInsensitiveCompare(udid) == .orderedSame }?.value
     }
 
-    /// Only the owner clears or changes an entry; another process may take a
-    /// device over only while it's errored or standing aside.
-    static func mayReplace(_ held: Entry, with entry: Entry?, by pid: Int32) -> Bool {
-        held.pid == pid || (entry != nil && !held.holdsDevice)
+    /// Only an explicit claim may take an errored or standing-aside device over.
+    static func mayReplace(_ held: Entry, with entry: Entry?, by pid: Int32,
+                           claim: Bool = false, deferToCLI: Bool = false) -> Bool {
+        held.pid == pid || (claim && entry != nil && !held.holdsDevice && !(deferToCLI && held.cli == true))
     }
 
     /// PID of *another* live process bridging this device. An errored bridge

@@ -120,36 +120,47 @@ final class Relay: @unchecked Sendable {
 
     /// The listener's state: the first verdict ends start(); a failure after it was
     /// ready is reported once (internal for tests, which pass no listener).
+    /// A listener this relay has since replaced or stopped speaks for nothing here —
+    /// and that is decided in the same locked step as whatever the event then does,
+    /// so a start() swapping listeners in between can't be handed an old verdict.
     func listenerStateChanged(_ state: NWListener.State, _ listener: NWListener?) {
-        // A listener this relay has since replaced or stopped speaks for nothing here.
-        if let listener, lock.withLock({ self.listener !== listener }) { return }
         switch state {
-        case .ready: finishStart(nil)
+        case .ready: finishStart(nil, from: listener)
         // .waiting (e.g. en0 lost its address mid-bind) would otherwise hang start().
         case .failed(let e), .waiting(let e):
-            let pending = lock.withLock { starting != nil }
+            let (ours, pending) = lock.withLock { () -> (Bool, Bool) in
+                let ours = isCurrent(listener)
+                return (ours, ours && starting != nil)
+            }
+            guard ours else { return }
             // Once up, .waiting may still recover by itself (a Wi‑Fi roam): only .failed is the end.
             if !pending, case .waiting = state { return }
             listener?.stateUpdateHandler = nil   // the listener is done either way
             listener?.cancel()
-            if finishStart(RelayError.bindFailed(e.localizedDescription)) { return }
+            if finishStart(RelayError.bindFailed(e.localizedDescription), from: listener) { return }
             let first = lock.withLock { () -> Bool in
-                guard !failureReported, !stopped else { return false }
+                guard isCurrent(listener), !failureReported, !stopped else { return false }
                 failureReported = true
                 return true
             }
             if first { onFailure?(self) }
         case .cancelled:
+            guard lock.withLock({ isCurrent(listener) }) else { return }
             listener?.stateUpdateHandler = nil
-            finishStart(RelayError.bindFailed("cancelled"))
+            finishStart(RelayError.bindFailed("cancelled"), from: listener)
         default: break
         }
     }
 
-    /// Resumes a waiting start(); false when none was waiting (it was ready already).
+    /// Under `lock`. Tests pass no listener: that is the current one.
+    private func isCurrent(_ listener: NWListener?) -> Bool { listener == nil || self.listener === listener }
+
+    /// Resumes a waiting start() — only for `listener`'s verdict if one is given;
+    /// false when none was waiting (it was ready already) or the listener is stale.
     @discardableResult
-    private func finishStart(_ error: Error?) -> Bool {
+    private func finishStart(_ error: Error?, from listener: NWListener? = nil) -> Bool {
         let cont = lock.withLock { () -> CheckedContinuation<Void, Error>? in
+            guard isCurrent(listener) else { return nil }
             defer { starting = nil }
             return starting
         }

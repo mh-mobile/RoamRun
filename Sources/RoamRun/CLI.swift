@@ -652,20 +652,19 @@ enum CLI {
         guard [".ipa", ".app"].contains(where: path.lowercased().trimmingCharacters(in: ["/"]).hasSuffix) else {
             stop("\(path) is not an .ipa or .app")
         }
+        let tmp = FileManager.default.temporaryDirectory
+        sweepStaleUnpacks(in: tmp)   // a Ctrl-C during an earlier install (or ota) skipped its cleanUp
         let udid = reachableUDID(profile)
-        checkSigning(profile, udid: udid, path: path)
         guard path.lowercased().hasSuffix(".ipa") else {
+            checkSigning(profile, udid: udid, path: path)
             exec(["/usr/bin/xcrun", "devicectl", "device", "install", "app", "--device", udid, path])
         }
         // devicectl documents .app bundles only: unpack the .ipa and hand it the .app inside.
-        let tmp = FileManager.default.temporaryDirectory
-        sweepStaleUnpacks(in: tmp)   // a Ctrl-C during an earlier install skipped its cleanUp
         let dir = tmp.appendingPathComponent("roamrun-ipa-\(UUID().uuidString)")
         let cleanUp = { try? FileManager.default.removeItem(at: dir) }   // exit() skips defer
         let unzip = Proc.run("/usr/bin/ditto", ["-x", "-k", path, dir.path], timeout: 300)
         guard unzip.status == 0 else { cleanUp(); stop("couldn't unpack \(path): \(firstLine(unzip.err) ?? "ditto exited \(unzip.status)")") }
         let payload = dir.appendingPathComponent("Payload")
-        // The same .app the signing check read (profilePlist picks it the same way).
         guard let app = OTA.appBundle(in: payload)
         else { cleanUp(); stop("\(path) has no Payload/*.app inside — not an iOS app archive?") }
         // A crafted archive could make Payload or Payload/X.app a link to somewhere else on this Mac.
@@ -673,6 +672,9 @@ enum CLI {
         guard appURL.resolvingSymlinksInPath().path.hasPrefix(dir.resolvingSymlinksInPath().path + "/Payload/") else {
             cleanUp(); stop("\(path)'s Payload/\(app) links outside the archive — not installing it")
         }
+        // Checked on this very .app: a separate partial unpack could land on another
+        // bundle of a multi-app archive and vouch for one that isn't installed.
+        checkSigning(profile, udid: udid, path: appURL.path, shown: path, cleanUp: { _ = cleanUp() })
         let status = visible(["/usr/bin/xcrun", "devicectl", "device", "install", "app", "--device", udid,
                               payload.appendingPathComponent(app).path])
         cleanUp()
@@ -694,18 +696,21 @@ enum CLI {
 
     /// App Store builds and builds not provisioned for this device fail with a
     /// cryptic devicectl error — say what's wrong before trying.
-    private static func checkSigning(_ profile: DeviceProfile, udid: String, path: String) {
+    /// `shown`: how to name it (the .ipa it came from); `cleanUp` runs before a refusal exits.
+    private static func checkSigning(_ profile: DeviceProfile, udid: String, path: String, shown: String? = nil,
+                                     cleanUp: () -> Void = {}) {
+        let name = shown ?? path
         switch provisioning(of: path) {
         case .appStore:
-            stop("\(path) is signed for App Store / TestFlight and can't be installed directly. Export it for Debugging, Release Testing (Ad Hoc) or Enterprise.")
+            cleanUp(); stop("\(name) is signed for App Store / TestFlight and can't be installed directly. Export it for Debugging, Release Testing (Ad Hoc) or Enterprise.")
         case .devices(let list) where !list.contains(where: { $0.caseInsensitiveCompare(udid) == .orderedSame }):
-            stop("\(path) isn't signed for \(profile.displayName) (UDID \(udid) is not in its provisioning profile). Add the device to the profile and export again.")
+            cleanUp(); stop("\(name) isn't signed for \(profile.displayName) (UDID \(udid) is not in its provisioning profile). Add the device to the profile and export again.")
         case .unknown:
             let info = NSDictionary(contentsOfFile: (path as NSString).appendingPathComponent("Info.plist"))
             if (info?["DTPlatformName"] as? String)?.hasSuffix("simulator") == true {
-                stop("\(path) is a Simulator build — build for a device (Any iOS Device / the device itself).")
+                cleanUp(); stop("\(name) is a Simulator build — build for a device (Any iOS Device / the device itself).")
             }
-            FileHandle.standardError.write(Data("roamrun: couldn't read \(path)'s provisioning profile — if the install fails, check it's a device build signed for \(profile.displayName)\n".utf8))
+            FileHandle.standardError.write(Data("roamrun: couldn't read \(name)'s provisioning profile — if the install fails, check it's a device build signed for \(profile.displayName)\n".utf8))
         default:
             break
         }

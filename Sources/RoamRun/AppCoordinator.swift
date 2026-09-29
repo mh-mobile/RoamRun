@@ -72,7 +72,7 @@ final class AppCoordinator: ObservableObject {
             launchWarning = "RoamRun couldn't read its saved devices, so the list starts empty. The file was kept as \(copy.path)."
         } else if store.unreadable {
             logStore.log("couldn't read \(ProfileStore.directory.path)/profiles.json; not writing over it")
-            launchWarning = "RoamRun couldn't read its saved devices (profiles.json in \(ProfileStore.directory.path)), so the list starts empty and nothing is saved over the file. Check its permissions, then reopen RoamRun."
+            launchWarning = Self.unreadableListWarning
         }
         for p in profiles { install(ProxyBridge(profile: p)) }
 
@@ -975,19 +975,31 @@ final class AppCoordinator: ObservableObject {
         }
         if found == profile.remotePairingPort {
             logStore.log("\"\(profile.displayName)\": RemotePairing port is still \(found)", device: profile.id)
-        } else if let idx = profiles.firstIndex(where: { $0.id == profile.id }) {
+        } else {
             // Before persist(): it may rebuild the bridge, and a new one reads as off.
             let wasOn = bridges[profile.id].map { $0.state != .off } == true
-            profiles[idx].remotePairingPort = found
-            persist()
+            guard let updated = Self.saveScannedPort(found, for: profile.id, in: profiles, save: { changed in
+                profiles = changed
+                persist()
+                return profiles
+            }) else { return }
             logStore.log("\"\(profile.displayName)\": RemotePairing port updated to \(found)", device: profile.id)
             // ProxyBridge holds its profile by value — swap it in or the
             // new port only takes effect after a relaunch.
             // Also errored / standing aside: the scan is how you fix a bridge that can't reach the device.
             bridges[profile.id]?.stop()
-            let bridge = install(ProxyBridge(profile: profiles[idx]))
+            let bridge = install(ProxyBridge(profile: updated))
             if wasOn { bridge.requestStart() }
         }
+    }
+
+    /// Saving can restore devices ahead of this one; select the saved profile by ID.
+    nonisolated static func saveScannedPort(_ port: UInt16, for id: UUID, in profiles: [DeviceProfile],
+                                          save: ([DeviceProfile]) -> [DeviceProfile]) -> DeviceProfile? {
+        var changed = profiles
+        guard let index = changed.firstIndex(where: { $0.id == id }) else { return nil }
+        changed[index].remotePairingPort = port
+        return save(changed).first { $0.id == id }
     }
 
     /// Swaps a running bridge's profile by rebuilding it: `ProxyBridge` holds the
@@ -1007,12 +1019,12 @@ final class AppCoordinator: ObservableObject {
     /// has ended. Starts a person asks for (Start, Try Again) use startBridge.
     private func autoStart(_ id: UUID, live: [UUID: StatusFile.Entry], restarting: Bool = false) {
         guard Snapshot.fakeProfiles == nil else { return }   // screenshot mode's devices never bridge
-        if let other = live[id], HomeRule.leftToCLI(other, myPID: getpid()) {
+        if let other = HomeRule.cliHolding(id, udid: bridges[id]?.udid ?? profile(id)?.udid, in: live, myPID: getpid()) {
             startWhenFree(id, after: other)
             return
         }
         if restarting { bridges[id]?.stop() }
-        bridges[id]?.requestStart()
+        bridges[id]?.requestStart(automatic: true)   // the claim itself defers to a CLI that got there first
     }
 
     /// Devices waiting in startWhenFree: the 30 s retry must not stack a waiter per tick.
@@ -1104,20 +1116,36 @@ final class AppCoordinator: ObservableObject {
         if on != launchAtLogin { syncingLoginItem = true; launchAtLogin = on; syncingLoginItem = false }
     }
 
+    nonisolated static var unreadableListWarning: String {
+        "RoamRun couldn't read its saved devices (profiles.json in \(ProfileStore.directory.path)), so the list starts empty and nothing is saved over the file. Check its permissions, then reopen RoamRun."
+    }
+    nonisolated static var saveFailedWarning: String {
+        "RoamRun couldn't save your devices (\(ProfileStore.directory.path)). Changes will be lost when it quits — check the disk and folder permissions."
+    }
+
     /// Saves the device list; a failed write would lose changes at the next launch, so say so.
     private func persist() {
         guard Snapshot.fakeProfiles == nil else { return }   // screenshot mode's fake devices never reach disk
         if let saved = store.save(base: savedProfiles, wanted: profiles) {
             savedProfiles = saved
-            if saved != profiles {   // `roamrun up` had saved a newer endpoint
-                let stale = zip(profiles, saved).filter { $0 != $1 }.map(\.1)
+            if saved != profiles {   // `roamrun up` had saved a newer endpoint, or devices we never read came back
+                let mine = Dictionary(profiles.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+                let wanted = wasActiveIDs
+                let stale = saved.filter { p in mine[p.id].map { $0 != p } ?? false }
                 profiles = saved
                 for p in stale { replaceBridge(with: p) }   // it holds its profile by value
+                // Kept from disk rather than dropped (the list we started from was unreadable): they need bridges.
+                for p in saved where bridges[p.id] == nil {
+                    capture.ownedHosts.insert(install(ProxyBridge(profile: p)).spoofHost)
+                    if wanted.contains(p.id) { autoStart(p.id, live: StatusFile.read()) }   // left on before it went unread
+                }
             }
+            // Saved, so the file is readable and written again: those two warnings no longer hold.
+            if launchWarning == Self.unreadableListWarning || launchWarning == Self.saveFailedWarning { launchWarning = nil }
             return
         }
         logStore.log("couldn't save the device list to \(ProfileStore.directory.path)")
-        launchWarning = "RoamRun couldn't save your devices (\(ProfileStore.directory.path)). Changes will be lost when it quits — check the disk and folder permissions."
+        launchWarning = Self.saveFailedWarning
     }
 
     /// Stops helpers a crashed run left behind, off the main thread; says what it did.
