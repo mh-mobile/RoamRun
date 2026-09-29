@@ -824,6 +824,37 @@ private func roundTrip(port: UInt16, payload: Data, timeout: TimeInterval = 5) a
     }
 }
 
+/// A connection to 127.0.0.1:port left open, once ready.
+private func openEcho(port: UInt16) async -> NWConnection? {
+    let conn = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+    let ok = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+        let box = OnceBox()
+        conn.stateUpdateHandler = { s in
+            switch s {
+            case .ready: box.run { cont.resume(returning: true) }
+            case .failed, .cancelled: box.run { cont.resume(returning: false) }
+            default: break
+            }
+        }
+        conn.start(queue: .global())
+        DispatchQueue.global().asyncAfter(deadline: .now() + 5) { box.run { cont.resume(returning: false) } }
+    }
+    if ok { return conn }
+    conn.cancel(); return nil
+}
+
+/// Sends `payload` on an open connection and returns the echo (nil on close or timeout).
+private func echo(_ conn: NWConnection, _ payload: Data) async -> Data? {
+    await withCheckedContinuation { cont in
+        let box = OnceBox()
+        conn.send(content: payload, completion: .contentProcessed { _ in })
+        conn.receive(minimumIncompleteLength: payload.count, maximumLength: 65536) { data, _, _, _ in
+            box.run { cont.resume(returning: data) }
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 5) { box.run { cont.resume(returning: nil) } }
+    }
+}
+
 private final class OnceBox: @unchecked Sendable {
     private let lock = NSLock(); private var done = false
     func run(_ body: () -> Void) { if lock.withLock({ let first = !done; done = true; return first }) { body() } }
@@ -940,17 +971,33 @@ private func startedRelay(upstream: UInt16, spare: Bool = false) async throws ->
         var held: [[NWConnection]] = []
         defer { held.joined().forEach { $0.cancel() } }
         let usable = 256 - Relay.controlReserve   // what tunnel relays may take
-        for n in [64, 64, 64, usable - 192] {
-            let r = try await startedRelay(upstream: upstream, spare: true)
+        for n in [64, 64, 64, usable - 192] {   // control relays: tunnel ones stop at spareCap
+            let r = try await startedRelay(upstream: upstream)
             relays.append(r); held.append(hold(n, to: r))
         }
         #expect(try await eventually { Relay.openPairs == usable })
-        // Another tunnel relay: refused, though it holds nothing and the process isn't full.
+        // A tunnel relay: refused, though it holds nothing and the process isn't full.
         let tunnel = try await startedRelay(upstream: upstream, spare: true); relays.append(tunnel)
         #expect(await roundTrip(port: tunnel.localPort, payload: Data("x".utf8), timeout: 2) == nil)
         // A control relay still gets through.
         let control = try await startedRelay(upstream: upstream); relays.append(control)
         #expect(await roundTrip(port: control.localPort, payload: Data("x".utf8)) == Data("x".utf8))
+    }
+
+    /// A tunnel relay keeps spareCap pairs: a new one pushes out the pair idle longest,
+    /// not the oldest — the live tunnel is the oldest, and it keeps moving bytes.
+    @Test func aFullTunnelRelayDropsItsIdlestPair() async throws {
+        let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
+        let relay = try await startedRelay(upstream: upstream, spare: true); defer { relay.stop() }
+        let live = try #require(await openEcho(port: relay.localPort)); defer { live.cancel() }
+        let idle = hold(Relay.spareCap - 1, to: relay); defer { idle.forEach { $0.cancel() } }
+        #expect(try await eventually { Relay.openPairs == Relay.spareCap })
+        #expect(await echo(live, Data("still here".utf8)) == Data("still here".utf8))
+        #expect(await roundTrip(port: relay.localPort, payload: Data("x".utf8)) == Data("x".utf8))
+        #expect(Relay.openPairs <= Relay.spareCap)
+        #expect(await echo(live, Data("and now".utf8)) == Data("and now".utf8))
+        relay.stop()
+        #expect(try await eventually { Relay.openPairs == 0 })
     }
 
     /// Here, not top-level: its probes sweep 49152…, where these echo servers listen.
