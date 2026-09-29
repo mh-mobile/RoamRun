@@ -984,20 +984,50 @@ private func startedRelay(upstream: UInt16, spare: Bool = false) async throws ->
         #expect(await roundTrip(port: control.localPort, payload: Data("x".utf8)) == Data("x".utf8))
     }
 
-    /// A tunnel relay keeps spareCap pairs: a new one pushes out the pair idle longest,
-    /// not the oldest — the live tunnel is the oldest, and it keeps moving bytes.
-    @Test func aFullTunnelRelayDropsItsIdlestPair() async throws {
+    /// A tunnel relay keeps spareCap pairs: a new one pushes out a standby — never the
+    /// live tunnel, even when it is both the oldest and has been quiet the longest.
+    @Test func aFullTunnelRelayDropsAStandbyNotTheQuietLiveOne() async throws {
         let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
         let relay = try await startedRelay(upstream: upstream, spare: true); defer { relay.stop() }
         let live = try #require(await openEcho(port: relay.localPort)); defer { live.cancel() }
+        let traffic = Data(count: Relay.standbyBytes)   // what a live tunnel has moved by the time standbys pile up
+        #expect(await echo(live, traffic)?.count == traffic.count)
         let idle = hold(Relay.spareCap - 1, to: relay); defer { idle.forEach { $0.cancel() } }
         #expect(try await eventually { Relay.openPairs == Relay.spareCap })
-        #expect(await echo(live, Data("still here".utf8)) == Data("still here".utf8))
         #expect(await roundTrip(port: relay.localPort, payload: Data("x".utf8)) == Data("x".utf8))
         #expect(Relay.openPairs <= Relay.spareCap)
-        #expect(await echo(live, Data("and now".utf8)) == Data("and now".utf8))
+        #expect(await echo(live, Data("still here".utf8)) == Data("still here".utf8))
         relay.stop()
         #expect(try await eventually { Relay.openPairs == 0 })
+    }
+
+    /// Only live-looking pairs: none is evicted, the relay takes one more.
+    @Test func aTunnelRelayWithNoStandbyTakesThePairInstead() async throws {
+        let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
+        let relay = try await startedRelay(upstream: upstream, spare: true); defer { relay.stop() }
+        var live: [NWConnection] = []
+        defer { live.forEach { $0.cancel() } }
+        for _ in 0..<Relay.spareCap {
+            let c = try #require(await openEcho(port: relay.localPort)); live.append(c)
+            #expect(await echo(c, Data(count: Relay.standbyBytes))?.count == Relay.standbyBytes)
+        }
+        let extra = try #require(await openEcho(port: relay.localPort)); defer { extra.cancel() }
+        #expect(try await eventually { Relay.openPairs == Relay.spareCap + 1 })
+        for c in live { #expect(await echo(c, Data("ok".utf8)) == Data("ok".utf8)) }
+    }
+
+    /// A relay whose pairs stay open but silent reads as quiet — how an old tunnel's
+    /// relay, kept open by standbys, gets closed.
+    @Test func openButSilentPairsReadAsQuiet() async throws {
+        let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
+        let relay = try await startedRelay(upstream: upstream, spare: true); defer { relay.stop() }
+        let c = try #require(await openEcho(port: relay.localPort)); defer { c.cancel() }
+        #expect(try await eventually { relay.openCount == 1 })
+        #expect(!relay.quiet(for: 0.3))
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(relay.openCount == 1 && relay.quiet(for: 0.3))
+        #expect(await echo(c, Data("hi".utf8)) == Data("hi".utf8))
+        #expect(!relay.quiet(for: 0.3))
     }
 
     /// Here, not top-level: its probes sweep 49152…, where these echo servers listen.
