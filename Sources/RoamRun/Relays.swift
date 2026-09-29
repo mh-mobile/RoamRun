@@ -44,6 +44,8 @@ final class Relay: @unchecked Sendable {
 
     private var listener: NWListener?
     private var connections: [NWConnection] = []
+    /// Each pair's byte counters, by its inbound connection.
+    private var stats: [ObjectIdentifier: ConnStats] = [:]
     /// Inbound connections whose upstream leg is established. An accepted
     /// connection that never reaches the iPhone must not count as "connected".
     private var established = Set<ObjectIdentifier>()
@@ -77,6 +79,13 @@ final class Relay: @unchecked Sendable {
         if spare && total >= maxTotal - controlReserve { return .reservedForControl }
         return nil
     }
+
+    /// Pairs a tunnel relay keeps. Past it the one idle longest makes room: those are
+    /// remotepairingd's standbys, silent after setup (measured: of 64 pairs, only the
+    /// live tunnel moved bytes), while the live one carries heartbeats even at rest.
+    /// Without it tunnel relays sat at 64 and filled the budget, so a new device or
+    /// tunnel had no room left for its first connection.
+    static let spareCap = 8
 
     /// A refusal is said at most this often per relay: remotepairingd retries every ~40 s.
     static let refusalLogInterval: TimeInterval = 600
@@ -206,7 +215,7 @@ final class Relay: @unchecked Sendable {
         }
         listener?.stateUpdateHandler = nil
         listener?.cancel()
-        lock.lock(); stopped = true; let open = connections; connections = []; established = []; lock.unlock()
+        lock.lock(); stopped = true; let open = connections; connections = []; established = []; stats = [:]; lock.unlock()
         Self.totalLock.withLock { Self.total -= open.count / 2 }
         for c in open { c.cancel() }
         finishStart(RelayError.bindFailed("stopped"))   // its handler is gone: nothing else would end a start in flight
@@ -244,7 +253,7 @@ final class Relay: @unchecked Sendable {
             default: break
             }
         }
-        guard track(inbound, outbound) else {
+        guard track(inbound, outbound, stats: stats) else {
             // Also breaks the handler → finish → outbound retain cycle.
             outbound.stateUpdateHandler = nil
             outbound.cancel()
@@ -294,10 +303,21 @@ final class Relay: @unchecked Sendable {
 
     /// False when stopped (an accept can race listener.cancel()) or full — said in
     /// the log, since remotepairingd only reports a reset connection.
-    private func track(_ conns: NWConnection...) -> Bool {
+    private func track(_ inbound: NWConnection, _ outbound: NWConnection, stats pairStats: ConnStats) -> Bool {
         lock.lock()
         guard !stopped else { lock.unlock(); return false }
         let pairs = connections.count / 2
+        if spare && pairs >= Self.spareCap {
+            // The new pair takes the evicted one's place in the count.
+            let (victim, wasEstablished) = evictIdlest()
+            stats[ObjectIdentifier(inbound)] = pairStats
+            connections += [inbound, outbound]
+            let n = established.count
+            lock.unlock()
+            victim.forEach { $0.cancel() }
+            if wasEstablished { onOpenCountChange?(n) }
+            return true
+        }
         let (refused, total) = Self.totalLock.withLock { () -> (Refusal?, Int) in
             let why = Self.refusal(relayPairs: pairs, total: Self.total, spare: spare)
             if why == nil { Self.total += 1 }
@@ -312,9 +332,23 @@ final class Relay: @unchecked Sendable {
             }
             return false
         }
-        connections += conns
+        stats[ObjectIdentifier(inbound)] = pairStats
+        connections += [inbound, outbound]
         lock.unlock()
         return true
+    }
+
+    /// Under `lock`: takes the pair idle longest out of the books (its finish then finds
+    /// nothing to untrack) and returns it to cancel once unlocked.
+    private func evictIdlest() -> ([NWConnection], Bool) {
+        let idlest = stride(from: 0, to: connections.count, by: 2).min { a, b in
+            (stats[ObjectIdentifier(connections[a])]?.lastActive ?? 0) < (stats[ObjectIdentifier(connections[b])]?.lastActive ?? 0)
+        }
+        guard let i = idlest else { return ([], false) }
+        let victim = Array(connections[i...i + 1])
+        connections.removeSubrange(i...i + 1)
+        stats[ObjectIdentifier(victim[0])] = nil
+        return (victim, established.remove(ObjectIdentifier(victim[0])) != nil)
     }
 
     private func markEstablished(_ inbound: NWConnection) {
@@ -331,6 +365,7 @@ final class Relay: @unchecked Sendable {
         lock.lock()
         let before = connections.count
         connections.removeAll { c in conns.contains { $0 === c } }
+        conns.forEach { stats[ObjectIdentifier($0)] = nil }
         let wasEstablished = conns.contains { established.remove(ObjectIdentifier($0)) != nil }
         let changed = connections.count != before, n = established.count
         lock.unlock()
@@ -344,6 +379,10 @@ private final class ConnStats: @unchecked Sendable {
     private let lock = NSLock()
     private var _up = 0, _down = 0, doneDirections = 0
     private var logged = false
+    /// Uptime (ns) of the last bytes either way, or of the pair's start.
+    private var _lastActive = DispatchTime.now().uptimeNanoseconds
+
+    var lastActive: UInt64 { lock.lock(); defer { lock.unlock() }; return _lastActive }
 
     var up: Int { lock.lock(); defer { lock.unlock() }; return _up }
     var down: Int { lock.lock(); defer { lock.unlock() }; return _down }
@@ -351,6 +390,7 @@ private final class ConnStats: @unchecked Sendable {
     func add(_ n: Int, up isUp: Bool) {
         lock.lock(); defer { lock.unlock() }
         if isUp { _up += n } else { _down += n }
+        _lastActive = DispatchTime.now().uptimeNanoseconds
     }
 
     /// True once both directions have seen EOF.
