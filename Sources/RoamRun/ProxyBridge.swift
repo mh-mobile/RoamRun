@@ -326,7 +326,7 @@ final class ProxyBridge: ObservableObject {
         var attempt = 1
         while true {
             let relay = Relay(localIP: localIP, localPort: localPort, remoteIP: profile.providerIP,
-                              remotePort: remotePort, onOpenCountChange: onOpenCountChange,
+                              remotePort: remotePort, spare: tunnelPort != nil, onOpenCountChange: onOpenCountChange,
                               onFailure: { [weak self] relay in Task { @MainActor in self?.relayFailed(relay, tunnelPort: tunnelPort, gen: gen) } })
             do {
                 try await relay.start()

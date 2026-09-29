@@ -830,10 +830,11 @@ private final class OnceBox: @unchecked Sendable {
 }
 
 /// A started relay on a free local port (random, retried if taken).
-private func startedRelay(upstream: UInt16) async throws -> Relay {
+private func startedRelay(upstream: UInt16, spare: Bool = false) async throws -> Relay {
     var lastError: Error?
     for _ in 0..<10 {
-        let r = Relay(localIP: "127.0.0.1", localPort: UInt16.random(in: 40000...49000), remoteIP: "127.0.0.1", remotePort: upstream)
+        let r = Relay(localIP: "127.0.0.1", localPort: UInt16.random(in: 40000...49000), remoteIP: "127.0.0.1",
+                      remotePort: upstream, spare: spare)
         do { try await r.start(); return r } catch { lastError = error }
     }
     throw lastError!
@@ -928,6 +929,28 @@ private func startedRelay(upstream: UInt16) async throws -> Relay {
         held[0][0].cancel()
         #expect(try await eventually { Relay.openPairs == 255 })
         #expect(await roundTrip(port: fifth.localPort, payload: Data("x".utf8)) == Data("x".utf8))
+    }
+
+    /// Tunnel relays fill up with remotepairingd's standby connections; the last
+    /// slots stay for control channels, which must come back every ~40 s.
+    @Test func tunnelRelaysLeaveTheLastSlotsToControlChannels() async throws {
+        let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
+        var relays: [Relay] = []
+        defer { relays.forEach { $0.stop() } }
+        var held: [[NWConnection]] = []
+        defer { held.joined().forEach { $0.cancel() } }
+        let usable = 256 - Relay.controlReserve   // what tunnel relays may take
+        for n in [64, 64, 64, usable - 192] {
+            let r = try await startedRelay(upstream: upstream, spare: true)
+            relays.append(r); held.append(hold(n, to: r))
+        }
+        #expect(try await eventually { Relay.openPairs == usable })
+        // Another tunnel relay: refused, though it holds nothing and the process isn't full.
+        let tunnel = try await startedRelay(upstream: upstream, spare: true); relays.append(tunnel)
+        #expect(await roundTrip(port: tunnel.localPort, payload: Data("x".utf8), timeout: 2) == nil)
+        // A control relay still gets through.
+        let control = try await startedRelay(upstream: upstream); relays.append(control)
+        #expect(await roundTrip(port: control.localPort, payload: Data("x".utf8)) == Data("x".utf8))
     }
 
     /// Here, not top-level: its probes sweep 49152…, where these echo servers listen.
@@ -2454,4 +2477,22 @@ extension RelayOnLocalhost {
     let entries = StatusFile.read(in: dir, live: live)
     #expect(HomeRule.cliHolding(UUID(), udid: udid.lowercased(), in: entries, myPID: getpid())?.pid == 4242)
     #expect(HomeRule.cliHolding(UUID(), udid: nil, in: entries, myPID: getpid()) == nil)
+}
+
+// MARK: - Relay admission
+
+@Test func admissionKeepsAReserveForControlChannels() {
+    let top = 256, reserve = Relay.controlReserve
+    #expect(Relay.refusal(relayPairs: 64, total: 10, spare: false) == .relayFull)
+    #expect(Relay.refusal(relayPairs: 3, total: top, spare: false) == .processFull)
+    #expect(Relay.refusal(relayPairs: 3, total: top - reserve, spare: true) == .reservedForControl)
+    #expect(Relay.refusal(relayPairs: 3, total: top - reserve - 1, spare: true) == nil)
+    #expect(Relay.refusal(relayPairs: 3, total: top - 1, spare: false) == nil)   // control may use the reserve
+}
+
+@Test func aRefusalIsLoggedOnlyEveryTenMinutesPerRelay() {
+    let now = Date()
+    #expect(Relay.shouldLogRefusal(last: nil, now: now))
+    #expect(!Relay.shouldLogRefusal(last: now.addingTimeInterval(-300), now: now))
+    #expect(Relay.shouldLogRefusal(last: now.addingTimeInterval(-600), now: now))
 }

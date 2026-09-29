@@ -35,6 +35,9 @@ final class Relay: @unchecked Sendable {
     /// The listener died after it was up; called once, off-main. Without it nothing
     /// would notice: the bridge keeps advertising a port nobody answers on.
     let onFailure: ((Relay) -> Void)?
+    /// A tunnel relay: its pairs may not take the control channels' reserve.
+    let spare: Bool
+    private var lastRefusalLog: Date?
     /// The start() waiting for the listener's first verdict.
     private var starting: CheckedContinuation<Void, Error>?
     private var failureReported = false
@@ -56,10 +59,37 @@ final class Relay: @unchecked Sendable {
     /// Connection pairs open across all relays (tests check it returns to zero).
     static var openPairs: Int { totalLock.withLock { total } }
 
+    /// The last pairs of the process-wide budget only control channels may take.
+    /// remotepairingd adds a standby connection to a tunnel each time it rebuilds its
+    /// control channel (every ~40 s while bridged) and never closes it, so tunnel
+    /// relays fill up; without a reserve they could take the slot a control channel
+    /// needs to come back, and the device would drop.
+    static let controlReserve = 16
+
+    enum Refusal: Equatable {
+        case relayFull, processFull, reservedForControl
+    }
+
+    /// Why a new pair can't be taken, or nil when it can. `spare`: a tunnel relay's.
+    static func refusal(relayPairs: Int, total: Int, spare: Bool) -> Refusal? {
+        if relayPairs >= maxConnections { return .relayFull }
+        if total >= maxTotal { return .processFull }
+        if spare && total >= maxTotal - controlReserve { return .reservedForControl }
+        return nil
+    }
+
+    /// A refusal is said at most this often per relay: remotepairingd retries every ~40 s.
+    static let refusalLogInterval: TimeInterval = 600
+
+    static func shouldLogRefusal(last: Date?, now: Date) -> Bool {
+        last.map { now.timeIntervalSince($0) >= refusalLogInterval } ?? true
+    }
+
     /// The callback is given here, not assigned afterwards: start() returns with the
     /// listener already accepting, and the calls that read it run off the main actor.
-    init(localIP: String, localPort: UInt16, remoteIP: String, remotePort: UInt16,
+    init(localIP: String, localPort: UInt16, remoteIP: String, remotePort: UInt16, spare: Bool = false,
          onOpenCountChange: ((Int) -> Void)? = nil, onFailure: ((Relay) -> Void)? = nil) {
+        self.spare = spare
         self.onOpenCountChange = onOpenCountChange
         self.onFailure = onFailure
         self.localIP = localIP
@@ -262,12 +292,26 @@ final class Relay: @unchecked Sendable {
         from.receive(minimumIncompleteLength: 1, maximumLength: 65536, completion: handle)
     }
 
-    /// False when stopped (an accept can race listener.cancel()) or full.
+    /// False when stopped (an accept can race listener.cancel()) or full — said in
+    /// the log, since remotepairingd only reports a reset connection.
     private func track(_ conns: NWConnection...) -> Bool {
         lock.lock()
-        guard !stopped, connections.count / 2 < Self.maxConnections else { lock.unlock(); return false }
-        let admitted = Self.totalLock.withLock { Self.total < Self.maxTotal ? (Self.total += 1, true).1 : false }
-        guard admitted else { lock.unlock(); return false }
+        guard !stopped else { lock.unlock(); return false }
+        let pairs = connections.count / 2
+        let (refused, total) = Self.totalLock.withLock { () -> (Refusal?, Int) in
+            let why = Self.refusal(relayPairs: pairs, total: Self.total, spare: spare)
+            if why == nil { Self.total += 1 }
+            return (why, Self.total)
+        }
+        if let refused {
+            let say = Self.shouldLogRefusal(last: lastRefusalLog, now: .now)
+            if say { lastRefusalLog = .now }
+            lock.unlock()
+            if say {
+                relayLog.log("refused a connection on :\(self.localPort, privacy: .public): \(String(describing: refused), privacy: .public) (\(pairs) pairs here, \(total) in all)")
+            }
+            return false
+        }
         connections += conns
         lock.unlock()
         return true
