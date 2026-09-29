@@ -80,12 +80,15 @@ final class Relay: @unchecked Sendable {
         return nil
     }
 
-    /// Pairs a tunnel relay keeps. Past it the one idle longest makes room: those are
-    /// remotepairingd's standbys, silent after setup (measured: of 64 pairs, only the
-    /// live tunnel moved bytes), while the live one carries heartbeats even at rest.
+    /// Pairs a tunnel relay keeps. Past it a standby makes room — the one idle longest.
     /// Without it tunnel relays sat at 64 and filled the budget, so a new device or
     /// tunnel had no room left for its first connection.
     static let spareCap = 8
+    /// What tells a standby from the live tunnel: measured, standbys move ~0.5 KB for
+    /// their setup and nothing after, the live one ~0.5 KB/s of heartbeats on top of
+    /// any debugging. A quiet spell doesn't make the live one a standby — when none
+    /// is under this, nothing is evicted and the relay just takes the pair.
+    static let standbyBytes = 16 * 1024
 
     /// A refusal is said at most this often per relay: remotepairingd retries every ~40 s.
     static let refusalLogInterval: TimeInterval = 600
@@ -221,6 +224,14 @@ final class Relay: @unchecked Sendable {
         finishStart(RelayError.bindFailed("stopped"))   // its handler is gone: nothing else would end a start in flight
     }
 
+    /// No pair has moved a byte for `seconds` (or there are none). Standbys stay open
+    /// but silent, so a relay the tunnel has left behind is quiet, not empty.
+    func quiet(for seconds: TimeInterval) -> Bool {
+        let now = DispatchTime.now().uptimeNanoseconds, span = UInt64(seconds * 1e9)
+        let since = now > span ? now - span : 0
+        return lock.withLock { stats.values.allSatisfy { $0.lastActive < since } }
+    }
+
     var openCount: Int {
         lock.lock(); defer { lock.unlock() }
         return established.count
@@ -307,9 +318,8 @@ final class Relay: @unchecked Sendable {
         lock.lock()
         guard !stopped else { lock.unlock(); return false }
         let pairs = connections.count / 2
-        if spare && pairs >= Self.spareCap {
+        if spare && pairs >= Self.spareCap, let (victim, wasEstablished) = evictIdlestStandby() {
             // The new pair takes the evicted one's place in the count.
-            let (victim, wasEstablished) = evictIdlest()
             stats[ObjectIdentifier(inbound)] = pairStats
             connections += [inbound, outbound]
             let n = established.count
@@ -338,13 +348,14 @@ final class Relay: @unchecked Sendable {
         return true
     }
 
-    /// Under `lock`: takes the pair idle longest out of the books (its finish then finds
-    /// nothing to untrack) and returns it to cancel once unlocked.
-    private func evictIdlest() -> ([NWConnection], Bool) {
-        let idlest = stride(from: 0, to: connections.count, by: 2).min { a, b in
-            (stats[ObjectIdentifier(connections[a])]?.lastActive ?? 0) < (stats[ObjectIdentifier(connections[b])]?.lastActive ?? 0)
+    /// Under `lock`: takes the standby idle longest out of the books (its finish then
+    /// finds nothing to untrack) and returns it to cancel once unlocked; nil if none.
+    private func evictIdlestStandby() -> ([NWConnection], Bool)? {
+        let standbys = stride(from: 0, to: connections.count, by: 2).compactMap { i -> (Int, UInt64)? in
+            guard let s = stats[ObjectIdentifier(connections[i])], s.up + s.down < Self.standbyBytes else { return nil }
+            return (i, s.lastActive)
         }
-        guard let i = idlest else { return ([], false) }
+        guard let i = standbys.min(by: { $0.1 < $1.1 })?.0 else { return nil }
         let victim = Array(connections[i...i + 1])
         connections.removeSubrange(i...i + 1)
         stats[ObjectIdentifier(victim[0])] = nil

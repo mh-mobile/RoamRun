@@ -505,12 +505,13 @@ final class ProxyBridge: ObservableObject {
 
     /// Tunnel ports move forward, so relays well behind the newest one — or
     /// ahead of it after a jump back — won't be dialed again. Close those
-    /// that carry no connection.
+    /// that carry nothing: remotepairingd's standbys keep such a relay open but
+    /// silent, so an old tunnel's relay would otherwise stay for good.
     // ponytail: fixed window of newest-32...newest+16; widen if old tunnels get reused.
     private func reapTunnelRelays(around newest: UInt16) -> Set<UInt16> {
         var reaped = Set<UInt16>()
         let window = (Int(newest) - 32)...(Int(newest) + 16)
-        for (port, pair) in tunnelRelays where !window.contains(Int(port)) && pair.openCount == 0 {
+        for (port, pair) in tunnelRelays where !window.contains(Int(port)) && (pair.openCount == 0 || pair.quiet(for: 300)) {
             pair.stop()
             tunnelRelays[port] = nil
             coveredPorts.remove(port)
