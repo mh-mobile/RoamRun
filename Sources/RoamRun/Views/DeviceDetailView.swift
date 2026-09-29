@@ -26,7 +26,7 @@ struct DeviceDetailView: View {
                     }
                     Divider().padding(.vertical, 10)
                     DisclosureGroup("Activity log", isExpanded: $showLog) {
-                        DeviceLog(device: profile.id).padding(.top, 8)
+                        DeviceLog(log: coordinator.logStore, device: profile.id).padding(.top, 8)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
@@ -280,12 +280,14 @@ private struct ConnectionPath: View {
 }
 
 /// This device's lines from the shared log, with a copy button for bug reports.
+/// Observes the log itself: the coordinator doesn't re-publish its changes, so a
+/// line logged while nothing else changed showed only on the next unrelated update.
 private struct DeviceLog: View {
-    @EnvironmentObject private var coordinator: AppCoordinator
+    @ObservedObject var log: LogStore
     let device: UUID
 
     var body: some View {
-        let lines = coordinator.logStore.lines.filter { $0.device == device }.map(\.text)
+        let lines = log.lines.filter { $0.device == device }.map(\.text)
         VStack(alignment: .trailing, spacing: 6) {
             ScrollViewReader { proxy in
                 ScrollView {

@@ -444,7 +444,7 @@ enum OTA {
         let store = root ?? directory
         guard let found = entries(of: store) else { return nil }
         var apps: [String] = []
-        for name in found where !name.hasPrefix(".") {
+        for name in found where !name.hasPrefix(".") && isFolder(store.appendingPathComponent(name)) {
             // Every level, not just the top one: `try?` here would have said "no
             // such app" for a folder that was merely unreadable, which is the
             // whole defect this function exists to avoid.
@@ -455,6 +455,14 @@ enum OTA {
             if inside.contains(where: { !$0.hasPrefix(".") }) { apps.append(name) }
         }
         return apps
+    }
+
+    /// A file dropped next to the app or build folders (notes, a stray .ipa, a
+    /// .DS_Store-like thing) is not one of them. Read as a folder it fails with
+    /// "not a directory", which counted as unreadable and took the page down.
+    private static func isFolder(_ url: URL) -> Bool {
+        var dir: ObjCBool = false
+        return !FileManager.default.fileExists(atPath: url.path, isDirectory: &dir) || dir.boolValue
     }
 
     /// `[]` when it isn't there, nil when it is but couldn't be read. Not
@@ -489,7 +497,7 @@ enum OTA {
         guard let slugs = entries(of: app) else { return nil }
         var unreadable = false
         let found = slugs.compactMap { slug -> Build? in
-            guard !slug.hasPrefix(".") else { return nil }
+            guard !slug.hasPrefix("."), isFolder(app.appendingPathComponent(slug)) else { return nil }
             let dir = app.appendingPathComponent(slug)
             // Absent is a build that was never finished; unreadable belongs to the
             // caller, or one folder's permissions take every build off the page.

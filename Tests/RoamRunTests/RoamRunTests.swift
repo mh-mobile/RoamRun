@@ -132,13 +132,22 @@ private func entry(pid: Int32, _ status: BridgeStatus) -> StatusFile.Entry {
 
 @Test func otherProcessCannotTakeAHealthyBridge() {
     for s in [BridgeStatus.ready, .waiting, .starting, .preparing] {
-        #expect(!StatusFile.mayReplace(entry(pid: 100, s), with: entry(pid: 200, .starting), by: 200))
+        #expect(!StatusFile.mayReplace(entry(pid: 100, s), with: entry(pid: 200, .starting), by: 200, claim: true))
     }
 }
 
 @Test func otherProcessMayTakeOverErroredOrStandingAside() {
     for s in [BridgeStatus.error, .local] {
-        #expect(StatusFile.mayReplace(entry(pid: 100, s), with: entry(pid: 200, .starting), by: 200))
+        #expect(StatusFile.mayReplace(entry(pid: 100, s), with: entry(pid: 200, .starting), by: 200, claim: true))
+    }
+}
+
+@Test func ordinaryUpdatesNeverTakeAnotherOwnersEntry() {
+    for held in [BridgeStatus.error, .local, .ready, .starting] {
+        for next in [BridgeStatus.error, .local, .starting] {
+            #expect(!StatusFile.mayReplace(entry(pid: 100, held), with: entry(pid: 200, next), by: 200))
+        }
+        #expect(!StatusFile.mayReplace(entry(pid: 100, held), with: nil, by: 200, claim: true))
     }
 }
 
@@ -626,7 +635,7 @@ import ServiceManagement
     // Errored elsewhere: ours to take.
     let errored = UUID()
     #expect(StatusFile.write(errored, e(other, .error), in: dir, live: live) == .written)
-    #expect(StatusFile.write(errored, e(getpid(), .starting), in: dir, live: live) == .written)
+    #expect(StatusFile.write(errored, e(getpid(), .starting), in: dir, live: live, claim: true) == .written)
     // A second profile for the same iPhone (same UDID) can't bridge it too; standing aside is fine.
     func withUDID(_ x: StatusFile.Entry) -> StatusFile.Entry { var x = x; x.udid = "00008130-000c1c5c307a8d3a"; return x }
     let first = UUID(), second = UUID()
@@ -672,6 +681,7 @@ private func ask(_ port: UInt16, _ request: String, hold: TimeInterval = 0) asyn
 @Suite(.serialized) struct OTAServerOverASocket {
     private func started() throws -> (OTAServer, UInt16) {
         let server = OTAServer(tailnetPort: 41443)
+        server.servedName = "m"   // the requests below name it as their Host
         let port = try #require(server.start())
         return (server, port)
     }
@@ -692,6 +702,19 @@ private func ask(_ port: UInt16, _ request: String, hold: TimeInterval = 0) asyn
         // Still answering afterwards: none of those wedged it.
         #expect(await ask(port, "HEAD /nope HTTP/1.1\r\nHost: m:41443\r\n\r\n")?
             .hasPrefix("HTTP/1.1 404") == true)
+    }
+
+    @Test func aHostThatIsntOurTailnetNameIsRefused() async throws {
+        let (server, port) = try started()
+        defer { server.stop() }
+        // A page on this Mac that rebinds its own name to 127.0.0.1 sends its own Host.
+        #expect(await ask(port, "GET / HTTP/1.1\r\nHost: attacker.example:41443\r\n\r\n")?
+            .hasPrefix("HTTP/1.1 421") == true)
+        // Case and a trailing dot are the same name.
+        #expect(await ask(port, "GET /nope HTTP/1.1\r\nHost: M.:41443\r\n\r\n")?.hasPrefix("HTTP/1.1 404") == true)
+        // Before the name is known, nothing is served.
+        server.servedName = nil
+        #expect(await ask(port, "GET /nope HTTP/1.1\r\nHost: m:41443\r\n\r\n")?.hasPrefix("HTTP/1.1 421") == true)
     }
 
     @Test func aPeerThatSaysNothingLetsGoOfItsSlot() async throws {
@@ -1936,4 +1959,499 @@ private func sized(_ path: String, _ b: OTA.Build) -> OTA.Build {
     var many: [String] = []
     for port in 1...9 { many = AppCoordinator.remembering(many, "port\(port)", keep: 5) }
     #expect(many == ["port5", "port6", "port7", "port8", "port9"])
+}
+
+// MARK: - Fixes from the bug-hunt review
+
+/// A run of `count` loopback ports nothing on this Mac holds right now, inside `band`:
+/// a port some other app happens to use would make a relay test flaky.
+/// Bands stay below 40000: `startedRelay` picks from 40000…49000, and a bridge here relays
+/// 127.0.0.1:p to itself, so a stray connection from those tests would loop and skew the pair count.
+private func freeBase(in band: ClosedRange<UInt16>, count: Int = 20) -> UInt16 {
+    func free(_ port: UInt16) -> Bool {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = port.bigEndian
+        addr.sin_addr.s_addr = INADDR_LOOPBACK.bigEndian
+        return withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0 }
+        }
+    }
+    for _ in 0..<200 {
+        let base = UInt16.random(in: band.lowerBound...(band.upperBound - UInt16(count)))
+        if (0..<count).allSatisfy({ free(base + UInt16($0)) }) { return base }
+    }
+    return band.lowerBound
+}
+
+private func scratchDir() -> URL {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-test-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    return dir
+}
+
+@Test func aPongThroughDERPStillMeansTheDeviceIsUp() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    // What tailscale 1.84 does for a relayed peer: the pong, then exit 1 unless
+    // it was told not to wait for a direct path.
+    let fake = dir.appendingPathComponent("tailscale")
+    try """
+    #!/bin/sh
+    echo "pong from iphone (100.64.0.10) via DERP(tok) in 20ms"
+    for a in "$@"; do [ "$a" = "--until-direct=false" ] && exit 0; done
+    echo "direct connection not established"
+    exit 1
+    """.write(to: fake, atomically: true, encoding: .utf8)
+    chmod(fake.path, 0o755)
+    #expect(TailscaleClient(binaryPath: fake.path).ping("100.64.0.10"))
+}
+
+@MainActor @Test func aStartStoppedWhileItAwaitedDoesntPutTheBridgeBack() {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let bridge = ProxyBridge(profile: profile("iPhone"), statusDir: dir)
+    let started = bridge.generation
+    bridge.stop()   // Stop pressed while relocate() waited on Tailscale
+    #expect(!bridge.step("Looking for the port", gen: started))
+    #expect(bridge.state == .off)
+    #expect(StatusFile.read(in: dir, live: { _ in true }).isEmpty)   // and it doesn't hold the device
+    // The current start still reports its progress.
+    #expect(bridge.step("Looking for the port", gen: bridge.generation))
+    #expect(bridge.state == .starting("Looking for the port"))
+    bridge.stop()
+}
+
+@MainActor private func eventuallyOnMain(_ condition: () -> Bool) async -> Bool {
+    for _ in 0..<100 {
+        if condition() { return true }
+        try? await Task.sleep(for: .milliseconds(50))
+    }
+    return condition()
+}
+
+
+@Test func theAppLeavesADeviceToARunningRoamrunUp() {
+    let me = getpid(), other: Int32 = 4242
+    func entry(_ pid: Int32, cli: Bool?, _ s: BridgeStatus) -> StatusFile.Entry {
+        .init(pid: pid, cli: cli, udid: nil, status: s.title, detail: "", ready: false, tunnelPorts: [],
+              updated: .now, state: s.rawValue)
+    }
+    // Errored or standing aside, a live `roamrun up` retries by itself.
+    #expect(HomeRule.leftToCLI(entry(other, cli: true, .error), myPID: me))
+    #expect(HomeRule.leftToCLI(entry(other, cli: true, .local), myPID: me))
+    #expect(!HomeRule.leftToCLI(entry(other, cli: false, .error), myPID: me))
+    #expect(!HomeRule.leftToCLI(entry(me, cli: true, .error), myPID: me))
+    #expect(!HomeRule.leftToCLI(nil, myPID: me))
+}
+
+@Test func theInstallPageKnowsOnlyItsTailnetName() {
+    #expect(OTAServer.isServedName("mac.tail1.ts.net:41443", servedName: "mac.tail1.ts.net"))
+    #expect(OTAServer.isServedName("Mac.Tail1.ts.net.", servedName: "mac.tail1.ts.net"))
+    #expect(!OTAServer.isServedName("attacker.example:41443", servedName: "mac.tail1.ts.net"))
+    #expect(!OTAServer.isServedName("mac.tail1.ts.net.attacker.example", servedName: "mac.tail1.ts.net"))
+    #expect(!OTAServer.isServedName("mac.tail1.ts.net", servedName: nil))
+}
+
+@Test func anUnreadableDeviceListIsNeverWrittenOver() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let store = ProfileStore(directory: dir)
+    let saved = [profile("iPhone"), profile("iPad")]
+    #expect(store.save(base: [], wanted: saved) == saved)
+    let file = dir.appendingPathComponent("profiles.json").path
+    chmod(file, 0)
+    defer { chmod(file, 0o600) }
+    // `roamrun up` learning a UDID, and the app saving a list it had to start empty.
+    #expect(!store.update { if !$0.isEmpty { $0[0].udid = "U" } })
+    #expect(store.save(base: [], wanted: [profile("New")]) == nil)
+    #expect(store.unreadable)
+    chmod(file, 0o600)
+    #expect(store.load() == saved)
+    #expect(!store.unreadable)
+}
+
+@Test func anUpdateThatChangesNothingWritesNothing() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let store = ProfileStore(directory: dir)
+    #expect(store.update { _ in })   // no file and nothing to add
+    #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("profiles.json").path))
+}
+
+@Test func aLostLoginItemThisCopyCantRestoreShowsOff() {
+    // Outside /Applications nothing registers it again: showing it on would be a promise nobody keeps.
+    #expect(AppCoordinator.loginItem(saved: true, status: .notRegistered, canRegister: false) == (on: false, register: false))
+    #expect(AppCoordinator.loginItem(saved: true, status: .notFound, canRegister: false) == (on: false, register: false))
+    #expect(AppCoordinator.loginItem(saved: true, status: .enabled, canRegister: false) == (on: true, register: false))
+    #expect(AppCoordinator.loginItem(saved: true, status: .notRegistered, canRegister: true) == (on: true, register: true))
+    // Only an installed copy is invited to take the login item back; a build run
+    // from a folder would take it from the one in /Applications.
+    #expect(AppCoordinator.lostLoginItemAdvice(bundlePath: "/Users/me/Applications/RoamRun.app").contains("Switch it on"))
+    #expect(!AppCoordinator.lostLoginItemAdvice(bundlePath: "/Users/me/src/RoamRun/RoamRun.app").contains("Switch it on"))
+}
+
+// MARK: - Second batch: remaining limits from the bug-hunt review
+
+@Test func onlyAPagePublishedToTheInternetFailsDoctor() {
+    // `doctor <name>` exits 1 on a fail, which scripts read as "the device isn't usable".
+    #expect(!CLI.failsDoctor(.notPublished))
+    #expect(!CLI.failsDoctor(.noHTTPSCertificates))
+    #expect(CLI.failsDoctor(.funnel))
+}
+
+@Test func onThisWiFiButUnreachableSaysWhy() {
+    func entry(_ s: BridgeStatus) -> StatusFile.Entry {
+        .init(pid: 4242, cli: false, udid: "U", status: s.title, detail: "", ready: s == .ready, tunnelPorts: [],
+              updated: .now, state: s.rawValue)
+    }
+    let asleep = CLI.readiness(entry(.local), udid: "U", core: "unavailable", deep: true)
+    #expect(!asleep.ready && asleep.kind == .local)
+    #expect(asleep.detail?.contains("On this Wi") == true)
+    let usable = CLI.readiness(entry(.local), udid: "U", core: "connected", deep: true)
+    #expect(usable.ready && usable.detail == nil)
+    // A bridge that looks ready but CoreDevice can't reach reads as waiting, as before.
+    let stale = CLI.readiness(entry(.ready), udid: "U", core: "unavailable", deep: true)
+    #expect(!stale.ready && stale.kind == .waiting && stale.detail != nil)
+}
+
+
+@Test func quittingGivesTheLiveEntryBackWhileOnlyTheSweepRuns() {
+    // Nothing running: quit takes the flag and ends it.
+    let free = AppCoordinator.beginReleaseAtQuit()
+    #expect(free.allowed && free.owns)
+    AppCoordinator.endServeChange()
+    // The sweep leaves the live entry alone: quit may give it back, without the flag.
+    #expect(AppCoordinator.beginServeChange(sweep: true))
+    let duringSweep = AppCoordinator.beginReleaseAtQuit()
+    #expect(duringSweep.allowed && !duringSweep.owns)
+    AppCoordinator.endServeChange()
+    // A publish or a release in flight: racing it is what the flag prevents.
+    #expect(AppCoordinator.beginServeChange())
+    #expect(!AppCoordinator.beginReleaseAtQuit().allowed)
+    AppCoordinator.endServeChange()
+}
+
+
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    var value: Int { lock.withLock { n } }
+    func bump() { lock.withLock { n += 1 } }
+}
+
+// MARK: - P3s from the bug-hunt review
+
+@Test func unknownValuesInJSONAreNullNotMissing() throws {
+    let row = CLI.Row(name: "iPhone", state: "off", id: "x", vpnAddress: "100.64.0.1", udid: nil, status: "Off",
+                      ready: false, owner: nil, pid: nil, tunnelPorts: [], coreDevice: nil, detail: nil, locked: nil)
+    let json = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(row)) as? [String: Any])
+    for key in ["udid", "owner", "pid", "coreDevice", "detail", "locked"] {
+        #expect(json[key] is NSNull, "\(key) should be null")
+    }
+    let check = CLI.Check(scope: "mac", result: "ok", message: "fine", fix: nil)
+    let c = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(check)) as? [String: Any])
+    #expect(c["fix"] is NSNull)
+}
+
+@Test func leftoverUnpackedArchivesAreSweptButFreshOnesStay() throws {
+    let tmp = scratchDir()
+    defer { try? FileManager.default.removeItem(at: tmp) }
+    let fm = FileManager.default
+    for name in ["roamrun-ipa-old", "roamrun-install-old", "roamrun-ipa-fresh", "someone-elses"] {
+        try fm.createDirectory(at: tmp.appendingPathComponent(name), withIntermediateDirectories: true)
+    }
+    let longAgo = Date.now.addingTimeInterval(-7200)
+    try fm.setAttributes([.creationDate: longAgo], ofItemAtPath: tmp.appendingPathComponent("roamrun-ipa-old").path)
+    try fm.setAttributes([.creationDate: longAgo], ofItemAtPath: tmp.appendingPathComponent("someone-elses").path)
+    try fm.setAttributes([.creationDate: longAgo], ofItemAtPath: tmp.appendingPathComponent("roamrun-install-old").path)
+    CLI.sweepStaleUnpacks(in: tmp)
+    #expect(!fm.fileExists(atPath: tmp.appendingPathComponent("roamrun-ipa-old").path))
+    #expect(!fm.fileExists(atPath: tmp.appendingPathComponent("roamrun-install-old").path))   // the signing check's unpacking
+    #expect(fm.fileExists(atPath: tmp.appendingPathComponent("roamrun-ipa-fresh").path))   // maybe an install running now
+    #expect(fm.fileExists(atPath: tmp.appendingPathComponent("someone-elses").path))
+}
+
+@Test func aTLSTerminatingForwardIsAPortInUse() {
+    // ipn.TCPPortHandler's key is TerminateTLS.
+    let json = #"{"TCP":{"41443":{"TerminateTLS":"mac.tail1.ts.net"}}}"#
+    #expect(TailscaleClient.serving(port: 41443, inJSON: json).alongside("mac.tail1.ts.net") == ["TCP forwarding"])
+}
+
+@Test func aControlCharacterInTheBuildNumberStillMakesAManifest() throws {
+    let build = OTA.Build(bundleID: "com.example.App", title: "App", version: "1.0", build: "7\u{1}", added: .now,
+                          size: 1, slug: "1.0-7-20260101-000000")
+    let data = try #require(OTA.manifest(for: build, base: "https://mac.tail1.ts.net:41443"))
+    let plist = try #require(try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+    let item = try #require((plist["items"] as? [[String: Any]])?.first)
+    #expect((item["metadata"] as? [String: Any])?["bundle-version"] as? String == "7")
+}
+
+@Test func aStrayFileInTheBuildsFolderDoesntTakeThePageDown() throws {
+    let root = scratchDir()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let slug = "1.0-1-20260101-000000"
+    let build = OTA.Build(bundleID: "com.example.App", title: "App", version: "1.0", build: "1", added: .now, size: 1, slug: slug)
+    let dir = root.appendingPathComponent("com.example.App").appendingPathComponent(slug)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    try JSONEncoder().encode(build).write(to: dir.appendingPathComponent("meta.json"))
+    // Notes dropped next to the app folders and next to the builds.
+    try Data("hi".utf8).write(to: root.appendingPathComponent("notes.txt"))
+    try Data("hi".utf8).write(to: root.appendingPathComponent("com.example.App").appendingPathComponent("old.ipa"))
+    #expect(OTA.appDirectories(in: root) == ["com.example.App"])
+    #expect(OTA.builds(in: root)?.first?.builds.map(\.slug) == [slug])
+}
+
+
+/// In the serialized relay suite: they open relays, and `processWideCapSpansRelays`
+/// counts every pair in the process — run beside it, they made it flaky.
+extension RelayOnLocalhost {
+    /// A restart while a bind is in flight, then a discovery whose window reaches the
+    /// old port further down: what is counted as relayed is exactly what listens.
+    @MainActor @Test func coveredPortsMatchRelaysAfterARestartMidBind() async {
+        let dir = scratchDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var p = profile("A")
+        p.providerIP = "127.0.0.1"
+        let bridge = ProxyBridge(profile: p, statusDir: dir)
+        defer { bridge.stop() }
+        let base = freeBase(in: 36000...37999, count: 30)
+        bridge.onTunnelPortDiscovered(base + 8, localIP: "127.0.0.1")
+        for _ in 0..<1000 where bridge.bindsInFlight == 0 { await Task.yield() }
+        #expect(bridge.bindsInFlight > 0)   // the old start is mid-bind
+        bridge.stop()
+        bridge.onTunnelPortDiscovered(base, localIP: "127.0.0.1")
+        #expect(await eventuallyOnMain { bridge.bindsInFlight == 0 && !bridge.tunnelRelayPorts.isEmpty })
+        try? await Task.sleep(for: .milliseconds(300))   // the old start's last bind ends too
+        #expect(bridge.coveredPortsForTests == bridge.tunnelRelayPorts)
+    }
+
+    @MainActor @Test func aTunnelPortInAnotherBridgesLookaheadGoesToItsDevice() async {
+        let dir = scratchDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var a = profile("A"), b = profile("B")
+        a.providerIP = "127.0.0.1"
+        b.providerIP = "127.0.0.1"
+        let bridgeA = ProxyBridge(profile: a, statusDir: dir), bridgeB = ProxyBridge(profile: b, statusDir: dir)
+        defer { bridgeA.stop(); bridgeB.stop() }
+        let base = freeBase(in: 30000...31999)   // bands differ per test: they run in parallel
+        bridgeA.onTunnelPortDiscovered(base, localIP: "127.0.0.1")
+        #expect(await eventuallyOnMain { bridgeA.tunnelRelayPorts.contains(base + 5) })
+        // B's device says base+5 is its tunnel; A only held it on speculation.
+        bridgeB.onTunnelPortDiscovered(base + 5, localIP: "127.0.0.1")
+        #expect(await eventuallyOnMain { bridgeB.tunnelRelayPorts.contains(base + 5) })
+        #expect(!bridgeA.tunnelRelayPorts.contains(base + 5))
+        // B's next attempt dials past the port it just found: that one moves over too.
+        #expect(await eventuallyOnMain { bridgeB.tunnelRelayPorts.contains(base + 6) })
+        #expect(!bridgeA.tunnelRelayPorts.contains(base + 16))
+        #expect(bridgeA.tunnelRelayPorts.contains(base + 4))   // the part of A's window below B's stays
+    }
+
+    @Test func aListenerThatDiesAfterItWasUpIsReportedOnce() async throws {
+        let failures = Counter()
+        let relay = Relay(localIP: "127.0.0.1", localPort: freeBase(in: 34000...35999, count: 1), remoteIP: "127.0.0.1",
+                          remotePort: 9, onFailure: { _ in failures.bump() })
+        try await relay.start()
+        defer { relay.stop() }
+        // What used to be dropped: the first verdict had already been given.
+        // Waiting once up may still recover by itself (a Wi‑Fi roam): not the end.
+        relay.listenerStateChanged(.waiting(.posix(.ENETDOWN)), nil)
+        #expect(failures.value == 0)
+        relay.listenerStateChanged(.failed(.posix(.ENETDOWN)), nil)
+        relay.listenerStateChanged(.failed(.posix(.ENETDOWN)), nil)
+        #expect(failures.value == 1)
+    }
+
+    @MainActor @Test func anotherProcessClaimingPortsTakesOnlyIdleLookahead() async {
+        let dir = scratchDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var a = profile("A")
+        a.providerIP = "127.0.0.1"
+        let bridge = ProxyBridge(profile: a, statusDir: dir)
+        defer { bridge.stop() }
+        let base = freeBase(in: 32000...33999)
+        bridge.onTunnelPortDiscovered(base, localIP: "127.0.0.1")
+        #expect(await eventuallyOnMain { bridge.bindsInFlight == 0 && bridge.tunnelRelayPorts.contains(base + 16) })
+        // Not from this process, not malformed, not wider than a window.
+        #expect(ProxyBridge.handleClaim("\(getpid()) \(base + 3)-\(base + 19)", myPID: getpid()) == 0)
+        #expect(ProxyBridge.handleClaim("4242 \(base)-\(base + 40)", myPID: getpid()) == 0)
+        #expect(ProxyBridge.handleClaim("4242 nonsense", myPID: getpid()) == 0)
+        // Another process's device owns base+3…: this bridge lets go of what it held ahead.
+        let heldAhead = bridge.tunnelRelayPorts.filter { $0 >= base + 3 }.count
+        #expect(heldAhead == 14)
+        #expect(ProxyBridge.handleClaim("4242 \(base + 3)-\(base + 19)", myPID: getpid()) == heldAhead)
+        #expect(!bridge.tunnelRelayPorts.contains(base + 3))
+        #expect(bridge.tunnelRelayPorts.contains(base + 2))
+    }
+
+    @Test func aListenerThisRelayNoLongerUsesIsIgnored() async throws {
+        let failures = Counter()
+        let relay = Relay(localIP: "127.0.0.1", localPort: freeBase(in: 34000...35999, count: 1), remoteIP: "127.0.0.1",
+                          remotePort: 9, onFailure: { _ in failures.bump() })
+        try await relay.start()
+        defer { relay.stop() }
+        // A late failure from some other listener (one a restart replaced) says nothing about this one.
+        let stranger = try NWListener(using: .tcp)
+        relay.listenerStateChanged(.failed(.posix(.ENETDOWN)), stranger)
+        #expect(failures.value == 0)
+    }
+}
+
+// MARK: - Third review round
+
+@Test func devicesThisProcessNeverSawStayOnDisk() {
+    let a = profile("A"), b = profile("B"), new = profile("New")
+    // Started from an unreadable list (nothing seen), then added one: the others stay.
+    #expect(Set(ProfileStore.merge(base: [], wanted: [new], disk: [a, b]).map(\.id)) == Set([a.id, b.id, new.id]))
+    // Deleted here — it was seen — so it doesn't come back.
+    #expect(ProfileStore.merge(base: [a, b], wanted: [b], disk: [a, b]).map(\.id) == [b.id])
+}
+
+@Test func aListThatBecomesReadableAgainIsntWrittenOverByTheEmptyOneWeStartedWith() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let store = ProfileStore(directory: dir)
+    let saved = [profile("iPhone"), profile("iPad")]
+    #expect(store.save(base: [], wanted: saved) == saved)
+    let file = dir.appendingPathComponent("profiles.json").path
+    chmod(file, 0)
+    let seen = store.load()   // the app at launch: nothing it can read
+    #expect(seen.isEmpty && store.unreadable)
+    chmod(file, 0o600)        // the permission comes back while it runs
+    let added = profile("New")
+    let after = try #require(store.save(base: seen, wanted: [added]))
+    #expect(Set(after.map(\.id)) == Set(saved.map(\.id) + [added.id]))
+    #expect(Set(store.load().map(\.id)) == Set(after.map(\.id)))
+}
+
+@Test func aPortScanStillSelectsItsDeviceAfterSavingRestoresOtherDevices() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let store = ProfileStore(directory: dir)
+    let restored = profile("A"), scanned = profile("B")
+    #expect(store.save(base: [], wanted: [restored]) == [restored])
+    // The app only knows B; this save is the first one after A becomes readable.
+    let updated = try #require(AppCoordinator.saveScannedPort(49160, for: scanned.id, in: [scanned]) { changed in
+        store.save(base: [], wanted: changed) ?? changed
+    })
+    #expect(store.load().map(\.id) == [restored.id, scanned.id])
+    #expect(store.load().first == restored)
+    #expect(updated.id == scanned.id)
+    #expect(updated.remotePairingPort == 49160)
+}
+
+@Test func anAutomaticClaimNeverTakesARunningRoamrunUpsDevice() {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let id = UUID(), cliPID: Int32 = 4242
+    func entry(_ pid: Int32, cli: Bool, _ s: BridgeStatus) -> StatusFile.Entry {
+        .init(pid: pid, cli: cli, udid: nil, status: s.title, detail: "", ready: false, tunnelPorts: [], updated: .now, state: s.rawValue)
+    }
+    let live: StatusFile.Liveness = { _ in true }
+    for held in [BridgeStatus.error, .local] {
+        #expect(StatusFile.write(id, entry(cliPID, cli: true, held), in: dir, live: live) == .written)
+        // The app on its own: refused, decided under the lock.
+        if case .heldBy = StatusFile.write(id, entry(getpid(), cli: false, .starting), in: dir, live: live, claim: true, deferToCLI: true) {} else {
+            Issue.record("an automatic start took a \(held) roamrun up's device")
+        }
+        // Start pressed by a person may still take an errored / standing-aside one, as README says.
+        #expect(StatusFile.write(id, entry(getpid(), cli: false, .starting), in: dir, live: live, claim: true) == .written)
+        StatusFile.write(id, nil, in: dir, live: live)
+    }
+    // Only a CLI is deferred to: another app copy's errored entry is taken as before.
+    #expect(StatusFile.write(id, entry(cliPID, cli: false, .error), in: dir, live: live) == .written)
+    #expect(StatusFile.write(id, entry(getpid(), cli: false, .starting), in: dir, live: live, claim: true, deferToCLI: true) == .written)
+}
+
+@MainActor @Test func aBridgeStartedAutomaticallyLeavesTheDeviceToRoamrunUp() async {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let p = profile("iPhone")
+    let live: StatusFile.Liveness = { _ in true }
+    let cli = StatusFile.Entry(pid: 4242, cli: true, udid: nil, status: BridgeStatus.error.title, detail: "", ready: false,
+                               tunnelPorts: [], updated: .now, state: BridgeStatus.error.rawValue)
+    #expect(StatusFile.write(p.id, cli, in: dir, live: live) == .written)
+    let bridge = ProxyBridge(profile: p, statusDir: dir, statusLive: live)
+    await bridge.start(automatic: true)   // what the app's restore, retry and resume paths now do
+    #expect(bridge.status == .error)
+    #expect(StatusFile.read(in: dir, live: live)[p.id]?.pid == 4242)   // still roamrun up's
+    bridge.stop()
+}
+
+@MainActor @Test func aManualClaimDoesntAuthorizeLaterUpdatesOrTeardownToTakeOver() {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let p = profile("iPhone")
+    let live: StatusFile.Liveness = { _ in true }
+    let bridge = ProxyBridge(profile: p, statusDir: dir, statusLive: live)
+    defer { bridge.stop() }
+
+    for held in [BridgeStatus.error, .local] {
+        #expect(bridge.claimDevice(automatic: false) == .written)
+        bridge.fail("the app's bridge is retryable")
+        let cli = StatusFile.Entry(pid: 4242, cli: true, udid: nil, status: held.title, detail: "CLI's entry",
+                                   ready: false, tunnelPorts: [], updated: .now, state: held.rawValue)
+        #expect(StatusFile.write(p.id, cli, in: dir, live: live, claim: true) == .written)
+
+        bridge.fail("a later status update")
+        #expect(StatusFile.read(in: dir, live: live)[p.id] == cli)
+        bridge.stop()   // teardown publishes changes before the state becomes Off
+        #expect(StatusFile.read(in: dir, live: live)[p.id] == cli)
+        #expect(bridge.claimDevice(automatic: true) == .heldBy(cli))
+        #expect(StatusFile.read(in: dir, live: live)[p.id] == cli)
+        // A new Start action may still take over. Its later updates stay ours too.
+        #expect(bridge.claimDevice(automatic: false) == .written)
+        bridge.fail("owned update")
+        #expect(StatusFile.read(in: dir, live: live)[p.id]?.detail == "owned update")
+        bridge.stop()
+        #expect(StatusFile.read(in: dir, live: live).isEmpty)
+    }
+}
+
+@MainActor @Test func aRefusedAutomaticClaimDoesntPublishStartingBeforeCheckingItsTwin() {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    var p = profile("iPhone")
+    p.udid = "00008130-000C1C5C307A8D3A"
+    let live: StatusFile.Liveness = { _ in true }
+    let twin = UUID()
+    let cli = StatusFile.Entry(pid: 4242, cli: true, udid: p.udid, status: BridgeStatus.error.title,
+                               detail: "", ready: false, tunnelPorts: [], updated: .now, state: BridgeStatus.error.rawValue)
+    #expect(StatusFile.write(twin, cli, in: dir, live: live) == .written)
+    let bridge = ProxyBridge(profile: p, statusDir: dir, statusLive: live)
+    defer { bridge.stop() }
+    #expect(bridge.claimDevice(automatic: true) == .heldBy(cli))
+    #expect(StatusFile.read(in: dir, live: live) == [twin: cli])
+}
+
+@Test func aDeviceAddedAgainWhileTheListWasUnreadableDoesntComeBackTwice() {
+    var old = profile("iPhone"), again = profile("iPhone")
+    old.udid = "00008130-000C1C5C307A8D3A"
+    again.udid = "00008130-000c1c5c307a8d3a"
+    let other = profile("iPad")
+    let merged = ProfileStore.merge(base: [], wanted: [again], disk: [old, other])
+    #expect(Set(merged.map(\.id)) == Set([again.id, other.id]))
+}
+
+@Test func anAutomaticStartLeavesATwinProfilesRoamrunUpAlone() {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let live: StatusFile.Liveness = { _ in true }
+    let udid = "00008130-000C1C5C307A8D3A", mine = UUID(), twin = UUID()
+    func entry(_ pid: Int32, cli: Bool, _ s: BridgeStatus) -> StatusFile.Entry {
+        .init(pid: pid, cli: cli, udid: udid, status: s.title, detail: "", ready: false, tunnelPorts: [], updated: .now, state: s.rawValue)
+    }
+    // `roamrun up` bridges the same iPhone through another saved profile, and is errored.
+    #expect(StatusFile.write(twin, entry(4242, cli: true, .error), in: dir, live: live) == .written)
+    if case .heldBy = StatusFile.write(mine, entry(getpid(), cli: false, .starting), in: dir, live: live, claim: true, deferToCLI: true) {} else {
+        Issue.record("an automatic start took a twin roamrun up's device")
+    }
+    #expect(StatusFile.write(mine, entry(getpid(), cli: false, .starting), in: dir, live: live, claim: true) == .written)   // Start pressed
+    // And the app waits for it rather than retrying into the refusal.
+    let entries = StatusFile.read(in: dir, live: live)
+    #expect(HomeRule.cliHolding(UUID(), udid: udid.lowercased(), in: entries, myPID: getpid())?.pid == 4242)
+    #expect(HomeRule.cliHolding(UUID(), udid: nil, in: entries, myPID: getpid()) == nil)
 }

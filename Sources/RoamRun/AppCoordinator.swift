@@ -53,10 +53,14 @@ final class AppCoordinator: ObservableObject {
     init() {
         let saved = UserDefaults.standard.object(forKey: Self.launchAtLoginKey) as? Bool
         let loginStatus = SMAppService.mainApp.status
-        let login = Self.loginItem(saved: saved, status: loginStatus)
+        // Only the installed copy registers itself: a build run from a folder must not
+        // become the login item in place of it.
+        let installed = Bundle.main.bundlePath.hasPrefix("/Applications/")
+        let login = Self.loginItem(saved: saved, status: loginStatus, canRegister: installed)
         launchAtLogin = login.on
         if saved == nil { UserDefaults.standard.set(login.on, forKey: Self.launchAtLoginKey) }
         if loginStatus == .requiresApproval { loginItemProblem = "Allow RoamRun in System Settings › General › Login Items." }
+        if saved == true && !login.on { loginItemProblem = Self.lostLoginItemAdvice(bundlePath: Bundle.main.bundlePath) }
         let savedCLIPath = UserDefaults.standard.string(forKey: "tailscaleCLIPath") ?? ""
         tailscaleClient.binaryPath = savedCLIPath.isEmpty ? nil : savedCLIPath
         tailscaleCLIPath = savedCLIPath
@@ -66,6 +70,9 @@ final class AppCoordinator: ObservableObject {
         if let copy = store.keptUnreadable {
             logStore.log("couldn't read saved devices; kept the file as \(copy.path)")
             launchWarning = "RoamRun couldn't read its saved devices, so the list starts empty. The file was kept as \(copy.path)."
+        } else if store.unreadable {
+            logStore.log("couldn't read \(ProfileStore.directory.path)/profiles.json; not writing over it")
+            launchWarning = Self.unreadableListWarning
         }
         for p in profiles { install(ProxyBridge(profile: p)) }
 
@@ -115,16 +122,15 @@ final class AppCoordinator: ObservableObject {
 
         learnDeviceTypes()
 
-        // Only the installed copy registers itself: a build run from a folder must not
-        // become the login item in place of it.
-        if login.register, Bundle.main.bundlePath.hasPrefix("/Applications/") { applyLaunchAtLogin() }
+        if login.register { applyLaunchAtLogin() }
 
         // A snapshot run is a throwaway copy; it must not touch the real app's bridges.
+        let live = StatusFile.read()
         for id in wasActiveIDs where Snapshot.path == nil {
             if let p = profiles.first(where: { $0.id == id }) {
                 isRestoringBridges = true
                 logStore.log("restoring bridge for \"\(p.displayName)\"", device: p.id)
-                self.bridge(for: p)?.requestStart()
+                autoStart(id, live: live)
             }
         }
 
@@ -322,16 +328,30 @@ final class AppCoordinator: ObservableObject {
     /// threads, and NSLock must be unlocked by the thread that took it.
     nonisolated static let publishLock = NSLock()
     nonisolated(unsafe) private static var changingServe = false
+    /// The change running is the sweep for leftovers, which never touches the live entry.
+    nonisolated(unsafe) private static var sweeping = false
 
-    nonisolated static func beginServeChange() -> Bool {
+    nonisolated static func beginServeChange(sweep: Bool = false) -> Bool {
         publishLock.withLock {
             guard !changingServe else { return false }
             changingServe = true
+            sweeping = sweep
             return true
         }
     }
 
-    nonisolated static func endServeChange() { publishLock.withLock { changingServe = false } }
+    nonisolated static func endServeChange() { publishLock.withLock { changingServe = false; sweeping = false } }
+
+    /// Whether quitting may give the live entry back now, and whether it took the
+    /// flag doing so (then it ends it). A running sweep leaves the live entry alone
+    /// — no publish can have made a newer one while it runs — so waiting on it
+    /// would only leave that entry behind when the process exits.
+    nonisolated static func beginReleaseAtQuit() -> (allowed: Bool, owns: Bool) {
+        publishLock.withLock {
+            guard changingServe else { changingServe = true; return (true, true) }
+            return (sweeping, false)
+        }
+    }
     nonisolated static let otaPortKey = "otaPort"
     /// A port of RoamRun's own, rather than a path on the tailnet's `:443`.
     /// 443 carries whatever else the user serves, so a mistake there is theirs,
@@ -377,7 +397,7 @@ final class AppCoordinator: ObservableObject {
         let sweep = publishWork.offerSweep(due: due,
                                           changeInProgress: Self.publishLock.withLock { Self.changingServe },
                                           wanted: strays.wanted, hasRemembered: !Self.remembered().isEmpty)
-        if sweep, Self.beginServeChange() {
+        if sweep, Self.beginServeChange(sweep: true) {
             let live = otaPublished
             let startedAt = strays.generation
             Task.detached { [weak self] in
@@ -469,6 +489,8 @@ final class AppCoordinator: ObservableObject {
                 }
                 return
             }
+            // The page answers under this name only; a rename republishes, which sets it again.
+            server.servedName = host
             // Never set by RoamRun and not possible on a port Funnel can publish —
             // but that list is Tailscale's policy, and this page would be on the
             // open internet. Loud, and it does not stop us serving: the entry is
@@ -573,18 +595,23 @@ final class AppCoordinator: ObservableObject {
             // couldn't read would leave it registered with nothing tracking it —
             // and the next port change would have no old port to give back.
             let gone: Bool
+            var host: String?
             let state = TailscaleClient.serving(port: published.port)
             switch state {
             case .unknown: gone = false
             case .nothing: gone = true
             // Under this node's name only: the entry we made under a name it has
             // since stopped answering to is one `serve` can no longer reach.
-            case .mounted: gone = Self.currentHost().map { state.root(on: $0) != published.target } ?? false
+            case .mounted:
+                host = Self.currentHost()
+                gone = host.map { state.root(on: $0) != published.target } ?? false
             }
             await MainActor.run {
                 guard let self else { return }
                 self.verifyingOTA = false
                 if gone, self.otaPublished?.target == published.target { self.otaPublished = nil }
+                // Still ours under the name the node answers to now: the page follows it.
+                if !gone, let host { self.otaServer?.servedName = host }
             }
         }
     }
@@ -658,7 +685,8 @@ final class AppCoordinator: ObservableObject {
             // Before the listener, not after: in between, the address answers 502
             // rather than stopping. Synchronously here, because this runs from
             // willTerminate where a detached task would not outlive the process.
-            if !Self.beginServeChange() {
+            let release = Self.beginReleaseAtQuit()
+            if !release.allowed {
                 // One is already on its way out. Racing it is how the `off` that
                 // arrives second removes whatever took the port; the record stays,
                 // so the next run recognises the entry and gives it back.
@@ -669,7 +697,7 @@ final class AppCoordinator: ObservableObject {
                 // when tailscaled isn't answering — which is when `off` fails anyway.
                 // The record stays, so the next launch reclaims it.
                 let gone = Self.releaseServe(published, timeout: 2)
-                Self.endServeChange()   // both callers terminate, but a leak here would wedge every later change
+                if release.owns { Self.endServeChange() }   // a leak here would wedge every later change
                 if !gone {
                     logStore.log("couldn't give port \(published.port) back; `tailscale serve --https=\(published.port) --set-path=/ off` clears it")
                 }
@@ -708,9 +736,9 @@ final class AppCoordinator: ObservableObject {
     }
 
     private func retryErroredBridges() {
-        for id in wasActiveIDs {
-            guard let p = profiles.first(where: { $0.id == id }), let b = bridges[id] else { continue }
-            if b.status == .error && b.autoRetry { startBridge(p) }
+        let live = StatusFile.read()
+        for id in wasActiveIDs where profile(id) != nil {
+            if let b = bridges[id], b.status == .error && b.autoRetry { autoStart(id, live: live) }
         }
     }
 
@@ -897,14 +925,7 @@ final class AppCoordinator: ObservableObject {
             self.learnDeviceTypes()
         }
         // Stepped back for a `roamrun up` watching the same device: take over again once it's gone.
-        bridge.onYield = { [weak self] other in
-            Task { @MainActor in
-                while StatusFile.isRoamRun(other) { try? await Task.sleep(for: .seconds(5)) }   // that process, not just its PID
-                guard let self, self.wasActiveIDs.contains(id), let p = self.profile(id),
-                      self.bridges[id]?.state == .off else { return }
-                self.startBridge(p)
-            }
-        }
+        bridge.onYield = { [weak self] other in self?.startWhenFree(id, after: other) }
         bridge.onProfileChange = { [weak self] moved in
             guard let self, let i = self.profiles.firstIndex(where: { $0.id == id }) else { return }
             self.profiles[i].providerIP = moved.providerIP
@@ -954,18 +975,31 @@ final class AppCoordinator: ObservableObject {
         }
         if found == profile.remotePairingPort {
             logStore.log("\"\(profile.displayName)\": RemotePairing port is still \(found)", device: profile.id)
-        } else if let idx = profiles.firstIndex(where: { $0.id == profile.id }) {
-            profiles[idx].remotePairingPort = found
-            persist()
+        } else {
+            // Before persist(): it may rebuild the bridge, and a new one reads as off.
+            let wasOn = bridges[profile.id].map { $0.state != .off } == true
+            guard let updated = Self.saveScannedPort(found, for: profile.id, in: profiles, save: { changed in
+                profiles = changed
+                persist()
+                return profiles
+            }) else { return }
             logStore.log("\"\(profile.displayName)\": RemotePairing port updated to \(found)", device: profile.id)
             // ProxyBridge holds its profile by value — swap it in or the
             // new port only takes effect after a relaunch.
             // Also errored / standing aside: the scan is how you fix a bridge that can't reach the device.
-            let wasOn = bridges[profile.id].map { $0.state != .off } == true
             bridges[profile.id]?.stop()
-            let bridge = install(ProxyBridge(profile: profiles[idx]))
+            let bridge = install(ProxyBridge(profile: updated))
             if wasOn { bridge.requestStart() }
         }
+    }
+
+    /// Saving can restore devices ahead of this one; select the saved profile by ID.
+    nonisolated static func saveScannedPort(_ port: UInt16, for id: UUID, in profiles: [DeviceProfile],
+                                          save: ([DeviceProfile]) -> [DeviceProfile]) -> DeviceProfile? {
+        var changed = profiles
+        guard let index = changed.firstIndex(where: { $0.id == id }) else { return nil }
+        changed[index].remotePairingPort = port
+        return save(changed).first { $0.id == id }
     }
 
     /// Swaps a running bridge's profile by rebuilding it: `ProxyBridge` holds the
@@ -975,8 +1009,40 @@ final class AppCoordinator: ObservableObject {
         guard let old = bridges[profile.id], old.profile != profile else { return }
         let wasOn = old.state != .off
         old.stop()
-        let bridge = install(ProxyBridge(profile: profile))
-        if wasOn { bridge.requestStart() }
+        install(ProxyBridge(profile: profile))
+        if wasOn { autoStart(profile.id, live: StatusFile.read()) }
+    }
+
+    /// The one way the app starts a bridge by itself (restore at launch, the 30 s
+    /// retry, an IP change, a rebuilt bridge): never over a running `roamrun up`,
+    /// which retries on its own and gives up (exit 1) if taken over — then once it
+    /// has ended. Starts a person asks for (Start, Try Again) use startBridge.
+    private func autoStart(_ id: UUID, live: [UUID: StatusFile.Entry], restarting: Bool = false) {
+        guard Snapshot.fakeProfiles == nil else { return }   // screenshot mode's devices never bridge
+        if let other = HomeRule.cliHolding(id, udid: bridges[id]?.udid ?? profile(id)?.udid, in: live, myPID: getpid()) {
+            startWhenFree(id, after: other)
+            return
+        }
+        if restarting { bridges[id]?.stop() }
+        bridges[id]?.requestStart(automatic: true)   // the claim itself defers to a CLI that got there first
+    }
+
+    /// Devices waiting in startWhenFree: the 30 s retry must not stack a waiter per tick.
+    private var waitingForCLI = Set<UUID>()
+
+    /// Once `other` — that process, not just its PID — has ended, starts `id` again
+    /// if it is still wanted and nothing else started it meanwhile.
+    private func startWhenFree(_ id: UUID, after other: StatusFile.Entry) {
+        guard waitingForCLI.insert(id).inserted else { return }
+        Task { @MainActor [weak self] in
+            while StatusFile.isRoamRun(other) { try? await Task.sleep(for: .seconds(5)) }
+            guard let self else { return }
+            self.waitingForCLI.remove(id)
+            guard self.wasActiveIDs.contains(id), self.profile(id) != nil,
+                  let b = self.bridges[id], b.state == .off || b.status == .error else { return }
+            // Through autoStart again: another `roamrun up` may have taken the device meanwhile.
+            self.autoStart(id, live: StatusFile.read())
+        }
     }
 
     // MARK: - Internals
@@ -1002,10 +1068,9 @@ final class AppCoordinator: ObservableObject {
         logStore.log("local IP changed -> \(ip); restarting active bridges")
         // Also retry bridges that errored (e.g. started while en0 had no IP).
         let wanted = wasActiveIDs
+        let live = StatusFile.read()
         for (id, bridge) in bridges where bridge.state.isActive || wanted.contains(id) {
-            bridge.stop()
-            // Through startBridge, so the CLI-owner and same-LAN checks apply.
-            if let p = profile(id) { startBridge(p) }
+            autoStart(id, live: live, restarting: true)
         }
     }
 
@@ -1013,10 +1078,23 @@ final class AppCoordinator: ObservableObject {
     /// bundle id, so changing it (0.1.12) or replacing the app drops it while the user's choice
     /// stands. `.requiresApproval` still counts as on: that's them switching it off in System
     /// Settings, which we leave alone.
-    nonisolated static func loginItem(saved: Bool?, status: SMAppService.Status) -> (on: Bool, register: Bool) {
+    /// Why "Open at login" shows off although it was on. Registering belongs to one
+    /// bundle id, so switching it on from a build run out of a folder would take the
+    /// login item from the installed copy (edfe07e): only an installed copy is invited.
+    nonisolated static func lostLoginItemAdvice(bundlePath: String) -> String {
+        bundlePath.contains("/Applications/")
+            ? "Open at login was lost when RoamRun was replaced or moved, and only the copy in /Applications turns it back on by itself. Switch it on to register this copy."
+            : "Open at login is off for this copy. The copy in /Applications turns it back on when it next opens."
+    }
+
+    /// `canRegister`: this copy may register itself again (only one in /Applications).
+    /// When it can't, a lost registration shows as off — showing it on would say
+    /// the app opens at login while nothing is registered.
+    nonisolated static func loginItem(saved: Bool?, status: SMAppService.Status,
+                                      canRegister: Bool = true) -> (on: Bool, register: Bool) {
         let live = status == .enabled || status == .requiresApproval
         let lost = saved == true && !live
-        return (live || lost, lost)
+        return (live || (lost && canRegister), lost && canRegister)
     }
 
     private func applyLaunchAtLogin() {
@@ -1038,20 +1116,36 @@ final class AppCoordinator: ObservableObject {
         if on != launchAtLogin { syncingLoginItem = true; launchAtLogin = on; syncingLoginItem = false }
     }
 
+    nonisolated static var unreadableListWarning: String {
+        "RoamRun couldn't read its saved devices (profiles.json in \(ProfileStore.directory.path)), so the list starts empty and nothing is saved over the file. Check its permissions, then reopen RoamRun."
+    }
+    nonisolated static var saveFailedWarning: String {
+        "RoamRun couldn't save your devices (\(ProfileStore.directory.path)). Changes will be lost when it quits — check the disk and folder permissions."
+    }
+
     /// Saves the device list; a failed write would lose changes at the next launch, so say so.
     private func persist() {
         guard Snapshot.fakeProfiles == nil else { return }   // screenshot mode's fake devices never reach disk
         if let saved = store.save(base: savedProfiles, wanted: profiles) {
             savedProfiles = saved
-            if saved != profiles {   // `roamrun up` had saved a newer endpoint
-                let stale = zip(profiles, saved).filter { $0 != $1 }.map(\.1)
+            if saved != profiles {   // `roamrun up` had saved a newer endpoint, or devices we never read came back
+                let mine = Dictionary(profiles.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+                let wanted = wasActiveIDs
+                let stale = saved.filter { p in mine[p.id].map { $0 != p } ?? false }
                 profiles = saved
                 for p in stale { replaceBridge(with: p) }   // it holds its profile by value
+                // Kept from disk rather than dropped (the list we started from was unreadable): they need bridges.
+                for p in saved where bridges[p.id] == nil {
+                    capture.ownedHosts.insert(install(ProxyBridge(profile: p)).spoofHost)
+                    if wanted.contains(p.id) { autoStart(p.id, live: StatusFile.read()) }   // left on before it went unread
+                }
             }
+            // Saved, so the file is readable and written again: those two warnings no longer hold.
+            if launchWarning == Self.unreadableListWarning || launchWarning == Self.saveFailedWarning { launchWarning = nil }
             return
         }
         logStore.log("couldn't save the device list to \(ProfileStore.directory.path)")
-        launchWarning = "RoamRun couldn't save your devices (\(ProfileStore.directory.path)). Changes will be lost when it quits — check the disk and folder permissions."
+        launchWarning = Self.saveFailedWarning
     }
 
     /// Stops helpers a crashed run left behind, off the main thread; says what it did.

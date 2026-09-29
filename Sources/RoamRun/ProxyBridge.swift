@@ -12,7 +12,7 @@ import OSLog
 /// onward to the iPhone over the mesh VPN.
 @MainActor
 final class ProxyBridge: ObservableObject {
-    @Published private(set) var state: BridgeState = .off { didSet { publishStatus() } }
+    @Published private(set) var state: BridgeState = .off
     /// remotepairingd holds a control channel to the iPhone through us.
     @Published private(set) var phoneConnected = false { didSet { publishStatus() } }
     /// A tunnel has been negotiated at least once, so relays are primed.
@@ -40,7 +40,7 @@ final class ProxyBridge: ObservableObject {
     private var tunnelRelays: [UInt16: Relay] = [:]
     private var coveredPorts = Set<UInt16>()
     private var localPort: UInt16 = 0
-    private var generation = 0
+    private(set) var generation = 0
     private var warmingUp = false
     private var waitingSince: Date?
     private var renewTimer: Timer?
@@ -75,12 +75,34 @@ final class ProxyBridge: ObservableObject {
         "rr-\(profile.id.uuidString.prefix(8).lowercased()).roamrun.local"
     }
 
-    init(profile: DeviceProfile) {
+    /// Where status.json lives, and which of its entries count as live; tests pass
+    /// a scratch folder and owners that aren't RoamRun.app.
+    private let statusDir: URL
+    private let statusLive: StatusFile.Liveness
+
+    init(profile: DeviceProfile, statusDir: URL = ProfileStore.directory,
+         statusLive: @escaping StatusFile.Liveness = StatusFile.isRoamRun) {
         self.profile = profile
         self.udid = profile.udid
+        self.statusDir = statusDir
+        self.statusLive = statusLive
+        Self.all.add(self)
+        Self.listenForClaims()
     }
 
-    func start() async {
+    /// Every bridge in this process: they all listen on the same address, so a
+    /// tunnel port one discovers may sit in another's lookahead window.
+    private static let all = NSHashTable<ProxyBridge>.weakObjects()
+    /// Ports given to another bridge here; a bind still in flight must not keep them.
+    private var yielded = Set<UInt16>()
+    /// This generation's binds under way, per port: one that fails must not uncover a
+    /// port another is still binding. Reset with the rest at teardown.
+    private var binding: [UInt16: Int] = [:]
+
+    /// `automatic`: the app starting it by itself (restore, retry, network change,
+    /// leaving this Wi‑Fi). Such a start never takes the device from a live `roamrun up`
+    /// — decided when the claim is written, so it can't race a check made earlier.
+    func start(automatic: Bool = false) async {
         generation += 1
         let gen = generation
         teardown()   // a failed or repeated start must not leave relays/timers behind
@@ -93,11 +115,10 @@ final class ProxyBridge: ObservableObject {
         autoRetry = true
         phoneConnected = false
         tunnelReady = false
-        setState(.starting("Checking local interface"))
         // One bridge per iPhone across processes — claimed here so every path
         // (Start, retries, restore, network change, CLI) goes through it. The
         // claim is one step under status.lock; only `.written` means it's ours.
-        switch publishStatus() {
+        switch claimDevice(automatic: automatic) {
         case .written:
             claimTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.checkClaim() }
@@ -136,7 +157,7 @@ final class ProxyBridge: ObservableObject {
                                                          port: profile.remotePairingPort)
         guard gen == generation else { return }   // stopped or restarted meanwhile
         if !reachable {
-            let (moved, answers) = await relocate()
+            let (moved, answers) = await relocate(gen: gen)
             guard gen == generation else { return }
             if moved.providerIP != profile.providerIP || moved.remotePairingPort != profile.remotePairingPort
                 || moved.providerHostName != profile.providerHostName {
@@ -246,10 +267,27 @@ final class ProxyBridge: ObservableObject {
         }
     }
 
+    /// Takeover permission belongs to this claim, never to subsequent status updates.
+    @discardableResult
+    func claimDevice(automatic: Bool) -> StatusFile.WriteResult {
+        state = .starting("Checking local interface")   // publish only with the claim's policy
+        return publishStatus(claim: true, deferToCLI: automatic && !CLI.isRunning)
+    }
+
+    /// A start's progress, unless that start was stopped or replaced while it
+    /// awaited — writing then would put a stopped bridge back to Starting, or
+    /// an active one back for good. False when stale.
+    @discardableResult
+    func step(_ what: String, gen: Int) -> Bool {
+        guard gen == generation else { return false }
+        setState(.starting(what))
+        return true
+    }
+
     /// Start from synchronous code. A stop() before the task gets to run wins.
-    func requestStart() {
+    func requestStart(automatic: Bool = false) {
         let g = generation
-        Task { guard g == generation else { return }; await start() }
+        Task { guard g == generation else { return }; await start(automatic: automatic) }
     }
 
     func stop() {
@@ -272,29 +310,135 @@ final class ProxyBridge: ObservableObject {
         for pair in tunnelRelays.values { pair.stop() }
         tunnelRelays = [:]
         coveredPorts = []
+        yielded = []
+        binding = [:]
         localPort = 0
         phoneConnected = false
         tunnelReady = false
     }
 
-    private func bindRelay(localIP: String, localPort: UInt16, remotePort: UInt16,
+    /// `tunnelPort` nil is the control relay. A listener that dies once up is
+    /// reported to relayFailed (for the generation that bound it).
+    private func bindRelay(localIP: String, localPort: UInt16, remotePort: UInt16, tries: Int = 1,
+                           tunnelPort: UInt16? = nil,
                            onOpenCountChange: ((Int) -> Void)? = nil) async throws -> Relay {
-        let relay = Relay(localIP: localIP, localPort: localPort, remoteIP: profile.providerIP,
-                          remotePort: remotePort, onOpenCountChange: onOpenCountChange)
-        try await relay.start()
-        return relay
+        let gen = generation
+        var attempt = 1
+        while true {
+            let relay = Relay(localIP: localIP, localPort: localPort, remoteIP: profile.providerIP,
+                              remotePort: remotePort, onOpenCountChange: onOpenCountChange,
+                              onFailure: { [weak self] relay in Task { @MainActor in self?.relayFailed(relay, tunnelPort: tunnelPort, gen: gen) } })
+            do {
+                try await relay.start()
+                return relay
+            } catch {
+                guard attempt < tries else { throw error }
+                attempt += 1
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+        }
     }
+
+    /// Takes `port` from the other bridges here that hold it only as an idle
+    /// lookahead. True if one gave it up.
+    private static func claim(_ port: UInt16, by me: ProxyBridge) -> Bool {
+        all.allObjects.filter { $0 !== me }.reduce(false) { $1.yield(port) || $0 }
+    }
+
+    /// Other RoamRun processes on this Mac listen on the same address, and their
+    /// idle lookahead can hold a port another process's device owns.
+    static let claimNotification = Notification.Name(AppID.bundle + ".claimTunnelPorts")
+    private static var listeningForClaims = false
+
+    /// Tells the other RoamRun processes that bridge a device — the app, a `roamrun
+    /// up` — that `window` is this device's. False when none does.
+    private static func announceClaim(_ window: ClosedRange<UInt16>, statusDir: URL) -> Bool {
+        let me = getpid()
+        guard StatusFile.read(in: statusDir).values.contains(where: { $0.pid != me && $0.holdsDevice }) else { return false }
+        DistributedNotificationCenter.default().postNotificationName(
+            claimNotification, object: "\(me) \(window.lowerBound)-\(window.upperBound)", userInfo: nil, deliverImmediately: true)
+        return true
+    }
+
+    private static func listenForClaims() {
+        guard !listeningForClaims else { return }
+        listeningForClaims = true
+        DistributedNotificationCenter.default().addObserver(forName: claimNotification, object: nil, queue: .main) { note in
+            let text = note.object as? String   // read before crossing into the main actor
+            MainActor.assumeIsolated { _ = handleClaim(text, myPID: getpid()) }
+        }
+    }
+
+    /// "<pid> <first>-<last>" from another process: its device owns those ports, so
+    /// bridges here let go of the ones they hold only ahead. Anything else is ignored;
+    /// a sender can take no more than an idle lookahead. How many were given (tests).
+    @discardableResult
+    static func handleClaim(_ text: String?, myPID: Int32) -> Int {
+        guard let parts = text?.split(separator: " "), parts.count == 2,
+              let pid = Int32(parts[0]), pid != myPID else { return 0 }
+        let range = parts[1].split(separator: "-")
+        guard range.count == 2, let lo = UInt16(range[0]), let hi = UInt16(range[1]),
+              lo <= hi, hi - lo <= 16 else { return 0 }
+        var given = 0
+        for bridge in all.allObjects {
+            let n = (lo...hi).filter { bridge.yield($0) }.count
+            if n > 0 { bridge.log("gave \(n) tunnel port(s) from \(lo) to a device bridged by another RoamRun process (pid \(pid))") }
+            given += n
+        }
+        return given
+    }
+
+    /// Another device's bridge found `port` to be its tunnel: let it go, unless a
+    /// connection runs on it (then it is this device's after all).
+    private func yield(_ port: UInt16) -> Bool {
+        guard port != localPort, coveredPorts.contains(port) else { return false }
+        if let relay = tunnelRelays[port] {
+            guard relay.openCount == 0 else { return false }
+            relay.stop()
+            tunnelRelays[port] = nil
+            if case .active(let lp, let existing) = state {
+                setState(.active(localPort: lp, tunnelPorts: existing.filter { $0 != port }))
+            }
+        } else {
+            yielded.insert(port)   // its bind is still in flight
+        }
+        coveredPorts.remove(port)
+        return true
+    }
+
+    /// Tunnel ports whose relay is listening (tests).
+    var tunnelRelayPorts: Set<UInt16> { Set(tunnelRelays.keys) }
+    /// Ports counted as relayed or being bound (tests check it matches reality).
+    var coveredPortsForTests: Set<UInt16> { coveredPorts }
+    /// Relay binds still under way (tests wait for them to settle).
+    var bindsInFlight: Int { binding.values.reduce(0, +) }
 
     /// remotepairingd connects ~5ms after logging the endpoint, so the port we
     /// just saw is always too late. The iPhone hands out tunnel ports
     /// sequentially, so pre-open the next ones for the retry.
     // ponytail: fixed lookahead of 16; widen if the device skips further ahead.
-    private func onTunnelPortDiscovered(_ port: UInt16, localIP: String) {
+    func onTunnelPortDiscovered(_ port: UInt16, localIP: String) {   // internal for tests
         // Hit: a lookahead relay was already listening when remotepairingd dialed this port.
         let hit = tunnelRelays[port] != nil
         let jump = lastTunnelPort.map { Int(port) - Int($0) }
         lastTunnelPort = port
         Self.tunnelLog.debug("\(self.profile.displayName, privacy: .public): tunnel port \(port) \(hit ? "hit" : "miss", privacy: .public), jump \(jump.map(String.init) ?? "first", privacy: .public)")
+        // The control relay fell back to a port above the device's own (it was taken
+        // here) and the device now tunnels on that very number: it can't be relayed.
+        if port == localPort {
+            log("tunnel port \(port) is where this bridge's control relay listens (\(profile.remotePairingPort) was taken on this Mac), so that tunnel can't be relayed — free port \(profile.remotePairingPort) and reconnect")
+        }
+        // The device just said this port is its own: another bridge's idle lookahead
+        // relay would hand remotepairingd's connection to the wrong iPhone.
+        // So is the window after it: the next attempt dials one of those.
+        let window = port...UInt16(min(Int(port) + 16, Int(UInt16.max)))
+        yielded.subtract(window)
+        let handedOver = Set(window.filter { Self.claim($0, by: self) })
+        if !handedOver.isEmpty {
+            log("took \(handedOver.count) tunnel port(s) from \(handedOver.min()!) held ahead by another device's bridge")
+        }
+        // Another RoamRun process (the app, a `roamrun up`) listens on this address too.
+        let announced = Self.announceClaim(window, statusDir: statusDir)
         // First: if ports jumped (e.g. lower after a device reboot), the old window must go.
         let reaped = reapTunnelRelays(around: port)
         if !reaped.isEmpty, case .active(let lp, let existing) = state {
@@ -311,24 +455,50 @@ final class ProxyBridge: ObservableObject {
         let gen = generation
         Task {
             var opened: [UInt16] = []
-            for p in ports {
-                guard gen == generation else { return }   // restarted: coveredPorts is the new bridge's now
-                do {
-                    let pair = try await bindRelay(localIP: localIP, localPort: p, remotePort: p)
-                    guard gen == generation else { pair.stop(); return }   // bridge stopped meanwhile
-                    tunnelRelays[p] = pair
-                    opened.append(p)
-                    tunnelReady = true
-                } catch {
-                    coveredPorts.remove(p)
-                    // Every bridge listens on the same address, so the usual cause is
-                    // another device's bridge whose lookahead window covers this port.
-                    log("failed to open relay for tunnel port \(p) — another device's bridge may already hold it: \(error.localizedDescription)")
+            var todo = ports, again: [UInt16] = []
+            // Two passes when another process was asked to let go: the ports it still
+            // held get one more try once the rest are up, so the usual case stays fast.
+            for pass in 0..<(announced ? 2 : 1) {
+                if pass == 1 {
+                    guard !again.isEmpty else { break }
+                    try? await Task.sleep(for: .milliseconds(300))
+                    (todo, again) = (again, [])
+                }
+                for p in todo {
+                    guard gen == generation else { return }   // restarted: coveredPorts is the new bridge's now
+                    // A port just taken from another bridge frees once its listener is cancelled.
+                    let tries = handedOver.contains(p) ? 20 : 1
+                    binding[p, default: 0] += 1
+                    let bound: Result<Relay, Error>
+                    do { bound = .success(try await bindRelay(localIP: localIP, localPort: p, remotePort: p, tries: tries, tunnelPort: p)) }
+                    catch { bound = .failure(error) }
+                    // Counted per generation: teardown resets it, and a bind from a start that is
+                    // gone touches neither the count nor coveredPorts (both are the new start's).
+                    if gen == generation { binding[p] = binding[p, default: 1] > 1 ? binding[p]! - 1 : nil }
+                    do {
+                        let pair = try bound.get()
+                        guard gen == generation else { pair.stop(); return }   // bridge stopped meanwhile
+                        if yielded.remove(p) != nil { pair.stop(); continue }   // given away while binding
+                        tunnelRelays[p] = pair
+                        opened.append(p)
+                        tunnelReady = true
+                    } catch {
+                        guard gen == generation else { return }
+                        if pass == 0, announced, tunnelRelays[p] == nil, !yielded.contains(p) { again.append(p); continue }
+                        yielded.remove(p)
+                        // Still covered while a relay is on it (an earlier bind of the same port
+                        // won) or another bind of it is under way (it was taken back meanwhile).
+                        if tunnelRelays[p] == nil && binding[p] == nil { coveredPorts.remove(p) }
+                        // Every bridge listens on the same address, so the usual cause is
+                        // another device's bridge whose lookahead window covers this port.
+                        log("failed to open relay for tunnel port \(p) — another device's bridge may already hold it: \(error.localizedDescription)")
+                    }
                 }
             }
             guard gen == generation else { return }   // restarted meanwhile: these ports aren't the new bridge's
             if case .active(let lp, let existing) = state {
-                setState(.active(localPort: lp, tunnelPorts: existing + opened))
+                // Not one handed to another bridge while the rest were binding.
+                setState(.active(localPort: lp, tunnelPorts: existing + opened.filter { tunnelRelays[$0] != nil }))
             }
         }
     }
@@ -431,9 +601,9 @@ final class ProxyBridge: ObservableObject {
     }
 
     @discardableResult
-    private func publishStatus() -> StatusFile.WriteResult {
+    private func publishStatus(claim: Bool = false, deferToCLI: Bool = false) -> StatusFile.WriteResult {
         let s = status
-        guard s != .off else { return StatusFile.write(profile.id, nil) }
+        guard s != .off else { return StatusFile.write(profile.id, nil, in: statusDir, live: statusLive) }
         var detail = ""
         var ports: [UInt16] = []
         switch state {
@@ -451,13 +621,14 @@ final class ProxyBridge: ObservableObject {
         }
         return StatusFile.write(profile.id, .init(pid: getpid(), cli: CLI.isRunning, udid: udid, status: s.title, detail: detail,
                                                   ready: s == .ready, tunnelPorts: ports, updated: .now,
-                                                  state: s.rawValue, started: StatusFile.myStart))
+                                                  state: s.rawValue, started: StatusFile.myStart), in: statusDir,
+                                 live: statusLive, claim: claim, deferToCLI: deferToCLI)
     }
 
     /// The device answers nowhere we know: it may have a new Tailscale address
     /// (re-registered) or RemotePairing port (restarted). Returns the profile
     /// with whatever was learned, and whether the device answers there.
-    private func relocate() async -> (DeviceProfile, Bool) {
+    private func relocate(gen: Int) async -> (DeviceProfile, Bool) {
         var p = profile
         if p.providerID == MeshProvider.tailscale.rawValue, !p.providerHostName.isEmpty {
             setState(.starting("Looking up \(p.providerHostName) on Tailscale"))
@@ -478,7 +649,8 @@ final class ProxyBridge: ObservableObject {
         let ip = p.providerIP
         guard p.providerID == MeshProvider.tailscale.rawValue, Date.now > noScanUntil,
               await Task.detached(operation: { TailscaleClient.fromSettings().ping(ip) }).value else { return (p, false) }
-        setState(.starting("Looking for \(profile.displayName)'s RemotePairing port"))
+        // Awaited twice above: a Stop or a restart meanwhile owns the state now.
+        guard step("Looking for \(profile.displayName)'s RemotePairing port", gen: gen) else { return (p, false) }
         let port: UInt16
         switch await ReachabilityProbe.findRemotePairingPort(host: p.providerIP) {
         case .found(let found): port = found
@@ -562,7 +734,7 @@ final class ProxyBridge: ObservableObject {
         guard state == .local, !checkingLAN else { return }
         // Two processes standing aside for one device would keep overwriting each
         // other's status entry (and `down` could stop only one): one steps back.
-        if let other = StatusFile.read()[profile.id], other.pid != getpid(),
+        if let other = StatusFile.read(in: statusDir, live: statusLive)[profile.id], other.pid != getpid(),
            HomeRule.yields(meCLI: CLI.isRunning, myPID: getpid(), to: other) {
             log("another RoamRun process (pid \(other.pid)) watches this device too — stopping here")
             stop()
@@ -580,7 +752,15 @@ final class ProxyBridge: ObservableObject {
         awayTicks = home ? 0 : awayTicks + 1
         guard HomeRule.shouldResume(awayTicks: awayTicks) else { return }
         awayTicks = 0
-        await start()
+        // Checked again after the wait: a `roamrun up` may have started meanwhile.
+        if let other = StatusFile.read(in: statusDir, live: statusLive)[profile.id], other.pid != getpid(),
+           HomeRule.yields(meCLI: CLI.isRunning, myPID: getpid(), to: other) {
+            log("another RoamRun process (pid \(other.pid)) watches this device too — stopping here")
+            stop()
+            onYield?(other)
+            return
+        }
+        await start(automatic: true)
     }
 
     /// Home if the iPhone itself advertises on this LAN — Tailscale may keep a
@@ -678,6 +858,26 @@ final class ProxyBridge: ObservableObject {
         setState(.error("Helper stopped: \(what). Retrying shortly."))
     }
 
+    /// A relay's listener died after it was up. The control one gone, the record
+    /// points at nothing: restart like a dead helper. A tunnel one is dropped, and
+    /// bound again when that port comes up again.
+    private func relayFailed(_ failed: Relay, tunnelPort: UInt16?, gen: Int) {
+        guard gen == generation else { return }
+        guard let port = tunnelPort else {
+            guard failed === controlRelay else { return }
+            return helperDied("the relay on port \(localPort) stopped listening", gen: gen)
+        }
+        // That relay, not whatever holds the port now: it may have been bound afresh meanwhile.
+        guard let relay = tunnelRelays[port], relay === failed else { return }
+        relay.stop()
+        tunnelRelays[port] = nil
+        coveredPorts.remove(port)
+        if case .active(let lp, let existing) = state {
+            setState(.active(localPort: lp, tunnelPorts: existing.filter { $0 != port }))
+        }
+        log("the relay for tunnel port \(port) stopped listening; it reopens when that port comes up again")
+    }
+
     /// remotepairingd saw our record but found no pairing for it. Waiting
     /// won't help; say what will.
     private func onUnrecognized(_ instance: String) {
@@ -726,7 +926,7 @@ final class ProxyBridge: ObservableObject {
             : "Another RoamRun process (pid \(other.pid)) \(what) \(profile.displayName). Stop it there first."))
     }
 
-    private func setState(_ s: BridgeState) { state = s }
+    private func setState(_ s: BridgeState) { state = s; publishStatus() }
     private func log(_ m: String) { onLog?("[\(profile.displayName)] \(m)") }
 }
 
@@ -751,6 +951,23 @@ enum HomeRule {
     }
 
     static func shouldResume(awayTicks: Int) -> Bool { awayTicks >= missesBeforeResume }
+
+    /// A live `roamrun up` holds this device's entry, in any state: the app's
+    /// automatic restarts leave it alone. Its errors are its own to retry, and a
+    /// takeover makes it give up (exit 1) — the Start button still can.
+    static func leftToCLI(_ entry: StatusFile.Entry?, myPID: Int32) -> Bool {
+        guard let entry else { return false }
+        return entry.cli == true && entry.pid != myPID
+    }
+
+    /// The `roamrun up` this device is left to: its own entry's, or one on another
+    /// saved profile for the same device (same UDID).
+    static func cliHolding(_ id: UUID, udid: String?, in live: [UUID: StatusFile.Entry], myPID: Int32) -> StatusFile.Entry? {
+        if let own = live[id], leftToCLI(own, myPID: myPID) { return own }
+        guard let udid else { return nil }
+        return live.first { $0.key != id && leftToCLI($0.value, myPID: myPID)
+            && $0.value.udid?.caseInsensitiveCompare(udid) == .orderedSame }?.value
+    }
 
     /// Of two processes watching one device, which steps back: the app yields
     /// to `roamrun up` (the user just asked for it); of two CLIs, the newer (higher pid).
