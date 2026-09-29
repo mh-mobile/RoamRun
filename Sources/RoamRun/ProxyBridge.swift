@@ -13,7 +13,8 @@ import OSLog
 @MainActor
 final class ProxyBridge: ObservableObject {
     @Published private(set) var state: BridgeState = .off
-    /// remotepairingd holds a control channel to the iPhone through us.
+    /// remotepairingd holds a control channel to the iPhone through us — or a tunnel it
+    /// set up still carries traffic (see `tunnelCarriesTraffic`).
     @Published private(set) var phoneConnected = false { didSet { publishStatus() } }
     /// A tunnel has been negotiated at least once, so relays are primed.
     @Published private(set) var tunnelReady = false { didSet { publishStatus() } }
@@ -261,6 +262,7 @@ final class ProxyBridge: ObservableObject {
         waitingSince = .now
         renewTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
+                self?.followTunnelTraffic()
                 self?.renewIfStuck()
                 self?.standAsideIfHome()
             }
@@ -579,13 +581,29 @@ final class ProxyBridge: ObservableObject {
         guard gen == generation else { return }
         // Read the live count: notifications from different threads can
         // arrive out of order, so a passed-in value may be stale.
-        if (controlRelay?.openCount ?? 0) > 0 { phoneConnected = true; waitingSince = nil; return }
+        if (controlRelay?.openCount ?? 0) > 0 || tunnelCarriesTraffic { phoneConnected = true; waitingSince = nil; return }
         Task {
             try? await Task.sleep(for: .seconds(5))
-            if gen == generation, controlRelay?.openCount == 0 {
+            if gen == generation, controlRelay?.openCount == 0, !tunnelCarriesTraffic {
                 phoneConnected = false
                 if waitingSince == nil { waitingSince = .now }
             }
+        }
+    }
+
+    /// On cellular the iPhone doesn't answer RemotePairing, so the control channel is
+    /// gone for good — yet a tunnel set up on Wi‑Fi keeps carrying Xcode's session (its
+    /// live pair moves heartbeats; standbys are silent). The device is in use then, not
+    /// lost: tearing down to look for it again would end that session.
+    private var tunnelCarriesTraffic: Bool {
+        tunnelRelays.values.contains { $0.openCount > 0 && !$0.quiet(for: 30) }
+    }
+
+    /// Controls only change on connect and close; tunnel traffic stopping says nothing.
+    private func followTunnelTraffic() {
+        guard state.isActive else { return }
+        if phoneConnected != ((controlRelay?.openCount ?? 0) > 0 || tunnelCarriesTraffic) {
+            controlConnectionsChanged(gen: generation)
         }
     }
 
