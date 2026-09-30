@@ -45,7 +45,7 @@ struct SettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     Toggle("Keep debugging on cellular", isOn: $keepOnCellular)
-                    Text("When a bridged device leaves Wi‑Fi, keep the session Xcode already has instead of closing it. Every Run then uses the device's cellular data. A new session still needs Wi‑Fi.")
+                    Text("When a device that is Ready for Xcode leaves Wi‑Fi, keep the session Xcode already has instead of closing it (not from On this Wi‑Fi: that session doesn't go through RoamRun). Every Run then uses the device's cellular data. A new session still needs Wi‑Fi.")
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
