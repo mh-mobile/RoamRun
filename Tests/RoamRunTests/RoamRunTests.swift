@@ -1050,6 +1050,7 @@ private func startedRelay(upstream: UInt16, spare: Bool = false) async throws ->
         let relay = try await startedRelay(upstream: upstream, spare: true); defer { relay.stop() }
         let c = try #require(await openEcho(port: relay.localPort)); defer { c.cancel() }
         #expect(try await eventually { relay.openCount == 1 })
+        #expect(!relay.heardFromDevice(within: 30))   // just opened: nothing from the device yet
         try await Task.sleep(for: .milliseconds(400))
         c.send(content: Data("heartbeat".utf8), completion: .contentProcessed { _ in })
         #expect(try await eventually { !relay.quiet(for: 0.3) })   // the Mac side wrote…

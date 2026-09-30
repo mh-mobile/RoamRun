@@ -409,8 +409,9 @@ private final class ConnStats: @unchecked Sendable {
     private var _lastActive = DispatchTime.now().uptimeNanoseconds
 
     var lastActive: UInt64 { lock.lock(); defer { lock.unlock() }; return _lastActive }
-    /// Uptime (ns) of the last bytes from the device, or of the pair's start.
-    private var _lastHeard = DispatchTime.now().uptimeNanoseconds
+    /// Uptime (ns) of the last bytes from the device; 0 until any arrive. Not the pair's
+    /// start: a connection remotepairingd just opened says nothing about the device.
+    private var _lastHeard: UInt64 = 0
     var lastHeard: UInt64 { lock.lock(); defer { lock.unlock() }; return _lastHeard }
 
     var up: Int { lock.lock(); defer { lock.unlock() }; return _up }
