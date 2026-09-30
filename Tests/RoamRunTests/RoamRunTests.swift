@@ -2316,6 +2316,18 @@ func linkFollowsTheTable(_ row: Int) {
     #expect(got == to, "\(name): \(from) → \(got), expected \(to)")
 }
 
+/// Cellular needs a device the mesh still reaches. Only Tailscale can be pinged; with a
+/// Manual IP mesh, the device's own bytes on the tunnel stand in — or a device on cellular
+/// behind any other VPN would read as unreachable, and never be paused.
+@Test func aSilentPortOnAnyMeshStillCountsAsReachedWhenTheDeviceTalks() async {
+    let pinged = Counter()
+    #expect(await ProxyBridge.stillReached(tailscale: false, heardJustNow: true, ping: { pinged.bump(); return false }))
+    #expect(!(await ProxyBridge.stillReached(tailscale: false, heardJustNow: false, ping: { pinged.bump(); return true })))
+    #expect(pinged.value == 0)   // Manual IP: never a tailscale ping
+    #expect(await ProxyBridge.stillReached(tailscale: true, heardJustNow: false, ping: { true }))
+    #expect(!(await ProxyBridge.stillReached(tailscale: true, heardJustNow: true, ping: { false })))
+}
+
 /// Old status files have no network; `roamrun status` then shows none.
 @Test func aStatusEntryWithoutANetworkDecodes() throws {
     let json = #"{"pid":1,"status":"Ready for Xcode","detail":"","ready":true,"tunnelPorts":[],"updated":0}"#

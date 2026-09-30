@@ -638,14 +638,15 @@ final class ProxyBridge: ObservableObject {
 
     /// Where a device is that only the tunnel holds. On Wi‑Fi too remotepairingd sometimes
     /// stops dialing the control channel: a RemotePairing port that answers means Wi‑Fi;
-    /// one that doesn't, from a device Tailscale still reaches, means cellular. A device
-    /// Tailscale can't reach is neither — it is going, and the tunnel will close.
+    /// one that doesn't, from a device the mesh still reaches, means cellular. A device it
+    /// can't reach is neither — it is going, and the tunnel will close.
     private func probeNetwork() {
         // Once a minute: while the port keeps answering, this would otherwise dial it every tick.
         guard !probingNetwork, Date.now.timeIntervalSince(lastNetworkProbe) >= 60 else { return }
         probingNetwork = true
         lastNetworkProbe = .now
         let gen = generation, ip = profile.providerIP, port = profile.remotePairingPort
+        let tailscale = profile.providerID == MeshProvider.tailscale.rawValue
         Task {
             // Twice, 5 s apart: one lost probe (a Tailscale stall, a Wi‑Fi hiccup) must not
             // close a Wi‑Fi session.
@@ -654,7 +655,10 @@ final class ProxyBridge: ObservableObject {
                 try? await Task.sleep(for: .seconds(5))
                 answers = await ReachabilityProbe.checkTCP(host: ip, port: port)
             }
-            let reached = answers ? true : await Task.detached { TailscaleClient.fromSettings().ping(ip) }.value
+            let reached = answers ? true
+                : await Self.stillReached(tailscale: tailscale,
+                                          heardJustNow: tunnelRelays.values.contains { $0.heardFromDevice(within: 10) },
+                                          ping: { await Task.detached { TailscaleClient.fromSettings().ping(ip) }.value })
             probingNetwork = false
             guard gen == generation else { return }
             evaluate(probe: answers ? .answers : reached ? .silentReachable : .unreachable)
@@ -663,6 +667,13 @@ final class ProxyBridge: ObservableObject {
 
     /// Effects of a change, in one place: the tunnel closed on pausing, the renewal clock
     /// restarted on losing the device, and one status write.
+    /// A device whose RemotePairing port is silent: does the mesh still reach it? Tailscale
+    /// can ping it; any other mesh VPN (Manual IP) has no such check, but bytes from the
+    /// device on its tunnel just now say the same.
+    static func stillReached(tailscale: Bool, heardJustNow: Bool, ping: () async -> Bool) async -> Bool {
+        tailscale ? await ping() : heardJustNow
+    }
+
     private func linkChanged(from old: Link) {
         if pausedOnCellular {
             if case .paused = old {} else {
