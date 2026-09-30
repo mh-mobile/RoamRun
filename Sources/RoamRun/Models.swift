@@ -102,14 +102,53 @@ enum DeviceNetwork: String, Codable {
     static var keepOnCellular: Bool { AppID.settings?.bool(forKey: keepOnCellularKey) ?? false }
 
     /// The control channel drops for ~0.5 s every ~40 s on Wi‑Fi too: only this long
-    /// without it, with the tunnel still carrying traffic, means the device left Wi‑Fi.
+    /// without it, with the tunnel still carrying traffic, is worth asking where the device is.
     static let cellularAfter: TimeInterval = 30
+}
 
-    /// nil: not connected, so no network to speak of.
-    static func infer(controlOpen: Bool, tunnelCarries: Bool, controlGoneFor: TimeInterval) -> DeviceNetwork? {
-        if controlOpen { return .wifi }
-        guard tunnelCarries else { return nil }
-        return controlGoneFor >= cellularAfter ? .cellular : .wifi
+/// How a bridged device is connected. One value, so no mix of flags can say two things
+/// at once; `next` is the only way it changes.
+enum Link: Equatable {
+    /// Neither a control channel nor a tunnel the device answers on.
+    case waiting
+    case wifi
+    /// Only the tunnel set up on Wi‑Fi still runs, and the user wants to keep it.
+    case cellular
+    /// It was on cellular with Keep debugging on cellular off: its tunnel was closed.
+    /// Until a control channel is back (Wi‑Fi), whatever the setting says by then.
+    case paused(since: Date)
+
+    /// What a probe of the RemotePairing port found, while only the tunnel holds the device.
+    enum Probe { case answers, silentReachable, unreachable }
+
+    struct Inputs {
+        var controlOpen: Bool
+        /// The device sent bytes on a tunnel within the last 30 s.
+        var heard: Bool
+        var controlGoneFor: TimeInterval
+        /// A probe that just finished, if any.
+        var probe: Probe?
+        var keepOnCellular: Bool
+        var now: Date
+    }
+
+    /// A control channel gone this long, with nothing from the device, means it's gone:
+    /// on Wi‑Fi remotepairingd redials within ~0.5 s.
+    static let waitAfter: TimeInterval = 5
+
+    static func next(_ link: Link, _ i: Inputs) -> Link {
+        if i.controlOpen { return .wifi }
+        if case .paused = link { return link }
+        guard i.heard else { return i.controlGoneFor >= waitAfter ? .waiting : link }
+        switch i.probe {
+        case .answers: return .wifi
+        case .silentReachable: return i.keepOnCellular ? .cellular : .paused(since: i.now)
+        case .unreachable, nil: break   // a device Tailscale can't reach is going, not on cellular
+        }
+        if link == .cellular, !i.keepOnCellular { return .paused(since: i.now) }
+        // Heard again after a long silence: which network is for the probe to say.
+        if link == .waiting { return i.controlGoneFor >= DeviceNetwork.cellularAfter ? .waiting : .wifi }
+        return link
     }
 }
 

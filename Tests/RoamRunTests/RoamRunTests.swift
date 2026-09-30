@@ -2277,15 +2277,38 @@ private final class Counter: @unchecked Sendable {
     func bump() { lock.withLock { n += 1 } }
 }
 
-/// A connected device is on Wi‑Fi while it answers RemotePairing; only a long silence
-/// from it with the tunnel still in use means cellular — the control channel also
-/// drops for ~0.5 s every ~40 s on Wi‑Fi.
-@Test func cellularIsInferredOnlyFromALongSilenceWithTheTunnelInUse() {
-    let after = DeviceNetwork.cellularAfter
-    #expect(DeviceNetwork.infer(controlOpen: true, tunnelCarries: false, controlGoneFor: 0) == .wifi)
-    #expect(DeviceNetwork.infer(controlOpen: false, tunnelCarries: true, controlGoneFor: 1) == .wifi)   // a Wi‑Fi flap
-    #expect(DeviceNetwork.infer(controlOpen: false, tunnelCarries: true, controlGoneFor: after) == .cellular)
-    #expect(DeviceNetwork.infer(controlOpen: false, tunnelCarries: false, controlGoneFor: after) == nil)   // gone
+/// The table agreed before `Link` was written: every row is a case the reviews found.
+/// (from, control open, heard, control gone for, probe, keep on cellular) → to
+private let linkT0 = Date(timeIntervalSince1970: 1_000)
+private let linkTable: [(String, Link, Bool, Bool, TimeInterval, Link.Probe?, Bool, Link)] = [
+    ("control open, from anywhere", .waiting, true, false, 0, nil, false, .wifi),
+    ("control back while paused", .paused(since: linkT0), true, true, 0, nil, false, .wifi),
+    ("a Wi‑Fi flap", .wifi, false, true, 1, nil, false, .wifi),
+    ("control just closed, device quiet", .wifi, false, false, 2, nil, false, .wifi),
+    ("control gone 5 s, device quiet", .wifi, false, false, 5, nil, false, .waiting),
+    ("cellular, device gone quiet", .cellular, false, false, 60, nil, true, .waiting),
+    ("port answers: Wi‑Fi without a control channel", .wifi, false, true, 40, .answers, false, .wifi),
+    ("port answers again after cellular", .cellular, false, true, 90, .answers, true, .wifi),
+    ("port silent, Tailscale reaches it, setting off", .wifi, false, true, 40, .silentReachable, false, .paused(since: linkT0)),
+    ("port silent, Tailscale reaches it, setting on", .wifi, false, true, 40, .silentReachable, true, .cellular),
+    ("Tailscale can't reach it: never cellular", .wifi, false, true, 40, .unreachable, false, .wifi),
+    ("waiting for the probe, no answer yet", .wifi, false, true, 40, nil, false, .wifi),
+    ("setting turned off while on cellular", .cellular, false, true, 90, nil, false, .paused(since: linkT0)),
+    ("paused: a redial is heard, setting on", .paused(since: linkT0 - 60), false, true, 90, nil, true, .paused(since: linkT0 - 60)),
+    ("paused: device quiet", .paused(since: linkT0 - 60), false, false, 90, nil, false, .paused(since: linkT0 - 60)),
+    ("paused: a probe result changes nothing, setting on", .paused(since: linkT0 - 60), false, true, 90, .silentReachable, true, .paused(since: linkT0 - 60)),
+    ("heard again soon after a drop", .waiting, false, true, 10, nil, false, .wifi),
+    ("heard again after a long silence: wait for the probe (B)", .waiting, false, true, 40, nil, false, .waiting),
+    ("…and the probe says cellular", .waiting, false, true, 45, .silentReachable, true, .cellular),
+    ("…or Wi‑Fi", .waiting, false, true, 45, .answers, false, .wifi),
+]
+
+@Test(arguments: linkTable.indices)
+func linkFollowsTheTable(_ row: Int) {
+    let (name, from, open, heard, gone, probe, keep, to) = linkTable[row]
+    let got = Link.next(from, .init(controlOpen: open, heard: heard, controlGoneFor: gone, probe: probe,
+                                    keepOnCellular: keep, now: linkT0))
+    #expect(got == to, "\(name): \(from) → \(got), expected \(to)")
 }
 
 /// Old status files have no network; `roamrun status` then shows none.
