@@ -992,6 +992,9 @@ enum CLI {
                 }
                 if bridge.status == .ready { line += " — pick “\(profile.displayName)” in Xcode. Ctrl-C to stop." }
                 if bridge.status == .local { line += " — Xcode sees it directly; bridging resumes when it leaves." }
+                if bridge.status == .waiting, bridge.pausedOnCellular {
+                    line += " — on cellular, so the tunnel was closed to save data; it reconnects on Wi‑Fi."
+                }
                 guard line != last else { return }
                 last = line
                 print("[\(Date.now.formatted(date: .omitted, time: .standard))] \(line)")

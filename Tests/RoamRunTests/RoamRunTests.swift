@@ -1043,6 +1043,19 @@ private func startedRelay(upstream: UInt16, spare: Bool = false) async throws ->
         #expect(try await eventually { Relay.openPairs == 0 })
     }
 
+    /// A tunnel whose far end is gone still gets remotepairingd's writes: only bytes
+    /// from the device say it is alive.
+    @Test func onlyBytesFromTheDeviceCountAsHearingIt() async throws {
+        let silent = try EchoServer(silent: true); let upstream = await silent.start(); defer { silent.stop() }
+        let relay = try await startedRelay(upstream: upstream, spare: true); defer { relay.stop() }
+        let c = try #require(await openEcho(port: relay.localPort)); defer { c.cancel() }
+        #expect(try await eventually { relay.openCount == 1 })
+        try await Task.sleep(for: .milliseconds(400))
+        c.send(content: Data("heartbeat".utf8), completion: .contentProcessed { _ in })
+        #expect(try await eventually { !relay.quiet(for: 0.3) })   // the Mac side wrote…
+        #expect(!relay.heardFromDevice(within: 0.3))              // …the device said nothing
+    }
+
     /// Here, not top-level: its probes sweep 49152…, where these echo servers listen.
     @Test func portScanKeepsItsDeadlineEvenOnASilentPort() async throws {
         // A port that accepts and never answers the handshake (4 s timeout on its own).

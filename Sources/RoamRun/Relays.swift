@@ -223,6 +223,13 @@ final class Relay: @unchecked Sendable {
         finishStart(RelayError.bindFailed("stopped"))   // its handler is gone: nothing else would end a start in flight
     }
 
+    /// Some pair got bytes from the device within `seconds` — the far end is alive.
+    func heardFromDevice(within seconds: TimeInterval) -> Bool {
+        let now = DispatchTime.now().uptimeNanoseconds, span = UInt64(seconds * 1e9)
+        let since = now > span ? now - span : 0
+        return lock.withLock { stats.values.contains { $0.lastHeard >= since } }
+    }
+
     /// No pair has moved a byte for `seconds` (or there are none). Standbys stay open
     /// but silent, so a relay the tunnel has left behind is quiet, not empty.
     func quiet(for seconds: TimeInterval) -> Bool {
@@ -402,6 +409,9 @@ private final class ConnStats: @unchecked Sendable {
     private var _lastActive = DispatchTime.now().uptimeNanoseconds
 
     var lastActive: UInt64 { lock.lock(); defer { lock.unlock() }; return _lastActive }
+    /// Uptime (ns) of the last bytes from the device, or of the pair's start.
+    private var _lastHeard = DispatchTime.now().uptimeNanoseconds
+    var lastHeard: UInt64 { lock.lock(); defer { lock.unlock() }; return _lastHeard }
 
     var up: Int { lock.lock(); defer { lock.unlock() }; return _up }
     var down: Int { lock.lock(); defer { lock.unlock() }; return _down }
@@ -410,6 +420,7 @@ private final class ConnStats: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         if isUp { _up += n } else { _down += n }
         _lastActive = DispatchTime.now().uptimeNanoseconds
+        if !isUp { _lastHeard = _lastActive }
     }
 
     /// True once both directions have seen EOF.

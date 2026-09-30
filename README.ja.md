@@ -279,7 +279,7 @@ Enterprise 署名なら不要ですが、代わりに 設定 › 一般 › VPN 
 
 Mac を自宅に置いたまま、手元の iPhone だけでビルド〜実機確認を回す使い方です。
 
-**前提: iPhone がインターネットにつながった Wi-Fi に接続していること。** モバイル回線だけでは使えません（iPhone の RemotePairing が Wi-Fi 接続時しか待ち受けないため）。使えるのは、Wi-Fi でつないでからモバイル通信に移る場合です。Settings › Network の **Keep debugging on cellular** をオンにしておくと、Xcode はそのままのセッションを使い続け、RoamRun は「Ready for Xcode · Cellular」と表示します。iPhone の再起動や Tailscale の切断などで新しいセッションが必要になったら、また Wi-Fi が要ります。オフのときは、iPhone が Wi-Fi を離れた時点でセッションを閉じ、Wi-Fi に戻ればつながり直します。「インターネット未接続」と表示される Wi-Fi に接続し、通信だけモバイル回線に流す構成でも待ち受けないことを確認しています。カフェやホテルの Wi-Fi、ポケット Wi-Fi、別の端末のテザリングなどを使ってください（2 台目の iPhone のインターネット共有に接続するのは可。その iPhone 自身がインターネット共有をしている状態は、自分が Wi-Fi につながっていないので不可）。
+**前提: iPhone がインターネットにつながった Wi-Fi に接続していること。** モバイル回線だけでは使えません（iPhone の RemotePairing が Wi-Fi 接続時しか待ち受けないため）。使えるのは、Wi-Fi でつないでからモバイル通信に移る場合です。Settings › Network の **Keep debugging on cellular** をオンにしておくと、Xcode はそのままのセッションを使い続け、RoamRun は「Ready for Xcode · Cellular」と表示します。iPhone の再起動や Tailscale の切断などで新しいセッションが必要になったら、また Wi-Fi が要ります。オフのときは、iPhone が Wi-Fi を離れた時点でセッションを閉じ（「Waiting for device · Cellular」と表示）、Wi-Fi に戻ればつながり直します。モバイル通信のまま30分たつと、応答しなくなった端末と同じように探し直す動きに戻ります。「インターネット未接続」と表示される Wi-Fi に接続し、通信だけモバイル回線に流す構成でも待ち受けないことを確認しています。カフェやホテルの Wi-Fi、ポケット Wi-Fi、別の端末のテザリングなどを使ってください（2 台目の iPhone のインターネット共有に接続するのは可。その iPhone 自身がインターネット共有をしている状態は、自分が Wi-Fi につながっていないので不可）。
 
 **回線について:** Tailscale は通常、Mac と iPhone を直接つなぎます（`tailscale status` で iPhone の行が `direct <アドレス>`）。UDP をふさいだ公衆 Wi-Fi などでは Tailscale の中継サーバー（DERP）経由になり（`relay "tok"` など）、動作はしますが遅くなります。ログイン画面のある Wi-Fi は、ログインを済ませてから使ってください。モバイル回線のテザリング（遅延 約 80ms、direct）で、インストール・起動・Xcode のデバッグ実行（ブレークポイント）まで確認済みです。
 

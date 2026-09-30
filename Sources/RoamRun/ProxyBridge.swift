@@ -596,6 +596,7 @@ final class ProxyBridge: ObservableObject {
         // arrive out of order, so a passed-in value may be stale.
         if (controlRelay?.openCount ?? 0) > 0 {
             phoneConnected = true; waitingSince = nil
+            if pausedOnCellular { pausedOnCellular = false }
             if network != .wifi { network = .wifi }   // the tick would say so up to 10 s later
             return
         }
@@ -613,8 +614,10 @@ final class ProxyBridge: ObservableObject {
     /// gone for good — yet a tunnel set up on Wi‑Fi keeps carrying Xcode's session (its
     /// live pair moves heartbeats; standbys are silent). The device is in use then, not
     /// lost: tearing down to look for it again would end that session.
+    /// Only bytes from the device count: remotepairingd keeps writing into a tunnel
+    /// whose far end is gone (phone off, Tailscale down) until TCP gives up.
     private var tunnelCarriesTraffic: Bool {
-        tunnelRelays.values.contains { $0.openCount > 0 && !$0.quiet(for: 30) }
+        tunnelRelays.values.contains { $0.openCount > 0 && $0.heardFromDevice(within: 30) }
     }
 
     /// Controls only change on connect and close; tunnel traffic stopping says nothing.
@@ -625,11 +628,16 @@ final class ProxyBridge: ObservableObject {
         let controlOpen = (controlRelay?.openCount ?? 0) > 0
         if controlOpen { controlGoneSince = nil; if pausedOnCellular { pausedOnCellular = false } }
         else if controlGoneSince == nil { controlGoneSince = .now }
+        // Paused: whatever remotepairingd dials into the tunnel relays meanwhile goes too.
+        if pausedOnCellular, !controlOpen, !DeviceNetwork.keepOnCellular {
+            if tunnelRelays.values.contains(where: { $0.openCount > 0 }) { pauseOnCellular() }
+            return
+        }
         let seen = DeviceNetwork.infer(controlOpen: controlOpen, tunnelCarries: tunnelCarriesTraffic,
                                        controlGoneFor: controlGoneSince.map { Date.now.timeIntervalSince($0) } ?? 0)
-        if seen == .cellular, network != .cellular {
-            confirmCellular()
-        } else if seen != .cellular, network != seen {
+        if seen == .cellular {
+            probeNetwork()   // keeps asking: the device may be back on Wi‑Fi with no control channel
+        } else if network != seen {
             network = seen
         }
         if network == .cellular, !DeviceNetwork.keepOnCellular { pauseOnCellular() }
@@ -638,9 +646,11 @@ final class ProxyBridge: ObservableObject {
         }
     }
 
-    /// On Wi‑Fi too remotepairingd sometimes stops dialing the control channel, tunnel
-    /// still up: only a RemotePairing port that doesn't answer means cellular.
-    private func confirmCellular() {
+    /// Where a device is that only the tunnel holds. On Wi‑Fi too remotepairingd sometimes
+    /// stops dialing the control channel: a RemotePairing port that answers means Wi‑Fi;
+    /// one that doesn't, from a device Tailscale still reaches, means cellular. A device
+    /// Tailscale can't reach is neither — it is going, and the tunnel will close.
+    private func probeNetwork() {
         // Once a minute: while the port keeps answering, this would otherwise dial it every tick.
         guard !probingNetwork, Date.now.timeIntervalSince(lastNetworkProbe) >= 60 else { return }
         probingNetwork = true
@@ -654,25 +664,32 @@ final class ProxyBridge: ObservableObject {
                 try? await Task.sleep(for: .seconds(5))
                 answers = await ReachabilityProbe.checkTCP(host: ip, port: port)
             }
+            let reached = answers ? true : await Task.detached { TailscaleClient.fromSettings().ping(ip) }.value
             probingNetwork = false
-            guard gen == generation, state.isActive, !answers, tunnelCarriesTraffic,
-                  (controlRelay?.openCount ?? 0) == 0 else { return }
-            network = .cellular
-            if !DeviceNetwork.keepOnCellular { pauseOnCellular() }
+            guard gen == generation, state.isActive, tunnelCarriesTraffic, (controlRelay?.openCount ?? 0) == 0 else { return }
+            if answers {
+                if network != .wifi { network = .wifi }
+            } else if reached {
+                if network != .cellular { network = .cellular }
+                if !DeviceNetwork.keepOnCellular { pauseOnCellular() }
+            }
         }
     }
 
     private func pauseOnCellular() {
-        log("on cellular — closed the tunnel (Keep debugging on cellular is off); back on Wi‑Fi it reconnects")
+        if !pausedOnCellular {
+            log("on cellular — closed the tunnel (Keep debugging on cellular is off); back on Wi‑Fi it reconnects")
+        }
         for relay in tunnelRelays.values { relay.dropConnections() }
-        if !pausedOnCellular { pausedSince = .now }
-        pausedOnCellular = true
-        network = nil
-        // Tunnel relays report no counts: say Waiting now, not after the next tick's debounce.
+        // Waiting first, so no status written on the way says Ready. Tunnel relays report
+        // no counts: without this it would say Ready until the next tick's debounce.
         if (controlRelay?.openCount ?? 0) == 0, phoneConnected {
             phoneConnected = false
             waitingSince = .now
         }
+        if !pausedOnCellular { pausedSince = .now }
+        pausedOnCellular = true
+        network = nil
     }
 
     var status: BridgeStatus {
@@ -768,9 +785,9 @@ final class ProxyBridge: ObservableObject {
         guard state.isActive else { stuckRenewals = 0; return }
         if phoneConnected {
             stuckRenewals = 0
-            // Held up by the tunnel alone, on Wi‑Fi: remotepairingd stopped dialing the control
-            // channel, and a new tunnel needs it. Nudge it as a waiting bridge would.
-            if network == .wifi, (controlRelay?.openCount ?? 0) == 0,
+            // Held up by the tunnel alone: if this is Wi‑Fi, remotepairingd stopped dialing the
+            // control channel, and a new tunnel needs it. Nudge it as a waiting bridge would.
+            if (controlRelay?.openCount ?? 0) == 0,
                let gone = controlGoneSince, Date.now.timeIntervalSince(gone) > 60,
                Date.now.timeIntervalSince(lastHeldRenewal) > 60 {
                 lastHeldRenewal = .now
