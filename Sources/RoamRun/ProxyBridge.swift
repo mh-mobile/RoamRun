@@ -16,6 +16,14 @@ final class ProxyBridge: ObservableObject {
     /// remotepairingd holds a control channel to the iPhone through us — or a tunnel it
     /// set up still carries traffic (see `tunnelCarriesTraffic`).
     @Published private(set) var phoneConnected = false { didSet { publishStatus() } }
+    /// Where the connected device is (nil while it isn't connected).
+    @Published private(set) var network: DeviceNetwork? { didSet { publishStatus() } }
+    /// On cellular with "Keep debugging on cellular" off: its tunnel was closed.
+    @Published private(set) var pausedOnCellular = false { didSet { if !pausedOnCellular { pausedSince = nil }; publishStatus() } }
+    private var pausedSince: Date?
+    private var controlGoneSince: Date?
+    private var probingNetwork = false
+    private var lastNetworkProbe = Date.distantPast
     /// A tunnel has been negotiated at least once, so relays are primed.
     @Published private(set) var tunnelReady = false { didSet { publishStatus() } }
 
@@ -317,6 +325,9 @@ final class ProxyBridge: ObservableObject {
         localPort = 0
         phoneConnected = false
         tunnelReady = false
+        network = nil
+        pausedOnCellular = false
+        controlGoneSince = nil
     }
 
     /// `tunnelPort` nil is the control relay. A listener that dies once up is
@@ -600,11 +611,50 @@ final class ProxyBridge: ObservableObject {
     }
 
     /// Controls only change on connect and close; tunnel traffic stopping says nothing.
+    /// Also where the device is — and, on cellular unless the user wants it, the
+    /// tunnel is closed there: every Run and heartbeat would be paid for.
     private func followTunnelTraffic() {
         guard state.isActive else { return }
-        if phoneConnected != ((controlRelay?.openCount ?? 0) > 0 || tunnelCarriesTraffic) {
+        let controlOpen = (controlRelay?.openCount ?? 0) > 0
+        if controlOpen { controlGoneSince = nil; if pausedOnCellular { pausedOnCellular = false } }
+        else if controlGoneSince == nil { controlGoneSince = .now }
+        let seen = DeviceNetwork.infer(controlOpen: controlOpen, tunnelCarries: tunnelCarriesTraffic,
+                                       controlGoneFor: controlGoneSince.map { Date.now.timeIntervalSince($0) } ?? 0)
+        if seen == .cellular, network != .cellular {
+            confirmCellular()
+        } else if seen != .cellular, network != seen {
+            network = seen
+        }
+        if network == .cellular, !DeviceNetwork.keepOnCellular { pauseOnCellular() }
+        if phoneConnected != (controlOpen || tunnelCarriesTraffic) {
             controlConnectionsChanged(gen: generation)
         }
+    }
+
+    /// On Wi‑Fi too remotepairingd sometimes stops dialing the control channel, tunnel
+    /// still up: only a RemotePairing port that doesn't answer means cellular.
+    private func confirmCellular() {
+        // Once a minute: while the port keeps answering, this would otherwise dial it every tick.
+        guard !probingNetwork, Date.now.timeIntervalSince(lastNetworkProbe) >= 60 else { return }
+        probingNetwork = true
+        lastNetworkProbe = .now
+        let gen = generation, ip = profile.providerIP, port = profile.remotePairingPort
+        Task {
+            let answers = await ReachabilityProbe.checkTCP(host: ip, port: port)
+            probingNetwork = false
+            guard gen == generation, state.isActive, !answers, tunnelCarriesTraffic,
+                  (controlRelay?.openCount ?? 0) == 0 else { return }
+            network = .cellular
+            if !DeviceNetwork.keepOnCellular { pauseOnCellular() }
+        }
+    }
+
+    private func pauseOnCellular() {
+        log("on cellular — closed the tunnel (Keep debugging on cellular is off); back on Wi‑Fi it reconnects")
+        for relay in tunnelRelays.values { relay.dropConnections() }
+        if !pausedOnCellular { pausedSince = .now }
+        pausedOnCellular = true
+        network = nil
     }
 
     var status: BridgeStatus {
@@ -631,6 +681,9 @@ final class ProxyBridge: ObservableObject {
         case .active(_, let t): ports = t
         case .off, .local: break
         }
+        if s == .waiting, pausedOnCellular {
+            detail = "On cellular, so the tunnel was closed to save data. It reconnects on Wi‑Fi; to keep debugging over cellular, turn it on in Settings."
+        }
         // Not an error: the bridge itself works over the mesh VPN. But the home
         // check is blind while this lasts, so say so wherever status is read.
         // Not while standing aside: getting to .local means the LAN answered, so the
@@ -640,7 +693,9 @@ final class ProxyBridge: ObservableObject {
         }
         return StatusFile.write(profile.id, .init(pid: getpid(), cli: CLI.isRunning, udid: udid, status: s.title, detail: detail,
                                                   ready: s == .ready, tunnelPorts: ports, updated: .now,
-                                                  state: s.rawValue, started: StatusFile.myStart), in: statusDir,
+                                                  state: s.rawValue, started: StatusFile.myStart,
+                                                  network: s == .ready ? network?.rawValue
+                                                      : pausedOnCellular ? DeviceNetwork.cellular.rawValue : nil), in: statusDir,
                                  live: statusLive, claim: claim, deferToCLI: deferToCLI)
     }
 
@@ -697,7 +752,9 @@ final class ProxyBridge: ObservableObject {
         stuckRenewals += 1
         // Three minutes and still nothing: the device may have moved port or address. The
         // error retry runs start() again, which finds it (relocate).
-        if stuckRenewals >= 3 {
+        // Paused on cellular, it hasn't moved: RemotePairing answers again on Wi‑Fi.
+        // For half an hour: its port may have changed meanwhile (a reboot), and only this finds it.
+        if stuckRenewals >= 3, !pausedOnCellular || Date.now.timeIntervalSince(pausedSince ?? .now) > 1800 {
             stuckRenewals = 0
             let gen = generation
             let ip = profile.providerIP

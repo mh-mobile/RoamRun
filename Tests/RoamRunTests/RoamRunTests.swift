@@ -1030,6 +1030,19 @@ private func startedRelay(upstream: UInt16, spare: Bool = false) async throws ->
         #expect(!relay.quiet(for: 0.3))
     }
 
+    /// Paused on cellular, a tunnel relay closes its pairs but keeps listening:
+    /// back on Wi‑Fi the next tunnel comes to the same port.
+    @Test func droppingConnectionsKeepsTheListener() async throws {
+        let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
+        let relay = try await startedRelay(upstream: upstream, spare: true); defer { relay.stop() }
+        let held = hold(3, to: relay); defer { held.forEach { $0.cancel() } }
+        #expect(try await eventually { Relay.openPairs == 3 })
+        relay.dropConnections()
+        #expect(Relay.openPairs == 0)
+        #expect(await roundTrip(port: relay.localPort, payload: Data("x".utf8)) == Data("x".utf8))
+        #expect(try await eventually { Relay.openPairs == 0 })
+    }
+
     /// Here, not top-level: its probes sweep 49152…, where these echo servers listen.
     @Test func portScanKeepsItsDeadlineEvenOnASilentPort() async throws {
         // A port that accepts and never answers the handshake (4 s timeout on its own).
@@ -2243,13 +2256,34 @@ private final class Counter: @unchecked Sendable {
     func bump() { lock.withLock { n += 1 } }
 }
 
+/// A connected device is on Wi‑Fi while it answers RemotePairing; only a long silence
+/// from it with the tunnel still in use means cellular — the control channel also
+/// drops for ~0.5 s every ~40 s on Wi‑Fi.
+@Test func cellularIsInferredOnlyFromALongSilenceWithTheTunnelInUse() {
+    let after = DeviceNetwork.cellularAfter
+    #expect(DeviceNetwork.infer(controlOpen: true, tunnelCarries: false, controlGoneFor: 0) == .wifi)
+    #expect(DeviceNetwork.infer(controlOpen: false, tunnelCarries: true, controlGoneFor: 1) == .wifi)   // a Wi‑Fi flap
+    #expect(DeviceNetwork.infer(controlOpen: false, tunnelCarries: true, controlGoneFor: after) == .cellular)
+    #expect(DeviceNetwork.infer(controlOpen: false, tunnelCarries: false, controlGoneFor: after) == nil)   // gone
+}
+
+/// Old status files have no network; `roamrun status` then shows none.
+@Test func aStatusEntryWithoutANetworkDecodes() throws {
+    let json = #"{"pid":1,"status":"Ready for Xcode","detail":"","ready":true,"tunnelPorts":[],"updated":0}"#
+    let e = try JSONDecoder().decode(StatusFile.Entry.self, from: Data(json.utf8))
+    #expect(e.deviceNetwork == nil)
+    var cellular = e; cellular.network = "cellular"
+    let back = try JSONDecoder().decode(StatusFile.Entry.self, from: JSONEncoder().encode(cellular))
+    #expect(back.deviceNetwork == .cellular)
+}
+
 // MARK: - P3s from the bug-hunt review
 
 @Test func unknownValuesInJSONAreNullNotMissing() throws {
     let row = CLI.Row(name: "iPhone", state: "off", id: "x", vpnAddress: "100.64.0.1", udid: nil, status: "Off",
-                      ready: false, owner: nil, pid: nil, tunnelPorts: [], coreDevice: nil, detail: nil, locked: nil)
+                      ready: false, owner: nil, pid: nil, tunnelPorts: [], network: nil, coreDevice: nil, detail: nil, locked: nil)
     let json = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(row)) as? [String: Any])
-    for key in ["udid", "owner", "pid", "coreDevice", "detail", "locked"] {
+    for key in ["udid", "owner", "pid", "network", "coreDevice", "detail", "locked"] {
         #expect(json[key] is NSNull, "\(key) should be null")
     }
     let check = CLI.Check(scope: "mac", result: "ok", message: "fine", fix: nil)

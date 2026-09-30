@@ -90,6 +90,29 @@ enum BridgeState: Equatable {
     }
 }
 
+/// Which network a bridged device is on, as far as the bridge can tell: Wi‑Fi while
+/// it answers RemotePairing, cellular when only a tunnel set up before still runs.
+enum DeviceNetwork: String, Codable {
+    case wifi, cellular
+
+    var title: String { self == .wifi ? "Wi‑Fi" : "Cellular" }
+
+    /// Off unless the user turned it on: over cellular every Run is paid for.
+    static let keepOnCellularKey = "keepDebuggingOnCellular"
+    static var keepOnCellular: Bool { AppID.settings?.bool(forKey: keepOnCellularKey) ?? false }
+
+    /// The control channel drops for ~0.5 s every ~40 s on Wi‑Fi too: only this long
+    /// without it, with the tunnel still carrying traffic, means the device left Wi‑Fi.
+    static let cellularAfter: TimeInterval = 30
+
+    /// nil: not connected, so no network to speak of.
+    static func infer(controlOpen: Bool, tunnelCarries: Bool, controlGoneFor: TimeInterval) -> DeviceNetwork? {
+        if controlOpen { return .wifi }
+        guard tunnelCarries else { return nil }
+        return controlGoneFor >= cellularAfter ? .cellular : .wifi
+    }
+}
+
 /// What the user needs to know, derived from the bridge internals.
 /// Raw values are the `state` key of `--json` output: scripts depend on them.
 enum BridgeStatus: String, CaseIterable {

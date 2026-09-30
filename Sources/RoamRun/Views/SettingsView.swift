@@ -8,6 +8,7 @@ struct SettingsView: View {
     @State private var cliError: String?
 
     @AppStorage("networkInterface") private var networkInterface = ""
+    @AppStorage(DeviceNetwork.keepOnCellularKey) private var keepOnCellular = false
     private let interfaces = InterfaceMonitor.ipv4Addresses()
 
     var body: some View {
@@ -41,6 +42,10 @@ struct SettingsView: View {
                     }
                     .onChange(of: networkInterface) { _ in coordinator.lanInterfaceChanged() }
                     Text("Where the bridge listens: the network Xcode looks for devices on. Automatic uses en0 (Wi‑Fi on most Macs) when it's connected.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Toggle("Keep debugging on cellular", isOn: $keepOnCellular)
+                    Text("When a bridged device leaves Wi‑Fi, keep the session Xcode already has instead of closing it. Every Run then uses the device's cellular data. A new session still needs Wi‑Fi.")
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }

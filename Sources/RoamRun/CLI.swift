@@ -289,6 +289,9 @@ enum CLI {
         let owner: String?
         let pid: Int32?
         let tunnelPorts: [UInt16]
+        /// "wifi" or "cellular" while ready over the bridge; "cellular" also while waiting
+        /// because it closed the tunnel on cellular (see `detail`); nil otherwise.
+        let network: String?
         /// CoreDevice's view: "connected", "disconnected" (reachable, no tunnel yet) or "unavailable".
         let coreDevice: String?
         let detail: String?
@@ -296,7 +299,7 @@ enum CLI {
         let locked: Bool?
 
         private enum CodingKeys: String, CodingKey {
-            case name, state, id, vpnAddress, udid, status, ready, owner, pid, tunnelPorts, coreDevice, detail, locked
+            case name, state, id, vpnAddress, udid, status, ready, owner, pid, tunnelPorts, network, coreDevice, detail, locked
         }
 
         /// `encode`, not the synthesized `encodeIfPresent`: nil becomes `null`.
@@ -312,6 +315,7 @@ enum CLI {
             try c.encode(owner, forKey: .owner)
             try c.encode(pid, forKey: .pid)
             try c.encode(tunnelPorts, forKey: .tunnelPorts)
+            try c.encode(network, forKey: .network)
             try c.encode(coreDevice, forKey: .coreDevice)
             try c.encode(detail, forKey: .detail)
             try c.encode(locked, forKey: .locked)
@@ -329,6 +333,7 @@ enum CLI {
         return Row(name: p.displayName, state: r.kind.rawValue, id: p.id.uuidString, vpnAddress: p.providerIP, udid: udid,
                    status: r.status, ready: r.ready,
                    owner: e.map(owner), pid: e?.pid, tunnelPorts: e?.tunnelPorts ?? [],
+                   network: r.ready || e?.kind == .waiting ? e?.network : nil,
                    coreDevice: core, detail: r.detail,
                    locked: deep && r.ready ? udid.flatMap { isLocked($0, by: deadline) } : nil)
     }
@@ -426,6 +431,7 @@ enum CLI {
         } else {
             for r in rows {
                 var line = "\(r.name): \(r.status)"
+                if let n = r.network.flatMap(DeviceNetwork.init(rawValue:)) { line += " · \(n.title)" }
                 if let owner = r.owner { line += " — \(owner)" }
                 if let lo = r.tunnelPorts.min(), let hi = r.tunnelPorts.max() { line += ", tunnel ports \(lo)–\(hi)" }
                 print(line)
@@ -1188,7 +1194,11 @@ enum CLI {
             }
             if let e = live[p.id] {
                 let own = LocalNetwork.withoutAdvice(e.detail)   // it gets its own line below
-                check(e.ready || e.kind == .local, "Mac-side bridge: \(e.status) (\(owner(e)))", fix: own.isEmpty ? "Wait a few seconds and run doctor again." : own)
+                let over = e.deviceNetwork.map { " over \($0.title.lowercased())" } ?? ""
+                check(e.ready || e.kind == .local, "Mac-side bridge: \(e.status)\(over) (\(owner(e)))", fix: own.isEmpty ? "Wait a few seconds and run doctor again." : own)
+                if e.deviceNetwork == .cellular {
+                    note("The device is on cellular: Xcode keeps the tunnel set up on Wi‑Fi, but a new one needs Wi‑Fi again")
+                }
                 if e.detail.contains(LocalNetwork.advice) {
                     check(false, "macOS is blocking RoamRun's local network access, so it can't tell whether the device is on this Wi-Fi",
                           fix: LocalNetwork.advice, warnOnly: true)

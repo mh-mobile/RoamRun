@@ -218,9 +218,8 @@ final class Relay: @unchecked Sendable {
         }
         listener?.stateUpdateHandler = nil
         listener?.cancel()
-        lock.lock(); stopped = true; let open = connections; connections = []; established = []; stats = [:]; lock.unlock()
-        Self.totalLock.withLock { Self.total -= open.count / 2 }
-        for c in open { c.cancel() }
+        lock.withLock { stopped = true }
+        dropConnections()
         finishStart(RelayError.bindFailed("stopped"))   // its handler is gone: nothing else would end a start in flight
     }
 
@@ -230,6 +229,15 @@ final class Relay: @unchecked Sendable {
         let now = DispatchTime.now().uptimeNanoseconds, span = UInt64(seconds * 1e9)
         let since = now > span ? now - span : 0
         return lock.withLock { stats.values.allSatisfy { $0.lastActive < since } }
+    }
+
+    /// Closes every pair; the listener stays, for whatever connects next.
+    func dropConnections() {
+        lock.lock(); let open = connections; let had = !established.isEmpty
+        connections = []; established = []; stats = [:]; lock.unlock()
+        Self.totalLock.withLock { Self.total -= open.count / 2 }
+        for c in open { c.cancel() }
+        if had, !lock.withLock({ stopped }) { onOpenCountChange?(0) }
     }
 
     var openCount: Int {

@@ -19,10 +19,13 @@ enum StatusFile {
         var state: String? = nil
         /// When the owner's process started, so a reused PID can't pass for it. Written from 0.1.13.
         var started: Double? = nil
+        /// DeviceNetwork raw value while connected. Written from 0.1.19.
+        var network: String? = nil
 
         /// From `state`, else from the title an older version wrote.
         var kind: BridgeStatus { state.flatMap(BridgeStatus.init(rawValue:)) ?? BridgeStatus(title: status) }
         var isError: Bool { kind == .error }
+        var deviceNetwork: DeviceNetwork? { network.flatMap(DeviceNetwork.init(rawValue:)) }
         /// Errored or standing aside (iPhone on this LAN): doesn't hold the device.
         var holdsDevice: Bool { kind != .error && kind != .local }
     }
