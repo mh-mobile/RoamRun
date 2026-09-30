@@ -158,6 +158,12 @@ roamrun ota [<name>] <App.ipa> [--replace] # publish the build so a device can i
 
 Options: `--json` (`devices`, `status`, `doctor`), `--wait N` (`status`: wait up to N seconds for Ready; each round runs two devicectl calls per device before the deadline is looked at again, so it can return several seconds after N; an N below 10 also shortens each of those calls, to a floor of 5 seconds), `-v` (`up`: show the activity log), `--workspace W` / `--project P` / `--configuration C` (`run`), `--replace` (`ota`: drop builds already listed under the same version and build number). `roamrun --help` lists everything; a command rejects options it doesn't take (exit 2).
 
+The CLI uses the app's settings, so a bridge started with `roamrun up` follows **Keep debugging on cellular** too. Without access to the app's Settings (over SSH, for example), turn it on or off with `defaults`:
+
+```bash
+defaults write io.github.mh-mobile.roamrun keepDebuggingOnCellular -bool true    # false to turn it off again
+```
+
 `<name>` is **the name you gave the device in RoamRun**, not the iPhone's own name (case-insensitive; see `roamrun devices`, rename with ✏️ in the app's detail view; names must be unique). Add each device once in the app (Add Device). The app and the CLI never bridge the same iPhone at once: whichever starts second refuses (`up` exits 0 if the other one already has it ready), except that a bridge that is standing aside ("On this Wi‑Fi") or has an error can be taken over — by Start, not by the app's automatic retries: while a `roamrun up` runs, the app leaves its device to it. `logs` relaunches the app, since `devicectl` can't attach a console to one already running; it works over a bridge and on the same Wi-Fi alike.
 
 `install` takes an `.ipa` (e.g. from CI) or an `.app` exported for **Debugging, Release Testing (Ad Hoc) or Enterprise** — the device's UDID must be in its provisioning profile (Enterprise: any device that trusts the certificate). Builds for App Store Connect (App Store / TestFlight) can't be installed directly; `install` says so before trying. RoamRun only reaches devices paired with this Mac; to hand a build to devices that aren't, use TestFlight or over-the-air distribution (Ad Hoc / Enterprise).
