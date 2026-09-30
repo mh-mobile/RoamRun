@@ -1030,6 +1030,40 @@ private func startedRelay(upstream: UInt16, spare: Bool = false) async throws ->
         #expect(!relay.quiet(for: 0.3))
     }
 
+    /// Paused on cellular, a tunnel relay closes its pairs but keeps listening:
+    /// back on Wi‑Fi the next tunnel comes to the same port.
+    @Test func droppingConnectionsKeepsTheListener() async throws {
+        let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
+        let relay = try await startedRelay(upstream: upstream, spare: true); defer { relay.stop() }
+        let held = hold(3, to: relay); defer { held.forEach { $0.cancel() } }
+        #expect(try await eventually { Relay.openPairs == 3 })
+        relay.dropConnections()
+        #expect(Relay.openPairs == 0)
+        #expect(await roundTrip(port: relay.localPort, payload: Data("x".utf8)) == Data("x".utf8))
+        #expect(try await eventually { Relay.openPairs == 0 })
+    }
+
+    /// A tunnel whose far end is gone still gets remotepairingd's writes: only bytes
+    /// from the device say it is alive.
+    @Test func onlyBytesFromTheDeviceCountAsHearingIt() async throws {
+        let silent = try EchoServer(silent: true); let upstream = await silent.start(); defer { silent.stop() }
+        let relay = try await startedRelay(upstream: upstream, spare: true); defer { relay.stop() }
+        let c = try #require(await openEcho(port: relay.localPort)); defer { c.cancel() }
+        #expect(try await eventually { relay.openCount == 1 })
+        #expect(!relay.heardFromDevice(within: 30))   // just opened: nothing from the device yet
+        try await Task.sleep(for: .milliseconds(400))
+        c.send(content: Data("heartbeat".utf8), completion: .contentProcessed { _ in })
+        #expect(try await eventually { !relay.quiet(for: 0.3) })   // the Mac side wrote…
+        #expect(!relay.heardFromDevice(within: 0.3))              // …the device said nothing
+
+        let talker = try EchoServer(); let answering = await talker.start(); defer { talker.stop() }
+        let live = try await startedRelay(upstream: answering, spare: true); defer { live.stop() }
+        let l = try #require(await openEcho(port: live.localPort)); defer { l.cancel() }
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(await echo(l, Data("heartbeat".utf8)) == Data("heartbeat".utf8))
+        #expect(live.heardFromDevice(within: 0.3))                // a device that answers is heard
+    }
+
     /// Here, not top-level: its probes sweep 49152…, where these echo servers listen.
     @Test func portScanKeepsItsDeadlineEvenOnASilentPort() async throws {
         // A port that accepts and never answers the handshake (4 s timeout on its own).
@@ -2243,13 +2277,74 @@ private final class Counter: @unchecked Sendable {
     func bump() { lock.withLock { n += 1 } }
 }
 
+/// The table agreed before `Link` was written: every row is a case the reviews found.
+/// (from, control open, heard, control gone for, probe, keep on cellular) → to
+private let linkT0 = Date(timeIntervalSince1970: 1_000)
+private let linkTable: [(String, Link, Bool, Bool, TimeInterval, Link.Probe?, Bool, Link)] = [
+    ("control open, from anywhere", .waiting, true, false, 0, nil, false, .wifi),
+    ("control back while paused", .paused(since: linkT0), true, true, 0, nil, false, .wifi),
+    ("a Wi‑Fi flap", .wifi, false, true, 1, nil, false, .wifi),
+    ("control just closed, device quiet", .wifi, false, false, 2, nil, false, .wifi),
+    ("control gone 5 s, device quiet", .wifi, false, false, 5, nil, false, .waiting),
+    ("cellular, device gone quiet", .cellular, false, false, 60, nil, true, .waiting),
+    ("port answers: Wi‑Fi without a control channel", .wifi, false, true, 40, .answers, false, .wifi),
+    ("port answers again after cellular", .cellular, false, true, 90, .answers, true, .wifi),
+    ("port silent, Tailscale reaches it, setting off", .wifi, false, true, 40, .silentReachable, false, .paused(since: linkT0)),
+    ("port silent, Tailscale reaches it, setting on", .wifi, false, true, 40, .silentReachable, true, .cellular),
+    ("Tailscale can't reach it: never cellular", .wifi, false, true, 40, .unreachable, false, .wifi),
+    ("waiting for the probe, no answer yet", .wifi, false, true, 40, nil, false, .wifi),
+    ("setting turned off while on cellular", .cellular, false, true, 90, nil, false, .paused(since: linkT0)),
+    ("paused: a redial is heard, setting on", .paused(since: linkT0 - 60), false, true, 90, nil, true, .paused(since: linkT0 - 60)),
+    ("paused: device quiet", .paused(since: linkT0 - 60), false, false, 90, nil, false, .paused(since: linkT0 - 60)),
+    ("paused: a probe that answers changes nothing either", .paused(since: linkT0 - 60), false, true, 90, .answers, false, .paused(since: linkT0 - 60)),
+    ("cellular, setting off, device gone quiet: gone, not paused", .cellular, false, false, 90, nil, false, .waiting),
+    ("waiting, heard, Tailscale can't reach it: still waiting", .waiting, false, true, 45, .unreachable, false, .waiting),
+    ("heard again at exactly 30 s: wait for the probe", .waiting, false, true, 30, nil, false, .waiting),
+    ("heard again just under 30 s", .waiting, false, true, 29.9, nil, false, .wifi),
+    ("paused: a probe result changes nothing, setting on", .paused(since: linkT0 - 60), false, true, 90, .silentReachable, true, .paused(since: linkT0 - 60)),
+    ("heard again soon after a drop", .waiting, false, true, 10, nil, false, .wifi),
+    ("heard again after a long silence: wait for the probe (B)", .waiting, false, true, 40, nil, false, .waiting),
+    ("…and the probe says cellular", .waiting, false, true, 45, .silentReachable, true, .cellular),
+    ("…or Wi‑Fi", .waiting, false, true, 45, .answers, false, .wifi),
+]
+
+@Test(arguments: linkTable.indices)
+func linkFollowsTheTable(_ row: Int) {
+    let (name, from, open, heard, gone, probe, keep, to) = linkTable[row]
+    let got = Link.next(from, .init(controlOpen: open, heard: heard, controlGoneFor: gone, probe: probe,
+                                    keepOnCellular: keep, now: linkT0))
+    #expect(got == to, "\(name): \(from) → \(got), expected \(to)")
+}
+
+/// Cellular needs a device the mesh still reaches. Only Tailscale can be pinged; with a
+/// Manual IP mesh, the device's own bytes on the tunnel stand in — or a device on cellular
+/// behind any other VPN would read as unreachable, and never be paused.
+@Test func aSilentPortOnAnyMeshStillCountsAsReachedWhenTheDeviceTalks() async {
+    let pinged = Counter()
+    #expect(await ProxyBridge.stillReached(tailscale: false, heardJustNow: true, ping: { pinged.bump(); return false }))
+    #expect(!(await ProxyBridge.stillReached(tailscale: false, heardJustNow: false, ping: { pinged.bump(); return true })))
+    #expect(pinged.value == 0)   // Manual IP: never a tailscale ping
+    #expect(await ProxyBridge.stillReached(tailscale: true, heardJustNow: false, ping: { true }))
+    #expect(!(await ProxyBridge.stillReached(tailscale: true, heardJustNow: true, ping: { false })))
+}
+
+/// Old status files have no network; `roamrun status` then shows none.
+@Test func aStatusEntryWithoutANetworkDecodes() throws {
+    let json = #"{"pid":1,"status":"Ready for Xcode","detail":"","ready":true,"tunnelPorts":[],"updated":0}"#
+    let e = try JSONDecoder().decode(StatusFile.Entry.self, from: Data(json.utf8))
+    #expect(e.deviceNetwork == nil)
+    var cellular = e; cellular.network = "cellular"
+    let back = try JSONDecoder().decode(StatusFile.Entry.self, from: JSONEncoder().encode(cellular))
+    #expect(back.deviceNetwork == .cellular)
+}
+
 // MARK: - P3s from the bug-hunt review
 
 @Test func unknownValuesInJSONAreNullNotMissing() throws {
     let row = CLI.Row(name: "iPhone", state: "off", id: "x", vpnAddress: "100.64.0.1", udid: nil, status: "Off",
-                      ready: false, owner: nil, pid: nil, tunnelPorts: [], coreDevice: nil, detail: nil, locked: nil)
+                      ready: false, owner: nil, pid: nil, tunnelPorts: [], network: nil, coreDevice: nil, detail: nil, locked: nil)
     let json = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(row)) as? [String: Any])
-    for key in ["udid", "owner", "pid", "coreDevice", "detail", "locked"] {
+    for key in ["udid", "owner", "pid", "network", "coreDevice", "detail", "locked"] {
         #expect(json[key] is NSNull, "\(key) should be null")
     }
     let check = CLI.Check(scope: "mac", result: "ok", message: "fine", fix: nil)

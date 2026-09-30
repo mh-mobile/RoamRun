@@ -52,7 +52,7 @@ private struct BridgeMenuItem: View {
             // A colored symbol glyph sits on the text baseline like the device icon.
             Text("\(Image(systemName: profile.symbol)) \(profile.displayName) — ")
                 + Text(Image(systemName: status.symbol)).foregroundColor(status.color)
-                + Text(" \(status.title)\(viaCLI ? " (Terminal)" : "")")
+                + Text(" \(coordinator.statusText(of: profile.id))\(viaCLI ? " (Terminal)" : "")")
         }
         if viaCLI {
             Button("Stop Bridge") { coordinator.stopExternalBridge(profile.id) }

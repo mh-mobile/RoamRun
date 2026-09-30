@@ -735,6 +735,20 @@ final class AppCoordinator: ObservableObject {
         return bridges[id]?.status ?? .off
     }
 
+    /// Where a ready device is, for the status line ("Ready for Xcode · Cellular") —
+    /// or a paused one ("Waiting for device · Cellular").
+    func network(of id: UUID) -> DeviceNetwork? {
+        if let e = externalBridges[id] { return e.deviceNetwork }
+        guard let b = bridges[id] else { return nil }
+        return b.status == .ready ? b.network : b.pausedOnCellular ? .cellular : nil
+    }
+
+    /// The status as the device list shows it.
+    func statusText(of id: UUID) -> String {
+        let title = status(of: id).title
+        return network(of: id).map { "\(title) · \($0.title)" } ?? title
+    }
+
     private func retryErroredBridges() {
         let live = StatusFile.read()
         for id in wasActiveIDs where profile(id) != nil {

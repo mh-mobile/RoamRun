@@ -13,8 +13,25 @@ import OSLog
 @MainActor
 final class ProxyBridge: ObservableObject {
     @Published private(set) var state: BridgeState = .off
-    /// remotepairingd holds a control channel to the iPhone through us.
-    @Published private(set) var phoneConnected = false { didSet { publishStatus() } }
+    /// How the device is connected; changes only through `evaluate()`.
+    @Published private(set) var link = Link.waiting { didSet { if link != oldValue { linkChanged(from: oldValue) } } }
+    /// A control channel through us, or a tunnel it set up that the device still answers on.
+    var phoneConnected: Bool { link == .wifi || link == .cellular }
+    /// Where the device is: nil while waiting; cellular also while paused there.
+    var network: DeviceNetwork? {
+        switch link {
+        case .waiting: return nil
+        case .wifi: return .wifi
+        case .cellular, .paused: return .cellular
+        }
+    }
+    var pausedOnCellular: Bool { if case .paused = link { true } else { false } }
+    // Observations `evaluate()` and the renewals work from — not state of their own.
+    private var controlGoneSince: Date?
+    private var lastRenewal = Date.distantPast
+    private var probingNetwork = false
+    private var lastNetworkProbe = Date.distantPast
+    private var lastHeldRenewal = Date.distantPast
     /// A tunnel has been negotiated at least once, so relays are primed.
     @Published private(set) var tunnelReady = false { didSet { publishStatus() } }
 
@@ -42,7 +59,6 @@ final class ProxyBridge: ObservableObject {
     private var localPort: UInt16 = 0
     private(set) var generation = 0
     private var warmingUp = false
-    private var waitingSince: Date?
     private var renewTimer: Timer?
     /// From the claim on, while starting too: gives the device up if another process claimed it.
     private var claimTimer: Timer?
@@ -113,7 +129,7 @@ final class ProxyBridge: ObservableObject {
         lastTunnelPort = nil
         activatedAt = .distantFuture
         autoRetry = true
-        phoneConnected = false
+        link = .waiting
         tunnelReady = false
         // One bridge per iPhone across processes — claimed here so every path
         // (Start, retries, restore, network change, CLI) goes through it. The
@@ -258,9 +274,11 @@ final class ProxyBridge: ObservableObject {
         activatedAt = .now
         setState(.active(localPort: localPort, tunnelPorts: []))
         log("bridge active: \(profile.providerIP) relayed locally on \(localIP):\(localPort)")
-        waitingSince = .now
+        lastRenewal = .now
+        evaluate()   // a control channel may have opened while starting, when evaluate() ignores it
         renewTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
+                self?.evaluate()
                 self?.renewIfStuck()
                 self?.standAsideIfHome()
             }
@@ -313,8 +331,11 @@ final class ProxyBridge: ObservableObject {
         yielded = []
         binding = [:]
         localPort = 0
-        phoneConnected = false
+        link = .waiting
         tunnelReady = false
+        controlGoneSince = nil
+        lastNetworkProbe = .distantPast
+        lastHeldRenewal = .distantPast
     }
 
     /// `tunnelPort` nil is the control relay. A listener that dies once up is
@@ -573,20 +594,96 @@ final class ProxyBridge: ObservableObject {
     }
 
     /// remotepairingd drops the control channel every ~42s (its ARP check
-    /// can't see this Mac's own IP) and reconnects within ~0.5s — debounce
-    /// so the UI doesn't flicker.
+    /// can't see this Mac's own IP) and reconnects within ~0.5s — `Link.next` waits
+    /// `waitAfter` before calling that gone, so the UI doesn't flicker; look again then.
     private func controlConnectionsChanged(gen: Int) {
         guard gen == generation else { return }
-        // Read the live count: notifications from different threads can
-        // arrive out of order, so a passed-in value may be stale.
-        if (controlRelay?.openCount ?? 0) > 0 { phoneConnected = true; waitingSince = nil; return }
+        evaluate()
+        guard (controlRelay?.openCount ?? 0) == 0 else { return }
         Task {
-            try? await Task.sleep(for: .seconds(5))
-            if gen == generation, controlRelay?.openCount == 0 {
-                phoneConnected = false
-                if waitingSince == nil { waitingSince = .now }
+            try? await Task.sleep(for: .seconds(Link.waitAfter + 0.5))
+            if gen == generation { evaluate() }
+        }
+    }
+
+    /// On cellular the iPhone doesn't answer RemotePairing, so the control channel is
+    /// gone for good — yet a tunnel set up on Wi‑Fi keeps carrying Xcode's session (its
+    /// live pair moves heartbeats; standbys are silent). The device is in use then, not
+    /// lost: tearing down to look for it again would end that session.
+    /// Only bytes from the device count: remotepairingd keeps writing into a tunnel
+    /// whose far end is gone (phone off, Tailscale down) until TCP gives up.
+    private var tunnelCarriesTraffic: Bool {
+        tunnelRelays.values.contains { $0.openCount > 0 && $0.heardFromDevice(within: 30) }
+    }
+
+    /// The one place `link` changes: from what the relays show now, and a probe's answer.
+    /// Runs on every control-count change, 5 s after a close, each 10 s tick, and when a
+    /// probe ends.
+    private func evaluate(probe: Link.Probe? = nil) {
+        guard state.isActive else { return }
+        let controlOpen = (controlRelay?.openCount ?? 0) > 0
+        if controlOpen { controlGoneSince = nil } else if controlGoneSince == nil { controlGoneSince = .now }
+        let gone = controlGoneSince.map { Date.now.timeIntervalSince($0) } ?? 0
+        let heard = tunnelCarriesTraffic
+        let next = Link.next(link, .init(controlOpen: controlOpen, heard: heard, controlGoneFor: gone, probe: probe,
+                                         keepOnCellular: DeviceNetwork.keepOnCellular, now: .now))
+        if next != link { link = next }   // @Published would redraw every view on each tick otherwise
+        if pausedOnCellular {
+            // Whatever remotepairingd dials into the tunnel relays meanwhile goes too.
+            for relay in tunnelRelays.values where relay.openCount > 0 { relay.dropConnections() }
+        } else if !controlOpen, heard, gone >= DeviceNetwork.cellularAfter, probe == nil {
+            probeNetwork()   // keeps asking: the device may be back on Wi‑Fi with no control channel
+        }
+    }
+
+    /// Where a device is that only the tunnel holds. On Wi‑Fi too remotepairingd sometimes
+    /// stops dialing the control channel: a RemotePairing port that answers means Wi‑Fi;
+    /// one that doesn't, from a device the mesh still reaches, means cellular. A device it
+    /// can't reach is neither — it is going, and the tunnel will close.
+    private func probeNetwork() {
+        // Once a minute: while the port keeps answering, this would otherwise dial it every tick.
+        guard !probingNetwork, Date.now.timeIntervalSince(lastNetworkProbe) >= 60 else { return }
+        probingNetwork = true
+        lastNetworkProbe = .now
+        let gen = generation, ip = profile.providerIP, port = profile.remotePairingPort
+        let tailscale = profile.providerID == MeshProvider.tailscale.rawValue
+        Task {
+            // Twice, 5 s apart: one lost probe (a Tailscale stall, a Wi‑Fi hiccup) must not
+            // close a Wi‑Fi session.
+            var answers = await ReachabilityProbe.checkTCP(host: ip, port: port)
+            if !answers {
+                try? await Task.sleep(for: .seconds(5))
+                answers = await ReachabilityProbe.checkTCP(host: ip, port: port)
+            }
+            let reached = answers ? true
+                : await Self.stillReached(tailscale: tailscale,
+                                          heardJustNow: tunnelRelays.values.contains { $0.heardFromDevice(within: 10) },
+                                          ping: { await Task.detached { TailscaleClient.fromSettings().ping(ip) }.value })
+            probingNetwork = false
+            guard gen == generation else { return }
+            evaluate(probe: answers ? .answers : reached ? .silentReachable : .unreachable)
+        }
+    }
+
+    /// Effects of a change, in one place: the tunnel closed on pausing, the renewal clock
+    /// restarted on losing the device, and one status write.
+    /// A device whose RemotePairing port is silent: does the mesh still reach it? Tailscale
+    /// can ping it; any other mesh VPN (Manual IP) has no such check, but bytes from the
+    /// device on its tunnel just now say the same.
+    static func stillReached(tailscale: Bool, heardJustNow: Bool, ping: () async -> Bool) async -> Bool {
+        tailscale ? await ping() : heardJustNow
+    }
+
+    private func linkChanged(from old: Link) {
+        if pausedOnCellular {
+            if case .paused = old {} else {
+                log("on cellular — closed the tunnel (Keep debugging on cellular is off); back on Wi‑Fi it reconnects")
+                for relay in tunnelRelays.values { relay.dropConnections() }
             }
         }
+        let wasConnected = old == .wifi || old == .cellular
+        if wasConnected, !phoneConnected { lastRenewal = .now }
+        publishStatus()
     }
 
     var status: BridgeStatus {
@@ -613,6 +710,10 @@ final class ProxyBridge: ObservableObject {
         case .active(_, let t): ports = t
         case .off, .local: break
         }
+        if s == .waiting, pausedOnCellular {
+            detail = "On cellular, so the tunnel was closed to save data. It reconnects on Wi‑Fi."
+                + (DeviceNetwork.keepOnCellular ? "" : " To keep the session next time the device leaves Wi‑Fi, turn on Keep debugging on cellular in Settings.")
+        }
         // Not an error: the bridge itself works over the mesh VPN. But the home
         // check is blind while this lasts, so say so wherever status is read.
         // Not while standing aside: getting to .local means the LAN answered, so the
@@ -622,7 +723,8 @@ final class ProxyBridge: ObservableObject {
         }
         return StatusFile.write(profile.id, .init(pid: getpid(), cli: CLI.isRunning, udid: udid, status: s.title, detail: detail,
                                                   ready: s == .ready, tunnelPorts: ports, updated: .now,
-                                                  state: s.rawValue, started: StatusFile.myStart), in: statusDir,
+                                                  state: s.rawValue, started: StatusFile.myStart,
+                                                  network: s == .ready || pausedOnCellular ? network?.rawValue : nil), in: statusDir,
                                  live: statusLive, claim: claim, deferToCLI: deferToCLI)
     }
 
@@ -673,13 +775,38 @@ final class ProxyBridge: ObservableObject {
     /// Waiting for a minute with the record up usually means remotepairingd
     /// gave up on this device ("Not attempting to reconnect…"). Re-announce.
     private func renewIfStuck() {
-        guard state.isActive, !phoneConnected else { stuckRenewals = 0; return }
-        guard let since = waitingSince, Date.now.timeIntervalSince(since) > 60 else { return }
-        waitingSince = .now
+        guard state.isActive else { stuckRenewals = 0; return }
+        switch link {
+        case .wifi, .cellular:
+            stuckRenewals = 0
+            // Held up by the tunnel alone, on Wi‑Fi: remotepairingd stopped dialing the control
+            // channel, and a new tunnel needs it. Nudge it as a waiting bridge would. Not on
+            // cellular, where 49152 doesn't answer anyway.
+            if link == .wifi, (controlRelay?.openCount ?? 0) == 0,
+               let gone = controlGoneSince, Date.now.timeIntervalSince(gone) > 60,
+               Date.now.timeIntervalSince(lastHeldRenewal) > 60 {
+                lastHeldRenewal = .now
+                log("no control channel for 60s — re-announcing Bonjour record")
+                dnsProxy.renew()
+            }
+            return
+        case .waiting where tunnelCarriesTraffic:
+            // Heard again, the probe still out (Link.next waits for it): not stuck, and the
+            // relocation below would tear down a tunnel still in use on cellular.
+            stuckRenewals = 0
+            return
+        case .waiting, .paused:
+            break
+        }
+        guard Date.now.timeIntervalSince(lastRenewal) > 60 else { return }
+        lastRenewal = .now
         stuckRenewals += 1
         // Three minutes and still nothing: the device may have moved port or address. The
         // error retry runs start() again, which finds it (relocate).
-        if stuckRenewals >= 3 {
+        // Paused on cellular, it hasn't moved: RemotePairing answers again on Wi‑Fi.
+        // For half an hour: its port may have changed meanwhile (a reboot), and only this finds it.
+        let pausedLong = if case .paused(let since) = link { Date.now.timeIntervalSince(since) > 1800 } else { true }
+        if stuckRenewals >= 3, pausedLong {
             stuckRenewals = 0
             let gen = generation
             let ip = profile.providerIP
@@ -688,7 +815,7 @@ final class ProxyBridge: ObservableObject {
                 guard !(await ReachabilityProbe.checkTCP(host: ip, port: profile.remotePairingPort)),
                       profile.providerID == MeshProvider.tailscale.rawValue,
                       await Task.detached(operation: { TailscaleClient.fromSettings().ping(ip) }).value,
-                      gen == generation, state.isActive, !phoneConnected else {
+                      gen == generation, state.isActive, !phoneConnected, !tunnelCarriesTraffic else {
                     if gen == generation, state.isActive, !phoneConnected { dnsProxy.renew() }   // asleep: keep nudging
                     return
                 }
@@ -708,7 +835,7 @@ final class ProxyBridge: ObservableObject {
     func nudgeAfterWake() {
         guard state.isActive else { return }
         log("Mac woke — re-announcing Bonjour record")
-        waitingSince = .now
+        lastRenewal = .now
         dnsProxy.renew()
     }
 

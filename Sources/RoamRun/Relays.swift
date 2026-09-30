@@ -218,10 +218,16 @@ final class Relay: @unchecked Sendable {
         }
         listener?.stateUpdateHandler = nil
         listener?.cancel()
-        lock.lock(); stopped = true; let open = connections; connections = []; established = []; stats = [:]; lock.unlock()
-        Self.totalLock.withLock { Self.total -= open.count / 2 }
-        for c in open { c.cancel() }
+        lock.withLock { stopped = true }
+        dropConnections()
         finishStart(RelayError.bindFailed("stopped"))   // its handler is gone: nothing else would end a start in flight
+    }
+
+    /// Some pair got bytes from the device within `seconds` — the far end is alive.
+    func heardFromDevice(within seconds: TimeInterval) -> Bool {
+        let now = DispatchTime.now().uptimeNanoseconds, span = UInt64(seconds * 1e9)
+        let since = now > span ? now - span : 0
+        return lock.withLock { stats.values.contains { $0.lastHeard > 0 && $0.lastHeard >= since } }
     }
 
     /// No pair has moved a byte for `seconds` (or there are none). Standbys stay open
@@ -230,6 +236,15 @@ final class Relay: @unchecked Sendable {
         let now = DispatchTime.now().uptimeNanoseconds, span = UInt64(seconds * 1e9)
         let since = now > span ? now - span : 0
         return lock.withLock { stats.values.allSatisfy { $0.lastActive < since } }
+    }
+
+    /// Closes every pair; the listener stays, for whatever connects next.
+    func dropConnections() {
+        lock.lock(); let open = connections; let had = !established.isEmpty
+        connections = []; established = []; stats = [:]; lock.unlock()
+        Self.totalLock.withLock { Self.total -= open.count / 2 }
+        for c in open { c.cancel() }
+        if had, !lock.withLock({ stopped }) { onOpenCountChange?(0) }
     }
 
     var openCount: Int {
@@ -394,6 +409,10 @@ private final class ConnStats: @unchecked Sendable {
     private var _lastActive = DispatchTime.now().uptimeNanoseconds
 
     var lastActive: UInt64 { lock.lock(); defer { lock.unlock() }; return _lastActive }
+    /// Uptime (ns) of the last bytes from the device; 0 until any arrive. Not the pair's
+    /// start: a connection remotepairingd just opened says nothing about the device.
+    private var _lastHeard: UInt64 = 0
+    var lastHeard: UInt64 { lock.lock(); defer { lock.unlock() }; return _lastHeard }
 
     var up: Int { lock.lock(); defer { lock.unlock() }; return _up }
     var down: Int { lock.lock(); defer { lock.unlock() }; return _down }
@@ -402,6 +421,7 @@ private final class ConnStats: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         if isUp { _up += n } else { _down += n }
         _lastActive = DispatchTime.now().uptimeNanoseconds
+        if !isUp { _lastHeard = _lastActive }
     }
 
     /// True once both directions have seen EOF.

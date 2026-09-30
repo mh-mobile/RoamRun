@@ -118,7 +118,8 @@ private struct SidebarRow: View {
                 .accessibilityHidden(true)   // the name and status below say it
             VStack(alignment: .leading, spacing: 2) {
                 Text(profile.displayName).fontWeight(.medium).lineLimit(1).help(profile.displayName)
-                Label(viaCLI ? "\(status.title) · Terminal" : status.title, systemImage: status.symbol)
+                let text = coordinator.statusText(of: profile.id)
+                Label(viaCLI ? "\(text) · Terminal" : text, systemImage: status.symbol)
                     .labelStyle(StatusLabelStyle(color: status.color))
                     .font(.caption)
                     .spinning(status.isWorking)
