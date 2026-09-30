@@ -1198,7 +1198,7 @@ enum CLI {
             }
             if let e = live[p.id] {
                 let own = LocalNetwork.withoutAdvice(e.detail)   // it gets its own line below
-                let over = e.deviceNetwork.map { " over \($0.title.lowercased())" } ?? ""
+                let over = e.deviceNetwork.map { " over \($0 == .wifi ? "Wi‑Fi" : "cellular")" } ?? ""
                 check(e.ready || e.kind == .local, "Mac-side bridge: \(e.status)\(over) (\(owner(e)))", fix: own.isEmpty ? "Wait a few seconds and run doctor again." : own)
                 if e.deviceNetwork == .cellular, e.kind == .ready {
                     note("The device is on cellular: Xcode keeps the tunnel set up on Wi‑Fi, but a new one needs Wi‑Fi again")
