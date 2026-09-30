@@ -227,7 +227,7 @@ final class Relay: @unchecked Sendable {
     func heardFromDevice(within seconds: TimeInterval) -> Bool {
         let now = DispatchTime.now().uptimeNanoseconds, span = UInt64(seconds * 1e9)
         let since = now > span ? now - span : 0
-        return lock.withLock { stats.values.contains { $0.lastHeard >= since } }
+        return lock.withLock { stats.values.contains { $0.lastHeard > 0 && $0.lastHeard >= since } }
     }
 
     /// No pair has moved a byte for `seconds` (or there are none). Standbys stay open

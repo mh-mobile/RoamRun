@@ -275,6 +275,7 @@ final class ProxyBridge: ObservableObject {
         setState(.active(localPort: localPort, tunnelPorts: []))
         log("bridge active: \(profile.providerIP) relayed locally on \(localIP):\(localPort)")
         lastRenewal = .now
+        evaluate()   // a control channel may have opened while starting, when evaluate() ignores it
         renewTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.evaluate()
@@ -624,8 +625,9 @@ final class ProxyBridge: ObservableObject {
         if controlOpen { controlGoneSince = nil } else if controlGoneSince == nil { controlGoneSince = .now }
         let gone = controlGoneSince.map { Date.now.timeIntervalSince($0) } ?? 0
         let heard = tunnelCarriesTraffic
-        link = Link.next(link, .init(controlOpen: controlOpen, heard: heard, controlGoneFor: gone, probe: probe,
-                                     keepOnCellular: DeviceNetwork.keepOnCellular, now: .now))
+        let next = Link.next(link, .init(controlOpen: controlOpen, heard: heard, controlGoneFor: gone, probe: probe,
+                                         keepOnCellular: DeviceNetwork.keepOnCellular, now: .now))
+        if next != link { link = next }   // @Published would redraw every view on each tick otherwise
         if pausedOnCellular {
             // Whatever remotepairingd dials into the tunnel relays meanwhile goes too.
             for relay in tunnelRelays.values where relay.openCount > 0 { relay.dropConnections() }
@@ -777,6 +779,11 @@ final class ProxyBridge: ObservableObject {
                 dnsProxy.renew()
             }
             return
+        case .waiting where tunnelCarriesTraffic:
+            // Heard again, the probe still out (Link.next waits for it): not stuck, and the
+            // relocation below would tear down a tunnel still in use on cellular.
+            stuckRenewals = 0
+            return
         case .waiting, .paused:
             break
         }
@@ -797,7 +804,7 @@ final class ProxyBridge: ObservableObject {
                 guard !(await ReachabilityProbe.checkTCP(host: ip, port: profile.remotePairingPort)),
                       profile.providerID == MeshProvider.tailscale.rawValue,
                       await Task.detached(operation: { TailscaleClient.fromSettings().ping(ip) }).value,
-                      gen == generation, state.isActive, !phoneConnected else {
+                      gen == generation, state.isActive, !phoneConnected, !tunnelCarriesTraffic else {
                     if gen == generation, state.isActive, !phoneConnected { dnsProxy.renew() }   // asleep: keep nudging
                     return
                 }
