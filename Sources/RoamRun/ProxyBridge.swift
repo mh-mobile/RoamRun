@@ -330,6 +330,7 @@ final class ProxyBridge: ObservableObject {
         pausedOnCellular = false
         controlGoneSince = nil
         lastNetworkProbe = .distantPast
+        lastHeldRenewal = .distantPast
     }
 
     /// `tunnelPort` nil is the control relay. A listener that dies once up is
@@ -629,7 +630,8 @@ final class ProxyBridge: ObservableObject {
         if controlOpen { controlGoneSince = nil; if pausedOnCellular { pausedOnCellular = false } }
         else if controlGoneSince == nil { controlGoneSince = .now }
         // Paused: whatever remotepairingd dials into the tunnel relays meanwhile goes too.
-        if pausedOnCellular, !controlOpen, !DeviceNetwork.keepOnCellular {
+        // Until Wi‑Fi: turning the setting on meanwhile applies to the next time it leaves.
+        if pausedOnCellular, !controlOpen {
             if tunnelRelays.values.contains(where: { $0.openCount > 0 }) { pauseOnCellular() }
             return
         }
@@ -785,9 +787,10 @@ final class ProxyBridge: ObservableObject {
         guard state.isActive else { stuckRenewals = 0; return }
         if phoneConnected {
             stuckRenewals = 0
-            // Held up by the tunnel alone: if this is Wi‑Fi, remotepairingd stopped dialing the
-            // control channel, and a new tunnel needs it. Nudge it as a waiting bridge would.
-            if (controlRelay?.openCount ?? 0) == 0,
+            // Held up by the tunnel alone, on Wi‑Fi: remotepairingd stopped dialing the control
+            // channel, and a new tunnel needs it. Nudge it as a waiting bridge would. Not on
+            // cellular, where 49152 doesn't answer anyway.
+            if network == .wifi, (controlRelay?.openCount ?? 0) == 0,
                let gone = controlGoneSince, Date.now.timeIntervalSince(gone) > 60,
                Date.now.timeIntervalSince(lastHeldRenewal) > 60 {
                 lastHeldRenewal = .now

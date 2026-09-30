@@ -313,7 +313,7 @@ struct TailscaleClient {
     /// Tailscale-level reachability (disco ping), independent of iPhone services.
     func ping(_ ip: String) -> Bool {
         guard let path = resolvedPath() else { return false }
-        let r = Proc.run(path, Self.pingArgs(ip))
+        let r = Proc.run(path, Self.pingArgs(ip), timeout: 8)   // the ping itself gives up at 3 s
         return r.status == 0 && r.out.contains("pong")
     }
 

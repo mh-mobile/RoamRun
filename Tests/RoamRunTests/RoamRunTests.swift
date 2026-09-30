@@ -1054,6 +1054,13 @@ private func startedRelay(upstream: UInt16, spare: Bool = false) async throws ->
         c.send(content: Data("heartbeat".utf8), completion: .contentProcessed { _ in })
         #expect(try await eventually { !relay.quiet(for: 0.3) })   // the Mac side wrote…
         #expect(!relay.heardFromDevice(within: 0.3))              // …the device said nothing
+
+        let talker = try EchoServer(); let answering = await talker.start(); defer { talker.stop() }
+        let live = try await startedRelay(upstream: answering, spare: true); defer { live.stop() }
+        let l = try #require(await openEcho(port: live.localPort)); defer { l.cancel() }
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(await echo(l, Data("heartbeat".utf8)) == Data("heartbeat".utf8))
+        #expect(live.heardFromDevice(within: 0.3))                // a device that answers is heard
     }
 
     /// Here, not top-level: its probes sweep 49152…, where these echo servers listen.

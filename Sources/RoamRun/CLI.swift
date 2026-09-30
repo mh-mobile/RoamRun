@@ -990,6 +990,7 @@ enum CLI {
                 case .starting(let step): line += " — \(step)"
                 default: break
                 }
+                if bridge.status == .ready, let n = bridge.network { line += " · \(n.title)" }
                 if bridge.status == .ready { line += " — pick “\(profile.displayName)” in Xcode. Ctrl-C to stop." }
                 if bridge.status == .local { line += " — Xcode sees it directly; bridging resumes when it leaves." }
                 if bridge.status == .waiting, bridge.pausedOnCellular {
