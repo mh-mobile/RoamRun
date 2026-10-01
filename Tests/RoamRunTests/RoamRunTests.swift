@@ -2715,7 +2715,8 @@ extension TimingSensitive.RelayOnLocalhost {
     var subscribers: [UUID: TunnelCoordinator.Subscriber] = [:]
 }
 
-/// Every field replaced: a bridge on this env reaches no network, process or setting.
+/// Every field replaced: a bridge on this env runs no tool and reads no setting. Its relays
+/// are real, listening on 127.0.0.1, but nothing is told to connect to them.
 /// The device answers on its port unless `reachable` says otherwise.
 @MainActor private func inertEnv(record: FakeRecord, watcher: FakeWatcher, reachable: Bool = true,
                                  now: @escaping @Sendable () -> Date = { .now }) -> BridgeEnv {
