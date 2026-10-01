@@ -73,10 +73,10 @@ sequenceDiagram
 
 ## 要件
 
-- macOS 13+、Apple Silicon（Intel Mac は非対応）。Mac の**管理者アカウント**で使うこと（RoamRun は `log stream` で remotepairingd のログを読みますが、macOS は管理者にしか許可していません）
+- 実質 macOS 14 以降（RoamRun 自体は 13 で動きますが、iOS 17.4 以降に対応する Xcode が 14 以上を必要とします）、Apple Silicon（Intel Mac は非対応）。Mac の**管理者アカウント**で使うこと（RoamRun は `log stream` で remotepairingd のログを読みますが、macOS は管理者にしか許可していません）
 - iPhone は iOS 17.4 以降（CoreDevice トンネルが TCP の世代。17.0–17.3 の QUIC/UDP トンネルは非対応）
 - iPad、Apple Vision Pro でも同じ仕組みで動作を確認済み（以下「iPhone」はこれらも含みます）。Vision Pro はもともと USB がなく Wi-Fi だけで開発する端末なので、外出先からの利用とも相性が良いです
-- Xcode（devicectl が使えること）。iPhone の iOS に対応した SDK を持つ版が必要です（[Apple の表](https://developer.apple.com/support/xcode/)）: iOS 17.4〜17.x は Xcode 15.3 以降（macOS 14）、iOS 18 は Xcode 16（macOS 14.5 以降）、iOS 26 は Xcode 26（macOS 15.6 以降）、iOS 27 は Xcode 27（macOS 26.6 以降）。`roamrun logs` と `run --logs` には Xcode 16 以降が必要です（`devicectl` の `--console` が入った版）
+- Xcode（devicectl が使えること）。iPhone の iOS に対応した SDK を持つ版が必要です（[Apple の表](https://developer.apple.com/support/xcode/)）: iOS 17.4〜17.x は Xcode 15.3 以降（macOS 14）、iOS 18 は Xcode 16（macOS 14.5 以降）、iOS 26 は Xcode 26（macOS 15.6 以降）、iOS 27 は Xcode 27（macOS 26.6 以降）。iOS の小さな更新（26.4 など）では、より新しい Xcode と macOS が必要になることがあります。表で確かめてください。`roamrun logs` と `run --logs` には Xcode 16 以降が必要です（`devicectl` の `--console` が入った版）
 - Tailscale（または任意の mesh VPN + 手動 IP 指定）が Mac/iPhone 両方で接続済み
 - iPhone をこの Mac と一度ペアリング済み（USB、または Xcode 27 + iOS 27 なら同じ Wi-Fi 上で Device Hub の「+」→「Pair Nearby Device…」）、デベロッパモード ON
 - つなぐときは iPhone が**何らかの Wi-Fi に接続していること**（cellular 不可: remotepairingd は Wi-Fi association を前提に listen する）。**Ready for Xcode**（別の Wi-Fi からブリッジ中）になったあとは、Settings › Network の **Keep debugging on cellular** をオンにしておけば、モバイル通信に移っても Xcode のセッションをそのまま使えます（初期値はオフ。オンにすると Run のたびに iPhone のモバイル通信を使います）
@@ -351,7 +351,7 @@ defaults delete com.roamrun.app 2>/dev/null      # 0.1.12 より前の版が残�
 `tailscale serve` にポート（`otaPort` で指定したもの。既定 41443）を持たせ、正常終了時には
 返しますが、強制終了やクラッシュでは返りません。上の `tailscale serve --https=41443 --set-path=/ off` で消せます。RoamRun をもう一度
 開いても消えます（残った自分のものを認識して返します）。見るのは現在の設定ポートと、
-直近 5 回の登録で使ったポートすべてなので、`otaPort` を変える前のポートに残ったものも
+記録に残る直近 5 件（重複を除く）の登録のポートすべてなので、`otaPort` を変える前のポートに残ったものも
 見つかります。見つけられないのは、それより古いものだけです。
 
 **アンインストールの前に RoamRun を終了してください。** `brew uninstall --zap` は

@@ -73,10 +73,10 @@ sequenceDiagram
 
 ## Requirements
 
-- macOS 13+ on Apple Silicon (Intel Macs aren't supported), with an **administrator account** (RoamRun reads remotepairingd's log with `log stream`, which macOS only allows admins)
+- macOS 14 or later in practice (RoamRun itself runs on 13, but every Xcode that supports iOS 17.4 or later needs 14) on Apple Silicon (Intel Macs aren't supported), with an **administrator account** (RoamRun reads remotepairingd's log with `log stream`, which macOS only allows admins)
 - iOS 17.4 or later on the iPhone (the generation whose CoreDevice tunnel is TCP; the QUIC/UDP tunnel of 17.0–17.3 isn't supported)
 - Also verified with iPad and Apple Vision Pro, which work the same way ("iPhone" below includes them). Vision Pro has no USB and is developed for over Wi-Fi anyway, which makes it a natural fit for working away from the Mac
-- Xcode (`devicectl` must be available) whose SDK covers the iPhone's iOS, per [Apple's table](https://developer.apple.com/support/xcode/): iOS 17.4–17.x needs Xcode 15.3 or later (macOS 14), iOS 18 Xcode 16 (macOS 14.5+), iOS 26 Xcode 26 (macOS 15.6+), iOS 27 Xcode 27 (macOS 26.6+). `roamrun logs` and `run --logs` need Xcode 16 or later, where `devicectl` gained `--console`
+- Xcode (`devicectl` must be available) whose SDK covers the iPhone's iOS, per [Apple's table](https://developer.apple.com/support/xcode/): iOS 17.4–17.x needs Xcode 15.3 or later (macOS 14), iOS 18 Xcode 16 (macOS 14.5+), iOS 26 Xcode 26 (macOS 15.6+), iOS 27 Xcode 27 (macOS 26.6+). A later iOS point release can need a later Xcode, and so a later macOS; the table has them. `roamrun logs` and `run --logs` need Xcode 16 or later, where `devicectl` gained `--console`
 - Tailscale (or any mesh VPN with a manually entered IP), connected on both the Mac and the iPhone
 - The iPhone paired with this Mac once (over USB, or with Xcode 27 + iOS 27 on the same Wi-Fi via Device Hub › "+" › "Pair Nearby Device…"), with Developer Mode on
 - To connect, the iPhone must be **on some Wi-Fi network** (cellular alone won't do: remotepairingd only listens while the iPhone is on Wi-Fi). Once it shows **Ready for Xcode** (bridged from another Wi‑Fi), it can move to cellular and keep the session Xcode has, if you turn on Settings › Network › **Keep debugging on cellular** (off by default: every Run then uses the iPhone's data)
@@ -351,7 +351,7 @@ If you used `roamrun ota`, one more thing lives outside that table: RoamRun asks
 default — and gives it back when it quits, but not if it is force-quit or
 crashes. `tailscale serve --https=41443 --set-path=/ off` clears it, and so does opening
 RoamRun again: it recognises a leftover of its own and gives it back. It looks on
-the port configured now and on every port its last 5 registrations used, so a
+the port configured now and on every port named by the last 5 distinct registrations it recorded, so a
 leftover from before `otaPort` was changed is found too. Only one older than
 that is missed.
 
