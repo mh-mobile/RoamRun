@@ -60,6 +60,7 @@ struct AddDeviceView: View {
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button("Add Device") {
+                    refusal = nil
                     guard let captured = newest(for: selectedHost) else { return }
                     switch coordinator.addDevice(captured: captured, provider: provider, meshDevice: meshDevice,
                                                  manualIP: manualIP, name: name) {
@@ -96,7 +97,17 @@ struct AddDeviceView: View {
             }
         }
         .onChange(of: selectedHost) { _ in
+            refusal = nil
             if name.isEmpty, let s = newest(for: selectedHost) { name = coordinator.uniqueName(s.shortHost) }
+        }
+        // A refusal is about what was asked then: any change makes it stale.
+        .onChange(of: meshDeviceID) { _ in refusal = nil }
+        .onChange(of: manualIP) { _ in refusal = nil }
+        .onChange(of: name) { _ in refusal = nil }
+        .onChange(of: provider) { _ in refusal = nil }
+        // The chosen Tailscale device gone from a refreshed list: no choice, not a blank one.
+        .onChange(of: coordinator.tailscaleDevices) { devices in
+            if let id = meshDeviceID, !devices.contains(where: { $0.id == id }) { meshDeviceID = nil }
         }
     }
 
@@ -172,7 +183,6 @@ struct AddDeviceView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityElement(children: .combine)
                 .accessibilityAddTraits(selectedHost == s.host ? .isSelected : [])
                 .accessibilityValue(selectedHost == s.host ? "Selected" : "")   // macOS VoiceOver may not voice the trait
                 if s.id != visibleServices.last?.id { Divider() }

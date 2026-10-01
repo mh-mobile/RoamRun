@@ -52,7 +52,8 @@ struct DeviceDetailView: View {
             Button("Rename") {
                 // Return can reach a disabled alert button: say why instead of closing on nothing.
                 if !coordinator.rename(profile.id, to: newName) {
-                    renameRefusal = coordinator.profiles.nameProblem(newName, except: profile.id) ?? "This device is no longer saved."
+                    let why = coordinator.profiles.nameProblem(newName, except: profile.id) ?? "This device is no longer saved."
+                    DispatchQueue.main.async { renameRefusal = why }   // once this alert has gone: two at once may not show
                 }
             }
                 .disabled(coordinator.profiles.nameProblem(newName, except: profile.id) != nil)
@@ -320,7 +321,9 @@ private struct DeviceLog: View {
                 .frame(height: 160)
                 .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.4)))
                 .onChange(of: log.appended) { _ in   // not lines.count: that stops at the log's limit
-                    if let last = lines.indices.last { proxy.scrollTo(last, anchor: .bottom) }
+                    // Only for this device's own lines: another's mustn't pull a reader back down.
+                    guard log.lines.last?.device == device, let last = lines.indices.last else { return }
+                    proxy.scrollTo(last, anchor: .bottom)
                 }
             }
             Button("Copy Log") {
