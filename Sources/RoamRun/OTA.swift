@@ -532,10 +532,6 @@ enum OTA {
             }
     }
 
-    /// A build directory with no `meta.json` at all: an add that died before
-    /// writing it. Nothing can show it and nothing else would ever remove it.
-    /// Only from `add`, which holds the lock — a half-written build is exactly
-    /// what this would delete if it ran while one was being made.
     /// Every other app's leftovers too, or one never added to again keeps its forever. Only
     /// with that app's lock free (no add running there) and only an hour old.
     static func sweepOthersStaging(in store: URL, besides mine: URL) {
@@ -551,6 +547,10 @@ enum OTA {
         }
     }
 
+    /// A build directory with no `meta.json` at all: an add that died before
+    /// writing it. Nothing can show it and nothing else would ever remove it.
+    /// Only from `add`, which holds the lock — a half-written build is exactly
+    /// what this would delete if it ran while one was being made.
     private static func reapOrphans(_ app: URL) {
         for slug in entries(of: app) ?? [] where !slug.hasPrefix(".") {
             let dir = app.appendingPathComponent(slug)

@@ -764,6 +764,7 @@ enum CLI {
             return src
         }
         do { try task.run() } catch { stop("could not run \(argv[0]): \(error.localizedDescription)") }
+        if let sig = caught.value { kill(task.processIdentifier, sig) }   // arrived while it launched
         task.waitUntilExit()
         for src in sources { src.cancel() }
         for sig in [SIGTERM, SIGHUP] { signal(sig, SIG_DFL) }
@@ -1007,7 +1008,11 @@ enum CLI {
         try? FileManager.default.removeItem(at: previous)
         guard (try? FileManager.default.moveItem(at: url, to: previous)) != nil else { return }
         let fresh = open(url.path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
-        guard fresh >= 0 else { return }   // still writing to the renamed file: nothing lost
+        guard fresh >= 0 else {
+            // Still writing to the renamed file: name it back, or the next look would delete it.
+            try? FileManager.default.moveItem(at: previous, to: url)
+            return
+        }
         for fd in fds { dup2(fresh, fd) }
         close(fresh)
     }
@@ -1368,13 +1373,13 @@ enum CLI {
         }
     }
 
-    /// A name as it must be typed in a shell: 'iPhone mh', 'it'\''s'.
     /// How to name a device in a command we suggest: a name starting with "-" would be taken
     /// for an option, so its id stands in (every command takes one).
     nonisolated static func commandName(_ p: DeviceProfile) -> String {
         p.displayName.hasPrefix("-") ? p.id.uuidString : shellName(p.displayName)
     }
 
+    /// A name as it must be typed in a shell: 'iPhone mh', 'it'\''s'.
     nonisolated static func shellName(_ name: String) -> String {
         guard name.isEmpty || !name.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "._-".contains($0)) }) else { return name }
         return "'" + name.replacingOccurrences(of: "'", with: #"'\''"#) + "'"
@@ -1511,7 +1516,7 @@ enum CLI {
 
     private static func names(_ profiles: [DeviceProfile]) -> String {
         profiles.isEmpty ? noDevices
-            : "Saved: " + profiles.map { shellName($0.displayName) }.joined(separator: ", ")
+            : "Saved: " + profiles.map { commandName($0) }.joined(separator: ", ")
     }
 
     private static func owner(_ e: StatusFile.Entry) -> String {
