@@ -55,11 +55,15 @@ struct BridgeEnv: Sendable {
     static let live = BridgeEnv()
 }
 
-/// Where a bridge's blocking tools run, so they never hold the main actor. Today a detached
-/// task each, as before; 1.7 changes where they wait without touching the callers.
+/// Where a bridge's blocking tools run: on a queue of their own, never the main actor or
+/// Swift's cooperative pool. That pool has a thread per core; a tool waiting there (a ping
+/// up to 8 s, devicectl up to 45 s) held one, and with several bridges checking at once
+/// their tools queued behind each other (#32). Concurrent, not serial, for the same reason.
 enum Blocking {
+    private static let queue = DispatchQueue(label: AppID.bundle + ".blocking", attributes: .concurrent)
+
     static func run<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
-        await Task.detached { work() }.value
+        await withCheckedContinuation { done in queue.async { done.resume(returning: work()) } }
     }
 }
 

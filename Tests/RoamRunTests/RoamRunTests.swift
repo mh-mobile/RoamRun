@@ -270,7 +270,7 @@ private func timed(_ path: String, _ args: [String]) -> (Proc.Result, TimeInterv
 extension TimingSensitive {
     @Suite(.serialized) struct ProcTiming {
         @Test func slowToolsFillingTheTaskPoolStillTimeOut() async {
-            // runAsync blocks a Swift concurrency thread per call; with every one of
+            // A Proc.run called from a task blocks a Swift concurrency thread; with every one of
             // them blocked, the timeout timers must still get to run.
             // Each run is timed from its own start: other tests may hold the pool first.
             let longest = await withTaskGroup(of: TimeInterval.self) { group in
@@ -280,6 +280,18 @@ extension TimingSensitive {
                 return await group.reduce(0, max)
             }
             #expect(longest < 4)
+        }
+
+        /// #32: blocking tools wait off Swift's cooperative pool. On it, twice as many as it
+        /// has threads (one per core) ran in two waves, each bridge's check behind another's.
+        @Test func blockingToolsDontQueueBehindEachOther() async {
+            let n = ProcessInfo.processInfo.activeProcessorCount * 2
+            let clock = ContinuousClock(), start = clock.now
+            await withTaskGroup(of: Void.self) { group in
+                for _ in 0..<n { group.addTask { await Blocking.run { usleep(1_000_000) } } }
+            }
+            let took = clock.now - start
+            #expect(took < .milliseconds(1_800), "\(n) one-second waits took \(took)")
         }
 
         @Test func quickToolReturnsItsOutput() {

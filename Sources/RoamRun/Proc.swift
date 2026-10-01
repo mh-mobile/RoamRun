@@ -10,7 +10,7 @@ enum Proc {
         var timedOut = false
     }
 
-    /// Its own queue gets a thread even while callers (e.g. runAsync) block
+    /// Its own queue gets a thread even while callers block
     /// every Swift concurrency / global-queue thread.
     private static let timers = DispatchQueue(label: AppID.bundle + ".proc-timers")
 
@@ -100,10 +100,6 @@ enum Proc {
         return root["result"] as? [String: Any]
     }
 
-    /// Same, off the calling actor.
-    static func runAsync(_ path: String, _ args: [String]) async -> Result {
-        await Task.detached { run(path, args) }.value
-    }
 }
 
 /// Feeds a long-running child's stdout to `onLine`, one complete line at a
