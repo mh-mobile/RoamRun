@@ -3107,6 +3107,9 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
     for err in ["failed to connect to local Tailscale daemon for /localapi/v0/ping; not running?",
                 "Tailscale is stopped.", "Logged out."] {
         #expect(TailscaleClient.ping(r(1, "", err)) == .couldNotRun(err), "\(err)")
+    }
+}
+
 // MARK: - Untested risky paths (7b / F55)
 
 /// `tailscale serve` and the record of what this Mac registered, faked. Calls are counted
