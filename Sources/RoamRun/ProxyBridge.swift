@@ -361,6 +361,7 @@ final class ProxyBridge: ObservableObject {
         controlGoneSince = nil
         lastNetworkProbe = .distantPast
         lastHeldRenewal = .distantPast
+        lastPathCheck = nil
     }
 
     /// `tunnelPort` nil is the control relay. A listener that dies once up is
@@ -688,7 +689,7 @@ final class ProxyBridge: ObservableObject {
             let reached = answers ? true
                 : await Self.stillReached(tailscale: tailscale,
                                           heardJustNow: tunnelRelays.values.contains { $0.heardFromDevice(within: 10) },
-                                          ping: { [ping = env.ping] in await Blocking.run { ping(ip) } == .pong })
+                                          ping: { [ping = env.ping] in await Blocking.run { ping(ip) } })
             probingNetwork = false
             guard gen == generation else { return }
             evaluate(probe: answers ? .answers : reached ? .silentReachable : .unreachable)
@@ -700,8 +701,15 @@ final class ProxyBridge: ObservableObject {
     /// A device whose RemotePairing port is silent: does the mesh still reach it? Tailscale
     /// can ping it; any other mesh VPN (Manual IP) has no such check, but bytes from the
     /// device on its tunnel just now say the same.
-    static func stillReached(tailscale: Bool, heardJustNow: Bool, ping: () async -> Bool) async -> Bool {
-        tailscale ? await ping() : heardJustNow
+    /// A ping that couldn't run (no CLI, it hung) says nothing: the device's own bytes decide,
+    /// as for a manual IP. Tailscale's own timeout is an answer: nothing came back.
+    static func stillReached(tailscale: Bool, heardJustNow: Bool, ping: () async -> TailscaleClient.Ping) async -> Bool {
+        guard tailscale else { return heardJustNow }
+        switch await ping() {
+        case .pong: return true
+        case .noPong: return false
+        case .couldNotRun: return heardJustNow
+        }
     }
 
     private func linkChanged(from old: Link) {
@@ -836,10 +844,10 @@ final class ProxyBridge: ObservableObject {
         stuckRenewals += 1
         // Three minutes and still nothing: the device may have moved port or address. The
         // error retry runs start() again, which finds it (relocate).
-        // Paused on cellular, it hasn't moved: RemotePairing answers again on Wi‑Fi.
-        // For half an hour: its port may have changed meanwhile (a reboot), and only this finds it.
-        let pausedLong = if case .paused(let since) = link { env.now().timeIntervalSince(since) > 1800 } else { true }
-        if stuckRenewals >= 3, pausedLong {
+        // Not while paused on cellular, however long: it hasn't moved, RemotePairing answers
+        // again on Wi‑Fi, and a scan over cellular finds nothing and spends the data pausing
+        // saves. A port changed meanwhile (a reboot) is for Find RemotePairing Port.
+        if HomeRule.relocatesWhenStuck(renewals: stuckRenewals, paused: pausedOnCellular) {
             stuckRenewals = 0
             let gen = generation
             let ip = profile.providerIP
@@ -882,7 +890,7 @@ final class ProxyBridge: ObservableObject {
         let gen = generation
         Task {
             defer { checkingLAN = false }
-            guard await isHome(), gen == generation, state.isActive else { return }
+            guard await isHome(pathCheckEvery: 60), gen == generation, state.isActive else { return }
             log("back on this Mac's network — standing aside until it leaves")
             memory.lastFullCheck = env.now()   // just proved; no full check on the next tick
             awayTicks = 0
@@ -928,7 +936,11 @@ final class ProxyBridge: ObservableObject {
 
     /// Home if the iPhone itself advertises on this LAN — Tailscale may keep a
     /// cellular path after it joins Wi-Fi — or if Tailscale's path says so.
-    private func isHome() async -> Bool {
+    /// `pathCheckEvery`: the Tailscale path check (a `tailscale ping -c 3`) at most that often.
+    /// Skipped, it says "not known", which leaves the bridge as it is: bridging, unknown and
+    /// away both keep bridging (a "home" already stood it aside). Only the 10 s check while
+    /// bridging passes it; starting and resuming always look.
+    private func isHome(pathCheckEvery: TimeInterval? = nil) async -> Bool {
         // The memory outlives this bridge: a write after it was stopped or rebuilt is stale.
         let bridging = state.isActive, now = env.now(), gen = generation
         // Not bridging: try a name known to be the device's advert before any `log show`.
@@ -957,8 +969,14 @@ final class ProxyBridge: ObservableObject {
         } else {
             saidLocalNetworkDenied = false
         }
+        if let every = pathCheckEvery, let last = lastPathCheck, now.timeIntervalSince(last) < every {
+            return decided(false, "Tailscale path not checked yet (every \(Int(every)) s)")
+        }
+        lastPathCheck = now
         return decided(await env.isOnLAN(profile), "Tailscale path")
     }
+    /// When the 10 s check last asked Tailscale's path (it pings).
+    private var lastPathCheck: Date?
 
     /// Said once per spell, not every check.
     private var saidLocalNetworkDenied = false
@@ -987,8 +1005,10 @@ final class ProxyBridge: ObservableObject {
     /// even after the iPhone rotated its Bonjour instance name.
     static func isOnLAN(_ profile: DeviceProfile) async -> Bool {
         let ip = profile.providerIP
-        let direct = await Blocking.run { Result { try TailscaleClient.fromSettings().directHost(ip) } }
-        guard profile.providerID == MeshProvider.tailscale.rawValue, case .success(let found) = direct else {
+        // Not Tailscale (a manual IP): no ping, whose answer would only be thrown away.
+        let tailscale = profile.providerID == MeshProvider.tailscale.rawValue
+        let direct = tailscale ? await Blocking.run { Result { try TailscaleClient.fromSettings().directHost(ip) } } : nil
+        guard tailscale, case .success(let found)? = direct else {
             // ponytail: no Tailscale CLI (or a manual IP) — probe the host name seen at Add. Misses a
             // renamed iPhone and can hit another iPhone of the same name; set the CLI path to avoid.
             return await ReachabilityProbe.speaksRemotePairing(host: profile.bonjourHost, port: profile.remotePairingPort, timeout: 2)
@@ -1146,6 +1166,10 @@ enum HomeRule {
     }
 
     static func shouldResume(awayTicks: Int) -> Bool { awayTicks >= missesBeforeResume }
+
+    /// Three re-announcements without a control channel: look for the device elsewhere —
+    /// unless it is paused on cellular, however long (2b: F1).
+    static func relocatesWhenStuck(renewals: Int, paused: Bool) -> Bool { renewals >= 3 && !paused }
 
     /// A live `roamrun up` holds this device's entry, in any state: the app's
     /// automatic restarts leave it alone. Its errors are its own to retry, and a

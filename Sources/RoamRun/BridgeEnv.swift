@@ -7,8 +7,8 @@ import Network
 /// them off the main actor, as before.
 struct BridgeEnv: Sendable {
     var now: @Sendable () -> Date = { .now }
-    /// Uptime (ns) for the relays' last-byte times.
-    var relayClock: @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }
+    /// The relays' clock for last-byte times (ns), running on through sleep (Relay.continuousNow).
+    var relayClock: @Sendable () -> UInt64 = { Relay.continuousNow() }
     var lanIPv4: @Sendable () -> String? = { InterfaceMonitor.currentIPv4() }
     var keepOnCellular: @Sendable () -> Bool = { DeviceNetwork.keepOnCellular }
     var cliRunning: @Sendable () -> Bool = { CLI.isRunning }

@@ -2469,11 +2469,38 @@ func linkFollowsTheTable(_ row: Int) {
 /// behind any other VPN would read as unreachable, and never be paused.
 @Test func aSilentPortOnAnyMeshStillCountsAsReachedWhenTheDeviceTalks() async {
     let pinged = Counter()
-    #expect(await ProxyBridge.stillReached(tailscale: false, heardJustNow: true, ping: { pinged.bump(); return false }))
-    #expect(!(await ProxyBridge.stillReached(tailscale: false, heardJustNow: false, ping: { pinged.bump(); return true })))
+    #expect(await ProxyBridge.stillReached(tailscale: false, heardJustNow: true, ping: { pinged.bump(); return .noPong }))
+    #expect(!(await ProxyBridge.stillReached(tailscale: false, heardJustNow: false, ping: { pinged.bump(); return .pong })))
     #expect(pinged.value == 0)   // Manual IP: never a tailscale ping
-    #expect(await ProxyBridge.stillReached(tailscale: true, heardJustNow: false, ping: { true }))
-    #expect(!(await ProxyBridge.stillReached(tailscale: true, heardJustNow: true, ping: { false })))
+    #expect(await ProxyBridge.stillReached(tailscale: true, heardJustNow: false, ping: { .pong }))
+    #expect(!(await ProxyBridge.stillReached(tailscale: true, heardJustNow: true, ping: { .noPong })))
+    // A ping that couldn't run (no CLI, it hung) says nothing: the device's bytes decide (2b: F2).
+    #expect(await ProxyBridge.stillReached(tailscale: true, heardJustNow: true, ping: { .couldNotRun("no tailscale CLI") }))
+    #expect(!(await ProxyBridge.stillReached(tailscale: true, heardJustNow: false, ping: { .couldNotRun("no tailscale CLI") })))
+}
+
+/// Paused on cellular, the stuck-renewal path never looks for the device elsewhere, however
+/// long: before, after 30 minutes it scanned (over cellular, finding nothing) and failed.
+@Test func pausedOnCellularNeverRelocates() {
+    #expect(HomeRule.relocatesWhenStuck(renewals: 3, paused: false))
+    #expect(!HomeRule.relocatesWhenStuck(renewals: 2, paused: false))
+    #expect(!HomeRule.relocatesWhenStuck(renewals: 3, paused: true))
+    #expect(!HomeRule.relocatesWhenStuck(renewals: 300, paused: true))
+}
+
+/// While bridging, the 10 s home check asks Tailscale's path (a ping) once a minute at
+/// most; in between it doesn't stand aside on that score (2b: F32/F4).
+@MainActor @Test func theBridgingHomeCheckPingsOnceAMinute() async {
+    let rig = Rig()
+    defer { rig.done() }
+    await rig.bridge.start(.manual)
+    #expect(rig.world.pathChecks == 1)                     // starting always looks
+    for _ in 0..<12 {                                      // two minutes of 10 s ticks
+        rig.world.now += 10
+        rig.bridge.tick()
+        try? await Task.sleep(for: .milliseconds(40))      // its check runs
+    }
+    #expect(rig.world.pathChecks == 3, "\(rig.world.pathChecks)")   // at 60 s and 120 s
 }
 
 /// Old status files have no network; `roamrun status` then shows none.
@@ -2838,6 +2865,7 @@ private final class World: @unchecked Sendable {
     var cli = false
     var lan: String? = "127.0.0.1"
     var advertAnswers = false
+    var pathChecks = 0
     var scan = ReachabilityProbe.PortScan.notFound
     var scans = 0
     var peers: [MeshDevice] = []
@@ -2867,7 +2895,7 @@ private final class World: @unchecked Sendable {
         e.lanIPv4 = { w.lan }
         e.checkTCP = { host, _ in w.answering.contains(host) }
         e.ping = { _ in w.ping }
-        e.isOnLAN = { _ in w.onLAN }
+        e.isOnLAN = { _ in w.pathChecks += 1; return w.onLAN }
         e.cliRunning = { w.cli }
         e.findRemotePairingPort = { _ in w.scans += 1; return w.scan }
         e.listDevices = { w.peers }
@@ -3053,6 +3081,10 @@ func renewalsWhileWaiting(ping: TailscaleClient.Ping) async {
     await rig.bridge.start(.manual)
     let stopsBefore = rig.record.stopped
     rig.world.onLAN = true
+    rig.bridge.tick()
+    try? await Task.sleep(for: .milliseconds(100))
+    #expect(rig.bridge.status == .waiting)                 // the path was asked at start: not again yet (2b)
+    rig.world.now += 60
     rig.bridge.tick()
     #expect(await eventuallyOnMain { rig.bridge.status == .local })
     #expect(rig.record.stopped > stopsBefore)
