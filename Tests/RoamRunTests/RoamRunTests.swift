@@ -3565,6 +3565,27 @@ extension TimingSensitive.OTAServerOverASocket {
     #expect(try String(contentsOf: log.appendingPathExtension("1"), encoding: .utf8) == "old enough to roll\n")   // the last run's kept
 }
 
+/// A step after the first failing (here: the last `.1` can't be moved aside) undoes the rest:
+/// the live log and the last run's keep their names and contents (F42 review).
+@Test func aRolloverThatFailsMidwayKeepsBothLogs() throws {
+    let dir = scratchDir()
+    let log = dir.appendingPathComponent("iPhone.log"), previous = log.appendingPathExtension("1")
+    defer {
+        try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: previous.path)
+        try? FileManager.default.removeItem(at: dir)
+    }
+    try Data("last run\n".utf8).write(to: previous)
+    try Data("this run, long enough\n".utf8).write(to: log)
+    try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: previous.path)
+    let fd = open(log.path, O_WRONLY | O_APPEND)
+    defer { close(fd) }
+    CLI.rotateLog(at: log, limit: 10, fds: [fd])
+    #expect(try String(contentsOf: previous, encoding: .utf8) == "last run\n")
+    #expect(try String(contentsOf: log, encoding: .utf8) == "this run, long enough\n")
+    _ = "still here\n".withCString { write(fd, $0, strlen($0)) }
+    #expect(try String(contentsOf: log, encoding: .utf8).hasSuffix("still here\n"))   // the descriptor's file kept its name
+}
+
 /// Any `ota` clears another app's leftover staging an hour old, unless that app's add is
 /// running (its lock is held); a fresh one stays (F44).
 @Test func anOtaClearsOtherAppsLeftoversButNotARunningAdd() throws {

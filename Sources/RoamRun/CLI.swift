@@ -140,6 +140,7 @@ enum CLI {
                 logs(p, bundleID: words[words.startIndex + 1], launch: parsed.launch)
             case "run":
                 guard name != nil, let p = targets.first else { fail("usage: roamrun run <name> [--scheme S]. " + names(profiles)) }
+                Proc.Passing.shared.begin()   // nothing it waits on may outlive it
                 let v = parsed.values
                 runApp(p, scheme: v["--scheme"], workspace: v["--workspace"], project: v["--project"],
                        configuration: v["--configuration"] ?? "Debug", logs: parsed.flags.contains("--logs"), launch: parsed.launch)
@@ -152,6 +153,7 @@ enum CLI {
                 guard name != nil, let p = targets.first, words.count >= 2 else {
                     fail("usage: roamrun install <name> <path to .ipa or .app>. " + names(profiles))
                 }
+                Proc.Passing.shared.begin()
                 install(p, path: words[words.startIndex + 1])
             case "ota":
                 // The name is optional here, unlike every command above: nothing is
@@ -647,6 +649,7 @@ enum CLI {
 
     /// Hands over to devicectl so Ctrl-C and kill reach it directly.
     private static func exec(_ argv: [String]) -> Never {
+        Proc.Passing.shared.endForExec()
         var cargs = argv.map { strdup($0) } + [nil]
         execv(argv[0], &cargs)
         stop("could not run \(argv[0]): \(String(cString: strerror(errno)))")
@@ -749,57 +752,15 @@ enum CLI {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: argv[0])
         task.arguments = Array(argv.dropFirst())
-        return passingSignalsOn { pass in
-            do { try task.run() } catch { stop("could not run \(argv[0]): \(error.localizedDescription)") }
-            pass.to(task)
-            task.waitUntilExit()
-            return task.terminationStatus
+        Proc.Passing.shared.launching()
+        do { try task.run() } catch {
+            Proc.Passing.shared.launched(nil)
+            stop("could not run \(argv[0]): \(error.localizedDescription)")
         }
-    }
-
-    /// While `body` waits on a child (a build, an install, `xcodebuild -list`): TERM and HUP (a
-    /// `kill`, a closed terminal) reach only us, so pass them on, or the child carries on
-    /// without us; then stop the same way once it has. INT isn't passed: Ctrl-C reaches the
-    /// whole foreground group already, and a second one would hit the child twice.
-    private static func passingSignalsOn<T>(_ body: (Forwarder) -> T) -> T {
-        let pass = Forwarder()
-        let sources = [SIGTERM, SIGHUP].map { sig -> DispatchSourceSignal in
-            signal(sig, SIG_IGN)
-            let src = DispatchSource.makeSignalSource(signal: sig, queue: .global())
-            src.setEventHandler(handler: forward(sig, with: pass))
-            src.resume()
-            return src
-        }
-        let result = body(pass)
-        for src in sources { src.cancel() }
-        for sig in [SIGTERM, SIGHUP] { signal(sig, SIG_DFL) }
-        if let sig = pass.caught { kill(getpid(), sig) }   // and stop as asked, once it has
-        return result
-    }
-
-    /// Made outside the main actor: the handler runs on a dispatch thread, and a closure
-    /// written in a main-actor function would be the main actor's and trap there.
-    nonisolated private static func forward(_ sig: Int32, with pass: Forwarder) -> @Sendable () -> Void {
-        { pass.received(sig) }
-    }
-
-    /// The child a signal goes to, and the signal if one came.
-    final class Forwarder: @unchecked Sendable {
-        private let lock = NSLock()
-        private var child: Process?
-        private var sig: Int32?
-        var caught: Int32? { lock.withLock { sig } }
-
-        /// The child is running: one that came while it launched goes to it now.
-        func to(_ task: Process) {
-            let pending: Int32? = lock.withLock { child = task; return sig }
-            if let pending { kill(task.processIdentifier, pending) }
-        }
-
-        func received(_ s: Int32) {
-            let task: Process? = lock.withLock { sig = s; return child }
-            if let task, task.isRunning { kill(task.processIdentifier, s) }
-        }
+        Proc.Passing.shared.launched(task)
+        task.waitUntilExit()
+        Proc.Passing.shared.childEnded()
+        return task.terminationStatus
     }
 
     /// Build → install → launch, for the project in the current folder.
@@ -821,9 +782,7 @@ enum CLI {
         if let scheme { chosen = scheme }
         else {
             // Generous: the first -list of a project can resolve its packages.
-            let list = passingSignalsOn { pass in
-                Proc.run("/usr/bin/xcrun", ["xcodebuild", "-list", "-json"] + container, timeout: 300, started: pass.to)
-            }
+            let list = Proc.run("/usr/bin/xcrun", ["xcodebuild", "-list", "-json"] + container, timeout: 300)
             let root = (try? JSONSerialization.jsonObject(with: Data(list.out.utf8))) as? [String: Any]
             let schemes = ((root?["workspace"] ?? root?["project"]) as? [String: Any])?["schemes"] as? [String] ?? []
             guard schemes.count == 1 else {
@@ -838,9 +797,7 @@ enum CLI {
         guard visible(build + ["-quiet", "build"]) == 0 else { stop("the build failed (see above)") }
 
         // The built .app: the build settings of the target that produces one.
-        let settings = passingSignalsOn { pass in
-            Proc.run(build[0], Array(build.dropFirst()) + ["-showBuildSettings", "-json"], timeout: 300, started: pass.to)
-        }
+        let settings = Proc.run(build[0], Array(build.dropFirst()) + ["-showBuildSettings", "-json"], timeout: 300)
         let targets = (try? JSONSerialization.jsonObject(with: Data(settings.out.utf8))) as? [[String: Any]] ?? []
         guard let s = appTarget(in: targets, scheme: chosen), let dir = s["TARGET_BUILD_DIR"], let wrapper = s["WRAPPER_NAME"] else {
             stop("built, but couldn't find the .app in the build settings (\(firstLine(settings.err) ?? "no app target"))")
@@ -1032,19 +989,25 @@ enum CLI {
         var st = stat()
         guard let first = fds.first, fstat(first, &st) == 0, st.st_size > limit else { return }
         let fm = FileManager.default
-        let previous = url.appendingPathExtension("1"), rolling = url.appendingPathExtension("rolling")
-        // Aside first: only once that worked does the last `.1` go, so a failure loses nothing.
+        let previous = url.appendingPathExtension("1")
+        let rolling = url.appendingPathExtension("rolling"), backup = url.appendingPathExtension("1.backup")
+        // Each step can be undone until the new file is open; only then does the old `.1` go.
         try? fm.removeItem(at: rolling)
+        try? fm.removeItem(at: backup)
         guard (try? fm.moveItem(at: url, to: rolling)) != nil else { return }
-        var kept = rolling
-        if (try? fm.removeItem(at: previous)) != nil || !fm.fileExists(atPath: previous.path),
-           (try? fm.moveItem(at: rolling, to: previous)) != nil { kept = previous }
-        let fresh = open(url.path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
-        guard fresh >= 0 else {
-            // Still writing to the renamed file: name it back, or the next look would delete it.
-            try? fm.moveItem(at: kept, to: url)
-            return
+        let hadPrevious = fm.fileExists(atPath: previous.path)
+        func undo() {
+            if fm.fileExists(atPath: previous.path), !fm.fileExists(atPath: rolling.path) {
+                try? fm.moveItem(at: previous, to: rolling)   // step 3 had happened
+            }
+            if hadPrevious { try? fm.moveItem(at: backup, to: previous) }
+            try? fm.moveItem(at: rolling, to: url)
         }
+        guard !hadPrevious || (try? fm.moveItem(at: previous, to: backup)) != nil else { return undo() }
+        guard (try? fm.moveItem(at: rolling, to: previous)) != nil else { return undo() }
+        let fresh = open(url.path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+        guard fresh >= 0 else { return undo() }   // still writing to the renamed file: it gets its name back
+        try? fm.removeItem(at: backup)
         for fd in fds { dup2(fresh, fd) }
         close(fresh)
     }
