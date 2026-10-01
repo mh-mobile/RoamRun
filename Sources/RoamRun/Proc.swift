@@ -75,7 +75,9 @@ enum Proc {
     static func ensureGone(_ watchdog: Process, grace: Duration = .seconds(1)) async -> Bool {
         func exited(within d: Duration) async -> Bool {
             let clock = ContinuousClock(), end = clock.now + d
-            while watchdog.isRunning && clock.now < end { try? await Task.sleep(for: .milliseconds(10)) }
+            while watchdog.isRunning && clock.now < end {
+                do { try await Task.sleep(for: .milliseconds(10)) } catch { break }   // cancelled: don't spin
+            }
             return !watchdog.isRunning
         }
         if await exited(within: grace) { return true }

@@ -311,10 +311,26 @@ struct TailscaleClient {
     }
 
     /// Tailscale-level reachability (disco ping), independent of iPhone services.
-    func ping(_ ip: String) -> Bool {
-        guard let path = resolvedPath() else { return false }
+    func ping(_ ip: String) -> Bool { pingResult(ip) == .pong }
+
+    enum Ping: Equatable, Sendable {
+        case pong
+        /// It ran and nothing answered.
+        case noPong
+        /// No answer either way: no CLI, it didn't launch, or it didn't finish.
+        case couldNotRun(String)
+    }
+
+    func pingResult(_ ip: String) -> Ping {
+        guard let path = resolvedPath() else { return .couldNotRun("no tailscale CLI") }
         let r = Proc.run(path, Self.pingArgs(ip), timeout: 8)   // the ping itself gives up at 3 s
-        return r.status == 0 && r.out.contains("pong")
+        return Self.ping(status: r.status, out: r.out, err: r.err)
+    }
+
+    static func ping(status: Int32, out: String, err: String) -> Ping {
+        if status == 0 && out.contains("pong") { return .pong }
+        if status == -1 || err.contains("timed out after") { return .couldNotRun(err) }   // Proc.run's own failures
+        return .noPong
     }
 
     /// `--until-direct` defaults to true: a pong via DERP then exits 1 ("direct

@@ -2732,7 +2732,7 @@ extension TimingSensitive.RelayOnLocalhost {
     e.answers = { _ in false }
     e.isOnLAN = { _ in false }
     e.warmUp = { _ in Proc.Result(status: 0, out: "", err: "") }
-    e.ping = { _ in false }
+    e.ping = { _ in .noPong }
     e.listDevices = { [] }
     e.recentAdvert = { _, _ in nil }
     e.killOrphanedHelpers = { 0 }
@@ -2796,7 +2796,7 @@ private func inertProfile(_ name: String) -> DeviceProfile {
 private final class World: @unchecked Sendable {
     var now = Date(timeIntervalSinceReferenceDate: 800_000_000)
     var answering: Set<String> = ["127.0.0.1"]   // hosts whose RemotePairing port answers
-    var ping = false
+    var ping = TailscaleClient.Ping.noPong
     var onLAN = false
     var cli = false
     var lan: String? = "127.0.0.1"
@@ -2855,9 +2855,9 @@ func startOutcomes(_ c: StartCase) async {
     case .answers: break
     case .onThisWiFi: rig.world.onLAN = true
     case .silentAndUnreached: rig.world.answering = []
-    case .silentScanFindsNothing: rig.world.answering = []; rig.world.ping = true
-    case .silentScanTimesOut: rig.world.answering = []; rig.world.ping = true; rig.world.scan = .timedOut
-    case .silentScanFindsAPort: rig.world.answering = []; rig.world.ping = true; rig.world.scan = .found(39999)
+    case .silentScanFindsNothing: rig.world.answering = []; rig.world.ping = .pong
+    case .silentScanTimesOut: rig.world.answering = []; rig.world.ping = .pong; rig.world.scan = .timedOut
+    case .silentScanFindsAPort: rig.world.answering = []; rig.world.ping = .pong; rig.world.scan = .found(39999)
     case .noLANAddress: rig.world.lan = nil
     }
     var saved: DeviceProfile?
@@ -2890,7 +2890,7 @@ func startOutcomes(_ c: StartCase) async {
 func aFruitlessScanIsNotRepeatedForTenMinutesOnThisBridge(_ result: ReachabilityProbe.PortScan) async {
     let rig = Rig()
     defer { rig.done() }
-    rig.world.answering = []; rig.world.ping = true; rig.world.scan = result
+    rig.world.answering = []; rig.world.ping = .pong; rig.world.scan = result
     await rig.bridge.start(.retry)
     #expect(rig.world.scans == 1)
     rig.world.now += 599
@@ -2902,7 +2902,7 @@ func aFruitlessScanIsNotRepeatedForTenMinutesOnThisBridge(_ result: Reachability
 
     let fresh = Rig()
     defer { fresh.done() }
-    fresh.world.answering = []; fresh.world.ping = true; fresh.world.scan = result
+    fresh.world.answering = []; fresh.world.ping = .pong; fresh.world.scan = result
     await fresh.bridge.start(.manual)
     #expect(fresh.world.scans == 1)
 }
@@ -2975,14 +2975,15 @@ func claimOutcomes(_ c: ClaimCase) async {
 
 /// Waiting with the record up: re-announce each minute; on the third, a device the mesh
 /// reaches but whose port is shut has moved, so the bridge fails and the retry finds it.
-@MainActor @Test(arguments: [false, true])
-func renewalsWhileWaiting(meshReachesIt: Bool) async {
+@MainActor @Test(arguments: [TailscaleClient.Ping.noPong, .couldNotRun("no tailscale CLI"), .pong])
+func renewalsWhileWaiting(ping: TailscaleClient.Ping) async {
+    let meshReachesIt = ping == .pong   // today a ping that couldn't run counts as no answer (2b changes that)
     let rig = Rig()
     defer { rig.done() }
     await rig.bridge.start(.manual)
     #expect(rig.bridge.status == .waiting)
     rig.world.answering = []
-    rig.world.ping = meshReachesIt
+    rig.world.ping = ping
     rig.bridge.tick()
     #expect(rig.record.renewed == 0)                        // within the first minute
     for n in 1...2 {
@@ -3090,6 +3091,16 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
     #expect(StatusFile.write(other.id, cli, in: other.dir, live: { _ in true }) == .written)
     await other.bridge.resumeIfAway()
     #expect(other.bridge.status == .off && yieldedTo == 4242)
+}
+
+/// Three outcomes, so 2b can tell this Mac's problem from the device's. Proc.run reports a
+/// launch failure as status -1 and a hang as "timed out after".
+@Test func pingTellsNoAnswerFromCouldntAsk() {
+    #expect(TailscaleClient.ping(status: 0, out: "pong from iphone (100.64.0.10) via DERP(tok) in 40ms", err: "") == .pong)
+    #expect(TailscaleClient.ping(status: 1, out: "timeout waiting for ping reply", err: "") == .noPong)
+    #expect(TailscaleClient.ping(status: -1, out: "", err: "The file doesn’t exist.") == .couldNotRun("The file doesn’t exist."))
+    let hung = "/opt/homebrew/bin/tailscale timed out after 8s"
+    #expect(TailscaleClient.ping(status: 15, out: "", err: hung) == .couldNotRun(hung))
 }
 
 // MARK: - Start reasons and the shared supervisor (1.5c)
