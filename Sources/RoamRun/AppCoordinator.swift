@@ -51,6 +51,9 @@ final class AppCoordinator: ObservableObject {
             for b in list { self.autoStart(b.profile.id, live: live, reason) }
         })
     private var bridgeObservers: [UUID: AnyCancellable] = [:]
+    /// Per saved device, kept across its bridges: a rebuilt one (edited endpoint, port found
+    /// again) remembers what the old one learned.
+    private var memories: [UUID: DeviceMemory] = [:]
     /// Set at launch when bridges left on are being brought back.
     private(set) var isRestoringBridges = false
     private var wasActiveIDs: Set<UUID> {
@@ -82,7 +85,7 @@ final class AppCoordinator: ObservableObject {
             logStore.log("couldn't read \(ProfileStore.directory.path)/profiles.json; not writing over it")
             launchWarning = Self.unreadableListWarning
         }
-        for p in profiles { install(ProxyBridge(profile: p)) }
+        for p in profiles { install(newBridge(p)) }
 
         capture.onLog = { [weak self] m in self?.logStore.log(m) }
         capture.ownedHosts = Set(profiles.map { ProxyBridge(profile: $0).spoofHost })
@@ -798,7 +801,7 @@ final class AppCoordinator: ObservableObject {
         // Known already if remotepairingd matched this advert; else learned on first connect.
         profile.udid = udid
         profiles.append(profile)
-        let bridge = install(ProxyBridge(profile: profile))
+        let bridge = install(newBridge(profile))
         capture.ownedHosts.insert(bridge.spoofHost)
         persist()
         logStore.log("added \"\(profile.displayName)\" -> \(ip)", device: profile.id)
@@ -812,6 +815,7 @@ final class AppCoordinator: ObservableObject {
         if selectedID == id { selectedID = nil }
         bridges[id] = nil
         bridgeObservers[id] = nil
+        memories[id] = nil
         profiles.removeAll { $0.id == id }
         wasActiveIDs.remove(id)
         persist()
@@ -934,6 +938,13 @@ final class AppCoordinator: ObservableObject {
 
     /// Registers a bridge and re-publishes its changes so views that only
     /// observe the coordinator (menu bar icon, sidebar) stay current.
+    /// A bridge for `profile` that carries its device's memory.
+    private func newBridge(_ profile: DeviceProfile) -> ProxyBridge {
+        let memory = memories[profile.id] ?? DeviceMemory()
+        memories[profile.id] = memory
+        return ProxyBridge(profile: profile, memory: memory)
+    }
+
     @discardableResult
     private func install(_ bridge: ProxyBridge) -> ProxyBridge {
         let id = bridge.profile.id
@@ -1008,7 +1019,7 @@ final class AppCoordinator: ObservableObject {
             // new port only takes effect after a relaunch.
             // Also errored / standing aside: the scan is how you fix a bridge that can't reach the device.
             bridges[profile.id]?.stop()
-            let bridge = install(ProxyBridge(profile: updated))
+            let bridge = install(newBridge(updated))
             if wasOn { bridge.requestStart(.rescan) }
         }
     }
@@ -1029,7 +1040,7 @@ final class AppCoordinator: ObservableObject {
         guard let old = bridges[profile.id], old.profile != profile else { return }
         let wasOn = old.state != .off
         old.stop()
-        install(ProxyBridge(profile: profile))
+        install(newBridge(profile))
         if wasOn { autoStart(profile.id, live: StatusFile.read(), .edit) }
     }
 
@@ -1147,7 +1158,7 @@ final class AppCoordinator: ObservableObject {
                 for p in stale { replaceBridge(with: p) }   // it holds its profile by value
                 // Kept from disk rather than dropped (the list we started from was unreadable): they need bridges.
                 for p in saved where bridges[p.id] == nil {
-                    capture.ownedHosts.insert(install(ProxyBridge(profile: p)).spoofHost)
+                    capture.ownedHosts.insert(install(newBridge(p)).spoofHost)
                     if wanted.contains(p.id) { autoStart(p.id, live: StatusFile.read(), .restore) }   // left on before it went unread
                 }
             }

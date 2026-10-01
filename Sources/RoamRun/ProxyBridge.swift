@@ -43,12 +43,14 @@ final class ProxyBridge: ObservableObject {
     var onProfileChange: ((DeviceProfile) -> Void)?
     /// Called after this bridge stopped because another process stands aside for the same device.
     var onYield: ((StatusFile.Entry) -> Void)?
-    private(set) var udid: String?
+    /// Learned from remotepairingd, or saved with the profile.
+    var udid: String? { memory.udid }
+    let memory: DeviceMemory
 
     /// False after an error retrying can't fix (unrecognized pairing) — the
     /// auto-retry loops leave it alone. Same-LAN / CLI-owner refusals stay
     /// retryable: they clear by themselves once the iPhone leaves or the CLI stops.
-    private(set) var autoRetry = true
+    var autoRetry: Bool { memory.autoRetry }
 
     private var dnsProxy: any BonjourRecord
     /// TCP only: since iOS 17.4 the CoreDevice tunnel is TCP (17.0–17.3 used
@@ -68,18 +70,12 @@ final class ProxyBridge: ObservableObject {
     private var activatedAt = Date.distantFuture
     /// Latest of the device's own adverts the watcher saw. Written only by the watcher.
     private var seenAdvert: (instance: String, at: Date)?
-    /// A name known to be the device's advert, for the cheap stand-aside probe.
-    private var homeAdvert: String?
-    /// Standing aside, the last time isHome confirmed the UDID the slow way.
-    private var lastFullCheck = Date.distantPast
     /// Standing aside, consecutive checks that found the device away.
     private var awayTicks = 0
     /// Re-announcements in a row without a control channel.
     private var stuckRenewals = 0
     /// First "identity nil" for our record; a second one within minutes is believed.
     private var unrecognizedSince: Date?
-    /// A port scan that found nothing isn't repeated for a while (e.g. device on cellular).
-    private var noScanUntil = Date.distantPast
     private static let homeLog = Logger(subsystem: AppID.bundle, category: "home")
     /// Lookahead hit/miss and port jumps (debug level): the data to retune +16 / -32
     /// if a future iOS allocates tunnel ports differently.
@@ -98,9 +94,11 @@ final class ProxyBridge: ObservableObject {
     private let env: BridgeEnv
 
     init(profile: DeviceProfile, statusDir: URL = ProfileStore.directory,
-         statusLive: @escaping StatusFile.Liveness = StatusFile.isRoamRun, env: BridgeEnv = .live) {
+         statusLive: @escaping StatusFile.Liveness = StatusFile.isRoamRun, env: BridgeEnv = .live,
+         memory: DeviceMemory = DeviceMemory()) {
         self.profile = profile
-        self.udid = profile.udid
+        self.memory = memory
+        memory.adopt(profile.udid)
         self.statusDir = statusDir
         self.statusLive = statusLive
         self.env = env
@@ -132,8 +130,8 @@ final class ProxyBridge: ObservableObject {
         unrecognizedSince = nil
         lastTunnelPort = nil
         activatedAt = .distantFuture
-        if policy.clearsRetryBlock { autoRetry = true }
-        if policy.clearsScanPause { noScanUntil = .distantPast }
+        if policy.clearsRetryBlock { memory.autoRetry = true }
+        if policy.clearsScanPause { memory.clearScanPause() }
         link = .waiting
         tunnelReady = false
         // One bridge per iPhone across processes — claimed here so every path
@@ -573,7 +571,7 @@ final class ProxyBridge: ObservableObject {
             // The device's own advert, seen live while bridging: lets isHome skip `log show`.
             if let mine = self.udid, udid.caseInsensitiveCompare(mine) == .orderedSame {
                 seenAdvert = (instance, env.now())
-                homeAdvert = instance
+                memory.homeAdvert = instance
             }
             return
         }
@@ -584,7 +582,7 @@ final class ProxyBridge: ObservableObject {
                 log("ignoring UDID \(udid) reported for our record (saved: \(known))")
                 return
             }
-            self.udid = udid
+            memory.adopt(udid)
             onUDID?(udid)
             publishStatus()
         }
@@ -773,7 +771,8 @@ final class ProxyBridge: ObservableObject {
         // offline — and not again soon after a scan found nothing (e.g. it's on cellular).
         let ip = p.providerIP
         let ping = env.ping
-        guard p.providerID == MeshProvider.tailscale.rawValue, env.now() > noScanUntil,
+        let endpoint = "\(p.providerIP):\(p.remotePairingPort)"
+        guard p.providerID == MeshProvider.tailscale.rawValue, !memory.scansPaused(of: endpoint, now: env.now()),
               await Blocking.run({ ping(ip) }) == .pong else { return (p, false) }
         // Awaited twice above: a Stop or a restart meanwhile owns the state now.
         guard step("Looking for \(profile.displayName)'s RemotePairing port", gen: gen) else { return (p, false) }
@@ -782,12 +781,12 @@ final class ProxyBridge: ObservableObject {
         case .found(let found): port = found
         case .notFound:
             log("no port on \(p.providerIP) answered as RemotePairing")
-            noScanUntil = env.now() + 600
+            memory.pauseScans(of: endpoint, until: env.now() + 600)
             return (p, false)
         case .timedOut:
             // A rescan starts over and would stall at the same place: same pause.
             log("RemotePairing port scan timed out before the full range was checked (Find RemotePairing Port in the app checks it all)")
-            noScanUntil = env.now() + 600
+            memory.pauseScans(of: endpoint, until: env.now() + 600)
             return (p, false)
         }
         if port != p.remotePairingPort { log("RemotePairing port moved: \(p.remotePairingPort) → \(port)") }
@@ -873,7 +872,7 @@ final class ProxyBridge: ObservableObject {
             defer { checkingLAN = false }
             guard await isHome(), gen == generation, state.isActive else { return }
             log("back on this Mac's network — standing aside until it leaves")
-            lastFullCheck = env.now()   // just proved; no full check on the next tick
+            memory.lastFullCheck = env.now()   // just proved; no full check on the next tick
             awayTicks = 0
             generation += 1
             teardown()
@@ -924,11 +923,11 @@ final class ProxyBridge: ObservableObject {
         // names still resolved and answered in ~0.1s (measured). The name is
         // per-device, so an answer means this device is on the LAN. Every 5 min
         // the full check below re-confirms the UDID, so a mistake can't persist.
-        if !bridging, HomeRule.useCheapProbe(known: homeAdvert, lastFullCheck: lastFullCheck, now: now),
-           let known = homeAdvert, await answers(known) {
+        if !bridging, HomeRule.useCheapProbe(known: memory.homeAdvert, lastFullCheck: memory.lastFullCheck, now: now),
+           let known = memory.homeAdvert, await answers(known) {
             return decided(true, "cached advert \(known.prefix(8))")
         }
-        if !bridging { lastFullCheck = now }
+        if !bridging { memory.lastFullCheck = now }
         if let udid {
             let fake = profile.instanceName
             // A resolved advert may be a stale cache entry (or a sleep proxy's):
@@ -937,7 +936,7 @@ final class ProxyBridge: ObservableObject {
             let instance = bridging
                 ? HomeRule.bridgingAdvert(seenAdvert, activatedAt: activatedAt, now: now)
                 : await Blocking.run { recent(udid, fake) }
-            if !bridging, let instance { homeAdvert = instance }
+            if !bridging, let instance { memory.homeAdvert = instance }
             if let instance, await answers(instance) { return decided(true, "advert \(instance.prefix(8))") }
         }
         if env.localNetworkDenied() {
@@ -1003,7 +1002,7 @@ final class ProxyBridge: ObservableObject {
         teardown()
         // Retrying can't fix this one: `log stream` needs an admin account.
         if what.contains("Must be admin") {
-            autoRetry = false
+            memory.autoRetry = false
             setState(.error("Reading remotepairingd's log needs an administrator account on this Mac (\(what))."))
             return
         }
@@ -1044,7 +1043,7 @@ final class ProxyBridge: ObservableObject {
         }
         log("remotepairingd does not recognize this device (identity nil)")
         stop()
-        autoRetry = false
+        memory.autoRetry = false
         setState(.error("This Mac doesn't recognize \(profile.displayName)'s pairing — its Bonjour identity changed or the pairing was reset. Put the device on this Mac's Wi‑Fi, remove it here and add it again. If Xcode also lost it, pair it in Xcode first."))
     }
 
@@ -1072,7 +1071,7 @@ final class ProxyBridge: ObservableObject {
     /// takes over once the other ends); `roamrun up` gives up: refused, it isn't in
     /// status.json, so `down` couldn't stop it.
     private func yieldClaim(to other: StatusFile.Entry, _ what: String) {
-        if env.cliRunning() { autoRetry = false }
+        if env.cliRunning() { memory.autoRetry = false }
         setState(.error(other.pid == getpid()
             ? "Another saved device here (same UDID) is bridging \(profile.displayName). Remove the duplicate."
             : "Another RoamRun process (pid \(other.pid)) \(what) \(profile.displayName). Stop it there first."))
