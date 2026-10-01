@@ -101,6 +101,8 @@ final class TunnelPortWatcher: @unchecked Sendable {
         if v4 != nil || line.firstMatch(of: Self.anyEndpoint) != nil {
             // An IPv6 endpoint (a device on this Wi‑Fi) isn't relayed, but it answers a
             // request all the same: left pending, that request took the next IPv4 one.
+            // ponytail: oldest-first, as for IPv4. An endpoint whose request already
+            // expired takes the next one's turn, which then goes unattributed.
             let owners = Set(pending.map(\.udid))
             if owners.count > 1 { ambiguousUntil = now + 5 }
             if let v4, let port = UInt16(v4.2) {
