@@ -1174,7 +1174,12 @@ final class ProxyBridge: ObservableObject {
         switch (state, s) {
         case (.error, .error): break
         case (.starting, .error): memory.failed(at: env.now(), since: attemptBegan, unreachable: unreachable)
-        case (_, .error): memory.failed(at: env.now(), unreachable: unreachable)
+        case (_, .error):
+            // Failing while up, the first retry is the next tick, as before the wait grew:
+            // counted from now, it would miss that tick by the second or two it is off.
+            let now = env.now()
+            memory.failed(at: now, since: memory.failures == 0 ? now - DeviceMemory.backoff(afterFailures: 1) : nil,
+                          unreachable: unreachable)
         case (_, .active), (_, .local): memory.resetBackoff()
         default: break
         }

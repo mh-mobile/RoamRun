@@ -3688,6 +3688,17 @@ func startPolicyTable(_ r: StartReason) {
     #expect(!m.retryDue(now: tick + 88) && m.retryDue(now: tick + 90))
 }
 
+/// Failing while up (a helper died, the device stopped answering), the first retry is the
+/// next tick, as in 0.1.19, not 30 s from the failure, which misses that tick.
+@MainActor @Test func failingWhileUpRetriesAtTheNextTick() async {
+    let rig = Rig()
+    defer { rig.done() }
+    await rig.bridge.start(.retry)
+    #expect(rig.bridge.memory.failures == 0)
+    rig.bridge.fail("the log stream ended")
+    #expect(rig.bridge.memory.failures == 1 && rig.bridge.memory.retryDue(now: rig.world.now))
+}
+
 /// A bridge that keeps failing to start counts it, and one that comes up starts over.
 @MainActor @Test func aFailedStartGrowsTheWaitAndASuccessResetsIt() async {
     let rig = Rig()

@@ -583,8 +583,9 @@ final class AppCoordinator: ObservableObject {
             // A status we couldn't read says nothing either way, so it is neither
             // a success nor a reason to drop the one record that can find it again.
             let unsure = after == .unknown
-            await MainActor.run {
-                guard let self else { return }
+            let adopted = await MainActor.run { () -> Bool in
+                // Turned off during that last read: what it wrote is for a stopped server.
+                guard let self, self.otaAttempt == attempt else { return false }
                 if landed {
                     self.publishWork.registered()
                     self.otaPublished = (tailnetPort, mine)
@@ -610,6 +611,13 @@ final class AppCoordinator: ObservableObject {
                     // were never registered can't recognise one that was.
                     Self.forgetServing(mine, on: tailnetPort)
                 }
+                return true
+            }
+            // Still under the lock, so nothing else is changing the port. False leaves
+            // the record for the next sweep.
+            if !adopted {
+                server.stop()
+                _ = Self.releaseServe((port: tailnetPort, target: mine))
             }
         }
     }

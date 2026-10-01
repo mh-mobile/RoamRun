@@ -91,7 +91,8 @@ enum Proc {
         }
         if await exited(within: grace) { return true }
         if Task.isCancelled { return !watchdog.isRunning }   // given up on: no KILL on the way out
-        let children = run("/usr/bin/pgrep", ["-P", "\(watchdog.processIdentifier)"], timeout: 5).out
+        let pid = watchdog.processIdentifier
+        let children = await Blocking.run { run("/usr/bin/pgrep", ["-P", "\(pid)"], timeout: 5).out }
         for pid in children.split(separator: "\n").compactMap({ Int32($0) }) { kill(pid, SIGKILL) }
         return await exited(within: .seconds(2))   // its loop notices within 0.5 s
     }
