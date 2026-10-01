@@ -250,8 +250,14 @@ final class ProxyBridge: ObservableObject {
             return
         }
 
-        await dnsProxy.previousExited()
+        let previousGone = await dnsProxy.previousExited()
         guard gen == generation else { return }
+        guard previousGone else {
+            generation += 1   // drop late callbacks from this attempt
+            teardown()
+            setState(.error("The previous Bonjour registration didn't stop, so a second isn't published next to it. Retrying shortly."))
+            return
+        }
         setState(.starting("Publishing Bonjour proxy"))
         checkClaim()   // lost the device while starting? Don't advertise it next to its new owner.
         guard gen == generation else { return }
