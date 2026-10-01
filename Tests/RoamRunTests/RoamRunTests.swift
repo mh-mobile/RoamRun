@@ -2516,6 +2516,88 @@ func linkFollowsTheTable(_ row: Int) {
     #expect(!m.onCellular)
 }
 
+/// A new address that doesn't answer at the known port: scanned (it pings), and taken only
+/// with the port the scan found there; a scan that finds nothing keeps the old address.
+@MainActor @Test(arguments: [true, false])
+func aNewAddressAndPortAreFoundTogether(scanFinds: Bool) async {
+    var p = inertProfile("iPhone"); p.providerHostName = "iphone"
+    let rig = Rig(p)
+    defer { rig.done() }
+    rig.world.answering = []
+    rig.world.advertAnswers = false
+    rig.world.ping = .pong
+    rig.world.scan = scanFinds ? .found(39999) : .notFound
+    rig.world.peers = [MeshDevice(id: "1", name: "iphone", os: "iOS", ips: ["127.0.0.2"], online: true)]
+    var saved: DeviceProfile?
+    rig.bridge.onProfileChange = { saved = $0 }
+    await rig.bridge.start(.manual)
+    #expect(rig.world.scannedHost == "127.0.0.2")         // the new address is what was scanned
+    if scanFinds {
+        #expect(saved?.providerIP == "127.0.0.2" && saved?.remotePairingPort == 39999)
+    } else {
+        #expect(saved == nil && rig.bridge.profile.providerIP == "127.0.0.1")
+    }
+}
+
+/// This Mac's Tailscale couldn't be asked twice in a row: the status says so, rather than
+/// leaving it to read as the device's fault (2c: F34).
+@MainActor @Test func aPingThatCantRunTwiceIsSaidInTheStatus() async {
+    let rig = Rig()
+    defer { rig.done() }
+    rig.world.answering = []
+    rig.world.ping = .couldNotRun("failed to connect to local Tailscale daemon")
+    await rig.bridge.start(.manual)
+    #expect(!(rig.entry()?.detail.contains("Tailscale on this Mac") ?? true))   // once: could be a blip
+    await rig.bridge.start(.manual)
+    #expect(rig.entry()?.detail.contains("Tailscale on this Mac couldn't be asked") == true)
+    rig.world.ping = .noPong
+    await rig.bridge.start(.manual)
+    #expect(!(rig.entry()?.detail.contains("Tailscale on this Mac") ?? true))
+    // Recovered with no ping made (the device answered straight away): no stale message.
+    rig.world.ping = .couldNotRun("failed to connect to local Tailscale daemon")
+    await rig.bridge.start(.manual); await rig.bridge.start(.manual)
+    rig.world.answering = ["127.0.0.1"]
+    await rig.bridge.start(.manual)
+    #expect(rig.bridge.status == .waiting && !(rig.entry()?.detail.contains("Tailscale on this Mac") ?? true))
+}
+
+/// Recovered at a new address after two pings that couldn't run: the count starts over, so a
+/// later error for another reason doesn't carry the stale Mac-side message (2c review).
+@MainActor @Test func aRecoveryAtANewAddressClearsTheMacSideCount() async {
+    var p = inertProfile("iPhone"); p.providerHostName = "iphone"
+    let rig = Rig(p)
+    defer { rig.done() }
+    rig.world.answering = []
+    rig.world.ping = .couldNotRun("failed to connect to local Tailscale daemon")
+    await rig.bridge.start(.manual); await rig.bridge.start(.manual)
+    #expect(rig.entry()?.detail.contains("Tailscale on this Mac") == true)
+    rig.world.peers = [MeshDevice(id: "1", name: "iphone", os: "iOS", ips: ["127.0.0.2"], online: true)]
+    rig.world.advertAnswers = true                          // RemotePairing answers at the new address
+    await rig.bridge.start(.manual)
+    #expect(rig.bridge.status == .waiting)
+    rig.bridge.fail("something else")
+    #expect(!(rig.entry()?.detail.contains("Tailscale on this Mac") ?? true))
+}
+
+/// A status write that failed is made again on the next tick, as things are then (2c: F39).
+@MainActor @Test func aFailedStatusWriteIsMadeAgain() async throws {
+    let rig = Rig()
+    defer {
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: rig.dir.path)
+        rig.done()
+    }
+    await rig.bridge.start(.manual)
+    try FileManager.default.removeItem(at: rig.dir.appendingPathComponent("status.lock"))
+    try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: rig.dir.path)
+    try #require(!FileManager.default.isWritableFile(atPath: rig.dir.path))   // not running as root
+    rig.bridge.fail("the device went away")
+    #expect(rig.bridge.statusWritePending)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: rig.dir.path)
+    rig.bridge.retryStatusWriteIfPending()
+    #expect(!rig.bridge.statusWritePending)
+    #expect(rig.entry()?.state == BridgeStatus.error.rawValue)
+}
+
 /// While bridging, the 10 s home check asks Tailscale's path (a ping) once a minute at
 /// most; in between it doesn't stand aside on that score (2b: F32/F4).
 @MainActor @Test func theBridgingHomeCheckPingsOnceAMinute() async {
@@ -2896,6 +2978,7 @@ private final class World: @unchecked Sendable {
     var pathChecks = 0
     var scan = ReachabilityProbe.PortScan.notFound
     var scans = 0
+    var scannedHost = ""
     var peers: [MeshDevice] = []
 }
 
@@ -2925,7 +3008,7 @@ private final class World: @unchecked Sendable {
         e.ping = { _ in w.ping }
         e.isOnLAN = { _ in w.pathChecks += 1; return w.onLAN }
         e.cliRunning = { w.cli }
-        e.findRemotePairingPort = { _ in w.scans += 1; return w.scan }
+        e.findRemotePairingPort = { host in w.scans += 1; w.scannedHost = host; return w.scan }
         e.listDevices = { w.peers }
         e.answers = { _ in w.advertAnswers }
         bridge = ProxyBridge(profile: p, statusDir: dir, statusLive: { _ in true }, env: e, memory: memory)
@@ -3003,17 +3086,26 @@ func aFruitlessScanIsNotRepeatedForTenMinutesOnThisBridge(_ result: Reachability
 }
 
 /// Found under its Tailscale name at a new address: followed and saved.
-@MainActor @Test func aDeviceWithANewTailscaleAddressIsFollowed() async {
+/// Found under its Tailscale name at a new address: followed and saved only once RemotePairing
+/// answers there (2c: F37); a name now on a device that doesn't answer leaves the address alone.
+@MainActor @Test(arguments: [true, false])
+func aDeviceWithANewTailscaleAddressIsFollowed(answersThere: Bool) async {
     var p = inertProfile("iPhone"); p.providerHostName = "iphone"
     let rig = Rig(p)
     defer { rig.done() }
     rig.world.answering = ["127.0.0.2"]
+    rig.world.advertAnswers = answersThere                 // the RemotePairing handshake at the new address
     rig.world.peers = [MeshDevice(id: "1", name: "iphone", os: "iOS", ips: ["127.0.0.2"], online: true)]
     var saved: DeviceProfile?
     rig.bridge.onProfileChange = { saved = $0 }
     await rig.bridge.start(.manual)
-    #expect(rig.bridge.status == .waiting)
-    #expect(rig.bridge.profile.providerIP == "127.0.0.2" && saved?.providerIP == "127.0.0.2")
+    if answersThere {
+        #expect(rig.bridge.status == .waiting)
+        #expect(rig.bridge.profile.providerIP == "127.0.0.2" && saved?.providerIP == "127.0.0.2")
+    } else {
+        #expect(rig.bridge.status == .error)
+        #expect(rig.bridge.profile.providerIP == "127.0.0.1" && saved == nil)
+    }
     #expect(rig.world.scans == 0)
 }
 

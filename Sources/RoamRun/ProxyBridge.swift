@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import OSLog
 
 /// Runs one device bridge end to end:
@@ -132,6 +133,7 @@ final class ProxyBridge: ObservableObject {
         }
         if policy.resetsBackoff { memory.resetBackoff() }
         attemptBegan = env.now()
+        warmUpsLeft = 10
         generation += 1
         let gen = generation
         teardown()   // a failed or repeated start must not leave relays/timers behind
@@ -184,6 +186,7 @@ final class ProxyBridge: ObservableObject {
 
         setState(.starting("Probing \(profile.providerIP):\(profile.remotePairingPort)"))
         var reachable = await env.checkTCP(profile.providerIP, profile.remotePairingPort)
+        if reachable { pingsNotRun = 0 }   // reached through this Mac's Tailscale: it works
         guard gen == generation else { return }   // stopped or restarted meanwhile
         if !reachable {
             let (moved, answers) = await relocate(gen: gen)
@@ -197,6 +200,7 @@ final class ProxyBridge: ObservableObject {
                 onProfileChange?(profile)   // kept even if it doesn't answer right now
             }
             reachable = answers
+            if reachable { pingsNotRun = 0 }   // reached at a new address or port: Tailscale works
         }
         guard gen == generation else { return }
         guard reachable else {
@@ -305,6 +309,7 @@ final class ProxyBridge: ObservableObject {
 
     /// The 10 s check while active (internal: tests drive it instead of the timer).
     func tick() {
+        retryStatusWriteIfPending()
         evaluate()
         renewIfStuck()
         standAsideIfHome()
@@ -614,7 +619,9 @@ final class ProxyBridge: ObservableObject {
     /// port shows up (the relay set grows past the control channel).
     private func warmUp(udid: String, gen: Int) async {
         for attempt in 1...5 {
-            guard gen == generation, !tunnelReady else { return }
+            // Each resolution of the record (every ~30 s) starts another round: two rounds a start.
+            guard gen == generation, !tunnelReady, warmUpsLeft > 0 else { return }
+            warmUpsLeft -= 1
             log("warming up tunnel for \(udid) (attempt \(attempt))")
             let r = await env.warmUp(udid)
             if gen != generation || tunnelReady { return }
@@ -689,7 +696,7 @@ final class ProxyBridge: ObservableObject {
             let reached = answers ? true
                 : await Self.stillReached(tailscale: tailscale,
                                           heardJustNow: tunnelRelays.values.contains { $0.heardFromDevice(within: 10) },
-                                          ping: { [ping = env.ping] in await Blocking.run { ping(ip) } })
+                                          ping: { await self.pingDevice(ip) })
             probingNetwork = false
             guard gen == generation else { return }
             evaluate(probe: answers ? .answers : reached ? .silentReachable : .unreachable)
@@ -726,6 +733,8 @@ final class ProxyBridge: ObservableObject {
         case .wifi: memory.onCellular = false
         case .waiting: break
         }
+        // The device is here now: what resolutions spent while it slept is given back.
+        if old == .waiting, link == .wifi { warmUpsLeft = 10 }
         publishStatus()
     }
 
@@ -743,6 +752,17 @@ final class ProxyBridge: ObservableObject {
 
     @discardableResult
     private func publishStatus(claim: Bool = false, deferToCLI: Bool = false) -> StatusFile.WriteResult {
+        let r = writeStatus(claim: claim, deferToCLI: deferToCLI)
+        if case .failed(let why) = r {
+            if !statusWritePending { log("couldn't write the status file (\(why)); trying again") }
+            statusWritePending = true
+        } else {
+            statusWritePending = false
+        }
+        return r
+    }
+
+    private func writeStatus(claim: Bool, deferToCLI: Bool) -> StatusFile.WriteResult {
         let s = status
         guard s != .off else { return StatusFile.write(profile.id, nil, in: statusDir, live: statusLive) }
         var detail = ""
@@ -764,6 +784,10 @@ final class ProxyBridge: ObservableObject {
         if env.localNetworkDenied(), s != .local {
             detail = detail.isEmpty ? LocalNetwork.advice : detail + " — " + LocalNetwork.advice
         }
+        if pingsNotRun >= 2, s == .error {
+            let mine = "Tailscale on this Mac couldn't be asked (\(pingNotRunWhy))"
+            detail = detail.isEmpty ? mine : detail + " — " + mine
+        }
         return StatusFile.write(profile.id, .init(pid: getpid(), cli: env.cliRunning(), udid: udid, status: s.title, detail: detail,
                                                   ready: s == .ready, tunnelPorts: ports, updated: env.now(),
                                                   state: s.rawValue, started: StatusFile.myStart,
@@ -776,6 +800,9 @@ final class ProxyBridge: ObservableObject {
     /// with whatever was learned, and whether the device answers there.
     private func relocate(gen: Int) async -> (DeviceProfile, Bool) {
         var p = profile
+        /// A new address Tailscale gave its name that didn't answer at the known port: scanned
+        /// instead of the old one, and taken only if the scan finds RemotePairing there.
+        var candidate: String?
         if p.providerID == MeshProvider.tailscale.rawValue, !p.providerHostName.isEmpty {
             setState(.starting("Looking up \(p.providerHostName) on Tailscale"))
             let list = env.listDevices
@@ -785,28 +812,35 @@ final class ProxyBridge: ObservableObject {
                 log("Tailscale name is now \(current.name) (was \(p.providerHostName))")
                 p.providerHostName = current.name
             }
+            // Followed only once RemotePairing answers there: a name Tailscale gave to another
+            // device would otherwise be saved over this one's address, for the app and the CLI.
+            // ponytail: the handshake doesn't say which device it is; same-named iPhones can still swap.
             if let ip = peers.first(where: { $0.name == p.providerHostName })?.ipv4, ip != p.providerIP {
-                log("\(p.providerHostName) has a new address: \(p.providerIP) → \(ip)")
-                p.providerIP = ip
-                if await env.checkTCP(ip, p.remotePairingPort) { return (p, true) }
+                let at = NWEndpoint.hostPort(host: .init(ip), port: .init(rawValue: p.remotePairingPort) ?? 49152)
+                if await env.answers(at) {
+                    log("\(p.providerHostName) has a new address: \(p.providerIP) → \(ip)")
+                    p.providerIP = ip
+                    return (p, true)
+                }
+                log("\(p.providerHostName) has a new address, \(ip), but RemotePairing doesn't answer on port \(p.remotePairingPort) there")
+                candidate = ip
             }
         }
         // Only scan a device that is up (answers Tailscale) — not one that's asleep or
         // offline — and not again soon after a scan found nothing (e.g. it's on cellular).
-        let ip = p.providerIP
-        let ping = env.ping
-        let endpoint = "\(p.providerIP):\(p.remotePairingPort)"
+        let ip = candidate ?? p.providerIP
+        let endpoint = "\(ip):\(p.remotePairingPort)"
         if memory.onCellular { log("last seen on cellular — not scanning for its port until it is back on Wi‑Fi") }
         guard p.providerID == MeshProvider.tailscale.rawValue, !memory.onCellular,
               !memory.scansPaused(of: endpoint, now: env.now()),
-              await Blocking.run({ ping(ip) }) == .pong else { return (p, false) }
+              await pingDevice(ip) == .pong else { return (p, false) }
         // Awaited twice above: a Stop or a restart meanwhile owns the state now.
         guard step("Looking for \(profile.displayName)'s RemotePairing port", gen: gen) else { return (p, false) }
         let port: UInt16
-        switch await env.findRemotePairingPort(p.providerIP) {
+        switch await env.findRemotePairingPort(ip) {
         case .found(let found): port = found
         case .notFound:
-            log("no port on \(p.providerIP) answered as RemotePairing")
+            log("no port on \(ip) answered as RemotePairing")
             if gen == generation { memory.pauseScans(of: endpoint, until: env.now() + 600) }
             return (p, false)
         case .timedOut:
@@ -816,6 +850,8 @@ final class ProxyBridge: ObservableObject {
             return (p, false)
         }
         if port != p.remotePairingPort { log("RemotePairing port moved: \(p.remotePairingPort) → \(port)") }
+        if ip != p.providerIP { log("\(p.providerHostName) has a new address: \(p.providerIP) → \(ip)") }
+        p.providerIP = ip
         p.remotePairingPort = port
         return (p, true)
     }
@@ -870,12 +906,11 @@ final class ProxyBridge: ObservableObject {
             stuckRenewals = 0
             let gen = generation
             let ip = profile.providerIP
-            let ping = env.ping
             Task {
                 // Port closed while the device answers Tailscale: it moved. Asleep: keep waiting.
                 guard !(await env.checkTCP(ip, profile.remotePairingPort)),
                       profile.providerID == MeshProvider.tailscale.rawValue,
-                      await Blocking.run({ ping(ip) }) == .pong,
+                      await pingDevice(ip) == .pong,
                       gen == generation, state.isActive, !phoneConnected, !tunnelCarriesTraffic else {
                     if gen == generation, state.isActive, !phoneConnected { dnsProxy.renew() }   // asleep: keep nudging
                     return
@@ -1153,6 +1188,31 @@ final class ProxyBridge: ObservableObject {
     private var unreachable = false
     /// When the current start began, for the wait after it fails.
     private var attemptBegan: Date?
+    /// devicectl warm-ups this start may still run.
+    private var warmUpsLeft = 10
+    /// This Mac's Tailscale couldn't be asked (stopped, signed out, no CLI) this many pings in
+    /// a row, and why; said in the status from the second, so it isn't taken for the device.
+    private var pingsNotRun = 0
+    private var pingNotRunWhy = ""
+    /// The last status write failed (disk, permissions): written again, as it is then, on the
+    /// next tick. Never as a claim, so it can't take a device another process holds now.
+    private(set) var statusWritePending = false
+
+    /// A Tailscale ping of the device, noting when this Mac's side couldn't run it.
+    private func pingDevice(_ ip: String) async -> TailscaleClient.Ping {
+        let ping = env.ping, gen = generation
+        let r = await Blocking.run { ping(ip) }
+        guard gen == generation else { return r }   // a stopped or restarted start's ping says nothing now
+        if case .couldNotRun(let why) = r {
+            pingsNotRun += 1
+            pingNotRunWhy = why.split(separator: "\n").first.map(String.init) ?? why
+        } else {
+            pingsNotRun = 0
+        }
+        return r
+    }
+
+    func retryStatusWriteIfPending() { if statusWritePending { publishStatus() } }
 
     /// Waiting out a longer retry: one cheap look at the port the device last answered on. At
     /// most one at a time per bridge, and only for this error: a start meanwhile makes it moot.
