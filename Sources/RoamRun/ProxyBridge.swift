@@ -118,10 +118,11 @@ final class ProxyBridge: ObservableObject {
     /// port another is still binding. Reset with the rest at teardown.
     private var binding: [UInt16: Int] = [:]
 
-    /// `automatic`: the app starting it by itself (restore, retry, network change,
-    /// leaving this Wi‑Fi). Such a start never takes the device from a live `roamrun up`
-    /// — decided when the claim is written, so it can't race a check made earlier.
-    func start(automatic: Bool = false) async {
+    /// What it may do follows from `reason` (StartPolicy). One that may not take the device
+    /// from a live `roamrun up` is refused when the claim is written, so it can't race a
+    /// check made earlier.
+    func start(_ reason: StartReason = .manual) async {
+        let policy = StartPolicy.of(reason)
         generation += 1
         let gen = generation
         teardown()   // a failed or repeated start must not leave relays/timers behind
@@ -131,13 +132,14 @@ final class ProxyBridge: ObservableObject {
         unrecognizedSince = nil
         lastTunnelPort = nil
         activatedAt = .distantFuture
-        autoRetry = true
+        if policy.clearsRetryBlock { autoRetry = true }
+        if policy.clearsScanPause { noScanUntil = .distantPast }
         link = .waiting
         tunnelReady = false
         // One bridge per iPhone across processes — claimed here so every path
         // (Start, retries, restore, network change, CLI) goes through it. The
         // claim is one step under status.lock; only `.written` means it's ours.
-        switch claimDevice(automatic: automatic) {
+        switch claimDevice(reason) {
         case .written:
             claimTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.checkClaim() }
@@ -301,9 +303,9 @@ final class ProxyBridge: ObservableObject {
 
     /// Takeover permission belongs to this claim, never to subsequent status updates.
     @discardableResult
-    func claimDevice(automatic: Bool) -> StatusFile.WriteResult {
+    func claimDevice(_ reason: StartReason) -> StatusFile.WriteResult {
         state = .starting("Checking local interface")   // publish only with the claim's policy
-        return publishStatus(claim: true, deferToCLI: automatic && !env.cliRunning())
+        return publishStatus(claim: true, deferToCLI: !StartPolicy.of(reason).mayTakeFromCLI && !env.cliRunning())
     }
 
     /// A start's progress, unless that start was stopped or replaced while it
@@ -317,9 +319,9 @@ final class ProxyBridge: ObservableObject {
     }
 
     /// Start from synchronous code. A stop() before the task gets to run wins.
-    func requestStart(automatic: Bool = false) {
+    func requestStart(_ reason: StartReason = .manual) {
         let g = generation
-        Task { guard g == generation else { return }; await start(automatic: automatic) }
+        Task { guard g == generation else { return }; await start(reason) }
     }
 
     func stop() {
@@ -910,7 +912,7 @@ final class ProxyBridge: ObservableObject {
             onYield?(other)
             return
         }
-        await start(automatic: true)
+        await start(.resume)
     }
 
     /// Home if the iPhone itself advertises on this LAN — Tailscale may keep a

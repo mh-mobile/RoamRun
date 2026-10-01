@@ -2684,7 +2684,7 @@ extension TimingSensitive.RelayOnLocalhost {
     defer { bridge.stop() }
     // The claim an automatic start makes (restore, retry, resume), not start() itself:
     // that would ping and run devicectl on this Mac.
-    if case .heldBy = bridge.claimDevice(automatic: true) {} else {
+    if case .heldBy = bridge.claimDevice(.retry) {} else {
         Issue.record("an automatic claim took roamrun up's device")
     }
     #expect(StatusFile.read(in: dir, live: live)[p.id]?.pid == 4242)   // still roamrun up's
@@ -2891,7 +2891,7 @@ func aFruitlessScanIsNotRepeatedForTenMinutesOnThisBridge(_ result: Reachability
     let rig = Rig()
     defer { rig.done() }
     rig.world.answering = []; rig.world.ping = true; rig.world.scan = result
-    await rig.bridge.start(automatic: true)
+    await rig.bridge.start(.retry)
     #expect(rig.world.scans == 1)
     rig.world.now += 599
     await rig.bridge.start()
@@ -2936,7 +2936,7 @@ func claimOutcomes(_ c: ClaimCase) async {
                                  ready: held == .ready, tunnelPorts: [], updated: .now, state: held.rawValue)
     #expect(StatusFile.write(rig.id, other, in: rig.dir, live: { _ in true }) == .written)
     rig.world.cli = [.readyCLIFromACLI, .erroredCLIAutomaticFromACLI].contains(c)
-    await rig.bridge.start(automatic: [.erroredCLIAutomatic, .erroredAppAutomatic, .erroredCLIAutomaticFromACLI].contains(c))
+    await rig.bridge.start([.erroredCLIAutomatic, .erroredAppAutomatic, .erroredCLIAutomaticFromACLI].contains(c) ? .retry : .manual)
     // Only the app's automatic start defers to a CLI; an errored entry is anyone's otherwise.
     let took = [.erroredCLIManual, .erroredAppAutomatic, .erroredCLIAutomaticFromACLI].contains(c)
     #expect(rig.bridge.status == (took ? .waiting : .error), "\(c)")
@@ -3092,6 +3092,81 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
     #expect(other.bridge.status == .off && yieldedTo == 4242)
 }
 
+// MARK: - Start reasons and the shared supervisor (1.5c)
+
+/// One table for what each reason may do. 1.5c keeps today's behaviour: only a start a
+/// person asked for takes from a `roamrun up`, every start clears the retry block, none
+/// skips the scan pause. 2a changes rows here.
+@Test(arguments: StartReason.allCases)
+func startPolicyTable(_ r: StartReason) {
+    let byHand: Set<StartReason> = [.manual, .rescan]
+    #expect(StartPolicy.of(r) == StartPolicy(mayTakeFromCLI: byHand.contains(r), clearsRetryBlock: true, clearsScanPause: false))
+}
+
+/// The claim follows the reason: against an errored `roamrun up` entry, only Start and
+/// Find RemotePairing Port take the device.
+@MainActor @Test(arguments: StartReason.allCases)
+func claimByReason(_ r: StartReason) {
+    let rig = Rig()
+    defer { rig.done() }
+    let other = StatusFile.Entry(pid: 4242, cli: true, udid: nil, status: BridgeStatus.error.title, detail: "", ready: false,
+                                 tunnelPorts: [], updated: .now, state: BridgeStatus.error.rawValue)
+    #expect(StatusFile.write(rig.id, other, in: rig.dir, live: { _ in true }) == .written)
+    let takes = r == .manual || r == .rescan
+    #expect((rig.bridge.claimDevice(r) == .written) == takes, "\(r)")
+}
+
+/// Which bridges the supervisor hands back, and with which reason.
+@MainActor @Test func theSupervisorRetriesRestartsPausesAndNudgesTheRightBridges() async {
+    let on = Rig(), off = Rig(), stuck = Rig(), active = Rig()
+    defer { [on, off, stuck, active].forEach { $0.done() } }
+    for r in [on, off, stuck] { r.world.lan = nil; await r.bridge.start() }   // errored: no LAN address
+    await active.bridge.start()
+    // A block retrying can't clear, on `stuck`: no admin rights for `log stream`.
+    stuck.world.lan = "127.0.0.1"
+    await stuck.bridge.start()
+    stuck.watcher.subscribers[stuck.id]?.onExit("log stream exited (status 64): Must be admin")
+    #expect(!stuck.bridge.autoRetry && stuck.bridge.status == .error)
+
+    var started: [(UUID, StartReason)] = []
+    var gaveUp: [UUID] = []
+    let wanted: Set<UUID> = [on.id, stuck.id, active.id]
+    let sup = BridgeSupervisor(all: { [on.bridge, off.bridge, stuck.bridge, active.bridge] },
+                               wanted: { wanted.contains($0.profile.id) },
+                               start: { list, reason in started += list.map { ($0.profile.id, reason) } },
+                               gaveUp: { gaveUp.append($0.profile.id) })
+    sup.retry()
+    #expect(started.map(\.0) == [on.id] && started.allSatisfy { $0.1 == .retry })   // not `off`: not left on
+    #expect(gaveUp == [stuck.id])
+
+    started = []
+    sup.lanAddressChanged()
+    #expect(Set(started.map(\.0)) == [on.id, stuck.id, active.id] && started.allSatisfy { $0.1 == .networkChange })
+
+    let renewedBefore = active.record.renewed
+    sup.woke()
+    #expect(active.record.renewed == renewedBefore + 1)   // only an active one re-announces
+
+    sup.lanAddressLost()
+    #expect(active.bridge.status == .error)
+    #expect(on.bridge.status == .error)                   // already errored: left as it was
+}
+
+/// Standing aside, the supervisor's 10 s look goes to resumeIfAway.
+@MainActor @Test func theSupervisorLooksAgainAtBridgesStandingAside() async {
+    let rig = Rig()
+    defer { rig.done() }
+    rig.world.onLAN = true
+    await rig.bridge.start()
+    rig.world.onLAN = false
+    let sup = BridgeSupervisor(all: { [rig.bridge] }, wanted: { _ in true }, start: { _, _ in })
+    for _ in 0..<3 {
+        sup.lookAgainIfAway()
+        try? await Task.sleep(for: .milliseconds(100))   // its Task runs one check
+    }
+    #expect(await eventuallyOnMain { rig.bridge.status == .waiting })
+}
+
 @MainActor @Test func aManualClaimDoesntAuthorizeLaterUpdatesOrTeardownToTakeOver() {
     let dir = scratchDir()
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -3101,7 +3176,7 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
     defer { bridge.stop() }
 
     for held in [BridgeStatus.error, .local] {
-        #expect(bridge.claimDevice(automatic: false) == .written)
+        #expect(bridge.claimDevice(.manual) == .written)
         bridge.fail("the app's bridge is retryable")
         let cli = StatusFile.Entry(pid: 4242, cli: true, udid: nil, status: held.title, detail: "CLI's entry",
                                    ready: false, tunnelPorts: [], updated: .now, state: held.rawValue)
@@ -3111,10 +3186,10 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
         #expect(StatusFile.read(in: dir, live: live)[p.id] == cli)
         bridge.stop()   // teardown publishes changes before the state becomes Off
         #expect(StatusFile.read(in: dir, live: live)[p.id] == cli)
-        #expect(bridge.claimDevice(automatic: true) == .heldBy(cli))
+        #expect(bridge.claimDevice(.retry) == .heldBy(cli))
         #expect(StatusFile.read(in: dir, live: live)[p.id] == cli)
         // A new Start action may still take over. Its later updates stay ours too.
-        #expect(bridge.claimDevice(automatic: false) == .written)
+        #expect(bridge.claimDevice(.manual) == .written)
         bridge.fail("owned update")
         #expect(StatusFile.read(in: dir, live: live)[p.id]?.detail == "owned update")
         bridge.stop()
@@ -3134,7 +3209,7 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
     #expect(StatusFile.write(twin, cli, in: dir, live: live) == .written)
     let bridge = ProxyBridge(profile: p, statusDir: dir, statusLive: live)
     defer { bridge.stop() }
-    #expect(bridge.claimDevice(automatic: true) == .heldBy(cli))
+    #expect(bridge.claimDevice(.retry) == .heldBy(cli))
     #expect(StatusFile.read(in: dir, live: live) == [twin: cli])
 }
 
