@@ -3107,6 +3107,133 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
     for err in ["failed to connect to local Tailscale daemon for /localapi/v0/ping; not running?",
                 "Tailscale is stopped.", "Logged out."] {
         #expect(TailscaleClient.ping(r(1, "", err)) == .couldNotRun(err), "\(err)")
+// MARK: - Untested risky paths (7b / F55)
+
+/// `tailscale serve` and the record of what this Mac registered, faked. Calls are counted
+/// so a test sees what would have been run.
+private final class FakeServe: @unchecked Sendable {
+    var states: [Int: TailscaleClient.Serving] = [:]   // missing: .nothing
+    var host: String? = "mac.ts.net"
+    var offWorks = true
+    var record: [String]
+    var offs: [Int] = []
+    var otaPort = 41443
+    init(record: [String] = []) { self.record = record }
+
+    var tools: AppCoordinator.ServeTools {
+        var t = AppCoordinator.ServeTools()
+        t.serving = { port, _ in self.states[port] ?? .nothing }
+        t.host = { _ in self.host }
+        t.off = { port, _ in self.offs.append(port); return self.offWorks }
+        t.remembered = { self.record }
+        t.forget = { target, port in
+            self.record.removeAll { let p = AppCoordinator.pair($0); return p.target == target && (p.port == nil || p.port == port) }
+        }
+        t.otaPort = { self.otaPort }
+        return t
+    }
+}
+
+/// A mount at `/` on `port` under mac.ts.net, proxying to `target`.
+private func mounted(_ port: Int, _ target: String) -> TailscaleClient.Serving {
+    TailscaleClient.serving(port: port, inJSON: #"{"Web":{"mac.ts.net:\#(port)":{"Handlers":{"/":{"Proxy":"\#(target)"}}}}}"#)
+}
+
+enum ReleaseCase: String, CaseIterable { case unreadable, alreadyGone, oursOffWorks, oursOffFails, someoneElses, noHostName }
+
+/// Giving one registration back: only what is provably ours is removed, and it is
+/// forgotten only once it is gone.
+@Test(arguments: ReleaseCase.allCases)
+func releaseServeOutcomes(_ c: ReleaseCase) {
+    let mine = "http://127.0.0.1:61816"
+    let fake = FakeServe(record: ["41443 \(mine)"])
+    switch c {
+    case .unreadable: fake.states[41443] = .unknown
+    case .alreadyGone: break
+    case .oursOffWorks: fake.states[41443] = mounted(41443, mine)
+    case .oursOffFails: fake.states[41443] = mounted(41443, mine); fake.offWorks = false
+    case .someoneElses: fake.states[41443] = mounted(41443, "http://127.0.0.1:8788")
+    case .noHostName: fake.states[41443] = mounted(41443, mine); fake.host = nil
+    }
+    let gone = AppCoordinator.releaseServe((port: 41443, target: mine), tools: fake.tools)
+    let (expectGone, expectOff, expectForgotten): (Bool, Bool, Bool) = switch c {
+    case .unreadable: (false, false, false)        // couldn't look: claiming it's gone is how one survives
+    case .alreadyGone: (true, false, true)
+    case .oursOffWorks: (true, true, true)
+    case .oursOffFails: (false, true, false)       // still there: remembered, so the next run knows it
+    case .someoneElses: (true, false, true)        // not ours to remove; ours is gone
+    case .noHostName: (false, false, false)
+    }
+    #expect(gone == expectGone, "\(c)")
+    #expect(fake.offs == (expectOff ? [41443] : []), "\(c)")
+    #expect(fake.record.isEmpty == expectForgotten, "\(c)")
+}
+
+/// Leftovers are looked for on every port the record names and the one configured now;
+/// only our own mount is removed, never the one this run serves from or the user's.
+@Test func reclaimStraysRemovesOnlyOurLeftovers() {
+    let old = "http://127.0.0.1:50001", live = "http://127.0.0.1:50002"
+    let fake = FakeServe(record: ["41444 \(old)", "41443 \(live)"])
+    fake.states[41444] = mounted(41444, old)               // a killed run's, after otaPort changed
+    fake.states[41443] = mounted(41443, live)              // this run's
+    fake.states[41445] = mounted(41445, "http://127.0.0.1:8788")
+    fake.otaPort = 41443
+    #expect(AppCoordinator.reclaimStrays(keeping: (port: 41443, target: live), tools: fake.tools) == true)
+    #expect(fake.offs == [41444])
+    #expect(fake.record == ["41443 \(live)"])
+
+    // One port it couldn't read: not "done", so the sweep runs again later.
+    let unsure = FakeServe(record: ["41444 \(old)"])
+    unsure.states[41444] = .unknown
+    #expect(AppCoordinator.reclaimStrays(keeping: nil, tools: unsure.tools) == nil)
+    // No name for this node: nothing can be judged.
+    let nameless = FakeServe(record: ["41444 \(old)"])
+    nameless.host = nil
+    #expect(AppCoordinator.reclaimStrays(keeping: nil, tools: nameless.tools) == nil)
+    #expect(nameless.offs.isEmpty)
+}
+
+/// A tunnel port far from the old window: the idle relays left behind are closed, and the
+/// count of covered ports matches what listens.
+@MainActor @Test func tunnelRelaysLeftBehindAreReaped() async {
+    let rig = Rig()
+    defer { rig.done() }
+    await rig.bridge.start(.manual)
+    rig.bridge.onTunnelPortDiscovered(38_100, localIP: "127.0.0.1")
+    #expect(await eventuallyOnMain { rig.bridge.bindsInFlight == 0 && rig.bridge.tunnelRelayPorts.count == 17 })
+    rig.bridge.onTunnelPortDiscovered(38_200, localIP: "127.0.0.1")
+    #expect(await eventuallyOnMain { rig.bridge.bindsInFlight == 0 && rig.bridge.tunnelRelayPorts.min() == 38_200 })
+    #expect(rig.bridge.tunnelRelayPorts == Set(38_200...38_216))
+    // The control relay may have moved up from its port (taken here): only the tunnel band is compared.
+    #expect(rig.bridge.coveredPortsForTests.filter { (38_000...38_999).contains($0) } == rig.bridge.tunnelRelayPorts)
+}
+
+extension TimingSensitive.OTAServerOverASocket {
+    /// The page, its manifest and the .ipa, end to end from a folder of builds.
+    @Test func aStoredBuildIsServedPageManifestAndIPA() async throws {
+        let root = otaScratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let dir = root.appendingPathComponent("com.example.App/1.0-1-x")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let ipa = Data("IPA-BYTES-\(UUID().uuidString)".utf8)
+        try ipa.write(to: dir.appendingPathComponent("app.ipa"))
+        try JSONEncoder().encode(build("1.0", "1", "1.0-1-x", size: Int64(ipa.count))).write(to: dir.appendingPathComponent("meta.json"))
+
+        let server = OTAServer(tailnetPort: 41443, root: root)
+        server.servedName = "m"
+        let port = try #require(server.start())
+        defer { server.stop() }
+        let page = await ask(port, "GET / HTTP/1.1\r\nHost: m:41443\r\n\r\n")
+        #expect(page?.hasPrefix("HTTP/1.1 200") == true)
+        #expect(page?.contains("com.example.App/1.0-1-x/manifest.plist") == true)
+        let manifest = await ask(port, "GET /com.example.App/1.0-1-x/manifest.plist HTTP/1.1\r\nHost: m:41443\r\n\r\n")
+        #expect(manifest?.hasPrefix("HTTP/1.1 200") == true)
+        #expect(manifest?.contains("https://m:41443/com.example.App/1.0-1-x/app.ipa") == true)
+        let body = await ask(port, "GET /com.example.App/1.0-1-x/app.ipa HTTP/1.1\r\nHost: m:41443\r\n\r\n")
+        #expect(body?.hasPrefix("HTTP/1.1 200") == true)
+        #expect(body?.hasSuffix(String(decoding: ipa, as: UTF8.self)) == true)
+        #expect(await ask(port, "GET /com.example.App/9.9-9-x/app.ipa HTTP/1.1\r\nHost: m:41443\r\n\r\n")?
+            .hasPrefix("HTTP/1.1 404") == true)
     }
 }
 

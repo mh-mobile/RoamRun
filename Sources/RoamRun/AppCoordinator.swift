@@ -222,8 +222,8 @@ final class AppCoordinator: ObservableObject {
         Array((seen.filter { $0 != target } + [target]).suffix(keep))
     }
 
-    nonisolated static func isOurs(_ target: String, on port: Int) -> Bool {
-        remembered().contains { let p = pair($0); return p.target == target && (p.port == nil || p.port == port) }
+    nonisolated static func isOurs(_ target: String, on port: Int, in record: [String] = remembered()) -> Bool {
+        record.contains { let p = pair($0); return p.target == target && (p.port == nil || p.port == port) }
     }
 
     nonisolated static func remembered() -> [String] {
@@ -261,16 +261,16 @@ final class AppCoordinator: ObservableObject {
         return .nothing
     }
 
-    nonisolated static func reclaimStrays(keeping live: (port: Int, target: String)?) -> Bool? {
-        guard let host = currentHost() else { return nil }
+    nonisolated static func reclaimStrays(keeping live: (port: Int, target: String)?, tools: ServeTools = .live) -> Bool? {
+        guard let host = tools.host(5) else { return nil }
         var asked = true, released = true
-        for port in Set(remembered().compactMap { pair($0).port } + [otaPort]).sorted() {
-            let state = TailscaleClient.serving(port: port)
+        for port in Set(tools.remembered().compactMap { pair($0).port } + [tools.otaPort()]).sorted() {
+            let state = tools.serving(port, 10)
             guard state != .unknown else { asked = false; continue }
-            guard let target = state.root(on: host), isOurs(target, on: port) else { continue }
+            guard let target = state.root(on: host), isOurs(target, on: port, in: tools.remembered()) else { continue }
             // The one this run is serving from, confirmed or not.
             if live?.port == port, live?.target == target { continue }
-            if !releaseServe((port: port, target: target)) { released = false }
+            if !releaseServe((port: port, target: target), tools: tools) { released = false }
         }
         return asked ? released : nil
     }
@@ -620,33 +620,49 @@ final class AppCoordinator: ObservableObject {
     /// has to try again — reporting it released when it isn't is how builds stay
     /// reachable while the log says otherwise.
     nonisolated static func releaseServe(_ published: (port: Int, target: String),
-                                         timeout: TimeInterval = 10) -> Bool {
-        let state = TailscaleClient.serving(port: published.port, timeout: timeout)
+                                         timeout: TimeInterval = 10, tools: ServeTools = .live) -> Bool {
+        let state = tools.serving(published.port, timeout)
         switch state {
         case .unknown: return false            // couldn't look; saying it's gone is how one survives
-        case .nothing: forgetServing(published.target, on: published.port); return true
+        case .nothing: tools.forget(published.target, published.port); return true
         case .mounted:
             // `off` removes this node's current name's mount and nothing else, so
             // that is the only entry we may claim — a root of ours under a name the
             // node has since changed would make us delete whatever took its place.
             // Asked only now: nothing to give back needs no name.
-            guard let host = currentHost(timeout: timeout) else { return false }
+            guard let host = tools.host(timeout) else { return false }
             guard state.root(on: host) == published.target else {
-                forgetServing(published.target, on: published.port)
+                tools.forget(published.target, published.port)
                 return true
             }
         }
-        // `--set-path=/` names the one mount to remove. Without it `off` means
-        // every mount on the port, and `tailscale` then asks for confirmation on
-        // a stdin that is /dev/null here: it removes nothing and still exits 0,
-        // so this would report a release that never happened.
-        let out = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
-                           ["serve", "--https=\(published.port)", "--set-path=/", "off"], timeout: timeout)
         // Only once it's really gone. Forgetting it while the entry survives
         // would leave the next run unable to recognise its own registration.
-        guard out.status == 0 else { return false }
-        forgetServing(published.target, on: published.port)
+        guard tools.off(published.port, timeout) else { return false }
+        tools.forget(published.target, published.port)
         return true
+    }
+
+    /// What giving back and sweeping `tailscale serve` entries touch: Tailscale, and the
+    /// record of what this Mac registered. The defaults are the real ones; tests swap them.
+    struct ServeTools: Sendable {
+        var serving: @Sendable (_ port: Int, _ timeout: TimeInterval) -> TailscaleClient.Serving = {
+            TailscaleClient.serving(port: $0, timeout: $1)
+        }
+        var host: @Sendable (_ timeout: TimeInterval) -> String? = { AppCoordinator.currentHost(timeout: $0) }
+        /// `--set-path=/` names the one mount to remove. Without it `off` means every mount
+        /// on the port, and `tailscale` then asks for confirmation on a stdin that is
+        /// /dev/null here: it removes nothing and still exits 0, reporting a release that
+        /// never happened. True when it exited 0.
+        var off: @Sendable (_ port: Int, _ timeout: TimeInterval) -> Bool = { port, timeout in
+            Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
+                     ["serve", "--https=\(port)", "--set-path=/", "off"], timeout: timeout).status == 0
+        }
+        var remembered: @Sendable () -> [String] = { AppCoordinator.remembered() }
+        var forget: @Sendable (_ target: String, _ port: Int) -> Void = { AppCoordinator.forgetServing($0, on: $1) }
+        var otaPort: @Sendable () -> Int = { AppCoordinator.otaPort }
+
+        static let live = ServeTools()
     }
 
     /// An entry proxying to a loopback port nothing is listening on can't be a

@@ -51,7 +51,10 @@ final class OTAServer: @unchecked Sendable {
         set { lock.withLock { _port = newValue } }
     }
 
-    init(tailnetPort: Int) { self.tailnetPort = tailnetPort }
+    /// Where the builds are: `ota/` unless a test passes its own folder.
+    private let root: URL?
+    init(tailnetPort: Int, root: URL? = nil) { self.tailnetPort = tailnetPort; self.root = root }
+    private var store: URL { root ?? OTA.directory }
 
     /// The MagicDNS name `tailscale serve` publishes us under; nil until it is known.
     /// Anything else in Host is not a request from the tailnet: a page on this
@@ -242,21 +245,21 @@ final class OTAServer: @unchecked Sendable {
         case 0:
             // At any level, not just the top one: an empty page is a lie about a
             // folder the Mac simply couldn't open.
-            guard let groups = OTA.builds() else {
+            guard let groups = OTA.builds(in: root) else {
                 let why = Data("Can't read the builds folder on the Mac.\n".utf8)
                 return send(conn, status: "503 Service Unavailable",
                             body: bodyWanted ? why : nil, length: Int64(why.count))
             }
-            let html = Data(OTA.indexHTML(groups, base: base).utf8)
+            let html = Data(OTA.indexHTML(groups, base: base, in: root).utf8)
             send(conn, status: "200 OK", type: "text/html; charset=utf-8",
                  body: bodyWanted ? html : nil, length: Int64(html.count))
         case 3 where parts[2] == "icon.png":
-            let url = OTA.directory.appendingPathComponent(parts[0]).appendingPathComponent(parts[1])
+            let url = store.appendingPathComponent(parts[0]).appendingPathComponent(parts[1])
                 .appendingPathComponent("icon.png")
             guard let png = try? Data(contentsOf: url) else { return send(conn, status: "404 Not Found") }
             send(conn, status: "200 OK", type: "image/png", body: bodyWanted ? png : nil, length: Int64(png.count))
         case 3 where parts[2] == "manifest.plist" || parts[2] == "app.ipa":
-            guard let known = OTA.builds(of: parts[0]) else {
+            guard let known = OTA.builds(of: parts[0], in: root) else {
                 return send(conn, status: "503 Service Unavailable")
             }
             guard let build = known.first(where: { $0.slug == parts[1] }) else {
@@ -268,7 +271,7 @@ final class OTAServer: @unchecked Sendable {
                 }
                 send(conn, status: "200 OK", type: "application/xml", body: bodyWanted ? data : nil, length: Int64(data.count))
             } else {
-                sendIPA(conn, at: OTA.directory.appendingPathComponent(parts[0]).appendingPathComponent(parts[1])
+                sendIPA(conn, at: store.appendingPathComponent(parts[0]).appendingPathComponent(parts[1])
                     .appendingPathComponent("app.ipa"), bodyWanted: bodyWanted, idle: idle)
             }
         default:
