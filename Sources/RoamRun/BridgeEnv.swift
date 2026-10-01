@@ -55,15 +55,15 @@ struct BridgeEnv: Sendable {
     static let live = BridgeEnv()
 }
 
-/// Where a bridge's blocking tools run: on a queue of their own, never the main actor or
+/// Where a bridge's blocking tools run: a thread of their own each, never the main actor or
 /// Swift's cooperative pool. That pool has a thread per core; a tool waiting there (a ping
 /// up to 8 s, devicectl up to 45 s) held one, and with several bridges checking at once
-/// their tools queued behind each other (#32). Concurrent, not serial, for the same reason.
+/// their tools queued behind each other (#32). Not a GCD queue either: blocked work there
+/// counts toward GCD's 64 threads, which the relays' connections and the probes'
+/// timeouts also run on. A thread costs little next to the process it waits for.
 enum Blocking {
-    private static let queue = DispatchQueue(label: AppID.bundle + ".blocking", attributes: .concurrent)
-
     static func run<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
-        await withCheckedContinuation { done in queue.async { done.resume(returning: work()) } }
+        await withCheckedContinuation { done in Thread.detachNewThread { done.resume(returning: work()) } }
     }
 }
 

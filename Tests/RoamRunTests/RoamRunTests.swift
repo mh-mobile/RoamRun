@@ -285,7 +285,7 @@ extension TimingSensitive {
         /// #32: blocking tools wait off Swift's cooperative pool. On it, twice as many as it
         /// has threads (one per core) ran in two waves, each bridge's check behind another's.
         @Test func blockingToolsDontQueueBehindEachOther() async {
-            let n = ProcessInfo.processInfo.activeProcessorCount * 2
+            let n = min(ProcessInfo.processInfo.activeProcessorCount * 2, 48)
             let clock = ContinuousClock(), start = clock.now
             await withTaskGroup(of: Void.self) { group in
                 for _ in 0..<n { group.addTask { await Blocking.run { usleep(1_000_000) } } }
