@@ -86,7 +86,9 @@ final class AppCoordinator: ObservableObject {
         savedProfiles = profiles
         if let copy = store.keptUnreadable {
             logStore.log("couldn't read saved devices; kept the file as \(copy.path)")
-            launchWarning = "RoamRun couldn't read its saved devices, so the list starts empty. The file was kept as \(copy.path)."
+            launchWarning = profiles.isEmpty
+                ? "RoamRun couldn't read its saved devices, so the list starts empty. The file was kept as \(copy.path)."
+                : "RoamRun couldn't read some of its saved devices; the others are here. The file was kept as \(copy.path)."
         } else if store.unreadable {
             logStore.log("couldn't read \(ProfileStore.directory.path)/profiles.json; not writing over it")
             launchWarning = Self.unreadableListWarning
@@ -780,18 +782,23 @@ final class AppCoordinator: ObservableObject {
 
     // MARK: - Profiles
 
+    enum AddResult: Equatable { case added(UUID), refused(String) }
+
     @discardableResult
     func addDevice(captured: CapturedService, provider: MeshProvider,
-                   meshDevice: MeshDevice?, manualIP: String, name: String) -> UUID? {
+                   meshDevice: MeshDevice?, manualIP: String, name: String) -> AddResult {
         let ip = provider == .manual ? manualIP.trimmingCharacters(in: .whitespaces) : (meshDevice?.ipv4 ?? "")
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         let displayName = trimmed.isEmpty ? captured.shortHost : trimmed
         // Same checks as the sheet, here too: two profiles for one device would collide.
         // By UDID when remotepairingd knows the advert (instance names rotate), else the exact advert.
         let udid = advertUDIDs[captured.instanceName]
-        guard !ip.isEmpty, profiles.nameProblem(displayName) == nil,
-              !profiles.contains(where: { $0.providerIP == ip || $0.instanceName == captured.instanceName
-                  || (udid != nil && $0.udid?.caseInsensitiveCompare(udid!) == .orderedSame) }) else { return nil }
+        guard !ip.isEmpty else { return .refused("Choose its VPN address.") }
+        if let problem = profiles.nameProblem(displayName) { return .refused(problem) }
+        if let same = profiles.first(where: { $0.providerIP == ip || $0.instanceName == captured.instanceName
+            || (udid != nil && $0.udid?.caseInsensitiveCompare(udid!) == .orderedSame) }) {
+            return .refused("This device is already saved as “\(same.displayName)”.")
+        }
         var profile = DeviceProfile(
             displayName: displayName,
             instanceName: captured.instanceName,
@@ -801,7 +808,7 @@ final class AppCoordinator: ObservableObject {
             bonjourHost: captured.host,
             txt: captured.txt,
             providerID: provider.rawValue,
-            providerHostName: provider == .manual ? manualIP : (meshDevice?.name ?? ""),
+            providerHostName: provider == .manual ? ip : (meshDevice?.name ?? ""),
             providerIP: ip
         )
         // Known already if remotepairingd matched this advert; else learned on first connect.
@@ -812,7 +819,7 @@ final class AppCoordinator: ObservableObject {
         persist()
         logStore.log("added \"\(profile.displayName)\" -> \(ip)", device: profile.id)
         learnDeviceTypes()
-        return profile.id
+        return .added(profile.id)
     }
 
     func deleteProfile(_ id: UUID) {
@@ -930,10 +937,16 @@ final class AppCoordinator: ObservableObject {
     // MARK: - Tailscale
 
     /// Off the main actor: a hung `tailscale status` must not freeze the UI.
+    /// Only the latest refresh's answer counts: an earlier, slower one must not overwrite it.
+    private var tailscaleRefresh = 0
+
     func refreshTailscale() {
         let client = tailscaleClient
+        tailscaleRefresh += 1
+        let mine = tailscaleRefresh
         Task {
             let result = await Task.detached { Result { try client.listDevices() } }.value
+            guard mine == tailscaleRefresh else { return }
             switch result {
             case .success(let devices):
                 tailscaleDevices = devices
@@ -1000,7 +1013,9 @@ final class AppCoordinator: ObservableObject {
 
     /// Probe a bounded range for the RemotePairing control channel when the
     /// captured port doesn't answer. Updates the profile on success.
-    func scanRemotePairingPort(_ profile: DeviceProfile) async {
+    /// What the scan found, also said next to its button (nil while one runs).
+    @discardableResult
+    func scanRemotePairingPort(_ profile: DeviceProfile) async -> String {
         let host = profile.providerIP
         logStore.log("\"\(profile.displayName)\": scanning \(host) for its RemotePairing port", device: profile.id)
         let found: UInt16
@@ -1009,13 +1024,14 @@ final class AppCoordinator: ObservableObject {
         case .found(let port): found = port
         case .notFound:
             logStore.log("\"\(profile.displayName)\": no RemotePairing port responded — is the device on Wi-Fi?", device: profile.id)
-            return
+            return "No port answered. Is the device on Wi‑Fi and unlocked?"
         case .timedOut:
             logStore.log("\"\(profile.displayName)\": the scan timed out before every port was checked", device: profile.id)
-            return
+            return "The scan timed out before every port was checked."
         }
         if found == profile.remotePairingPort {
             logStore.log("\"\(profile.displayName)\": RemotePairing port is still \(found)", device: profile.id)
+            return "Still on port \(found)."
         } else {
             // Before persist(): it may rebuild the bridge, and a new one reads as off.
             let wasOn = bridges[profile.id].map { $0.state != .off } == true
@@ -1023,7 +1039,7 @@ final class AppCoordinator: ObservableObject {
                 profiles = changed
                 persist()
                 return profiles
-            }) else { return }
+            }) else { return "Found port \(found), but the device is no longer saved." }
             logStore.log("\"\(profile.displayName)\": RemotePairing port updated to \(found)", device: profile.id)
             // ProxyBridge holds its profile by value — swap it in or the
             // new port only takes effect after a relaunch.
@@ -1032,7 +1048,15 @@ final class AppCoordinator: ObservableObject {
             install(newBridge(updated))
             // Through autoStart: a live `roamrun up` holding the device keeps it (F16).
             if wasOn { autoStart(profile.id, live: StatusFile.read(), .rescan) }
+            return "Moved to port \(found)\(wasOn ? "; the bridge restarts on it" : "")."
         }
+    }
+
+    /// Who runs a device's bridge in another process, for a label: `roamrun up` in a terminal,
+    /// or another copy of the app. Nil when this app does (or nobody).
+    func runElsewhere(_ id: UUID) -> String? {
+        guard let e = externalBridges[id] else { return nil }
+        return e.cli == true ? "Terminal" : "another RoamRun"
     }
 
     /// Saving can restore devices ahead of this one; select the saved profile by ID.

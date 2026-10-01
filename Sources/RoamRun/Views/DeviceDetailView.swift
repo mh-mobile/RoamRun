@@ -11,6 +11,8 @@ struct DeviceDetailView: View {
     @State private var renaming = false
     @State private var newName = ""
     @State private var showLog = Snapshot.expand
+    @State private var renameRefusal: String?
+    @State private var scanResult: String?
 
     var body: some View {
         ScrollView {
@@ -47,12 +49,22 @@ struct DeviceDetailView: View {
         }
         .alert("Rename Device", isPresented: $renaming) {
             TextField("Name", text: $newName)
-            Button("Rename") { coordinator.rename(profile.id, to: newName) }
+            Button("Rename") {
+                // Return can reach a disabled alert button: say why instead of closing on nothing.
+                if !coordinator.rename(profile.id, to: newName) {
+                    renameRefusal = coordinator.profiles.nameProblem(newName, except: profile.id) ?? "This device is no longer saved."
+                }
+            }
                 .disabled(coordinator.profiles.nameProblem(newName, except: profile.id) != nil)
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(coordinator.profiles.nameProblem(newName, except: profile.id).map { $0 + " " } ?? "")
                 + Text("Used in the menu and the CLI (roamrun up <name>). Must be unique and not start with “-”.")
+        }
+        .alert("Couldn't Rename", isPresented: Binding(get: { renameRefusal != nil }, set: { if !$0 { renameRefusal = nil } })) {
+            Button("OK") {}
+        } message: {
+            Text(renameRefusal ?? "")
         }
         .alert("Remove “\(profile.displayName)”?", isPresented: $confirmDelete) {
             Button("Remove", role: .destructive) { coordinator.deleteProfile(profile.id) }
@@ -124,14 +136,15 @@ struct DeviceDetailView: View {
             HStack {
                 Button(scanning ? "Scanning…" : "Find RemotePairing Port") {
                     scanning = true
+                    scanResult = nil
                     Task {
-                        await coordinator.scanRemotePairingPort(profile)
+                        scanResult = await coordinator.scanRemotePairingPort(profile)
                         scanning = false
                     }
                 }
                 .disabled(scanning)
-                Text("Use if the device restarted and the bridge can't reach it.")
-                    .font(.caption).foregroundStyle(.secondary)
+                Text(scanResult ?? "Use if the device restarted and the bridge can't reach it.")
+                    .font(.caption).foregroundStyle(scanResult == nil ? .secondary : .primary)
             }
         }
         .font(.callout)
@@ -174,7 +187,9 @@ private struct StatusCard: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
                 if let external {
-                    Label("Running from Terminal (roamrun up, pid \(external.pid))", systemImage: "terminal")
+                    Label(external.cli == true ? "Running from Terminal (roamrun up, pid \(external.pid))"
+                                               : "Running in another copy of RoamRun (pid \(external.pid))",
+                          systemImage: external.cli == true ? "terminal" : "macwindow")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -253,7 +268,7 @@ private struct ConnectionPath: View {
         // One element: the line's color is what says "connected".
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("This Mac to \(profile.displayName) over \(profile.providerID == MeshProvider.tailscale.rawValue ? "Tailscale" : "the mesh VPN")")
-        .accessibilityValue(linked ? "Connected" : "Not connected")
+        .accessibilityValue(linked ? "Connected" : status == .local ? "Not needed: on this Mac's Wi‑Fi" : "Not connected")
     }
 
     private func node(_ symbol: String, _ title: String, active: Bool) -> some View {
@@ -304,7 +319,7 @@ private struct DeviceLog: View {
                 }
                 .frame(height: 160)
                 .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.4)))
-                .onChange(of: lines.count) { _ in
+                .onChange(of: log.appended) { _ in   // not lines.count: that stops at the log's limit
                     if let last = lines.indices.last { proxy.scrollTo(last, anchor: .bottom) }
                 }
             }
