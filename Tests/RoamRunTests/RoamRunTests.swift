@@ -3486,8 +3486,8 @@ func startPolicyTable(_ r: StartReason) {
     #expect(started == 1)                                    // waited out, then retried
 }
 
-/// The wait counts from the failure, a moment after the tick that started the retry: due at
-/// the tick 30 s on, not the one after.
+/// A failure just after a tick is still due on the tick its wait points at, not the one after
+/// (the timer's drift is within the second of slack).
 @MainActor @Test func aRetryIsntPushedToTheTickAfter() {
     let m = DeviceMemory(), tick = Date(timeIntervalSinceReferenceDate: 800_000_000)
     let rig = Rig(memory: m)
