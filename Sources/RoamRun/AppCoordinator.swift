@@ -554,26 +554,23 @@ final class AppCoordinator: ObservableObject {
                     return
                 }
             }
-            // Looked at again just before writing: the reads above can take 20 s
-            // between them, and `serve` replaces whatever is at `/` by then. This
-            // narrows that window; it can't close it, as `tailscale serve` has no
-            // write-if-unchanged. Anything new waits for the next tick's checks.
-            // Turned off during those reads too: publishing a stopped server would
-            // leave the address answering 502 until the next tick gave it back.
-            let current = await MainActor.run { self?.otaAttempt == attempt }
-            guard current else { return }
-            guard TailscaleClient.serving(port: tailnetPort) == state else {
+            let step = await Self.publish(mine, on: tailnetPort, expecting: state) {
+                await MainActor.run { self?.otaAttempt == attempt }
+            }
+            let after: TailscaleClient.Serving, said: String
+            switch step {
+            case .changed:
                 await MainActor.run {
                     self?.complainOnce("port \(tailnetPort) changed while RoamRun was checking it; looking again shortly")
                 }
                 return
+            case .notWanted, .withdrawn:
+                server.stop()
+                return
+            case .ran(let state, let output):
+                after = state
+                said = output
             }
-            // Written before the call, not after: quitting while `tailscale` is
-            // still working would otherwise leave an entry finished by a child
-            // that outlived us, with nothing left to say it was ours.
-            Self.rememberServing(mine, on: tailnetPort)
-            let out = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
-                               ["serve", "--bg", "--yes", "--https=\(tailnetPort)", mine], timeout: 20)
             // The exit code is not the answer; the config is. `tailscale serve`
             // exits 0 without writing anything when the tailnet has no HTTPS
             // certificates: it prints the admin page's link to stdout and calls
@@ -582,10 +579,6 @@ final class AppCoordinator: ObservableObject {
             // success logged "serving builds over the air" every minute while
             // nothing was served — and `doctor` sent people to that log to find
             // out why the page was missing.
-            //
-            // Before hopping back, too: `serving` waits on `tailscale` for up to
-            // 10 s and the main actor is where the menu bar lives.
-            let after = TailscaleClient.serving(port: tailnetPort)
             let landed = after.isRegistered(mine)
             // A status we couldn't read says nothing either way, so it is neither
             // a success nor a reason to drop the one record that can find it again.
@@ -609,7 +602,6 @@ final class AppCoordinator: ObservableObject {
                     // Whatever `tailscale` said, the entry isn't there. Its stdout
                     // carries the only thing that explains the silent case — a link
                     // to the page where HTTPS certificates are turned on.
-                    let said = (out.err + "\n" + out.out).trimmingCharacters(in: .whitespacesAndNewlines)
                     self.complainOnce("port \(tailnetPort) isn't served after asking tailscale to, will retry" +
                                       (said.isEmpty ? ". Does your tailnet have HTTPS certificates turned on?"
                                                     : ": \(said)"))
@@ -652,6 +644,38 @@ final class AppCoordinator: ObservableObject {
                 if !gone, let host { self.otaServer?.servedName = host }
             }
         }
+    }
+
+    enum PublishStep: Equatable {
+        case changed      // the port isn't as it was checked: nothing written
+        case notWanted    // turned off before writing: nothing written
+        case withdrawn    // turned off while `serve` ran: given back, or left to the sweep
+        case ran(after: TailscaleClient.Serving, said: String)
+    }
+
+    /// The write itself, between two looks at whether it is still wanted. `state` is what
+    /// the port carried when checked; the reads before can take 20 s, and `serve` replaces
+    /// whatever is at `/` by then. Looking again narrows that window; it can't close it, as
+    /// `tailscale serve` has no write-if-unchanged. Turned off meanwhile: publishing a
+    /// stopped server would leave the address answering 502 until the next tick.
+    nonisolated static func publish(_ mine: String, on port: Int, expecting state: TailscaleClient.Serving,
+                                    tools: ServeTools = .live,
+                                    stillWanted: @Sendable () async -> Bool) async -> PublishStep {
+        guard tools.serving(port, 10) == state else { return .changed }
+        guard await stillWanted() else { return .notWanted }
+        // Written before the call, not after: quitting while `tailscale` is
+        // still working would otherwise leave an entry finished by a child
+        // that outlived us, with nothing left to say it was ours.
+        tools.remember(mine, port)
+        let said = tools.serve(port, mine)
+        guard await stillWanted() else {
+            // False leaves the record, and the next sweep gives it back.
+            _ = releaseServe((port: port, target: mine), tools: tools)
+            return .withdrawn
+        }
+        // Here, not after hopping back: `serving` waits on `tailscale` for up to
+        // 10 s and the main actor is where the menu bar lives.
+        return .ran(after: tools.serving(port, 10), said: said)
     }
 
     /// Gives a registration back, but only while it is still exactly ours.
@@ -704,6 +728,13 @@ final class AppCoordinator: ObservableObject {
             Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
                      ["serve", "--https=\(port)", "--set-path=/", "off"], timeout: timeout).status == 0
         }
+        /// What `tailscale` printed, for when the entry isn't there afterwards.
+        var serve: @Sendable (_ port: Int, _ target: String) -> String = { port, target in
+            let out = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
+                               ["serve", "--bg", "--yes", "--https=\(port)", target], timeout: 20)
+            return (out.err + "\n" + out.out).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        var remember: @Sendable (_ target: String, _ port: Int) -> Void = { AppCoordinator.rememberServing($0, on: $1) }
         var remembered: @Sendable () -> [String] = { AppCoordinator.remembered() }
         var forget: @Sendable (_ target: String, _ port: Int) -> Void = { AppCoordinator.forgetServing($0, on: $1) }
         var otaPort: @Sendable () -> Int = { AppCoordinator.otaPort }

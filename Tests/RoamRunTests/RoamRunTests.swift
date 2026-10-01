@@ -3407,6 +3407,7 @@ private final class FakeServe: @unchecked Sendable {
     var afterOff: TailscaleClient.Serving?
     var record: [String]
     var offs: [Int] = []
+    var serves: [Int] = []
     var otaPort = 41443
     init(record: [String] = []) { self.record = record }
 
@@ -3419,6 +3420,8 @@ private final class FakeServe: @unchecked Sendable {
             if self.offWorks { self.states[port] = self.afterOff }
             return self.offWorks
         }
+        t.serve = { port, target in self.serves.append(port); self.states[port] = mounted(port, target); return "" }
+        t.remember = { target, port in self.record.append("\(port) \(target)") }
         t.remembered = { self.record }
         t.forget = { target, port in
             self.record.removeAll { let p = AppCoordinator.pair($0); return p.target == target && (p.port == nil || p.port == port) }
@@ -3966,4 +3969,32 @@ func claimByReason(_ r: StartReason, fromCLI: Bool) {
     #expect(OTAServer.tooSlow(sent: 100_000, after: 300))           // ~330 B/s
     #expect(!OTAServer.tooSlow(sent: 300 * 8 * 1024, after: 300))   // right at 8 KB/s
     #expect(!OTAServer.tooSlow(sent: 50_000_000, after: 3600))      // ~14 KB/s for an hour
+}
+
+/// The write between two looks at whether OTA is still on: turned off before it, nothing
+/// is written; turned off while `serve` ran, what it wrote is given back and forgotten.
+enum PublishCase: String, CaseIterable { case portChanged, offBefore, offDuring, stillOn }
+
+@Test(arguments: PublishCase.allCases)
+func publishStepsAsideWhenTurnedOff(_ c: PublishCase) async {
+    final class Answers: @unchecked Sendable { var left: [Bool]; init(_ a: [Bool]) { left = a } }
+    let mine = "http://127.0.0.1:61816"
+    let fake = FakeServe()
+    let answers = Answers(c == .offBefore ? [false] : c == .offDuring ? [true, false] : [true, true])
+    let checked: TailscaleClient.Serving = c == .portChanged ? mounted(41443, "http://127.0.0.1:8788") : .nothing
+    let step = await AppCoordinator.publish(mine, on: 41443, expecting: checked, tools: fake.tools) {
+        answers.left.removeFirst()
+    }
+    switch c {
+    case .portChanged, .offBefore:
+        #expect(step == (c == .portChanged ? .changed : .notWanted))
+        #expect(fake.serves.isEmpty && fake.record.isEmpty)
+    case .offDuring:
+        #expect(step == .withdrawn)
+        #expect(fake.serves == [41443] && fake.offs == [41443] && fake.record.isEmpty)
+        #expect(fake.states[41443] == nil)
+    case .stillOn:
+        #expect(step == .ran(after: mounted(41443, mine), said: ""))
+        #expect(fake.offs.isEmpty && fake.record == ["41443 \(mine)"])
+    }
 }
