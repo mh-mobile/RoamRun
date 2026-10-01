@@ -11,6 +11,8 @@ struct DeviceDetailView: View {
     @State private var renaming = false
     @State private var newName = ""
     @State private var showLog = Snapshot.expand
+    @State private var renameRefusal: String?
+    @State private var scanResult: String?
 
     var body: some View {
         ScrollView {
@@ -47,12 +49,23 @@ struct DeviceDetailView: View {
         }
         .alert("Rename Device", isPresented: $renaming) {
             TextField("Name", text: $newName)
-            Button("Rename") { coordinator.rename(profile.id, to: newName) }
+            Button("Rename") {
+                // Return can reach a disabled alert button: say why instead of closing on nothing.
+                if !coordinator.rename(profile.id, to: newName) {
+                    let why = coordinator.profiles.nameProblem(newName, except: profile.id) ?? "This device is no longer saved."
+                    DispatchQueue.main.async { renameRefusal = why }   // once this alert has gone: two at once may not show
+                }
+            }
                 .disabled(coordinator.profiles.nameProblem(newName, except: profile.id) != nil)
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(coordinator.profiles.nameProblem(newName, except: profile.id).map { $0 + " " } ?? "")
                 + Text("Used in the menu and the CLI (roamrun up <name>). Must be unique and not start with “-”.")
+        }
+        .alert("Couldn't Rename", isPresented: Binding(get: { renameRefusal != nil }, set: { if !$0 { renameRefusal = nil } })) {
+            Button("OK") {}
+        } message: {
+            Text(renameRefusal ?? "")
         }
         .alert("Remove “\(profile.displayName)”?", isPresented: $confirmDelete) {
             Button("Remove", role: .destructive) { coordinator.deleteProfile(profile.id) }
@@ -124,14 +137,15 @@ struct DeviceDetailView: View {
             HStack {
                 Button(scanning ? "Scanning…" : "Find RemotePairing Port") {
                     scanning = true
+                    scanResult = nil
                     Task {
-                        await coordinator.scanRemotePairingPort(profile)
+                        scanResult = await coordinator.scanRemotePairingPort(profile)
                         scanning = false
                     }
                 }
                 .disabled(scanning)
-                Text("Use if the device restarted and the bridge can't reach it.")
-                    .font(.caption).foregroundStyle(.secondary)
+                Text(scanResult ?? "Use if the device restarted and the bridge can't reach it.")
+                    .font(.caption).foregroundStyle(scanResult == nil ? .secondary : .primary)
             }
         }
         .font(.callout)
@@ -174,7 +188,9 @@ private struct StatusCard: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
                 if let external {
-                    Label("Running from Terminal (roamrun up, pid \(external.pid))", systemImage: "terminal")
+                    Label(external.cli == true ? "Running from Terminal (roamrun up, pid \(external.pid))"
+                                               : "Running in another copy of RoamRun (pid \(external.pid))",
+                          systemImage: external.cli == true ? "terminal" : "macwindow")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -253,7 +269,7 @@ private struct ConnectionPath: View {
         // One element: the line's color is what says "connected".
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("This Mac to \(profile.displayName) over \(profile.providerID == MeshProvider.tailscale.rawValue ? "Tailscale" : "the mesh VPN")")
-        .accessibilityValue(linked ? "Connected" : "Not connected")
+        .accessibilityValue(linked ? "Connected" : status == .local ? "Not needed: on this Mac's Wi‑Fi" : "Not connected")
     }
 
     private func node(_ symbol: String, _ title: String, active: Bool) -> some View {
@@ -283,6 +299,7 @@ private struct ConnectionPath: View {
 /// Observes the log itself: the coordinator doesn't re-publish its changes, so a
 /// line logged while nothing else changed showed only on the next unrelated update.
 private struct DeviceLog: View {
+    private static let end = "end"
     @ObservedObject var log: LogStore
     let device: UUID
 
@@ -298,14 +315,17 @@ private struct DeviceLog: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .id(i)
                         }
+                        Color.clear.frame(height: 1).id(Self.end)   // below the padding-free last line
                     }
                     .padding(8)
                     .textSelection(.enabled)
                 }
                 .frame(height: 160)
                 .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.4)))
-                .onChange(of: lines.count) { _ in
-                    if let last = lines.indices.last { proxy.scrollTo(last, anchor: .bottom) }
+                // Only this device's own lines: another's mustn't pull a reader back down.
+                .onChange(of: log.appended[device, default: 0]) { _ in
+                    // Next turn: the new line isn't laid out yet, so it stopped one line short.
+                    DispatchQueue.main.async { proxy.scrollTo(Self.end, anchor: .bottom) }
                 }
             }
             Button("Copy Log") {

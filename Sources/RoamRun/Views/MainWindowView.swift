@@ -109,7 +109,7 @@ private struct SidebarRow: View {
 
     var body: some View {
         let status = coordinator.status(of: profile.id)
-        let viaCLI = coordinator.externalBridges[profile.id] != nil
+        let elsewhere = coordinator.runElsewhere(profile.id)
         HStack(spacing: 10) {
             Image(systemName: profile.symbol)
                 .font(.title2)
@@ -119,7 +119,7 @@ private struct SidebarRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(profile.displayName).fontWeight(.medium).lineLimit(1).help(profile.displayName)
                 let text = coordinator.statusText(of: profile.id)
-                Label(viaCLI ? "\(text) · Terminal" : text, systemImage: status.symbol)
+                Label(elsewhere.map { "\(text) · \($0)" } ?? text, systemImage: status.symbol)
                     .labelStyle(StatusLabelStyle(color: status.color))
                     .font(.caption)
                     .spinning(status.isWorking)

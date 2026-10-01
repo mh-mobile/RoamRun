@@ -10,7 +10,6 @@ struct AddDeviceView: View {
     /// while the sheet is open, the device doesn't.
     @State private var selectedHost: String?
     @State private var provider: MeshProvider = .tailscale
-    @State private var meshDevice: MeshDevice?
     @State private var manualIP = ""
     @State private var name = ""
     /// host -> whether the advertised host:port actually answers.
@@ -24,6 +23,11 @@ struct AddDeviceView: View {
     /// devicectl are read, so the hints below would blame the device for a wait
     /// the app is causing.
     @State private var showHints = false
+    /// Why Add Device was refused (a check the fields above can't see, e.g. the same device by UDID).
+    @State private var refusal: String?
+    /// The chosen Tailscale device, by its id: a refresh brings new values for the same device.
+    @State private var meshDeviceID: String?
+    private var meshDevice: MeshDevice? { coordinator.tailscaleDevices.first { $0.id == meshDeviceID } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -49,18 +53,24 @@ struct AddDeviceView: View {
                     Text("\(chosenIP) is already saved as “\(saved.displayName)”.")
                         .font(.caption)
                         .foregroundStyle(.red)
+                } else if let refusal {
+                    Text(refusal).font(.caption).foregroundStyle(.red)
                 }
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button("Add Device") {
-                    guard let captured = newest(for: selectedHost),
-                          let id = coordinator.addDevice(captured: captured, provider: provider,
-                                                         meshDevice: meshDevice, manualIP: manualIP,
-                                                         name: name) else { return }   // stay: the checks above say why
-                    added = true   // the sheet re-renders while closing: don't flag the device we just saved
-                    onAdded(id)
-                    dismiss()
+                    refusal = nil
+                    guard let captured = newest(for: selectedHost) else { return }
+                    switch coordinator.addDevice(captured: captured, provider: provider, meshDevice: meshDevice,
+                                                 manualIP: manualIP, name: name) {
+                    case .added(let id):
+                        added = true   // the sheet re-renders while closing: don't flag the device we just saved
+                        onAdded(id)
+                        dismiss()
+                    case .refused(let why):
+                        refusal = why   // stay, and say why
+                    }
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
@@ -87,7 +97,17 @@ struct AddDeviceView: View {
             }
         }
         .onChange(of: selectedHost) { _ in
+            refusal = nil
             if name.isEmpty, let s = newest(for: selectedHost) { name = coordinator.uniqueName(s.shortHost) }
+        }
+        // A refusal is about what was asked then: any change makes it stale.
+        .onChange(of: meshDeviceID) { _ in refusal = nil }
+        .onChange(of: manualIP) { _ in refusal = nil }
+        .onChange(of: name) { _ in refusal = nil }
+        .onChange(of: provider) { _ in refusal = nil }
+        // The chosen Tailscale device gone from a refreshed list: no choice, not a blank one.
+        .onChange(of: coordinator.tailscaleDevices) { devices in
+            if let id = meshDeviceID, !devices.contains(where: { $0.id == id }) { meshDeviceID = nil }
         }
     }
 
@@ -131,7 +151,9 @@ struct AddDeviceView: View {
                         Text("• The device is unlocked and on the same Wi‑Fi as this Mac (or on USB)")
                         Text("• Developer Mode is on (Settings › Privacy & Security)")
                         Text("• It has been paired with this Mac (USB, or Xcode 27 Device Hub › Pair Nearby Device)")
-                        Text("• RoamRun is allowed in System Settings › Privacy & Security › Local Network — without it this Mac can't see the device at all")
+                        if #available(macOS 15, *) {   // the Local Network permission came with macOS 15
+                            Text("• RoamRun is allowed in System Settings › Privacy & Security › Local Network — without it this Mac can't see the device at all")
+                        }
                     }
                     .fixedSize(horizontal: false, vertical: true)   // wrap instead of truncating
                     .font(.callout)
@@ -153,16 +175,16 @@ struct AddDeviceView: View {
     private var serviceList: some View {
         VStack(spacing: 0) {
             ForEach(visibleServices) { s in
-                ServiceRow(service: s, live: Snapshot.fakeServices == nil ? liveness[s.host] : true,
-                           selected: selectedHost == s.host,
-                           symbol: DeviceProfile.symbol(for: deviceType(ofHost: s.host)))
-                    .contentShape(Rectangle())
-                    .onTapGesture { selectedHost = s.host }
-                    // A tap gesture alone isn't reachable with VoiceOver: make the row a selectable button.
-                    .accessibilityElement(children: .combine)
-                    .accessibilityAddTraits(selectedHost == s.host ? [.isButton, .isSelected] : .isButton)
-                    .accessibilityValue(selectedHost == s.host ? "Selected" : "")   // macOS VoiceOver may not voice the trait
-                    .accessibilityAction { selectedHost = s.host }
+                // A button, not a tap gesture: reachable with the keyboard (Tab, Space) and VoiceOver.
+                Button { selectedHost = s.host } label: {
+                    ServiceRow(service: s, live: Snapshot.fakeServices == nil ? liveness[s.host] : true,
+                               selected: selectedHost == s.host,
+                               symbol: DeviceProfile.symbol(for: deviceType(ofHost: s.host)))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selectedHost == s.host ? .isSelected : [])
+                .accessibilityValue(selectedHost == s.host ? "Selected" : "")   // macOS VoiceOver may not voice the trait
                 if s.id != visibleServices.last?.id { Divider() }
             }
         }
@@ -216,10 +238,10 @@ struct AddDeviceView: View {
                         .font(.callout)
                 }
                 HStack {
-                    Picker("Device", selection: $meshDevice) {
-                        Text("Choose…").tag(MeshDevice?.none)
+                    Picker("Device", selection: $meshDeviceID) {
+                        Text("Choose…").tag(String?.none)
                         ForEach(peersSorted) { d in
-                            Text(d.label).tag(MeshDevice?.some(d))
+                            Text(d.label).tag(String?.some(d.id))
                         }
                     }
                     .labelsHidden()

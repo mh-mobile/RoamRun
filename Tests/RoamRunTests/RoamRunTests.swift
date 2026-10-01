@@ -3931,3 +3931,15 @@ func claimByReason(_ r: StartReason, fromCLI: Bool) {
     #expect(!Relay.shouldLogRefusal(last: now.addingTimeInterval(-300), now: now))
     #expect(Relay.shouldLogRefusal(last: now.addingTimeInterval(-600), now: now))
 }
+
+/// The log view scrolls when its device's count moves: a line of another device's logged
+/// right after must not hide it, and the count keeps going past the log's limit.
+@MainActor @Test func logCountsLinesPerDevice() {
+    let log = LogStore(), a = UUID(), b = UUID()
+    log.log("Opening relay", device: a)
+    log.log("Starting bridge", device: b)
+    log.log("app-wide")
+    #expect(log.appended[a] == 1 && log.appended[b] == 1)
+    for _ in 0..<600 { log.log("line", device: a) }
+    #expect(log.appended[a] == 601 && log.lines.count == 500)
+}
