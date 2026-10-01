@@ -3147,6 +3147,26 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
     #expect(second.bridge.autoRetry)                       // every start clears it, as before
 }
 
+/// Standing aside, the device's advert found the slow way is what the next bridge tries
+/// first, and a profile that names another device starts it over.
+@MainActor @Test func aRebuiltBridgeKeepsTheAdvertUnlessTheDeviceChanged() async {
+    let memory = DeviceMemory()
+    var p = inertProfile("iPhone"); p.udid = "00008130-000C1C5C307A8D3A"
+    let first = Rig(p, memory: memory)
+    first.world.onLAN = true
+    await first.bridge.start(.manual)                     // standing aside
+    memory.homeAdvert = "REAL-ADVERT"                     // what isHome learns from `log show`
+    first.done()
+
+    let same = Rig(p, memory: memory)
+    defer { same.done() }
+    #expect(same.bridge.memory.homeAdvert == "REAL-ADVERT")
+    var other = p; other.udid = "00008101-000A00000000A001"
+    let replaced = Rig(other, memory: memory)
+    defer { replaced.done() }
+    #expect(memory.homeAdvert == nil && memory.udid == "00008101-000A00000000A001")
+}
+
 /// The scan pause belongs to the endpoint: kept by a rebuilt bridge at the same address and
 /// port, gone once either changes.
 @MainActor @Test func theScanPauseFollowsTheEndpointAcrossBridges() async {

@@ -936,8 +936,6 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
-    /// Registers a bridge and re-publishes its changes so views that only
-    /// observe the coordinator (menu bar icon, sidebar) stay current.
     /// A bridge for `profile` that carries its device's memory.
     private func newBridge(_ profile: DeviceProfile) -> ProxyBridge {
         let memory = memories[profile.id] ?? DeviceMemory()
@@ -945,6 +943,8 @@ final class AppCoordinator: ObservableObject {
         return ProxyBridge(profile: profile, memory: memory)
     }
 
+    /// Registers a bridge and re-publishes its changes so views that only
+    /// observe the coordinator (menu bar icon, sidebar) stay current.
     @discardableResult
     private func install(_ bridge: ProxyBridge) -> ProxyBridge {
         let id = bridge.profile.id

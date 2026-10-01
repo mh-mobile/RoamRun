@@ -781,12 +781,12 @@ final class ProxyBridge: ObservableObject {
         case .found(let found): port = found
         case .notFound:
             log("no port on \(p.providerIP) answered as RemotePairing")
-            memory.pauseScans(of: endpoint, until: env.now() + 600)
+            if gen == generation { memory.pauseScans(of: endpoint, until: env.now() + 600) }
             return (p, false)
         case .timedOut:
             // A rescan starts over and would stall at the same place: same pause.
             log("RemotePairing port scan timed out before the full range was checked (Find RemotePairing Port in the app checks it all)")
-            memory.pauseScans(of: endpoint, until: env.now() + 600)
+            if gen == generation { memory.pauseScans(of: endpoint, until: env.now() + 600) }
             return (p, false)
         }
         if port != p.remotePairingPort { log("RemotePairing port moved: \(p.remotePairingPort) → \(port)") }
@@ -917,7 +917,8 @@ final class ProxyBridge: ObservableObject {
     /// Home if the iPhone itself advertises on this LAN — Tailscale may keep a
     /// cellular path after it joins Wi-Fi — or if Tailscale's path says so.
     private func isHome() async -> Bool {
-        let bridging = state.isActive, now = env.now()
+        // The memory outlives this bridge: a write after it was stopped or rebuilt is stale.
+        let bridging = state.isActive, now = env.now(), gen = generation
         // Not bridging: try a name known to be the device's advert before any `log show`.
         // iOS doesn't withdraw rotated _remotepairing names: 15-min-old instance
         // names still resolved and answered in ~0.1s (measured). The name is
@@ -927,7 +928,7 @@ final class ProxyBridge: ObservableObject {
            let known = memory.homeAdvert, await answers(known) {
             return decided(true, "cached advert \(known.prefix(8))")
         }
-        if !bridging { memory.lastFullCheck = now }
+        if !bridging, gen == generation { memory.lastFullCheck = now }
         if let udid {
             let fake = profile.instanceName
             // A resolved advert may be a stale cache entry (or a sleep proxy's):
@@ -936,7 +937,7 @@ final class ProxyBridge: ObservableObject {
             let instance = bridging
                 ? HomeRule.bridgingAdvert(seenAdvert, activatedAt: activatedAt, now: now)
                 : await Blocking.run { recent(udid, fake) }
-            if !bridging, let instance { memory.homeAdvert = instance }
+            if !bridging, let instance, gen == generation { memory.homeAdvert = instance }
             if let instance, await answers(instance) { return decided(true, "advert \(instance.prefix(8))") }
         }
         if env.localNetworkDenied() {
