@@ -76,7 +76,7 @@ sequenceDiagram
 - macOS 13+、Apple Silicon（Intel Mac は非対応）。Mac の**管理者アカウント**で使うこと（RoamRun は `log stream` で remotepairingd のログを読みますが、macOS は管理者にしか許可していません）
 - iPhone は iOS 17.4 以降（CoreDevice トンネルが TCP の世代。17.0–17.3 の QUIC/UDP トンネルは非対応）
 - iPad、Apple Vision Pro でも同じ仕組みで動作を確認済み（以下「iPhone」はこれらも含みます）。Vision Pro はもともと USB がなく Wi-Fi だけで開発する端末なので、外出先からの利用とも相性が良いです
-- Xcode（devicectl が使えること）
+- Xcode（devicectl が使えること）。iPhone の iOS に対応した SDK を持つ版が必要です（[Apple の表](https://developer.apple.com/support/xcode/)）: iOS 17.4〜17.x は Xcode 15.3 以降（macOS 14）、iOS 18 は Xcode 16（macOS 14.5 以降）、iOS 26 は Xcode 26（macOS 15.6 以降）、iOS 27 は Xcode 27（macOS 26.6 以降）。`roamrun logs` と `run --logs` には Xcode 16 以降が必要です（`devicectl` の `--console` が入った版）
 - Tailscale（または任意の mesh VPN + 手動 IP 指定）が Mac/iPhone 両方で接続済み
 - iPhone をこの Mac と一度ペアリング済み（USB、または Xcode 27 + iOS 27 なら同じ Wi-Fi 上で Device Hub の「+」→「Pair Nearby Device…」）、デベロッパモード ON
 - つなぐときは iPhone が**何らかの Wi-Fi に接続していること**（cellular 不可: remotepairingd は Wi-Fi association を前提に listen する）。**Ready for Xcode**（別の Wi-Fi からブリッジ中）になったあとは、Settings › Network の **Keep debugging on cellular** をオンにしておけば、モバイル通信に移っても Xcode のセッションをそのまま使えます（初期値はオフ。オンにすると Run のたびに iPhone のモバイル通信を使います）
@@ -156,7 +156,7 @@ roamrun ota [<name>] <App.ipa> [--replace] # ブリッジを通さず、実機�
                                            #   インストールのみ。Ad Hoc か Enterprise 署名が必要（下記参照）
 ```
 
-オプション: `--json`（`devices`、`status`、`doctor`）、`--wait N`（`status`: 最大 N 秒 Ready を待つ。各回はデバイスごとに devicectl を 2 回実行してから次の判定に進むため、N を数秒過ぎて返ることがあります。N が 10 未満のときは各 devicectl 呼び出しも短くなります（下限 5 秒））、`-v`（`up`: アクティビティログを表示）、`--workspace W` / `--project P` / `--configuration C`（`run`）、`--replace`（`ota`: 同じバージョン・ビルド番号で既に並んでいるものを消す）。一覧は `roamrun --help` で表示されます。コマンドが受け付けないオプションはエラーになります（exit 2）。
+オプション: `--json`（`devices`、`status`、`doctor`。`devices` は CoreDevice に問い合わせないので、その `ready` は「ブリッジが Ready か、デバイスがこの Wi‑Fi にいるか」だけを表します。Xcode から使えるかは `status` で確かめてください）、`--wait N`（`status`: 最大 N 秒 Ready を待つ。各回はデバイスごとに devicectl を 2 回実行してから次の判定に進むため、N を数秒過ぎて返ることがあります。N が 10 未満のときは各 devicectl 呼び出しも短くなります（下限 5 秒））、`-v`（`up`: アクティビティログを表示）、`--workspace W` / `--project P` / `--configuration C`（`run`）、`--replace`（`ota`: 同じバージョン・ビルド番号で既に並んでいるものを消す）。一覧は `roamrun --help` で表示されます。コマンドが受け付けないオプションはエラーになります（exit 2）。
 
 CLI はアプリの設定を使うので、`roamrun up` で始めたブリッジも **Keep debugging on cellular** に従います。SSH 越しなどでアプリの Settings を開けないときは、`defaults` で切り替えてください。
 
@@ -254,7 +254,8 @@ roamrun ota iPhone build/MyApp.ipa     # 1台だけ確認したいときは名�
   Enterprise 署名ならどれも不要です
 - **tailnet で HTTPS が有効なこと**（MagicDNS と HTTPS 証明書）。RoamRun は**専用ポート**を
   1 つだけ使い（既定 41443。変更は `defaults write io.github.mh-mobile.roamrun otaPort -int …`。
-  443 / 8443 / 10000 は Funnel で公開できてしまうポートなので受け付けず、41443 のままになります）、
+  443 / 8443 / 10000 は Funnel で公開できてしまうポートなので受け付けず、41443 のままになります。
+  1024 未満と 65535 を超えるポートも同じく 41443 になります）、
   終了時に返します。あなたが他に serve しているものが載る `:443` には**一切触りません**。
   また Tailscale Funnel が現在公開できるのは 443 / 8443 / 10000 の 3 つだけなので、
   **それ以外のポートはインターネットに出しようがありません**。RoamRun が Funnel を
@@ -349,9 +350,9 @@ defaults delete com.roamrun.app 2>/dev/null      # 0.1.12 より前の版が残�
 `roamrun ota` を使った場合、上の表の外にもう 1 つ残るものがあります。RoamRun は
 `tailscale serve` にポート（`otaPort` で指定したもの。既定 41443）を持たせ、正常終了時には
 返しますが、強制終了やクラッシュでは返りません。上の `tailscale serve --https=41443 --set-path=/ off` で消せます。RoamRun をもう一度
-開いても消えます（そのポートに残った自分のものを認識して返します）。見つけられないのは、
-アプリを止めている間に `otaPort` を変えた場合の「別ポートに残ったもの」だけです
-（見るのは現在の設定ポートだけ）。
+開いても消えます（残った自分のものを認識して返します）。見るのは現在の設定ポートと、
+直近 5 回の登録で使ったポートすべてなので、`otaPort` を変える前のポートに残ったものも
+見つかります。見つけられないのは、それより古いものだけです。
 
 **アンインストールの前に RoamRun を終了してください。** `brew uninstall --zap` は
 「どのエントリが RoamRun のものか」を記録した設定ごと消すため、終了を挟まずに消すと、

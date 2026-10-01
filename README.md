@@ -76,7 +76,7 @@ sequenceDiagram
 - macOS 13+ on Apple Silicon (Intel Macs aren't supported), with an **administrator account** (RoamRun reads remotepairingd's log with `log stream`, which macOS only allows admins)
 - iOS 17.4 or later on the iPhone (the generation whose CoreDevice tunnel is TCP; the QUIC/UDP tunnel of 17.0–17.3 isn't supported)
 - Also verified with iPad and Apple Vision Pro, which work the same way ("iPhone" below includes them). Vision Pro has no USB and is developed for over Wi-Fi anyway, which makes it a natural fit for working away from the Mac
-- Xcode (`devicectl` must be available)
+- Xcode (`devicectl` must be available) whose SDK covers the iPhone's iOS, per [Apple's table](https://developer.apple.com/support/xcode/): iOS 17.4–17.x needs Xcode 15.3 or later (macOS 14), iOS 18 Xcode 16 (macOS 14.5+), iOS 26 Xcode 26 (macOS 15.6+), iOS 27 Xcode 27 (macOS 26.6+). `roamrun logs` and `run --logs` need Xcode 16 or later, where `devicectl` gained `--console`
 - Tailscale (or any mesh VPN with a manually entered IP), connected on both the Mac and the iPhone
 - The iPhone paired with this Mac once (over USB, or with Xcode 27 + iOS 27 on the same Wi-Fi via Device Hub › "+" › "Pair Nearby Device…"), with Developer Mode on
 - To connect, the iPhone must be **on some Wi-Fi network** (cellular alone won't do: remotepairingd only listens while the iPhone is on Wi-Fi). Once it shows **Ready for Xcode** (bridged from another Wi‑Fi), it can move to cellular and keep the session Xcode has, if you turn on Settings › Network › **Keep debugging on cellular** (off by default: every Run then uses the iPhone's data)
@@ -156,7 +156,7 @@ roamrun ota [<name>] <App.ipa> [--replace] # publish the build so a device can i
                                            #   bridge — install only, needs Ad Hoc or Enterprise signing (see below)
 ```
 
-Options: `--json` (`devices`, `status`, `doctor`), `--wait N` (`status`: wait up to N seconds for Ready; each round runs two devicectl calls per device before the deadline is looked at again, so it can return several seconds after N; an N below 10 also shortens each of those calls, to a floor of 5 seconds), `-v` (`up`: show the activity log), `--workspace W` / `--project P` / `--configuration C` (`run`), `--replace` (`ota`: drop builds already listed under the same version and build number). `roamrun --help` lists everything; a command rejects options it doesn't take (exit 2).
+Options: `--json` (`devices`, `status`, `doctor`; `devices` doesn't ask CoreDevice, so its `ready` only means the bridge is Ready or the device is on this Wi‑Fi — `status` tells whether Xcode can use it), `--wait N` (`status`: wait up to N seconds for Ready; each round runs two devicectl calls per device before the deadline is looked at again, so it can return several seconds after N; an N below 10 also shortens each of those calls, to a floor of 5 seconds), `-v` (`up`: show the activity log), `--workspace W` / `--project P` / `--configuration C` (`run`), `--replace` (`ota`: drop builds already listed under the same version and build number). `roamrun --help` lists everything; a command rejects options it doesn't take (exit 2).
 
 The CLI uses the app's settings, so a bridge started with `roamrun up` follows **Keep debugging on cellular** too. Without access to the app's Settings (over SSH, for example), turn it on or off with `defaults`:
 
@@ -264,7 +264,8 @@ What it needs:
 - **HTTPS in your tailnet** — MagicDNS and HTTPS certificates turned on. RoamRun
   serves on a port of its own (41443 by default, `defaults write
   io.github.mh-mobile.roamrun otaPort -int …` to change it; 443, 8443 and 10000
-  are refused and fall back to 41443, since Funnel could publish those) and gives
+  are refused and fall back to 41443, since Funnel could publish those, and so
+  are ports below 1024 and above 65535) and gives
   it back when it quits. It never touches your tailnet's `:443`, where whatever else you
   serve lives — and because Tailscale Funnel currently publishes only 443, 8443
   and 10000, a port outside those three can't be put on the internet. RoamRun
@@ -349,10 +350,10 @@ If you used `roamrun ota`, one more thing lives outside that table: RoamRun asks
 `tailscale serve` to carry one port — whichever `otaPort` names, 41443 by
 default — and gives it back when it quits, but not if it is force-quit or
 crashes. `tailscale serve --https=41443 --set-path=/ off` clears it, and so does opening
-RoamRun again: it recognises a leftover of its own on that port and gives it
-back. The one it can't find is one it made on a *different* port, if `otaPort`
-was changed while the app wasn't running — it only ever looks at the port
-configured now.
+RoamRun again: it recognises a leftover of its own and gives it back. It looks on
+the port configured now and on every port its last 5 registrations used, so a
+leftover from before `otaPort` was changed is found too. Only one older than
+that is missed.
 
 **Quit RoamRun before uninstalling.** `brew uninstall --zap` deletes the settings
 that record which entry was RoamRun's, so an entry left by an app that was never
