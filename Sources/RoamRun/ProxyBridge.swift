@@ -200,6 +200,7 @@ final class ProxyBridge: ObservableObject {
                 onProfileChange?(profile)   // kept even if it doesn't answer right now
             }
             reachable = answers
+            if reachable { pingsNotRun = 0 }   // reached at a new address or port: Tailscale works
         }
         guard gen == generation else { return }
         guard reachable else {
@@ -1199,8 +1200,9 @@ final class ProxyBridge: ObservableObject {
 
     /// A Tailscale ping of the device, noting when this Mac's side couldn't run it.
     private func pingDevice(_ ip: String) async -> TailscaleClient.Ping {
-        let ping = env.ping
+        let ping = env.ping, gen = generation
         let r = await Blocking.run { ping(ip) }
+        guard gen == generation else { return r }   // a stopped or restarted start's ping says nothing now
         if case .couldNotRun(let why) = r {
             pingsNotRun += 1
             pingNotRunWhy = why.split(separator: "\n").first.map(String.init) ?? why

@@ -2561,6 +2561,24 @@ func aNewAddressAndPortAreFoundTogether(scanFinds: Bool) async {
     #expect(rig.bridge.status == .waiting && !(rig.entry()?.detail.contains("Tailscale on this Mac") ?? true))
 }
 
+/// Recovered at a new address after two pings that couldn't run: the count starts over, so a
+/// later error for another reason doesn't carry the stale Mac-side message (2c review).
+@MainActor @Test func aRecoveryAtANewAddressClearsTheMacSideCount() async {
+    var p = inertProfile("iPhone"); p.providerHostName = "iphone"
+    let rig = Rig(p)
+    defer { rig.done() }
+    rig.world.answering = []
+    rig.world.ping = .couldNotRun("failed to connect to local Tailscale daemon")
+    await rig.bridge.start(.manual); await rig.bridge.start(.manual)
+    #expect(rig.entry()?.detail.contains("Tailscale on this Mac") == true)
+    rig.world.peers = [MeshDevice(id: "1", name: "iphone", os: "iOS", ips: ["127.0.0.2"], online: true)]
+    rig.world.advertAnswers = true                          // RemotePairing answers at the new address
+    await rig.bridge.start(.manual)
+    #expect(rig.bridge.status == .waiting)
+    rig.bridge.fail("something else")
+    #expect(!(rig.entry()?.detail.contains("Tailscale on this Mac") ?? true))
+}
+
 /// A status write that failed is made again on the next tick, as things are then (2c: F39).
 @MainActor @Test func aFailedStatusWriteIsMadeAgain() async throws {
     let rig = Rig()

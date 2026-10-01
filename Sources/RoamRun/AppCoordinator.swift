@@ -44,7 +44,10 @@ final class AppCoordinator: ObservableObject {
     private let interfaceMonitor = InterfaceMonitor()
     /// Retries, the away check, address changes and wake, shared with `roamrun up`.
     private lazy var supervisor = BridgeSupervisor(
-        all: { [unowned self] in Array(self.bridges.values) },
+        all: { [unowned self] in
+            self.departing.removeAll { !$0.statusWritePending }
+            return Array(self.bridges.values) + self.departing
+        },
         wanted: { [unowned self] in self.wasActiveIDs.contains($0.profile.id) && self.profile($0.profile.id) != nil },
         start: { [unowned self] list, reason in
             let live = StatusFile.read()
@@ -54,6 +57,9 @@ final class AppCoordinator: ObservableObject {
     /// Per saved device, kept across its bridges: a rebuilt one (edited endpoint, port found
     /// again) remembers what the old one learned.
     private var memories: [UUID: DeviceMemory] = [:]
+    /// Deleted devices' bridges whose status removal failed: kept until a retry lands it, or
+    /// the entry (this app's own, so never stale) would make the iPhone a duplicate if added again.
+    private var departing: [ProxyBridge] = []
     /// Set at launch when bridges left on are being brought back.
     private(set) var isRestoringBridges = false
     private var wasActiveIDs: Set<UUID> {
@@ -813,7 +819,10 @@ final class AppCoordinator: ObservableObject {
         stopExternalBridge(id)   // a `roamrun up` for it would otherwise live on, unstoppable by name
         if let spoof = bridges[id]?.spoofHost { capture.ownedHosts.remove(spoof) }
         if selectedID == id { selectedID = nil }
-        bridges[id]?.stop()   // its status entry would stay, and the same iPhone added again read as a duplicate
+        if let b = bridges[id] {
+            b.stop()   // its status entry would stay, and the same iPhone added again read as a duplicate
+            if b.statusWritePending { departing.append(b) }
+        }
         bridges[id] = nil
         bridgeObservers[id] = nil
         memories[id] = nil
