@@ -134,3 +134,5 @@ final class DNSServiceProxy: @unchecked Sendable {
     }
 
 }
+
+extension DNSServiceProxy: BonjourRecord {}

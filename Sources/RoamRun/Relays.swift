@@ -46,6 +46,7 @@ final class Relay: @unchecked Sendable {
     private var connections: [NWConnection] = []
     /// Each pair's byte counters, by its inbound connection.
     private var stats: [ObjectIdentifier: ConnStats] = [:]
+    private let clock: @Sendable () -> UInt64
     /// Inbound connections whose upstream leg is established. An accepted
     /// connection that never reaches the iPhone must not count as "connected".
     private var established = Set<ObjectIdentifier>()
@@ -99,9 +100,12 @@ final class Relay: @unchecked Sendable {
 
     /// The callback is given here, not assigned afterwards: start() returns with the
     /// listener already accepting, and the calls that read it run off the main actor.
+    /// `clock`: uptime (ns) the last-byte times are kept in.
     init(localIP: String, localPort: UInt16, remoteIP: String, remotePort: UInt16, spare: Bool = false,
+         clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds },
          onOpenCountChange: ((Int) -> Void)? = nil, onFailure: ((Relay) -> Void)? = nil) {
         self.spare = spare
+        self.clock = clock
         self.onOpenCountChange = onOpenCountChange
         self.onFailure = onFailure
         self.localIP = localIP
@@ -225,7 +229,7 @@ final class Relay: @unchecked Sendable {
 
     /// Some pair got bytes from the device within `seconds` — the far end is alive.
     func heardFromDevice(within seconds: TimeInterval) -> Bool {
-        let now = DispatchTime.now().uptimeNanoseconds, span = UInt64(seconds * 1e9)
+        let now = clock(), span = UInt64(seconds * 1e9)
         let since = now > span ? now - span : 0
         return lock.withLock { stats.values.contains { $0.lastHeard > 0 && $0.lastHeard >= since } }
     }
@@ -233,7 +237,7 @@ final class Relay: @unchecked Sendable {
     /// No pair has moved a byte for `seconds` (or there are none). Standbys stay open
     /// but silent, so a relay the tunnel has left behind is quiet, not empty.
     func quiet(for seconds: TimeInterval) -> Bool {
-        let now = DispatchTime.now().uptimeNanoseconds, span = UInt64(seconds * 1e9)
+        let now = clock(), span = UInt64(seconds * 1e9)
         let since = now > span ? now - span : 0
         return lock.withLock { stats.values.allSatisfy { $0.lastActive < since } }
     }
@@ -262,7 +266,7 @@ final class Relay: @unchecked Sendable {
         }
         guard let rport = NWEndpoint.Port(rawValue: remotePort) else { inbound.cancel(); return }
         let outbound = NWConnection(host: NWEndpoint.Host(remoteIP), port: rport, using: Self.tcpParams(keepalive: true))
-        let stats = ConnStats()
+        let stats = ConnStats(clock: clock)
         let port = remotePort
         let finish: @Sendable (String) -> Void = { [weak self] reason in
             stats.logOnce("tcp :\(port) sent=\(stats.up)B recv=\(stats.down)B \(reason)")
@@ -405,8 +409,10 @@ private final class ConnStats: @unchecked Sendable {
     private let lock = NSLock()
     private var _up = 0, _down = 0, doneDirections = 0
     private var logged = false
+    private let clock: @Sendable () -> UInt64
     /// Uptime (ns) of the last bytes either way, or of the pair's start.
-    private var _lastActive = DispatchTime.now().uptimeNanoseconds
+    private var _lastActive: UInt64
+    init(clock: @escaping @Sendable () -> UInt64) { self.clock = clock; _lastActive = clock() }
 
     var lastActive: UInt64 { lock.lock(); defer { lock.unlock() }; return _lastActive }
     /// Uptime (ns) of the last bytes from the device; 0 until any arrive. Not the pair's
@@ -420,7 +426,7 @@ private final class ConnStats: @unchecked Sendable {
     func add(_ n: Int, up isUp: Bool) {
         lock.lock(); defer { lock.unlock() }
         if isUp { _up += n } else { _down += n }
-        _lastActive = DispatchTime.now().uptimeNanoseconds
+        _lastActive = clock()
         if !isUp { _lastHeard = _lastActive }
     }
 
