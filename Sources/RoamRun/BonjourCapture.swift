@@ -85,6 +85,7 @@ final class BonjourCapture: ObservableObject {
 
     func stop() {
         stopped = true
+        launchFailing = false   // the next start's failure is news again
         scan += 1
         process?.terminate()
         process = nil
