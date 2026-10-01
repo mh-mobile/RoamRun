@@ -242,7 +242,9 @@ final class ProxyBridge: ObservableObject {
             onLog: { m in me.value?.log(m) },
             onExit: { m in me.value?.helperDied(m, gen: gen) }))
         dnsProxy.onExit = { [weak self] status in
-            Task { @MainActor in self?.helperDied("dns-sd exited (status \(status))", gen: gen) }
+            let what = status == -1 ? "dns-sd couldn't be replaced (the old registration didn't stop, or the new one didn't launch)"
+                                    : "dns-sd exited (status \(status))"
+            Task { @MainActor in self?.helperDied(what, gen: gen) }
         }
         guard subscribed else {
             teardown()

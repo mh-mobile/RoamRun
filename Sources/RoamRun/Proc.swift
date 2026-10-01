@@ -61,8 +61,10 @@ enum Proc {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/sh")
         // The trap only raises a flag: a TERM between `&` and `c=$!` would find no pid to
-        // kill, so the loop, which runs after `c` is set, does the killing.
-        let watchdog = #"t=; trap 't=1' TERM INT HUP; "$0" "$@" & c=$!; while [ -z "$t" ] && kill -0 $PPID 2>/dev/null && kill -0 $c 2>/dev/null; do sleep 0.5 & wait $!; done; kill $c 2>/dev/null; wait $c; s=$?; [ -n "$t" ] && exit 0; exit $s"#
+        // kill, so the loop, which runs after `c` is set, does the killing. The TERM is
+        // repeated until the child is gone: one sent before the child's exec meets the
+        // trap it inherited and is lost, and a second signal mustn't end the wait early.
+        let watchdog = #"t=; trap 't=1' TERM INT HUP; "$0" "$@" & c=$!; while [ -z "$t" ] && kill -0 $PPID 2>/dev/null && kill -0 $c 2>/dev/null; do sleep 0.5 & wait $!; done; kill $c 2>/dev/null; while kill -0 $c 2>/dev/null; do sleep 0.2 & wait $!; kill $c 2>/dev/null; done; wait $c; s=$?; [ -n "$t" ] && exit 0; exit $s"#
         task.arguments = ["-c", watchdog, path] + args
         return task
     }

@@ -24,6 +24,7 @@ final class DNSServiceProxy: @unchecked Sendable {
         return true
     }
     /// `dns-sd -P` died on its own (not via stop()/renew()): the record is gone.
+    /// -1: a renew couldn't replace it (the old one didn't stop, or the new one didn't launch).
     var onExit: ((Int32) -> Void)?
 
     /// - Parameters:
