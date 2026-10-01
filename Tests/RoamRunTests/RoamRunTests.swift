@@ -3139,7 +3139,7 @@ private func mounted(_ port: Int, _ target: String) -> TailscaleClient.Serving {
     TailscaleClient.serving(port: port, inJSON: #"{"Web":{"mac.ts.net:\#(port)":{"Handlers":{"/":{"Proxy":"\#(target)"}}}}}"#)
 }
 
-enum ReleaseCase: String, CaseIterable { case unreadable, alreadyGone, oursOffWorks, oursOffFails, someoneElses, noHostName }
+enum ReleaseCase: String, CaseIterable { case unreadable, alreadyGone, oursOffWorks, oursOffFails, someoneElses, oursUnderAnOldName, noHostName }
 
 /// Giving one registration back: only what is provably ours is removed, and it is
 /// forgotten only once it is gone.
@@ -3153,6 +3153,9 @@ func releaseServeOutcomes(_ c: ReleaseCase) {
     case .oursOffWorks: fake.states[41443] = mounted(41443, mine)
     case .oursOffFails: fake.states[41443] = mounted(41443, mine); fake.offWorks = false
     case .someoneElses: fake.states[41443] = mounted(41443, "http://127.0.0.1:8788")
+    case .oursUnderAnOldName:   // the node was renamed: `off` would hit whatever took its place
+        fake.states[41443] = TailscaleClient.serving(port: 41443,
+            inJSON: #"{"Web":{"old.ts.net:41443":{"Handlers":{"/":{"Proxy":"\#(mine)"}}}}}"#)
     case .noHostName: fake.states[41443] = mounted(41443, mine); fake.host = nil
     }
     let gone = AppCoordinator.releaseServe((port: 41443, target: mine), tools: fake.tools)
@@ -3161,7 +3164,7 @@ func releaseServeOutcomes(_ c: ReleaseCase) {
     case .alreadyGone: (true, false, true)
     case .oursOffWorks: (true, true, true)
     case .oursOffFails: (false, true, false)       // still there: remembered, so the next run knows it
-    case .someoneElses: (true, false, true)        // not ours to remove; ours is gone
+    case .someoneElses, .oursUnderAnOldName: (true, false, true)   // not ours to remove; ours is gone
     case .noHostName: (false, false, false)
     }
     #expect(gone == expectGone, "\(c)")
@@ -3172,15 +3175,15 @@ func releaseServeOutcomes(_ c: ReleaseCase) {
 /// Leftovers are looked for on every port the record names and the one configured now;
 /// only our own mount is removed, never the one this run serves from or the user's.
 @Test func reclaimStraysRemovesOnlyOurLeftovers() {
-    let old = "http://127.0.0.1:50001", live = "http://127.0.0.1:50002"
-    let fake = FakeServe(record: ["41444 \(old)", "41443 \(live)"])
+    let old = "http://127.0.0.1:50001", live = "http://127.0.0.1:50002", older = "http://127.0.0.1:50003"
+    let fake = FakeServe(record: ["41444 \(old)", "41446 \(older)", "41443 \(live)"])
     fake.states[41444] = mounted(41444, old)               // a killed run's, after otaPort changed
     fake.states[41443] = mounted(41443, live)              // this run's
-    fake.states[41445] = mounted(41445, "http://127.0.0.1:8788")
+    fake.states[41446] = mounted(41446, "http://127.0.0.1:8788")   // ours was replaced by the user's
     fake.otaPort = 41443
     #expect(AppCoordinator.reclaimStrays(keeping: (port: 41443, target: live), tools: fake.tools) == true)
-    #expect(fake.offs == [41444])
-    #expect(fake.record == ["41443 \(live)"])
+    #expect(fake.offs == [41444])                          // never the live one, never the user's
+    #expect(fake.record == ["41446 \(older)", "41443 \(live)"])
 
     // One port it couldn't read: not "done", so the sweep runs again later.
     let unsure = FakeServe(record: ["41444 \(old)"])
@@ -3195,17 +3198,27 @@ func releaseServeOutcomes(_ c: ReleaseCase) {
 
 /// A tunnel port far from the old window: the idle relays left behind are closed, and the
 /// count of covered ports matches what listens.
+/// Not tested here: a relay outside the window that still carries traffic stays. That needs a
+/// device end that answers, which the faked env doesn't have.
 @MainActor @Test func tunnelRelaysLeftBehindAreReaped() async {
     let rig = Rig()
     defer { rig.done() }
     await rig.bridge.start(.manual)
-    rig.bridge.onTunnelPortDiscovered(38_100, localIP: "127.0.0.1")
+    let a = freeBase(in: 38_000...38_900, count: 140)
+    let b = a + 20, far = a + 120
+    rig.bridge.onTunnelPortDiscovered(a, localIP: "127.0.0.1")
     #expect(await eventuallyOnMain { rig.bridge.bindsInFlight == 0 && rig.bridge.tunnelRelayPorts.count == 17 })
-    rig.bridge.onTunnelPortDiscovered(38_200, localIP: "127.0.0.1")
-    #expect(await eventuallyOnMain { rig.bridge.bindsInFlight == 0 && rig.bridge.tunnelRelayPorts.min() == 38_200 })
-    #expect(rig.bridge.tunnelRelayPorts == Set(38_200...38_216))
-    // The control relay may have moved up from its port (taken here): only the tunnel band is compared.
-    #expect(rig.bridge.coveredPortsForTests.filter { (38_000...38_999).contains($0) } == rig.bridge.tunnelRelayPorts)
+    // A step ahead: the old ones are still inside newest-32…newest+16, so they stay.
+    rig.bridge.onTunnelPortDiscovered(b, localIP: "127.0.0.1")
+    #expect(await eventuallyOnMain {
+        rig.bridge.bindsInFlight == 0 && rig.bridge.tunnelRelayPorts == Set(a...(a + 16)).union(b...(b + 16))
+    })
+    // A jump: everything idle outside the new window goes.
+    rig.bridge.onTunnelPortDiscovered(far, localIP: "127.0.0.1")
+    #expect(await eventuallyOnMain { rig.bridge.bindsInFlight == 0 && rig.bridge.tunnelRelayPorts.min() == far })
+    #expect(rig.bridge.tunnelRelayPorts == Set(far...(far + 16)))
+    guard case .active(let control, _) = rig.bridge.state else { Issue.record("not active"); return }
+    #expect(rig.bridge.coveredPortsForTests == rig.bridge.tunnelRelayPorts.union([control]))
 }
 
 extension TimingSensitive.OTAServerOverASocket {
