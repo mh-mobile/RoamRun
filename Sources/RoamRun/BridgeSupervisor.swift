@@ -106,6 +106,9 @@ final class BridgeSupervisor {
     /// Wi‑Fi down) so nobody has to. Failing again and again, each waits longer (up to 10
     /// minutes); meanwhile a cheap look at its port each tick brings it back at once.
     func retry() {
+        // A status write that failed is made again, as things are now (off or idle bridges too:
+        // a stop's removal that didn't land would leave the device looking taken).
+        all().forEach { $0.retryStatusWriteIfPending() }
         let errored = all().filter { wanted($0) && $0.status == .error }
         let retryable = errored.filter(\.autoRetry)
         // The wait counts from the tick that started the failed attempt; a second of slack for
