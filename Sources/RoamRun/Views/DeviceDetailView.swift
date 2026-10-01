@@ -299,6 +299,7 @@ private struct ConnectionPath: View {
 /// Observes the log itself: the coordinator doesn't re-publish its changes, so a
 /// line logged while nothing else changed showed only on the next unrelated update.
 private struct DeviceLog: View {
+    private static let end = "end"
     @ObservedObject var log: LogStore
     let device: UUID
 
@@ -314,6 +315,7 @@ private struct DeviceLog: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .id(i)
                         }
+                        Color.clear.frame(height: 1).id(Self.end)   // below the padding-free last line
                     }
                     .padding(8)
                     .textSelection(.enabled)
@@ -322,8 +324,9 @@ private struct DeviceLog: View {
                 .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.4)))
                 .onChange(of: log.appended) { _ in   // not lines.count: that stops at the log's limit
                     // Only for this device's own lines: another's mustn't pull a reader back down.
-                    guard log.lines.last?.device == device, let last = lines.indices.last else { return }
-                    proxy.scrollTo(last, anchor: .bottom)
+                    guard log.lines.last?.device == device else { return }
+                    // Next turn: the new line isn't laid out yet, so it stopped one line short.
+                    DispatchQueue.main.async { proxy.scrollTo(Self.end, anchor: .bottom) }
                 }
             }
             Button("Copy Log") {
