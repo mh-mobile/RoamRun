@@ -288,6 +288,9 @@ final class AppCoordinator: ObservableObject {
     /// Said once per reason: the retry runs every 30s and the log is a person's.
     private var otaComplaint = ""
     private var verifyingOTA = false
+    /// Bumped by each start of the OTA server and by turning it off: a start that
+    /// finishes under an older number is no longer wanted.
+    private var otaAttempt = 0
     /// Whether to look for registrations a run left behind, and a generation so
     /// a sweep that started earlier can't clear a request made while it ran.
     /// An entry left by a run that didn't give it back is invisible to
@@ -387,7 +390,10 @@ final class AppCoordinator: ObservableObject {
             guard Self.beginServeChange() else { return }            // one of these is already running
             Task.detached { [weak self] in
                 defer { Self.endServeChange() }
-                guard Self.releaseServe(published) else { return }   // else the next tick tries again
+                guard Self.releaseServe(published) else {             // the next tick tries again
+                    await MainActor.run { self?.couldNotRelease(published.port) }
+                    return
+                }
                 await MainActor.run { if self?.otaPublished?.port == published.port { self?.otaPublished = nil } }
             }
             return
@@ -416,7 +422,8 @@ final class AppCoordinator: ObservableObject {
         }
         guard !apps.isEmpty else {
             // Deleting the folder is the off switch, whether or not the page ever
-            // got published: the listener goes either way.
+            // got published: the listener goes either way, one still coming up too.
+            otaAttempt += 1
             otaServer?.stop()
             otaServer = nil
             if let published = otaPublished, Self.beginServeChange() {
@@ -424,7 +431,10 @@ final class AppCoordinator: ObservableObject {
                 // port nothing holds any more would otherwise be unfindable.
                 Task.detached { [weak self] in                     // shells out twice; not on the main actor
                     defer { Self.endServeChange() }
-                    guard Self.releaseServe(published) else { return }
+                    guard Self.releaseServe(published) else {
+                        await MainActor.run { self?.couldNotRelease(published.port) }
+                        return
+                    }
                     await MainActor.run { if self?.otaPublished?.port == published.port { self?.otaPublished = nil } }
                 }
             }
@@ -469,17 +479,23 @@ final class AppCoordinator: ObservableObject {
             otaServer = nil
         }
         let server = otaServer ?? OTAServer(tailnetPort: tailnetPort)
-        // ponytail: opening the listener waits on the network stack, so this can
-        // hold the main actor for up to 5 s if it never comes up. Moving it off
-        // needs OTAServer out of this actor's region; do that if it ever shows.
-        guard let port = server.start() else {
-            Self.endServeChange()
-            complainOnce("couldn't start the over-the-air server")
-            return
-        }
-        otaServer = server
+        otaAttempt += 1
+        let attempt = otaAttempt
         Task.detached { [weak self] in
             defer { Self.endServeChange() }
+            // Off the main actor: the listener can take up to 5 s to come up.
+            guard let port = server.start() else {
+                await MainActor.run { self?.complainOnce("couldn't start the over-the-air server") }
+                return
+            }
+            // Turned off (or quitting) while it came up: a server nobody wants
+            // would hold its port until the app quits.
+            let wanted = await MainActor.run { () -> Bool in
+                guard let self, self.otaAttempt == attempt else { return false }
+                self.otaServer = server
+                return true
+            }
+            guard wanted else { server.stop(); return }
             let mine = "http://127.0.0.1:\(port)"
             // Only ever replace an entry we can prove we made — ours from a run
             // that ended without releasing it. Anything else on that port is the
@@ -538,12 +554,23 @@ final class AppCoordinator: ObservableObject {
                     return
                 }
             }
-            // Written before the call, not after: quitting while `tailscale` is
-            // still working would otherwise leave an entry finished by a child
-            // that outlived us, with nothing left to say it was ours.
-            Self.rememberServing(mine, on: tailnetPort)
-            let out = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
-                               ["serve", "--bg", "--yes", "--https=\(tailnetPort)", mine], timeout: 20)
+            let step = await Self.publish(mine, on: tailnetPort, expecting: state) {
+                await MainActor.run { self?.otaAttempt == attempt }
+            }
+            let after: TailscaleClient.Serving, said: String
+            switch step {
+            case .changed:
+                await MainActor.run {
+                    self?.complainOnce("port \(tailnetPort) changed while RoamRun was checking it; looking again shortly")
+                }
+                return
+            case .notWanted, .withdrawn:
+                server.stop()
+                return
+            case .ran(let state, let output):
+                after = state
+                said = output
+            }
             // The exit code is not the answer; the config is. `tailscale serve`
             // exits 0 without writing anything when the tailnet has no HTTPS
             // certificates: it prints the admin page's link to stdout and calls
@@ -552,10 +579,6 @@ final class AppCoordinator: ObservableObject {
             // success logged "serving builds over the air" every minute while
             // nothing was served — and `doctor` sent people to that log to find
             // out why the page was missing.
-            //
-            // Before hopping back, too: `serving` waits on `tailscale` for up to
-            // 10 s and the main actor is where the menu bar lives.
-            let after = TailscaleClient.serving(port: tailnetPort)
             let landed = after.isRegistered(mine)
             // A status we couldn't read says nothing either way, so it is neither
             // a success nor a reason to drop the one record that can find it again.
@@ -579,7 +602,6 @@ final class AppCoordinator: ObservableObject {
                     // Whatever `tailscale` said, the entry isn't there. Its stdout
                     // carries the only thing that explains the silent case — a link
                     // to the page where HTTPS certificates are turned on.
-                    let said = (out.err + "\n" + out.out).trimmingCharacters(in: .whitespacesAndNewlines)
                     self.complainOnce("port \(tailnetPort) isn't served after asking tailscale to, will retry" +
                                       (said.isEmpty ? ". Does your tailnet have HTTPS certificates turned on?"
                                                     : ": \(said)"))
@@ -624,6 +646,38 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
+    enum PublishStep: Equatable {
+        case changed      // the port isn't as it was checked: nothing written
+        case notWanted    // turned off before writing: nothing written
+        case withdrawn    // turned off while `serve` ran: given back, or left to the sweep
+        case ran(after: TailscaleClient.Serving, said: String)
+    }
+
+    /// The write itself, between two looks at whether it is still wanted. `state` is what
+    /// the port carried when checked; the reads before can take 20 s, and `serve` replaces
+    /// whatever is at `/` by then. Looking again narrows that window; it can't close it, as
+    /// `tailscale serve` has no write-if-unchanged. Turned off meanwhile: publishing a
+    /// stopped server would leave the address answering 502 until the next tick.
+    nonisolated static func publish(_ mine: String, on port: Int, expecting state: TailscaleClient.Serving,
+                                    tools: ServeTools = .live,
+                                    stillWanted: @Sendable () async -> Bool) async -> PublishStep {
+        guard tools.serving(port, 10) == state else { return .changed }
+        guard await stillWanted() else { return .notWanted }
+        // Written before the call, not after: quitting while `tailscale` is
+        // still working would otherwise leave an entry finished by a child
+        // that outlived us, with nothing left to say it was ours.
+        tools.remember(mine, port)
+        let said = tools.serve(port, mine)
+        guard await stillWanted() else {
+            // False leaves the record, and the next sweep gives it back.
+            _ = releaseServe((port: port, target: mine), tools: tools)
+            return .withdrawn
+        }
+        // Here, not after hopping back: `serving` waits on `tailscale` for up to
+        // 10 s and the main actor is where the menu bar lives.
+        return .ran(after: tools.serving(port, 10), said: said)
+    }
+
     /// Gives a registration back, but only while it is still exactly ours.
     /// `nonisolated` so it can run off the main actor: it shells out twice, and
     /// only the call at quit has to be synchronous.
@@ -633,6 +687,7 @@ final class AppCoordinator: ObservableObject {
     nonisolated static func releaseServe(_ published: (port: Int, target: String),
                                          timeout: TimeInterval = 10, tools: ServeTools = .live) -> Bool {
         let state = tools.serving(published.port, timeout)
+        let host: String
         switch state {
         case .unknown: return false            // couldn't look; saying it's gone is how one survives
         case .nothing: tools.forget(published.target, published.port); return true
@@ -641,15 +696,19 @@ final class AppCoordinator: ObservableObject {
             // that is the only entry we may claim — a root of ours under a name the
             // node has since changed would make us delete whatever took its place.
             // Asked only now: nothing to give back needs no name.
-            guard let host = tools.host(timeout) else { return false }
-            guard state.root(on: host) == published.target else {
+            guard let named = tools.host(timeout) else { return false }
+            guard state.root(on: named) == published.target else {
                 tools.forget(published.target, published.port)
                 return true
             }
+            host = named
         }
         // Only once it's really gone. Forgetting it while the entry survives
-        // would leave the next run unable to recognise its own registration.
+        // would leave the next run unable to recognise its own registration —
+        // and `off` exiting 0 is not that: it is how it reports removing nothing.
         guard tools.off(published.port, timeout) else { return false }
+        let after = tools.serving(published.port, timeout)
+        guard after != .unknown, after.root(on: host) != published.target else { return false }
         tools.forget(published.target, published.port)
         return true
     }
@@ -669,6 +728,13 @@ final class AppCoordinator: ObservableObject {
             Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
                      ["serve", "--https=\(port)", "--set-path=/", "off"], timeout: timeout).status == 0
         }
+        /// What `tailscale` printed, for when the entry isn't there afterwards.
+        var serve: @Sendable (_ port: Int, _ target: String) -> String = { port, target in
+            let out = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
+                               ["serve", "--bg", "--yes", "--https=\(port)", target], timeout: 20)
+            return (out.err + "\n" + out.out).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        var remember: @Sendable (_ target: String, _ port: Int) -> Void = { AppCoordinator.rememberServing($0, on: $1) }
         var remembered: @Sendable () -> [String] = { AppCoordinator.remembered() }
         var forget: @Sendable (_ target: String, _ port: Int) -> Void = { AppCoordinator.forgetServing($0, on: $1) }
         var otaPort: @Sendable () -> Int = { AppCoordinator.otaPort }
@@ -692,6 +758,12 @@ final class AppCoordinator: ObservableObject {
         (try? TailscaleClient.fromSettings().selfDNSName(timeout: timeout)) ?? nil
     }
 
+    /// Said, or a release `tailscale` keeps not doing retries every tick in silence.
+    private func couldNotRelease(_ port: Int) {
+        complainOnce("couldn't confirm port \(port) was given back; trying again. " +
+                     "`tailscale serve --https=\(port) --set-path=/ off` clears it")
+    }
+
     private func complainOnce(_ line: String) {
         guard line != otaComplaint else { return }
         otaComplaint = line
@@ -704,6 +776,7 @@ final class AppCoordinator: ObservableObject {
         // to give back with no server left.
         let server = otaServer
         otaServer = nil
+        otaAttempt += 1
         if let published = otaPublished {
             otaPublished = nil
             // Before the listener, not after: in between, the address answers 502
@@ -717,7 +790,7 @@ final class AppCoordinator: ObservableObject {
                 logStore.log("port \(published.port) is already being changed; leaving it to that")
             } else {
                 // Short here, unlike the background paths: this runs on the thread
-                // the app quits on. Three calls in a row, so ~6 s at worst, and only
+                // the app quits on. Four calls in a row, so ~8 s at worst, and only
                 // when tailscaled isn't answering — which is when `off` fails anyway.
                 // The record stays, so the next launch reclaims it.
                 let gone = Self.releaseServe(published, timeout: 2)

@@ -22,6 +22,9 @@ private final class IdleTimer: @unchecked Sendable {
         }
         queue.asyncAfter(deadline: .now() + seconds, execute: work)
     }
+
+    /// A finished connection's timer would otherwise sit there for the idle limit.
+    func cancel() { lock.withLock { pending?.cancel(); pending = nil } }
 }
 
 /// Serves the OTA page, the manifests and the .ipa files on loopback, for
@@ -134,18 +137,20 @@ final class OTAServer: @unchecked Sendable {
             return true
         }
         guard accepted else { conn.cancel(); return }
-        conn.stateUpdateHandler = { [weak self, weak conn] state in
-            switch state {
-            case .failed: conn?.cancel()        // always ends at .cancelled, so `closed` runs once
-            case .cancelled: if let conn { self?.closed(conn) }
-            default: break
-            }
-        }
         // A peer that stops reading would otherwise hold a file handle and a
         // chunk of an .ipa until the app quits. Time without progress, not time
         // altogether: this exists for slow cellular, where a big .ipa legitimately
         // takes a long while.
-        let idle = IdleTimer(queue: queue) { conn.cancel() }
+        let idle = IdleTimer(queue: queue) { [weak conn] in conn?.cancel() }
+        conn.stateUpdateHandler = { [weak self, weak conn] state in
+            switch state {
+            case .failed: conn?.cancel()        // always ends at .cancelled, so `closed` runs once
+            case .cancelled:
+                idle.cancel()
+                if let conn { self?.closed(conn) }
+            default: break
+            }
+        }
         // Armed to the head's deadline, not the idle limit: a peer that connects
         // and never sends produces no callback to check a deadline in, and eight
         // of those are every connection there is. `pump` re-arms it to the idle
@@ -317,11 +322,24 @@ final class OTAServer: @unchecked Sendable {
             "Content-Length: \(size)\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
         conn.send(content: Data(head.utf8), completion: .contentProcessed { [weak self] error in
             guard error == nil else { try? handle.close(); conn.cancel(); return }
-            self?.pump(conn, handle, idle)
+            self?.pump(conn, handle, idle, since: .now(), sent: 0)
         })
     }
 
-    private func pump(_ conn: NWConnection, _ handle: FileHandle, _ idle: IdleTimer) {
+    /// A peer trickling a few bytes at a time never trips the idle timer, and eight of
+    /// them are every connection there is. Low on purpose: 8 KB/s still brings a 100 MB
+    /// build down in under four hours, so only a peer that isn't really downloading goes.
+    static func tooSlow(sent: Int64, after seconds: TimeInterval) -> Bool {
+        seconds >= 300 && Double(sent) < seconds * 8 * 1024
+    }
+
+    private func pump(_ conn: NWConnection, _ handle: FileHandle, _ idle: IdleTimer, since: DispatchTime, sent: Int64) {
+        let elapsed = Double(DispatchTime.now().uptimeNanoseconds - since.uptimeNanoseconds) / 1e9
+        if Self.tooSlow(sent: sent, after: elapsed) {
+            try? handle.close()
+            conn.cancel()
+            return
+        }
         idle.arm(Self.idleLimit)   // it is moving, so it isn't idle
         let chunk: Data
         do {
@@ -341,7 +359,7 @@ final class OTAServer: @unchecked Sendable {
         }
         conn.send(content: chunk, completion: .contentProcessed { [weak self] error in
             guard error == nil else { try? handle.close(); conn.cancel(); return }
-            self?.pump(conn, handle, idle)
+            self?.pump(conn, handle, idle, since: since, sent: sent + Int64(chunk.count))
         })
     }
 }
