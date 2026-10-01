@@ -154,7 +154,7 @@ final class ProxyBridge: ObservableObject {
         // A SIGKILLed app or `roamrun up` leaves dns-sd advertising a dead relay.
         // Off the main actor: `ps` can take a while.
         let killOrphans = env.killOrphanedHelpers
-        let killed = await Task.detached { killOrphans() }.value
+        let killed = await Blocking.run { killOrphans() }
         guard gen == generation else { return }
         if killed > 0 { log("killed \(killed) leftover helper process(es)") }
 
@@ -679,7 +679,7 @@ final class ProxyBridge: ObservableObject {
             let reached = answers ? true
                 : await Self.stillReached(tailscale: tailscale,
                                           heardJustNow: tunnelRelays.values.contains { $0.heardFromDevice(within: 10) },
-                                          ping: { [ping = env.ping] in await Task.detached { ping(ip) }.value })
+                                          ping: { [ping = env.ping] in await Blocking.run { ping(ip) } == .pong })
             probingNetwork = false
             guard gen == generation else { return }
             evaluate(probe: answers ? .answers : reached ? .silentReachable : .unreachable)
@@ -757,7 +757,7 @@ final class ProxyBridge: ObservableObject {
         if p.providerID == MeshProvider.tailscale.rawValue, !p.providerHostName.isEmpty {
             setState(.starting("Looking up \(p.providerHostName) on Tailscale"))
             let list = env.listDevices
-            let peers = await Task.detached { try? list() }.value ?? []
+            let peers = await Blocking.run { try? list() } ?? []
             // Renamed on Tailscale (same address): follow the new name, so a later address change is found.
             if let current = peers.first(where: { $0.ips.contains(p.providerIP) }), current.name != p.providerHostName {
                 log("Tailscale name is now \(current.name) (was \(p.providerHostName))")
@@ -774,7 +774,7 @@ final class ProxyBridge: ObservableObject {
         let ip = p.providerIP
         let ping = env.ping
         guard p.providerID == MeshProvider.tailscale.rawValue, env.now() > noScanUntil,
-              await Task.detached(operation: { ping(ip) }).value else { return (p, false) }
+              await Blocking.run({ ping(ip) }) == .pong else { return (p, false) }
         // Awaited twice above: a Stop or a restart meanwhile owns the state now.
         guard step("Looking for \(profile.displayName)'s RemotePairing port", gen: gen) else { return (p, false) }
         let port: UInt16
@@ -838,7 +838,7 @@ final class ProxyBridge: ObservableObject {
                 // Port closed while the device answers Tailscale: it moved. Asleep: keep waiting.
                 guard !(await env.checkTCP(ip, profile.remotePairingPort)),
                       profile.providerID == MeshProvider.tailscale.rawValue,
-                      await Task.detached(operation: { ping(ip) }).value,
+                      await Blocking.run({ ping(ip) }) == .pong,
                       gen == generation, state.isActive, !phoneConnected, !tunnelCarriesTraffic else {
                     if gen == generation, state.isActive, !phoneConnected { dnsProxy.renew() }   // asleep: keep nudging
                     return
@@ -936,7 +936,7 @@ final class ProxyBridge: ObservableObject {
             let recent = env.recentAdvert
             let instance = bridging
                 ? HomeRule.bridgingAdvert(seenAdvert, activatedAt: activatedAt, now: now)
-                : await Task.detached(operation: { recent(udid, fake) }).value
+                : await Blocking.run { recent(udid, fake) }
             if !bridging, let instance { homeAdvert = instance }
             if let instance, await answers(instance) { return decided(true, "advert \(instance.prefix(8))") }
         }
@@ -975,13 +975,13 @@ final class ProxyBridge: ObservableObject {
     /// even after the iPhone rotated its Bonjour instance name.
     static func isOnLAN(_ profile: DeviceProfile) async -> Bool {
         let ip = profile.providerIP
-        let direct = await Task.detached { Result { try TailscaleClient.fromSettings().directHost(ip) } }.value
+        let direct = await Blocking.run { Result { try TailscaleClient.fromSettings().directHost(ip) } }
         guard profile.providerID == MeshProvider.tailscale.rawValue, case .success(let found) = direct else {
             // ponytail: no Tailscale CLI (or a manual IP) — probe the host name seen at Add. Misses a
             // renamed iPhone and can hit another iPhone of the same name; set the CLI path to avoid.
             return await ReachabilityProbe.speaksRemotePairing(host: profile.bonjourHost, port: profile.remotePairingPort, timeout: 2)
         }
-        guard let host = found, await Task.detached(operation: { isOnLink(host) }).value else { return false }
+        guard let host = found, await Blocking.run({ isOnLink(host) }) else { return false }
         return await ReachabilityProbe.speaksRemotePairing(host: host, port: profile.remotePairingPort, timeout: 2)
     }
 

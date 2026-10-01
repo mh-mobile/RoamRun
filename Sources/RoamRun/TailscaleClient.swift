@@ -311,10 +311,33 @@ struct TailscaleClient {
     }
 
     /// Tailscale-level reachability (disco ping), independent of iPhone services.
-    func ping(_ ip: String) -> Bool {
-        guard let path = resolvedPath() else { return false }
+    func ping(_ ip: String) -> Bool { pingResult(ip) == .pong }
+
+    enum Ping: Equatable, Sendable {
+        case pong
+        /// It ran and nothing answered.
+        case noPong
+        /// No answer either way: no CLI, it didn't launch, or it didn't finish.
+        case couldNotRun(String)
+    }
+
+    func pingResult(_ ip: String) -> Ping {
+        guard let path = resolvedPath() else { return .couldNotRun("no tailscale CLI") }
         let r = Proc.run(path, Self.pingArgs(ip), timeout: 8)   // the ping itself gives up at 3 s
-        return r.status == 0 && r.out.contains("pong")
+        return Self.ping(r)
+    }
+
+    /// Status -1 is a launch that failed (Proc.run). This Mac's own Tailscale being down,
+    /// stopped or signed out is no answer about the device either.
+    static func ping(_ r: Proc.Result) -> Ping {
+        if r.status == 0 && r.out.contains("pong") { return .pong }
+        if r.status == -1 || r.timedOut { return .couldNotRun(r.err) }
+        let said = (r.err + "\n" + r.out).lowercased()
+        if ["local tailscale daemon", "tailscale is stopped", "logged out", "needslogin", "not logged in"]
+            .contains(where: said.contains) {
+            return .couldNotRun(r.err.isEmpty ? r.out : r.err)
+        }
+        return .noPong
     }
 
     /// `--until-direct` defaults to true: a pong via DERP then exits 1 ("direct

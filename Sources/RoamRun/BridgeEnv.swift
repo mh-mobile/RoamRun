@@ -27,13 +27,15 @@ struct BridgeEnv: Sendable {
     }
     var isOnLAN: @MainActor (DeviceProfile) async -> Bool = { await ProxyBridge.isOnLAN($0) }
     /// `devicectl device info details`, which makes CoreDevice ask for a tunnel.
-    var warmUp: @Sendable (_ udid: String) async -> Proc.Result = {
-        await Proc.runAsync("/usr/bin/xcrun", ["devicectl", "--quiet", "--timeout", "30",
-                                               "device", "info", "details", "--device", $0])
+    var warmUp: @Sendable (_ udid: String) async -> Proc.Result = { udid in
+        await Blocking.run {
+            Proc.run("/usr/bin/xcrun", ["devicectl", "--quiet", "--timeout", "30",
+                                        "device", "info", "details", "--device", udid])
+        }
     }
 
     // Blocking.
-    var ping: @Sendable (_ ip: String) -> Bool = { TailscaleClient.fromSettings().ping($0) }
+    var ping: @Sendable (_ ip: String) -> TailscaleClient.Ping = { TailscaleClient.fromSettings().pingResult($0) }
     var listDevices: @Sendable () throws -> [MeshDevice] = { try TailscaleClient.fromSettings().listDevices() }
     /// The device's own advert remotepairingd resolved in the last 90 s, not `besides`.
     var recentAdvert: @Sendable (_ udid: String, _ besides: String) -> String? = {
@@ -51,6 +53,14 @@ struct BridgeEnv: Sendable {
     var listenForClaims: @MainActor () -> Void = { ProxyBridge.listenForClaims() }
 
     static let live = BridgeEnv()
+}
+
+/// Where a bridge's blocking tools run, so they never hold the main actor. Today a detached
+/// task each, as before; 1.7 changes where they wait without touching the callers.
+enum Blocking {
+    static func run<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
+        await Task.detached { work() }.value
+    }
 }
 
 /// The fake `_remotepairing._tcp` record a bridge publishes (DNSServiceProxy; tests fake it).

@@ -6,6 +6,8 @@ enum Proc {
         let status: Int32
         let out: String
         let err: String
+        /// Stopped at the timeout rather than finished.
+        var timedOut = false
     }
 
     /// Its own queue gets a thread even while callers (e.g. runAsync) block
@@ -50,7 +52,8 @@ enum Proc {
         let stderr = String(decoding: box.err, as: UTF8.self)
         return Result(status: task.terminationStatus,
                       out: String(decoding: box.out, as: UTF8.self),
-                      err: box.timedOut ? "\(path) timed out after \(Int(timeout))s" + (stderr.isEmpty ? "" : "\n" + stderr) : stderr)
+                      err: box.timedOut ? "\(path) timed out after \(Int(timeout))s" + (stderr.isEmpty ? "" : "\n" + stderr) : stderr,
+                      timedOut: box.timedOut)
     }
 
     /// A long-running helper that can't outlive RoamRun: a tiny `sh` watchdog
@@ -75,10 +78,13 @@ enum Proc {
     static func ensureGone(_ watchdog: Process, grace: Duration = .seconds(1)) async -> Bool {
         func exited(within d: Duration) async -> Bool {
             let clock = ContinuousClock(), end = clock.now + d
-            while watchdog.isRunning && clock.now < end { try? await Task.sleep(for: .milliseconds(10)) }
+            while watchdog.isRunning && clock.now < end {
+                do { try await Task.sleep(for: .milliseconds(10)) } catch { break }   // cancelled: don't spin
+            }
             return !watchdog.isRunning
         }
         if await exited(within: grace) { return true }
+        if Task.isCancelled { return !watchdog.isRunning }   // given up on: no KILL on the way out
         let children = run("/usr/bin/pgrep", ["-P", "\(watchdog.processIdentifier)"], timeout: 5).out
         for pid in children.split(separator: "\n").compactMap({ Int32($0) }) { kill(pid, SIGKILL) }
         return await exited(within: .seconds(2))   // its loop notices within 0.5 s
