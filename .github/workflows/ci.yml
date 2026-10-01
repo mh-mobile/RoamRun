@@ -10,11 +10,17 @@ permissions:
 
 jobs:
   test:
-    # glassEffect needs the macOS 26 SDK.
-    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        # glassEffect needs the macOS 26 SDK. Xcode 27 is a public preview image: a
+        # failure there is worth seeing but doesn't block a merge.
+        runner: [macos-26, xcode-27]
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.runner == 'xcode-27' }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5
       - run: xcrun swift --version
       - run: make test
       - name: Build the app bundle
