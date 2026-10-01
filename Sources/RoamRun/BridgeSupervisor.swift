@@ -100,3 +100,41 @@ final class BridgeSupervisor {
     /// After sleep, relayed connections can look open while dead: re-announce right away.
     func woke() { all().forEach { $0.nudgeAfterWake() } }
 }
+
+/// What RoamRun knows about one saved device, across its bridges: one rebuilt for an edited
+/// endpoint or a port found again picks up where the old one left off. Its owner keeps one
+/// per profile id; a bridge's own run (relays, timers, checks under way) starts afresh.
+@MainActor
+final class DeviceMemory {
+    private(set) var udid: String?
+    /// A Bonjour name known to be the device's own advert, for the cheap stand-aside probe.
+    var homeAdvert: String?
+    /// Standing aside, the last time the home check confirmed the UDID the slow way.
+    var lastFullCheck = Date.distantPast
+    /// False after an error retrying can't fix (unrecognized pairing, no admin rights).
+    var autoRetry = true
+    /// A scan that found nothing: no other on that endpoint ("ip:port") until then.
+    private var scanPause: (endpoint: String, until: Date)?
+
+    init(udid: String? = nil) { self.udid = udid }
+
+    /// The device this memory is about. Another known device than the one remembered:
+    /// nothing here holds for it. A UDID learned for the first time is the same device.
+    func adopt(_ udid: String?) {
+        guard let udid else { return }
+        if let known = self.udid, known.caseInsensitiveCompare(udid) != .orderedSame {
+            homeAdvert = nil
+            lastFullCheck = .distantPast
+            autoRetry = true
+            scanPause = nil
+        }
+        self.udid = udid
+    }
+
+    func pauseScans(of endpoint: String, until: Date) { scanPause = (endpoint, until) }
+    func clearScanPause() { scanPause = nil }
+    func scansPaused(of endpoint: String, now: Date) -> Bool {
+        guard let scanPause, scanPause.endpoint == endpoint else { return false }
+        return now <= scanPause.until
+    }
+}

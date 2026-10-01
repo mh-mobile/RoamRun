@@ -2817,12 +2817,13 @@ private final class World: @unchecked Sendable {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var nextPort: UInt16 = 39300
 
-    init(_ given: DeviceProfile = inertProfile("iPhone")) {
+    /// `keepPort`: a bridge rebuilt for a profile another rig ran keeps its endpoint.
+    init(_ given: DeviceProfile = inertProfile("iPhone"), memory: DeviceMemory = DeviceMemory(), keepPort: Bool = false) {
         var p = given
-        p.remotePairingPort = Self.lock.withLock {
+        if !keepPort { p.remotePairingPort = Self.lock.withLock {
             defer { Self.nextPort = Self.nextPort >= 39_975 ? 39300 : Self.nextPort + 25 }
             return Self.nextPort
-        }
+        } }
         var e = inertEnv(record: record, watcher: watcher)
         let w = world
         e.now = { w.now }
@@ -2834,7 +2835,7 @@ private final class World: @unchecked Sendable {
         e.findRemotePairingPort = { _ in w.scans += 1; return w.scan }
         e.listDevices = { w.peers }
         e.answers = { _ in w.advertAnswers }
-        bridge = ProxyBridge(profile: p, statusDir: dir, statusLive: { _ in true }, env: e)
+        bridge = ProxyBridge(profile: p, statusDir: dir, statusLive: { _ in true }, env: e, memory: memory)
     }
 
     func entry() -> StatusFile.Entry? { StatusFile.read(in: dir, live: { _ in true })[id] }
@@ -3108,6 +3109,93 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
                 "Tailscale is stopped.", "Logged out."] {
         #expect(TailscaleClient.ping(r(1, "", err)) == .couldNotRun(err), "\(err)")
     }
+}
+
+// MARK: - What a device's memory keeps across its bridges (1.6)
+
+/// Another known device clears it; learning the UDID for the first time doesn't.
+@MainActor @Test func aDeviceMemoryForgetsOnlyForAnotherDevice() {
+    let m = DeviceMemory()
+    let checked = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    m.homeAdvert = "ADVERT"; m.autoRetry = false; m.lastFullCheck = checked
+    m.pauseScans(of: "100.64.0.10:49152", until: .distantFuture)
+    m.adopt("00008130-000C1C5C307A8D3A")                 // first learned: the same device
+    #expect(m.homeAdvert == "ADVERT" && !m.autoRetry && m.lastFullCheck == checked)
+    #expect(m.scansPaused(of: "100.64.0.10:49152", now: .now))
+    m.adopt("00008130-000c1c5c307a8d3a")                 // case only
+    #expect(m.homeAdvert == "ADVERT")
+    m.adopt(nil)                                          // a profile without one says nothing
+    #expect(m.udid == "00008130-000c1c5c307a8d3a")
+    m.adopt("00008101-000A00000000A001")                 // another device
+    #expect(m.homeAdvert == nil && m.autoRetry && m.lastFullCheck == .distantPast)
+    #expect(!m.scansPaused(of: "100.64.0.10:49152", now: .now))
+    #expect(m.udid == "00008101-000A00000000A001")
+}
+
+/// A bridge rebuilt for the same device (an edited endpoint, a port found again) keeps
+/// what the old one learned: the UDID, a block on retries, the device's advert name.
+@MainActor @Test func aRebuiltBridgeKeepsWhatTheOldOneLearned() async {
+    let memory = DeviceMemory()
+    let first = Rig(memory: memory)
+    await first.bridge.start(.manual)
+    first.watcher.subscribers[first.id]?.onDevice(first.bridge.profile.instanceName, "00008130-000C1C5C307A8D3A")
+    first.watcher.subscribers[first.id]?.onExit("log stream exited (status 64): Must be admin")
+    #expect(!first.bridge.autoRetry)
+    first.done()
+
+    let second = Rig(first.bridge.profile, memory: memory)   // the profile never saved the UDID
+    defer { second.done() }
+    #expect(second.bridge.udid == "00008130-000C1C5C307A8D3A")
+    #expect(!second.bridge.autoRetry)                      // still blocked until something starts it
+    await second.bridge.start(.edit)
+    #expect(second.bridge.autoRetry)                       // every start clears it, as before
+}
+
+/// Standing aside, the device's advert found the slow way is what the next bridge tries
+/// first, and a profile that names another device starts it over.
+@MainActor @Test func aRebuiltBridgeKeepsTheAdvertUnlessTheDeviceChanged() async {
+    let memory = DeviceMemory()
+    var p = inertProfile("iPhone"); p.udid = "00008130-000C1C5C307A8D3A"
+    let first = Rig(p, memory: memory)
+    first.world.onLAN = true
+    await first.bridge.start(.manual)                     // standing aside
+    memory.homeAdvert = "REAL-ADVERT"                     // what isHome learns from `log show`
+    let checked = memory.lastFullCheck
+    #expect(checked != .distantPast)                      // the stand-aside check ran the slow way
+    first.done()
+
+    let same = Rig(p, memory: memory)
+    defer { same.done() }
+    #expect(same.bridge.memory.homeAdvert == "REAL-ADVERT" && same.bridge.memory.lastFullCheck == checked)
+    var other = p; other.udid = "00008101-000A00000000A001"
+    let replaced = Rig(other, memory: memory)
+    defer { replaced.done() }
+    #expect(memory.homeAdvert == nil && memory.udid == "00008101-000A00000000A001")
+}
+
+/// The scan pause belongs to the endpoint: kept by a rebuilt bridge at the same address and
+/// port, gone once either changes.
+@MainActor @Test func theScanPauseFollowsTheEndpointAcrossBridges() async {
+    let memory = DeviceMemory()
+    let first = Rig(memory: memory)
+    first.world.answering = []; first.world.ping = .pong
+    await first.bridge.start(.manual)
+    #expect(first.world.scans == 1)
+    first.done()
+
+    let same = Rig(first.bridge.profile, memory: memory, keepPort: true)
+    same.world.answering = []; same.world.ping = .pong; same.world.now = first.world.now
+    await same.bridge.start(.edit)
+    #expect(same.world.scans == 0)                         // paused: same endpoint
+    same.done()
+
+    var moved = first.bridge.profile
+    moved.remotePairingPort += 1
+    let other = Rig(moved, memory: memory, keepPort: true)
+    defer { other.done() }
+    other.world.answering = []; other.world.ping = .pong; other.world.now = first.world.now
+    await other.bridge.start(.edit)
+    #expect(other.world.scans == 1)                        // another endpoint: not paused
 }
 
 // MARK: - Untested risky paths (7b / F55)
