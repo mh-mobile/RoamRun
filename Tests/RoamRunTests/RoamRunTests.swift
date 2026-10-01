@@ -2882,13 +2882,15 @@ func startOutcomes(_ c: StartCase) async {
     }
 }
 
-/// A scan that found nothing isn't repeated for 10 minutes by this bridge — today not even
-/// by a start someone asked for (2a may change this; the plan's F3/R5). The pause lives in
-/// the bridge: a new one (the device removed and added again) scans at once.
-@MainActor @Test func aFruitlessScanIsNotRepeatedForTenMinutesOnThisBridge() async {
+/// A scan that found nothing, or ran out of time, isn't repeated for 10 minutes by this
+/// bridge — today not even by a start someone asked for (2a may change this; the plan's
+/// F3/R5). The pause lives in the bridge: a new one (the device removed and added again)
+/// scans at once.
+@MainActor @Test(arguments: [ReachabilityProbe.PortScan.notFound, .timedOut])
+func aFruitlessScanIsNotRepeatedForTenMinutesOnThisBridge(_ result: ReachabilityProbe.PortScan) async {
     let rig = Rig()
     defer { rig.done() }
-    rig.world.answering = []; rig.world.ping = true
+    rig.world.answering = []; rig.world.ping = true; rig.world.scan = result
     await rig.bridge.start(automatic: true)
     #expect(rig.world.scans == 1)
     rig.world.now += 599
@@ -2897,6 +2899,12 @@ func startOutcomes(_ c: StartCase) async {
     rig.world.now += 2
     await rig.bridge.start()
     #expect(rig.world.scans == 2)
+
+    let fresh = Rig()
+    defer { fresh.done() }
+    fresh.world.answering = []; fresh.world.ping = true; fresh.world.scan = result
+    await fresh.bridge.start()
+    #expect(fresh.world.scans == 1)
 }
 
 /// Found under its Tailscale name at a new address: followed and saved.
