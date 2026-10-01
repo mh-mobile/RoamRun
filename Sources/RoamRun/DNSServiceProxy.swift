@@ -15,12 +15,16 @@ final class DNSServiceProxy: @unchecked Sendable {
     private var stopping: Process?
 
     /// A quick stop → start must let the old registration go first, or mDNSResponder
-    /// may rename the new one. Waits up to 1 s without blocking the caller's thread.
-    @MainActor func previousExited() async {
-        for _ in 0..<100 where stopping?.isRunning == true { try? await Task.sleep(for: .milliseconds(10)) }
-        stopping = nil
+    /// may rename the new one, and two would answer for the device. False when the
+    /// old one couldn't be confirmed gone: then nothing new may be registered.
+    @MainActor func previousExited() async -> Bool {
+        guard let old = stopping else { return true }
+        guard await Proc.ensureGone(old) else { return false }
+        if stopping === old { stopping = nil }
+        return true
     }
     /// `dns-sd -P` died on its own (not via stop()/renew()): the record is gone.
+    /// -1: a renew couldn't replace it (the old one didn't stop, or the new one didn't launch).
     var onExit: ((Int32) -> Void)?
 
     /// - Parameters:
@@ -76,17 +80,17 @@ final class DNSServiceProxy: @unchecked Sendable {
         if let old { stopping = old }   // a start right after must wait for it too
         let token = UUID()
         renewToken = token
-        // Let the old registration go first, or mDNSResponder may rename ours — waiting
-        // off the main thread; a stop() meanwhile cancels the respawn.
+        // Let the old registration go first, or mDNSResponder may rename ours; a stop()
+        // meanwhile cancels the respawn. One that can't be confirmed gone isn't joined
+        // by a second: the bridge fails and retries later.
         let me = Weak(self)
-        DispatchQueue.global().async {
-            var tries = 0
-            while old?.isRunning == true && tries < 100 { usleep(10_000); tries += 1 }
-            DispatchQueue.main.async {
-                guard let self = me.value, self.renewToken == token, self.process == nil else { return }
-                self.renewToken = nil
-                if !self.spawn(self.lastArgs) { self.onExit?(-1) }
-            }
+        Task { @MainActor in
+            var gone = true
+            if let old { gone = await Proc.ensureGone(old) }
+            guard let self = me.value, self.renewToken == token, self.process == nil else { return }
+            self.renewToken = nil
+            if gone, let old, self.stopping === old { self.stopping = nil }
+            if !gone || !self.spawn(self.lastArgs) { self.onExit?(-1) }
         }
     }
 

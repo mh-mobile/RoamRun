@@ -60,9 +60,28 @@ enum Proc {
     static func tied(_ path: String, _ args: [String]) -> Process {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/sh")
-        let watchdog = #"trap 'kill $c 2>/dev/null; wait $c; exit 0' TERM INT HUP; "$0" "$@" & c=$!; while kill -0 $PPID 2>/dev/null && kill -0 $c 2>/dev/null; do sleep 0.5 & wait $!; done; kill $c 2>/dev/null; wait $c"#
+        // The trap only raises a flag: a TERM between `&` and `c=$!` would find no pid to
+        // kill, so the loop, which runs after `c` is set, does the killing. The TERM is
+        // repeated until the child is gone: one sent before the child's exec meets the
+        // trap it inherited and is lost, and a second signal mustn't end the wait early.
+        let watchdog = #"t=; trap 't=1' TERM INT HUP; "$0" "$@" & c=$!; while [ -z "$t" ] && kill -0 $PPID 2>/dev/null && kill -0 $c 2>/dev/null; do sleep 0.5 & wait $!; done; kill $c 2>/dev/null; while kill -0 $c 2>/dev/null; do sleep 0.2 & wait $!; kill $c 2>/dev/null; done; wait $c; s=$?; [ -n "$t" ] && exit 0; exit $s"#
         task.arguments = ["-c", watchdog, path] + args
         return task
+    }
+
+    /// After a TERM to a `tied` watchdog: true once it has exited, which it does only
+    /// after its child. A child that ignored TERM gets KILL after `grace`. The watchdog
+    /// itself is never KILLed while it has a child: that would leave the child behind.
+    static func ensureGone(_ watchdog: Process, grace: Duration = .seconds(1)) async -> Bool {
+        func exited(within d: Duration) async -> Bool {
+            let clock = ContinuousClock(), end = clock.now + d
+            while watchdog.isRunning && clock.now < end { try? await Task.sleep(for: .milliseconds(10)) }
+            return !watchdog.isRunning
+        }
+        if await exited(within: grace) { return true }
+        let children = run("/usr/bin/pgrep", ["-P", "\(watchdog.processIdentifier)"], timeout: 5).out
+        for pid in children.split(separator: "\n").compactMap({ Int32($0) }) { kill(pid, SIGKILL) }
+        return await exited(within: .seconds(2))   // its loop notices within 0.5 s
     }
 
     /// `xcrun devicectl <args> --json-output …`: its "result" object; nil if it failed.

@@ -307,6 +307,47 @@ extension TimingSensitive {
             #expect(t < 6, "t=\(t)")
         }
 
+        /// TERM right after launch, before the watchdog has even noted its child's pid:
+        /// the child must still go, and the watchdog with it.
+        @Test func aWatchdogStoppedAtOnceTakesItsChildAlong() async throws {
+            let marker = "41.\(Int.random(in: 100_000...999_999))"   // sleep's argument, to find strays
+            for i in 0..<60 {
+                let t = Proc.tied("/bin/sleep", [marker])
+                t.standardOutput = FileHandle.nullDevice
+                try t.run()
+                usleep(useconds_t(i % 30) * 100)   // 0–3 ms: sweep the moment between the trap and `c=$!`
+                t.terminate()
+                let clock = ContinuousClock(), start = clock.now
+                while t.isRunning && clock.now - start < .seconds(3) { try await Task.sleep(for: .milliseconds(20)) }
+                #expect(!t.isRunning, "the watchdog outlived its TERM")
+                if t.isRunning { kill(t.processIdentifier, SIGKILL) }
+            }
+            try await Task.sleep(for: .milliseconds(200))
+            let strays = Proc.run("/usr/bin/pgrep", ["-f", "sleep \(marker)"]).out
+            #expect(strays.isEmpty, "left behind: \(strays)")
+            _ = Proc.run("/usr/bin/pkill", ["-f", "sleep \(marker)"])
+        }
+
+        /// A child that ignores TERM: the watchdog can't stop it, so the caller does.
+        @Test func aRegistrationThatWontStopIsKilledAndConfirmedGone() async throws {
+            let t = Proc.tied("/bin/sh", ["-c", "trap '' TERM; exec /bin/sleep 30"])
+            t.standardOutput = FileHandle.nullDevice
+            t.standardError = FileHandle.nullDevice   // the watchdog's "Killed: 9"
+            try t.run()
+            try await Task.sleep(for: .milliseconds(300))   // the trap is set
+            let child = Proc.run("/usr/bin/pgrep", ["-P", "\(t.processIdentifier)"]).out
+            t.terminate()
+            // A second signal (Ctrl-C to the group, then stop()) must not let it leave the child.
+            try await Task.sleep(for: .milliseconds(300))
+            t.terminate()
+            #expect(await Proc.ensureGone(t))
+            #expect(!t.isRunning)
+            let pids = child.split(separator: "\n").compactMap { Int32($0) }   // may include its `sleep 0.5`
+            #expect(!pids.isEmpty)
+            for pid in pids { #expect(kill(pid, 0) != 0, "pid \(pid) outlived the watchdog") }
+            for pid in pids { kill(pid, SIGKILL) }
+        }
+
         @Test func toolThatExitsKeepsItsResultWhileABackgroundChildHoldsThePipe() {
             let (r, t) = timed("/bin/sh", ["-c", "echo hi; sleep 30 &"])
             #expect(r.status == 0 && r.out == "hi\n", "status=\(r.status) out=\(r.out)")
