@@ -390,7 +390,10 @@ final class AppCoordinator: ObservableObject {
             guard Self.beginServeChange() else { return }            // one of these is already running
             Task.detached { [weak self] in
                 defer { Self.endServeChange() }
-                guard Self.releaseServe(published) else { return }   // else the next tick tries again
+                guard Self.releaseServe(published) else {             // the next tick tries again
+                    await MainActor.run { self?.couldNotRelease(published.port) }
+                    return
+                }
                 await MainActor.run { if self?.otaPublished?.port == published.port { self?.otaPublished = nil } }
             }
             return
@@ -428,7 +431,10 @@ final class AppCoordinator: ObservableObject {
                 // port nothing holds any more would otherwise be unfindable.
                 Task.detached { [weak self] in                     // shells out twice; not on the main actor
                     defer { Self.endServeChange() }
-                    guard Self.releaseServe(published) else { return }
+                    guard Self.releaseServe(published) else {
+                        await MainActor.run { self?.couldNotRelease(published.port) }
+                        return
+                    }
                     await MainActor.run { if self?.otaPublished?.port == published.port { self?.otaPublished = nil } }
                 }
             }
@@ -552,7 +558,16 @@ final class AppCoordinator: ObservableObject {
             // between them, and `serve` replaces whatever is at `/` by then. This
             // narrows that window; it can't close it, as `tailscale serve` has no
             // write-if-unchanged. Anything new waits for the next tick's checks.
-            guard TailscaleClient.serving(port: tailnetPort) == state else { return }
+            // Turned off during those reads too: publishing a stopped server would
+            // leave the address answering 502 until the next tick gave it back.
+            let current = await MainActor.run { self?.otaAttempt == attempt }
+            guard current else { return }
+            guard TailscaleClient.serving(port: tailnetPort) == state else {
+                await MainActor.run {
+                    self?.complainOnce("port \(tailnetPort) changed while RoamRun was checking it; looking again shortly")
+                }
+                return
+            }
             // Written before the call, not after: quitting while `tailscale` is
             // still working would otherwise leave an entry finished by a child
             // that outlived us, with nothing left to say it was ours.
@@ -712,6 +727,12 @@ final class AppCoordinator: ObservableObject {
         (try? TailscaleClient.fromSettings().selfDNSName(timeout: timeout)) ?? nil
     }
 
+    /// Said, or a release `tailscale` keeps not doing retries every tick in silence.
+    private func couldNotRelease(_ port: Int) {
+        complainOnce("couldn't confirm port \(port) was given back; trying again. " +
+                     "`tailscale serve --https=\(port) --set-path=/ off` clears it")
+    }
+
     private func complainOnce(_ line: String) {
         guard line != otaComplaint else { return }
         otaComplaint = line
@@ -738,7 +759,7 @@ final class AppCoordinator: ObservableObject {
                 logStore.log("port \(published.port) is already being changed; leaving it to that")
             } else {
                 // Short here, unlike the background paths: this runs on the thread
-                // the app quits on. Three calls in a row, so ~6 s at worst, and only
+                // the app quits on. Four calls in a row, so ~8 s at worst, and only
                 // when tailscaled isn't answering — which is when `off` fails anyway.
                 // The record stays, so the next launch reclaims it.
                 let gone = Self.releaseServe(published, timeout: 2)
