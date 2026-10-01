@@ -55,11 +55,58 @@ struct BridgeEnv: Sendable {
     static let live = BridgeEnv()
 }
 
-/// Where a bridge's blocking tools run, so they never hold the main actor. Today a detached
-/// task each, as before; 1.7 changes where they wait without touching the callers.
+/// Where a bridge's blocking tools run: a thread of their own each, never the main actor or
+/// Swift's cooperative pool. That pool has a thread per core; a tool waiting there (a ping
+/// up to 8 s, devicectl up to 45 s) held one, and with several bridges checking at once
+/// their tools queued behind each other (#32). Not a GCD queue either: blocked work there
+/// counts toward GCD's 64 threads, which the relays' connections and the probes'
+/// timeouts also run on. A thread costs little next to the process it waits for.
 enum Blocking {
+    /// At most this many at once; more wait their turn without holding a thread. Tools aren't
+    /// cancelled, so a stopped bridge's still run out their timeouts beside the new ones'.
+    static let limit = 48
+    private static let gate = Gate(limit)
+
     static func run<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
-        await Task.detached { work() }.value
+        await gate.enter()
+        return await withCheckedContinuation { done in
+            // A thread of our own has no autorelease pool: what Foundation autoreleases in the
+            // tool (Process, pipes, strings) would leak, every check, for as long as RoamRun runs.
+            Thread.detachNewThread {
+                let result = autoreleasepool { work() }
+                gate.leave()
+                done.resume(returning: result)
+            }
+        }
+    }
+
+    /// Counts permits; a task without one waits, first come first served.
+    final class Gate: @unchecked Sendable {
+        private let lock = NSLock()
+        private var free: Int
+        private var waiting: [CheckedContinuation<Void, Never>] = []
+
+        init(_ permits: Int) { free = permits }
+
+        func enter() async {
+            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+                let now: Bool = lock.withLock {
+                    guard free > 0 else { waiting.append(c); return false }
+                    free -= 1
+                    return true
+                }
+                if now { c.resume() }
+            }
+        }
+
+        /// The permit goes straight to the longest waiter, if any.
+        func leave() {
+            let next: CheckedContinuation<Void, Never>? = lock.withLock {
+                if waiting.isEmpty { free += 1; return nil }
+                return waiting.removeFirst()
+            }
+            next?.resume()
+        }
     }
 }
 

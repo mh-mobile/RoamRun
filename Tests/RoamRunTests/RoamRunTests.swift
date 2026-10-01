@@ -270,7 +270,7 @@ private func timed(_ path: String, _ args: [String]) -> (Proc.Result, TimeInterv
 extension TimingSensitive {
     @Suite(.serialized) struct ProcTiming {
         @Test func slowToolsFillingTheTaskPoolStillTimeOut() async {
-            // runAsync blocks a Swift concurrency thread per call; with every one of
+            // A Proc.run called from a task blocks a Swift concurrency thread; with every one of
             // them blocked, the timeout timers must still get to run.
             // Each run is timed from its own start: other tests may hold the pool first.
             let longest = await withTaskGroup(of: TimeInterval.self) { group in
@@ -280,6 +280,41 @@ extension TimingSensitive {
                 return await group.reduce(0, max)
             }
             #expect(longest < 4)
+        }
+
+        /// #32: blocking tools wait off Swift's cooperative pool. On it, twice as many as it
+        /// has threads (one per core) ran in two waves, each bridge's check behind another's.
+        @Test func blockingToolsDontQueueBehindEachOther() async {
+            let n = min(ProcessInfo.processInfo.activeProcessorCount * 2, Blocking.limit)
+            let clock = ContinuousClock(), start = clock.now
+            await withTaskGroup(of: Void.self) { group in
+                for _ in 0..<n { group.addTask { _ = await Blocking.run { usleep(1_000_000) } } }
+            }
+            let took = clock.now - start
+            #expect(took < .milliseconds(1_800), "\(n) one-second waits took \(took)")
+        }
+
+        /// Beyond the limit, tools wait their turn: two permits, four half-second jobs, two
+        /// waves, and never more than two at once.
+        @Test func blockingWorkBeyondTheLimitWaitsItsTurn() async {
+            let gate = Blocking.Gate(2)
+            final class Count: @unchecked Sendable { let l = NSLock(); var now = 0, peak = 0 }
+            let count = Count()
+            let clock = ContinuousClock(), start = clock.now
+            await withTaskGroup(of: Void.self) { group in
+                for _ in 0..<4 {
+                    group.addTask {
+                        await gate.enter()
+                        count.l.withLock { count.now += 1; count.peak = max(count.peak, count.now) }
+                        try? await Task.sleep(for: .milliseconds(500))
+                        count.l.withLock { count.now -= 1 }
+                        gate.leave()
+                    }
+                }
+            }
+            let took = clock.now - start
+            #expect(count.peak == 2)
+            #expect(took >= .milliseconds(950) && took < .milliseconds(1_800), "\(took)")
         }
 
         @Test func quickToolReturnsItsOutput() {
