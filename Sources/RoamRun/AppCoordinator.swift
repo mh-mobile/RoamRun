@@ -288,6 +288,9 @@ final class AppCoordinator: ObservableObject {
     /// Said once per reason: the retry runs every 30s and the log is a person's.
     private var otaComplaint = ""
     private var verifyingOTA = false
+    /// Bumped by each start of the OTA server and by turning it off: a start that
+    /// finishes under an older number is no longer wanted.
+    private var otaAttempt = 0
     /// Whether to look for registrations a run left behind, and a generation so
     /// a sweep that started earlier can't clear a request made while it ran.
     /// An entry left by a run that didn't give it back is invisible to
@@ -416,7 +419,8 @@ final class AppCoordinator: ObservableObject {
         }
         guard !apps.isEmpty else {
             // Deleting the folder is the off switch, whether or not the page ever
-            // got published: the listener goes either way.
+            // got published: the listener goes either way, one still coming up too.
+            otaAttempt += 1
             otaServer?.stop()
             otaServer = nil
             if let published = otaPublished, Self.beginServeChange() {
@@ -469,17 +473,23 @@ final class AppCoordinator: ObservableObject {
             otaServer = nil
         }
         let server = otaServer ?? OTAServer(tailnetPort: tailnetPort)
-        // ponytail: opening the listener waits on the network stack, so this can
-        // hold the main actor for up to 5 s if it never comes up. Moving it off
-        // needs OTAServer out of this actor's region; do that if it ever shows.
-        guard let port = server.start() else {
-            Self.endServeChange()
-            complainOnce("couldn't start the over-the-air server")
-            return
-        }
-        otaServer = server
+        otaAttempt += 1
+        let attempt = otaAttempt
         Task.detached { [weak self] in
             defer { Self.endServeChange() }
+            // Off the main actor: the listener can take up to 5 s to come up.
+            guard let port = server.start() else {
+                await MainActor.run { self?.complainOnce("couldn't start the over-the-air server") }
+                return
+            }
+            // Turned off (or quitting) while it came up: a server nobody wants
+            // would hold its port until the app quits.
+            let wanted = await MainActor.run { () -> Bool in
+                guard let self, self.otaAttempt == attempt else { return false }
+                self.otaServer = server
+                return true
+            }
+            guard wanted else { server.stop(); return }
             let mine = "http://127.0.0.1:\(port)"
             // Only ever replace an entry we can prove we made — ours from a run
             // that ended without releasing it. Anything else on that port is the
@@ -538,6 +548,11 @@ final class AppCoordinator: ObservableObject {
                     return
                 }
             }
+            // Looked at again just before writing: the reads above can take 20 s
+            // between them, and `serve` replaces whatever is at `/` by then. This
+            // narrows that window; it can't close it, as `tailscale serve` has no
+            // write-if-unchanged. Anything new waits for the next tick's checks.
+            guard TailscaleClient.serving(port: tailnetPort) == state else { return }
             // Written before the call, not after: quitting while `tailscale` is
             // still working would otherwise leave an entry finished by a child
             // that outlived us, with nothing left to say it was ours.
@@ -633,6 +648,7 @@ final class AppCoordinator: ObservableObject {
     nonisolated static func releaseServe(_ published: (port: Int, target: String),
                                          timeout: TimeInterval = 10, tools: ServeTools = .live) -> Bool {
         let state = tools.serving(published.port, timeout)
+        let host: String
         switch state {
         case .unknown: return false            // couldn't look; saying it's gone is how one survives
         case .nothing: tools.forget(published.target, published.port); return true
@@ -641,15 +657,19 @@ final class AppCoordinator: ObservableObject {
             // that is the only entry we may claim — a root of ours under a name the
             // node has since changed would make us delete whatever took its place.
             // Asked only now: nothing to give back needs no name.
-            guard let host = tools.host(timeout) else { return false }
-            guard state.root(on: host) == published.target else {
+            guard let named = tools.host(timeout) else { return false }
+            guard state.root(on: named) == published.target else {
                 tools.forget(published.target, published.port)
                 return true
             }
+            host = named
         }
         // Only once it's really gone. Forgetting it while the entry survives
-        // would leave the next run unable to recognise its own registration.
+        // would leave the next run unable to recognise its own registration —
+        // and `off` exiting 0 is not that: it is how it reports removing nothing.
         guard tools.off(published.port, timeout) else { return false }
+        let after = tools.serving(published.port, timeout)
+        guard after != .unknown, after.root(on: host) != published.target else { return false }
         tools.forget(published.target, published.port)
         return true
     }
@@ -704,6 +724,7 @@ final class AppCoordinator: ObservableObject {
         // to give back with no server left.
         let server = otaServer
         otaServer = nil
+        otaAttempt += 1
         if let published = otaPublished {
             otaPublished = nil
             // Before the listener, not after: in between, the address answers 502

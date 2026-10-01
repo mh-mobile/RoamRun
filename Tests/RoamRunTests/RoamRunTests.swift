@@ -3403,6 +3403,8 @@ private final class FakeServe: @unchecked Sendable {
     var states: [Int: TailscaleClient.Serving] = [:]   // missing: .nothing
     var host: String? = "mac.ts.net"
     var offWorks = true
+    /// What the port carries after an `off` that exited 0 (nil: nothing).
+    var afterOff: TailscaleClient.Serving?
     var record: [String]
     var offs: [Int] = []
     var otaPort = 41443
@@ -3412,7 +3414,11 @@ private final class FakeServe: @unchecked Sendable {
         var t = AppCoordinator.ServeTools()
         t.serving = { port, _ in self.states[port] ?? .nothing }
         t.host = { _ in self.host }
-        t.off = { port, _ in self.offs.append(port); return self.offWorks }
+        t.off = { port, _ in
+            self.offs.append(port)
+            if self.offWorks { self.states[port] = self.afterOff }
+            return self.offWorks
+        }
         t.remembered = { self.record }
         t.forget = { target, port in
             self.record.removeAll { let p = AppCoordinator.pair($0); return p.target == target && (p.port == nil || p.port == port) }
@@ -3427,7 +3433,10 @@ private func mounted(_ port: Int, _ target: String) -> TailscaleClient.Serving {
     TailscaleClient.serving(port: port, inJSON: #"{"Web":{"mac.ts.net:\#(port)":{"Handlers":{"/":{"Proxy":"\#(target)"}}}}}"#)
 }
 
-enum ReleaseCase: String, CaseIterable { case unreadable, alreadyGone, oursOffWorks, oursOffFails, someoneElses, oursUnderAnOldName, noHostName }
+enum ReleaseCase: String, CaseIterable {
+    case unreadable, alreadyGone, oursOffWorks, oursOffFails, someoneElses, oursUnderAnOldName, noHostName
+    case offSaysYesButStays, offThenUnreadable, offThenSomeoneElses
+}
 
 /// Giving one registration back: only what is provably ours is removed, and it is
 /// forgotten only once it is gone.
@@ -3445,6 +3454,10 @@ func releaseServeOutcomes(_ c: ReleaseCase) {
         fake.states[41443] = TailscaleClient.serving(port: 41443,
             inJSON: #"{"Web":{"old.ts.net:41443":{"Handlers":{"/":{"Proxy":"\#(mine)"}}}}}"#)
     case .noHostName: fake.states[41443] = mounted(41443, mine); fake.host = nil
+    case .offSaysYesButStays: fake.states[41443] = mounted(41443, mine); fake.afterOff = mounted(41443, mine)
+    case .offThenUnreadable: fake.states[41443] = mounted(41443, mine); fake.afterOff = .unknown
+    case .offThenSomeoneElses:   // ours went, and something else took `/` straight after
+        fake.states[41443] = mounted(41443, mine); fake.afterOff = mounted(41443, "http://127.0.0.1:8788")
     }
     let gone = AppCoordinator.releaseServe((port: 41443, target: mine), tools: fake.tools)
     let (expectGone, expectOff, expectForgotten): (Bool, Bool, Bool) = switch c {
@@ -3454,6 +3467,8 @@ func releaseServeOutcomes(_ c: ReleaseCase) {
     case .oursOffFails: (false, true, false)       // still there: remembered, so the next run knows it
     case .someoneElses, .oursUnderAnOldName: (true, false, true)   // not ours to remove; ours is gone
     case .noHostName: (false, false, false)
+    case .offSaysYesButStays, .offThenUnreadable: (false, true, false)   // not seen gone: kept for the next sweep
+    case .offThenSomeoneElses: (true, true, true)
     }
     #expect(gone == expectGone, "\(c)")
     #expect(fake.offs == (expectOff ? [41443] : []), "\(c)")
@@ -3942,4 +3957,13 @@ func claimByReason(_ r: StartReason, fromCLI: Bool) {
     #expect(log.appended[a] == 1 && log.appended[b] == 1)
     for _ in 0..<600 { log.log("line", device: a) }
     #expect(log.appended[a] == 601 && log.lines.count == 500)
+}
+
+/// The download floor: a peer far below it goes after five minutes, a slow but real
+/// download doesn't, and nothing goes before five minutes whatever the rate.
+@Test func otaDownloadFloor() {
+    #expect(!OTAServer.tooSlow(sent: 0, after: 299))
+    #expect(OTAServer.tooSlow(sent: 100_000, after: 300))           // ~330 B/s
+    #expect(!OTAServer.tooSlow(sent: 300 * 8 * 1024, after: 300))   // right at 8 KB/s
+    #expect(!OTAServer.tooSlow(sent: 50_000_000, after: 3600))      // ~14 KB/s for an hour
 }
