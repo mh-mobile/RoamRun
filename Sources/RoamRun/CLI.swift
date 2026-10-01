@@ -30,8 +30,8 @@ enum CLI {
                                      the device (bridged and ready, or a bridge standing aside on this Wi-Fi);
                                      without a name it lists every saved device and exits 0 if any one of
                                      them is ready (--wait: wait up to N seconds for ready; each round runs
-                                     two devicectl calls per device before the deadline is looked at again,
-                                     so it can return several seconds after N)
+                                     one devicectl list, plus a lock check per ready device, before the
+                                     deadline is looked at again, so it can return several seconds after N)
       doctor [name] [--json]         Check each step from this Mac to the device and say what to fix
                                      (without a name: devices with a running bridge, or all if none runs)
       run <name> [--scheme S] [--workspace W | --project P] [--configuration C] [--logs] [launch options]
@@ -391,9 +391,10 @@ enum CLI {
         return Proc.devicectl(timed, timeout: Double(secs) + 5)
     }
 
-    /// How long a `status` probe may take. Each round of `--wait N` runs two
-    /// devicectl calls per device before the deadline is looked at again, so
-    /// without this a `--wait 1` could sit for ~20s per device. devicectl
+    /// How long a `status` probe may take. Each round of `--wait N` runs one
+    /// `devicectl list devices` plus a lock check per ready device before the
+    /// deadline is looked at again, so without this a `--wait 1` could sit for
+    /// ~20s per call. devicectl
     /// refuses a --timeout below 5, which is the floor here too.
     nonisolated static func probeSeconds(by deadline: Date?, now: Date = .now) -> Int {
         guard let deadline else { return 10 }
