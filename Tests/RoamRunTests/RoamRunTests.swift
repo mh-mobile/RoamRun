@@ -3411,6 +3411,27 @@ func startPolicyTable(_ r: StartReason) {
     #expect(m.retryDue(now: t) && m.failures == 0)
 }
 
+/// Waiting for a `roamrun up` to end, the start keeps what the strongest reason meant: a
+/// rescan or an edit made meanwhile isn't lost to a plain retry.
+@Test func aStartWaitingForTheCLIKeepsTheStrongestReason() {
+    #expect(StartReason.stronger(.retry, .edit) == .edit)
+    #expect(StartReason.stronger(.edit, .retry) == .edit)
+    #expect(StartReason.stronger(.networkChange, .rescan) == .rescan)
+    #expect(StartReason.stronger(.rescan, .edit) == .rescan)
+    #expect(StartReason.stronger(.edit, .networkChange) == .networkChange)   // a tie: the later
+    #expect(StartReason.stronger(.resume, .retry) == .retry)
+}
+
+/// The wait runs from when the failed attempt began (a tick), so it is never shorter than
+/// the step it is on, however long the attempt took to fail.
+@MainActor @Test func theWaitRunsFromTheAttemptsStart() {
+    let m = DeviceMemory(), tick = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    m.failed(at: tick + 12, since: tick, unreachable: true)
+    #expect(!m.retryDue(now: tick + 28) && m.retryDue(now: tick + 30))
+    m.failed(at: tick + 40, since: tick + 30, unreachable: true)   // second: 60 s
+    #expect(!m.retryDue(now: tick + 88) && m.retryDue(now: tick + 90))
+}
+
 /// A bridge that keeps failing to start counts it, and one that comes up starts over.
 @MainActor @Test func aFailedStartGrowsTheWaitAndASuccessResetsIt() async {
     let rig = Rig()

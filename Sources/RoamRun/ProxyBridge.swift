@@ -131,6 +131,7 @@ final class ProxyBridge: ObservableObject {
             return
         }
         if policy.resetsBackoff { memory.resetBackoff() }
+        attemptBegan = env.now()
         generation += 1
         let gen = generation
         teardown()   // a failed or repeated start must not leave relays/timers behind
@@ -1093,6 +1094,7 @@ final class ProxyBridge: ObservableObject {
         // What the retries' wait grows or shrinks by: a start that came up, or one that failed.
         switch (state, s) {
         case (.error, .error): break
+        case (.starting, .error): memory.failed(at: env.now(), since: attemptBegan, unreachable: unreachable)
         case (_, .error): memory.failed(at: env.now(), unreachable: unreachable)
         case (_, .active), (_, .local): memory.resetBackoff()
         default: break
@@ -1104,6 +1106,8 @@ final class ProxyBridge: ObservableObject {
     }
     /// Set just before an error that means the device didn't answer.
     private var unreachable = false
+    /// When the current start began, for the wait after it fails.
+    private var attemptBegan: Date?
 
     /// Waiting out a longer retry: one cheap look at the port the device last answered on. At
     /// most one at a time per bridge, and only for this error: a start meanwhile makes it moot.

@@ -956,7 +956,7 @@ final class AppCoordinator: ObservableObject {
             self.learnDeviceTypes()
         }
         // Stepped back for a `roamrun up` watching the same device: take over again once it's gone.
-        bridge.onYield = { [weak self] other in self?.startWhenFree(id, after: other) }
+        bridge.onYield = { [weak self] other in self?.startWhenFree(id, after: other, .resume) }
         bridge.onProfileChange = { [weak self] moved in
             guard let self, let i = self.profiles.firstIndex(where: { $0.id == id }) else { return }
             self.profiles[i].providerIP = moved.providerIP
@@ -1052,7 +1052,7 @@ final class AppCoordinator: ObservableObject {
     private func autoStart(_ id: UUID, live: [UUID: StatusFile.Entry], _ reason: StartReason) {
         guard Snapshot.fakeProfiles == nil else { return }   // screenshot mode's devices never bridge
         if let other = HomeRule.cliHolding(id, udid: bridges[id]?.udid ?? profile(id)?.udid, in: live, myPID: getpid()) {
-            startWhenFree(id, after: other)
+            startWhenFree(id, after: other, reason)
             return
         }
         if StartPolicy.of(reason).restarts { bridges[id]?.stop() }
@@ -1060,20 +1060,25 @@ final class AppCoordinator: ObservableObject {
     }
 
     /// Devices waiting in startWhenFree: the 30 s retry must not stack a waiter per tick.
-    private var waitingForCLI = Set<UUID>()
+    /// For each, the start it will make once free: what a rescan or an edit meant still holds then.
+    private var waitingForCLI: [UUID: StartReason] = [:]
 
     /// Once `other` — that process, not just its PID — has ended, starts `id` again
     /// if it is still wanted and nothing else started it meanwhile.
-    private func startWhenFree(_ id: UUID, after other: StatusFile.Entry) {
-        guard waitingForCLI.insert(id).inserted else { return }
+    private func startWhenFree(_ id: UUID, after other: StatusFile.Entry, _ reason: StartReason) {
+        if let pending = waitingForCLI[id] {
+            waitingForCLI[id] = StartReason.stronger(pending, reason)
+            return
+        }
+        waitingForCLI[id] = reason
         Task { @MainActor [weak self] in
             while StatusFile.isRoamRun(other) { try? await Task.sleep(for: .seconds(5)) }
             guard let self else { return }
-            self.waitingForCLI.remove(id)
+            let reason = self.waitingForCLI.removeValue(forKey: id) ?? .retry
             guard self.wasActiveIDs.contains(id), self.profile(id) != nil,
                   let b = self.bridges[id], b.state == .off || b.status == .error else { return }
             // Through autoStart again: another `roamrun up` may have taken the device meanwhile.
-            self.autoStart(id, live: StatusFile.read(), .retry)
+            self.autoStart(id, live: StatusFile.read(), reason)
         }
     }
 

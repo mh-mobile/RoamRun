@@ -9,6 +9,21 @@ enum StartReason: String, CaseIterable, Sendable {
     case retry           // the 30 s retry, or a `roamrun up` that held it ended
     case networkChange   // this Mac's LAN address changed
     case resume          // it left this Wi‑Fi while standing aside
+
+    /// Of two starts waiting for the same thing (a `roamrun up` to end), the one that does
+    /// more: a rescan clears the scan pause and the wait; an edit or a new network the wait.
+    /// A tie goes to the later.
+    static func stronger(_ a: StartReason, _ b: StartReason) -> StartReason {
+        func rank(_ r: StartReason) -> Int {
+            switch r {
+            case .manual: 4
+            case .rescan: 3
+            case .edit, .networkChange: 2
+            case .restore, .retry, .resume: 1
+            }
+        }
+        return rank(a) > rank(b) ? a : b
+    }
 }
 
 /// Why retrying stopped: an error that starting again can't fix.
@@ -93,9 +108,9 @@ final class BridgeSupervisor {
     func retry() {
         let errored = all().filter { wanted($0) && $0.status == .error }
         let retryable = errored.filter(\.autoRetry)
-        // Half a tick of slack: a wait counted from when a retry failed, a moment after a tick,
-        // would otherwise slip to the tick after.
-        let due = retryable.filter { $0.memory.retryDue(now: now() + 15) }
+        // The wait counts from the tick that started the failed attempt; a second of slack for
+        // the timer's own drift.
+        let due = retryable.filter { $0.memory.retryDue(now: now() + 1) }
         if !due.isEmpty { start(due, .retry) }
         for b in retryable where !due.contains(where: { $0 === b }) && b.memory.lastFailureUnreachable {
             b.lookForItsPort { [weak self] answered in
@@ -178,10 +193,12 @@ final class DeviceMemory {
 
     /// 30 s, 1, 2, 4, 8 minutes, then every 10.
     static func backoff(afterFailures n: Int) -> TimeInterval { min(30 * pow(2, Double(max(n, 1) - 1)), 600) }
-    func failed(at now: Date, unreachable: Bool) {
+    /// `since`: when the attempt that failed began, so the wait runs from the tick that
+    /// started it rather than slipping by however long the attempt took.
+    func failed(at now: Date, since: Date? = nil, unreachable: Bool) {
         lastFailureUnreachable = unreachable
         failures += 1
-        retryAt = now + Self.backoff(afterFailures: failures)
+        retryAt = (since ?? now) + Self.backoff(afterFailures: failures)
     }
     func resetBackoff() {
         failures = 0
