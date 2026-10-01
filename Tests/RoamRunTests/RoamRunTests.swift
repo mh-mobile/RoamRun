@@ -3562,6 +3562,7 @@ extension TimingSensitive.OTAServerOverASocket {
     _ = "more than ten bytes here\n".withCString { write(fd, $0, strlen($0)) }
     CLI.rotateLog(at: log, limit: 10, fds: [fd])
     #expect(!FileManager.default.fileExists(atPath: log.path))
+    #expect(try String(contentsOf: log.appendingPathExtension("1"), encoding: .utf8) == "old enough to roll\n")   // the last run's kept
 }
 
 /// Any `ota` clears another app's leftover staging an hour old, unless that app's add is

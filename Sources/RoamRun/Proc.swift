@@ -17,7 +17,9 @@ enum Proc {
     /// Runs to completion. Both pipes are drained while it runs — waiting
     /// first deadlocks once a tool writes more than the ~64KB pipe buffer.
     /// Never unbounded: a wedged tool must not hang the CLI or a bridge's checks.
-    static func run(_ path: String, _ args: [String], timeout: TimeInterval = 45) -> Result {
+    /// `started`: told the child once it runs (the CLI passes its TERM/HUP on to it).
+    static func run(_ path: String, _ args: [String], timeout: TimeInterval = 45,
+                    started: ((Process) -> Void)? = nil) -> Result {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: path)
         task.arguments = args
@@ -29,6 +31,7 @@ enum Proc {
         let exited = DispatchSemaphore(value: 0)
         task.terminationHandler = { _ in exited.signal() }
         do { try task.run() } catch { return Result(status: -1, out: "", err: error.localizedDescription) }
+        started?(task)
         let box = OutputBox()
         timers.asyncAfter(deadline: .now() + timeout) { if task.isRunning { box.timedOut = true; task.terminate() } }
         timers.asyncAfter(deadline: .now() + timeout + 2) {   // ignored TERM

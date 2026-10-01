@@ -749,40 +749,57 @@ enum CLI {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: argv[0])
         task.arguments = Array(argv.dropFirst())
-        // TERM and HUP (a `kill`, a closed terminal) reach only us: pass them on, or the build or
-        // install carries on without us. INT isn't passed: Ctrl-C reaches the whole foreground
-        // group already, and a second one would hit the child twice.
-        let caught = Caught()
+        return passingSignalsOn { pass in
+            do { try task.run() } catch { stop("could not run \(argv[0]): \(error.localizedDescription)") }
+            pass.to(task)
+            task.waitUntilExit()
+            return task.terminationStatus
+        }
+    }
+
+    /// While `body` waits on a child (a build, an install, `xcodebuild -list`): TERM and HUP (a
+    /// `kill`, a closed terminal) reach only us, so pass them on, or the child carries on
+    /// without us; then stop the same way once it has. INT isn't passed: Ctrl-C reaches the
+    /// whole foreground group already, and a second one would hit the child twice.
+    private static func passingSignalsOn<T>(_ body: (Forwarder) -> T) -> T {
+        let pass = Forwarder()
         let sources = [SIGTERM, SIGHUP].map { sig -> DispatchSourceSignal in
             signal(sig, SIG_IGN)
             let src = DispatchSource.makeSignalSource(signal: sig, queue: .global())
-            src.setEventHandler(handler: forward(sig, to: task, noting: caught))
+            src.setEventHandler(handler: forward(sig, with: pass))
             src.resume()
             return src
         }
-        do { try task.run() } catch { stop("could not run \(argv[0]): \(error.localizedDescription)") }
-        if let sig = caught.value { kill(task.processIdentifier, sig) }   // arrived while it launched
-        task.waitUntilExit()
+        let result = body(pass)
         for src in sources { src.cancel() }
         for sig in [SIGTERM, SIGHUP] { signal(sig, SIG_DFL) }
-        if let sig = caught.value { kill(getpid(), sig) }   // and stop as asked, once it has
-        return task.terminationStatus
+        if let sig = pass.caught { kill(getpid(), sig) }   // and stop as asked, once it has
+        return result
     }
 
     /// Made outside the main actor: the handler runs on a dispatch thread, and a closure
-    /// written in `visible` would be the main actor's and trap there.
-    nonisolated private static func forward(_ sig: Int32, to task: Process, noting caught: Caught) -> @Sendable () -> Void {
-        return {
-            caught.set(sig)
-            if task.isRunning { kill(task.processIdentifier, sig) }
-        }
+    /// written in a main-actor function would be the main actor's and trap there.
+    nonisolated private static func forward(_ sig: Int32, with pass: Forwarder) -> @Sendable () -> Void {
+        { pass.received(sig) }
     }
 
-    private final class Caught: @unchecked Sendable {
+    /// The child a signal goes to, and the signal if one came.
+    final class Forwarder: @unchecked Sendable {
         private let lock = NSLock()
+        private var child: Process?
         private var sig: Int32?
-        var value: Int32? { lock.withLock { sig } }
-        func set(_ s: Int32) { lock.withLock { sig = s } }
+        var caught: Int32? { lock.withLock { sig } }
+
+        /// The child is running: one that came while it launched goes to it now.
+        func to(_ task: Process) {
+            let pending: Int32? = lock.withLock { child = task; return sig }
+            if let pending { kill(task.processIdentifier, pending) }
+        }
+
+        func received(_ s: Int32) {
+            let task: Process? = lock.withLock { sig = s; return child }
+            if let task, task.isRunning { kill(task.processIdentifier, s) }
+        }
     }
 
     /// Build → install → launch, for the project in the current folder.
@@ -804,7 +821,9 @@ enum CLI {
         if let scheme { chosen = scheme }
         else {
             // Generous: the first -list of a project can resolve its packages.
-            let list = Proc.run("/usr/bin/xcrun", ["xcodebuild", "-list", "-json"] + container, timeout: 300)
+            let list = passingSignalsOn { pass in
+                Proc.run("/usr/bin/xcrun", ["xcodebuild", "-list", "-json"] + container, timeout: 300, started: pass.to)
+            }
             let root = (try? JSONSerialization.jsonObject(with: Data(list.out.utf8))) as? [String: Any]
             let schemes = ((root?["workspace"] ?? root?["project"]) as? [String: Any])?["schemes"] as? [String] ?? []
             guard schemes.count == 1 else {
@@ -819,7 +838,9 @@ enum CLI {
         guard visible(build + ["-quiet", "build"]) == 0 else { stop("the build failed (see above)") }
 
         // The built .app: the build settings of the target that produces one.
-        let settings = Proc.run(build[0], Array(build.dropFirst()) + ["-showBuildSettings", "-json"], timeout: 300)
+        let settings = passingSignalsOn { pass in
+            Proc.run(build[0], Array(build.dropFirst()) + ["-showBuildSettings", "-json"], timeout: 300, started: pass.to)
+        }
         let targets = (try? JSONSerialization.jsonObject(with: Data(settings.out.utf8))) as? [[String: Any]] ?? []
         guard let s = appTarget(in: targets, scheme: chosen), let dir = s["TARGET_BUILD_DIR"], let wrapper = s["WRAPPER_NAME"] else {
             stop("built, but couldn't find the .app in the build settings (\(firstLine(settings.err) ?? "no app target"))")
@@ -1010,13 +1031,18 @@ enum CLI {
     nonisolated static func rotateLog(at url: URL, limit: Int64 = 10 << 20, fds: [Int32] = [STDOUT_FILENO, STDERR_FILENO]) {
         var st = stat()
         guard let first = fds.first, fstat(first, &st) == 0, st.st_size > limit else { return }
-        let previous = url.appendingPathExtension("1")
-        try? FileManager.default.removeItem(at: previous)
-        guard (try? FileManager.default.moveItem(at: url, to: previous)) != nil else { return }
+        let fm = FileManager.default
+        let previous = url.appendingPathExtension("1"), rolling = url.appendingPathExtension("rolling")
+        // Aside first: only once that worked does the last `.1` go, so a failure loses nothing.
+        try? fm.removeItem(at: rolling)
+        guard (try? fm.moveItem(at: url, to: rolling)) != nil else { return }
+        var kept = rolling
+        if (try? fm.removeItem(at: previous)) != nil || !fm.fileExists(atPath: previous.path),
+           (try? fm.moveItem(at: rolling, to: previous)) != nil { kept = previous }
         let fresh = open(url.path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
         guard fresh >= 0 else {
             // Still writing to the renamed file: name it back, or the next look would delete it.
-            try? FileManager.default.moveItem(at: previous, to: url)
+            try? fm.moveItem(at: kept, to: url)
             return
         }
         for fd in fds { dup2(fresh, fd) }
