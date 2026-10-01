@@ -140,6 +140,7 @@ enum CLI {
                 logs(p, bundleID: words[words.startIndex + 1], launch: parsed.launch)
             case "run":
                 guard name != nil, let p = targets.first else { fail("usage: roamrun run <name> [--scheme S]. " + names(profiles)) }
+                Proc.Passing.shared.begin()   // nothing it waits on may outlive it
                 let v = parsed.values
                 runApp(p, scheme: v["--scheme"], workspace: v["--workspace"], project: v["--project"],
                        configuration: v["--configuration"] ?? "Debug", logs: parsed.flags.contains("--logs"), launch: parsed.launch)
@@ -152,6 +153,7 @@ enum CLI {
                 guard name != nil, let p = targets.first, words.count >= 2 else {
                     fail("usage: roamrun install <name> <path to .ipa or .app>. " + names(profiles))
                 }
+                Proc.Passing.shared.begin()
                 install(p, path: words[words.startIndex + 1])
             case "ota":
                 // The name is optional here, unlike every command above: nothing is
@@ -418,13 +420,15 @@ enum CLI {
         if json { printJSON(profiles.map { row($0, live[$0.id], deep: false) }); exit(0) }
         guard !profiles.isEmpty else { print(noDevices); exit(0) }
         let w = max(4, profiles.map(\.displayName.count).max() ?? 4)
-        print("NAME".padding(toLength: w + 2, withPad: " ", startingAt: 0) + "VPN ADDRESS      UDID                       STATUS")
+        print("NAME".padding(toLength: w + 2, withPad: " ", startingAt: 0)
+              + "VPN ADDRESS      UDID                       ID                                    STATUS")
         for p in profiles {
             let e = live[p.id]
             let status = e.map { "\($0.status) (\(owner($0)))" } ?? BridgeStatus.off.title
             print(p.displayName.padding(toLength: w + 2, withPad: " ", startingAt: 0)
                   + p.providerIP.padding(toLength: 17, withPad: " ", startingAt: 0)
-                  + (e?.udid ?? p.udid ?? "-").padding(toLength: 27, withPad: " ", startingAt: 0) + status)
+                  + (e?.udid ?? p.udid ?? "-").padding(toLength: 27, withPad: " ", startingAt: 0)
+                  + p.id.uuidString.padding(toLength: 38, withPad: " ", startingAt: 0) + status)
         }
         exit(0)
     }
@@ -633,11 +637,11 @@ enum CLI {
     /// Wi-Fi without a bridge) and that is unlocked; otherwise says what to do.
     private static func reachableUDID(_ profile: DeviceProfile) -> String {
         guard let udid = StatusFile.read()[profile.id]?.udid ?? profile.udid else {
-            stop("\(profile.displayName)'s UDID isn't known yet — start its bridge once: roamrun up \(shellName(profile.displayName)) -d")
+            stop("\(profile.displayName)'s UDID isn't known yet — start its bridge once: roamrun up \(commandName(profile)) -d")
         }
         let core = coreDeviceState(udid)
         guard let core, core != "unavailable" else {
-            stop("Xcode can't reach \(profile.displayName) (\(core ?? "unknown")). If it's away, start the bridge: roamrun up \(shellName(profile.displayName)) -d; otherwise run roamrun doctor \(shellName(profile.displayName)).")
+            stop("Xcode can't reach \(profile.displayName) (\(core ?? "unknown")). If it's away, start the bridge: roamrun up \(commandName(profile)) -d; otherwise run roamrun doctor \(commandName(profile)).")
         }
         if isLocked(udid) == true { stop("\(profile.displayName) is locked — ask the user to unlock it and keep the screen on.") }
         return udid
@@ -645,6 +649,7 @@ enum CLI {
 
     /// Hands over to devicectl so Ctrl-C and kill reach it directly.
     private static func exec(_ argv: [String]) -> Never {
+        Proc.Passing.shared.endForExec()
         var cargs = argv.map { strdup($0) } + [nil]
         execv(argv[0], &cargs)
         stop("could not run \(argv[0]): \(String(cString: strerror(errno)))")
@@ -747,8 +752,14 @@ enum CLI {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: argv[0])
         task.arguments = Array(argv.dropFirst())
-        do { try task.run() } catch { stop("could not run \(argv[0]): \(error.localizedDescription)") }
+        Proc.Passing.shared.launching()
+        do { try task.run() } catch {
+            Proc.Passing.shared.launched(nil)
+            stop("could not run \(argv[0]): \(error.localizedDescription)")
+        }
+        Proc.Passing.shared.launched(task)
         task.waitUntilExit()
+        Proc.Passing.shared.childEnded()
         return task.terminationStatus
     }
 
@@ -860,7 +871,7 @@ enum CLI {
             print("\(profile.displayName) is already bridged by \(owner(e)) — ready for Xcode.")
             exit(0)
         }
-        stop("\(profile.displayName) is being bridged by \(owner(e)) (\(e.status)). Use it once it's ready, or run roamrun down \(shellName(profile.displayName)) first.")
+        stop("\(profile.displayName) is being bridged by \(owner(e)) (\(e.status)). Use it once it's ready, or run roamrun down \(commandName(profile)) first.")
     }
 
     /// devicectl can't attach to a running process, so this relaunches the app
@@ -915,11 +926,8 @@ enum CLI {
             print("\(profile.displayName) is on this Wi\u{2011}Fi and already watched by roamrun up (pid \(e.pid)) — it takes over when the device leaves.")
             exit(0)
         }
-        let logDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Logs/RoamRun", isDirectory: true)
-        try? FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
-        let safeName = fileSafe(profile.displayName)
-        let logURL = logDir.appendingPathComponent("\(safeName.isEmpty ? profile.id.uuidString : safeName).log")
+        let logURL = detachedLog(profile)
+        try? FileManager.default.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         // Keep the previous run's log (an earlier failure may point at it).
         let previous = logURL.appendingPathExtension("1")
         try? FileManager.default.removeItem(at: previous)
@@ -960,19 +968,61 @@ enum CLI {
         }
         print("""
           Log:  \(logURL.path)
-          Stop: roamrun down \(shellName(profile.displayName))
+          Stop: roamrun down \(commandName(profile))
         """)
         exit(lastKind == .ready || lastKind == .local ? 0 : 1)
+    }
+
+    /// Where `up -d`'s bridge writes; the previous run's is kept beside it as `.log.1`.
+    private static func detachedLog(_ profile: DeviceProfile) -> URL {
+        let safeName = fileSafe(profile.displayName)
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/RoamRun", isDirectory: true)
+            .appendingPathComponent("\(safeName.isEmpty ? profile.id.uuidString : safeName).log")
+    }
+
+    /// The background bridge's stdout and stderr are its log file; one left running for weeks
+    /// would fill the disk. Past `limit`, the file becomes `.log.1` (replacing that) and a new
+    /// one is opened under the same descriptors. A rename that fails changes nothing: the
+    /// writing goes on where it was, and nothing is deleted.
+    nonisolated static func rotateLog(at url: URL, limit: Int64 = 10 << 20, fds: [Int32] = [STDOUT_FILENO, STDERR_FILENO]) {
+        var st = stat()
+        guard let first = fds.first, fstat(first, &st) == 0, st.st_size > limit else { return }
+        let fm = FileManager.default
+        let previous = url.appendingPathExtension("1")
+        let rolling = url.appendingPathExtension("rolling"), backup = url.appendingPathExtension("1.backup")
+        // Each step can be undone until the new file is open; only then does the old `.1` go.
+        try? fm.removeItem(at: rolling)
+        try? fm.removeItem(at: backup)
+        guard (try? fm.moveItem(at: url, to: rolling)) != nil else { return }
+        let hadPrevious = fm.fileExists(atPath: previous.path)
+        func undo() {
+            if fm.fileExists(atPath: previous.path), !fm.fileExists(atPath: rolling.path) {
+                try? fm.moveItem(at: previous, to: rolling)   // step 3 had happened
+            }
+            if hadPrevious { try? fm.moveItem(at: backup, to: previous) }
+            try? fm.moveItem(at: rolling, to: url)
+        }
+        guard !hadPrevious || (try? fm.moveItem(at: previous, to: backup)) != nil else { return undo() }
+        guard (try? fm.moveItem(at: rolling, to: previous)) != nil else { return undo() }
+        let fresh = open(url.path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+        guard fresh >= 0 else { return undo() }   // still writing to the renamed file: it gets its name back
+        try? fm.removeItem(at: backup)
+        for fd in fds { dup2(fresh, fd) }
+        close(fresh)
     }
 
     private static func up(_ profile: DeviceProfile, verbose: Bool, detachedChild: Bool = false) {
         if StatusFile.otherOwner(of: profile.id) != nil, let e = StatusFile.read()[profile.id] {
             alreadyBridged(profile, e)
         }
+        var logRotation: Timer?
         if detachedChild {
             // Own session: closing the terminal / ending SSH doesn't reach us.
             setsid()
             signal(SIGHUP, SIG_IGN)
+            let log = detachedLog(profile)
+            logRotation = Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { _ in rotateLog(at: log) }
         }
         let bridge = ProxyBridge(profile: profile)
         self.bridge = bridge
@@ -1060,7 +1110,7 @@ enum CLI {
             src.resume()
             sources.append(src as AnyObject)
         }
-        keepAlive = [ticker, supervisor, monitor, wake] + sources
+        keepAlive = [ticker, supervisor, monitor, wake] + sources + (logRotation.map { [$0] } ?? [])
 
         print("Bridging \(profile.displayName) over \(profile.providerIP)…")
         bridge.requestStart(.manual)
@@ -1153,7 +1203,7 @@ enum CLI {
         for p in profiles {
             section("\n\(p.displayName) (\(p.providerIP))", p.displayName)
             if !checkAll, live[p.id] == nil {
-                note("Bridge is off — not checked (roamrun doctor \(shellName(p.displayName)) checks it anyway)")
+                note("Bridge is off — not checked (roamrun doctor \(commandName(p)) checks it anyway)")
                 continue
             }
             // On this Wi‑Fi Xcode reaches the device directly: the VPN path doesn't matter.
@@ -1232,7 +1282,7 @@ enum CLI {
                     }
                 }
             } else {
-                check(false, "Bridge is off", fix: "roamrun up \(shellName(p.displayName)) -d  (or Start Bridge in the app)")
+                check(false, "Bridge is off", fix: "roamrun up \(commandName(p)) -d  (or Start Bridge in the app)")
             }
         }
         otaSection(section: section, check: check, note: note)
@@ -1316,6 +1366,12 @@ enum CLI {
         if let host {
             note("Open on the device: https://\(host):\(tailnetPort)/")
         }
+    }
+
+    /// How to name a device in a command we suggest: a name starting with "-" would be taken
+    /// for an option, so its id stands in (every command takes one).
+    nonisolated static func commandName(_ p: DeviceProfile) -> String {
+        p.displayName.hasPrefix("-") ? p.id.uuidString : shellName(p.displayName)
     }
 
     /// A name as it must be typed in a shell: 'iPhone mh', 'it'\''s'.
@@ -1455,7 +1511,7 @@ enum CLI {
 
     private static func names(_ profiles: [DeviceProfile]) -> String {
         profiles.isEmpty ? noDevices
-            : "Saved: " + profiles.map { shellName($0.displayName) }.joined(separator: ", ")
+            : "Saved: " + profiles.map { commandName($0) }.joined(separator: ", ")
     }
 
     private static func owner(_ e: StatusFile.Entry) -> String {

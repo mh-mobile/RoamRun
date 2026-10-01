@@ -139,7 +139,7 @@ The app binary doubles as a CLI (handy over SSH or in scripts). To put `roamrun`
 - **Built from source:** the same, once the app is in `/Applications`; or `make install-cli` to use the build in the repo folder (`BINDIR=$HOME/bin` also works)
 
 ```sh
-roamrun devices               # saved devices (name, UDID) and their status
+roamrun devices               # saved devices (name, UDID, id) and their status
 roamrun up <name>             # start a bridge and show progress until Ready; Ctrl-C stops and cleans up
 roamrun up <name> -d          # start in the background (survives closing the terminal; log in ~/Library/Logs/RoamRun/)
                               #   waits up to 60s for Ready and exits 1 if it isn't — the bridge keeps trying either way
