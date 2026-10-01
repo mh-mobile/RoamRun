@@ -1027,7 +1027,7 @@ final class AppCoordinator: ObservableObject {
             startWhenFree(id, after: other)
             return
         }
-        if reason == .networkChange { bridges[id]?.stop() }
+        if StartPolicy.of(reason).restarts { bridges[id]?.stop() }
         bridges[id]?.requestStart(reason)   // the claim itself defers to a CLI that got there first
     }
 

@@ -2761,7 +2761,7 @@ private func inertProfile(_ name: String) -> DeviceProfile {
     let bridge = ProxyBridge(profile: p, statusDir: dir, statusLive: { _ in true },
                              env: inertEnv(record: record, watcher: watcher))
     defer { bridge.stop() }
-    await bridge.start()
+    await bridge.start(.manual)
     #expect(bridge.state.isActive)
     #expect(record.registered == 1)
     #expect(watcher.subscribers[p.id] != nil)
@@ -2784,7 +2784,7 @@ private func inertProfile(_ name: String) -> DeviceProfile {
     env.lanIPv4 = { nil }
     let bridge = ProxyBridge(profile: inertProfile("iPhone"), statusDir: dir, statusLive: { _ in true }, env: env)
     defer { bridge.stop() }
-    await bridge.start()
+    await bridge.start(.manual)
     #expect(bridge.status == .error)
     #expect(record.registered == 0)
 }
@@ -2862,7 +2862,7 @@ func startOutcomes(_ c: StartCase) async {
     }
     var saved: DeviceProfile?
     rig.bridge.onProfileChange = { saved = $0 }
-    await rig.bridge.start()
+    await rig.bridge.start(.manual)
     let expected: (BridgeStatus, registered: Int, scans: Int) = switch c {
     case .answers: (.waiting, 1, 0)
     case .onThisWiFi: (.local, 0, 0)
@@ -2894,16 +2894,16 @@ func aFruitlessScanIsNotRepeatedForTenMinutesOnThisBridge(_ result: Reachability
     await rig.bridge.start(.retry)
     #expect(rig.world.scans == 1)
     rig.world.now += 599
-    await rig.bridge.start()
+    await rig.bridge.start(.manual)
     #expect(rig.world.scans == 1)
     rig.world.now += 2
-    await rig.bridge.start()
+    await rig.bridge.start(.manual)
     #expect(rig.world.scans == 2)
 
     let fresh = Rig()
     defer { fresh.done() }
     fresh.world.answering = []; fresh.world.ping = true; fresh.world.scan = result
-    await fresh.bridge.start()
+    await fresh.bridge.start(.manual)
     #expect(fresh.world.scans == 1)
 }
 
@@ -2916,7 +2916,7 @@ func aFruitlessScanIsNotRepeatedForTenMinutesOnThisBridge(_ result: Reachability
     rig.world.peers = [MeshDevice(id: "1", name: "iphone", os: "iOS", ips: ["127.0.0.2"], online: true)]
     var saved: DeviceProfile?
     rig.bridge.onProfileChange = { saved = $0 }
-    await rig.bridge.start()
+    await rig.bridge.start(.manual)
     #expect(rig.bridge.status == .waiting)
     #expect(rig.bridge.profile.providerIP == "127.0.0.2" && saved?.providerIP == "127.0.0.2")
     #expect(rig.world.scans == 0)
@@ -2948,15 +2948,15 @@ func claimOutcomes(_ c: ClaimCase) async {
 @MainActor @Test func whatStopsTheRetriesAndWhatResumesThem() async {
     let rig = Rig()
     defer { rig.done() }
-    await rig.bridge.start()
+    await rig.bridge.start(.manual)
     rig.record.onExit?(1)                                   // dns-sd died
     #expect(await eventuallyOnMain { rig.bridge.status == .error })
     #expect(rig.bridge.autoRetry)
 
-    await rig.bridge.start()
+    await rig.bridge.start(.manual)
     rig.watcher.subscribers[rig.id]?.onExit("log stream exited (status 64): Must be admin to run 'stream' command")
     #expect(rig.bridge.status == .error && !rig.bridge.autoRetry)
-    await rig.bridge.start()
+    await rig.bridge.start(.manual)
     #expect(rig.bridge.autoRetry)                           // start() clears it, whoever calls it
 
     let mine = rig.bridge.profile.instanceName
@@ -2979,7 +2979,7 @@ func claimOutcomes(_ c: ClaimCase) async {
 func renewalsWhileWaiting(meshReachesIt: Bool) async {
     let rig = Rig()
     defer { rig.done() }
-    await rig.bridge.start()
+    await rig.bridge.start(.manual)
     #expect(rig.bridge.status == .waiting)
     rig.world.answering = []
     rig.world.ping = meshReachesIt
@@ -3005,7 +3005,7 @@ func renewalsWhileWaiting(meshReachesIt: Bool) async {
 @MainActor @Test func aBridgedDeviceThatComesHomeStandsAside() async {
     let rig = Rig()
     defer { rig.done() }
-    await rig.bridge.start()
+    await rig.bridge.start(.manual)
     let stopsBefore = rig.record.stopped
     rig.world.onLAN = true
     rig.bridge.tick()
@@ -3018,7 +3018,7 @@ func renewalsWhileWaiting(meshReachesIt: Bool) async {
 @MainActor @Test func wakingReannouncesAndRestartsTheMinute() async {
     let rig = Rig()
     defer { rig.done() }
-    await rig.bridge.start()
+    await rig.bridge.start(.manual)
     rig.world.now += 50
     rig.bridge.nudgeAfterWake()
     #expect(rig.record.renewed == 1)
@@ -3036,7 +3036,7 @@ func renewalsWhileWaiting(meshReachesIt: Bool) async {
     rig.world.peers = [MeshDevice(id: "1", name: "iphone-2", os: "iOS", ips: ["127.0.0.1"], online: true)]
     var saved: DeviceProfile?
     rig.bridge.onProfileChange = { saved = $0 }
-    await rig.bridge.start()
+    await rig.bridge.start(.manual)
     #expect(rig.bridge.status == .error)                    // still silent, and not pinged up
     #expect(saved?.providerHostName == "iphone-2" && rig.bridge.profile.providerHostName == "iphone-2")
 }
@@ -3047,7 +3047,7 @@ func renewalsWhileWaiting(meshReachesIt: Bool) async {
 func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
     let rig = Rig()
     defer { rig.done() }
-    await rig.bridge.start()
+    await rig.bridge.start(.manual)
     let udid = "00008130-000C1C5C307A8D3A"
     rig.watcher.subscribers[rig.id]?.onDevice(rig.bridge.profile.instanceName, udid)   // ours: learns the UDID
     rig.world.now += 1
@@ -3069,7 +3069,7 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
     let rig = Rig()
     defer { rig.done() }
     rig.world.onLAN = true
-    await rig.bridge.start()
+    await rig.bridge.start(.manual)
     #expect(rig.bridge.status == .local)
     rig.world.onLAN = false
     await rig.bridge.resumeIfAway()
@@ -3081,7 +3081,7 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
     let other = Rig()
     defer { other.done() }
     other.world.onLAN = true
-    await other.bridge.start()
+    await other.bridge.start(.manual)
     let cli = StatusFile.Entry(pid: 4242, cli: true, udid: nil, status: BridgeStatus.local.title, detail: "", ready: false,
                                tunnelPorts: [], updated: .now, state: BridgeStatus.local.rawValue)
     var yieldedTo: Int32?
@@ -3100,31 +3100,33 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
 @Test(arguments: StartReason.allCases)
 func startPolicyTable(_ r: StartReason) {
     let byHand: Set<StartReason> = [.manual, .rescan]
-    #expect(StartPolicy.of(r) == StartPolicy(mayTakeFromCLI: byHand.contains(r), clearsRetryBlock: true, clearsScanPause: false))
+    #expect(StartPolicy.of(r) == StartPolicy(mayTakeFromCLI: byHand.contains(r), clearsRetryBlock: true, clearsScanPause: false,
+                                             restarts: r == .networkChange))
 }
 
-/// The claim follows the reason: against an errored `roamrun up` entry, only Start and
-/// Find RemotePairing Port take the device.
-@MainActor @Test(arguments: StartReason.allCases)
-func claimByReason(_ r: StartReason) {
+/// The claim follows the reason: against an errored `roamrun up` entry, the app's only Start
+/// and Find RemotePairing Port take the device; a `roamrun up` takes it whatever the reason.
+@MainActor @Test(arguments: StartReason.allCases, [false, true])
+func claimByReason(_ r: StartReason, fromCLI: Bool) {
     let rig = Rig()
+    rig.world.cli = fromCLI
     defer { rig.done() }
     let other = StatusFile.Entry(pid: 4242, cli: true, udid: nil, status: BridgeStatus.error.title, detail: "", ready: false,
                                  tunnelPorts: [], updated: .now, state: BridgeStatus.error.rawValue)
     #expect(StatusFile.write(rig.id, other, in: rig.dir, live: { _ in true }) == .written)
-    let takes = r == .manual || r == .rescan
-    #expect((rig.bridge.claimDevice(r) == .written) == takes, "\(r)")
+    let takes = fromCLI || r == .manual || r == .rescan
+    #expect((rig.bridge.claimDevice(r) == .written) == takes, "\(r) fromCLI: \(fromCLI)")
 }
 
 /// Which bridges the supervisor hands back, and with which reason.
 @MainActor @Test func theSupervisorRetriesRestartsPausesAndNudgesTheRightBridges() async {
     let on = Rig(), off = Rig(), stuck = Rig(), active = Rig()
     defer { [on, off, stuck, active].forEach { $0.done() } }
-    for r in [on, off, stuck] { r.world.lan = nil; await r.bridge.start() }   // errored: no LAN address
-    await active.bridge.start()
+    for r in [on, off, stuck] { r.world.lan = nil; await r.bridge.start(.manual) }   // errored: no LAN address
+    await active.bridge.start(.manual)
     // A block retrying can't clear, on `stuck`: no admin rights for `log stream`.
     stuck.world.lan = "127.0.0.1"
-    await stuck.bridge.start()
+    await stuck.bridge.start(.manual)
     stuck.watcher.subscribers[stuck.id]?.onExit("log stream exited (status 64): Must be admin")
     #expect(!stuck.bridge.autoRetry && stuck.bridge.status == .error)
 
@@ -3157,14 +3159,15 @@ func claimByReason(_ r: StartReason) {
     let rig = Rig()
     defer { rig.done() }
     rig.world.onLAN = true
-    await rig.bridge.start()
+    await rig.bridge.start(.manual)
     rig.world.onLAN = false
     let sup = BridgeSupervisor(all: { [rig.bridge] }, wanted: { _ in true }, start: { _, _ in })
-    for _ in 0..<3 {
+    // As the 10 s timer would: again and again until three misses in a row resume it. A look
+    // while the last one still runs is skipped, as it is in the app.
+    #expect(await eventuallyOnMain {
         sup.lookAgainIfAway()
-        try? await Task.sleep(for: .milliseconds(100))   // its Task runs one check
-    }
-    #expect(await eventuallyOnMain { rig.bridge.status == .waiting })
+        return rig.bridge.status == .waiting
+    })
 }
 
 @MainActor @Test func aManualClaimDoesntAuthorizeLaterUpdatesOrTeardownToTakeOver() {

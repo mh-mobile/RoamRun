@@ -19,13 +19,17 @@ struct StartPolicy: Equatable {
     var clearsRetryBlock: Bool
     /// Scans for the RemotePairing port within 10 minutes of a scan that found nothing.
     var clearsScanPause: Bool
+    /// Stops a running bridge first: its relays are bound to the old address.
+    var restarts: Bool
 
     static func of(_ reason: StartReason) -> StartPolicy {
         switch reason {
         case .manual, .rescan:
-            StartPolicy(mayTakeFromCLI: true, clearsRetryBlock: true, clearsScanPause: false)
-        case .edit, .restore, .retry, .networkChange, .resume:
-            StartPolicy(mayTakeFromCLI: false, clearsRetryBlock: true, clearsScanPause: false)
+            StartPolicy(mayTakeFromCLI: true, clearsRetryBlock: true, clearsScanPause: false, restarts: false)
+        case .networkChange:
+            StartPolicy(mayTakeFromCLI: false, clearsRetryBlock: true, clearsScanPause: false, restarts: true)
+        case .edit, .restore, .retry, .resume:
+            StartPolicy(mayTakeFromCLI: false, clearsRetryBlock: true, clearsScanPause: false, restarts: false)
         }
     }
 }
@@ -40,7 +44,7 @@ final class BridgeSupervisor {
     var all: () -> [ProxyBridge]
     /// Left on by the user: those errors are retried, and restarted on a new address.
     var wanted: (ProxyBridge) -> Bool
-    /// Starts these for `reason`; `.networkChange` restarts them.
+    /// Starts these for `reason` (restarting them if its policy says so).
     var start: ([ProxyBridge], StartReason) -> Void
     /// An errored bridge retrying can't fix. Nil: it is left as it is.
     var gaveUp: ((ProxyBridge) -> Void)?

@@ -1024,7 +1024,7 @@ enum CLI {
         // Unlike the app, nothing re-announces on wake.
         let supervisor = BridgeSupervisor(all: { [bridge] }, wanted: { _ in true }, start: { list, reason in
             for b in list {
-                if reason == .networkChange { b.stop() }
+                if StartPolicy.of(reason).restarts { b.stop() }
                 b.requestStart(reason)
             }
         }, gaveUp: { b in

@@ -121,7 +121,7 @@ final class ProxyBridge: ObservableObject {
     /// What it may do follows from `reason` (StartPolicy). One that may not take the device
     /// from a live `roamrun up` is refused when the claim is written, so it can't race a
     /// check made earlier.
-    func start(_ reason: StartReason = .manual) async {
+    func start(_ reason: StartReason) async {
         let policy = StartPolicy.of(reason)
         generation += 1
         let gen = generation
@@ -319,7 +319,7 @@ final class ProxyBridge: ObservableObject {
     }
 
     /// Start from synchronous code. A stop() before the task gets to run wins.
-    func requestStart(_ reason: StartReason = .manual) {
+    func requestStart(_ reason: StartReason) {
         let g = generation
         Task { guard g == generation else { return }; await start(reason) }
     }
