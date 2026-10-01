@@ -756,10 +756,7 @@ enum CLI {
         let sources = [SIGTERM, SIGHUP].map { sig -> DispatchSourceSignal in
             signal(sig, SIG_IGN)
             let src = DispatchSource.makeSignalSource(signal: sig, queue: .global())
-            src.setEventHandler {
-                caught.set(sig)
-                if task.isRunning { kill(task.processIdentifier, sig) }
-            }
+            src.setEventHandler(handler: forward(sig, to: task, noting: caught))
             src.resume()
             return src
         }
@@ -770,6 +767,15 @@ enum CLI {
         for sig in [SIGTERM, SIGHUP] { signal(sig, SIG_DFL) }
         if let sig = caught.value { kill(getpid(), sig) }   // and stop as asked, once it has
         return task.terminationStatus
+    }
+
+    /// Made outside the main actor: the handler runs on a dispatch thread, and a closure
+    /// written in `visible` would be the main actor's and trap there.
+    nonisolated private static func forward(_ sig: Int32, to task: Process, noting caught: Caught) -> @Sendable () -> Void {
+        return {
+            caught.set(sig)
+            if task.isRunning { kill(task.processIdentifier, sig) }
+        }
     }
 
     private final class Caught: @unchecked Sendable {
