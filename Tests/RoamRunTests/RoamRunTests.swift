@@ -931,8 +931,10 @@ private final class EchoServer: @unchecked Sendable {
 }
 
 /// Polls `condition` for up to 5 s: connection callbacks land when they land.
+/// Up to 15 s: closes reach the process-wide pair count late on a loaded machine, and the
+/// relay suite's counts then missed a 5 s wait now and then. It returns as soon as it holds.
 private func eventually(_ condition: () -> Bool) async throws -> Bool {
-    for _ in 0..<50 where !condition() { try await Task.sleep(for: .milliseconds(100)) }
+    for _ in 0..<150 where !condition() { try await Task.sleep(for: .milliseconds(100)) }
     return condition()
 }
 
@@ -2918,10 +2920,9 @@ func startOutcomes(_ c: StartCase) async {
     }
 }
 
-/// A scan that found nothing, or ran out of time, isn't repeated for 10 minutes by this
-/// bridge — today not even by a start someone asked for (2a may change this; the plan's
-/// F3/R5). The pause lives in the bridge: a new one (the device removed and added again)
-/// scans at once.
+/// A scan that found nothing, or ran out of time, isn't repeated for 10 minutes by an
+/// automatic start; Start (and Find RemotePairing Port) scans regardless (2a: F3/R5). The
+/// pause lives with the device's memory: a new device (removed and added again) scans at once.
 @MainActor @Test(arguments: [ReachabilityProbe.PortScan.notFound, .timedOut])
 func aFruitlessScanIsNotRepeatedForTenMinutesOnThisBridge(_ result: ReachabilityProbe.PortScan) async {
     let rig = Rig()
@@ -2930,11 +2931,13 @@ func aFruitlessScanIsNotRepeatedForTenMinutesOnThisBridge(_ result: Reachability
     await rig.bridge.start(.retry)
     #expect(rig.world.scans == 1)
     rig.world.now += 599
-    await rig.bridge.start(.manual)
+    await rig.bridge.start(.retry)
     #expect(rig.world.scans == 1)
-    rig.world.now += 2
     await rig.bridge.start(.manual)
-    #expect(rig.world.scans == 2)
+    #expect(rig.world.scans == 2)                          // a person asked
+    rig.world.now += 601
+    await rig.bridge.start(.retry)
+    #expect(rig.world.scans == 3)
 
     let fresh = Rig()
     defer { fresh.done() }
@@ -2992,8 +2995,13 @@ func claimOutcomes(_ c: ClaimCase) async {
     await rig.bridge.start(.manual)
     rig.watcher.subscribers[rig.id]?.onExit("log stream exited (status 64): Must be admin to run 'stream' command")
     #expect(rig.bridge.status == .error && !rig.bridge.autoRetry)
+    let blocked = rig.bridge.state
+    for r in StartReason.allCases where r != .manual {
+        await rig.bridge.start(r)
+        #expect(!rig.bridge.autoRetry && rig.bridge.state == blocked, "\(r)")   // left as it was (2a)
+    }
     await rig.bridge.start(.manual)
-    #expect(rig.bridge.autoRetry)                           // start() clears it, whoever calls it
+    #expect(rig.bridge.autoRetry)                           // only Start lifts it
 
     let mine = rig.bridge.profile.instanceName
     rig.watcher.subscribers[rig.id]?.onUnrecognized(mine)
@@ -3152,7 +3160,7 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
 @MainActor @Test func aDeviceMemoryForgetsOnlyForAnotherDevice() {
     let m = DeviceMemory()
     let checked = Date(timeIntervalSinceReferenceDate: 800_000_000)
-    m.homeAdvert = "ADVERT"; m.autoRetry = false; m.lastFullCheck = checked
+    m.homeAdvert = "ADVERT"; m.block = .pairingLost; m.lastFullCheck = checked
     m.pauseScans(of: "100.64.0.10:49152", until: .distantFuture)
     m.adopt("00008130-000C1C5C307A8D3A")                 // first learned: the same device
     #expect(m.homeAdvert == "ADVERT" && !m.autoRetry && m.lastFullCheck == checked)
@@ -3181,9 +3189,11 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
     let second = Rig(first.bridge.profile, memory: memory)   // the profile never saved the UDID
     defer { second.done() }
     #expect(second.bridge.udid == "00008130-000C1C5C307A8D3A")
-    #expect(!second.bridge.autoRetry)                      // still blocked until something starts it
+    #expect(!second.bridge.autoRetry)                      // still blocked
     await second.bridge.start(.edit)
-    #expect(second.bridge.autoRetry)                       // every start clears it, as before
+    #expect(!second.bridge.autoRetry && second.record.registered == 0)   // an edit doesn't lift it (2a)
+    await second.bridge.start(.manual)
+    #expect(second.bridge.autoRetry && second.record.registered == 1)    // Start does
 }
 
 /// Standing aside, the device's advert found the slow way is what the next bridge tries
@@ -3378,18 +3388,155 @@ extension TimingSensitive.OTAServerOverASocket {
 
 // MARK: - Start reasons and the shared supervisor (1.5c)
 
-/// One table for what each reason may do. 1.5c keeps today's behaviour: only a start a
-/// person asked for takes from a `roamrun up`, every start clears the retry block, none
-/// skips the scan pause. 2a changes rows here.
+/// One table for what each reason may do (2a). Only Start lifts a retry block or takes from
+/// a `roamrun up`; Find RemotePairing Port and Start skip the scan pause; what a person did,
+/// or a new network, starts the retries short again; only a new address restarts.
 @Test(arguments: StartReason.allCases)
 func startPolicyTable(_ r: StartReason) {
-    let byHand: Set<StartReason> = [.manual, .rescan]
-    #expect(StartPolicy.of(r) == StartPolicy(mayTakeFromCLI: byHand.contains(r), clearsRetryBlock: true, clearsScanPause: false,
-                                             restarts: r == .networkChange))
+    let p = StartPolicy.of(r)
+    #expect(p.mayTakeFromCLI == (r == .manual), "\(r)")
+    #expect(p.clears == (r == .manual ? Set(RetryBlock.allCases) : []), "\(r)")
+    #expect(p.clearsScanPause == [.manual, .rescan].contains(r), "\(r)")
+    #expect(p.resetsBackoff == [.manual, .rescan, .edit, .networkChange].contains(r), "\(r)")
+    #expect(p.restarts == (r == .networkChange), "\(r)")
+}
+
+/// Retries wait longer after each failure in a row: 30 s, 1, 2, 4, 8 minutes, then 10.
+@MainActor @Test func retriesBackOffUpToTenMinutes() {
+    #expect((1...7).map { DeviceMemory.backoff(afterFailures: $0) } == [30, 60, 120, 240, 480, 600, 600])
+    let m = DeviceMemory(), t = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    m.failed(at: t, unreachable: true); m.failed(at: t, unreachable: true)
+    #expect(!m.retryDue(now: t + 59) && m.retryDue(now: t + 60))
+    m.resetBackoff()
+    #expect(m.retryDue(now: t) && m.failures == 0)
+}
+
+/// Waiting for a `roamrun up` to end, the start keeps what the strongest reason meant: a
+/// rescan or an edit made meanwhile isn't lost to a plain retry.
+@Test func aStartWaitingForTheCLIKeepsTheStrongestReason() {
+    #expect(StartReason.stronger(.retry, .edit) == .edit)
+    #expect(StartReason.stronger(.edit, .retry) == .edit)
+    #expect(StartReason.stronger(.networkChange, .rescan) == .rescan)
+    #expect(StartReason.stronger(.rescan, .edit) == .rescan)
+    #expect(StartReason.stronger(.edit, .networkChange) == .networkChange)   // a tie: the later
+    #expect(StartReason.stronger(.resume, .retry) == .retry)
+}
+
+/// The wait runs from when the failed attempt began (a tick), so it is never shorter than
+/// the step it is on, however long the attempt took to fail.
+@MainActor @Test func theWaitRunsFromTheAttemptsStart() {
+    let m = DeviceMemory(), tick = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    m.failed(at: tick + 12, since: tick, unreachable: true)
+    #expect(!m.retryDue(now: tick + 28) && m.retryDue(now: tick + 30))
+    m.failed(at: tick + 40, since: tick + 30, unreachable: true)   // second: 60 s
+    #expect(!m.retryDue(now: tick + 88) && m.retryDue(now: tick + 90))
+}
+
+/// A bridge that keeps failing to start counts it, and one that comes up starts over.
+@MainActor @Test func aFailedStartGrowsTheWaitAndASuccessResetsIt() async {
+    let rig = Rig()
+    defer { rig.done() }
+    rig.world.lan = nil                                      // no LAN address: every start fails
+    await rig.bridge.start(.retry)
+    await rig.bridge.start(.retry)
+    await rig.bridge.start(.retry)
+    #expect(rig.bridge.memory.failures == 3)
+    #expect(!rig.bridge.memory.retryDue(now: rig.world.now + 119) && rig.bridge.memory.retryDue(now: rig.world.now + 120))
+    rig.world.lan = "127.0.0.1"
+    await rig.bridge.start(.retry)
+    #expect(rig.bridge.status == .waiting && rig.bridge.memory.failures == 0)
+}
+
+/// The supervisor's tick: a bridge still in its wait isn't restarted, unless a cheap look
+/// finds the port of a device that didn't answer answering again — then at once.
+@MainActor @Test func theSupervisorWaitsOutTheBackoffButNotAnAnsweringPort() async {
+    let rig = Rig()
+    defer { rig.done() }
+    rig.world.answering = []                                 // the device doesn't answer: unreachable
+    await rig.bridge.start(.manual)
+    await rig.bridge.start(.retry)                           // two failures: 60 s to wait
+    #expect(rig.bridge.memory.failures == 2 && rig.bridge.memory.lastFailureUnreachable)
+    var started: [StartReason] = []
+    let sup = BridgeSupervisor(all: { [rig.bridge] }, wanted: { _ in true },
+                               start: { _, r in started.append(r) }, now: { rig.world.now })
+    sup.retry()
+    try? await Task.sleep(for: .milliseconds(200))           // its look at the port, still shut
+    #expect(started.isEmpty)
+    rig.world.answering = ["127.0.0.1"]
+    #expect(await eventuallyOnMain { sup.retry(); return started.contains(.retry) })
+    #expect(rig.bridge.memory.failures == 0)
+}
+
+/// A failure on this Mac's side (here: no LAN address) isn't fixed by the device answering,
+/// so its wait isn't cut short by a port that answers.
+@MainActor @Test func aPortThatAnswersDoesntCutAWaitForThisMacsOwnFailure() async {
+    let rig = Rig()
+    defer { rig.done() }
+    rig.world.lan = nil
+    await rig.bridge.start(.manual)
+    await rig.bridge.start(.retry)
+    #expect(!rig.bridge.memory.lastFailureUnreachable)
+    var started = 0
+    let sup = BridgeSupervisor(all: { [rig.bridge] }, wanted: { _ in true },
+                               start: { _, _ in started += 1 }, now: { rig.world.now })
+    for _ in 0..<3 { sup.retry(); try? await Task.sleep(for: .milliseconds(50)) }
+    #expect(started == 0)
+    rig.world.now += 61
+    sup.retry()
+    #expect(started == 1)                                    // waited out, then retried
+}
+
+/// A failure just after a tick is still due on the tick its wait points at, not the one after
+/// (the timer's drift is within the second of slack).
+@MainActor @Test func aRetryIsntPushedToTheTickAfter() {
+    let m = DeviceMemory(), tick = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let rig = Rig(memory: m)
+    defer { rig.done() }
+    rig.bridge.fail("down")                                  // errored, as it would be
+    m.resetBackoff()
+    m.failed(at: tick + 0.4, unreachable: true)              // the retry started at the tick failed soon after
+    var started = 0
+    let sup = BridgeSupervisor(all: { [rig.bridge] }, wanted: { _ in true },
+                               start: { _, _ in started += 1 }, now: { tick + 30 })
+    sup.retry()
+    #expect(started == 1)
+}
+
+/// A blocked bridge stopped for a new address, or rebuilt: its start is turned away, it says
+/// why again, and stays an error — so `roamrun up` still gives up instead of sitting at Off.
+@MainActor @Test func aBlockedBridgeTurnedAwayKeepsItsErrorAndTheCLIStillGivesUp() async {
+    let rig = Rig()
+    defer { rig.done() }
+    await rig.bridge.start(.manual)
+    rig.watcher.subscribers[rig.id]?.onExit("log stream exited (status 64): Must be admin")
+    guard case .error(let why) = rig.bridge.state else { Issue.record("not an error"); return }
+    var gaveUp = 0
+    let sup = BridgeSupervisor(all: { [rig.bridge] }, wanted: { _ in true }, start: { list, reason in
+        for b in list {                                      // as roamrun up's start does
+            if StartPolicy.of(reason).restarts { b.stop() }
+            b.requestStart(reason)
+        }
+    }, gaveUp: { _ in gaveUp += 1 })
+    sup.lanAddressChanged()
+    #expect(await eventuallyOnMain { rig.bridge.state == .error(why) })
+    sup.retry()
+    #expect(gaveUp == 1)
+}
+
+/// Waking: whatever failed before the sleep, the next retry is a short wait again.
+@MainActor @Test func wakingStartsTheRetriesShortAgain() async {
+    let rig = Rig()
+    defer { rig.done() }
+    rig.world.lan = nil
+    await rig.bridge.start(.manual)
+    await rig.bridge.start(.retry)
+    #expect(rig.bridge.memory.failures == 2)
+    BridgeSupervisor(all: { [rig.bridge] }, wanted: { _ in true }, start: { _, _ in }).woke()
+    #expect(rig.bridge.memory.failures == 0)
 }
 
 /// The claim follows the reason: against an errored `roamrun up` entry, the app's only Start
-/// and Find RemotePairing Port take the device; a `roamrun up` takes it whatever the reason.
+/// takes the device; a `roamrun up` takes it whatever the reason.
 @MainActor @Test(arguments: StartReason.allCases, [false, true])
 func claimByReason(_ r: StartReason, fromCLI: Bool) {
     let rig = Rig()
@@ -3398,7 +3545,7 @@ func claimByReason(_ r: StartReason, fromCLI: Bool) {
     let other = StatusFile.Entry(pid: 4242, cli: true, udid: nil, status: BridgeStatus.error.title, detail: "", ready: false,
                                  tunnelPorts: [], updated: .now, state: BridgeStatus.error.rawValue)
     #expect(StatusFile.write(rig.id, other, in: rig.dir, live: { _ in true }) == .written)
-    let takes = fromCLI || r == .manual || r == .rescan
+    let takes = fromCLI || r == .manual   // 2a: Find RemotePairing Port no longer takes (F16)
     #expect((rig.bridge.claimDevice(r) == .written) == takes, "\(r) fromCLI: \(fromCLI)")
 }
 

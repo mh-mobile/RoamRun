@@ -214,7 +214,7 @@ private struct StatusCard: View {
             return "\(profile.displayName) is on this Mac's network, so Xcode reaches it directly — no bridge needed. RoamRun resumes the bridge by itself when it leaves."
         case .error:
             if let external { return external.detail.isEmpty ? "The other RoamRun process reported an error — see its log." : external.detail }
-            if case .error(let m) = bridge.state { return bridge.autoRetry ? m + "\nRoamRun retries automatically every 30 seconds." : m }
+            if case .error(let m) = bridge.state { return bridge.autoRetry ? m + "\nRoamRun retries automatically, waiting longer after each failure in a row (up to 10 minutes)." : m }
             return ""
         }
     }
