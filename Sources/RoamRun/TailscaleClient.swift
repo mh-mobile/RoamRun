@@ -324,12 +324,19 @@ struct TailscaleClient {
     func pingResult(_ ip: String) -> Ping {
         guard let path = resolvedPath() else { return .couldNotRun("no tailscale CLI") }
         let r = Proc.run(path, Self.pingArgs(ip), timeout: 8)   // the ping itself gives up at 3 s
-        return Self.ping(status: r.status, out: r.out, err: r.err)
+        return Self.ping(r)
     }
 
-    static func ping(status: Int32, out: String, err: String) -> Ping {
-        if status == 0 && out.contains("pong") { return .pong }
-        if status == -1 || err.contains("timed out after") { return .couldNotRun(err) }   // Proc.run's own failures
+    /// Status -1 is a launch that failed (Proc.run). This Mac's own Tailscale being down,
+    /// stopped or signed out is no answer about the device either.
+    static func ping(_ r: Proc.Result) -> Ping {
+        if r.status == 0 && r.out.contains("pong") { return .pong }
+        if r.status == -1 || r.timedOut { return .couldNotRun(r.err) }
+        let said = (r.err + "\n" + r.out).lowercased()
+        if ["local tailscale daemon", "tailscale is stopped", "logged out", "needslogin", "not logged in"]
+            .contains(where: said.contains) {
+            return .couldNotRun(r.err.isEmpty ? r.out : r.err)
+        }
         return .noPong
     }
 

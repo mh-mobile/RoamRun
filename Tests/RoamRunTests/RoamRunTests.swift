@@ -3093,14 +3093,21 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
     #expect(other.bridge.status == .off && yieldedTo == 4242)
 }
 
-/// Three outcomes, so 2b can tell this Mac's problem from the device's. Proc.run reports a
-/// launch failure as status -1 and a hang as "timed out after".
+/// Three outcomes, so 2b can tell this Mac's problem from the device's.
 @Test func pingTellsNoAnswerFromCouldntAsk() {
-    #expect(TailscaleClient.ping(status: 0, out: "pong from iphone (100.64.0.10) via DERP(tok) in 40ms", err: "") == .pong)
-    #expect(TailscaleClient.ping(status: 1, out: "timeout waiting for ping reply", err: "") == .noPong)
-    #expect(TailscaleClient.ping(status: -1, out: "", err: "The file doesn’t exist.") == .couldNotRun("The file doesn’t exist."))
-    let hung = "/opt/homebrew/bin/tailscale timed out after 8s"
-    #expect(TailscaleClient.ping(status: 15, out: "", err: hung) == .couldNotRun(hung))
+    func r(_ status: Int32, _ out: String, _ err: String, timedOut: Bool = false) -> Proc.Result {
+        Proc.Result(status: status, out: out, err: err, timedOut: timedOut)
+    }
+    #expect(TailscaleClient.ping(r(0, "pong from iphone (100.64.0.10) via DERP(tok) in 40ms", "")) == .pong)
+    // What `tailscale ping -c 1` prints when nothing answers.
+    #expect(TailscaleClient.ping(r(1, "ping \"100.64.0.10\" timed out\n", "no reply\n")) == .noPong)
+    #expect(TailscaleClient.ping(r(-1, "", "The file doesn’t exist.")) == .couldNotRun("The file doesn’t exist."))
+    #expect(TailscaleClient.ping(r(15, "", "tailscale timed out after 8s", timedOut: true)) == .couldNotRun("tailscale timed out after 8s"))
+    // This Mac's own Tailscale: not an answer about the device.
+    for err in ["failed to connect to local Tailscale daemon for /localapi/v0/ping; not running?",
+                "Tailscale is stopped.", "Logged out."] {
+        #expect(TailscaleClient.ping(r(1, "", err)) == .couldNotRun(err), "\(err)")
+    }
 }
 
 // MARK: - Start reasons and the shared supervisor (1.5c)
