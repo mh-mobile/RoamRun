@@ -3116,15 +3116,19 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
 /// Another known device clears it; learning the UDID for the first time doesn't.
 @MainActor @Test func aDeviceMemoryForgetsOnlyForAnotherDevice() {
     let m = DeviceMemory()
-    m.homeAdvert = "ADVERT"; m.autoRetry = false; m.pauseScans(of: "100.64.0.10:49152", until: .distantFuture)
+    let checked = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    m.homeAdvert = "ADVERT"; m.autoRetry = false; m.lastFullCheck = checked
+    m.pauseScans(of: "100.64.0.10:49152", until: .distantFuture)
     m.adopt("00008130-000C1C5C307A8D3A")                 // first learned: the same device
-    #expect(m.homeAdvert == "ADVERT" && !m.autoRetry && m.scansPaused(of: "100.64.0.10:49152", now: .now))
+    #expect(m.homeAdvert == "ADVERT" && !m.autoRetry && m.lastFullCheck == checked)
+    #expect(m.scansPaused(of: "100.64.0.10:49152", now: .now))
     m.adopt("00008130-000c1c5c307a8d3a")                 // case only
     #expect(m.homeAdvert == "ADVERT")
     m.adopt(nil)                                          // a profile without one says nothing
     #expect(m.udid == "00008130-000c1c5c307a8d3a")
     m.adopt("00008101-000A00000000A001")                 // another device
-    #expect(m.homeAdvert == nil && m.autoRetry && !m.scansPaused(of: "100.64.0.10:49152", now: .now))
+    #expect(m.homeAdvert == nil && m.autoRetry && m.lastFullCheck == .distantPast)
+    #expect(!m.scansPaused(of: "100.64.0.10:49152", now: .now))
     #expect(m.udid == "00008101-000A00000000A001")
 }
 
@@ -3156,11 +3160,13 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
     first.world.onLAN = true
     await first.bridge.start(.manual)                     // standing aside
     memory.homeAdvert = "REAL-ADVERT"                     // what isHome learns from `log show`
+    let checked = memory.lastFullCheck
+    #expect(checked != .distantPast)                      // the stand-aside check ran the slow way
     first.done()
 
     let same = Rig(p, memory: memory)
     defer { same.done() }
-    #expect(same.bridge.memory.homeAdvert == "REAL-ADVERT")
+    #expect(same.bridge.memory.homeAdvert == "REAL-ADVERT" && same.bridge.memory.lastFullCheck == checked)
     var other = p; other.udid = "00008101-000A00000000A001"
     let replaced = Rig(other, memory: memory)
     defer { replaced.done() }
