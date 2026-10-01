@@ -106,7 +106,7 @@ final class ProxyBridge: ObservableObject {
         self.env = env
         self.dnsProxy = env.makeRecord()
         Self.all.add(self)
-        Self.listenForClaims()
+        env.listenForClaims()
     }
 
     /// Every bridge in this process: they all listen on the same address, so a
@@ -388,15 +388,20 @@ final class ProxyBridge: ObservableObject {
 
     /// Tells the other RoamRun processes that bridge a device — the app, a `roamrun
     /// up` — that `window` is this device's. False when none does.
-    private static func announceClaim(_ window: ClosedRange<UInt16>, statusDir: URL) -> Bool {
+    private static func announceClaim(_ window: ClosedRange<UInt16>, statusDir: URL, live: StatusFile.Liveness,
+                                      post: (String) -> Void) -> Bool {
         let me = getpid()
-        guard StatusFile.read(in: statusDir).values.contains(where: { $0.pid != me && $0.holdsDevice }) else { return false }
-        DistributedNotificationCenter.default().postNotificationName(
-            claimNotification, object: "\(me) \(window.lowerBound)-\(window.upperBound)", userInfo: nil, deliverImmediately: true)
+        guard StatusFile.read(in: statusDir, live: live).values.contains(where: { $0.pid != me && $0.holdsDevice }) else { return false }
+        post("\(me) \(window.lowerBound)-\(window.upperBound)")
         return true
     }
 
-    private static func listenForClaims() {
+    static func postClaim(_ text: String) {
+        DistributedNotificationCenter.default().postNotificationName(claimNotification, object: text, userInfo: nil,
+                                                                     deliverImmediately: true)
+    }
+
+    static func listenForClaims() {
         guard !listeningForClaims else { return }
         listeningForClaims = true
         DistributedNotificationCenter.default().addObserver(forName: claimNotification, object: nil, queue: .main) { note in
@@ -474,7 +479,7 @@ final class ProxyBridge: ObservableObject {
             log("took \(handedOver.count) tunnel port(s) from \(handedOver.min()!) held ahead by another device's bridge")
         }
         // Another RoamRun process (the app, a `roamrun up`) listens on this address too.
-        let announced = Self.announceClaim(window, statusDir: statusDir)
+        let announced = Self.announceClaim(window, statusDir: statusDir, live: statusLive, post: env.postClaim)
         // First: if ports jumped (e.g. lower after a device reboot), the old window must go.
         let reaped = reapTunnelRelays(around: port)
         if !reaped.isEmpty, case .active(let lp, let existing) = state {
@@ -732,7 +737,7 @@ final class ProxyBridge: ObservableObject {
         // check is blind while this lasts, so say so wherever status is read.
         // Not while standing aside: getting to .local means the LAN answered, so the
         // gate is open again and the flag is only waiting to age out.
-        if LocalNetwork.denied, s != .local {
+        if env.localNetworkDenied(), s != .local {
             detail = detail.isEmpty ? LocalNetwork.advice : detail + " — " + LocalNetwork.advice
         }
         return StatusFile.write(profile.id, .init(pid: getpid(), cli: env.cliRunning(), udid: udid, status: s.title, detail: detail,
@@ -933,7 +938,7 @@ final class ProxyBridge: ObservableObject {
             if !bridging, let instance { homeAdvert = instance }
             if let instance, await answers(instance) { return decided(true, "advert \(instance.prefix(8))") }
         }
-        if LocalNetwork.denied {
+        if env.localNetworkDenied() {
             if !saidLocalNetworkDenied { saidLocalNetworkDenied = true; log(LocalNetwork.advice) }
         } else {
             saidLocalNetworkDenied = false

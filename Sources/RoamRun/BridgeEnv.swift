@@ -12,6 +12,8 @@ struct BridgeEnv: Sendable {
     var lanIPv4: @Sendable () -> String? = { InterfaceMonitor.currentIPv4() }
     var keepOnCellular: @Sendable () -> Bool = { DeviceNetwork.keepOnCellular }
     var cliRunning: @Sendable () -> Bool = { CLI.isRunning }
+    /// macOS refused a probe to this Wi‑Fi lately (process-wide).
+    var localNetworkDenied: @Sendable () -> Bool = { LocalNetwork.denied }
 
     var checkTCP: @Sendable (_ host: String, _ port: UInt16) async -> Bool = {
         await ReachabilityProbe.checkTCP(host: $0, port: $1)
@@ -23,7 +25,7 @@ struct BridgeEnv: Sendable {
     var answers: @Sendable (_ endpoint: NWEndpoint) async -> Bool = {
         await ReachabilityProbe.speaksRemotePairing($0, timeout: 2)
     }
-    var isOnLAN: @Sendable (DeviceProfile) async -> Bool = { await ProxyBridge.isOnLAN($0) }
+    var isOnLAN: @MainActor (DeviceProfile) async -> Bool = { await ProxyBridge.isOnLAN($0) }
     /// `devicectl device info details`, which makes CoreDevice ask for a tunnel.
     var warmUp: @Sendable (_ udid: String) async -> Proc.Result = {
         await Proc.runAsync("/usr/bin/xcrun", ["devicectl", "--quiet", "--timeout", "30",
@@ -44,6 +46,9 @@ struct BridgeEnv: Sendable {
     }
     var unsubscribe: @MainActor (UUID) -> Void = { TunnelCoordinator.shared.unsubscribe($0) }
     var makeRecord: @MainActor () -> any BonjourRecord = { DNSServiceProxy() }
+    /// Tunnel-port claims between RoamRun processes (system-wide notifications).
+    var postClaim: @MainActor (String) -> Void = { ProxyBridge.postClaim($0) }
+    var listenForClaims: @MainActor () -> Void = { ProxyBridge.listenForClaims() }
 
     static let live = BridgeEnv()
 }

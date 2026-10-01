@@ -2725,6 +2725,7 @@ extension TimingSensitive.RelayOnLocalhost {
     e.lanIPv4 = { "127.0.0.1" }
     e.keepOnCellular = { false }
     e.cliRunning = { false }
+    e.localNetworkDenied = { false }
     e.checkTCP = { _, _ in reachable }
     e.findRemotePairingPort = { _ in .notFound }
     e.answers = { _ in false }
@@ -2737,6 +2738,8 @@ extension TimingSensitive.RelayOnLocalhost {
     e.subscribe = { id, s in watcher.subscribers[id] = s; return true }
     e.unsubscribe = { id in watcher.subscribers[id] = nil }
     e.makeRecord = { record }
+    e.postClaim = { _ in }
+    e.listenForClaims = {}
     return e
 }
 
@@ -2756,6 +2759,7 @@ private func inertProfile(_ name: String) -> DeviceProfile {
     let p = inertProfile("iPhone")
     let bridge = ProxyBridge(profile: p, statusDir: dir, statusLive: { _ in true },
                              env: inertEnv(record: record, watcher: watcher))
+    defer { bridge.stop() }
     await bridge.start()
     #expect(bridge.state.isActive)
     #expect(record.registered == 1)
@@ -2778,10 +2782,10 @@ private func inertProfile(_ name: String) -> DeviceProfile {
     var env = inertEnv(record: record, watcher: watcher)
     env.lanIPv4 = { nil }
     let bridge = ProxyBridge(profile: inertProfile("iPhone"), statusDir: dir, statusLive: { _ in true }, env: env)
+    defer { bridge.stop() }
     await bridge.start()
     #expect(bridge.status == .error)
     #expect(record.registered == 0)
-    bridge.stop()
 }
 
 @MainActor @Test func aManualClaimDoesntAuthorizeLaterUpdatesOrTeardownToTakeOver() {
