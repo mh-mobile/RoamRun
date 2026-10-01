@@ -322,9 +322,8 @@ private struct DeviceLog: View {
                 }
                 .frame(height: 160)
                 .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.4)))
-                .onChange(of: log.appended) { _ in   // not lines.count: that stops at the log's limit
-                    // Only for this device's own lines: another's mustn't pull a reader back down.
-                    guard log.lines.last?.device == device else { return }
+                // Only this device's own lines: another's mustn't pull a reader back down.
+                .onChange(of: log.appended[device, default: 0]) { _ in
                     // Next turn: the new line isn't laid out yet, so it stopped one line short.
                     DispatchQueue.main.async { proxy.scrollTo(Self.end, anchor: .bottom) }
                 }

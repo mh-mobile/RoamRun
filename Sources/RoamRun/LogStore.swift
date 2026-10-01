@@ -5,8 +5,9 @@ import OSLog
 final class LogStore: ObservableObject {
     /// Each line with the device it's about (nil: app-wide), so a rename doesn't hide its history.
     @Published private(set) var lines: [(device: UUID?, text: String)] = []
-    /// Lines logged so far, for scrolling: the count of `lines` stops growing at the limit.
-    @Published private(set) var appended = 0
+    /// Lines logged so far per device, for scrolling: the count of `lines` stops growing at
+    /// the limit, and the last line can be another device's by the time a view looks.
+    @Published private(set) var appended: [UUID: Int] = [:]
     private let limit = 500
     private static let logger = Logger(subsystem: AppID.bundle, category: "bridge")
 
@@ -15,7 +16,7 @@ final class LogStore: ObservableObject {
         Self.logger.log("\(message, privacy: .private)")
         let stamp = Date.now.formatted(date: .omitted, time: .standard)
         lines.append((device, "\(stamp)  \(message)"))
-        appended += 1
+        if let device { appended[device, default: 0] += 1 }
         if lines.count > limit { lines.removeFirst(lines.count - limit) }
     }
 }
