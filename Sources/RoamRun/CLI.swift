@@ -1021,33 +1021,23 @@ enum CLI {
             }
         }
         // Same recovery as the app: retry errors, rebind when the Mac's IP changes.
-        let retry = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
-            MainActor.assumeIsolated {
-                guard bridge.status == .error else { return }
-                if bridge.autoRetry { bridge.requestStart(); return }
-                // Retrying can't fix it (lost pairing, no admin rights): say why and stop.
-                let reason = { if case .error(let m) = bridge.state { m } else { "the bridge failed" } }()
-                bridge.stop()   // before printing: its "bridge stopped" line mustn't be the log's last
-                FileHandle.standardError.write(Data("roamrun: \(reason)\n".utf8))
-                exit(1)
+        // Unlike the app, nothing re-announces on wake.
+        let supervisor = BridgeSupervisor(all: { [bridge] }, wanted: { _ in true }, start: { list, reason in
+            for b in list {
+                if StartPolicy.of(reason).restarts { b.stop() }
+                b.requestStart(reason)
             }
-        }
-        let away = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
-            MainActor.assumeIsolated {
-                if bridge.state == .local { Task { await bridge.resumeIfAway() } }
-            }
-        }
+        }, gaveUp: { b in
+            // Retrying can't fix it (lost pairing, no admin rights): say why and stop.
+            let reason = { if case .error(let m) = b.state { m } else { "the bridge failed" } }()
+            b.stop()   // before printing: its "bridge stopped" line mustn't be the log's last
+            FileHandle.standardError.write(Data("roamrun: \(reason)\n".utf8))
+            exit(1)
+        })
+        supervisor.run()
         let monitor = InterfaceMonitor()
-        monitor.onLost = {
-            Task { @MainActor in
-                guard bridge.state.isActive else { return }
-                bridge.stop()
-                bridge.fail(ProxyBridge.noAddressMessage)
-            }
-        }
-        monitor.onChange = { _ in
-            Task { @MainActor in bridge.stop(); bridge.requestStart() }
-        }
+        monitor.onLost = { Task { @MainActor in supervisor.lanAddressLost() } }
+        monitor.onChange = { _ in Task { @MainActor in supervisor.lanAddressChanged() } }
         monitor.start()
 
         // Ctrl-C must tear down dns-sd / log children, or the fake Bonjour
@@ -1066,10 +1056,10 @@ enum CLI {
             src.resume()
             sources.append(src as AnyObject)
         }
-        keepAlive = [ticker, retry, away, monitor] + sources
+        keepAlive = [ticker, supervisor, monitor] + sources
 
         print("Bridging \(profile.displayName) over \(profile.providerIP)…")
-        bridge.requestStart()
+        bridge.requestStart(.manual)
     }
 
     /// Walks the path Xcode → this Mac → Tailscale → iPhone and reports the

@@ -42,6 +42,14 @@ final class AppCoordinator: ObservableObject {
     private let store = ProfileStore()
     private var tailscaleClient = TailscaleClient()
     private let interfaceMonitor = InterfaceMonitor()
+    /// Retries, the away check, address changes and wake, shared with `roamrun up`.
+    private lazy var supervisor = BridgeSupervisor(
+        all: { [unowned self] in Array(self.bridges.values) },
+        wanted: { [unowned self] in self.wasActiveIDs.contains($0.profile.id) && self.profile($0.profile.id) != nil },
+        start: { [unowned self] list, reason in
+            let live = StatusFile.read()
+            for b in list { self.autoStart(b.profile.id, live: live, reason) }
+        })
     private var bridgeObservers: [UUID: AnyCancellable] = [:]
     /// Set at launch when bridges left on are being brought back.
     private(set) var isRestoringBridges = false
@@ -90,7 +98,7 @@ final class AppCoordinator: ObservableObject {
         // After sleep, relayed connections can look open while dead: re-announce right away.
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification,
                                                           object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.bridges.values.forEach { $0.nudgeAfterWake() } }
+            MainActor.assumeIsolated { self?.supervisor.woke() }
         }
 
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
@@ -130,22 +138,11 @@ final class AppCoordinator: ObservableObject {
             if let p = profiles.first(where: { $0.id == id }) {
                 isRestoringBridges = true
                 logStore.log("restoring bridge for \"\(p.displayName)\"", device: p.id)
-                autoStart(id, live: live)
+                autoStart(id, live: live, .restore)
             }
         }
 
-        // Bridges the user left on retry quietly after errors (iPhone asleep,
-        // Tailscale paused, Wi-Fi down) so nobody has to open the window.
-        Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.retryErroredBridges() }
-        }
-        // Standing aside: resume soon after the device leaves this Wi-Fi.
-        Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                for b in self.bridges.values where b.state == .local { Task { await b.resumeIfAway() } }
-            }
-        }
+        supervisor.run()
         // Pick up bridges started from the command line.
         Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshExternalBridges() }
@@ -749,13 +746,6 @@ final class AppCoordinator: ObservableObject {
         return network(of: id).map { "\(title) · \($0.title)" } ?? title
     }
 
-    private func retryErroredBridges() {
-        let live = StatusFile.read()
-        for id in wasActiveIDs where profile(id) != nil {
-            if let b = bridges[id], b.status == .error && b.autoRetry { autoStart(id, live: live) }
-        }
-    }
-
     /// Worst state across all bridges, for the menu bar icon.
     var overallStatus: BridgeStatus {
         let all = profiles.map { status(of: $0.id) }   // CLI-owned devices report the CLI's state
@@ -825,7 +815,7 @@ final class AppCoordinator: ObservableObject {
 
         // Same-LAN detection lives in ProxyBridge.start (by Tailscale endpoint,
         // which survives the iPhone rotating its Bonjour instance name).
-        bridge.requestStart()
+        bridge.requestStart(.manual)
     }
 
     func stopBridge(_ profile: DeviceProfile) {
@@ -1003,7 +993,7 @@ final class AppCoordinator: ObservableObject {
             // Also errored / standing aside: the scan is how you fix a bridge that can't reach the device.
             bridges[profile.id]?.stop()
             let bridge = install(ProxyBridge(profile: updated))
-            if wasOn { bridge.requestStart() }
+            if wasOn { bridge.requestStart(.rescan) }
         }
     }
 
@@ -1024,21 +1014,21 @@ final class AppCoordinator: ObservableObject {
         let wasOn = old.state != .off
         old.stop()
         install(ProxyBridge(profile: profile))
-        if wasOn { autoStart(profile.id, live: StatusFile.read()) }
+        if wasOn { autoStart(profile.id, live: StatusFile.read(), .edit) }
     }
 
     /// The one way the app starts a bridge by itself (restore at launch, the 30 s
     /// retry, an IP change, a rebuilt bridge): never over a running `roamrun up`,
     /// which retries on its own and gives up (exit 1) if taken over — then once it
     /// has ended. Starts a person asks for (Start, Try Again) use startBridge.
-    private func autoStart(_ id: UUID, live: [UUID: StatusFile.Entry], restarting: Bool = false) {
+    private func autoStart(_ id: UUID, live: [UUID: StatusFile.Entry], _ reason: StartReason) {
         guard Snapshot.fakeProfiles == nil else { return }   // screenshot mode's devices never bridge
         if let other = HomeRule.cliHolding(id, udid: bridges[id]?.udid ?? profile(id)?.udid, in: live, myPID: getpid()) {
             startWhenFree(id, after: other)
             return
         }
-        if restarting { bridges[id]?.stop() }
-        bridges[id]?.requestStart(automatic: true)   // the claim itself defers to a CLI that got there first
+        if StartPolicy.of(reason).restarts { bridges[id]?.stop() }
+        bridges[id]?.requestStart(reason)   // the claim itself defers to a CLI that got there first
     }
 
     /// Devices waiting in startWhenFree: the 30 s retry must not stack a waiter per tick.
@@ -1055,7 +1045,7 @@ final class AppCoordinator: ObservableObject {
             guard self.wasActiveIDs.contains(id), self.profile(id) != nil,
                   let b = self.bridges[id], b.state == .off || b.status == .error else { return }
             // Through autoStart again: another `roamrun up` may have taken the device meanwhile.
-            self.autoStart(id, live: StatusFile.read())
+            self.autoStart(id, live: StatusFile.read(), .retry)
         }
     }
 
@@ -1069,23 +1059,14 @@ final class AppCoordinator: ObservableObject {
         for bridge in bridges.values { bridge.stop() }
     }
 
-    /// Relays are bound to en0's address; show the pause instead of a stale "active".
     private func onInterfaceLost() {
         logStore.log("local IP lost; bridges paused until Wi-Fi returns")
-        for bridge in bridges.values where bridge.state.isActive {
-            bridge.stop()
-            bridge.fail(ProxyBridge.noAddressMessage)
-        }
+        supervisor.lanAddressLost()
     }
 
     private func onInterfaceChange(_ ip: String) {
         logStore.log("local IP changed -> \(ip); restarting active bridges")
-        // Also retry bridges that errored (e.g. started while en0 had no IP).
-        let wanted = wasActiveIDs
-        let live = StatusFile.read()
-        for (id, bridge) in bridges where bridge.state.isActive || wanted.contains(id) {
-            autoStart(id, live: live, restarting: true)
-        }
+        supervisor.lanAddressChanged()
     }
 
     /// What the toggle shows, and whether to register again. A registration belongs to the
@@ -1151,7 +1132,7 @@ final class AppCoordinator: ObservableObject {
                 // Kept from disk rather than dropped (the list we started from was unreadable): they need bridges.
                 for p in saved where bridges[p.id] == nil {
                     capture.ownedHosts.insert(install(ProxyBridge(profile: p)).spoofHost)
-                    if wanted.contains(p.id) { autoStart(p.id, live: StatusFile.read()) }   // left on before it went unread
+                    if wanted.contains(p.id) { autoStart(p.id, live: StatusFile.read(), .restore) }   // left on before it went unread
                 }
             }
             // Saved, so the file is readable and written again: those two warnings no longer hold.
