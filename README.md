@@ -73,10 +73,10 @@ sequenceDiagram
 
 ## Requirements
 
-- macOS 14 or later in practice (RoamRun itself runs on 13, but every Xcode that supports iOS 17.4 or later needs 14) on Apple Silicon (Intel Macs aren't supported), with an **administrator account** (RoamRun reads remotepairingd's log with `log stream`, which macOS only allows admins)
+- macOS 13+ on Apple Silicon (Intel Macs aren't supported), with an **administrator account** (RoamRun reads remotepairingd's log with `log stream`, which macOS only allows admins)
 - iOS 17.4 or later on the iPhone (the generation whose CoreDevice tunnel is TCP; the QUIC/UDP tunnel of 17.0–17.3 isn't supported)
 - Also verified with iPad and Apple Vision Pro, which work the same way ("iPhone" below includes them). Vision Pro has no USB and is developed for over Wi-Fi anyway, which makes it a natural fit for working away from the Mac
-- Xcode (`devicectl` must be available) whose SDK covers the iPhone's iOS, per [Apple's table](https://developer.apple.com/support/xcode/): iOS 17.4–17.x needs Xcode 15.3 or later (macOS 14), iOS 18 Xcode 16 (macOS 14.5+), iOS 26 Xcode 26 (macOS 15.6+), iOS 27 Xcode 27 (macOS 26.6+). A later iOS point release can need a later Xcode, and so a later macOS; the table has them. `roamrun logs` and `run --logs` need Xcode 16 or later, where `devicectl` gained `--console`
+- Xcode with `devicectl` (Xcode 15 or later) whose Device Support range covers the iPhone's iOS, and that runs on your macOS — both are in [Apple's table](https://developer.apple.com/support/xcode/). Building your app may need a newer SDK, depending on the APIs it uses; that is your project's requirement, not RoamRun's. `roamrun logs` and `run --logs` need Xcode 16 or later, where `devicectl` gained `--console`
 - Tailscale (or any mesh VPN with a manually entered IP), connected on both the Mac and the iPhone
 - The iPhone paired with this Mac once (over USB, or with Xcode 27 + iOS 27 on the same Wi-Fi via Device Hub › "+" › "Pair Nearby Device…"), with Developer Mode on
 - To connect, the iPhone must be **on some Wi-Fi network** (cellular alone won't do: remotepairingd only listens while the iPhone is on Wi-Fi). Once it shows **Ready for Xcode** (bridged from another Wi‑Fi), it can move to cellular and keep the session Xcode has, if you turn on Settings › Network › **Keep debugging on cellular** (off by default: every Run then uses the iPhone's data)
@@ -156,7 +156,7 @@ roamrun ota [<name>] <App.ipa> [--replace] # publish the build so a device can i
                                            #   bridge — install only, needs Ad Hoc or Enterprise signing (see below)
 ```
 
-Options: `--json` (`devices`, `status`, `doctor`; `devices` doesn't ask CoreDevice, so its `ready` only means the bridge is Ready or the device is on this Wi‑Fi — `status` tells whether Xcode can use it), `--wait N` (`status`: wait up to N seconds for Ready; each round runs two devicectl calls per device before the deadline is looked at again, so it can return several seconds after N; an N below 10 also shortens each of those calls, to a floor of 5 seconds), `-v` (`up`: show the activity log), `--workspace W` / `--project P` / `--configuration C` (`run`), `--replace` (`ota`: drop builds already listed under the same version and build number). `roamrun --help` lists everything; a command rejects options it doesn't take (exit 2).
+Options: `--json` (`devices`, `status`, `doctor`; `devices` doesn't ask CoreDevice, so its `ready` only means the bridge is Ready or the device is on this Wi‑Fi — `status` also asks CoreDevice once the device's UDID is known), `--wait N` (`status`: wait up to N seconds for Ready; each round runs two devicectl calls per device before the deadline is looked at again, so it can return several seconds after N; an N below 10 also shortens each of those calls, to a floor of 5 seconds), `-v` (`up`: show the activity log), `--workspace W` / `--project P` / `--configuration C` (`run`), `--replace` (`ota`: drop builds already listed under the same version and build number). `roamrun --help` lists everything; a command rejects options it doesn't take (exit 2).
 
 The CLI uses the app's settings, so a bridge started with `roamrun up` follows **Keep debugging on cellular** too. Without access to the app's Settings (over SSH, for example), turn it on or off with `defaults`:
 

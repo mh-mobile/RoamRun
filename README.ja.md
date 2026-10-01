@@ -73,10 +73,10 @@ sequenceDiagram
 
 ## 要件
 
-- 実質 macOS 14 以降（RoamRun 自体は 13 で動きますが、iOS 17.4 以降に対応する Xcode が 14 以上を必要とします）、Apple Silicon（Intel Mac は非対応）。Mac の**管理者アカウント**で使うこと（RoamRun は `log stream` で remotepairingd のログを読みますが、macOS は管理者にしか許可していません）
+- macOS 13+、Apple Silicon（Intel Mac は非対応）。Mac の**管理者アカウント**で使うこと（RoamRun は `log stream` で remotepairingd のログを読みますが、macOS は管理者にしか許可していません）
 - iPhone は iOS 17.4 以降（CoreDevice トンネルが TCP の世代。17.0–17.3 の QUIC/UDP トンネルは非対応）
 - iPad、Apple Vision Pro でも同じ仕組みで動作を確認済み（以下「iPhone」はこれらも含みます）。Vision Pro はもともと USB がなく Wi-Fi だけで開発する端末なので、外出先からの利用とも相性が良いです
-- Xcode（devicectl が使えること）。iPhone の iOS に対応した SDK を持つ版が必要です（[Apple の表](https://developer.apple.com/support/xcode/)）: iOS 17.4〜17.x は Xcode 15.3 以降（macOS 14）、iOS 18 は Xcode 16（macOS 14.5 以降）、iOS 26 は Xcode 26（macOS 15.6 以降）、iOS 27 は Xcode 27（macOS 26.6 以降）。iOS の小さな更新（26.4 など）では、より新しい Xcode と macOS が必要になることがあります。表で確かめてください。`roamrun logs` と `run --logs` には Xcode 16 以降が必要です（`devicectl` の `--console` が入った版）
+- `devicectl` のある Xcode（Xcode 15 以降）で、その Device Support（実機に入れてデバッグできる iOS の範囲）が iPhone の iOS を含み、お使いの macOS で動く版（どちらも [Apple の表](https://developer.apple.com/support/xcode/)にあります）。アプリのビルドに新しい SDK が要るかは、プロジェクトが使う API しだいで、RoamRun の要件ではありません。`roamrun logs` と `run --logs` には Xcode 16 以降が必要です（`devicectl` の `--console` が入った版）
 - Tailscale（または任意の mesh VPN + 手動 IP 指定）が Mac/iPhone 両方で接続済み
 - iPhone をこの Mac と一度ペアリング済み（USB、または Xcode 27 + iOS 27 なら同じ Wi-Fi 上で Device Hub の「+」→「Pair Nearby Device…」）、デベロッパモード ON
 - つなぐときは iPhone が**何らかの Wi-Fi に接続していること**（cellular 不可: remotepairingd は Wi-Fi association を前提に listen する）。**Ready for Xcode**（別の Wi-Fi からブリッジ中）になったあとは、Settings › Network の **Keep debugging on cellular** をオンにしておけば、モバイル通信に移っても Xcode のセッションをそのまま使えます（初期値はオフ。オンにすると Run のたびに iPhone のモバイル通信を使います）
@@ -156,7 +156,7 @@ roamrun ota [<name>] <App.ipa> [--replace] # ブリッジを通さず、実機�
                                            #   インストールのみ。Ad Hoc か Enterprise 署名が必要（下記参照）
 ```
 
-オプション: `--json`（`devices`、`status`、`doctor`。`devices` は CoreDevice に問い合わせないので、その `ready` は「ブリッジが Ready か、デバイスがこの Wi‑Fi にいるか」だけを表します。Xcode から使えるかは `status` で確かめてください）、`--wait N`（`status`: 最大 N 秒 Ready を待つ。各回はデバイスごとに devicectl を 2 回実行してから次の判定に進むため、N を数秒過ぎて返ることがあります。N が 10 未満のときは各 devicectl 呼び出しも短くなります（下限 5 秒））、`-v`（`up`: アクティビティログを表示）、`--workspace W` / `--project P` / `--configuration C`（`run`）、`--replace`（`ota`: 同じバージョン・ビルド番号で既に並んでいるものを消す）。一覧は `roamrun --help` で表示されます。コマンドが受け付けないオプションはエラーになります（exit 2）。
+オプション: `--json`（`devices`、`status`、`doctor`。`devices` は CoreDevice に問い合わせないので、その `ready` は「ブリッジが Ready か、デバイスがこの Wi‑Fi にいるか」だけを表します。`status` は、デバイスの UDID が分かっていれば CoreDevice にも問い合わせます）、`--wait N`（`status`: 最大 N 秒 Ready を待つ。各回はデバイスごとに devicectl を 2 回実行してから次の判定に進むため、N を数秒過ぎて返ることがあります。N が 10 未満のときは各 devicectl 呼び出しも短くなります（下限 5 秒））、`-v`（`up`: アクティビティログを表示）、`--workspace W` / `--project P` / `--configuration C`（`run`）、`--replace`（`ota`: 同じバージョン・ビルド番号で既に並んでいるものを消す）。一覧は `roamrun --help` で表示されます。コマンドが受け付けないオプションはエラーになります（exit 2）。
 
 CLI はアプリの設定を使うので、`roamrun up` で始めたブリッジも **Keep debugging on cellular** に従います。SSH 越しなどでアプリの Settings を開けないときは、`defaults` で切り替えてください。
 
