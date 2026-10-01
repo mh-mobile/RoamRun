@@ -63,7 +63,11 @@ struct BridgeEnv: Sendable {
 /// timeouts also run on. A thread costs little next to the process it waits for.
 enum Blocking {
     static func run<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
-        await withCheckedContinuation { done in Thread.detachNewThread { done.resume(returning: work()) } }
+        await withCheckedContinuation { done in
+            // A thread of our own has no autorelease pool: what Foundation autoreleases in the
+            // tool (Process, pipes, strings) would leak, every check, for as long as RoamRun runs.
+            Thread.detachNewThread { done.resume(returning: autoreleasepool { work() }) }
+        }
     }
 }
 

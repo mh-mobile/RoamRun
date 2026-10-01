@@ -288,7 +288,7 @@ extension TimingSensitive {
             let n = min(ProcessInfo.processInfo.activeProcessorCount * 2, 48)
             let clock = ContinuousClock(), start = clock.now
             await withTaskGroup(of: Void.self) { group in
-                for _ in 0..<n { group.addTask { await Blocking.run { usleep(1_000_000) } } }
+                for _ in 0..<n { group.addTask { _ = await Blocking.run { usleep(1_000_000) } } }
             }
             let took = clock.now - start
             #expect(took < .milliseconds(1_800), "\(n) one-second waits took \(took)")
