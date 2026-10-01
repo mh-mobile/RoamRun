@@ -125,6 +125,9 @@ final class ProxyBridge: ObservableObject {
         // Left as it is: starting again can't fix it, and only a start that lifts it may try.
         guard memory.block == .none else {
             log("not starting (\(reason.rawValue)): retrying can't fix \(memory.block.rawValue)")
+            // Stopped for a restart, or rebuilt: still say why, and stay an error (the CLI
+            // gives up on one; the app shows it).
+            if case .error = state {} else if let why = memory.blockMessage { state = .error(why); publishStatus() }
             return
         }
         if policy.resetsBackoff { memory.resetBackoff() }
@@ -196,6 +199,7 @@ final class ProxyBridge: ObservableObject {
         }
         guard gen == generation else { return }
         guard reachable else {
+            unreachable = true
             setState(.error("\(profile.providerIP) did not respond on RemotePairing port \(profile.remotePairingPort) — the device may be locked or asleep (unlock it and keep the screen on), off Wi-Fi, or its mesh VPN may be off"))
             return
         }
@@ -851,6 +855,7 @@ final class ProxyBridge: ObservableObject {
                 log("\(profile.providerIP):\(profile.remotePairingPort) no longer answers — looking for the device again")
                 generation += 1
                 teardown()
+                unreachable = true
                 setState(.error("\(profile.displayName) no longer answers on \(profile.providerIP):\(profile.remotePairingPort). RoamRun keeps retrying."))
             }
             return
@@ -1088,13 +1093,17 @@ final class ProxyBridge: ObservableObject {
         // What the retries' wait grows or shrinks by: a start that came up, or one that failed.
         switch (state, s) {
         case (.error, .error): break
-        case (_, .error): memory.failed(at: env.now())
+        case (_, .error): memory.failed(at: env.now(), unreachable: unreachable)
         case (_, .active), (_, .local): memory.resetBackoff()
         default: break
         }
+        unreachable = false
+        if case .error(let why) = s, memory.block != .none { memory.blockMessage = why }
         state = s
         publishStatus()
     }
+    /// Set just before an error that means the device didn't answer.
+    private var unreachable = false
 
     /// Waiting out a longer retry: one cheap look at the port the device last answered on. At
     /// most one at a time per bridge, and only for this error: a start meanwhile makes it moot.

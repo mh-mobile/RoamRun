@@ -93,9 +93,11 @@ final class BridgeSupervisor {
     func retry() {
         let errored = all().filter { wanted($0) && $0.status == .error }
         let retryable = errored.filter(\.autoRetry)
-        let due = retryable.filter { $0.memory.retryDue(now: now()) }
+        // Half a tick of slack: a wait counted from when a retry failed, a moment after a tick,
+        // would otherwise slip to the tick after.
+        let due = retryable.filter { $0.memory.retryDue(now: now() + 15) }
         if !due.isEmpty { start(due, .retry) }
-        for b in retryable where !due.contains(where: { $0 === b }) {
+        for b in retryable where !due.contains(where: { $0 === b }) && b.memory.lastFailureUnreachable {
             b.lookForItsPort { [weak self] answered in
                 guard answered, let self else { return }
                 b.memory.resetBackoff()
@@ -145,11 +147,16 @@ final class DeviceMemory {
     /// Standing aside, the last time the home check confirmed the UDID the slow way.
     var lastFullCheck = Date.distantPast
     /// An error retrying can't fix, until a start whose reason lifts it.
-    var block = RetryBlock.none
+    var block = RetryBlock.none { didSet { if block == .none { blockMessage = nil } } }
     var autoRetry: Bool { block == .none }
+    /// What the error said when the block was set, shown again by a start it turns away.
+    var blockMessage: String?
     /// Starts that ended in an error in a row, and when the next retry is due.
     private(set) var failures = 0
     private(set) var retryAt = Date.distantPast
+    /// The last failure was the device not answering (not something on this Mac): only then
+    /// does a port that answers again mean a retry may work.
+    private(set) var lastFailureUnreachable = false
     /// A scan that found nothing: no other on that endpoint ("ip:port") until then.
     private var scanPause: (endpoint: String, until: Date)?
 
@@ -171,7 +178,8 @@ final class DeviceMemory {
 
     /// 30 s, 1, 2, 4, 8 minutes, then every 10.
     static func backoff(afterFailures n: Int) -> TimeInterval { min(30 * pow(2, Double(max(n, 1) - 1)), 600) }
-    func failed(at now: Date) {
+    func failed(at now: Date, unreachable: Bool) {
+        lastFailureUnreachable = unreachable
         failures += 1
         retryAt = now + Self.backoff(afterFailures: failures)
     }
