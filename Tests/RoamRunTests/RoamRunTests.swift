@@ -60,6 +60,40 @@ private func ports(_ lines: [(String, TimeInterval)]) -> [(UInt16, String?)] {
     #expect(got[0].1 == nil)
 }
 
+private func endpointV6(_ port: Int) -> String {
+    "remotepairingd[1950:1] [com.apple.dt.remotepairing:networktunnelmanager] tunnel-593: Got tunnel endpoint: 'fe80::14a2:5da8:a26:9bb4%en0.\(port)', includePeerToPeer: false"
+}
+
+@Test func anIPv6EndpointAnswersItsRequestToo() {
+    // A device on this Wi‑Fi (link-local IPv6, not relayed) gets its endpoint, then a
+    // bridged one asks: the IPv4 endpoint is the bridged one's, not still A's.
+    let got = ports([(establish(phoneA), 0), (endpointV6(64106), 0.002),
+                     (establish(phoneB), 0.003), (endpoint(55940), 0.004)])
+    #expect(got.count == 1)                       // the IPv6 one isn't relayed
+    #expect(got.first?.1 == phoneB)
+}
+
+@Test func anIPv6EndpointWithTwoRequestsOutIsAmbiguousToo() {
+    // A and B both waiting, and an IPv6 endpoint answers one of them: the next IPv4
+    // endpoint may be either's, so it is credited to nobody.
+    let got = ports([(establish(phoneA), 0), (establish(phoneB), 0.001),
+                     (endpointV6(64106), 0.002), (endpoint(55940), 0.003)])
+    #expect(got.count == 1)
+    #expect(got.first?.1 == nil)
+}
+
+@Test func mixedEndpointsDropNoMorePortsThanBefore() {
+    // A asks (LAN, IPv6) and B asks (bridged); both endpoints arrive. Before, the IPv4
+    // one was unattributed as well; no case here may become worse than that.
+    let v6First = ports([(establish(phoneA), 0), (establish(phoneB), 0.001),
+                         (endpointV6(64106), 0.002), (endpoint(55940), 0.003)])
+    #expect(v6First.map(\.0) == [55940])
+    // Settled apart: each answered before the next request.
+    let apart = ports([(establish(phoneA), 0), (endpointV6(64106), 0.002),
+                       (establish(phoneB), 10), (endpoint(55940), 10.002)])
+    #expect(apart.first?.1 == phoneB)
+}
+
 @Test func failedRequestExpires() {
     // A's request never got an endpoint; B asks 10s later.
     let got = ports([(establish(phoneA), 0), (establish(phoneB), 10), (endpoint(55940), 10.002)])
@@ -375,6 +409,19 @@ private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> { CLI.
     #expect(try parsed("logs iPhone com.x").get().words == ["iPhone", "com.x"])
     let run = try? parsed("run iPhone --scheme S --logs").get()
     #expect(run?.words == ["iPhone"] && run?.values["--scheme"] == "S" && run?.flags == ["--logs"])
+}
+
+@Test func everyValueOptionTakesTheEqualsFormToo() throws {
+    #expect(try parsed("status iPhone --wait=60").get().wait == 60)
+    let run = try parsed("run iPhone --scheme=S --configuration=Debug --url=myapp://a=b --arg=-v --env=A=b=c").get()
+    #expect(run.values["--scheme"] == "S" && run.values["--configuration"] == "Debug")
+    #expect(run.launch == CLI.Launch(args: ["-v"], env: ["A=b=c"], url: "myapp://a=b"))   // split at the first "=" only
+    // The spaced form still keeps an "=" inside the value.
+    #expect(try parsed("run iPhone --env A=B").get().launch.env == ["A=B"])
+    // Not for flags, and a name it doesn't take is still refused.
+    for bad in ["run iPhone --logs=1", "status iPhone --nope=1", "status iPhone --wait=-1"] {
+        #expect((try? parsed(bad).get()) == nil, "\(bad)")
+    }
 }
 
 @Test func argumentsThatAreRejected() {

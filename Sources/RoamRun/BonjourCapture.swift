@@ -69,7 +69,13 @@ final class BonjourCapture: ObservableObject {
             process = task
             onLog?("Bonjour scan started (\(serviceType))")
         } catch {
-            onLog?("Failed to start dns-sd -Z: \(error.localizedDescription)")
+            // As if it had died at once: without this one failure ends scanning for good.
+            onLog?("Failed to start dns-sd -Z: \(error.localizedDescription); retrying in 5s")
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(5))
+                guard let self, !self.stopped, self.scan == mine, self.process == nil else { return }
+                self.start(serviceType: self.serviceType, domain: self.domain)
+            }
         }
     }
 

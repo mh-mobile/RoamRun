@@ -235,6 +235,17 @@ enum CLI {
         var i = 1
         while i < args.count {
             let a = args[i]
+            // `--name=value`, split at the first "=": `--env=A=b` is --env with A=b.
+            if a.hasPrefix("--"), let eq = a.firstIndex(of: "="), spec.options.contains(a[...eq] + "") {
+                let name = String(a[..<eq]), value = String(a[a.index(after: eq)...])
+                guard !value.isEmpty else {
+                    return .failure(.init(message: name == "--wait" ? "--wait needs a number of seconds" : "\(name) needs a value"))
+                }
+                p.values[name] = value
+                p.lists[name, default: []].append(value)
+                i += 1
+                continue
+            }
             if spec.options.contains(a + "=") {
                 // --arg values are often flags themselves (-ShowScreen), --wait may be negative (refused below).
                 guard i + 1 < args.count, !args[i + 1].hasPrefix("-") || a == "--wait" || a == "--arg" else {
@@ -326,10 +337,11 @@ enum CLI {
     /// *and* CoreDevice sees the iPhone. The bridge alone can look ready for a while
     /// after the iPhone falls asleep (its relayed connections linger). Without it
     /// (`devices --json`), `ready` is only the bridge's word, or "on this Wi‑Fi".
-    private static func row(_ p: DeviceProfile, _ e: StatusFile.Entry?, deep: Bool, by deadline: Date? = nil) -> Row {
+    private static func row(_ p: DeviceProfile, _ e: StatusFile.Entry?, deep: Bool, by deadline: Date? = nil,
+                            coreState: ((String) -> String?)? = nil) -> Row {
         let udid = e?.udid ?? p.udid
         let usable = e?.ready == true || e?.kind == .local   // on this Wi-Fi: Xcode sees it directly
-        let core = deep && usable ? udid.flatMap { coreDeviceState($0, by: deadline) } : nil
+        let core = deep && usable ? udid.flatMap { u in coreState.map { $0(u) } ?? coreDeviceState(u, by: deadline) } : nil
         let r = readiness(e, udid: udid, core: core, deep: deep)
         return Row(name: p.displayName, state: r.kind.rawValue, id: p.id.uuidString, vpnAddress: p.providerIP, udid: udid,
                    status: r.status, ready: r.ready,
@@ -423,7 +435,13 @@ enum CLI {
         let budget = wait == nil ? nil : deadline   // no --wait: the probes keep their own timeouts
         repeat {
             let live = StatusFile.read()
-            rows = targets.map { row($0, live[$0.id], deep: true, by: budget) }
+            // One `devicectl list devices` a round, not one per device, and none if no row needs it.
+            var listed: [String: Any]??
+            let coreState = { (udid: String) -> String? in
+                if listed == nil { listed = .some(devicectl(["list", "devices"], by: budget)) }
+                return listed!.flatMap { tunnelState(in: $0, udid: udid) }
+            }
+            rows = targets.map { row($0, live[$0.id], deep: true, by: budget, coreState: coreState) }
             if rows.contains(where: \.ready) || Date.now >= deadline { break }
             usleep(useconds_t(min(3, max(0.1, deadline.timeIntervalSinceNow)) * 1_000_000))   // each round spawns devicectl
         } while true

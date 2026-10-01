@@ -74,16 +74,22 @@ RELEASE_SIGN_ID ?= Developer ID Application
 RELEASE_NOTARY_PROFILE ?= roamrun-notary
 # Built under a -pending name; the release name appears only once every check passed.
 PENDING_DMG = $(APP_NAME)-$(VERSION)-pending.dmg
+# The tag must name the commit the dmg is built from (AGENTS.md), so it needs git to say which.
 release-dmg:
-	@if git rev-parse --is-inside-work-tree >/dev/null 2>&1 && [ -n "$$(git status --porcelain)" ]; then \
+	@git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { \
+		echo "not a git checkout — release from a fresh clone (AGENTS.md)"; exit 1; }
+	@if [ -n "$$(git status --porcelain)" ]; then \
 		echo "working tree has uncommitted changes — release from a fresh clone (AGENTS.md)"; exit 1; fi
+	@t=$$(git rev-parse -q --verify "refs/tags/v$(VERSION)^{commit}"); \
+	if [ -n "$$t" ] && [ "$$t" != "$$(git rev-parse HEAD)" ]; then \
+		echo "tag v$(VERSION) is on $$t, not on HEAD — check out that commit or bump the version"; exit 1; fi
 	rm -f $(DMG) $(PENDING_DMG)
 	$(MAKE) dmg DMG="$(PENDING_DMG)" SIGN_ID="$(RELEASE_SIGN_ID)" NOTARY_PROFILE="$(RELEASE_NOTARY_PROFILE)"
 	xcrun stapler validate $(BUNDLE)
 	xcrun stapler validate $(PENDING_DMG)
 	spctl -a -vv -t exec $(BUNDLE) 2>&1 | grep -q "source=Notarized Developer ID"
 	mv $(PENDING_DMG) $(DMG)
-	@echo "Release $(DMG) is signed, notarized and stapled"
+	@echo "Release $(DMG) is signed, notarized and stapled, built from $$(git rev-parse HEAD) (gh release create --target)"
 
 # `roamrun` on PATH, pointing into the app bundle (one binary for app + CLI).
 BINDIR ?= /usr/local/bin
