@@ -62,11 +62,50 @@ struct BridgeEnv: Sendable {
 /// counts toward GCD's 64 threads, which the relays' connections and the probes'
 /// timeouts also run on. A thread costs little next to the process it waits for.
 enum Blocking {
+    /// At most this many at once; more wait their turn without holding a thread. Tools aren't
+    /// cancelled, so a stopped bridge's still run out their timeouts beside the new ones'.
+    static let limit = 48
+    private static let gate = Gate(limit)
+
     static func run<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
-        await withCheckedContinuation { done in
+        await gate.enter()
+        return await withCheckedContinuation { done in
             // A thread of our own has no autorelease pool: what Foundation autoreleases in the
             // tool (Process, pipes, strings) would leak, every check, for as long as RoamRun runs.
-            Thread.detachNewThread { done.resume(returning: autoreleasepool { work() }) }
+            Thread.detachNewThread {
+                let result = autoreleasepool { work() }
+                gate.leave()
+                done.resume(returning: result)
+            }
+        }
+    }
+
+    /// Counts permits; a task without one waits, first come first served.
+    final class Gate: @unchecked Sendable {
+        private let lock = NSLock()
+        private var free: Int
+        private var waiting: [CheckedContinuation<Void, Never>] = []
+
+        init(_ permits: Int) { free = permits }
+
+        func enter() async {
+            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+                let now: Bool = lock.withLock {
+                    guard free > 0 else { waiting.append(c); return false }
+                    free -= 1
+                    return true
+                }
+                if now { c.resume() }
+            }
+        }
+
+        /// The permit goes straight to the longest waiter, if any.
+        func leave() {
+            let next: CheckedContinuation<Void, Never>? = lock.withLock {
+                if waiting.isEmpty { free += 1; return nil }
+                return waiting.removeFirst()
+            }
+            next?.resume()
         }
     }
 }
