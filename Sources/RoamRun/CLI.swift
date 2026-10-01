@@ -393,7 +393,8 @@ enum CLI {
 
     /// How long a `status` probe may take. Each round of `--wait N` runs one
     /// `devicectl list devices` plus a lock check per ready device before the
-    /// deadline is looked at again, so without this a `--wait 1` could sit for ~20s per call. devicectl
+    /// deadline is looked at again, so without this a `--wait 1` could sit for
+    /// ~20s per call. devicectl
     /// refuses a --timeout below 5, which is the floor here too.
     nonisolated static func probeSeconds(by deadline: Date?, now: Date = .now) -> Int {
         guard let deadline else { return 10 }
