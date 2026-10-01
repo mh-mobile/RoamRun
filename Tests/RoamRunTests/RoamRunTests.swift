@@ -2501,6 +2501,21 @@ func linkFollowsTheTable(_ row: Int) {
     #expect(rig.world.scans == 1 && !rig.bridge.memory.onCellular)
 }
 
+/// "Last seen on cellular" ends where Wi‑Fi is proved: standing aside on this Mac's Wi‑Fi,
+/// and with another device's memory (2b review).
+@MainActor @Test func standingAsideOrAnotherDeviceForgetsCellular() async {
+    let rig = Rig()
+    defer { rig.done() }
+    rig.bridge.memory.onCellular = true
+    rig.world.onLAN = true
+    await rig.bridge.start(.retry)
+    #expect(rig.bridge.status == .local && !rig.bridge.memory.onCellular)
+    let m = DeviceMemory()
+    m.adopt("00008130-000C1C5C307A8D3A"); m.onCellular = true
+    m.adopt("00008101-000A00000000A001")
+    #expect(!m.onCellular)
+}
+
 /// While bridging, the 10 s home check asks Tailscale's path (a ping) once a minute at
 /// most; in between it doesn't stand aside on that score (2b: F32/F4).
 @MainActor @Test func theBridgingHomeCheckPingsOnceAMinute() async {

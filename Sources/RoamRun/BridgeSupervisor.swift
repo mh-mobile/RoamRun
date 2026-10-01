@@ -186,6 +186,7 @@ final class DeviceMemory {
             lastFullCheck = .distantPast
             block = .none
             scanPause = nil
+            onCellular = false
             resetBackoff()
         }
         self.udid = udid

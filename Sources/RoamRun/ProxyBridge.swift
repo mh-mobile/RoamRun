@@ -895,7 +895,8 @@ final class ProxyBridge: ObservableObject {
     /// After the Mac wakes, relayed connections may be dead while still looking open:
     /// re-announce now instead of waiting for keepalive and the 60 s renew.
     func nudgeAfterWake() {
-        guard state.isActive else { return }
+        // Paused, it re-announces only once its port answers (renewIfStuck's look, on the next tick).
+        guard state.isActive, !pausedOnCellular else { return }
         log("Mac woke — re-announcing Bonjour record")
         lastRenewal = env.now()
         dnsProxy.renew()
@@ -1142,6 +1143,7 @@ final class ProxyBridge: ObservableObject {
         case (_, .active), (_, .local): memory.resetBackoff()
         default: break
         }
+        if case .local = s { memory.onCellular = false }   // proved on this Mac's Wi‑Fi
         unreachable = false
         if case .error(let why) = s, memory.block != .none { memory.blockMessage = why }
         state = s
