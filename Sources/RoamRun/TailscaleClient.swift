@@ -333,7 +333,8 @@ struct TailscaleClient {
         if r.status == 0 && r.out.contains("pong") { return .pong }
         if r.status == -1 || r.timedOut { return .couldNotRun(r.err) }
         let said = (r.err + "\n" + r.out).lowercased()
-        if ["local tailscale daemon", "tailscale is stopped", "logged out", "needslogin", "not logged in"]
+        if ["local tailscale daemon", "tailscale is stopped", "logged out", "needslogin", "not logged in",
+            "access denied", "permission denied"]
             .contains(where: said.contains) {
             return .couldNotRun(r.err.isEmpty ? r.out : r.err)
         }

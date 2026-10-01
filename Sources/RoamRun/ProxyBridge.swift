@@ -721,6 +721,11 @@ final class ProxyBridge: ObservableObject {
         }
         let wasConnected = old == .wifi || old == .cellular
         if wasConnected, !phoneConnected { lastRenewal = env.now() }
+        switch link {
+        case .cellular, .paused: memory.onCellular = true
+        case .wifi: memory.onCellular = false
+        case .waiting: break
+        }
         publishStatus()
     }
 
@@ -791,7 +796,9 @@ final class ProxyBridge: ObservableObject {
         let ip = p.providerIP
         let ping = env.ping
         let endpoint = "\(p.providerIP):\(p.remotePairingPort)"
-        guard p.providerID == MeshProvider.tailscale.rawValue, !memory.scansPaused(of: endpoint, now: env.now()),
+        if memory.onCellular { log("last seen on cellular — not scanning for its port until it is back on Wi‑Fi") }
+        guard p.providerID == MeshProvider.tailscale.rawValue, !memory.onCellular,
+              !memory.scansPaused(of: endpoint, now: env.now()),
               await Blocking.run({ ping(ip) }) == .pong else { return (p, false) }
         // Awaited twice above: a Stop or a restart meanwhile owns the state now.
         guard step("Looking for \(profile.displayName)'s RemotePairing port", gen: gen) else { return (p, false) }
@@ -841,6 +848,18 @@ final class ProxyBridge: ObservableObject {
         }
         guard env.now().timeIntervalSince(lastRenewal) > 60 else { return }
         lastRenewal = env.now()
+        // Paused on cellular: re-registering every minute would only churn (and a failed
+        // re-register restarts the bridge). A cheap look at its port instead; once it answers
+        // the device is back on Wi‑Fi, and a fresh record is what makes remotepairingd dial.
+        if pausedOnCellular {
+            let gen = generation, ip = profile.providerIP, port = profile.remotePairingPort
+            Task {
+                guard await env.checkTCP(ip, port), gen == generation, pausedOnCellular else { return }
+                log("its RemotePairing port answers again — re-announcing Bonjour record")
+                dnsProxy.renew()
+            }
+            return
+        }
         stuckRenewals += 1
         // Three minutes and still nothing: the device may have moved port or address. The
         // error retry runs start() again, which finds it (relocate).
@@ -969,7 +988,9 @@ final class ProxyBridge: ObservableObject {
         } else {
             saidLocalNetworkDenied = false
         }
-        if let every = pathCheckEvery, let last = lastPathCheck, now.timeIntervalSince(last) < every {
+        // Paused on cellular it can't be on this Wi‑Fi path; the advert above still notices it home.
+        if pathCheckEvery != nil, pausedOnCellular { return decided(false, "paused on cellular: path not checked") }
+        if let every = pathCheckEvery, let last = lastPathCheck, abs(now.timeIntervalSince(last)) < every {
             return decided(false, "Tailscale path not checked yet (every \(Int(every)) s)")
         }
         lastPathCheck = now
@@ -977,6 +998,8 @@ final class ProxyBridge: ObservableObject {
     }
     /// When the 10 s check last asked Tailscale's path (it pings).
     private var lastPathCheck: Date?
+    /// The 10 s home check is running (tests wait for it).
+    var checkingHomeForTests: Bool { checkingLAN }
 
     /// Said once per spell, not every check.
     private var saidLocalNetworkDenied = false

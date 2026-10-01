@@ -2488,6 +2488,19 @@ func linkFollowsTheTable(_ row: Int) {
     #expect(!HomeRule.relocatesWhenStuck(renewals: 300, paused: true))
 }
 
+/// Last seen on cellular, a start doesn't scan over cellular for a port it won't find;
+/// back on Wi‑Fi, or Start, it does again (2b review).
+@MainActor @Test func aDeviceLastSeenOnCellularIsntScannedFor() async {
+    let rig = Rig()
+    defer { rig.done() }
+    rig.bridge.memory.onCellular = true
+    rig.world.answering = []; rig.world.ping = .pong
+    await rig.bridge.start(.retry)
+    #expect(rig.world.scans == 0 && rig.bridge.status == .error)
+    await rig.bridge.start(.manual)                        // a person asked: look
+    #expect(rig.world.scans == 1 && !rig.bridge.memory.onCellular)
+}
+
 /// While bridging, the 10 s home check asks Tailscale's path (a ping) once a minute at
 /// most; in between it doesn't stand aside on that score (2b: F32/F4).
 @MainActor @Test func theBridgingHomeCheckPingsOnceAMinute() async {
@@ -2498,7 +2511,7 @@ func linkFollowsTheTable(_ row: Int) {
     for _ in 0..<12 {                                      // two minutes of 10 s ticks
         rig.world.now += 10
         rig.bridge.tick()
-        try? await Task.sleep(for: .milliseconds(40))      // its check runs
+        #expect(await eventuallyOnMain { !rig.bridge.checkingHomeForTests })   // its check ran
     }
     #expect(rig.world.pathChecks == 3, "\(rig.world.pathChecks)")   // at 60 s and 120 s
 }
@@ -2786,7 +2799,7 @@ extension TimingSensitive.RelayOnLocalhost {
                                  now: @escaping @Sendable () -> Date = { .now }) -> BridgeEnv {
     var e = BridgeEnv()
     e.now = now
-    e.relayClock = { DispatchTime.now().uptimeNanoseconds }
+    e.relayClock = { Relay.continuousNow() }
     e.lanIPv4 = { "127.0.0.1" }
     e.keepOnCellular = { false }
     e.cliRunning = { false }
@@ -3181,7 +3194,7 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
     #expect(TailscaleClient.ping(r(15, "", "tailscale timed out after 8s", timedOut: true)) == .couldNotRun("tailscale timed out after 8s"))
     // This Mac's own Tailscale: not an answer about the device.
     for err in ["failed to connect to local Tailscale daemon for /localapi/v0/ping; not running?",
-                "Tailscale is stopped.", "Logged out."] {
+                "Tailscale is stopped.", "Logged out.", "Access denied: ping access denied"] {
         #expect(TailscaleClient.ping(r(1, "", err)) == .couldNotRun(err), "\(err)")
     }
 }
