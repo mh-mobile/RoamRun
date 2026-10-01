@@ -2789,6 +2789,309 @@ private func inertProfile(_ name: String) -> DeviceProfile {
     #expect(record.registered == 0)
 }
 
+// MARK: - How a bridge behaves today (1.5b): pinned before 1.6 / 2a / 2b change it
+
+/// What the faked world answers; the test turns these between steps. Read from the env's
+/// closures, which may run off the main actor, but never while the test writes them.
+private final class World: @unchecked Sendable {
+    var now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    var answering: Set<String> = ["127.0.0.1"]   // hosts whose RemotePairing port answers
+    var ping = false
+    var onLAN = false
+    var cli = false
+    var lan: String? = "127.0.0.1"
+    var advertAnswers = false
+    var scan = ReachabilityProbe.PortScan.notFound
+    var scans = 0
+    var peers: [MeshDevice] = []
+}
+
+@MainActor private struct Rig {
+    let world = World(), record = FakeRecord(), watcher = FakeWatcher()
+    let dir = scratchDir()
+    let bridge: ProxyBridge
+    var id: UUID { bridge.profile.id }
+
+    /// A port band per rig: parallel tests' bridges each bind a control relay, and a
+    /// listener's port frees only some time after it is cancelled.
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var nextPort: UInt16 = 39300
+
+    init(_ given: DeviceProfile = inertProfile("iPhone")) {
+        var p = given
+        p.remotePairingPort = Self.lock.withLock {
+            defer { Self.nextPort = Self.nextPort >= 39_975 ? 39300 : Self.nextPort + 25 }
+            return Self.nextPort
+        }
+        var e = inertEnv(record: record, watcher: watcher)
+        let w = world
+        e.now = { w.now }
+        e.lanIPv4 = { w.lan }
+        e.checkTCP = { host, _ in w.answering.contains(host) }
+        e.ping = { _ in w.ping }
+        e.isOnLAN = { _ in w.onLAN }
+        e.cliRunning = { w.cli }
+        e.findRemotePairingPort = { _ in w.scans += 1; return w.scan }
+        e.listDevices = { w.peers }
+        e.answers = { _ in w.advertAnswers }
+        bridge = ProxyBridge(profile: p, statusDir: dir, statusLive: { _ in true }, env: e)
+    }
+
+    func entry() -> StatusFile.Entry? { StatusFile.read(in: dir, live: { _ in true })[id] }
+    func done() { bridge.stop(); try? FileManager.default.removeItem(at: dir) }
+}
+
+enum StartCase: String, CaseIterable {
+    case answers, onThisWiFi, silentAndUnreached, silentScanFindsNothing, silentScanTimesOut, silentScanFindsAPort,
+         noLANAddress
+}
+
+/// start() from Off, one row per situation it meets.
+@MainActor @Test(arguments: StartCase.allCases)
+func startOutcomes(_ c: StartCase) async {
+    let rig = Rig()
+    defer { rig.done() }
+    switch c {
+    case .answers: break
+    case .onThisWiFi: rig.world.onLAN = true
+    case .silentAndUnreached: rig.world.answering = []
+    case .silentScanFindsNothing: rig.world.answering = []; rig.world.ping = true
+    case .silentScanTimesOut: rig.world.answering = []; rig.world.ping = true; rig.world.scan = .timedOut
+    case .silentScanFindsAPort: rig.world.answering = []; rig.world.ping = true; rig.world.scan = .found(39999)
+    case .noLANAddress: rig.world.lan = nil
+    }
+    var saved: DeviceProfile?
+    rig.bridge.onProfileChange = { saved = $0 }
+    await rig.bridge.start()
+    let expected: (BridgeStatus, registered: Int, scans: Int) = switch c {
+    case .answers: (.waiting, 1, 0)
+    case .onThisWiFi: (.local, 0, 0)
+    case .silentAndUnreached: (.error, 0, 0)          // not pinged up: no scan
+    case .silentScanFindsNothing, .silentScanTimesOut: (.error, 0, 1)
+    case .silentScanFindsAPort: (.waiting, 1, 1)
+    case .noLANAddress: (.error, 0, 0)
+    }
+    #expect(rig.bridge.status == expected.0, "\(c)")
+    #expect(rig.record.registered == expected.registered, "\(c)")
+    #expect(rig.world.scans == expected.scans, "\(c)")
+    #expect(rig.bridge.autoRetry, "\(c)")              // none of these stops the retries
+    if c == .silentScanFindsAPort {
+        #expect(rig.bridge.profile.remotePairingPort == 39999 && saved?.remotePairingPort == 39999)
+    } else {
+        #expect(saved == nil, "\(c)")
+    }
+}
+
+/// A scan that found nothing, or ran out of time, isn't repeated for 10 minutes by this
+/// bridge — today not even by a start someone asked for (2a may change this; the plan's
+/// F3/R5). The pause lives in the bridge: a new one (the device removed and added again)
+/// scans at once.
+@MainActor @Test(arguments: [ReachabilityProbe.PortScan.notFound, .timedOut])
+func aFruitlessScanIsNotRepeatedForTenMinutesOnThisBridge(_ result: ReachabilityProbe.PortScan) async {
+    let rig = Rig()
+    defer { rig.done() }
+    rig.world.answering = []; rig.world.ping = true; rig.world.scan = result
+    await rig.bridge.start(automatic: true)
+    #expect(rig.world.scans == 1)
+    rig.world.now += 599
+    await rig.bridge.start()
+    #expect(rig.world.scans == 1)
+    rig.world.now += 2
+    await rig.bridge.start()
+    #expect(rig.world.scans == 2)
+
+    let fresh = Rig()
+    defer { fresh.done() }
+    fresh.world.answering = []; fresh.world.ping = true; fresh.world.scan = result
+    await fresh.bridge.start()
+    #expect(fresh.world.scans == 1)
+}
+
+/// Found under its Tailscale name at a new address: followed and saved.
+@MainActor @Test func aDeviceWithANewTailscaleAddressIsFollowed() async {
+    var p = inertProfile("iPhone"); p.providerHostName = "iphone"
+    let rig = Rig(p)
+    defer { rig.done() }
+    rig.world.answering = ["127.0.0.2"]
+    rig.world.peers = [MeshDevice(id: "1", name: "iphone", os: "iOS", ips: ["127.0.0.2"], online: true)]
+    var saved: DeviceProfile?
+    rig.bridge.onProfileChange = { saved = $0 }
+    await rig.bridge.start()
+    #expect(rig.bridge.status == .waiting)
+    #expect(rig.bridge.profile.providerIP == "127.0.0.2" && saved?.providerIP == "127.0.0.2")
+    #expect(rig.world.scans == 0)
+}
+
+enum ClaimCase: String, CaseIterable {
+    case erroredCLIAutomatic, erroredCLIManual, readyCLIManual, readyCLIFromACLI, erroredAppAutomatic, erroredCLIAutomaticFromACLI
+}
+
+/// Who gets a device another process's `roamrun up` has in its entry.
+@MainActor @Test(arguments: ClaimCase.allCases)
+func claimOutcomes(_ c: ClaimCase) async {
+    let rig = Rig()
+    defer { rig.done() }
+    let held: BridgeStatus = [.readyCLIManual, .readyCLIFromACLI].contains(c) ? .ready : .error
+    let other = StatusFile.Entry(pid: 4242, cli: c != .erroredAppAutomatic, udid: nil, status: held.title, detail: "",
+                                 ready: held == .ready, tunnelPorts: [], updated: .now, state: held.rawValue)
+    #expect(StatusFile.write(rig.id, other, in: rig.dir, live: { _ in true }) == .written)
+    rig.world.cli = [.readyCLIFromACLI, .erroredCLIAutomaticFromACLI].contains(c)
+    await rig.bridge.start(automatic: [.erroredCLIAutomatic, .erroredAppAutomatic, .erroredCLIAutomaticFromACLI].contains(c))
+    // Only the app's automatic start defers to a CLI; an errored entry is anyone's otherwise.
+    let took = [.erroredCLIManual, .erroredAppAutomatic, .erroredCLIAutomaticFromACLI].contains(c)
+    #expect(rig.bridge.status == (took ? .waiting : .error), "\(c)")
+    #expect(rig.entry()?.pid == (took ? getpid() : 4242), "\(c)")
+    #expect(rig.bridge.autoRetry == (c != .readyCLIFromACLI), "\(c)")   // a refused CLI gives up
+}
+
+/// The three ways retries stop today, and that any start() turns them back on.
+@MainActor @Test func whatStopsTheRetriesAndWhatResumesThem() async {
+    let rig = Rig()
+    defer { rig.done() }
+    await rig.bridge.start()
+    rig.record.onExit?(1)                                   // dns-sd died
+    #expect(await eventuallyOnMain { rig.bridge.status == .error })
+    #expect(rig.bridge.autoRetry)
+
+    await rig.bridge.start()
+    rig.watcher.subscribers[rig.id]?.onExit("log stream exited (status 64): Must be admin to run 'stream' command")
+    #expect(rig.bridge.status == .error && !rig.bridge.autoRetry)
+    await rig.bridge.start()
+    #expect(rig.bridge.autoRetry)                           // start() clears it, whoever calls it
+
+    let mine = rig.bridge.profile.instanceName
+    rig.watcher.subscribers[rig.id]?.onUnrecognized(mine)
+    #expect(rig.bridge.state.isActive)                      // once can be a hiccup
+    rig.world.now += 301
+    rig.watcher.subscribers[rig.id]?.onUnrecognized(mine)
+    #expect(rig.bridge.state.isActive)                      // too long after: counts as a first sighting again
+    rig.world.now += 10
+    rig.watcher.subscribers[rig.id]?.onUnrecognized(mine)
+    #expect(rig.bridge.state.isActive)                      // the same announcement again
+    rig.world.now += 20
+    rig.watcher.subscribers[rig.id]?.onUnrecognized(mine)
+    #expect(rig.bridge.status == .error && !rig.bridge.autoRetry)
+}
+
+/// Waiting with the record up: re-announce each minute; on the third, a device the mesh
+/// reaches but whose port is shut has moved, so the bridge fails and the retry finds it.
+@MainActor @Test(arguments: [false, true])
+func renewalsWhileWaiting(meshReachesIt: Bool) async {
+    let rig = Rig()
+    defer { rig.done() }
+    await rig.bridge.start()
+    #expect(rig.bridge.status == .waiting)
+    rig.world.answering = []
+    rig.world.ping = meshReachesIt
+    rig.bridge.tick()
+    #expect(rig.record.renewed == 0)                        // within the first minute
+    for n in 1...2 {
+        rig.world.now += 61
+        rig.bridge.tick()
+        #expect(rig.record.renewed == n)
+    }
+    rig.world.now += 61
+    rig.bridge.tick()
+    if meshReachesIt {
+        #expect(await eventuallyOnMain { rig.bridge.status == .error })
+        #expect(rig.bridge.autoRetry)
+    } else {
+        #expect(await eventuallyOnMain { rig.record.renewed == 3 })   // asleep: keep nudging
+        #expect(rig.bridge.status == .waiting)
+    }
+}
+
+/// Back on this Mac's Wi‑Fi while bridged: the record goes, the bridge stands aside.
+@MainActor @Test func aBridgedDeviceThatComesHomeStandsAside() async {
+    let rig = Rig()
+    defer { rig.done() }
+    await rig.bridge.start()
+    let stopsBefore = rig.record.stopped
+    rig.world.onLAN = true
+    rig.bridge.tick()
+    #expect(await eventuallyOnMain { rig.bridge.status == .local })
+    #expect(rig.record.stopped > stopsBefore)
+    #expect(rig.entry()?.state == BridgeStatus.local.rawValue)
+}
+
+/// After the Mac wakes: re-announce at once, and the minute restarts from then.
+@MainActor @Test func wakingReannouncesAndRestartsTheMinute() async {
+    let rig = Rig()
+    defer { rig.done() }
+    await rig.bridge.start()
+    rig.world.now += 50
+    rig.bridge.nudgeAfterWake()
+    #expect(rig.record.renewed == 1)
+    rig.world.now += 30                                     // 80 s since start, 30 since the nudge
+    rig.bridge.tick()
+    #expect(rig.record.renewed == 1)
+}
+
+/// Renamed on Tailscale at the same address: the new name is followed and saved.
+@MainActor @Test func aTailscaleRenameIsFollowed() async {
+    var p = inertProfile("iPhone"); p.providerHostName = "iphone"
+    let rig = Rig(p)
+    defer { rig.done() }
+    rig.world.answering = []
+    rig.world.peers = [MeshDevice(id: "1", name: "iphone-2", os: "iOS", ips: ["127.0.0.1"], online: true)]
+    var saved: DeviceProfile?
+    rig.bridge.onProfileChange = { saved = $0 }
+    await rig.bridge.start()
+    #expect(rig.bridge.status == .error)                    // still silent, and not pinged up
+    #expect(saved?.providerHostName == "iphone-2" && rig.bridge.profile.providerHostName == "iphone-2")
+}
+
+/// While bridged, the device's own advert (another instance, same UDID) that answers means
+/// it is home — if the watcher saw it within 90 s. HomeObservation's TTL will change this.
+@MainActor @Test(arguments: [false, true])
+func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
+    let rig = Rig()
+    defer { rig.done() }
+    await rig.bridge.start()
+    let udid = "00008130-000C1C5C307A8D3A"
+    rig.watcher.subscribers[rig.id]?.onDevice(rig.bridge.profile.instanceName, udid)   // ours: learns the UDID
+    rig.world.now += 1
+    rig.watcher.subscribers[rig.id]?.onDevice("REAL-ADVERT", udid)
+    rig.world.advertAnswers = true
+    if stale { rig.world.now += 91 }
+    rig.bridge.tick()
+    if stale {
+        try? await Task.sleep(for: .milliseconds(200))
+        #expect(rig.bridge.status == .waiting)
+    } else {
+        #expect(await eventuallyOnMain { rig.bridge.status == .local })
+    }
+}
+
+/// Standing aside: three misses in a row before resuming, by an automatic start; and a
+/// `roamrun up` watching the same device makes this one step back.
+@MainActor @Test func standingAsideResumesAfterThreeMissesAndStepsBackForACLI() async {
+    let rig = Rig()
+    defer { rig.done() }
+    rig.world.onLAN = true
+    await rig.bridge.start()
+    #expect(rig.bridge.status == .local)
+    rig.world.onLAN = false
+    await rig.bridge.resumeIfAway()
+    await rig.bridge.resumeIfAway()
+    #expect(rig.bridge.status == .local)
+    await rig.bridge.resumeIfAway()
+    #expect(rig.bridge.status == .waiting)
+
+    let other = Rig()
+    defer { other.done() }
+    other.world.onLAN = true
+    await other.bridge.start()
+    let cli = StatusFile.Entry(pid: 4242, cli: true, udid: nil, status: BridgeStatus.local.title, detail: "", ready: false,
+                               tunnelPorts: [], updated: .now, state: BridgeStatus.local.rawValue)
+    var yieldedTo: Int32?
+    other.bridge.onYield = { yieldedTo = $0.pid }
+    _ = StatusFile.write(other.id, nil, in: other.dir, live: { _ in true })
+    #expect(StatusFile.write(other.id, cli, in: other.dir, live: { _ in true }) == .written)
+    await other.bridge.resumeIfAway()
+    #expect(other.bridge.status == .off && yieldedTo == 4242)
+}
+
 @MainActor @Test func aManualClaimDoesntAuthorizeLaterUpdatesOrTeardownToTakeOver() {
     let dir = scratchDir()
     defer { try? FileManager.default.removeItem(at: dir) }
