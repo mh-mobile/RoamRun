@@ -186,6 +186,7 @@ final class ProxyBridge: ObservableObject {
 
         setState(.starting("Probing \(profile.providerIP):\(profile.remotePairingPort)"))
         var reachable = await env.checkTCP(profile.providerIP, profile.remotePairingPort)
+        if reachable { pingsNotRun = 0 }   // reached through this Mac's Tailscale: it works
         guard gen == generation else { return }   // stopped or restarted meanwhile
         if !reachable {
             let (moved, answers) = await relocate(gen: gen)
@@ -731,6 +732,8 @@ final class ProxyBridge: ObservableObject {
         case .wifi: memory.onCellular = false
         case .waiting: break
         }
+        // The device is here now: what resolutions spent while it slept is given back.
+        if old == .waiting, link == .wifi { warmUpsLeft = 10 }
         publishStatus()
     }
 
@@ -780,7 +783,7 @@ final class ProxyBridge: ObservableObject {
         if env.localNetworkDenied(), s != .local {
             detail = detail.isEmpty ? LocalNetwork.advice : detail + " — " + LocalNetwork.advice
         }
-        if pingsNotRun >= 2, s != .ready, s != .local {
+        if pingsNotRun >= 2, s == .error {
             let mine = "Tailscale on this Mac couldn't be asked (\(pingNotRunWhy))"
             detail = detail.isEmpty ? mine : detail + " — " + mine
         }
@@ -796,6 +799,9 @@ final class ProxyBridge: ObservableObject {
     /// with whatever was learned, and whether the device answers there.
     private func relocate(gen: Int) async -> (DeviceProfile, Bool) {
         var p = profile
+        /// A new address Tailscale gave its name that didn't answer at the known port: scanned
+        /// instead of the old one, and taken only if the scan finds RemotePairing there.
+        var candidate: String?
         if p.providerID == MeshProvider.tailscale.rawValue, !p.providerHostName.isEmpty {
             setState(.starting("Looking up \(p.providerHostName) on Tailscale"))
             let list = env.listDevices
@@ -815,13 +821,14 @@ final class ProxyBridge: ObservableObject {
                     p.providerIP = ip
                     return (p, true)
                 }
-                log("\(p.providerHostName) has a new address, \(ip), but RemotePairing doesn't answer there — keeping \(p.providerIP)")
+                log("\(p.providerHostName) has a new address, \(ip), but RemotePairing doesn't answer on port \(p.remotePairingPort) there")
+                candidate = ip
             }
         }
         // Only scan a device that is up (answers Tailscale) — not one that's asleep or
         // offline — and not again soon after a scan found nothing (e.g. it's on cellular).
-        let ip = p.providerIP
-        let endpoint = "\(p.providerIP):\(p.remotePairingPort)"
+        let ip = candidate ?? p.providerIP
+        let endpoint = "\(ip):\(p.remotePairingPort)"
         if memory.onCellular { log("last seen on cellular — not scanning for its port until it is back on Wi‑Fi") }
         guard p.providerID == MeshProvider.tailscale.rawValue, !memory.onCellular,
               !memory.scansPaused(of: endpoint, now: env.now()),
@@ -829,10 +836,10 @@ final class ProxyBridge: ObservableObject {
         // Awaited twice above: a Stop or a restart meanwhile owns the state now.
         guard step("Looking for \(profile.displayName)'s RemotePairing port", gen: gen) else { return (p, false) }
         let port: UInt16
-        switch await env.findRemotePairingPort(p.providerIP) {
+        switch await env.findRemotePairingPort(ip) {
         case .found(let found): port = found
         case .notFound:
-            log("no port on \(p.providerIP) answered as RemotePairing")
+            log("no port on \(ip) answered as RemotePairing")
             if gen == generation { memory.pauseScans(of: endpoint, until: env.now() + 600) }
             return (p, false)
         case .timedOut:
@@ -842,6 +849,8 @@ final class ProxyBridge: ObservableObject {
             return (p, false)
         }
         if port != p.remotePairingPort { log("RemotePairing port moved: \(p.remotePairingPort) → \(port)") }
+        if ip != p.providerIP { log("\(p.providerHostName) has a new address: \(p.providerIP) → \(ip)") }
+        p.providerIP = ip
         p.remotePairingPort = port
         return (p, true)
     }

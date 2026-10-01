@@ -813,6 +813,7 @@ final class AppCoordinator: ObservableObject {
         stopExternalBridge(id)   // a `roamrun up` for it would otherwise live on, unstoppable by name
         if let spoof = bridges[id]?.spoofHost { capture.ownedHosts.remove(spoof) }
         if selectedID == id { selectedID = nil }
+        bridges[id]?.stop()   // its status entry would stay, and the same iPhone added again read as a duplicate
         bridges[id] = nil
         bridgeObservers[id] = nil
         memories[id] = nil
