@@ -187,7 +187,7 @@ final class ProxyBridge: ObservableObject {
         }
         guard gen == generation else { return }
         guard reachable else {
-            setState(.error("\(profile.providerIP) did not respond on RemotePairing port \(profile.remotePairingPort) — check the mesh VPN and that the device is on Wi-Fi"))
+            setState(.error("\(profile.providerIP) did not respond on RemotePairing port \(profile.remotePairingPort) — the device may be locked or asleep (unlock it and keep the screen on), off Wi-Fi, or its mesh VPN may be off"))
             return
         }
 
