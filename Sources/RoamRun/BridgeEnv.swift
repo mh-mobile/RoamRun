@@ -27,9 +27,11 @@ struct BridgeEnv: Sendable {
     }
     var isOnLAN: @MainActor (DeviceProfile) async -> Bool = { await ProxyBridge.isOnLAN($0) }
     /// `devicectl device info details`, which makes CoreDevice ask for a tunnel.
-    var warmUp: @Sendable (_ udid: String) async -> Proc.Result = {
-        await Proc.runAsync("/usr/bin/xcrun", ["devicectl", "--quiet", "--timeout", "30",
-                                               "device", "info", "details", "--device", $0])
+    var warmUp: @Sendable (_ udid: String) async -> Proc.Result = { udid in
+        await Blocking.run {
+            Proc.run("/usr/bin/xcrun", ["devicectl", "--quiet", "--timeout", "30",
+                                        "device", "info", "details", "--device", udid])
+        }
     }
 
     // Blocking.
