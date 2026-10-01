@@ -316,6 +316,7 @@ enum OTA {
         // and a run whose adds are all duplicates used to reach neither sweep.
         sweepStaging(app)
         reapOrphans(app)
+        sweepOthersStaging(in: store, besides: app)
 
         // The same archive handed over twice: two rows the eye can't tell apart,
         // and one fewer slot for a build that is actually different. A rebuild
@@ -535,6 +536,21 @@ enum OTA {
     /// writing it. Nothing can show it and nothing else would ever remove it.
     /// Only from `add`, which holds the lock — a half-written build is exactly
     /// what this would delete if it ran while one was being made.
+    /// Every other app's leftovers too, or one never added to again keeps its forever. Only
+    /// with that app's lock free (no add running there) and only an hour old.
+    static func sweepOthersStaging(in store: URL, besides mine: URL) {
+        for name in entries(of: store) ?? [] where !name.hasPrefix(".") {
+            let app = store.appendingPathComponent(name, isDirectory: true)
+            guard app.standardizedFileURL != mine.standardizedFileURL else { continue }
+            let lock = open(app.appendingPathComponent(".lock").path, O_RDWR | O_NOFOLLOW)
+            guard lock >= 0 else { continue }   // no lock file: never added to, nothing staged
+            defer { close(lock) }
+            guard flock(lock, LOCK_EX | LOCK_NB) == 0 else { continue }   // an add is running there
+            sweepStaging(app)
+            flock(lock, LOCK_UN)
+        }
+    }
+
     private static func reapOrphans(_ app: URL) {
         for slug in entries(of: app) ?? [] where !slug.hasPrefix(".") {
             let dir = app.appendingPathComponent(slug)

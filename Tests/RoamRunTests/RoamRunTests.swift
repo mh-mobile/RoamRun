@@ -3538,6 +3538,70 @@ extension TimingSensitive.OTAServerOverASocket {
     }
 }
 
+// MARK: - CLI (PR 4)
+
+/// `up -d`'s log, past its limit, becomes `.log.1` and the writing moves to a new file; a
+/// rename that fails changes nothing (F42).
+@Test func theBackgroundLogRollsOverAtItsLimit() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let log = dir.appendingPathComponent("iPhone.log")
+    FileManager.default.createFile(atPath: log.path, contents: nil)
+    let fd = open(log.path, O_WRONLY | O_APPEND)
+    defer { close(fd) }
+    _ = "old enough to roll\n".withCString { write(fd, $0, strlen($0)) }
+    CLI.rotateLog(at: log, limit: 10, fds: [fd])
+    _ = "new\n".withCString { write(fd, $0, strlen($0)) }
+    #expect(try String(contentsOf: log.appendingPathExtension("1"), encoding: .utf8) == "old enough to roll\n")
+    #expect(try String(contentsOf: log, encoding: .utf8) == "new\n")
+    // Small: left alone.
+    CLI.rotateLog(at: log, limit: 10, fds: [fd])
+    #expect(try String(contentsOf: log, encoding: .utf8) == "new\n")
+    // The file renamed away under it (can't be moved): the descriptor keeps writing where it was.
+    try FileManager.default.removeItem(at: log)
+    _ = "more than ten bytes here\n".withCString { write(fd, $0, strlen($0)) }
+    CLI.rotateLog(at: log, limit: 10, fds: [fd])
+    #expect(!FileManager.default.fileExists(atPath: log.path))
+}
+
+/// Any `ota` clears another app's leftover staging an hour old, unless that app's add is
+/// running (its lock is held); a fresh one stays (F44).
+@Test func anOtaClearsOtherAppsLeftoversButNotARunningAdd() throws {
+    let store = otaScratch()
+    defer { try? FileManager.default.removeItem(at: store) }
+    let fm = FileManager.default, old = Date(timeIntervalSinceNow: -7200)
+    func app(_ name: String, staging: [(String, Date)]) throws -> URL {
+        let a = store.appendingPathComponent(name)
+        try fm.createDirectory(at: a, withIntermediateDirectories: true)
+        fm.createFile(atPath: a.appendingPathComponent(".lock").path, contents: nil)
+        for (n, made) in staging {
+            let d = a.appendingPathComponent(n)
+            try fm.createDirectory(at: d, withIntermediateDirectories: true)
+            try fm.setAttributes([.creationDate: made], ofItemAtPath: d.path)
+        }
+        return a
+    }
+    let mine = try app("com.example.Mine", staging: [])
+    let idle = try app("com.example.Idle", staging: [(".adding-old", old), (".adding-new", .now)])
+    let busy = try app("com.example.Busy", staging: [(".adding-old", old)])
+    let held = open(busy.appendingPathComponent(".lock").path, O_RDWR)
+    defer { close(held) }
+    #expect(flock(held, LOCK_EX) == 0)                      // an add running there
+    OTA.sweepOthersStaging(in: store, besides: mine)
+    #expect(!fm.fileExists(atPath: idle.appendingPathComponent(".adding-old").path))
+    #expect(fm.fileExists(atPath: idle.appendingPathComponent(".adding-new").path))
+    #expect(fm.fileExists(atPath: busy.appendingPathComponent(".adding-old").path))
+}
+
+/// A command we suggest for a device whose name starts with "-" names it by id: the name
+/// would be read as an option (F13).
+@Test func aSuggestedCommandNamesADashDeviceByID() {
+    var p = profile("-iPad")
+    #expect(CLI.commandName(p) == p.id.uuidString)
+    p.displayName = "Kid's iPad"
+    #expect(CLI.commandName(p) == "'Kid'\\''s iPad'")
+}
+
 // MARK: - Start reasons and the shared supervisor (1.5c)
 
 /// One table for what each reason may do (2a). Only Start lifts a retry block or takes from

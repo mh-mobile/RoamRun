@@ -70,7 +70,7 @@ not match the installed CLI until then (`roamrun --help` is authoritative).
 ## 3. Get the device ready
 
 ```sh
-roamrun devices                       # saved devices + UDID
+roamrun devices                       # saved devices + UDID + id (use the id for a name starting with "-")
 roamrun up iPhone -d                  # bridge in the background; returns when ready (exit 1 after 60 s if not — it keeps trying)
 # Stop here unless all three pass — don't build or install on a device that isn't ready.
 roamrun status iPhone --wait 60 --json > /tmp/rr.json || { roamrun doctor iPhone; exit 1; }   # act on doctor's first fail

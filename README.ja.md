@@ -139,7 +139,7 @@ Mac の IP が変わるとブリッジは自動再起動します。
 - **ソースからビルドした場合:** `/Applications` に移したなら同じ手順。フォルダ内のビルドを使うなら `make install-cli`（`BINDIR=$HOME/bin` なども可）
 
 ```sh
-roamrun devices               # 登録済み iPhone（名前・UDID）と状態
+roamrun devices               # 登録済み iPhone（名前・UDID・id）と状態
 roamrun up <name>             # ブリッジを起動し、Ready まで表示。Ctrl-C で停止・後片付け
 roamrun up <name> -d          # バックグラウンドで起動（ターミナルを閉じても継続。ログは ~/Library/Logs/RoamRun/）
                               #   最大 60 秒 Ready を待ち、間に合わなければ exit 1（ブリッジはそのまま試し続けます）
