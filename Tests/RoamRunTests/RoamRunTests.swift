@@ -2690,6 +2690,105 @@ extension TimingSensitive.RelayOnLocalhost {
     #expect(StatusFile.read(in: dir, live: live)[p.id]?.pid == 4242)   // still roamrun up's
 }
 
+@Test func onlyTestRunnersTripTheRealFolderGuard() {
+    #expect(ProfileStore.isTestRunner("xctest"))
+    #expect(ProfileStore.isTestRunner("swiftpm-testing-helper"))
+    #expect(ProfileStore.isTestRunner(ProcessInfo.processInfo.processName))   // so it fires in this very run
+    for name in ["RoamRun", "roamrun", "xctest-helper", ""] { #expect(!ProfileStore.isTestRunner(name), "\(name)") }
+}
+
+// MARK: - A bridge with nothing real behind it (BridgeEnv)
+
+/// Stands in for `dns-sd -P`.
+@MainActor private final class FakeRecord: BonjourRecord {
+    var onExit: ((Int32) -> Void)?
+    var registered = 0, stopped = 0, renewed = 0
+    func register(instanceName: String, serviceType: String, domain: String,
+                  port: UInt16, host: String, ip: String, txt: [String: String]) throws { registered += 1 }
+    func stop() { stopped += 1 }
+    func renew() { renewed += 1 }
+    func previousExited() async -> Bool { true }
+}
+
+/// Stands in for the shared remotepairingd watcher: the test feeds its subscriber.
+@MainActor private final class FakeWatcher {
+    var subscribers: [UUID: TunnelCoordinator.Subscriber] = [:]
+}
+
+/// Every field replaced: a bridge on this env runs no tool and reads no setting. Its relays
+/// are real, listening on 127.0.0.1, but nothing is told to connect to them.
+/// The device answers on its port unless `reachable` says otherwise.
+@MainActor private func inertEnv(record: FakeRecord, watcher: FakeWatcher, reachable: Bool = true,
+                                 now: @escaping @Sendable () -> Date = { .now }) -> BridgeEnv {
+    var e = BridgeEnv()
+    e.now = now
+    e.relayClock = { DispatchTime.now().uptimeNanoseconds }
+    e.lanIPv4 = { "127.0.0.1" }
+    e.keepOnCellular = { false }
+    e.cliRunning = { false }
+    e.localNetworkDenied = { false }
+    e.checkTCP = { _, _ in reachable }
+    e.findRemotePairingPort = { _ in .notFound }
+    e.answers = { _ in false }
+    e.isOnLAN = { _ in false }
+    e.warmUp = { _ in Proc.Result(status: 0, out: "", err: "") }
+    e.ping = { _ in false }
+    e.listDevices = { [] }
+    e.recentAdvert = { _, _ in nil }
+    e.killOrphanedHelpers = { 0 }
+    e.subscribe = { id, s in watcher.subscribers[id] = s; return true }
+    e.unsubscribe = { id in watcher.subscribers[id] = nil }
+    e.makeRecord = { record }
+    e.postClaim = { _ in }
+    e.listenForClaims = {}
+    return e
+}
+
+/// Outside 49152…, the ephemeral range other tests' servers listen in.
+private func inertProfile(_ name: String) -> DeviceProfile {
+    var p = profile(name)
+    p.remotePairingPort = 39300
+    p.providerIP = "127.0.0.1"
+    p.instanceName = "FAKE-\(name)"
+    return p
+}
+
+@MainActor @Test func aBridgeRunsEndToEndOnAnInertEnv() async {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let record = FakeRecord(), watcher = FakeWatcher()
+    let p = inertProfile("iPhone")
+    let bridge = ProxyBridge(profile: p, statusDir: dir, statusLive: { _ in true },
+                             env: inertEnv(record: record, watcher: watcher))
+    defer { bridge.stop() }
+    await bridge.start()
+    #expect(bridge.state.isActive)
+    #expect(record.registered == 1)
+    #expect(watcher.subscribers[p.id] != nil)
+    // The watcher says remotepairingd resolved our record: the UDID is learned.
+    watcher.subscribers[p.id]?.onDevice(p.instanceName, "00008130-000C1C5C307A8D3A")
+    #expect(bridge.udid == "00008130-000C1C5C307A8D3A")
+    bridge.tick()
+    #expect(bridge.status == .waiting)   // no control channel through it
+    bridge.stop()
+    #expect(record.stopped >= 1)
+    #expect(watcher.subscribers[p.id] == nil)
+    #expect(StatusFile.read(in: dir, live: { _ in true })[p.id] == nil)
+}
+
+@MainActor @Test func aBridgeWithNoLANAddressSaysSoOnAnInertEnv() async {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let record = FakeRecord(), watcher = FakeWatcher()
+    var env = inertEnv(record: record, watcher: watcher)
+    env.lanIPv4 = { nil }
+    let bridge = ProxyBridge(profile: inertProfile("iPhone"), statusDir: dir, statusLive: { _ in true }, env: env)
+    defer { bridge.stop() }
+    await bridge.start()
+    #expect(bridge.status == .error)
+    #expect(record.registered == 0)
+}
+
 @MainActor @Test func aManualClaimDoesntAuthorizeLaterUpdatesOrTeardownToTakeOver() {
     let dir = scratchDir()
     defer { try? FileManager.default.removeItem(at: dir) }

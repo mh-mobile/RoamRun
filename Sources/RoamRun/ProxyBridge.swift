@@ -50,7 +50,7 @@ final class ProxyBridge: ObservableObject {
     /// retryable: they clear by themselves once the iPhone leaves or the CLI stops.
     private(set) var autoRetry = true
 
-    private var dnsProxy = DNSServiceProxy()
+    private var dnsProxy: any BonjourRecord
     /// TCP only: since iOS 17.4 the CoreDevice tunnel is TCP (17.0–17.3 used
     /// QUIC over UDP, which RoamRun doesn't support).
     private var controlRelay: Relay?
@@ -95,15 +95,18 @@ final class ProxyBridge: ObservableObject {
     /// a scratch folder and owners that aren't RoamRun.app.
     private let statusDir: URL
     private let statusLive: StatusFile.Liveness
+    private let env: BridgeEnv
 
     init(profile: DeviceProfile, statusDir: URL = ProfileStore.directory,
-         statusLive: @escaping StatusFile.Liveness = StatusFile.isRoamRun) {
+         statusLive: @escaping StatusFile.Liveness = StatusFile.isRoamRun, env: BridgeEnv = .live) {
         self.profile = profile
         self.udid = profile.udid
         self.statusDir = statusDir
         self.statusLive = statusLive
+        self.env = env
+        self.dnsProxy = env.makeRecord()
         Self.all.add(self)
-        Self.listenForClaims()
+        env.listenForClaims()
     }
 
     /// Every bridge in this process: they all listen on the same address, so a
@@ -148,11 +151,12 @@ final class ProxyBridge: ObservableObject {
         }
         // A SIGKILLed app or `roamrun up` leaves dns-sd advertising a dead relay.
         // Off the main actor: `ps` can take a while.
-        let killed = await Task.detached { DNSServiceProxy.killOrphanedHelpers() }.value
+        let killOrphans = env.killOrphanedHelpers
+        let killed = await Task.detached { killOrphans() }.value
         guard gen == generation else { return }
         if killed > 0 { log("killed \(killed) leftover helper process(es)") }
 
-        guard let localIP = InterfaceMonitor.currentIPv4() else {
+        guard let localIP = env.lanIPv4() else {
             setState(.error(Self.noAddressMessage))
             return
         }
@@ -169,8 +173,7 @@ final class ProxyBridge: ObservableObject {
         guard gen == generation else { return }
 
         setState(.starting("Probing \(profile.providerIP):\(profile.remotePairingPort)"))
-        var reachable = await ReachabilityProbe.checkTCP(host: profile.providerIP,
-                                                         port: profile.remotePairingPort)
+        var reachable = await env.checkTCP(profile.providerIP, profile.remotePairingPort)
         guard gen == generation else { return }   // stopped or restarted meanwhile
         if !reachable {
             let (moved, answers) = await relocate(gen: gen)
@@ -223,7 +226,7 @@ final class ProxyBridge: ObservableObject {
         // One watcher per process routes each tunnel port to the bridge whose device asked for it.
         // Lines already queued when the bridge stops or restarts still arrive; the generation check drops them.
         let me = Weak(self)
-        let subscribed = TunnelCoordinator.shared.subscribe(profile.id, .init(
+        let subscribed = env.subscribe(profile.id, .init(
             udid: { me.value?.udid },
             onPort: { port, host in
                 guard let self = me.value, gen == self.generation else { return }
@@ -279,25 +282,28 @@ final class ProxyBridge: ObservableObject {
             return
         }
 
-        activatedAt = .now
+        activatedAt = env.now()
         setState(.active(localPort: localPort, tunnelPorts: []))
         log("bridge active: \(profile.providerIP) relayed locally on \(localIP):\(localPort)")
-        lastRenewal = .now
+        lastRenewal = env.now()
         evaluate()   // a control channel may have opened while starting, when evaluate() ignores it
         renewTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.evaluate()
-                self?.renewIfStuck()
-                self?.standAsideIfHome()
-            }
+            MainActor.assumeIsolated { self?.tick() }
         }
+    }
+
+    /// The 10 s check while active (internal: tests drive it instead of the timer).
+    func tick() {
+        evaluate()
+        renewIfStuck()
+        standAsideIfHome()
     }
 
     /// Takeover permission belongs to this claim, never to subsequent status updates.
     @discardableResult
     func claimDevice(automatic: Bool) -> StatusFile.WriteResult {
         state = .starting("Checking local interface")   // publish only with the claim's policy
-        return publishStatus(claim: true, deferToCLI: automatic && !CLI.isRunning)
+        return publishStatus(claim: true, deferToCLI: automatic && !env.cliRunning())
     }
 
     /// A start's progress, unless that start was stopped or replaced while it
@@ -329,7 +335,7 @@ final class ProxyBridge: ObservableObject {
         renewTimer = nil
         claimTimer?.invalidate()
         claimTimer = nil
-        TunnelCoordinator.shared.unsubscribe(profile.id)
+        env.unsubscribe(profile.id)
         dnsProxy.stop()
         controlRelay?.stop()
         controlRelay = nil
@@ -355,7 +361,8 @@ final class ProxyBridge: ObservableObject {
         var attempt = 1
         while true {
             let relay = Relay(localIP: localIP, localPort: localPort, remoteIP: profile.providerIP,
-                              remotePort: remotePort, spare: tunnelPort != nil, onOpenCountChange: onOpenCountChange,
+                              remotePort: remotePort, spare: tunnelPort != nil, clock: env.relayClock,
+                              onOpenCountChange: onOpenCountChange,
                               onFailure: { [weak self] relay in Task { @MainActor in self?.relayFailed(relay, tunnelPort: tunnelPort, gen: gen) } })
             do {
                 try await relay.start()
@@ -381,15 +388,20 @@ final class ProxyBridge: ObservableObject {
 
     /// Tells the other RoamRun processes that bridge a device — the app, a `roamrun
     /// up` — that `window` is this device's. False when none does.
-    private static func announceClaim(_ window: ClosedRange<UInt16>, statusDir: URL) -> Bool {
+    private static func announceClaim(_ window: ClosedRange<UInt16>, statusDir: URL, live: StatusFile.Liveness,
+                                      post: (String) -> Void) -> Bool {
         let me = getpid()
-        guard StatusFile.read(in: statusDir).values.contains(where: { $0.pid != me && $0.holdsDevice }) else { return false }
-        DistributedNotificationCenter.default().postNotificationName(
-            claimNotification, object: "\(me) \(window.lowerBound)-\(window.upperBound)", userInfo: nil, deliverImmediately: true)
+        guard StatusFile.read(in: statusDir, live: live).values.contains(where: { $0.pid != me && $0.holdsDevice }) else { return false }
+        post("\(me) \(window.lowerBound)-\(window.upperBound)")
         return true
     }
 
-    private static func listenForClaims() {
+    static func postClaim(_ text: String) {
+        DistributedNotificationCenter.default().postNotificationName(claimNotification, object: text, userInfo: nil,
+                                                                     deliverImmediately: true)
+    }
+
+    static func listenForClaims() {
         guard !listeningForClaims else { return }
         listeningForClaims = true
         DistributedNotificationCenter.default().addObserver(forName: claimNotification, object: nil, queue: .main) { note in
@@ -467,7 +479,7 @@ final class ProxyBridge: ObservableObject {
             log("took \(handedOver.count) tunnel port(s) from \(handedOver.min()!) held ahead by another device's bridge")
         }
         // Another RoamRun process (the app, a `roamrun up`) listens on this address too.
-        let announced = Self.announceClaim(window, statusDir: statusDir)
+        let announced = Self.announceClaim(window, statusDir: statusDir, live: statusLive, post: env.postClaim)
         // First: if ports jumped (e.g. lower after a device reboot), the old window must go.
         let reaped = reapTunnelRelays(around: port)
         if !reaped.isEmpty, case .active(let lp, let existing) = state {
@@ -558,7 +570,7 @@ final class ProxyBridge: ObservableObject {
         guard instance == profile.instanceName else {
             // The device's own advert, seen live while bridging: lets isHome skip `log show`.
             if let mine = self.udid, udid.caseInsensitiveCompare(mine) == .orderedSame {
-                seenAdvert = (instance, .now)
+                seenAdvert = (instance, env.now())
                 homeAdvert = instance
             }
             return
@@ -592,8 +604,7 @@ final class ProxyBridge: ObservableObject {
         for attempt in 1...5 {
             guard gen == generation, !tunnelReady else { return }
             log("warming up tunnel for \(udid) (attempt \(attempt))")
-            let r = await Proc.runAsync("/usr/bin/xcrun", ["devicectl", "--quiet", "--timeout", "30",
-                                                          "device", "info", "details", "--device", udid])
+            let r = await env.warmUp(udid)
             if gen != generation || tunnelReady { return }
             let err = r.err.split(separator: "\n").first.map(String.init) ?? ""
             log("warm-up: devicectl exited \(r.status)\(err.isEmpty ? "" : ": \(err)")")
@@ -630,11 +641,11 @@ final class ProxyBridge: ObservableObject {
     private func evaluate(probe: Link.Probe? = nil) {
         guard state.isActive else { return }
         let controlOpen = (controlRelay?.openCount ?? 0) > 0
-        if controlOpen { controlGoneSince = nil } else if controlGoneSince == nil { controlGoneSince = .now }
-        let gone = controlGoneSince.map { Date.now.timeIntervalSince($0) } ?? 0
+        if controlOpen { controlGoneSince = nil } else if controlGoneSince == nil { controlGoneSince = env.now() }
+        let gone = controlGoneSince.map { env.now().timeIntervalSince($0) } ?? 0
         let heard = tunnelCarriesTraffic
         let next = Link.next(link, .init(controlOpen: controlOpen, heard: heard, controlGoneFor: gone, probe: probe,
-                                         keepOnCellular: DeviceNetwork.keepOnCellular, now: .now))
+                                         keepOnCellular: env.keepOnCellular(), now: env.now()))
         if next != link { link = next }   // @Published would redraw every view on each tick otherwise
         if pausedOnCellular {
             // Whatever remotepairingd dials into the tunnel relays meanwhile goes too.
@@ -650,23 +661,23 @@ final class ProxyBridge: ObservableObject {
     /// can't reach is neither — it is going, and the tunnel will close.
     private func probeNetwork() {
         // Once a minute: while the port keeps answering, this would otherwise dial it every tick.
-        guard !probingNetwork, Date.now.timeIntervalSince(lastNetworkProbe) >= 60 else { return }
+        guard !probingNetwork, env.now().timeIntervalSince(lastNetworkProbe) >= 60 else { return }
         probingNetwork = true
-        lastNetworkProbe = .now
+        lastNetworkProbe = env.now()
         let gen = generation, ip = profile.providerIP, port = profile.remotePairingPort
         let tailscale = profile.providerID == MeshProvider.tailscale.rawValue
         Task {
             // Twice, 5 s apart: one lost probe (a Tailscale stall, a Wi‑Fi hiccup) must not
             // close a Wi‑Fi session.
-            var answers = await ReachabilityProbe.checkTCP(host: ip, port: port)
+            var answers = await env.checkTCP(ip, port)
             if !answers {
                 try? await Task.sleep(for: .seconds(5))
-                answers = await ReachabilityProbe.checkTCP(host: ip, port: port)
+                answers = await env.checkTCP(ip, port)
             }
             let reached = answers ? true
                 : await Self.stillReached(tailscale: tailscale,
                                           heardJustNow: tunnelRelays.values.contains { $0.heardFromDevice(within: 10) },
-                                          ping: { await Task.detached { TailscaleClient.fromSettings().ping(ip) }.value })
+                                          ping: { [ping = env.ping] in await Task.detached { ping(ip) }.value })
             probingNetwork = false
             guard gen == generation else { return }
             evaluate(probe: answers ? .answers : reached ? .silentReachable : .unreachable)
@@ -690,7 +701,7 @@ final class ProxyBridge: ObservableObject {
             }
         }
         let wasConnected = old == .wifi || old == .cellular
-        if wasConnected, !phoneConnected { lastRenewal = .now }
+        if wasConnected, !phoneConnected { lastRenewal = env.now() }
         publishStatus()
     }
 
@@ -720,17 +731,17 @@ final class ProxyBridge: ObservableObject {
         }
         if s == .waiting, pausedOnCellular {
             detail = "On cellular, so the tunnel was closed to save data. It reconnects on Wi‑Fi."
-                + (DeviceNetwork.keepOnCellular ? "" : " To keep the session next time the device leaves Wi‑Fi, turn on Keep debugging on cellular in Settings.")
+                + (env.keepOnCellular() ? "" : " To keep the session next time the device leaves Wi‑Fi, turn on Keep debugging on cellular in Settings.")
         }
         // Not an error: the bridge itself works over the mesh VPN. But the home
         // check is blind while this lasts, so say so wherever status is read.
         // Not while standing aside: getting to .local means the LAN answered, so the
         // gate is open again and the flag is only waiting to age out.
-        if LocalNetwork.denied, s != .local {
+        if env.localNetworkDenied(), s != .local {
             detail = detail.isEmpty ? LocalNetwork.advice : detail + " — " + LocalNetwork.advice
         }
-        return StatusFile.write(profile.id, .init(pid: getpid(), cli: CLI.isRunning, udid: udid, status: s.title, detail: detail,
-                                                  ready: s == .ready, tunnelPorts: ports, updated: .now,
+        return StatusFile.write(profile.id, .init(pid: getpid(), cli: env.cliRunning(), udid: udid, status: s.title, detail: detail,
+                                                  ready: s == .ready, tunnelPorts: ports, updated: env.now(),
                                                   state: s.rawValue, started: StatusFile.myStart,
                                                   network: s == .ready || pausedOnCellular ? network?.rawValue : nil), in: statusDir,
                                  live: statusLive, claim: claim, deferToCLI: deferToCLI)
@@ -743,7 +754,8 @@ final class ProxyBridge: ObservableObject {
         var p = profile
         if p.providerID == MeshProvider.tailscale.rawValue, !p.providerHostName.isEmpty {
             setState(.starting("Looking up \(p.providerHostName) on Tailscale"))
-            let peers = await Task.detached { try? TailscaleClient.fromSettings().listDevices() }.value ?? []
+            let list = env.listDevices
+            let peers = await Task.detached { try? list() }.value ?? []
             // Renamed on Tailscale (same address): follow the new name, so a later address change is found.
             if let current = peers.first(where: { $0.ips.contains(p.providerIP) }), current.name != p.providerHostName {
                 log("Tailscale name is now \(current.name) (was \(p.providerHostName))")
@@ -752,27 +764,28 @@ final class ProxyBridge: ObservableObject {
             if let ip = peers.first(where: { $0.name == p.providerHostName })?.ipv4, ip != p.providerIP {
                 log("\(p.providerHostName) has a new address: \(p.providerIP) → \(ip)")
                 p.providerIP = ip
-                if await ReachabilityProbe.checkTCP(host: ip, port: p.remotePairingPort) { return (p, true) }
+                if await env.checkTCP(ip, p.remotePairingPort) { return (p, true) }
             }
         }
         // Only scan a device that is up (answers Tailscale) — not one that's asleep or
         // offline — and not again soon after a scan found nothing (e.g. it's on cellular).
         let ip = p.providerIP
-        guard p.providerID == MeshProvider.tailscale.rawValue, Date.now > noScanUntil,
-              await Task.detached(operation: { TailscaleClient.fromSettings().ping(ip) }).value else { return (p, false) }
+        let ping = env.ping
+        guard p.providerID == MeshProvider.tailscale.rawValue, env.now() > noScanUntil,
+              await Task.detached(operation: { ping(ip) }).value else { return (p, false) }
         // Awaited twice above: a Stop or a restart meanwhile owns the state now.
         guard step("Looking for \(profile.displayName)'s RemotePairing port", gen: gen) else { return (p, false) }
         let port: UInt16
-        switch await ReachabilityProbe.findRemotePairingPort(host: p.providerIP) {
+        switch await env.findRemotePairingPort(p.providerIP) {
         case .found(let found): port = found
         case .notFound:
             log("no port on \(p.providerIP) answered as RemotePairing")
-            noScanUntil = .now + 600
+            noScanUntil = env.now() + 600
             return (p, false)
         case .timedOut:
             // A rescan starts over and would stall at the same place: same pause.
             log("RemotePairing port scan timed out before the full range was checked (Find RemotePairing Port in the app checks it all)")
-            noScanUntil = .now + 600
+            noScanUntil = env.now() + 600
             return (p, false)
         }
         if port != p.remotePairingPort { log("RemotePairing port moved: \(p.remotePairingPort) → \(port)") }
@@ -791,9 +804,9 @@ final class ProxyBridge: ObservableObject {
             // channel, and a new tunnel needs it. Nudge it as a waiting bridge would. Not on
             // cellular, where 49152 doesn't answer anyway.
             if link == .wifi, (controlRelay?.openCount ?? 0) == 0,
-               let gone = controlGoneSince, Date.now.timeIntervalSince(gone) > 60,
-               Date.now.timeIntervalSince(lastHeldRenewal) > 60 {
-                lastHeldRenewal = .now
+               let gone = controlGoneSince, env.now().timeIntervalSince(gone) > 60,
+               env.now().timeIntervalSince(lastHeldRenewal) > 60 {
+                lastHeldRenewal = env.now()
                 log("no control channel for 60s — re-announcing Bonjour record")
                 dnsProxy.renew()
             }
@@ -806,23 +819,24 @@ final class ProxyBridge: ObservableObject {
         case .waiting, .paused:
             break
         }
-        guard Date.now.timeIntervalSince(lastRenewal) > 60 else { return }
-        lastRenewal = .now
+        guard env.now().timeIntervalSince(lastRenewal) > 60 else { return }
+        lastRenewal = env.now()
         stuckRenewals += 1
         // Three minutes and still nothing: the device may have moved port or address. The
         // error retry runs start() again, which finds it (relocate).
         // Paused on cellular, it hasn't moved: RemotePairing answers again on Wi‑Fi.
         // For half an hour: its port may have changed meanwhile (a reboot), and only this finds it.
-        let pausedLong = if case .paused(let since) = link { Date.now.timeIntervalSince(since) > 1800 } else { true }
+        let pausedLong = if case .paused(let since) = link { env.now().timeIntervalSince(since) > 1800 } else { true }
         if stuckRenewals >= 3, pausedLong {
             stuckRenewals = 0
             let gen = generation
             let ip = profile.providerIP
+            let ping = env.ping
             Task {
                 // Port closed while the device answers Tailscale: it moved. Asleep: keep waiting.
-                guard !(await ReachabilityProbe.checkTCP(host: ip, port: profile.remotePairingPort)),
+                guard !(await env.checkTCP(ip, profile.remotePairingPort)),
                       profile.providerID == MeshProvider.tailscale.rawValue,
-                      await Task.detached(operation: { TailscaleClient.fromSettings().ping(ip) }).value,
+                      await Task.detached(operation: { ping(ip) }).value,
                       gen == generation, state.isActive, !phoneConnected, !tunnelCarriesTraffic else {
                     if gen == generation, state.isActive, !phoneConnected { dnsProxy.renew() }   // asleep: keep nudging
                     return
@@ -843,7 +857,7 @@ final class ProxyBridge: ObservableObject {
     func nudgeAfterWake() {
         guard state.isActive else { return }
         log("Mac woke — re-announcing Bonjour record")
-        lastRenewal = .now
+        lastRenewal = env.now()
         dnsProxy.renew()
     }
 
@@ -857,7 +871,7 @@ final class ProxyBridge: ObservableObject {
             defer { checkingLAN = false }
             guard await isHome(), gen == generation, state.isActive else { return }
             log("back on this Mac's network — standing aside until it leaves")
-            lastFullCheck = .now   // just proved; no full check on the next tick
+            lastFullCheck = env.now()   // just proved; no full check on the next tick
             awayTicks = 0
             generation += 1
             teardown()
@@ -871,7 +885,7 @@ final class ProxyBridge: ObservableObject {
         // Two processes standing aside for one device would keep overwriting each
         // other's status entry (and `down` could stop only one): one steps back.
         if let other = StatusFile.read(in: statusDir, live: statusLive)[profile.id], other.pid != getpid(),
-           HomeRule.yields(meCLI: CLI.isRunning, myPID: getpid(), to: other) {
+           HomeRule.yields(meCLI: env.cliRunning(), myPID: getpid(), to: other) {
             log("another RoamRun process (pid \(other.pid)) watches this device too — stopping here")
             stop()
             onYield?(other)
@@ -890,7 +904,7 @@ final class ProxyBridge: ObservableObject {
         awayTicks = 0
         // Checked again after the wait: a `roamrun up` may have started meanwhile.
         if let other = StatusFile.read(in: statusDir, live: statusLive)[profile.id], other.pid != getpid(),
-           HomeRule.yields(meCLI: CLI.isRunning, myPID: getpid(), to: other) {
+           HomeRule.yields(meCLI: env.cliRunning(), myPID: getpid(), to: other) {
             log("another RoamRun process (pid \(other.pid)) watches this device too — stopping here")
             stop()
             onYield?(other)
@@ -902,7 +916,7 @@ final class ProxyBridge: ObservableObject {
     /// Home if the iPhone itself advertises on this LAN — Tailscale may keep a
     /// cellular path after it joins Wi-Fi — or if Tailscale's path says so.
     private func isHome() async -> Bool {
-        let bridging = state.isActive, now = Date.now
+        let bridging = state.isActive, now = env.now()
         // Not bridging: try a name known to be the device's advert before any `log show`.
         // iOS doesn't withdraw rotated _remotepairing names: 15-min-old instance
         // names still resolved and answered in ~0.1s (measured). The name is
@@ -917,26 +931,26 @@ final class ProxyBridge: ObservableObject {
             let fake = profile.instanceName
             // A resolved advert may be a stale cache entry (or a sleep proxy's):
             // only an answer from it proves the device is here.
+            let recent = env.recentAdvert
             let instance = bridging
                 ? HomeRule.bridgingAdvert(seenAdvert, activatedAt: activatedAt, now: now)
-                : await Task.detached(operation: { Self.recentAdvert(udid: udid, besides: fake) }).value
+                : await Task.detached(operation: { recent(udid, fake) }).value
             if !bridging, let instance { homeAdvert = instance }
             if let instance, await answers(instance) { return decided(true, "advert \(instance.prefix(8))") }
         }
-        if LocalNetwork.denied {
+        if env.localNetworkDenied() {
             if !saidLocalNetworkDenied { saidLocalNetworkDenied = true; log(LocalNetwork.advice) }
         } else {
             saidLocalNetworkDenied = false
         }
-        return decided(await Self.isOnLAN(profile), "Tailscale path")
+        return decided(await env.isOnLAN(profile), "Tailscale path")
     }
 
     /// Said once per spell, not every check.
     private var saidLocalNetworkDenied = false
 
     private func answers(_ instance: String) async -> Bool {
-        await ReachabilityProbe.speaksRemotePairing(.service(name: instance, type: profile.serviceType,
-                                                             domain: profile.domain, interface: nil), timeout: 2)
+        await env.answers(.service(name: instance, type: profile.serviceType, domain: profile.domain, interface: nil))
     }
 
     /// One line per decision at debug level (off by default): which signal decided.
@@ -948,7 +962,7 @@ final class ProxyBridge: ObservableObject {
     /// At home the iPhone re-announces itself every ~30s under a fresh name,
     /// and remotepairingd matches each one to its UDID.
     // ponytail: can't tell another Mac's RoamRun record for the same iPhone from the real one.
-    nonisolated private static func recentAdvert(udid: String, besides fake: String) -> String? {
+    nonisolated static func recentAdvert(udid: String, besides fake: String) -> String? {
         TunnelPortWatcher.recentAdverts(last: "90s", timeout: 5).reversed().first { instance, owner in
             instance != fake && owner?.caseInsensitiveCompare(udid) == .orderedSame
         }?.0
@@ -1020,9 +1034,9 @@ final class ProxyBridge: ObservableObject {
         guard instance == profile.instanceName, state.isActive else { return }
         // Once can be a hiccup (e.g. right after remotepairingd restarts); act on a second
         // sighting — a later one, not the same announcement logged twice.
-        if let first = unrecognizedSince, Date.now.timeIntervalSince(first) < 20 { return }
-        guard let first = unrecognizedSince, Date.now.timeIntervalSince(first) < 300 else {
-            unrecognizedSince = .now
+        if let first = unrecognizedSince, env.now().timeIntervalSince(first) < 20 { return }
+        guard let first = unrecognizedSince, env.now().timeIntervalSince(first) < 300 else {
+            unrecognizedSince = env.now()
             log("remotepairingd did not recognize this device (identity nil) — waiting to see it again")
             return
         }
@@ -1056,7 +1070,7 @@ final class ProxyBridge: ObservableObject {
     /// takes over once the other ends); `roamrun up` gives up: refused, it isn't in
     /// status.json, so `down` couldn't stop it.
     private func yieldClaim(to other: StatusFile.Entry, _ what: String) {
-        if CLI.isRunning { autoRetry = false }
+        if env.cliRunning() { autoRetry = false }
         setState(.error(other.pid == getpid()
             ? "Another saved device here (same UDID) is bridging \(profile.displayName). Remove the duplicate."
             : "Another RoamRun process (pid \(other.pid)) \(what) \(profile.displayName). Stop it there first."))
