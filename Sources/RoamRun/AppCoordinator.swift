@@ -1019,8 +1019,9 @@ final class AppCoordinator: ObservableObject {
             // new port only takes effect after a relaunch.
             // Also errored / standing aside: the scan is how you fix a bridge that can't reach the device.
             bridges[profile.id]?.stop()
-            let bridge = install(newBridge(updated))
-            if wasOn { bridge.requestStart(.rescan) }
+            install(newBridge(updated))
+            // Through autoStart: a live `roamrun up` holding the device keeps it (F16).
+            if wasOn { autoStart(profile.id, live: StatusFile.read(), .rescan) }
         }
     }
 

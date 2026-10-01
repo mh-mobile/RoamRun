@@ -1,3 +1,4 @@
+import AppKit
 import CoreImage
 import Foundation
 
@@ -1020,8 +1021,7 @@ enum CLI {
                 print("[\(Date.now.formatted(date: .omitted, time: .standard))] \(line)")
             }
         }
-        // Same recovery as the app: retry errors, rebind when the Mac's IP changes.
-        // Unlike the app, nothing re-announces on wake.
+        // Same recovery as the app: retry errors, rebind when the Mac's IP changes, re-announce on wake.
         let supervisor = BridgeSupervisor(all: { [bridge] }, wanted: { _ in true }, start: { list, reason in
             for b in list {
                 if StartPolicy.of(reason).restarts { b.stop() }
@@ -1035,6 +1035,10 @@ enum CLI {
             exit(1)
         })
         supervisor.run()
+        let wake = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification,
+                                                                     object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { supervisor.woke() }
+        }
         let monitor = InterfaceMonitor()
         monitor.onLost = { Task { @MainActor in supervisor.lanAddressLost() } }
         monitor.onChange = { _ in Task { @MainActor in supervisor.lanAddressChanged() } }
@@ -1056,7 +1060,7 @@ enum CLI {
             src.resume()
             sources.append(src as AnyObject)
         }
-        keepAlive = [ticker, supervisor, monitor] + sources
+        keepAlive = [ticker, supervisor, monitor, wake] + sources
 
         print("Bridging \(profile.displayName) over \(profile.providerIP)…")
         bridge.requestStart(.manual)

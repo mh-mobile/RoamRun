@@ -11,25 +11,40 @@ enum StartReason: String, CaseIterable, Sendable {
     case resume          // it left this Wi‑Fi while standing aside
 }
 
+/// Why retrying stopped: an error that starting again can't fix.
+enum RetryBlock: String, CaseIterable, Sendable {
+    case none
+    case needsAdmin          // `log stream` needs an administrator account
+    case pairingLost         // remotepairingd doesn't recognize the device
+    case cliYieldedToOther   // a `roamrun up` refused: another process has the device
+}
+
 /// What a start may do, by reason.
 struct StartPolicy: Equatable {
     /// May take a device whose errored or standing-aside entry a live `roamrun up` holds.
     var mayTakeFromCLI: Bool
-    /// Turns retries back on after an error retrying can't fix.
-    var clearsRetryBlock: Bool
+    /// The retry blocks it lifts. A block it leaves in place stops the start.
+    var clears: Set<RetryBlock>
     /// Scans for the RemotePairing port within 10 minutes of a scan that found nothing.
     var clearsScanPause: Bool
     /// Stops a running bridge first: its relays are bound to the old address.
     var restarts: Bool
+    /// Back to the first, short wait between retries.
+    var resetsBackoff: Bool
 
     static func of(_ reason: StartReason) -> StartPolicy {
         switch reason {
-        case .manual, .rescan:
-            StartPolicy(mayTakeFromCLI: true, clearsRetryBlock: true, clearsScanPause: false, restarts: false)
+        case .manual:          // a person asked: everything goes
+            StartPolicy(mayTakeFromCLI: true, clears: Set(RetryBlock.allCases), clearsScanPause: true,
+                        restarts: false, resetsBackoff: true)
+        case .rescan:          // asked for too, but it found a port: it neither fixes a pairing nor takes from a CLI
+            StartPolicy(mayTakeFromCLI: false, clears: [], clearsScanPause: true, restarts: false, resetsBackoff: true)
+        case .edit:
+            StartPolicy(mayTakeFromCLI: false, clears: [], clearsScanPause: false, restarts: false, resetsBackoff: true)
         case .networkChange:
-            StartPolicy(mayTakeFromCLI: false, clearsRetryBlock: true, clearsScanPause: false, restarts: true)
-        case .edit, .restore, .retry, .resume:
-            StartPolicy(mayTakeFromCLI: false, clearsRetryBlock: true, clearsScanPause: false, restarts: false)
+            StartPolicy(mayTakeFromCLI: false, clears: [], clearsScanPause: false, restarts: true, resetsBackoff: true)
+        case .restore, .retry, .resume:
+            StartPolicy(mayTakeFromCLI: false, clears: [], clearsScanPause: false, restarts: false, resetsBackoff: false)
         }
     }
 }
@@ -48,14 +63,17 @@ final class BridgeSupervisor {
     var start: ([ProxyBridge], StartReason) -> Void
     /// An errored bridge retrying can't fix. Nil: it is left as it is.
     var gaveUp: ((ProxyBridge) -> Void)?
+    var now: () -> Date
     private var timers: [Timer] = []
 
     init(all: @escaping () -> [ProxyBridge], wanted: @escaping (ProxyBridge) -> Bool,
-         start: @escaping ([ProxyBridge], StartReason) -> Void, gaveUp: ((ProxyBridge) -> Void)? = nil) {
+         start: @escaping ([ProxyBridge], StartReason) -> Void, gaveUp: ((ProxyBridge) -> Void)? = nil,
+         now: @escaping () -> Date = { .now }) {
         self.all = all
         self.wanted = wanted
         self.start = start
         self.gaveUp = gaveUp
+        self.now = now
     }
 
     func run() {
@@ -70,11 +88,20 @@ final class BridgeSupervisor {
     }
 
     /// Bridges the user left on retry quietly after errors (iPhone asleep, Tailscale paused,
-    /// Wi‑Fi down) so nobody has to.
+    /// Wi‑Fi down) so nobody has to. Failing again and again, each waits longer (up to 10
+    /// minutes); meanwhile a cheap look at its port each tick brings it back at once.
     func retry() {
         let errored = all().filter { wanted($0) && $0.status == .error }
         let retryable = errored.filter(\.autoRetry)
-        if !retryable.isEmpty { start(retryable, .retry) }
+        let due = retryable.filter { $0.memory.retryDue(now: now()) }
+        if !due.isEmpty { start(due, .retry) }
+        for b in retryable where !due.contains(where: { $0 === b }) {
+            b.lookForItsPort { [weak self] answered in
+                guard answered, let self else { return }
+                b.memory.resetBackoff()
+                self.start([b], .retry)
+            }
+        }
         if let gaveUp { errored.filter { !$0.autoRetry }.forEach(gaveUp) }
     }
 
@@ -98,7 +125,13 @@ final class BridgeSupervisor {
     }
 
     /// After sleep, relayed connections can look open while dead: re-announce right away.
-    func woke() { all().forEach { $0.nudgeAfterWake() } }
+    /// What failed before the sleep says nothing about now: retries start short again.
+    func woke() {
+        for b in all() {
+            b.memory.resetBackoff()
+            b.nudgeAfterWake()
+        }
+    }
 }
 
 /// What RoamRun knows about one saved device, across its bridges: one rebuilt for an edited
@@ -111,8 +144,12 @@ final class DeviceMemory {
     var homeAdvert: String?
     /// Standing aside, the last time the home check confirmed the UDID the slow way.
     var lastFullCheck = Date.distantPast
-    /// False after an error retrying can't fix (unrecognized pairing, no admin rights).
-    var autoRetry = true
+    /// An error retrying can't fix, until a start whose reason lifts it.
+    var block = RetryBlock.none
+    var autoRetry: Bool { block == .none }
+    /// Starts that ended in an error in a row, and when the next retry is due.
+    private(set) var failures = 0
+    private(set) var retryAt = Date.distantPast
     /// A scan that found nothing: no other on that endpoint ("ip:port") until then.
     private var scanPause: (endpoint: String, until: Date)?
 
@@ -125,11 +162,24 @@ final class DeviceMemory {
         if let known = self.udid, known.caseInsensitiveCompare(udid) != .orderedSame {
             homeAdvert = nil
             lastFullCheck = .distantPast
-            autoRetry = true
+            block = .none
             scanPause = nil
+            resetBackoff()
         }
         self.udid = udid
     }
+
+    /// 30 s, 1, 2, 4, 8 minutes, then every 10.
+    static func backoff(afterFailures n: Int) -> TimeInterval { min(30 * pow(2, Double(max(n, 1) - 1)), 600) }
+    func failed(at now: Date) {
+        failures += 1
+        retryAt = now + Self.backoff(afterFailures: failures)
+    }
+    func resetBackoff() {
+        failures = 0
+        retryAt = .distantPast
+    }
+    func retryDue(now: Date) -> Bool { now >= retryAt }
 
     func pauseScans(of endpoint: String, until: Date) { scanPause = (endpoint, until) }
     func clearScanPause() { scanPause = nil }

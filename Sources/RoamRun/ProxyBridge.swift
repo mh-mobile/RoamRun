@@ -121,6 +121,13 @@ final class ProxyBridge: ObservableObject {
     /// check made earlier.
     func start(_ reason: StartReason) async {
         let policy = StartPolicy.of(reason)
+        if policy.clears.contains(memory.block) { memory.block = .none }
+        // Left as it is: starting again can't fix it, and only a start that lifts it may try.
+        guard memory.block == .none else {
+            log("not starting (\(reason.rawValue)): retrying can't fix \(memory.block.rawValue)")
+            return
+        }
+        if policy.resetsBackoff { memory.resetBackoff() }
         generation += 1
         let gen = generation
         teardown()   // a failed or repeated start must not leave relays/timers behind
@@ -130,7 +137,6 @@ final class ProxyBridge: ObservableObject {
         unrecognizedSince = nil
         lastTunnelPort = nil
         activatedAt = .distantFuture
-        if policy.clearsRetryBlock { memory.autoRetry = true }
         if policy.clearsScanPause { memory.clearScanPause() }
         link = .waiting
         tunnelReady = false
@@ -251,7 +257,7 @@ final class ProxyBridge: ObservableObject {
         }
         guard subscribed else {
             teardown()
-            setState(.error("Couldn't watch remotepairingd's log (see Activity log). Retrying shortly."))
+            setState(.error("Couldn't watch remotepairingd's log (see Activity log). RoamRun keeps retrying."))
             return
         }
 
@@ -260,7 +266,7 @@ final class ProxyBridge: ObservableObject {
         guard previousGone else {
             generation += 1   // drop late callbacks from this attempt
             teardown()
-            setState(.error("The previous Bonjour registration didn't stop, so a second isn't published next to it. Retrying shortly."))
+            setState(.error("The previous Bonjour registration didn't stop, so a second isn't published next to it. RoamRun keeps retrying."))
             return
         }
         setState(.starting("Publishing Bonjour proxy"))
@@ -845,7 +851,7 @@ final class ProxyBridge: ObservableObject {
                 log("\(profile.providerIP):\(profile.remotePairingPort) no longer answers — looking for the device again")
                 generation += 1
                 teardown()
-                setState(.error("\(profile.displayName) no longer answers on \(profile.providerIP):\(profile.remotePairingPort). Retrying shortly."))
+                setState(.error("\(profile.displayName) no longer answers on \(profile.providerIP):\(profile.remotePairingPort). RoamRun keeps retrying."))
             }
             return
         }
@@ -1003,11 +1009,11 @@ final class ProxyBridge: ObservableObject {
         teardown()
         // Retrying can't fix this one: `log stream` needs an admin account.
         if what.contains("Must be admin") {
-            memory.autoRetry = false
+            memory.block = .needsAdmin
             setState(.error("Reading remotepairingd's log needs an administrator account on this Mac (\(what))."))
             return
         }
-        setState(.error("Helper stopped: \(what). Retrying shortly."))
+        setState(.error("Helper stopped: \(what). RoamRun keeps retrying."))
     }
 
     /// A relay's listener died after it was up. The control one gone, the record
@@ -1044,7 +1050,7 @@ final class ProxyBridge: ObservableObject {
         }
         log("remotepairingd does not recognize this device (identity nil)")
         stop()
-        memory.autoRetry = false
+        memory.block = .pairingLost
         setState(.error("This Mac doesn't recognize \(profile.displayName)'s pairing — its Bonjour identity changed or the pairing was reset. Put the device on this Mac's Wi‑Fi, remove it here and add it again. If Xcode also lost it, pair it in Xcode first."))
     }
 
@@ -1072,13 +1078,37 @@ final class ProxyBridge: ObservableObject {
     /// takes over once the other ends); `roamrun up` gives up: refused, it isn't in
     /// status.json, so `down` couldn't stop it.
     private func yieldClaim(to other: StatusFile.Entry, _ what: String) {
-        if env.cliRunning() { memory.autoRetry = false }
+        if env.cliRunning() { memory.block = .cliYieldedToOther }
         setState(.error(other.pid == getpid()
             ? "Another saved device here (same UDID) is bridging \(profile.displayName). Remove the duplicate."
             : "Another RoamRun process (pid \(other.pid)) \(what) \(profile.displayName). Stop it there first."))
     }
 
-    private func setState(_ s: BridgeState) { state = s; publishStatus() }
+    private func setState(_ s: BridgeState) {
+        // What the retries' wait grows or shrinks by: a start that came up, or one that failed.
+        switch (state, s) {
+        case (.error, .error): break
+        case (_, .error): memory.failed(at: env.now())
+        case (_, .active), (_, .local): memory.resetBackoff()
+        default: break
+        }
+        state = s
+        publishStatus()
+    }
+
+    /// Waiting out a longer retry: one cheap look at the port the device last answered on. At
+    /// most one at a time per bridge, and only for this error: a start meanwhile makes it moot.
+    func lookForItsPort(then answered: @escaping (Bool) -> Void) {
+        guard !lookingForPort else { return }
+        lookingForPort = true
+        let gen = generation, ip = profile.providerIP, port = profile.remotePairingPort
+        Task {
+            let answers = await env.checkTCP(ip, port)
+            lookingForPort = false
+            answered(answers && gen == generation && status == .error && autoRetry)
+        }
+    }
+    private var lookingForPort = false
     private func log(_ m: String) { onLog?("[\(profile.displayName)] \(m)") }
 }
 
