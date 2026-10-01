@@ -100,9 +100,14 @@ final class Relay: @unchecked Sendable {
 
     /// The callback is given here, not assigned afterwards: start() returns with the
     /// listener already accepting, and the calls that read it run off the main actor.
-    /// `clock`: uptime (ns) the last-byte times are kept in.
+    /// Nanoseconds that keep counting while the Mac sleeps. Uptime stopped: bytes from before a
+    /// sleep looked as fresh as ever after it, so a tunnel the device had long left still
+    /// read as "heard from just now".
+    static func continuousNow() -> UInt64 { clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) }
+
+    /// `clock`: what the last-byte times are kept in.
     init(localIP: String, localPort: UInt16, remoteIP: String, remotePort: UInt16, spare: Bool = false,
-         clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds },
+         clock: @escaping @Sendable () -> UInt64 = { Relay.continuousNow() },
          onOpenCountChange: ((Int) -> Void)? = nil, onFailure: ((Relay) -> Void)? = nil) {
         self.spare = spare
         self.clock = clock

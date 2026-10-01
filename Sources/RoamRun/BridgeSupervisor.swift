@@ -186,6 +186,7 @@ final class DeviceMemory {
             lastFullCheck = .distantPast
             block = .none
             scanPause = nil
+            onCellular = false
             resetBackoff()
         }
         self.udid = udid
@@ -207,7 +208,11 @@ final class DeviceMemory {
     func retryDue(now: Date) -> Bool { now >= retryAt }
 
     func pauseScans(of endpoint: String, until: Date) { scanPause = (endpoint, until) }
-    func clearScanPause() { scanPause = nil }
+    /// Last seen on cellular (tunnel only, or paused), not yet back on Wi‑Fi: a scan there finds
+    /// nothing and costs data, so starts don't scan until it is back or a person asks.
+    var onCellular = false
+
+    func clearScanPause() { scanPause = nil; onCellular = false }
     func scansPaused(of endpoint: String, now: Date) -> Bool {
         guard let scanPause, scanPause.endpoint == endpoint else { return false }
         return now <= scanPause.until
