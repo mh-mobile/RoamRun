@@ -322,9 +322,10 @@ enum CLI {
         }
     }
 
-    /// `ready` means Xcode can use the device right now: the bridge is up *and*
-    /// CoreDevice sees the iPhone. The bridge alone can look ready for a while
-    /// after the iPhone falls asleep (its relayed connections linger).
+    /// With `deep`, `ready` means Xcode can use the device right now: the bridge is up
+    /// *and* CoreDevice sees the iPhone. The bridge alone can look ready for a while
+    /// after the iPhone falls asleep (its relayed connections linger). Without it
+    /// (`devices --json`), `ready` is only the bridge's word, or "on this Wi‑Fi".
     private static func row(_ p: DeviceProfile, _ e: StatusFile.Entry?, deep: Bool, by deadline: Date? = nil) -> Row {
         let udid = e?.udid ?? p.udid
         let usable = e?.ready == true || e?.kind == .local   // on this Wi-Fi: Xcode sees it directly
