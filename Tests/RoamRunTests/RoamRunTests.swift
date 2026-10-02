@@ -4025,17 +4025,30 @@ func everyDocumentedCommandParses(_ doc: String) throws {
     var checked = 0
     for snippet in code {
         // Only where `roamrun` starts a command, not as another tool's argument; comments dropped.
-        let line = snippet.split(separator: " #", maxSplits: 1).first.map(String.init) ?? snippet
+        // Placeholders (<name>) become a word first: their ">" isn't a redirection.
+        let line = (snippet.split(separator: " #", maxSplits: 1).first.map(String.init) ?? snippet)
+            .replacing(#/<[^<>\s]+>/#, with: "x")
         for m in line.matches(of: #/(?:^\s*|[(;&|]\s*)roamrun\s+([^|;&>)\n]*)/#) {
-            let words = m.1.split(whereSeparator: \.isWhitespace).map {
-                $0.trimmingCharacters(in: CharacterSet(charactersIn: "[]<>'\"")).replacingOccurrences(of: "...", with: "")
+            var words = m.1.split(whereSeparator: \.isWhitespace).map {
+                $0.trimmingCharacters(in: CharacterSet(charactersIn: "[]'\"")).replacingOccurrences(of: "...", with: "")
+                    .replacingOccurrences(of: "…", with: "")
             }.filter { !$0.isEmpty }
+            // A placeholder value (--wait N, --url URL) stands for a valid one.
+            for i in words.indices.dropFirst() where words[i].allSatisfy({ $0.isUppercase }) {
+                switch words[i - 1] {
+                case "--wait": words[i] = "1"
+                case "--url": words[i] = "x://y"
+                case "--env": words[i] = "A=b"
+                default: break
+                }
+            }
             guard let command = words.first else { continue }
             #expect(CLI.commands.contains(command), "\(doc): roamrun \(m.1)")
             checked += 1
             if command == "init" {
-                let known: Set = ["--client", "--print", "--uninstall", "claude", "codex", "cursor", "gemini", "copilot", "name"]
-                #expect(Set(words.dropFirst()).isSubset(of: known), "\(doc): roamrun \(m.1)")
+                let known: Set = ["--client", "--print", "--uninstall", "claude", "codex", "cursor", "gemini", "copilot", "x"]
+                let given = words.dropFirst().map { $0.hasPrefix("--client=") ? "--client" : $0 }
+                #expect(Set(given).isSubset(of: known), "\(doc): roamrun \(m.1)")
             } else if case .failure(let e) = CLI.parse(words) {
                 Issue.record("\(doc): roamrun \(m.1) — \(e.message)")
             }
