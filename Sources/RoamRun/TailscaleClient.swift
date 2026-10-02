@@ -37,12 +37,19 @@ struct TailscaleClient {
 
     /// PATH as the user's own shell sets it (rc files included). An app opened
     /// from Finder only gets launchd's minimal PATH, missing e.g. ~/go/bin or Nix.
-    static let shellPATH: String = {
+    /// Kept once found, not before: a slow rc at login (past the timeout) would otherwise
+    /// leave the CLI unfound until the app restarts.
+    static var shellPATH: String {
+        if let known = pathLock.withLock({ knownPATH }) { return known }
         let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.hasPrefix("/") ? $0 : nil } ?? "/bin/zsh"
         let out = Proc.run(shell, ["-ilc", #"printf '\n__RR_PATH__%s' "$PATH""#], timeout: 3).out
         guard let r = out.range(of: "__RR_PATH__", options: .backwards) else { return "" }
-        return out[r.upperBound...].trimmingCharacters(in: .newlines)
-    }()
+        let found = out[r.upperBound...].trimmingCharacters(in: .newlines)
+        if !found.isEmpty { pathLock.withLock { knownPATH = found } }
+        return found
+    }
+    private static let pathLock = NSLock()
+    nonisolated(unsafe) private static var knownPATH: String?
 
     /// The client with the CLI path from Settings. The app owns the defaults
     /// domain; the CLI reads it by suite name.
@@ -102,6 +109,8 @@ struct TailscaleClient {
         let out = Proc.run(fromSettings().resolvedPath() ?? "/usr/bin/false", ["status", "--json"], timeout: 5)
         guard out.status == 0, let data = out.out.data(using: .utf8),
               let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        // Signed out or still starting: no netmap, so no CertDomains either — that says nothing.
+        guard stateProblem(inStatusJSON: out.out) == nil else { return nil }
         // Absent and empty mean the same thing here: the field is `omitempty`,
         // so an empty list simply isn't in the JSON.
         return !((root["CertDomains"] as? [String] ?? []).isEmpty)
@@ -333,8 +342,8 @@ struct TailscaleClient {
         if r.status == 0 && r.out.contains("pong") { return .pong }
         if r.status == -1 || r.timedOut { return .couldNotRun(r.err) }
         let said = (r.err + "\n" + r.out).lowercased()
-        if ["local tailscale daemon", "tailscale is stopped", "logged out", "needslogin", "not logged in",
-            "access denied", "permission denied"]
+        if ["local tailscale daemon", "local tailscale service", "tailscale is stopped", "logged out", "needslogin",
+            "not logged in", "not yet approved", "unexpected state", "access denied", "permission denied"]
             .contains(where: said.contains) {
             return .couldNotRun(r.err.isEmpty ? r.out : r.err)
         }

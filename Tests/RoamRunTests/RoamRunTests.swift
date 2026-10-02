@@ -3307,7 +3307,9 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
     #expect(TailscaleClient.ping(r(15, "", "tailscale timed out after 8s", timedOut: true)) == .couldNotRun("tailscale timed out after 8s"))
     // This Mac's own Tailscale: not an answer about the device.
     for err in ["failed to connect to local Tailscale daemon for /localapi/v0/ping; not running?",
-                "Tailscale is stopped.", "Logged out.", "Access denied: ping access denied"] {
+                "Tailscale is stopped.", "Logged out.", "Access denied: ping access denied",
+                "failed to connect to local Tailscale service; is Tailscale running?",   // the app quit
+                "Machine is not yet approved by tailnet admin.", "unexpected state: NoState"] {
         #expect(TailscaleClient.ping(r(1, "", err)) == .couldNotRun(err), "\(err)")
     }
 }
