@@ -1,8 +1,21 @@
 import Foundation
 
 final class ProfileStore {
-    static let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("RoamRun", isDirectory: true)
+    static let directory: URL = {
+        #if DEBUG
+        // Tests pass their own folder. This one holds the person's real devices and status.
+        let runner = isTestRunner(ProcessInfo.processInfo.processName)
+        if runner { Thread.callStackSymbols.forEach { print("STACK", $0) } }
+        precondition(!runner, "a test reached the real Application Support folder; pass a scratch directory")
+        #endif
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("RoamRun", isDirectory: true)
+    }()
+    /// The processes `swift test` runs tests in (Swift Testing's helper, XCTest's runner).
+    static func isTestRunner(_ processName: String) -> Bool {
+        ["xctest", "swiftpm-testing-helper"].contains(processName)
+    }
+
     private let dir: URL
     private let url: URL
 

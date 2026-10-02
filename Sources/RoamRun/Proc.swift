@@ -6,9 +6,11 @@ enum Proc {
         let status: Int32
         let out: String
         let err: String
+        /// Stopped at the timeout rather than finished.
+        var timedOut = false
     }
 
-    /// Its own queue gets a thread even while callers (e.g. runAsync) block
+    /// Its own queue gets a thread even while callers block
     /// every Swift concurrency / global-queue thread.
     private static let timers = DispatchQueue(label: AppID.bundle + ".proc-timers")
 
@@ -26,7 +28,12 @@ enum Proc {
         // Not waitUntilExit(): it spins the caller's run loop (often the main one).
         let exited = DispatchSemaphore(value: 0)
         task.terminationHandler = { _ in exited.signal() }
-        do { try task.run() } catch { return Result(status: -1, out: "", err: error.localizedDescription) }
+        Passing.shared.launching()
+        do { try task.run() } catch {
+            Passing.shared.launched(nil)
+            return Result(status: -1, out: "", err: error.localizedDescription)
+        }
+        Passing.shared.launched(task)
         let box = OutputBox()
         timers.asyncAfter(deadline: .now() + timeout) { if task.isRunning { box.timedOut = true; task.terminate() } }
         timers.asyncAfter(deadline: .now() + timeout + 2) {   // ignored TERM
@@ -44,13 +51,15 @@ enum Proc {
             }
         }
         exited.wait()   // bounded by the TERM/KILL timers
+        Passing.shared.childEnded()
         // A grandchild can keep the pipes open after the tool exited: keep what
         // it wrote so far (the readers finish whenever that one exits).
         _ = group.wait(timeout: .now() + 1)
         let stderr = String(decoding: box.err, as: UTF8.self)
         return Result(status: task.terminationStatus,
                       out: String(decoding: box.out, as: UTF8.self),
-                      err: box.timedOut ? "\(path) timed out after \(Int(timeout))s" + (stderr.isEmpty ? "" : "\n" + stderr) : stderr)
+                      err: box.timedOut ? "\(path) timed out after \(Int(timeout))s" + (stderr.isEmpty ? "" : "\n" + stderr) : stderr,
+                      timedOut: box.timedOut)
     }
 
     /// A long-running helper that can't outlive RoamRun: a tiny `sh` watchdog
@@ -60,9 +69,32 @@ enum Proc {
     static func tied(_ path: String, _ args: [String]) -> Process {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/sh")
-        let watchdog = #"trap 'kill $c 2>/dev/null; wait $c; exit 0' TERM INT HUP; "$0" "$@" & c=$!; while kill -0 $PPID 2>/dev/null && kill -0 $c 2>/dev/null; do sleep 0.5 & wait $!; done; kill $c 2>/dev/null; wait $c"#
+        // The trap only raises a flag: a TERM between `&` and `c=$!` would find no pid to
+        // kill, so the loop, which runs after `c` is set, does the killing. The TERM is
+        // repeated until the child is gone: one sent before the child's exec meets the
+        // trap it inherited and is lost, and a second signal mustn't end the wait early.
+        let watchdog = #"t=; trap 't=1' TERM INT HUP; "$0" "$@" & c=$!; while [ -z "$t" ] && kill -0 $PPID 2>/dev/null && kill -0 $c 2>/dev/null; do sleep 0.5 & wait $!; done; kill $c 2>/dev/null; while kill -0 $c 2>/dev/null; do sleep 0.2 & wait $!; kill $c 2>/dev/null; done; wait $c; s=$?; [ -n "$t" ] && exit 0; exit $s"#
         task.arguments = ["-c", watchdog, path] + args
         return task
+    }
+
+    /// After a TERM to a `tied` watchdog: true once it has exited, which it does only
+    /// after its child. A child that ignored TERM gets KILL after `grace`. The watchdog
+    /// itself is never KILLed while it has a child: that would leave the child behind.
+    static func ensureGone(_ watchdog: Process, grace: Duration = .seconds(1)) async -> Bool {
+        func exited(within d: Duration) async -> Bool {
+            let clock = ContinuousClock(), end = clock.now + d
+            while watchdog.isRunning && clock.now < end {
+                do { try await Task.sleep(for: .milliseconds(10)) } catch { break }   // cancelled: don't spin
+            }
+            return !watchdog.isRunning
+        }
+        if await exited(within: grace) { return true }
+        if Task.isCancelled { return !watchdog.isRunning }   // given up on: no KILL on the way out
+        let pid = watchdog.processIdentifier
+        let children = await Blocking.run { run("/usr/bin/pgrep", ["-P", "\(pid)"], timeout: 5).out }
+        for pid in children.split(separator: "\n").compactMap({ Int32($0) }) { kill(pid, SIGKILL) }
+        return await exited(within: .seconds(2))   // its loop notices within 0.5 s
     }
 
     /// `xcrun devicectl <args> --json-output …`: its "result" object; nil if it failed.
@@ -75,10 +107,6 @@ enum Proc {
         return root["result"] as? [String: Any]
     }
 
-    /// Same, off the calling actor.
-    static func runAsync(_ path: String, _ args: [String]) async -> Result {
-        await Task.detached { run(path, args) }.value
-    }
 }
 
 /// Feeds a long-running child's stdout to `onLine`, one complete line at a
@@ -122,4 +150,66 @@ private final class OutputBox: @unchecked Sendable {
 final class Weak<T: AnyObject>: @unchecked Sendable {
     weak var value: T?
     init(_ value: T) { self.value = value }
+}
+
+extension Proc {
+    /// For the CLI's `run` and `install`: a child they wait on (devicectl, ditto, xcodebuild, an
+    /// install) must not outlive them. Once begun, TERM and HUP (a `kill`, a closed terminal)
+    /// go to the child running now; when it has ended, the process stops the same way. INT
+    /// isn't caught: Ctrl-C reaches the whole foreground group already. Inactive until
+    /// `begin()`, so the app and `up` are untouched.
+    final class Passing: @unchecked Sendable {
+        static let shared = Passing()
+        private let lock = NSLock()
+        private var active = false
+        private var starting = 0
+        private var child: Process?
+        private var caught: Int32?
+        private var sources: [DispatchSourceSignal] = []
+
+        func begin() {
+            let srcs = [SIGTERM, SIGHUP].map { sig -> DispatchSourceSignal in
+                signal(sig, SIG_IGN)
+                let src = DispatchSource.makeSignalSource(signal: sig, queue: .global())
+                src.setEventHandler { [self] in received(sig) }
+                src.resume()
+                return src
+            }
+            lock.withLock { active = true; sources = srcs }
+        }
+
+        /// What `exec` replaces us with gets the signals back: an ignored one survives exec.
+        func endForExec() {
+            for sig in [SIGTERM, SIGHUP] { signal(sig, SIG_DFL) }
+        }
+
+        func launching() { lock.withLock { if active { starting += 1 } } }
+        func launched(_ task: Process?) {
+            lock.withLock {
+                guard active else { return }
+                starting = max(0, starting - 1)
+                if let task { child = task }
+            }
+        }
+
+        /// Right after a child ends: one stopped by our signal means we stop too, by it, rather
+        /// than carry on and report the child's failure as if it were the cause.
+        func childEnded() {
+            guard let sig = lock.withLock({ caught }) else { return }
+            signal(sig, SIG_DFL)
+            kill(getpid(), sig)
+        }
+
+        private func received(_ sig: Int32) {
+            lock.withLock { caught = sig }
+            // A child being launched right now: let it start, then it gets the signal too.
+            for _ in 0..<200 where lock.withLock({ starting > 0 }) { usleep(10_000) }
+            if let task = lock.withLock({ child }), task.isRunning {
+                kill(task.processIdentifier, sig)
+                while task.isRunning { usleep(20_000) }
+            }
+            signal(sig, SIG_DFL)
+            kill(getpid(), sig)
+        }
+    }
 }

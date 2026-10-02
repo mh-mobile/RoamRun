@@ -130,11 +130,12 @@ extension ReachabilityProbe {
     /// service, so each is confirmed with the handshake as its batch comes in.
     /// Every probe gets only the time left: a host that drops probes would
     /// otherwise cost 1.2 s per batch, ~80 s in all, plus 4 s per silent port.
-    static func findRemotePairingPort(host: String, limit: Duration = .seconds(30)) async -> PortScan {
+    /// `from` is for tests: 49152… is also the Mac's ephemeral range, where their servers listen.
+    static func findRemotePairingPort(host: String, from first: UInt16 = 49152, limit: Duration = .seconds(30)) async -> PortScan {
         let clock = ContinuousClock()
         let deadline = clock.now + limit
         func left() -> TimeInterval { (deadline - clock.now) / .seconds(1) }
-        var next = 49152
+        var next = Int(first)
         while next <= 65535 {
             guard left() > 0, !Task.isCancelled else { return .timedOut }
             let batch = UInt16(next)...UInt16(min(next + 255, 65535))

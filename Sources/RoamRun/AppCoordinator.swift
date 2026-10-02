@@ -42,7 +42,24 @@ final class AppCoordinator: ObservableObject {
     private let store = ProfileStore()
     private var tailscaleClient = TailscaleClient()
     private let interfaceMonitor = InterfaceMonitor()
+    /// Retries, the away check, address changes and wake, shared with `roamrun up`.
+    private lazy var supervisor = BridgeSupervisor(
+        all: { [unowned self] in
+            self.departing.removeAll { !$0.statusWritePending }
+            return Array(self.bridges.values) + self.departing
+        },
+        wanted: { [unowned self] in self.wasActiveIDs.contains($0.profile.id) && self.profile($0.profile.id) != nil },
+        start: { [unowned self] list, reason in
+            let live = StatusFile.read()
+            for b in list { self.autoStart(b.profile.id, live: live, reason) }
+        })
     private var bridgeObservers: [UUID: AnyCancellable] = [:]
+    /// Per saved device, kept across its bridges: a rebuilt one (edited endpoint, port found
+    /// again) remembers what the old one learned.
+    private var memories: [UUID: DeviceMemory] = [:]
+    /// Deleted devices' bridges whose status removal failed: kept until a retry lands it, or
+    /// the entry (this app's own, so never stale) would make the iPhone a duplicate if added again.
+    private var departing: [ProxyBridge] = []
     /// Set at launch when bridges left on are being brought back.
     private(set) var isRestoringBridges = false
     private var wasActiveIDs: Set<UUID> {
@@ -69,12 +86,14 @@ final class AppCoordinator: ObservableObject {
         savedProfiles = profiles
         if let copy = store.keptUnreadable {
             logStore.log("couldn't read saved devices; kept the file as \(copy.path)")
-            launchWarning = "RoamRun couldn't read its saved devices, so the list starts empty. The file was kept as \(copy.path)."
+            launchWarning = profiles.isEmpty
+                ? "RoamRun couldn't read its saved devices, so the list starts empty. The file was kept as \(copy.path)."
+                : "RoamRun couldn't read some of its saved devices; the others are here. The file was kept as \(copy.path)."
         } else if store.unreadable {
             logStore.log("couldn't read \(ProfileStore.directory.path)/profiles.json; not writing over it")
             launchWarning = Self.unreadableListWarning
         }
-        for p in profiles { install(ProxyBridge(profile: p)) }
+        for p in profiles { install(newBridge(p)) }
 
         capture.onLog = { [weak self] m in self?.logStore.log(m) }
         capture.ownedHosts = Set(profiles.map { ProxyBridge(profile: $0).spoofHost })
@@ -90,7 +109,7 @@ final class AppCoordinator: ObservableObject {
         // After sleep, relayed connections can look open while dead: re-announce right away.
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification,
                                                           object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.bridges.values.forEach { $0.nudgeAfterWake() } }
+            MainActor.assumeIsolated { self?.supervisor.woke() }
         }
 
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
@@ -130,22 +149,11 @@ final class AppCoordinator: ObservableObject {
             if let p = profiles.first(where: { $0.id == id }) {
                 isRestoringBridges = true
                 logStore.log("restoring bridge for \"\(p.displayName)\"", device: p.id)
-                autoStart(id, live: live)
+                autoStart(id, live: live, .restore)
             }
         }
 
-        // Bridges the user left on retry quietly after errors (iPhone asleep,
-        // Tailscale paused, Wi-Fi down) so nobody has to open the window.
-        Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.retryErroredBridges() }
-        }
-        // Standing aside: resume soon after the device leaves this Wi-Fi.
-        Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                for b in self.bridges.values where b.state == .local { Task { await b.resumeIfAway() } }
-            }
-        }
+        supervisor.run()
         // Pick up bridges started from the command line.
         Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshExternalBridges() }
@@ -225,8 +233,8 @@ final class AppCoordinator: ObservableObject {
         Array((seen.filter { $0 != target } + [target]).suffix(keep))
     }
 
-    nonisolated static func isOurs(_ target: String, on port: Int) -> Bool {
-        remembered().contains { let p = pair($0); return p.target == target && (p.port == nil || p.port == port) }
+    nonisolated static func isOurs(_ target: String, on port: Int, in record: [String] = remembered()) -> Bool {
+        record.contains { let p = pair($0); return p.target == target && (p.port == nil || p.port == port) }
     }
 
     nonisolated static func remembered() -> [String] {
@@ -264,22 +272,25 @@ final class AppCoordinator: ObservableObject {
         return .nothing
     }
 
-    nonisolated static func reclaimStrays(keeping live: (port: Int, target: String)?) -> Bool? {
-        guard let host = currentHost() else { return nil }
+    nonisolated static func reclaimStrays(keeping live: (port: Int, target: String)?, tools: ServeTools = .live) -> Bool? {
+        guard let host = tools.host(5) else { return nil }
         var asked = true, released = true
-        for port in Set(remembered().compactMap { pair($0).port } + [otaPort]).sorted() {
-            let state = TailscaleClient.serving(port: port)
+        for port in Set(tools.remembered().compactMap { pair($0).port } + [tools.otaPort()]).sorted() {
+            let state = tools.serving(port, 10)
             guard state != .unknown else { asked = false; continue }
-            guard let target = state.root(on: host), isOurs(target, on: port) else { continue }
+            guard let target = state.root(on: host), isOurs(target, on: port, in: tools.remembered()) else { continue }
             // The one this run is serving from, confirmed or not.
             if live?.port == port, live?.target == target { continue }
-            if !releaseServe((port: port, target: target)) { released = false }
+            if !releaseServe((port: port, target: target), tools: tools) { released = false }
         }
         return asked ? released : nil
     }
     /// Said once per reason: the retry runs every 30s and the log is a person's.
     private var otaComplaint = ""
     private var verifyingOTA = false
+    /// Bumped by each start of the OTA server and by turning it off: a start that
+    /// finishes under an older number is no longer wanted.
+    private var otaAttempt = 0
     /// Whether to look for registrations a run left behind, and a generation so
     /// a sweep that started earlier can't clear a request made while it ran.
     /// An entry left by a run that didn't give it back is invisible to
@@ -379,7 +390,10 @@ final class AppCoordinator: ObservableObject {
             guard Self.beginServeChange() else { return }            // one of these is already running
             Task.detached { [weak self] in
                 defer { Self.endServeChange() }
-                guard Self.releaseServe(published) else { return }   // else the next tick tries again
+                guard Self.releaseServe(published) else {             // the next tick tries again
+                    await MainActor.run { self?.couldNotRelease(published.port) }
+                    return
+                }
                 await MainActor.run { if self?.otaPublished?.port == published.port { self?.otaPublished = nil } }
             }
             return
@@ -408,7 +422,8 @@ final class AppCoordinator: ObservableObject {
         }
         guard !apps.isEmpty else {
             // Deleting the folder is the off switch, whether or not the page ever
-            // got published: the listener goes either way.
+            // got published: the listener goes either way, one still coming up too.
+            otaAttempt += 1
             otaServer?.stop()
             otaServer = nil
             if let published = otaPublished, Self.beginServeChange() {
@@ -416,7 +431,10 @@ final class AppCoordinator: ObservableObject {
                 // port nothing holds any more would otherwise be unfindable.
                 Task.detached { [weak self] in                     // shells out twice; not on the main actor
                     defer { Self.endServeChange() }
-                    guard Self.releaseServe(published) else { return }
+                    guard Self.releaseServe(published) else {
+                        await MainActor.run { self?.couldNotRelease(published.port) }
+                        return
+                    }
                     await MainActor.run { if self?.otaPublished?.port == published.port { self?.otaPublished = nil } }
                 }
             }
@@ -461,17 +479,23 @@ final class AppCoordinator: ObservableObject {
             otaServer = nil
         }
         let server = otaServer ?? OTAServer(tailnetPort: tailnetPort)
-        // ponytail: opening the listener waits on the network stack, so this can
-        // hold the main actor for up to 5 s if it never comes up. Moving it off
-        // needs OTAServer out of this actor's region; do that if it ever shows.
-        guard let port = server.start() else {
-            Self.endServeChange()
-            complainOnce("couldn't start the over-the-air server")
-            return
-        }
-        otaServer = server
+        otaAttempt += 1
+        let attempt = otaAttempt
         Task.detached { [weak self] in
             defer { Self.endServeChange() }
+            // Off the main actor: the listener can take up to 5 s to come up.
+            guard let port = server.start() else {
+                await MainActor.run { self?.complainOnce("couldn't start the over-the-air server") }
+                return
+            }
+            // Turned off (or quitting) while it came up: a server nobody wants
+            // would hold its port until the app quits.
+            let wanted = await MainActor.run { () -> Bool in
+                guard let self, self.otaAttempt == attempt else { return false }
+                self.otaServer = server
+                return true
+            }
+            guard wanted else { server.stop(); return }
             let mine = "http://127.0.0.1:\(port)"
             // Only ever replace an entry we can prove we made — ours from a run
             // that ended without releasing it. Anything else on that port is the
@@ -530,12 +554,23 @@ final class AppCoordinator: ObservableObject {
                     return
                 }
             }
-            // Written before the call, not after: quitting while `tailscale` is
-            // still working would otherwise leave an entry finished by a child
-            // that outlived us, with nothing left to say it was ours.
-            Self.rememberServing(mine, on: tailnetPort)
-            let out = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
-                               ["serve", "--bg", "--yes", "--https=\(tailnetPort)", mine], timeout: 20)
+            let step = await Self.publish(mine, on: tailnetPort, expecting: state) {
+                await MainActor.run { self?.otaAttempt == attempt }
+            }
+            let after: TailscaleClient.Serving, said: String
+            switch step {
+            case .changed:
+                await MainActor.run {
+                    self?.complainOnce("port \(tailnetPort) changed while RoamRun was checking it; looking again shortly")
+                }
+                return
+            case .notWanted, .withdrawn:
+                server.stop()
+                return
+            case .ran(let state, let output):
+                after = state
+                said = output
+            }
             // The exit code is not the answer; the config is. `tailscale serve`
             // exits 0 without writing anything when the tailnet has no HTTPS
             // certificates: it prints the admin page's link to stdout and calls
@@ -544,16 +579,13 @@ final class AppCoordinator: ObservableObject {
             // success logged "serving builds over the air" every minute while
             // nothing was served — and `doctor` sent people to that log to find
             // out why the page was missing.
-            //
-            // Before hopping back, too: `serving` waits on `tailscale` for up to
-            // 10 s and the main actor is where the menu bar lives.
-            let after = TailscaleClient.serving(port: tailnetPort)
             let landed = after.isRegistered(mine)
             // A status we couldn't read says nothing either way, so it is neither
             // a success nor a reason to drop the one record that can find it again.
             let unsure = after == .unknown
-            await MainActor.run {
-                guard let self else { return }
+            let adopted = await MainActor.run { () -> Bool in
+                // Turned off during that last read: what it wrote is for a stopped server.
+                guard let self, self.otaAttempt == attempt else { return false }
                 if landed {
                     self.publishWork.registered()
                     self.otaPublished = (tailnetPort, mine)
@@ -571,7 +603,6 @@ final class AppCoordinator: ObservableObject {
                     // Whatever `tailscale` said, the entry isn't there. Its stdout
                     // carries the only thing that explains the silent case — a link
                     // to the page where HTTPS certificates are turned on.
-                    let said = (out.err + "\n" + out.out).trimmingCharacters(in: .whitespacesAndNewlines)
                     self.complainOnce("port \(tailnetPort) isn't served after asking tailscale to, will retry" +
                                       (said.isEmpty ? ". Does your tailnet have HTTPS certificates turned on?"
                                                     : ": \(said)"))
@@ -580,6 +611,13 @@ final class AppCoordinator: ObservableObject {
                     // were never registered can't recognise one that was.
                     Self.forgetServing(mine, on: tailnetPort)
                 }
+                return true
+            }
+            // Still under the lock, so nothing else is changing the port. False leaves
+            // the record for the next sweep.
+            if !adopted {
+                server.stop()
+                _ = Self.releaseServe((port: tailnetPort, target: mine))
             }
         }
     }
@@ -616,6 +654,38 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
+    enum PublishStep: Equatable {
+        case changed      // the port isn't as it was checked: nothing written
+        case notWanted    // turned off before writing: nothing written
+        case withdrawn    // turned off while `serve` ran: given back, or left to the sweep
+        case ran(after: TailscaleClient.Serving, said: String)
+    }
+
+    /// The write itself, between two looks at whether it is still wanted. `state` is what
+    /// the port carried when checked; the reads before can take 20 s, and `serve` replaces
+    /// whatever is at `/` by then. Looking again narrows that window; it can't close it, as
+    /// `tailscale serve` has no write-if-unchanged. Turned off meanwhile: publishing a
+    /// stopped server would leave the address answering 502 until the next tick.
+    nonisolated static func publish(_ mine: String, on port: Int, expecting state: TailscaleClient.Serving,
+                                    tools: ServeTools = .live,
+                                    stillWanted: @Sendable () async -> Bool) async -> PublishStep {
+        guard tools.serving(port, 10) == state else { return .changed }
+        guard await stillWanted() else { return .notWanted }
+        // Written before the call, not after: quitting while `tailscale` is
+        // still working would otherwise leave an entry finished by a child
+        // that outlived us, with nothing left to say it was ours.
+        tools.remember(mine, port)
+        let said = tools.serve(port, mine)
+        guard await stillWanted() else {
+            // False leaves the record, and the next sweep gives it back.
+            _ = releaseServe((port: port, target: mine), tools: tools)
+            return .withdrawn
+        }
+        // Here, not after hopping back: `serving` waits on `tailscale` for up to
+        // 10 s and the main actor is where the menu bar lives.
+        return .ran(after: tools.serving(port, 10), said: said)
+    }
+
     /// Gives a registration back, but only while it is still exactly ours.
     /// `nonisolated` so it can run off the main actor: it shells out twice, and
     /// only the call at quit has to be synchronous.
@@ -623,33 +693,61 @@ final class AppCoordinator: ObservableObject {
     /// has to try again — reporting it released when it isn't is how builds stay
     /// reachable while the log says otherwise.
     nonisolated static func releaseServe(_ published: (port: Int, target: String),
-                                         timeout: TimeInterval = 10) -> Bool {
-        let state = TailscaleClient.serving(port: published.port, timeout: timeout)
+                                         timeout: TimeInterval = 10, tools: ServeTools = .live) -> Bool {
+        let state = tools.serving(published.port, timeout)
+        let host: String
         switch state {
         case .unknown: return false            // couldn't look; saying it's gone is how one survives
-        case .nothing: forgetServing(published.target, on: published.port); return true
+        case .nothing: tools.forget(published.target, published.port); return true
         case .mounted:
             // `off` removes this node's current name's mount and nothing else, so
             // that is the only entry we may claim — a root of ours under a name the
             // node has since changed would make us delete whatever took its place.
             // Asked only now: nothing to give back needs no name.
-            guard let host = currentHost(timeout: timeout) else { return false }
-            guard state.root(on: host) == published.target else {
-                forgetServing(published.target, on: published.port)
+            guard let named = tools.host(timeout) else { return false }
+            guard state.root(on: named) == published.target else {
+                tools.forget(published.target, published.port)
                 return true
             }
+            host = named
         }
-        // `--set-path=/` names the one mount to remove. Without it `off` means
-        // every mount on the port, and `tailscale` then asks for confirmation on
-        // a stdin that is /dev/null here: it removes nothing and still exits 0,
-        // so this would report a release that never happened.
-        let out = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
-                           ["serve", "--https=\(published.port)", "--set-path=/", "off"], timeout: timeout)
         // Only once it's really gone. Forgetting it while the entry survives
-        // would leave the next run unable to recognise its own registration.
-        guard out.status == 0 else { return false }
-        forgetServing(published.target, on: published.port)
+        // would leave the next run unable to recognise its own registration —
+        // and `off` exiting 0 is not that: it is how it reports removing nothing.
+        guard tools.off(published.port, timeout) else { return false }
+        let after = tools.serving(published.port, timeout)
+        guard after != .unknown, after.root(on: host) != published.target else { return false }
+        tools.forget(published.target, published.port)
         return true
+    }
+
+    /// What giving back and sweeping `tailscale serve` entries touch: Tailscale, and the
+    /// record of what this Mac registered. The defaults are the real ones; tests swap them.
+    struct ServeTools: Sendable {
+        var serving: @Sendable (_ port: Int, _ timeout: TimeInterval) -> TailscaleClient.Serving = {
+            TailscaleClient.serving(port: $0, timeout: $1)
+        }
+        var host: @Sendable (_ timeout: TimeInterval) -> String? = { AppCoordinator.currentHost(timeout: $0) }
+        /// `--set-path=/` names the one mount to remove. Without it `off` means every mount
+        /// on the port, and `tailscale` then asks for confirmation on a stdin that is
+        /// /dev/null here: it removes nothing and still exits 0, reporting a release that
+        /// never happened. True when it exited 0.
+        var off: @Sendable (_ port: Int, _ timeout: TimeInterval) -> Bool = { port, timeout in
+            Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
+                     ["serve", "--https=\(port)", "--set-path=/", "off"], timeout: timeout).status == 0
+        }
+        /// What `tailscale` printed, for when the entry isn't there afterwards.
+        var serve: @Sendable (_ port: Int, _ target: String) -> String = { port, target in
+            let out = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
+                               ["serve", "--bg", "--yes", "--https=\(port)", target], timeout: 20)
+            return (out.err + "\n" + out.out).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        var remember: @Sendable (_ target: String, _ port: Int) -> Void = { AppCoordinator.rememberServing($0, on: $1) }
+        var remembered: @Sendable () -> [String] = { AppCoordinator.remembered() }
+        var forget: @Sendable (_ target: String, _ port: Int) -> Void = { AppCoordinator.forgetServing($0, on: $1) }
+        var otaPort: @Sendable () -> Int = { AppCoordinator.otaPort }
+
+        static let live = ServeTools()
     }
 
     /// An entry proxying to a loopback port nothing is listening on can't be a
@@ -668,6 +766,12 @@ final class AppCoordinator: ObservableObject {
         (try? TailscaleClient.fromSettings().selfDNSName(timeout: timeout)) ?? nil
     }
 
+    /// Said, or a release `tailscale` keeps not doing retries every tick in silence.
+    private func couldNotRelease(_ port: Int) {
+        complainOnce("couldn't confirm port \(port) was given back; trying again. " +
+                     "`tailscale serve --https=\(port) --set-path=/ off` clears it")
+    }
+
     private func complainOnce(_ line: String) {
         guard line != otaComplaint else { return }
         otaComplaint = line
@@ -680,6 +784,7 @@ final class AppCoordinator: ObservableObject {
         // to give back with no server left.
         let server = otaServer
         otaServer = nil
+        otaAttempt += 1
         if let published = otaPublished {
             otaPublished = nil
             // Before the listener, not after: in between, the address answers 502
@@ -693,7 +798,7 @@ final class AppCoordinator: ObservableObject {
                 logStore.log("port \(published.port) is already being changed; leaving it to that")
             } else {
                 // Short here, unlike the background paths: this runs on the thread
-                // the app quits on. Three calls in a row, so ~6 s at worst, and only
+                // the app quits on. Four calls in a row, so ~8 s at worst, and only
                 // when tailscaled isn't answering — which is when `off` fails anyway.
                 // The record stays, so the next launch reclaims it.
                 let gone = Self.releaseServe(published, timeout: 2)
@@ -749,13 +854,6 @@ final class AppCoordinator: ObservableObject {
         return network(of: id).map { "\(title) · \($0.title)" } ?? title
     }
 
-    private func retryErroredBridges() {
-        let live = StatusFile.read()
-        for id in wasActiveIDs where profile(id) != nil {
-            if let b = bridges[id], b.status == .error && b.autoRetry { autoStart(id, live: live) }
-        }
-    }
-
     /// Worst state across all bridges, for the menu bar icon.
     var overallStatus: BridgeStatus {
         let all = profiles.map { status(of: $0.id) }   // CLI-owned devices report the CLI's state
@@ -765,18 +863,23 @@ final class AppCoordinator: ObservableObject {
 
     // MARK: - Profiles
 
+    enum AddResult: Equatable { case added(UUID), refused(String) }
+
     @discardableResult
     func addDevice(captured: CapturedService, provider: MeshProvider,
-                   meshDevice: MeshDevice?, manualIP: String, name: String) -> UUID? {
+                   meshDevice: MeshDevice?, manualIP: String, name: String) -> AddResult {
         let ip = provider == .manual ? manualIP.trimmingCharacters(in: .whitespaces) : (meshDevice?.ipv4 ?? "")
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         let displayName = trimmed.isEmpty ? captured.shortHost : trimmed
         // Same checks as the sheet, here too: two profiles for one device would collide.
         // By UDID when remotepairingd knows the advert (instance names rotate), else the exact advert.
         let udid = advertUDIDs[captured.instanceName]
-        guard !ip.isEmpty, profiles.nameProblem(displayName) == nil,
-              !profiles.contains(where: { $0.providerIP == ip || $0.instanceName == captured.instanceName
-                  || (udid != nil && $0.udid?.caseInsensitiveCompare(udid!) == .orderedSame) }) else { return nil }
+        guard !ip.isEmpty else { return .refused("Choose its VPN address.") }
+        if let problem = profiles.nameProblem(displayName) { return .refused(problem) }
+        if let same = profiles.first(where: { $0.providerIP == ip || $0.instanceName == captured.instanceName
+            || (udid != nil && $0.udid?.caseInsensitiveCompare(udid!) == .orderedSame) }) {
+            return .refused("This device is already saved as “\(same.displayName)”.")
+        }
         var profile = DeviceProfile(
             displayName: displayName,
             instanceName: captured.instanceName,
@@ -786,26 +889,31 @@ final class AppCoordinator: ObservableObject {
             bonjourHost: captured.host,
             txt: captured.txt,
             providerID: provider.rawValue,
-            providerHostName: provider == .manual ? manualIP : (meshDevice?.name ?? ""),
+            providerHostName: provider == .manual ? ip : (meshDevice?.name ?? ""),
             providerIP: ip
         )
         // Known already if remotepairingd matched this advert; else learned on first connect.
         profile.udid = udid
         profiles.append(profile)
-        let bridge = install(ProxyBridge(profile: profile))
+        let bridge = install(newBridge(profile))
         capture.ownedHosts.insert(bridge.spoofHost)
         persist()
         logStore.log("added \"\(profile.displayName)\" -> \(ip)", device: profile.id)
         learnDeviceTypes()
-        return profile.id
+        return .added(profile.id)
     }
 
     func deleteProfile(_ id: UUID) {
         stopExternalBridge(id)   // a `roamrun up` for it would otherwise live on, unstoppable by name
         if let spoof = bridges[id]?.spoofHost { capture.ownedHosts.remove(spoof) }
         if selectedID == id { selectedID = nil }
+        if let b = bridges[id] {
+            b.stop()   // its status entry would stay, and the same iPhone added again read as a duplicate
+            if b.statusWritePending { departing.append(b) }
+        }
         bridges[id] = nil
         bridgeObservers[id] = nil
+        memories[id] = nil
         profiles.removeAll { $0.id == id }
         wasActiveIDs.remove(id)
         persist()
@@ -825,7 +933,7 @@ final class AppCoordinator: ObservableObject {
 
         // Same-LAN detection lives in ProxyBridge.start (by Tailscale endpoint,
         // which survives the iPhone rotating its Bonjour instance name).
-        bridge.requestStart()
+        bridge.requestStart(.manual)
     }
 
     func stopBridge(_ profile: DeviceProfile) {
@@ -910,10 +1018,16 @@ final class AppCoordinator: ObservableObject {
     // MARK: - Tailscale
 
     /// Off the main actor: a hung `tailscale status` must not freeze the UI.
+    /// Only the latest refresh's answer counts: an earlier, slower one must not overwrite it.
+    private var tailscaleRefresh = 0
+
     func refreshTailscale() {
         let client = tailscaleClient
+        tailscaleRefresh += 1
+        let mine = tailscaleRefresh
         Task {
             let result = await Task.detached { Result { try client.listDevices() } }.value
+            guard mine == tailscaleRefresh else { return }
             switch result {
             case .success(let devices):
                 tailscaleDevices = devices
@@ -924,6 +1038,13 @@ final class AppCoordinator: ObservableObject {
                 logStore.log("tailscale: \(error.localizedDescription)")
             }
         }
+    }
+
+    /// A bridge for `profile` that carries its device's memory.
+    private func newBridge(_ profile: DeviceProfile) -> ProxyBridge {
+        let memory = memories[profile.id] ?? DeviceMemory()
+        memories[profile.id] = memory
+        return ProxyBridge(profile: profile, memory: memory)
     }
 
     /// Registers a bridge and re-publishes its changes so views that only
@@ -939,7 +1060,7 @@ final class AppCoordinator: ObservableObject {
             self.learnDeviceTypes()
         }
         // Stepped back for a `roamrun up` watching the same device: take over again once it's gone.
-        bridge.onYield = { [weak self] other in self?.startWhenFree(id, after: other) }
+        bridge.onYield = { [weak self] other in self?.startWhenFree(id, after: other, .resume) }
         bridge.onProfileChange = { [weak self] moved in
             guard let self, let i = self.profiles.firstIndex(where: { $0.id == id }) else { return }
             self.profiles[i].providerIP = moved.providerIP
@@ -973,7 +1094,9 @@ final class AppCoordinator: ObservableObject {
 
     /// Probe a bounded range for the RemotePairing control channel when the
     /// captured port doesn't answer. Updates the profile on success.
-    func scanRemotePairingPort(_ profile: DeviceProfile) async {
+    /// What the scan found, also said next to its button (nil while one runs).
+    @discardableResult
+    func scanRemotePairingPort(_ profile: DeviceProfile) async -> String {
         let host = profile.providerIP
         logStore.log("\"\(profile.displayName)\": scanning \(host) for its RemotePairing port", device: profile.id)
         let found: UInt16
@@ -982,13 +1105,14 @@ final class AppCoordinator: ObservableObject {
         case .found(let port): found = port
         case .notFound:
             logStore.log("\"\(profile.displayName)\": no RemotePairing port responded — is the device on Wi-Fi?", device: profile.id)
-            return
+            return "No port answered. Is the device on Wi‑Fi and unlocked?"
         case .timedOut:
             logStore.log("\"\(profile.displayName)\": the scan timed out before every port was checked", device: profile.id)
-            return
+            return "The scan timed out before every port was checked."
         }
         if found == profile.remotePairingPort {
             logStore.log("\"\(profile.displayName)\": RemotePairing port is still \(found)", device: profile.id)
+            return "Still on port \(found)."
         } else {
             // Before persist(): it may rebuild the bridge, and a new one reads as off.
             let wasOn = bridges[profile.id].map { $0.state != .off } == true
@@ -996,15 +1120,24 @@ final class AppCoordinator: ObservableObject {
                 profiles = changed
                 persist()
                 return profiles
-            }) else { return }
+            }) else { return "Found port \(found), but the device is no longer saved." }
             logStore.log("\"\(profile.displayName)\": RemotePairing port updated to \(found)", device: profile.id)
             // ProxyBridge holds its profile by value — swap it in or the
             // new port only takes effect after a relaunch.
             // Also errored / standing aside: the scan is how you fix a bridge that can't reach the device.
             bridges[profile.id]?.stop()
-            let bridge = install(ProxyBridge(profile: updated))
-            if wasOn { bridge.requestStart() }
+            install(newBridge(updated))
+            // Through autoStart: a live `roamrun up` holding the device keeps it (F16).
+            if wasOn { autoStart(profile.id, live: StatusFile.read(), .rescan) }
+            return "Moved to port \(found)\(wasOn ? "; the bridge restarts on it" : "")."
         }
+    }
+
+    /// Who runs a device's bridge in another process, for a label: `roamrun up` in a terminal,
+    /// or another copy of the app. Nil when this app does (or nobody).
+    func runElsewhere(_ id: UUID) -> String? {
+        guard let e = externalBridges[id] else { return nil }
+        return e.cli == true ? "Terminal" : "another RoamRun"
     }
 
     /// Saving can restore devices ahead of this one; select the saved profile by ID.
@@ -1023,39 +1156,44 @@ final class AppCoordinator: ObservableObject {
         guard let old = bridges[profile.id], old.profile != profile else { return }
         let wasOn = old.state != .off
         old.stop()
-        install(ProxyBridge(profile: profile))
-        if wasOn { autoStart(profile.id, live: StatusFile.read()) }
+        install(newBridge(profile))
+        if wasOn { autoStart(profile.id, live: StatusFile.read(), .edit) }
     }
 
     /// The one way the app starts a bridge by itself (restore at launch, the 30 s
     /// retry, an IP change, a rebuilt bridge): never over a running `roamrun up`,
     /// which retries on its own and gives up (exit 1) if taken over — then once it
     /// has ended. Starts a person asks for (Start, Try Again) use startBridge.
-    private func autoStart(_ id: UUID, live: [UUID: StatusFile.Entry], restarting: Bool = false) {
+    private func autoStart(_ id: UUID, live: [UUID: StatusFile.Entry], _ reason: StartReason) {
         guard Snapshot.fakeProfiles == nil else { return }   // screenshot mode's devices never bridge
         if let other = HomeRule.cliHolding(id, udid: bridges[id]?.udid ?? profile(id)?.udid, in: live, myPID: getpid()) {
-            startWhenFree(id, after: other)
+            startWhenFree(id, after: other, reason)
             return
         }
-        if restarting { bridges[id]?.stop() }
-        bridges[id]?.requestStart(automatic: true)   // the claim itself defers to a CLI that got there first
+        if StartPolicy.of(reason).restarts { bridges[id]?.stop() }
+        bridges[id]?.requestStart(reason)   // the claim itself defers to a CLI that got there first
     }
 
     /// Devices waiting in startWhenFree: the 30 s retry must not stack a waiter per tick.
-    private var waitingForCLI = Set<UUID>()
+    /// For each, the start it will make once free: what a rescan or an edit meant still holds then.
+    private var waitingForCLI: [UUID: StartReason] = [:]
 
     /// Once `other` — that process, not just its PID — has ended, starts `id` again
     /// if it is still wanted and nothing else started it meanwhile.
-    private func startWhenFree(_ id: UUID, after other: StatusFile.Entry) {
-        guard waitingForCLI.insert(id).inserted else { return }
+    private func startWhenFree(_ id: UUID, after other: StatusFile.Entry, _ reason: StartReason) {
+        if let pending = waitingForCLI[id] {
+            waitingForCLI[id] = StartReason.stronger(pending, reason)
+            return
+        }
+        waitingForCLI[id] = reason
         Task { @MainActor [weak self] in
             while StatusFile.isRoamRun(other) { try? await Task.sleep(for: .seconds(5)) }
             guard let self else { return }
-            self.waitingForCLI.remove(id)
+            let reason = self.waitingForCLI.removeValue(forKey: id) ?? .retry
             guard self.wasActiveIDs.contains(id), self.profile(id) != nil,
                   let b = self.bridges[id], b.state == .off || b.status == .error else { return }
             // Through autoStart again: another `roamrun up` may have taken the device meanwhile.
-            self.autoStart(id, live: StatusFile.read())
+            self.autoStart(id, live: StatusFile.read(), reason)
         }
     }
 
@@ -1069,23 +1207,14 @@ final class AppCoordinator: ObservableObject {
         for bridge in bridges.values { bridge.stop() }
     }
 
-    /// Relays are bound to en0's address; show the pause instead of a stale "active".
     private func onInterfaceLost() {
         logStore.log("local IP lost; bridges paused until Wi-Fi returns")
-        for bridge in bridges.values where bridge.state.isActive {
-            bridge.stop()
-            bridge.fail(ProxyBridge.noAddressMessage)
-        }
+        supervisor.lanAddressLost()
     }
 
     private func onInterfaceChange(_ ip: String) {
         logStore.log("local IP changed -> \(ip); restarting active bridges")
-        // Also retry bridges that errored (e.g. started while en0 had no IP).
-        let wanted = wasActiveIDs
-        let live = StatusFile.read()
-        for (id, bridge) in bridges where bridge.state.isActive || wanted.contains(id) {
-            autoStart(id, live: live, restarting: true)
-        }
+        supervisor.lanAddressChanged()
     }
 
     /// What the toggle shows, and whether to register again. A registration belongs to the
@@ -1150,8 +1279,8 @@ final class AppCoordinator: ObservableObject {
                 for p in stale { replaceBridge(with: p) }   // it holds its profile by value
                 // Kept from disk rather than dropped (the list we started from was unreadable): they need bridges.
                 for p in saved where bridges[p.id] == nil {
-                    capture.ownedHosts.insert(install(ProxyBridge(profile: p)).spoofHost)
-                    if wanted.contains(p.id) { autoStart(p.id, live: StatusFile.read()) }   // left on before it went unread
+                    capture.ownedHosts.insert(install(newBridge(p)).spoofHost)
+                    if wanted.contains(p.id) { autoStart(p.id, live: StatusFile.read(), .restore) }   // left on before it went unread
                 }
             }
             // Saved, so the file is readable and written again: those two warnings no longer hold.

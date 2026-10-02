@@ -97,15 +97,22 @@ final class TunnelPortWatcher: @unchecked Sendable {
             }
             return
         }
-        if let m = line.firstMatch(of: Self.pattern), let port = UInt16(m.2) {
+        let v4 = line.firstMatch(of: Self.pattern)
+        if v4 != nil || line.firstMatch(of: Self.anyEndpoint) != nil {
+            // An IPv6 endpoint (a device on this Wi‑Fi) isn't relayed, but it answers a
+            // request all the same: left pending, that request took the next IPv4 one.
+            // ponytail: oldest-first, as for IPv4. An endpoint whose request already
+            // expired takes the next one's turn, which then goes unattributed.
             let owners = Set(pending.map(\.udid))
             if owners.count > 1 { ambiguousUntil = now + 5 }
-            onPort?(port, owners.count == 1 && now >= ambiguousUntil ? owners.first : nil, String(m.1))
+            if let v4, let port = UInt16(v4.2) {
+                onPort?(port, owners.count == 1 && now >= ambiguousUntil ? owners.first : nil, String(v4.1))
+            }
             // Unknown whose request this answered, so the rest can't be trusted either.
             if owners.count > 1 { pending.removeAll() } else if !pending.isEmpty { pending.removeFirst() }
         } else if let m = line.firstMatch(of: Self.establishPattern) {
             pending.append((String(m.1), now))
-        } else if line.contains("Got tunnel endpoint"), line.firstMatch(of: Self.anyEndpoint) == nil {
+        } else if line.contains("Got tunnel endpoint") {
             // The format changed (a macOS update?): say so rather than silently find no ports.
             onLog?("unrecognized tunnel endpoint line: \(line.suffix(160))")
         }

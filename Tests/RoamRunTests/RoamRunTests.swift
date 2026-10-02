@@ -60,6 +60,40 @@ private func ports(_ lines: [(String, TimeInterval)]) -> [(UInt16, String?)] {
     #expect(got[0].1 == nil)
 }
 
+private func endpointV6(_ port: Int) -> String {
+    "remotepairingd[1950:1] [com.apple.dt.remotepairing:networktunnelmanager] tunnel-593: Got tunnel endpoint: 'fe80::14a2:5da8:a26:9bb4%en0.\(port)', includePeerToPeer: false"
+}
+
+@Test func anIPv6EndpointAnswersItsRequestToo() {
+    // A device on this Wi‑Fi (link-local IPv6, not relayed) gets its endpoint, then a
+    // bridged one asks: the IPv4 endpoint is the bridged one's, not still A's.
+    let got = ports([(establish(phoneA), 0), (endpointV6(64106), 0.002),
+                     (establish(phoneB), 0.003), (endpoint(55940), 0.004)])
+    #expect(got.count == 1)                       // the IPv6 one isn't relayed
+    #expect(got.first?.1 == phoneB)
+}
+
+@Test func anIPv6EndpointWithTwoRequestsOutIsAmbiguousToo() {
+    // A and B both waiting, and an IPv6 endpoint answers one of them: the next IPv4
+    // endpoint may be either's, so it is credited to nobody.
+    let got = ports([(establish(phoneA), 0), (establish(phoneB), 0.001),
+                     (endpointV6(64106), 0.002), (endpoint(55940), 0.003)])
+    #expect(got.count == 1)
+    #expect(got.first?.1 == nil)
+}
+
+@Test func mixedEndpointsDropNoMorePortsThanBefore() {
+    // A asks (LAN, IPv6) and B asks (bridged); both endpoints arrive. Before, the IPv4
+    // one was unattributed as well; no case here may become worse than that.
+    let v6First = ports([(establish(phoneA), 0), (establish(phoneB), 0.001),
+                         (endpointV6(64106), 0.002), (endpoint(55940), 0.003)])
+    #expect(v6First.map(\.0) == [55940])
+    // Settled apart: each answered before the next request.
+    let apart = ports([(establish(phoneA), 0), (endpointV6(64106), 0.002),
+                       (establish(phoneB), 10), (endpoint(55940), 10.002)])
+    #expect(apart.first?.1 == phoneB)
+}
+
 @Test func failedRequestExpires() {
     // A's request never got an endpoint; B asks 10s later.
     let got = ports([(establish(phoneA), 0), (establish(phoneB), 10), (endpoint(55940), 10.002)])
@@ -227,50 +261,133 @@ private func timed(_ path: String, _ args: [String]) -> (Proc.Result, TimeInterv
     return (r, Date().timeIntervalSince(start))
 }
 
+/// Suites that time things, or block every Swift concurrency thread to test that, run one
+/// after another: `.serialized` on each alone only orders its own tests, so one suite
+/// filling the pool would still skew another's deadlines.
+@Suite(.serialized) struct TimingSensitive {}
+
 // Timing tests run one at a time: in parallel on a small CI runner they'd skew each other.
-@Suite(.serialized) struct ProcTiming {
-    @Test func slowToolsFillingTheTaskPoolStillTimeOut() async {
-        // runAsync blocks a Swift concurrency thread per call; with every one of
-        // them blocked, the timeout timers must still get to run.
-        // Each run is timed from its own start: other tests may hold the pool first.
-        let longest = await withTaskGroup(of: TimeInterval.self) { group in
-            for _ in 0..<ProcessInfo.processInfo.activeProcessorCount {
-                group.addTask { await Task.detached { timed("/bin/sleep", ["20"]).1 }.value }
+extension TimingSensitive {
+    @Suite(.serialized) struct ProcTiming {
+        @Test func slowToolsFillingTheTaskPoolStillTimeOut() async {
+            // A Proc.run called from a task blocks a Swift concurrency thread; with every one of
+            // them blocked, the timeout timers must still get to run.
+            // Each run is timed from its own start: other tests may hold the pool first.
+            let longest = await withTaskGroup(of: TimeInterval.self) { group in
+                for _ in 0..<ProcessInfo.processInfo.activeProcessorCount {
+                    group.addTask { await Task.detached { timed("/bin/sleep", ["20"]).1 }.value }
+                }
+                return await group.reduce(0, max)
             }
-            return await group.reduce(0, max)
+            #expect(longest < 4)
         }
-        #expect(longest < 4)
-    }
 
-    @Test func quickToolReturnsItsOutput() {
-        let (r, t) = timed("/bin/echo", ["hello"])
-        #expect(r.status == 0 && r.out == "hello\n")
-        #expect(t < 2.5, "t=\(t)")   // it returns at once; the bound is for a busy machine
-    }
+        /// #32: blocking tools wait off Swift's cooperative pool. On it, twice as many as it
+        /// has threads (one per core) ran in two waves, each bridge's check behind another's.
+        @Test func blockingToolsDontQueueBehindEachOther() async {
+            let n = min(ProcessInfo.processInfo.activeProcessorCount * 2, Blocking.limit)
+            let clock = ContinuousClock(), start = clock.now
+            await withTaskGroup(of: Void.self) { group in
+                for _ in 0..<n { group.addTask { _ = await Blocking.run { usleep(1_000_000) } } }
+            }
+            let took = clock.now - start
+            #expect(took < .milliseconds(1_800), "\(n) one-second waits took \(took)")
+        }
 
-    @Test func slowToolIsStoppedAtTheTimeout() {
-        let (r, t) = timed("/bin/sleep", ["20"])
-        #expect(r.status != 0 && r.err.contains("timed out"), "status=\(r.status) err=\(r.err)")
-        #expect(t < 2.5, "t=\(t)")
-    }
+        /// Beyond the limit, tools wait their turn: two permits, four half-second jobs, two
+        /// waves, and never more than two at once.
+        @Test func blockingWorkBeyondTheLimitWaitsItsTurn() async {
+            let gate = Blocking.Gate(2)
+            final class Count: @unchecked Sendable { let l = NSLock(); var now = 0, peak = 0 }
+            let count = Count()
+            let clock = ContinuousClock(), start = clock.now
+            await withTaskGroup(of: Void.self) { group in
+                for _ in 0..<4 {
+                    group.addTask {
+                        await gate.enter()
+                        count.l.withLock { count.now += 1; count.peak = max(count.peak, count.now) }
+                        try? await Task.sleep(for: .milliseconds(500))
+                        count.l.withLock { count.now -= 1 }
+                        gate.leave()
+                    }
+                }
+            }
+            let took = clock.now - start
+            #expect(count.peak == 2)
+            #expect(took >= .milliseconds(950) && took < .milliseconds(1_800), "\(took)")
+        }
 
-    @Test func toolIgnoringTermIsKilled() {
-        let (r, t) = timed("/bin/sh", ["-c", "trap '' TERM; while :; do :; done"])
-        #expect(r.status == 9, "status=\(r.status) err=\(r.err) t=\(t)")   // SIGKILL 2s after the ignored TERM
-        #expect(t < 4.5, "t=\(t)")
-    }
+        @Test func quickToolReturnsItsOutput() {
+            let (r, t) = timed("/bin/echo", ["hello"])
+            #expect(r.status == 0 && r.out == "hello\n")
+            #expect(t < 2.5, "t=\(t)")   // it returns at once; the bound is for a busy machine
+        }
 
-    @Test func grandchildHoldingThePipeDoesNotHangUs() {
-        // sh is killed, but its `sleep` keeps stdout open.
-        let (r, t) = timed("/bin/sh", ["-c", "trap '' TERM; sleep 8"])
-        #expect(r.status == 9, "status=\(r.status) err=\(r.err)")
-        #expect(t < 6, "t=\(t)")
-    }
+        @Test func slowToolIsStoppedAtTheTimeout() {
+            let (r, t) = timed("/bin/sleep", ["20"])
+            #expect(r.status != 0 && r.err.contains("timed out"), "status=\(r.status) err=\(r.err)")
+            #expect(t < 2.5, "t=\(t)")
+        }
 
-    @Test func toolThatExitsKeepsItsResultWhileABackgroundChildHoldsThePipe() {
-        let (r, t) = timed("/bin/sh", ["-c", "echo hi; sleep 30 &"])
-        #expect(r.status == 0 && r.out == "hi\n", "status=\(r.status) out=\(r.out)")
-        #expect(t < 2.5, "t=\(t)")
+        @Test func toolIgnoringTermIsKilled() {
+            let (r, t) = timed("/bin/sh", ["-c", "trap '' TERM; while :; do :; done"])
+            #expect(r.status == 9, "status=\(r.status) err=\(r.err) t=\(t)")   // SIGKILL 2s after the ignored TERM
+            #expect(t < 4.5, "t=\(t)")
+        }
+
+        @Test func grandchildHoldingThePipeDoesNotHangUs() {
+            // sh is killed, but its `sleep` keeps stdout open.
+            let (r, t) = timed("/bin/sh", ["-c", "trap '' TERM; sleep 8"])
+            #expect(r.status == 9, "status=\(r.status) err=\(r.err)")
+            #expect(t < 6, "t=\(t)")
+        }
+
+        /// TERM right after launch, before the watchdog has even noted its child's pid:
+        /// the child must still go, and the watchdog with it.
+        @Test func aWatchdogStoppedAtOnceTakesItsChildAlong() async throws {
+            let marker = "41.\(Int.random(in: 100_000...999_999))"   // sleep's argument, to find strays
+            for i in 0..<60 {
+                let t = Proc.tied("/bin/sleep", [marker])
+                t.standardOutput = FileHandle.nullDevice
+                try t.run()
+                usleep(useconds_t(i % 30) * 100)   // 0–3 ms: sweep the moment between the trap and `c=$!`
+                t.terminate()
+                let clock = ContinuousClock(), start = clock.now
+                while t.isRunning && clock.now - start < .seconds(3) { try await Task.sleep(for: .milliseconds(20)) }
+                #expect(!t.isRunning, "the watchdog outlived its TERM")
+                if t.isRunning { kill(t.processIdentifier, SIGKILL) }
+            }
+            try await Task.sleep(for: .milliseconds(200))
+            let strays = Proc.run("/usr/bin/pgrep", ["-f", "sleep \(marker)"]).out
+            #expect(strays.isEmpty, "left behind: \(strays)")
+            _ = Proc.run("/usr/bin/pkill", ["-f", "sleep \(marker)"])
+        }
+
+        /// A child that ignores TERM: the watchdog can't stop it, so the caller does.
+        @Test func aRegistrationThatWontStopIsKilledAndConfirmedGone() async throws {
+            let t = Proc.tied("/bin/sh", ["-c", "trap '' TERM; exec /bin/sleep 30"])
+            t.standardOutput = FileHandle.nullDevice
+            t.standardError = FileHandle.nullDevice   // the watchdog's "Killed: 9"
+            try t.run()
+            try await Task.sleep(for: .milliseconds(300))   // the trap is set
+            let child = Proc.run("/usr/bin/pgrep", ["-P", "\(t.processIdentifier)"]).out
+            t.terminate()
+            // A second signal (Ctrl-C to the group, then stop()) must not let it leave the child.
+            try await Task.sleep(for: .milliseconds(300))
+            t.terminate()
+            #expect(await Proc.ensureGone(t))
+            #expect(!t.isRunning)
+            let pids = child.split(separator: "\n").compactMap { Int32($0) }   // may include its `sleep 0.5`
+            #expect(!pids.isEmpty)
+            for pid in pids { #expect(kill(pid, 0) != 0, "pid \(pid) outlived the watchdog") }
+            for pid in pids { kill(pid, SIGKILL) }
+        }
+
+        @Test func toolThatExitsKeepsItsResultWhileABackgroundChildHoldsThePipe() {
+            let (r, t) = timed("/bin/sh", ["-c", "echo hi; sleep 30 &"])
+            #expect(r.status == 0 && r.out == "hi\n", "status=\(r.status) out=\(r.out)")
+            #expect(t < 2.5, "t=\(t)")
+        }
     }
 }
 
@@ -368,6 +485,19 @@ private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> { CLI.
     #expect(try parsed("logs iPhone com.x").get().words == ["iPhone", "com.x"])
     let run = try? parsed("run iPhone --scheme S --logs").get()
     #expect(run?.words == ["iPhone"] && run?.values["--scheme"] == "S" && run?.flags == ["--logs"])
+}
+
+@Test func everyValueOptionTakesTheEqualsFormToo() throws {
+    #expect(try parsed("status iPhone --wait=60").get().wait == 60)
+    let run = try parsed("run iPhone --scheme=S --configuration=Debug --url=myapp://a=b --arg=-v --env=A=b=c").get()
+    #expect(run.values["--scheme"] == "S" && run.values["--configuration"] == "Debug")
+    #expect(run.launch == CLI.Launch(args: ["-v"], env: ["A=b=c"], url: "myapp://a=b"))   // split at the first "=" only
+    // The spaced form still keeps an "=" inside the value.
+    #expect(try parsed("run iPhone --env A=B").get().launch.env == ["A=B"])
+    // Not for flags, and a name it doesn't take is still refused.
+    for bad in ["run iPhone --logs=1", "status iPhone --nope=1", "status iPhone --wait=-1"] {
+        #expect((try? parsed(bad).get()) == nil, "\(bad)")
+    }
 }
 
 @Test func argumentsThatAreRejected() {
@@ -678,83 +808,85 @@ private func ask(_ port: UInt16, _ request: String, hold: TimeInterval = 0) asyn
     return got.isEmpty ? nil : String(decoding: got, as: UTF8.self)
 }
 
-@Suite(.serialized) struct OTAServerOverASocket {
-    private func started() throws -> (OTAServer, UInt16) {
-        let server = OTAServer(tailnetPort: 41443)
-        server.servedName = "m"   // the requests below name it as their Host
-        let port = try #require(server.start())
-        return (server, port)
-    }
-
-    @Test func itAnswersOnlyTheMethodsAndRequestsItServes() async throws {
-        let (server, port) = try started()
-        defer { server.stop() }
-        // A path it doesn't serve: nothing here touches stored builds.
-        #expect(await ask(port, "GET /nope HTTP/1.1\r\nHost: m:41443\r\n\r\n")?.hasPrefix("HTTP/1.1 404") == true)
-        #expect(await ask(port, "POST / HTTP/1.1\r\nHost: m:41443\r\n\r\n")?.hasPrefix("HTTP/1.1 405") == true)
-        // Without a Host every link in the manifest would point the device at itself.
-        #expect(await ask(port, "GET /nope HTTP/1.1\r\n\r\n")?.hasPrefix("HTTP/1.1 400") == true)
-        #expect(await ask(port, "GET /nope HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n")?
-            .hasPrefix("HTTP/1.1 400") == true)
-        // A head that never ends.
-        let huge = "GET /nope HTTP/1.1\r\nHost: m\r\nX: " + String(repeating: "y", count: 40_000) + "\r\n"
-        #expect(await ask(port, huge)?.hasPrefix("HTTP/1.1 431") == true)
-        // Still answering afterwards: none of those wedged it.
-        #expect(await ask(port, "HEAD /nope HTTP/1.1\r\nHost: m:41443\r\n\r\n")?
-            .hasPrefix("HTTP/1.1 404") == true)
-    }
-
-    @Test func aHostThatIsntOurTailnetNameIsRefused() async throws {
-        let (server, port) = try started()
-        defer { server.stop() }
-        // A page on this Mac that rebinds its own name to 127.0.0.1 sends its own Host.
-        #expect(await ask(port, "GET / HTTP/1.1\r\nHost: attacker.example:41443\r\n\r\n")?
-            .hasPrefix("HTTP/1.1 421") == true)
-        // Case and a trailing dot are the same name.
-        #expect(await ask(port, "GET /nope HTTP/1.1\r\nHost: M.:41443\r\n\r\n")?.hasPrefix("HTTP/1.1 404") == true)
-        // Before the name is known, nothing is served.
-        server.servedName = nil
-        #expect(await ask(port, "GET /nope HTTP/1.1\r\nHost: m:41443\r\n\r\n")?.hasPrefix("HTTP/1.1 421") == true)
-    }
-
-    @Test func aPeerThatSaysNothingLetsGoOfItsSlot() async throws {
-        let (server, port) = try started()
-        defer { server.stop() }
-        // Eight is every connection there is, and a peer that connects and stays
-        // quiet produces no callback to check a deadline in — which is why the
-        // deadline is on the idle timer rather than inside the read loop.
-        let silent = (0..<8).map { _ in
-            Task { _ = await ask(port, "", hold: 30) }
+extension TimingSensitive {
+    @Suite(.serialized) struct OTAServerOverASocket {
+        private func started() throws -> (OTAServer, UInt16) {
+            let server = OTAServer(tailnetPort: 41443)
+            server.servedName = "m"   // the requests below name it as their Host
+            let port = try #require(server.start())
+            return (server, port)
         }
-        try await Task.sleep(for: .seconds(1))
-        // The ninth is refused outright rather than queued behind them.
-        #expect(await ask(port, "GET /nope HTTP/1.1\r\nHost: m\r\n\r\n") == nil)
-        // And they are let go of well inside the idle limit, not held for 120 s.
-        try await Task.sleep(for: .seconds(16))
-        #expect(await ask(port, "GET /nope HTTP/1.1\r\nHost: m\r\n\r\n")?.hasPrefix("HTTP/1.1 404") == true)
-        for t in silent { t.cancel() }
-    }
 
-    @Test func stoppingTakesTheConnectionsWithIt() async throws {
-        let (server, port) = try started()
-        // Connected and waiting to be told something — and reading, so it can see
-        // the close when it comes.
-        let quiet = Task { await ask(port, "") }
-        try await Task.sleep(for: .seconds(1))
-        // Cancelling the listener only stops new ones; a connection in flight used
-        // to sit there until the idle timer, because the pump holds the server
-        // weakly and the chain simply stops when the server goes.
-        server.stop()
-        let closed = await withTaskGroup(of: Bool.self) { group in
-            group.addTask { _ = await quiet.value; return true }
-            // Well inside the 15 s the head deadline would take, so a pass here is
-            // `stop` having done it rather than the timer.
-            group.addTask { try? await Task.sleep(for: .seconds(5)); return false }
-            defer { group.cancelAll() }
-            return await group.next() ?? false
+        @Test func itAnswersOnlyTheMethodsAndRequestsItServes() async throws {
+            let (server, port) = try started()
+            defer { server.stop() }
+            // A path it doesn't serve: nothing here touches stored builds.
+            #expect(await ask(port, "GET /nope HTTP/1.1\r\nHost: m:41443\r\n\r\n")?.hasPrefix("HTTP/1.1 404") == true)
+            #expect(await ask(port, "POST / HTTP/1.1\r\nHost: m:41443\r\n\r\n")?.hasPrefix("HTTP/1.1 405") == true)
+            // Without a Host every link in the manifest would point the device at itself.
+            #expect(await ask(port, "GET /nope HTTP/1.1\r\n\r\n")?.hasPrefix("HTTP/1.1 400") == true)
+            #expect(await ask(port, "GET /nope HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n")?
+                .hasPrefix("HTTP/1.1 400") == true)
+            // A head that never ends.
+            let huge = "GET /nope HTTP/1.1\r\nHost: m\r\nX: " + String(repeating: "y", count: 40_000) + "\r\n"
+            #expect(await ask(port, huge)?.hasPrefix("HTTP/1.1 431") == true)
+            // Still answering afterwards: none of those wedged it.
+            #expect(await ask(port, "HEAD /nope HTTP/1.1\r\nHost: m:41443\r\n\r\n")?
+                .hasPrefix("HTTP/1.1 404") == true)
         }
-        #expect(closed)
-        #expect(server.port == 0)
+
+        @Test func aHostThatIsntOurTailnetNameIsRefused() async throws {
+            let (server, port) = try started()
+            defer { server.stop() }
+            // A page on this Mac that rebinds its own name to 127.0.0.1 sends its own Host.
+            #expect(await ask(port, "GET / HTTP/1.1\r\nHost: attacker.example:41443\r\n\r\n")?
+                .hasPrefix("HTTP/1.1 421") == true)
+            // Case and a trailing dot are the same name.
+            #expect(await ask(port, "GET /nope HTTP/1.1\r\nHost: M.:41443\r\n\r\n")?.hasPrefix("HTTP/1.1 404") == true)
+            // Before the name is known, nothing is served.
+            server.servedName = nil
+            #expect(await ask(port, "GET /nope HTTP/1.1\r\nHost: m:41443\r\n\r\n")?.hasPrefix("HTTP/1.1 421") == true)
+        }
+
+        @Test func aPeerThatSaysNothingLetsGoOfItsSlot() async throws {
+            let (server, port) = try started()
+            defer { server.stop() }
+            // Eight is every connection there is, and a peer that connects and stays
+            // quiet produces no callback to check a deadline in — which is why the
+            // deadline is on the idle timer rather than inside the read loop.
+            let silent = (0..<8).map { _ in
+                Task { _ = await ask(port, "", hold: 30) }
+            }
+            try await Task.sleep(for: .seconds(1))
+            // The ninth is refused outright rather than queued behind them.
+            #expect(await ask(port, "GET /nope HTTP/1.1\r\nHost: m\r\n\r\n") == nil)
+            // And they are let go of well inside the idle limit, not held for 120 s.
+            try await Task.sleep(for: .seconds(16))
+            #expect(await ask(port, "GET /nope HTTP/1.1\r\nHost: m\r\n\r\n")?.hasPrefix("HTTP/1.1 404") == true)
+            for t in silent { t.cancel() }
+        }
+
+        @Test func stoppingTakesTheConnectionsWithIt() async throws {
+            let (server, port) = try started()
+            // Connected and waiting to be told something — and reading, so it can see
+            // the close when it comes.
+            let quiet = Task { await ask(port, "") }
+            try await Task.sleep(for: .seconds(1))
+            // Cancelling the listener only stops new ones; a connection in flight used
+            // to sit there until the idle timer, because the pump holds the server
+            // weakly and the chain simply stops when the server goes.
+            server.stop()
+            let closed = await withTaskGroup(of: Bool.self) { group in
+                group.addTask { _ = await quiet.value; return true }
+                // Well inside the 15 s the head deadline would take, so a pass here is
+                // `stop` having done it rather than the timer.
+                group.addTask { try? await Task.sleep(for: .seconds(5)); return false }
+                defer { group.cancelAll() }
+                return await group.next() ?? false
+            }
+            #expect(closed)
+            #expect(server.port == 0)
+        }
     }
 }
 
@@ -799,8 +931,10 @@ private final class EchoServer: @unchecked Sendable {
 }
 
 /// Polls `condition` for up to 5 s: connection callbacks land when they land.
+/// Up to 15 s: closes reach the process-wide pair count late on a loaded machine, and the
+/// relay suite's counts then missed a 5 s wait now and then. It returns as soon as it holds.
 private func eventually(_ condition: () -> Bool) async throws -> Bool {
-    for _ in 0..<50 where !condition() { try await Task.sleep(for: .milliseconds(100)) }
+    for _ in 0..<150 where !condition() { try await Task.sleep(for: .milliseconds(100)) }
     return condition()
 }
 
@@ -871,223 +1005,226 @@ private func startedRelay(upstream: UInt16, spare: Bool = false) async throws ->
     throw lastError!
 }
 
-@Suite(.serialized) struct RelayOnLocalhost {
-    @Test func bytesGoThroughUnchanged() async throws {
-        let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
-        let relay = try await startedRelay(upstream: upstream); defer { relay.stop() }
-        let payload = Data((0..<4000).map { UInt8($0 % 251) })
-        #expect(await roundTrip(port: relay.localPort, payload: payload) == payload)
-    }
-
-    @Test func refusedUpstreamClosesTheLocalSide() async throws {
-        let server = try EchoServer(); let dead = await server.start(); server.stop()   // nothing listens there now
-        let relay = try await startedRelay(upstream: dead); defer { relay.stop() }
-        let start = Date()
-        let got = await roundTrip(port: relay.localPort, payload: Data("hi".utf8), timeout: 8)
-        #expect(got == nil || got?.isEmpty == true)
-        #expect(Date().timeIntervalSince(start) < 7)   // closed, not left hanging until our timeout
-    }
-
-    @Test func connectionsBeyondTheCapAreRefused() async throws {
-        let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
-        let relay = try await startedRelay(upstream: upstream); defer { relay.stop() }
-        var held: [NWConnection] = []
-        defer { held.forEach { $0.cancel() } }
-        for _ in 0..<64 {   // the per-relay cap, each kept open
-            let c = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: relay.localPort)!, using: .tcp)
-            c.start(queue: .global()); held.append(c)
+extension TimingSensitive {
+    @Suite(.serialized) struct RelayOnLocalhost {
+        @Test func bytesGoThroughUnchanged() async throws {
+            let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
+            let relay = try await startedRelay(upstream: upstream); defer { relay.stop() }
+            let payload = Data((0..<4000).map { UInt8($0 % 251) })
+            #expect(await roundTrip(port: relay.localPort, payload: payload) == payload)
         }
-        try await Task.sleep(for: .seconds(2))   // let all 64 be accepted and tracked
-        #expect(await roundTrip(port: relay.localPort, payload: Data("x".utf8), timeout: 3) == nil)
-    }
 
-    /// Opens `n` connections to the relay and keeps them until cancelled.
-    private func hold(_ n: Int, to relay: Relay) -> [NWConnection] {
-        (0..<n).map { _ in
-            let c = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: relay.localPort)!, using: .tcp)
-            c.start(queue: .global()); return c
+        @Test func refusedUpstreamClosesTheLocalSide() async throws {
+            let server = try EchoServer(); let dead = await server.start(); server.stop()   // nothing listens there now
+            let relay = try await startedRelay(upstream: dead); defer { relay.stop() }
+            let start = Date()
+            let got = await roundTrip(port: relay.localPort, payload: Data("hi".utf8), timeout: 8)
+            #expect(got == nil || got?.isEmpty == true)
+            #expect(Date().timeIntervalSince(start) < 7)   // closed, not left hanging until our timeout
         }
-    }
 
-    /// The process-wide pair count must come back to zero whichever side ends a
-    /// connection first — stop(), the client, or the upstream — or relays
-    /// slowly lose capacity until they refuse everything.
-    @Test func pairCountSurvivesStopAndCloseRaces() async throws {
-        let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
-        #expect(try await eventually { Relay.openPairs == 0 })
-
-        // Stop with every connection tracked, then the clients' late closes arrive.
-        let a = try await startedRelay(upstream: upstream)
-        var held = hold(64, to: a)
-        #expect(try await eventually { Relay.openPairs == 64 })
-        a.stop()
-        held.forEach { $0.cancel() }
-        #expect(try await eventually { Relay.openPairs == 0 })
-
-        // stop() and the upstream closing every connection, at the same moment.
-        let far = try EchoServer(); let farPort = await far.start(); defer { far.stop() }
-        let b = try await startedRelay(upstream: farPort)
-        held = hold(40, to: b)
-        #expect(try await eventually { far.accepted == 40 && Relay.openPairs == 40 })
-        DispatchQueue.concurrentPerform(iterations: 2) { i in if i == 0 { far.closeAll() } else { b.stop() } }
-        held.forEach { $0.cancel() }
-        #expect(try await eventually { Relay.openPairs == 0 })
-
-        // Full, all closed by the clients: new connections get through again.
-        let c = try await startedRelay(upstream: upstream); defer { c.stop() }
-        held = hold(64, to: c)
-        #expect(try await eventually { Relay.openPairs == 64 })
-        #expect(await roundTrip(port: c.localPort, payload: Data("x".utf8), timeout: 2) == nil)
-        held.forEach { $0.cancel() }
-        #expect(try await eventually { Relay.openPairs == 0 })
-        #expect(await roundTrip(port: c.localPort, payload: Data("x".utf8)) == Data("x".utf8))
-    }
-
-    /// 256 pairs across all relays: one more is refused anywhere, until one closes.
-    @Test func processWideCapSpansRelays() async throws {
-        let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
-        var relays: [Relay] = []
-        defer { relays.forEach { $0.stop() } }
-        var held: [[NWConnection]] = []
-        defer { held.joined().forEach { $0.cancel() } }
-        for _ in 0..<4 {
-            let r = try await startedRelay(upstream: upstream)
-            relays.append(r); held.append(hold(64, to: r))
+        @Test func connectionsBeyondTheCapAreRefused() async throws {
+            let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
+            let relay = try await startedRelay(upstream: upstream); defer { relay.stop() }
+            var held: [NWConnection] = []
+            defer { held.forEach { $0.cancel() } }
+            for _ in 0..<64 {   // the per-relay cap, each kept open
+                let c = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: relay.localPort)!, using: .tcp)
+                c.start(queue: .global()); held.append(c)
+            }
+            try await Task.sleep(for: .seconds(2))   // let all 64 be accepted and tracked
+            #expect(await roundTrip(port: relay.localPort, payload: Data("x".utf8), timeout: 3) == nil)
         }
-        #expect(try await eventually { Relay.openPairs == 256 })
-        let fifth = try await startedRelay(upstream: upstream); relays.append(fifth)
-        #expect(await roundTrip(port: fifth.localPort, payload: Data("x".utf8), timeout: 2) == nil)
-        held[0][0].cancel()
-        #expect(try await eventually { Relay.openPairs == 255 })
-        #expect(await roundTrip(port: fifth.localPort, payload: Data("x".utf8)) == Data("x".utf8))
-    }
 
-    /// Tunnel relays fill up with remotepairingd's standby connections; the last
-    /// slots stay for control channels, which must come back every ~40 s.
-    @Test func tunnelRelaysLeaveTheLastSlotsToControlChannels() async throws {
-        let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
-        var relays: [Relay] = []
-        defer { relays.forEach { $0.stop() } }
-        var held: [[NWConnection]] = []
-        defer { held.joined().forEach { $0.cancel() } }
-        let usable = 256 - Relay.controlReserve   // what tunnel relays may take
-        for n in [64, 64, 64, usable - 192] {   // control relays: tunnel ones stop at spareCap
-            let r = try await startedRelay(upstream: upstream)
-            relays.append(r); held.append(hold(n, to: r))
+        /// Opens `n` connections to the relay and keeps them until cancelled.
+        private func hold(_ n: Int, to relay: Relay) -> [NWConnection] {
+            (0..<n).map { _ in
+                let c = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: relay.localPort)!, using: .tcp)
+                c.start(queue: .global()); return c
+            }
         }
-        #expect(try await eventually { Relay.openPairs == usable })
-        // A tunnel relay: refused, though it holds nothing and the process isn't full.
-        let tunnel = try await startedRelay(upstream: upstream, spare: true); relays.append(tunnel)
-        #expect(await roundTrip(port: tunnel.localPort, payload: Data("x".utf8), timeout: 2) == nil)
-        // A control relay still gets through.
-        let control = try await startedRelay(upstream: upstream); relays.append(control)
-        #expect(await roundTrip(port: control.localPort, payload: Data("x".utf8)) == Data("x".utf8))
-    }
 
-    /// A tunnel relay keeps spareCap pairs: a new one pushes out a standby — never the
-    /// live tunnel, even when it is both the oldest and has been quiet the longest.
-    @Test func aFullTunnelRelayDropsAStandbyNotTheQuietLiveOne() async throws {
-        let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
-        let relay = try await startedRelay(upstream: upstream, spare: true); defer { relay.stop() }
-        let live = try #require(await openEcho(port: relay.localPort)); defer { live.cancel() }
-        let traffic = Data(count: Relay.standbyBytes)   // what a live tunnel has moved by the time standbys pile up
-        #expect(await echo(live, traffic)?.count == traffic.count)
-        let idle = hold(Relay.spareCap - 1, to: relay); defer { idle.forEach { $0.cancel() } }
-        #expect(try await eventually { Relay.openPairs == Relay.spareCap })
-        #expect(await roundTrip(port: relay.localPort, payload: Data("x".utf8)) == Data("x".utf8))
-        #expect(Relay.openPairs <= Relay.spareCap)
-        #expect(await echo(live, Data("still here".utf8)) == Data("still here".utf8))
-        relay.stop()
-        #expect(try await eventually { Relay.openPairs == 0 })
-    }
+        /// The process-wide pair count must come back to zero whichever side ends a
+        /// connection first — stop(), the client, or the upstream — or relays
+        /// slowly lose capacity until they refuse everything.
+        @Test func pairCountSurvivesStopAndCloseRaces() async throws {
+            let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
+            #expect(try await eventually { Relay.openPairs == 0 })
 
-    /// Only live-looking pairs: none is evicted, the relay takes one more.
-    @Test func aTunnelRelayWithNoStandbyTakesThePairInstead() async throws {
-        let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
-        let relay = try await startedRelay(upstream: upstream, spare: true); defer { relay.stop() }
-        var live: [NWConnection] = []
-        defer { live.forEach { $0.cancel() } }
-        for _ in 0..<Relay.spareCap {
-            let c = try #require(await openEcho(port: relay.localPort)); live.append(c)
-            #expect(await echo(c, Data(count: Relay.standbyBytes))?.count == Relay.standbyBytes)
+            // Stop with every connection tracked, then the clients' late closes arrive.
+            let a = try await startedRelay(upstream: upstream)
+            var held = hold(64, to: a)
+            #expect(try await eventually { Relay.openPairs == 64 })
+            a.stop()
+            held.forEach { $0.cancel() }
+            #expect(try await eventually { Relay.openPairs == 0 })
+
+            // stop() and the upstream closing every connection, at the same moment.
+            let far = try EchoServer(); let farPort = await far.start(); defer { far.stop() }
+            let b = try await startedRelay(upstream: farPort)
+            held = hold(40, to: b)
+            #expect(try await eventually { far.accepted == 40 && Relay.openPairs == 40 })
+            DispatchQueue.concurrentPerform(iterations: 2) { i in if i == 0 { far.closeAll() } else { b.stop() } }
+            held.forEach { $0.cancel() }
+            #expect(try await eventually { Relay.openPairs == 0 })
+
+            // Full, all closed by the clients: new connections get through again.
+            let c = try await startedRelay(upstream: upstream); defer { c.stop() }
+            held = hold(64, to: c)
+            #expect(try await eventually { Relay.openPairs == 64 })
+            #expect(await roundTrip(port: c.localPort, payload: Data("x".utf8), timeout: 2) == nil)
+            held.forEach { $0.cancel() }
+            #expect(try await eventually { Relay.openPairs == 0 })
+            #expect(await roundTrip(port: c.localPort, payload: Data("x".utf8)) == Data("x".utf8))
         }
-        let extra = try #require(await openEcho(port: relay.localPort)); defer { extra.cancel() }
-        #expect(try await eventually { Relay.openPairs == Relay.spareCap + 1 })
-        for c in live { #expect(await echo(c, Data("ok".utf8)) == Data("ok".utf8)) }
-    }
 
-    /// A relay whose pairs stay open but silent reads as quiet — how an old tunnel's
-    /// relay, kept open by standbys, gets closed.
-    @Test func openButSilentPairsReadAsQuiet() async throws {
-        let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
-        let relay = try await startedRelay(upstream: upstream, spare: true); defer { relay.stop() }
-        let c = try #require(await openEcho(port: relay.localPort)); defer { c.cancel() }
-        #expect(try await eventually { relay.openCount == 1 })
-        #expect(!relay.quiet(for: 0.3))
-        try await Task.sleep(for: .milliseconds(400))
-        #expect(relay.openCount == 1 && relay.quiet(for: 0.3))
-        #expect(await echo(c, Data("hi".utf8)) == Data("hi".utf8))
-        #expect(!relay.quiet(for: 0.3))
-    }
-
-    /// Paused on cellular, a tunnel relay closes its pairs but keeps listening:
-    /// back on Wi‑Fi the next tunnel comes to the same port.
-    @Test func droppingConnectionsKeepsTheListener() async throws {
-        let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
-        let relay = try await startedRelay(upstream: upstream, spare: true); defer { relay.stop() }
-        let held = hold(3, to: relay); defer { held.forEach { $0.cancel() } }
-        #expect(try await eventually { Relay.openPairs == 3 })
-        relay.dropConnections()
-        #expect(Relay.openPairs == 0)
-        #expect(await roundTrip(port: relay.localPort, payload: Data("x".utf8)) == Data("x".utf8))
-        #expect(try await eventually { Relay.openPairs == 0 })
-    }
-
-    /// A tunnel whose far end is gone still gets remotepairingd's writes: only bytes
-    /// from the device say it is alive.
-    @Test func onlyBytesFromTheDeviceCountAsHearingIt() async throws {
-        let silent = try EchoServer(silent: true); let upstream = await silent.start(); defer { silent.stop() }
-        let relay = try await startedRelay(upstream: upstream, spare: true); defer { relay.stop() }
-        let c = try #require(await openEcho(port: relay.localPort)); defer { c.cancel() }
-        #expect(try await eventually { relay.openCount == 1 })
-        #expect(!relay.heardFromDevice(within: 30))   // just opened: nothing from the device yet
-        try await Task.sleep(for: .milliseconds(400))
-        c.send(content: Data("heartbeat".utf8), completion: .contentProcessed { _ in })
-        #expect(try await eventually { !relay.quiet(for: 0.3) })   // the Mac side wrote…
-        #expect(!relay.heardFromDevice(within: 0.3))              // …the device said nothing
-
-        let talker = try EchoServer(); let answering = await talker.start(); defer { talker.stop() }
-        let live = try await startedRelay(upstream: answering, spare: true); defer { live.stop() }
-        let l = try #require(await openEcho(port: live.localPort)); defer { l.cancel() }
-        try await Task.sleep(for: .milliseconds(400))
-        #expect(await echo(l, Data("heartbeat".utf8)) == Data("heartbeat".utf8))
-        #expect(live.heardFromDevice(within: 0.3))                // a device that answers is heard
-    }
-
-    /// Here, not top-level: its probes sweep 49152…, where these echo servers listen.
-    @Test func portScanKeepsItsDeadlineEvenOnASilentPort() async throws {
-        // A port that accepts and never answers the handshake (4 s timeout on its own).
-        var silent: EchoServer?
-        for port in UInt16(49152)...49160 where silent == nil {
-            if let s = try? EchoServer(silent: true, port: port), await s.start() != 0 { silent = s }
+        /// 256 pairs across all relays: one more is refused anywhere, until one closes.
+        @Test func processWideCapSpansRelays() async throws {
+            let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
+            var relays: [Relay] = []
+            defer { relays.forEach { $0.stop() } }
+            var held: [[NWConnection]] = []
+            defer { held.joined().forEach { $0.cancel() } }
+            for _ in 0..<4 {
+                let r = try await startedRelay(upstream: upstream)
+                relays.append(r); held.append(hold(64, to: r))
+            }
+            #expect(try await eventually { Relay.openPairs == 256 })
+            let fifth = try await startedRelay(upstream: upstream); relays.append(fifth)
+            #expect(await roundTrip(port: fifth.localPort, payload: Data("x".utf8), timeout: 2) == nil)
+            held[0][0].cancel()
+            #expect(try await eventually { Relay.openPairs == 255 })
+            #expect(await roundTrip(port: fifth.localPort, payload: Data("x".utf8)) == Data("x".utf8))
         }
-        guard let silent else { return }   // all taken: nothing to test here
-        defer { silent.stop() }
-        let clock = ContinuousClock(), start = clock.now
-        let r = await ReachabilityProbe.findRemotePairingPort(host: "127.0.0.1", limit: .seconds(1))
-        #expect(r == .timedOut)
-        #expect(clock.now - start < .seconds(3.5))   // 1 s alone; slower beside parallel tests, but under the 4 s handshake
-    }
 
-    @Test func stopFreesThePort() async throws {
-        let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
-        let first = try await startedRelay(upstream: upstream)
-        let port = first.localPort
-        first.stop()
-        try await Task.sleep(for: .milliseconds(200))
-        let again = Relay(localIP: "127.0.0.1", localPort: port, remoteIP: "127.0.0.1", remotePort: upstream)
-        try await again.start(); defer { again.stop() }
-        #expect(await roundTrip(port: port, payload: Data("x".utf8)) == Data("x".utf8))
+        /// Tunnel relays fill up with remotepairingd's standby connections; the last
+        /// slots stay for control channels, which must come back every ~40 s.
+        @Test func tunnelRelaysLeaveTheLastSlotsToControlChannels() async throws {
+            let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
+            var relays: [Relay] = []
+            defer { relays.forEach { $0.stop() } }
+            var held: [[NWConnection]] = []
+            defer { held.joined().forEach { $0.cancel() } }
+            let usable = 256 - Relay.controlReserve   // what tunnel relays may take
+            for n in [64, 64, 64, usable - 192] {   // control relays: tunnel ones stop at spareCap
+                let r = try await startedRelay(upstream: upstream)
+                relays.append(r); held.append(hold(n, to: r))
+            }
+            #expect(try await eventually { Relay.openPairs == usable })
+            // A tunnel relay: refused, though it holds nothing and the process isn't full.
+            let tunnel = try await startedRelay(upstream: upstream, spare: true); relays.append(tunnel)
+            #expect(await roundTrip(port: tunnel.localPort, payload: Data("x".utf8), timeout: 2) == nil)
+            // A control relay still gets through.
+            let control = try await startedRelay(upstream: upstream); relays.append(control)
+            #expect(await roundTrip(port: control.localPort, payload: Data("x".utf8)) == Data("x".utf8))
+        }
+
+        /// A tunnel relay keeps spareCap pairs: a new one pushes out a standby — never the
+        /// live tunnel, even when it is both the oldest and has been quiet the longest.
+        @Test func aFullTunnelRelayDropsAStandbyNotTheQuietLiveOne() async throws {
+            let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
+            let relay = try await startedRelay(upstream: upstream, spare: true); defer { relay.stop() }
+            let live = try #require(await openEcho(port: relay.localPort)); defer { live.cancel() }
+            let traffic = Data(count: Relay.standbyBytes)   // what a live tunnel has moved by the time standbys pile up
+            #expect(await echo(live, traffic)?.count == traffic.count)
+            let idle = hold(Relay.spareCap - 1, to: relay); defer { idle.forEach { $0.cancel() } }
+            #expect(try await eventually { Relay.openPairs == Relay.spareCap })
+            #expect(await roundTrip(port: relay.localPort, payload: Data("x".utf8)) == Data("x".utf8))
+            #expect(Relay.openPairs <= Relay.spareCap)
+            #expect(await echo(live, Data("still here".utf8)) == Data("still here".utf8))
+            relay.stop()
+            #expect(try await eventually { Relay.openPairs == 0 })
+        }
+
+        /// Only live-looking pairs: none is evicted, the relay takes one more.
+        @Test func aTunnelRelayWithNoStandbyTakesThePairInstead() async throws {
+            let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
+            let relay = try await startedRelay(upstream: upstream, spare: true); defer { relay.stop() }
+            var live: [NWConnection] = []
+            defer { live.forEach { $0.cancel() } }
+            for _ in 0..<Relay.spareCap {
+                let c = try #require(await openEcho(port: relay.localPort)); live.append(c)
+                #expect(await echo(c, Data(count: Relay.standbyBytes))?.count == Relay.standbyBytes)
+            }
+            let extra = try #require(await openEcho(port: relay.localPort)); defer { extra.cancel() }
+            #expect(try await eventually { Relay.openPairs == Relay.spareCap + 1 })
+            for c in live { #expect(await echo(c, Data("ok".utf8)) == Data("ok".utf8)) }
+        }
+
+        /// A relay whose pairs stay open but silent reads as quiet — how an old tunnel's
+        /// relay, kept open by standbys, gets closed.
+        @Test func openButSilentPairsReadAsQuiet() async throws {
+            let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
+            let relay = try await startedRelay(upstream: upstream, spare: true); defer { relay.stop() }
+            let c = try #require(await openEcho(port: relay.localPort)); defer { c.cancel() }
+            #expect(try await eventually { relay.openCount == 1 })
+            #expect(!relay.quiet(for: 0.3))
+            try await Task.sleep(for: .milliseconds(400))
+            #expect(relay.openCount == 1 && relay.quiet(for: 0.3))
+            #expect(await echo(c, Data("hi".utf8)) == Data("hi".utf8))
+            #expect(!relay.quiet(for: 0.3))
+        }
+
+        /// Paused on cellular, a tunnel relay closes its pairs but keeps listening:
+        /// back on Wi‑Fi the next tunnel comes to the same port.
+        @Test func droppingConnectionsKeepsTheListener() async throws {
+            let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
+            let relay = try await startedRelay(upstream: upstream, spare: true); defer { relay.stop() }
+            let held = hold(3, to: relay); defer { held.forEach { $0.cancel() } }
+            #expect(try await eventually { Relay.openPairs == 3 })
+            relay.dropConnections()
+            #expect(Relay.openPairs == 0)
+            #expect(await roundTrip(port: relay.localPort, payload: Data("x".utf8)) == Data("x".utf8))
+            #expect(try await eventually { Relay.openPairs == 0 })
+        }
+
+        /// A tunnel whose far end is gone still gets remotepairingd's writes: only bytes
+        /// from the device say it is alive.
+        @Test func onlyBytesFromTheDeviceCountAsHearingIt() async throws {
+            let silent = try EchoServer(silent: true); let upstream = await silent.start(); defer { silent.stop() }
+            let relay = try await startedRelay(upstream: upstream, spare: true); defer { relay.stop() }
+            let c = try #require(await openEcho(port: relay.localPort)); defer { c.cancel() }
+            #expect(try await eventually { relay.openCount == 1 })
+            #expect(!relay.heardFromDevice(within: 30))   // just opened: nothing from the device yet
+            try await Task.sleep(for: .milliseconds(400))
+            c.send(content: Data("heartbeat".utf8), completion: .contentProcessed { _ in })
+            #expect(try await eventually { !relay.quiet(for: 0.3) })   // the Mac side wrote…
+            #expect(!relay.heardFromDevice(within: 0.3))              // …the device said nothing
+
+            let talker = try EchoServer(); let answering = await talker.start(); defer { talker.stop() }
+            let live = try await startedRelay(upstream: answering, spare: true); defer { live.stop() }
+            let l = try #require(await openEcho(port: live.localPort)); defer { l.cancel() }
+            try await Task.sleep(for: .milliseconds(400))
+            #expect(await echo(l, Data("heartbeat".utf8)) == Data("heartbeat".utf8))
+            #expect(live.heardFromDevice(within: 0.3))                // a device that answers is heard
+        }
+
+        /// Below 49152, the Mac's ephemeral range: any test's server may listen there, and
+        /// one that answered the probe would end the scan early and race the deadline.
+        @Test func portScanKeepsItsDeadlineEvenOnASilentPort() async throws {
+            // A port that accepts and never answers the handshake (4 s timeout on its own).
+            var silent: EchoServer?, from: UInt16 = 0
+            for port in UInt16(39152)...39160 where silent == nil {
+                if let s = try? EchoServer(silent: true, port: port), await s.start() != 0 { silent = s; from = port }
+            }
+            guard let silent else { return }   // all taken: nothing to test here
+            defer { silent.stop() }
+            let clock = ContinuousClock(), start = clock.now
+            let r = await ReachabilityProbe.findRemotePairingPort(host: "127.0.0.1", from: from, limit: .seconds(1))
+            #expect(r == .timedOut)
+            #expect(clock.now - start < .seconds(3.5))   // 1 s alone; slower beside parallel tests, but under the 4 s handshake
+        }
+
+        @Test func stopFreesThePort() async throws {
+            let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
+            let first = try await startedRelay(upstream: upstream)
+            let port = first.localPort
+            first.stop()
+            try await Task.sleep(for: .milliseconds(200))
+            let again = Relay(localIP: "127.0.0.1", localPort: port, remoteIP: "127.0.0.1", remotePort: upstream)
+            try await again.start(); defer { again.stop() }
+            #expect(await roundTrip(port: port, payload: Data("x".utf8)) == Data("x".utf8))
+        }
     }
 }
 
@@ -1347,11 +1484,11 @@ private func startedRelay(upstream: UInt16, spare: Bool = false) async throws ->
 @Test func thePageEscapesWhatCameFromTheArchive() {
     let build = OTA.Build(bundleID: "com.example.App", title: "<script>alert(1)</script>", version: "1.0", build: "1",
                           added: .now, size: 1)
-    let html = OTA.indexHTML([(bundleID: "com.example.App", builds: [build])], base: "https://x/p")
+    let html = OTA.indexHTML([(bundleID: "com.example.App", builds: [build])], base: "https://x/p", in: absentOTA)
     #expect(!html.contains("<script>alert"))
     #expect(html.contains("&lt;script&gt;"))
     #expect(html.contains("NEWEST"))
-    #expect(OTA.indexHTML([], base: "https://x/p").contains("No builds yet"))
+    #expect(OTA.indexHTML([], base: "https://x/p", in: absentOTA).contains("No builds yet"))
 }
 
 @Test func theServerWontServeAnythingOutsideItsOwnDirectory() {
@@ -1749,9 +1886,17 @@ private func startedRelay(upstream: UInt16, spare: Bool = false) async throws ->
 @Test func aFolderThatCantBeReadIsNotAnEmptyOne() throws {
     // Deleting ota/ is the off switch; failing to read it is not, and treating
     // the two alike takes the page down under a download.
-    let gone = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-absent-\(UUID().uuidString)")
-    #expect((try? FileManager.default.contentsOfDirectory(atPath: gone.path)) == nil)
-    #expect(!FileManager.default.fileExists(atPath: gone.path))   // so appDirectories would say []
+    let root = scratchDir()
+    let app = root.appendingPathComponent("com.example.App")
+    try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+    try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: app.path)
+    defer {
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: app.path)
+        try? FileManager.default.removeItem(at: root)
+    }
+    try #require(!FileManager.default.isReadableFile(atPath: app.path))   // not running as root
+    #expect(OTA.appDirectories(in: root) == nil)                                       // unreadable: ask again
+    #expect(OTA.appDirectories(in: root.appendingPathComponent("absent")) == [])     // gone: off
 }
 
 @Test func anExpiredProfileOrAnUnknownUdidIsRefusedBeforeTheDeviceSeesIt() throws {
@@ -2057,7 +2202,7 @@ private func sized(_ path: String, _ b: OTA.Build) -> OTA.Build {
     func page(_ expires: Date?) -> String {
         let build = OTA.Build(bundleID: "com.example.App", title: "App", version: "1.0", build: "1",
                               added: .now, size: 1, expires: expires, slug: "1.0-1-x")
-        return OTA.indexHTML([(bundleID: "com.example.App", builds: [build])], base: "https://x/p")
+        return OTA.indexHTML([(bundleID: "com.example.App", builds: [build])], base: "https://x/p", in: absentOTA)
     }
     #expect(page(.now.addingTimeInterval(-86_400)).contains("EXPIRED"))
     #expect(!page(.now.addingTimeInterval(86_400)).contains("EXPIRED"))
@@ -2120,6 +2265,9 @@ private func freeBase(in band: ClosedRange<UInt16>, count: Int = 20) -> UInt16 {
     }
     return band.lowerBound
 }
+
+/// For page tests: icons are looked up here, so they never touch the real ota/ folder.
+private let absentOTA = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-absent-\(UUID().uuidString)")
 
 private func scratchDir() -> URL {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-test-\(UUID().uuidString)")
@@ -2321,11 +2469,148 @@ func linkFollowsTheTable(_ row: Int) {
 /// behind any other VPN would read as unreachable, and never be paused.
 @Test func aSilentPortOnAnyMeshStillCountsAsReachedWhenTheDeviceTalks() async {
     let pinged = Counter()
-    #expect(await ProxyBridge.stillReached(tailscale: false, heardJustNow: true, ping: { pinged.bump(); return false }))
-    #expect(!(await ProxyBridge.stillReached(tailscale: false, heardJustNow: false, ping: { pinged.bump(); return true })))
+    #expect(await ProxyBridge.stillReached(tailscale: false, heardJustNow: true, ping: { pinged.bump(); return .noPong }))
+    #expect(!(await ProxyBridge.stillReached(tailscale: false, heardJustNow: false, ping: { pinged.bump(); return .pong })))
     #expect(pinged.value == 0)   // Manual IP: never a tailscale ping
-    #expect(await ProxyBridge.stillReached(tailscale: true, heardJustNow: false, ping: { true }))
-    #expect(!(await ProxyBridge.stillReached(tailscale: true, heardJustNow: true, ping: { false })))
+    #expect(await ProxyBridge.stillReached(tailscale: true, heardJustNow: false, ping: { .pong }))
+    #expect(!(await ProxyBridge.stillReached(tailscale: true, heardJustNow: true, ping: { .noPong })))
+    // A ping that couldn't run (no CLI, it hung) says nothing: the device's bytes decide (2b: F2).
+    #expect(await ProxyBridge.stillReached(tailscale: true, heardJustNow: true, ping: { .couldNotRun("no tailscale CLI") }))
+    #expect(!(await ProxyBridge.stillReached(tailscale: true, heardJustNow: false, ping: { .couldNotRun("no tailscale CLI") })))
+}
+
+/// Paused on cellular, the stuck-renewal path never looks for the device elsewhere, however
+/// long: before, after 30 minutes it scanned (over cellular, finding nothing) and failed.
+@Test func pausedOnCellularNeverRelocates() {
+    #expect(HomeRule.relocatesWhenStuck(renewals: 3, paused: false))
+    #expect(!HomeRule.relocatesWhenStuck(renewals: 2, paused: false))
+    #expect(!HomeRule.relocatesWhenStuck(renewals: 3, paused: true))
+    #expect(!HomeRule.relocatesWhenStuck(renewals: 300, paused: true))
+}
+
+/// Last seen on cellular, a start doesn't scan over cellular for a port it won't find;
+/// back on Wi‑Fi, or Start, it does again (2b review).
+@MainActor @Test func aDeviceLastSeenOnCellularIsntScannedFor() async {
+    let rig = Rig()
+    defer { rig.done() }
+    rig.bridge.memory.onCellular = true
+    rig.world.answering = []; rig.world.ping = .pong
+    await rig.bridge.start(.retry)
+    #expect(rig.world.scans == 0 && rig.bridge.status == .error)
+    await rig.bridge.start(.manual)                        // a person asked: look
+    #expect(rig.world.scans == 1 && !rig.bridge.memory.onCellular)
+}
+
+/// "Last seen on cellular" ends where Wi‑Fi is proved: standing aside on this Mac's Wi‑Fi,
+/// and with another device's memory (2b review).
+@MainActor @Test func standingAsideOrAnotherDeviceForgetsCellular() async {
+    let rig = Rig()
+    defer { rig.done() }
+    rig.bridge.memory.onCellular = true
+    rig.world.onLAN = true
+    await rig.bridge.start(.retry)
+    #expect(rig.bridge.status == .local && !rig.bridge.memory.onCellular)
+    let m = DeviceMemory()
+    m.adopt("00008130-000C1C5C307A8D3A"); m.onCellular = true
+    m.adopt("00008101-000A00000000A001")
+    #expect(!m.onCellular)
+}
+
+/// A new address that doesn't answer at the known port: scanned (it pings), and taken only
+/// with the port the scan found there; a scan that finds nothing keeps the old address.
+@MainActor @Test(arguments: [true, false])
+func aNewAddressAndPortAreFoundTogether(scanFinds: Bool) async {
+    var p = inertProfile("iPhone"); p.providerHostName = "iphone"
+    let rig = Rig(p)
+    defer { rig.done() }
+    rig.world.answering = []
+    rig.world.advertAnswers = false
+    rig.world.ping = .pong
+    rig.world.scan = scanFinds ? .found(39999) : .notFound
+    rig.world.peers = [MeshDevice(id: "1", name: "iphone", os: "iOS", ips: ["127.0.0.2"], online: true)]
+    var saved: DeviceProfile?
+    rig.bridge.onProfileChange = { saved = $0 }
+    await rig.bridge.start(.manual)
+    #expect(rig.world.scannedHost == "127.0.0.2")         // the new address is what was scanned
+    if scanFinds {
+        #expect(saved?.providerIP == "127.0.0.2" && saved?.remotePairingPort == 39999)
+    } else {
+        #expect(saved == nil && rig.bridge.profile.providerIP == "127.0.0.1")
+    }
+}
+
+/// This Mac's Tailscale couldn't be asked twice in a row: the status says so, rather than
+/// leaving it to read as the device's fault (2c: F34).
+@MainActor @Test func aPingThatCantRunTwiceIsSaidInTheStatus() async {
+    let rig = Rig()
+    defer { rig.done() }
+    rig.world.answering = []
+    rig.world.ping = .couldNotRun("failed to connect to local Tailscale daemon")
+    await rig.bridge.start(.manual)
+    #expect(!(rig.entry()?.detail.contains("Tailscale on this Mac") ?? true))   // once: could be a blip
+    await rig.bridge.start(.manual)
+    #expect(rig.entry()?.detail.contains("Tailscale on this Mac couldn't be asked") == true)
+    rig.world.ping = .noPong
+    await rig.bridge.start(.manual)
+    #expect(!(rig.entry()?.detail.contains("Tailscale on this Mac") ?? true))
+    // Recovered with no ping made (the device answered straight away): no stale message.
+    rig.world.ping = .couldNotRun("failed to connect to local Tailscale daemon")
+    await rig.bridge.start(.manual); await rig.bridge.start(.manual)
+    rig.world.answering = ["127.0.0.1"]
+    await rig.bridge.start(.manual)
+    #expect(rig.bridge.status == .waiting && !(rig.entry()?.detail.contains("Tailscale on this Mac") ?? true))
+}
+
+/// Recovered at a new address after two pings that couldn't run: the count starts over, so a
+/// later error for another reason doesn't carry the stale Mac-side message (2c review).
+@MainActor @Test func aRecoveryAtANewAddressClearsTheMacSideCount() async {
+    var p = inertProfile("iPhone"); p.providerHostName = "iphone"
+    let rig = Rig(p)
+    defer { rig.done() }
+    rig.world.answering = []
+    rig.world.ping = .couldNotRun("failed to connect to local Tailscale daemon")
+    await rig.bridge.start(.manual); await rig.bridge.start(.manual)
+    #expect(rig.entry()?.detail.contains("Tailscale on this Mac") == true)
+    rig.world.peers = [MeshDevice(id: "1", name: "iphone", os: "iOS", ips: ["127.0.0.2"], online: true)]
+    rig.world.advertAnswers = true                          // RemotePairing answers at the new address
+    await rig.bridge.start(.manual)
+    #expect(rig.bridge.status == .waiting)
+    rig.bridge.fail("something else")
+    #expect(!(rig.entry()?.detail.contains("Tailscale on this Mac") ?? true))
+}
+
+/// A status write that failed is made again on the next tick, as things are then (2c: F39).
+@MainActor @Test func aFailedStatusWriteIsMadeAgain() async throws {
+    let rig = Rig()
+    defer {
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: rig.dir.path)
+        rig.done()
+    }
+    await rig.bridge.start(.manual)
+    try FileManager.default.removeItem(at: rig.dir.appendingPathComponent("status.lock"))
+    try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: rig.dir.path)
+    try #require(!FileManager.default.isWritableFile(atPath: rig.dir.path))   // not running as root
+    rig.bridge.fail("the device went away")
+    #expect(rig.bridge.statusWritePending)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: rig.dir.path)
+    rig.bridge.retryStatusWriteIfPending()
+    #expect(!rig.bridge.statusWritePending)
+    #expect(rig.entry()?.state == BridgeStatus.error.rawValue)
+}
+
+/// While bridging, the 10 s home check asks Tailscale's path (a ping) once a minute at
+/// most; in between it doesn't stand aside on that score (2b: F32/F4).
+@MainActor @Test func theBridgingHomeCheckPingsOnceAMinute() async {
+    let rig = Rig()
+    defer { rig.done() }
+    await rig.bridge.start(.manual)
+    #expect(rig.world.pathChecks == 1)                     // starting always looks
+    for _ in 0..<12 {                                      // two minutes of 10 s ticks
+        rig.world.now += 10
+        rig.bridge.tick()
+        #expect(await eventuallyOnMain { !rig.bridge.checkingHomeForTests })   // its check ran
+    }
+    #expect(rig.world.pathChecks == 3, "\(rig.world.pathChecks)")   // at 60 s and 120 s
 }
 
 /// Old status files have no network; `roamrun status` then shows none.
@@ -2403,7 +2688,7 @@ func linkFollowsTheTable(_ row: Int) {
 
 /// In the serialized relay suite: they open relays, and `processWideCapSpansRelays`
 /// counts every pair in the process — run beside it, they made it flaky.
-extension RelayOnLocalhost {
+extension TimingSensitive.RelayOnLocalhost {
     /// A restart while a bind is in flight, then a discovery whose window reaches the
     /// old port further down: what is counted as relayed is exactly what listens.
     @MainActor @Test func coveredPortsMatchRelaysAfterARestartMidBind() async {
@@ -2561,7 +2846,7 @@ extension RelayOnLocalhost {
     #expect(StatusFile.write(id, entry(getpid(), cli: false, .starting), in: dir, live: live, claim: true, deferToCLI: true) == .written)
 }
 
-@MainActor @Test func aBridgeStartedAutomaticallyLeavesTheDeviceToRoamrunUp() async {
+@MainActor @Test func aBridgeStartedAutomaticallyLeavesTheDeviceToRoamrunUp() {
     let dir = scratchDir()
     defer { try? FileManager.default.removeItem(at: dir) }
     let p = profile("iPhone")
@@ -2570,10 +2855,1017 @@ extension RelayOnLocalhost {
                                tunnelPorts: [], updated: .now, state: BridgeStatus.error.rawValue)
     #expect(StatusFile.write(p.id, cli, in: dir, live: live) == .written)
     let bridge = ProxyBridge(profile: p, statusDir: dir, statusLive: live)
-    await bridge.start(automatic: true)   // what the app's restore, retry and resume paths now do
-    #expect(bridge.status == .error)
+    defer { bridge.stop() }
+    // The claim an automatic start makes (restore, retry, resume), not start() itself:
+    // that would ping and run devicectl on this Mac.
+    if case .heldBy = bridge.claimDevice(.retry) {} else {
+        Issue.record("an automatic claim took roamrun up's device")
+    }
     #expect(StatusFile.read(in: dir, live: live)[p.id]?.pid == 4242)   // still roamrun up's
+}
+
+@Test func onlyTestRunnersTripTheRealFolderGuard() {
+    #expect(ProfileStore.isTestRunner("xctest"))
+    #expect(ProfileStore.isTestRunner("swiftpm-testing-helper"))
+    #expect(ProfileStore.isTestRunner(ProcessInfo.processInfo.processName))   // so it fires in this very run
+    for name in ["RoamRun", "roamrun", "xctest-helper", ""] { #expect(!ProfileStore.isTestRunner(name), "\(name)") }
+}
+
+// MARK: - A bridge with nothing real behind it (BridgeEnv)
+
+/// Stands in for `dns-sd -P`.
+@MainActor private final class FakeRecord: BonjourRecord {
+    var onExit: ((Int32) -> Void)?
+    var registered = 0, stopped = 0, renewed = 0
+    func register(instanceName: String, serviceType: String, domain: String,
+                  port: UInt16, host: String, ip: String, txt: [String: String]) throws { registered += 1 }
+    func stop() { stopped += 1 }
+    func renew() { renewed += 1 }
+    func previousExited() async -> Bool { true }
+}
+
+/// Stands in for the shared remotepairingd watcher: the test feeds its subscriber.
+@MainActor private final class FakeWatcher {
+    var subscribers: [UUID: TunnelCoordinator.Subscriber] = [:]
+}
+
+/// Every field replaced: a bridge on this env runs no tool and reads no setting. Its relays
+/// are real, listening on 127.0.0.1, but nothing is told to connect to them.
+/// The device answers on its port unless `reachable` says otherwise.
+@MainActor private func inertEnv(record: FakeRecord, watcher: FakeWatcher, reachable: Bool = true,
+                                 now: @escaping @Sendable () -> Date = { .now }) -> BridgeEnv {
+    var e = BridgeEnv()
+    e.now = now
+    e.relayClock = { Relay.continuousNow() }
+    e.lanIPv4 = { "127.0.0.1" }
+    e.keepOnCellular = { false }
+    e.cliRunning = { false }
+    e.localNetworkDenied = { false }
+    e.checkTCP = { _, _ in reachable }
+    e.findRemotePairingPort = { _ in .notFound }
+    e.answers = { _ in false }
+    e.isOnLAN = { _ in false }
+    e.warmUp = { _ in Proc.Result(status: 0, out: "", err: "") }
+    e.ping = { _ in .noPong }
+    e.listDevices = { [] }
+    e.recentAdvert = { _, _ in nil }
+    e.killOrphanedHelpers = { 0 }
+    e.subscribe = { id, s in watcher.subscribers[id] = s; return true }
+    e.unsubscribe = { id in watcher.subscribers[id] = nil }
+    e.makeRecord = { record }
+    e.postClaim = { _ in }
+    e.listenForClaims = {}
+    return e
+}
+
+/// Outside 49152…, the ephemeral range other tests' servers listen in.
+private func inertProfile(_ name: String) -> DeviceProfile {
+    var p = profile(name)
+    p.remotePairingPort = 39300
+    p.providerIP = "127.0.0.1"
+    p.instanceName = "FAKE-\(name)"
+    return p
+}
+
+@MainActor @Test func aBridgeRunsEndToEndOnAnInertEnv() async {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let record = FakeRecord(), watcher = FakeWatcher()
+    let p = inertProfile("iPhone")
+    let bridge = ProxyBridge(profile: p, statusDir: dir, statusLive: { _ in true },
+                             env: inertEnv(record: record, watcher: watcher))
+    defer { bridge.stop() }
+    await bridge.start(.manual)
+    #expect(bridge.state.isActive)
+    #expect(record.registered == 1)
+    #expect(watcher.subscribers[p.id] != nil)
+    // The watcher says remotepairingd resolved our record: the UDID is learned.
+    watcher.subscribers[p.id]?.onDevice(p.instanceName, "00008130-000C1C5C307A8D3A")
+    #expect(bridge.udid == "00008130-000C1C5C307A8D3A")
+    bridge.tick()
+    #expect(bridge.status == .waiting)   // no control channel through it
     bridge.stop()
+    #expect(record.stopped >= 1)
+    #expect(watcher.subscribers[p.id] == nil)
+    #expect(StatusFile.read(in: dir, live: { _ in true })[p.id] == nil)
+}
+
+@MainActor @Test func aBridgeWithNoLANAddressSaysSoOnAnInertEnv() async {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let record = FakeRecord(), watcher = FakeWatcher()
+    var env = inertEnv(record: record, watcher: watcher)
+    env.lanIPv4 = { nil }
+    let bridge = ProxyBridge(profile: inertProfile("iPhone"), statusDir: dir, statusLive: { _ in true }, env: env)
+    defer { bridge.stop() }
+    await bridge.start(.manual)
+    #expect(bridge.status == .error)
+    #expect(record.registered == 0)
+}
+
+// MARK: - How a bridge behaves today (1.5b): pinned before 1.6 / 2a / 2b change it
+
+/// What the faked world answers; the test turns these between steps. Read from the env's
+/// closures, which may run off the main actor, but never while the test writes them.
+private final class World: @unchecked Sendable {
+    var now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    var answering: Set<String> = ["127.0.0.1"]   // hosts whose RemotePairing port answers
+    var ping = TailscaleClient.Ping.noPong
+    var onLAN = false
+    var cli = false
+    var lan: String? = "127.0.0.1"
+    var advertAnswers = false
+    var pathChecks = 0
+    var scan = ReachabilityProbe.PortScan.notFound
+    var scans = 0
+    var scannedHost = ""
+    var peers: [MeshDevice] = []
+}
+
+@MainActor private struct Rig {
+    let world = World(), record = FakeRecord(), watcher = FakeWatcher()
+    let dir = scratchDir()
+    let bridge: ProxyBridge
+    var id: UUID { bridge.profile.id }
+
+    /// A port band per rig: parallel tests' bridges each bind a control relay, and a
+    /// listener's port frees only some time after it is cancelled.
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var nextPort: UInt16 = 39300
+
+    /// `keepPort`: a bridge rebuilt for a profile another rig ran keeps its endpoint.
+    init(_ given: DeviceProfile = inertProfile("iPhone"), memory: DeviceMemory = DeviceMemory(), keepPort: Bool = false) {
+        var p = given
+        if !keepPort { p.remotePairingPort = Self.lock.withLock {
+            defer { Self.nextPort = Self.nextPort >= 39_975 ? 39300 : Self.nextPort + 25 }
+            return Self.nextPort
+        } }
+        var e = inertEnv(record: record, watcher: watcher)
+        let w = world
+        e.now = { w.now }
+        e.lanIPv4 = { w.lan }
+        e.checkTCP = { host, _ in w.answering.contains(host) }
+        e.ping = { _ in w.ping }
+        e.isOnLAN = { _ in w.pathChecks += 1; return w.onLAN }
+        e.cliRunning = { w.cli }
+        e.findRemotePairingPort = { host in w.scans += 1; w.scannedHost = host; return w.scan }
+        e.listDevices = { w.peers }
+        e.answers = { _ in w.advertAnswers }
+        bridge = ProxyBridge(profile: p, statusDir: dir, statusLive: { _ in true }, env: e, memory: memory)
+    }
+
+    func entry() -> StatusFile.Entry? { StatusFile.read(in: dir, live: { _ in true })[id] }
+    func done() { bridge.stop(); try? FileManager.default.removeItem(at: dir) }
+}
+
+enum StartCase: String, CaseIterable {
+    case answers, onThisWiFi, silentAndUnreached, silentScanFindsNothing, silentScanTimesOut, silentScanFindsAPort,
+         noLANAddress
+}
+
+/// start() from Off, one row per situation it meets.
+@MainActor @Test(arguments: StartCase.allCases)
+func startOutcomes(_ c: StartCase) async {
+    let rig = Rig()
+    defer { rig.done() }
+    switch c {
+    case .answers: break
+    case .onThisWiFi: rig.world.onLAN = true
+    case .silentAndUnreached: rig.world.answering = []
+    case .silentScanFindsNothing: rig.world.answering = []; rig.world.ping = .pong
+    case .silentScanTimesOut: rig.world.answering = []; rig.world.ping = .pong; rig.world.scan = .timedOut
+    case .silentScanFindsAPort: rig.world.answering = []; rig.world.ping = .pong; rig.world.scan = .found(39999)
+    case .noLANAddress: rig.world.lan = nil
+    }
+    var saved: DeviceProfile?
+    rig.bridge.onProfileChange = { saved = $0 }
+    await rig.bridge.start(.manual)
+    let expected: (BridgeStatus, registered: Int, scans: Int) = switch c {
+    case .answers: (.waiting, 1, 0)
+    case .onThisWiFi: (.local, 0, 0)
+    case .silentAndUnreached: (.error, 0, 0)          // not pinged up: no scan
+    case .silentScanFindsNothing, .silentScanTimesOut: (.error, 0, 1)
+    case .silentScanFindsAPort: (.waiting, 1, 1)
+    case .noLANAddress: (.error, 0, 0)
+    }
+    #expect(rig.bridge.status == expected.0, "\(c)")
+    #expect(rig.record.registered == expected.registered, "\(c)")
+    #expect(rig.world.scans == expected.scans, "\(c)")
+    #expect(rig.bridge.autoRetry, "\(c)")              // none of these stops the retries
+    if c == .silentScanFindsAPort {
+        #expect(rig.bridge.profile.remotePairingPort == 39999 && saved?.remotePairingPort == 39999)
+    } else {
+        #expect(saved == nil, "\(c)")
+    }
+}
+
+/// A scan that found nothing, or ran out of time, isn't repeated for 10 minutes by an
+/// automatic start; Start (and Find RemotePairing Port) scans regardless (2a: F3/R5). The
+/// pause lives with the device's memory: a new device (removed and added again) scans at once.
+@MainActor @Test(arguments: [ReachabilityProbe.PortScan.notFound, .timedOut])
+func aFruitlessScanIsNotRepeatedForTenMinutesOnThisBridge(_ result: ReachabilityProbe.PortScan) async {
+    let rig = Rig()
+    defer { rig.done() }
+    rig.world.answering = []; rig.world.ping = .pong; rig.world.scan = result
+    await rig.bridge.start(.retry)
+    #expect(rig.world.scans == 1)
+    rig.world.now += 599
+    await rig.bridge.start(.retry)
+    #expect(rig.world.scans == 1)
+    await rig.bridge.start(.manual)
+    #expect(rig.world.scans == 2)                          // a person asked
+    rig.world.now += 601
+    await rig.bridge.start(.retry)
+    #expect(rig.world.scans == 3)
+
+    let fresh = Rig()
+    defer { fresh.done() }
+    fresh.world.answering = []; fresh.world.ping = .pong; fresh.world.scan = result
+    await fresh.bridge.start(.manual)
+    #expect(fresh.world.scans == 1)
+}
+
+/// Found under its Tailscale name at a new address: followed and saved.
+/// Found under its Tailscale name at a new address: followed and saved only once RemotePairing
+/// answers there (2c: F37); a name now on a device that doesn't answer leaves the address alone.
+@MainActor @Test(arguments: [true, false])
+func aDeviceWithANewTailscaleAddressIsFollowed(answersThere: Bool) async {
+    var p = inertProfile("iPhone"); p.providerHostName = "iphone"
+    let rig = Rig(p)
+    defer { rig.done() }
+    rig.world.answering = ["127.0.0.2"]
+    rig.world.advertAnswers = answersThere                 // the RemotePairing handshake at the new address
+    rig.world.peers = [MeshDevice(id: "1", name: "iphone", os: "iOS", ips: ["127.0.0.2"], online: true)]
+    var saved: DeviceProfile?
+    rig.bridge.onProfileChange = { saved = $0 }
+    await rig.bridge.start(.manual)
+    if answersThere {
+        #expect(rig.bridge.status == .waiting)
+        #expect(rig.bridge.profile.providerIP == "127.0.0.2" && saved?.providerIP == "127.0.0.2")
+    } else {
+        #expect(rig.bridge.status == .error)
+        #expect(rig.bridge.profile.providerIP == "127.0.0.1" && saved == nil)
+    }
+    #expect(rig.world.scans == 0)
+}
+
+enum ClaimCase: String, CaseIterable {
+    case erroredCLIAutomatic, erroredCLIManual, readyCLIManual, readyCLIFromACLI, erroredAppAutomatic, erroredCLIAutomaticFromACLI
+}
+
+/// Who gets a device another process's `roamrun up` has in its entry.
+@MainActor @Test(arguments: ClaimCase.allCases)
+func claimOutcomes(_ c: ClaimCase) async {
+    let rig = Rig()
+    defer { rig.done() }
+    let held: BridgeStatus = [.readyCLIManual, .readyCLIFromACLI].contains(c) ? .ready : .error
+    let other = StatusFile.Entry(pid: 4242, cli: c != .erroredAppAutomatic, udid: nil, status: held.title, detail: "",
+                                 ready: held == .ready, tunnelPorts: [], updated: .now, state: held.rawValue)
+    #expect(StatusFile.write(rig.id, other, in: rig.dir, live: { _ in true }) == .written)
+    rig.world.cli = [.readyCLIFromACLI, .erroredCLIAutomaticFromACLI].contains(c)
+    await rig.bridge.start([.erroredCLIAutomatic, .erroredAppAutomatic, .erroredCLIAutomaticFromACLI].contains(c) ? .retry : .manual)
+    // Only the app's automatic start defers to a CLI; an errored entry is anyone's otherwise.
+    let took = [.erroredCLIManual, .erroredAppAutomatic, .erroredCLIAutomaticFromACLI].contains(c)
+    #expect(rig.bridge.status == (took ? .waiting : .error), "\(c)")
+    #expect(rig.entry()?.pid == (took ? getpid() : 4242), "\(c)")
+    #expect(rig.bridge.autoRetry == (c != .readyCLIFromACLI), "\(c)")   // a refused CLI gives up
+}
+
+/// The three ways retries stop today, and that any start() turns them back on.
+@MainActor @Test func whatStopsTheRetriesAndWhatResumesThem() async {
+    let rig = Rig()
+    defer { rig.done() }
+    await rig.bridge.start(.manual)
+    rig.record.onExit?(1)                                   // dns-sd died
+    #expect(await eventuallyOnMain { rig.bridge.status == .error })
+    #expect(rig.bridge.autoRetry)
+
+    await rig.bridge.start(.manual)
+    rig.watcher.subscribers[rig.id]?.onExit("log stream exited (status 64): Must be admin to run 'stream' command")
+    #expect(rig.bridge.status == .error && !rig.bridge.autoRetry)
+    let blocked = rig.bridge.state
+    for r in StartReason.allCases where r != .manual {
+        await rig.bridge.start(r)
+        #expect(!rig.bridge.autoRetry && rig.bridge.state == blocked, "\(r)")   // left as it was (2a)
+    }
+    await rig.bridge.start(.manual)
+    #expect(rig.bridge.autoRetry)                           // only Start lifts it
+
+    let mine = rig.bridge.profile.instanceName
+    rig.watcher.subscribers[rig.id]?.onUnrecognized(mine)
+    #expect(rig.bridge.state.isActive)                      // once can be a hiccup
+    rig.world.now += 301
+    rig.watcher.subscribers[rig.id]?.onUnrecognized(mine)
+    #expect(rig.bridge.state.isActive)                      // too long after: counts as a first sighting again
+    rig.world.now += 10
+    rig.watcher.subscribers[rig.id]?.onUnrecognized(mine)
+    #expect(rig.bridge.state.isActive)                      // the same announcement again
+    rig.world.now += 20
+    rig.watcher.subscribers[rig.id]?.onUnrecognized(mine)
+    #expect(rig.bridge.status == .error && !rig.bridge.autoRetry)
+}
+
+/// Waiting with the record up: re-announce each minute; on the third, a device the mesh
+/// reaches but whose port is shut has moved, so the bridge fails and the retry finds it.
+@MainActor @Test(arguments: [TailscaleClient.Ping.noPong, .couldNotRun("no tailscale CLI"), .pong])
+func renewalsWhileWaiting(ping: TailscaleClient.Ping) async {
+    let meshReachesIt = ping == .pong   // today a ping that couldn't run counts as no answer (2b changes that)
+    let rig = Rig()
+    defer { rig.done() }
+    await rig.bridge.start(.manual)
+    #expect(rig.bridge.status == .waiting)
+    rig.world.answering = []
+    rig.world.ping = ping
+    rig.bridge.tick()
+    #expect(rig.record.renewed == 0)                        // within the first minute
+    for n in 1...2 {
+        rig.world.now += 61
+        rig.bridge.tick()
+        #expect(rig.record.renewed == n)
+    }
+    rig.world.now += 61
+    rig.bridge.tick()
+    if meshReachesIt {
+        #expect(await eventuallyOnMain { rig.bridge.status == .error })
+        #expect(rig.bridge.autoRetry)
+    } else {
+        #expect(await eventuallyOnMain { rig.record.renewed == 3 })   // asleep: keep nudging
+        #expect(rig.bridge.status == .waiting)
+    }
+}
+
+/// Back on this Mac's Wi‑Fi while bridged: the record goes, the bridge stands aside.
+@MainActor @Test func aBridgedDeviceThatComesHomeStandsAside() async {
+    let rig = Rig()
+    defer { rig.done() }
+    await rig.bridge.start(.manual)
+    let stopsBefore = rig.record.stopped
+    rig.world.onLAN = true
+    rig.bridge.tick()
+    try? await Task.sleep(for: .milliseconds(100))
+    #expect(rig.bridge.status == .waiting)                 // the path was asked at start: not again yet (2b)
+    rig.world.now += 60
+    rig.bridge.tick()
+    #expect(await eventuallyOnMain { rig.bridge.status == .local })
+    #expect(rig.record.stopped > stopsBefore)
+    #expect(rig.entry()?.state == BridgeStatus.local.rawValue)
+}
+
+/// After the Mac wakes: re-announce at once, and the minute restarts from then.
+@MainActor @Test func wakingReannouncesAndRestartsTheMinute() async {
+    let rig = Rig()
+    defer { rig.done() }
+    await rig.bridge.start(.manual)
+    rig.world.now += 50
+    rig.bridge.nudgeAfterWake()
+    #expect(rig.record.renewed == 1)
+    rig.world.now += 30                                     // 80 s since start, 30 since the nudge
+    rig.bridge.tick()
+    #expect(rig.record.renewed == 1)
+}
+
+/// Renamed on Tailscale at the same address: the new name is followed and saved.
+@MainActor @Test func aTailscaleRenameIsFollowed() async {
+    var p = inertProfile("iPhone"); p.providerHostName = "iphone"
+    let rig = Rig(p)
+    defer { rig.done() }
+    rig.world.answering = []
+    rig.world.peers = [MeshDevice(id: "1", name: "iphone-2", os: "iOS", ips: ["127.0.0.1"], online: true)]
+    var saved: DeviceProfile?
+    rig.bridge.onProfileChange = { saved = $0 }
+    await rig.bridge.start(.manual)
+    #expect(rig.bridge.status == .error)                    // still silent, and not pinged up
+    #expect(saved?.providerHostName == "iphone-2" && rig.bridge.profile.providerHostName == "iphone-2")
+}
+
+/// While bridged, the device's own advert (another instance, same UDID) that answers means
+/// it is home — if the watcher saw it within 90 s. HomeObservation's TTL will change this.
+@MainActor @Test(arguments: [false, true])
+func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
+    let rig = Rig()
+    defer { rig.done() }
+    await rig.bridge.start(.manual)
+    let udid = "00008130-000C1C5C307A8D3A"
+    rig.watcher.subscribers[rig.id]?.onDevice(rig.bridge.profile.instanceName, udid)   // ours: learns the UDID
+    rig.world.now += 1
+    rig.watcher.subscribers[rig.id]?.onDevice("REAL-ADVERT", udid)
+    rig.world.advertAnswers = true
+    if stale { rig.world.now += 91 }
+    rig.bridge.tick()
+    if stale {
+        try? await Task.sleep(for: .milliseconds(200))
+        #expect(rig.bridge.status == .waiting)
+    } else {
+        #expect(await eventuallyOnMain { rig.bridge.status == .local })
+    }
+}
+
+/// Standing aside: three misses in a row before resuming, by an automatic start; and a
+/// `roamrun up` watching the same device makes this one step back.
+@MainActor @Test func standingAsideResumesAfterThreeMissesAndStepsBackForACLI() async {
+    let rig = Rig()
+    defer { rig.done() }
+    rig.world.onLAN = true
+    await rig.bridge.start(.manual)
+    #expect(rig.bridge.status == .local)
+    rig.world.onLAN = false
+    await rig.bridge.resumeIfAway()
+    await rig.bridge.resumeIfAway()
+    #expect(rig.bridge.status == .local)
+    await rig.bridge.resumeIfAway()
+    #expect(rig.bridge.status == .waiting)
+
+    let other = Rig()
+    defer { other.done() }
+    other.world.onLAN = true
+    await other.bridge.start(.manual)
+    let cli = StatusFile.Entry(pid: 4242, cli: true, udid: nil, status: BridgeStatus.local.title, detail: "", ready: false,
+                               tunnelPorts: [], updated: .now, state: BridgeStatus.local.rawValue)
+    var yieldedTo: Int32?
+    other.bridge.onYield = { yieldedTo = $0.pid }
+    _ = StatusFile.write(other.id, nil, in: other.dir, live: { _ in true })
+    #expect(StatusFile.write(other.id, cli, in: other.dir, live: { _ in true }) == .written)
+    await other.bridge.resumeIfAway()
+    #expect(other.bridge.status == .off && yieldedTo == 4242)
+}
+
+/// Three outcomes, so 2b can tell this Mac's problem from the device's.
+@Test func pingTellsNoAnswerFromCouldntAsk() {
+    func r(_ status: Int32, _ out: String, _ err: String, timedOut: Bool = false) -> Proc.Result {
+        Proc.Result(status: status, out: out, err: err, timedOut: timedOut)
+    }
+    #expect(TailscaleClient.ping(r(0, "pong from iphone (100.64.0.10) via DERP(tok) in 40ms", "")) == .pong)
+    // What `tailscale ping -c 1` prints when nothing answers.
+    #expect(TailscaleClient.ping(r(1, "ping \"100.64.0.10\" timed out\n", "no reply\n")) == .noPong)
+    #expect(TailscaleClient.ping(r(-1, "", "The file doesn’t exist.")) == .couldNotRun("The file doesn’t exist."))
+    #expect(TailscaleClient.ping(r(15, "", "tailscale timed out after 8s", timedOut: true)) == .couldNotRun("tailscale timed out after 8s"))
+    // This Mac's own Tailscale: not an answer about the device.
+    for err in ["failed to connect to local Tailscale daemon for /localapi/v0/ping; not running?",
+                "Tailscale is stopped.", "Logged out.", "Access denied: ping access denied"] {
+        #expect(TailscaleClient.ping(r(1, "", err)) == .couldNotRun(err), "\(err)")
+    }
+}
+
+// MARK: - What a device's memory keeps across its bridges (1.6)
+
+/// Another known device clears it; learning the UDID for the first time doesn't.
+@MainActor @Test func aDeviceMemoryForgetsOnlyForAnotherDevice() {
+    let m = DeviceMemory()
+    let checked = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    m.homeAdvert = "ADVERT"; m.block = .pairingLost; m.lastFullCheck = checked
+    m.pauseScans(of: "100.64.0.10:49152", until: .distantFuture)
+    m.adopt("00008130-000C1C5C307A8D3A")                 // first learned: the same device
+    #expect(m.homeAdvert == "ADVERT" && !m.autoRetry && m.lastFullCheck == checked)
+    #expect(m.scansPaused(of: "100.64.0.10:49152", now: .now))
+    m.adopt("00008130-000c1c5c307a8d3a")                 // case only
+    #expect(m.homeAdvert == "ADVERT")
+    m.adopt(nil)                                          // a profile without one says nothing
+    #expect(m.udid == "00008130-000c1c5c307a8d3a")
+    m.adopt("00008101-000A00000000A001")                 // another device
+    #expect(m.homeAdvert == nil && m.autoRetry && m.lastFullCheck == .distantPast)
+    #expect(!m.scansPaused(of: "100.64.0.10:49152", now: .now))
+    #expect(m.udid == "00008101-000A00000000A001")
+}
+
+/// A bridge rebuilt for the same device (an edited endpoint, a port found again) keeps
+/// what the old one learned: the UDID, a block on retries, the device's advert name.
+@MainActor @Test func aRebuiltBridgeKeepsWhatTheOldOneLearned() async {
+    let memory = DeviceMemory()
+    let first = Rig(memory: memory)
+    await first.bridge.start(.manual)
+    first.watcher.subscribers[first.id]?.onDevice(first.bridge.profile.instanceName, "00008130-000C1C5C307A8D3A")
+    first.watcher.subscribers[first.id]?.onExit("log stream exited (status 64): Must be admin")
+    #expect(!first.bridge.autoRetry)
+    first.done()
+
+    let second = Rig(first.bridge.profile, memory: memory)   // the profile never saved the UDID
+    defer { second.done() }
+    #expect(second.bridge.udid == "00008130-000C1C5C307A8D3A")
+    #expect(!second.bridge.autoRetry)                      // still blocked
+    await second.bridge.start(.edit)
+    #expect(!second.bridge.autoRetry && second.record.registered == 0)   // an edit doesn't lift it (2a)
+    await second.bridge.start(.manual)
+    #expect(second.bridge.autoRetry && second.record.registered == 1)    // Start does
+}
+
+/// Standing aside, the device's advert found the slow way is what the next bridge tries
+/// first, and a profile that names another device starts it over.
+@MainActor @Test func aRebuiltBridgeKeepsTheAdvertUnlessTheDeviceChanged() async {
+    let memory = DeviceMemory()
+    var p = inertProfile("iPhone"); p.udid = "00008130-000C1C5C307A8D3A"
+    let first = Rig(p, memory: memory)
+    first.world.onLAN = true
+    await first.bridge.start(.manual)                     // standing aside
+    memory.homeAdvert = "REAL-ADVERT"                     // what isHome learns from `log show`
+    let checked = memory.lastFullCheck
+    #expect(checked != .distantPast)                      // the stand-aside check ran the slow way
+    first.done()
+
+    let same = Rig(p, memory: memory)
+    defer { same.done() }
+    #expect(same.bridge.memory.homeAdvert == "REAL-ADVERT" && same.bridge.memory.lastFullCheck == checked)
+    var other = p; other.udid = "00008101-000A00000000A001"
+    let replaced = Rig(other, memory: memory)
+    defer { replaced.done() }
+    #expect(memory.homeAdvert == nil && memory.udid == "00008101-000A00000000A001")
+}
+
+/// The scan pause belongs to the endpoint: kept by a rebuilt bridge at the same address and
+/// port, gone once either changes.
+@MainActor @Test func theScanPauseFollowsTheEndpointAcrossBridges() async {
+    let memory = DeviceMemory()
+    let first = Rig(memory: memory)
+    first.world.answering = []; first.world.ping = .pong
+    await first.bridge.start(.manual)
+    #expect(first.world.scans == 1)
+    first.done()
+
+    let same = Rig(first.bridge.profile, memory: memory, keepPort: true)
+    same.world.answering = []; same.world.ping = .pong; same.world.now = first.world.now
+    await same.bridge.start(.edit)
+    #expect(same.world.scans == 0)                         // paused: same endpoint
+    same.done()
+
+    var moved = first.bridge.profile
+    moved.remotePairingPort += 1
+    let other = Rig(moved, memory: memory, keepPort: true)
+    defer { other.done() }
+    other.world.answering = []; other.world.ping = .pong; other.world.now = first.world.now
+    await other.bridge.start(.edit)
+    #expect(other.world.scans == 1)                        // another endpoint: not paused
+}
+
+// MARK: - Untested risky paths (7b / F55)
+
+/// `tailscale serve` and the record of what this Mac registered, faked. Calls are counted
+/// so a test sees what would have been run.
+private final class FakeServe: @unchecked Sendable {
+    var states: [Int: TailscaleClient.Serving] = [:]   // missing: .nothing
+    var host: String? = "mac.ts.net"
+    var offWorks = true
+    /// What the port carries after an `off` that exited 0 (nil: nothing).
+    var afterOff: TailscaleClient.Serving?
+    var record: [String]
+    var offs: [Int] = []
+    var serves: [Int] = []
+    var otaPort = 41443
+    init(record: [String] = []) { self.record = record }
+
+    var tools: AppCoordinator.ServeTools {
+        var t = AppCoordinator.ServeTools()
+        t.serving = { port, _ in self.states[port] ?? .nothing }
+        t.host = { _ in self.host }
+        t.off = { port, _ in
+            self.offs.append(port)
+            if self.offWorks { self.states[port] = self.afterOff }
+            return self.offWorks
+        }
+        t.serve = { port, target in self.serves.append(port); self.states[port] = mounted(port, target); return "" }
+        t.remember = { target, port in self.record.append("\(port) \(target)") }
+        t.remembered = { self.record }
+        t.forget = { target, port in
+            self.record.removeAll { let p = AppCoordinator.pair($0); return p.target == target && (p.port == nil || p.port == port) }
+        }
+        t.otaPort = { self.otaPort }
+        return t
+    }
+}
+
+/// A mount at `/` on `port` under mac.ts.net, proxying to `target`.
+private func mounted(_ port: Int, _ target: String) -> TailscaleClient.Serving {
+    TailscaleClient.serving(port: port, inJSON: #"{"Web":{"mac.ts.net:\#(port)":{"Handlers":{"/":{"Proxy":"\#(target)"}}}}}"#)
+}
+
+enum ReleaseCase: String, CaseIterable {
+    case unreadable, alreadyGone, oursOffWorks, oursOffFails, someoneElses, oursUnderAnOldName, noHostName
+    case offSaysYesButStays, offThenUnreadable, offThenSomeoneElses
+}
+
+/// Giving one registration back: only what is provably ours is removed, and it is
+/// forgotten only once it is gone.
+@Test(arguments: ReleaseCase.allCases)
+func releaseServeOutcomes(_ c: ReleaseCase) {
+    let mine = "http://127.0.0.1:61816"
+    let fake = FakeServe(record: ["41443 \(mine)"])
+    switch c {
+    case .unreadable: fake.states[41443] = .unknown
+    case .alreadyGone: break
+    case .oursOffWorks: fake.states[41443] = mounted(41443, mine)
+    case .oursOffFails: fake.states[41443] = mounted(41443, mine); fake.offWorks = false
+    case .someoneElses: fake.states[41443] = mounted(41443, "http://127.0.0.1:8788")
+    case .oursUnderAnOldName:   // the node was renamed: `off` would hit whatever took its place
+        fake.states[41443] = TailscaleClient.serving(port: 41443,
+            inJSON: #"{"Web":{"old.ts.net:41443":{"Handlers":{"/":{"Proxy":"\#(mine)"}}}}}"#)
+    case .noHostName: fake.states[41443] = mounted(41443, mine); fake.host = nil
+    case .offSaysYesButStays: fake.states[41443] = mounted(41443, mine); fake.afterOff = mounted(41443, mine)
+    case .offThenUnreadable: fake.states[41443] = mounted(41443, mine); fake.afterOff = .unknown
+    case .offThenSomeoneElses:   // ours went, and something else took `/` straight after
+        fake.states[41443] = mounted(41443, mine); fake.afterOff = mounted(41443, "http://127.0.0.1:8788")
+    }
+    let gone = AppCoordinator.releaseServe((port: 41443, target: mine), tools: fake.tools)
+    let (expectGone, expectOff, expectForgotten): (Bool, Bool, Bool) = switch c {
+    case .unreadable: (false, false, false)        // couldn't look: claiming it's gone is how one survives
+    case .alreadyGone: (true, false, true)
+    case .oursOffWorks: (true, true, true)
+    case .oursOffFails: (false, true, false)       // still there: remembered, so the next run knows it
+    case .someoneElses, .oursUnderAnOldName: (true, false, true)   // not ours to remove; ours is gone
+    case .noHostName: (false, false, false)
+    case .offSaysYesButStays, .offThenUnreadable: (false, true, false)   // not seen gone: kept for the next sweep
+    case .offThenSomeoneElses: (true, true, true)
+    }
+    #expect(gone == expectGone, "\(c)")
+    #expect(fake.offs == (expectOff ? [41443] : []), "\(c)")
+    #expect(fake.record.isEmpty == expectForgotten, "\(c)")
+}
+
+/// Leftovers are looked for on every port the record names and the one configured now;
+/// only our own mount is removed, never the one this run serves from or the user's.
+@Test func reclaimStraysRemovesOnlyOurLeftovers() {
+    let old = "http://127.0.0.1:50001", live = "http://127.0.0.1:50002", older = "http://127.0.0.1:50003"
+    let fake = FakeServe(record: ["41444 \(old)", "41446 \(older)", "41443 \(live)"])
+    fake.states[41444] = mounted(41444, old)               // a killed run's, after otaPort changed
+    fake.states[41443] = mounted(41443, live)              // this run's
+    fake.states[41446] = mounted(41446, "http://127.0.0.1:8788")   // ours was replaced by the user's
+    fake.otaPort = 41443
+    #expect(AppCoordinator.reclaimStrays(keeping: (port: 41443, target: live), tools: fake.tools) == true)
+    #expect(fake.offs == [41444])                          // never the live one, never the user's
+    #expect(fake.record == ["41446 \(older)", "41443 \(live)"])
+
+    // One port it couldn't read: not "done", so the sweep runs again later.
+    let unsure = FakeServe(record: ["41444 \(old)"])
+    unsure.states[41444] = .unknown
+    #expect(AppCoordinator.reclaimStrays(keeping: nil, tools: unsure.tools) == nil)
+    // No name for this node: nothing can be judged.
+    let nameless = FakeServe(record: ["41444 \(old)"])
+    nameless.host = nil
+    #expect(AppCoordinator.reclaimStrays(keeping: nil, tools: nameless.tools) == nil)
+    #expect(nameless.offs.isEmpty)
+}
+
+/// A tunnel port far from the old window: the idle relays left behind are closed, and the
+/// count of covered ports matches what listens.
+/// Not tested here: a relay outside the window that still carries traffic stays. That needs a
+/// device end that answers, which the faked env doesn't have.
+@MainActor @Test func tunnelRelaysLeftBehindAreReaped() async {
+    let rig = Rig()
+    defer { rig.done() }
+    await rig.bridge.start(.manual)
+    let a = freeBase(in: 38_000...38_900, count: 140)
+    let b = a + 20, far = a + 120
+    rig.bridge.onTunnelPortDiscovered(a, localIP: "127.0.0.1")
+    #expect(await eventuallyOnMain { rig.bridge.bindsInFlight == 0 && rig.bridge.tunnelRelayPorts.count == 17 })
+    // A step ahead: the old ones are still inside newest-32…newest+16, so they stay.
+    rig.bridge.onTunnelPortDiscovered(b, localIP: "127.0.0.1")
+    #expect(await eventuallyOnMain {
+        rig.bridge.bindsInFlight == 0 && rig.bridge.tunnelRelayPorts == Set(a...(a + 16)).union(b...(b + 16))
+    })
+    // A jump: everything idle outside the new window goes.
+    rig.bridge.onTunnelPortDiscovered(far, localIP: "127.0.0.1")
+    #expect(await eventuallyOnMain { rig.bridge.bindsInFlight == 0 && rig.bridge.tunnelRelayPorts.min() == far })
+    #expect(rig.bridge.tunnelRelayPorts == Set(far...(far + 16)))
+    guard case .active(let control, _) = rig.bridge.state else { Issue.record("not active"); return }
+    #expect(rig.bridge.coveredPortsForTests == rig.bridge.tunnelRelayPorts.union([control]))
+}
+
+extension TimingSensitive.OTAServerOverASocket {
+    /// The page, its manifest and the .ipa, end to end from a folder of builds.
+    @Test func aStoredBuildIsServedPageManifestAndIPA() async throws {
+        let root = otaScratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let dir = root.appendingPathComponent("com.example.App/1.0-1-x")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let ipa = Data("IPA-BYTES-\(UUID().uuidString)".utf8)
+        try ipa.write(to: dir.appendingPathComponent("app.ipa"))
+        try JSONEncoder().encode(build("1.0", "1", "1.0-1-x", size: Int64(ipa.count))).write(to: dir.appendingPathComponent("meta.json"))
+
+        let server = OTAServer(tailnetPort: 41443, root: root)
+        server.servedName = "m"
+        let port = try #require(server.start())
+        defer { server.stop() }
+        let page = await ask(port, "GET / HTTP/1.1\r\nHost: m:41443\r\n\r\n")
+        #expect(page?.hasPrefix("HTTP/1.1 200") == true)
+        #expect(page?.contains("com.example.App/1.0-1-x/manifest.plist") == true)
+        let manifest = await ask(port, "GET /com.example.App/1.0-1-x/manifest.plist HTTP/1.1\r\nHost: m:41443\r\n\r\n")
+        #expect(manifest?.hasPrefix("HTTP/1.1 200") == true)
+        #expect(manifest?.contains("https://m:41443/com.example.App/1.0-1-x/app.ipa") == true)
+        let body = await ask(port, "GET /com.example.App/1.0-1-x/app.ipa HTTP/1.1\r\nHost: m:41443\r\n\r\n")
+        #expect(body?.hasPrefix("HTTP/1.1 200") == true)
+        #expect(body?.hasSuffix(String(decoding: ipa, as: UTF8.self)) == true)
+        #expect(await ask(port, "GET /com.example.App/9.9-9-x/app.ipa HTTP/1.1\r\nHost: m:41443\r\n\r\n")?
+            .hasPrefix("HTTP/1.1 404") == true)
+    }
+}
+
+// MARK: - CLI (PR 4)
+
+/// `up -d`'s log, past its limit, becomes `.log.1` and the writing moves to a new file; a
+/// rename that fails changes nothing (F42).
+@Test func theBackgroundLogRollsOverAtItsLimit() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let log = dir.appendingPathComponent("iPhone.log")
+    FileManager.default.createFile(atPath: log.path, contents: nil)
+    let fd = open(log.path, O_WRONLY | O_APPEND)
+    defer { close(fd) }
+    _ = "old enough to roll\n".withCString { write(fd, $0, strlen($0)) }
+    CLI.rotateLog(at: log, limit: 10, fds: [fd])
+    _ = "new\n".withCString { write(fd, $0, strlen($0)) }
+    #expect(try String(contentsOf: log.appendingPathExtension("1"), encoding: .utf8) == "old enough to roll\n")
+    #expect(try String(contentsOf: log, encoding: .utf8) == "new\n")
+    // Small: left alone.
+    CLI.rotateLog(at: log, limit: 10, fds: [fd])
+    #expect(try String(contentsOf: log, encoding: .utf8) == "new\n")
+    // The file renamed away under it (can't be moved): the descriptor keeps writing where it was.
+    try FileManager.default.removeItem(at: log)
+    _ = "more than ten bytes here\n".withCString { write(fd, $0, strlen($0)) }
+    CLI.rotateLog(at: log, limit: 10, fds: [fd])
+    #expect(!FileManager.default.fileExists(atPath: log.path))
+    #expect(try String(contentsOf: log.appendingPathExtension("1"), encoding: .utf8) == "old enough to roll\n")   // the last run's kept
+}
+
+/// A step after the first failing (here: the last `.1` can't be moved aside) undoes the rest:
+/// the live log and the last run's keep their names and contents (F42 review).
+@Test func aRolloverThatFailsMidwayKeepsBothLogs() throws {
+    let dir = scratchDir()
+    let log = dir.appendingPathComponent("iPhone.log"), previous = log.appendingPathExtension("1")
+    defer {
+        try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: previous.path)
+        try? FileManager.default.removeItem(at: dir)
+    }
+    try Data("last run\n".utf8).write(to: previous)
+    try Data("this run, long enough\n".utf8).write(to: log)
+    try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: previous.path)
+    let fd = open(log.path, O_WRONLY | O_APPEND)
+    defer { close(fd) }
+    CLI.rotateLog(at: log, limit: 10, fds: [fd])
+    #expect(try String(contentsOf: previous, encoding: .utf8) == "last run\n")
+    #expect(try String(contentsOf: log, encoding: .utf8) == "this run, long enough\n")
+    _ = "still here\n".withCString { write(fd, $0, strlen($0)) }
+    #expect(try String(contentsOf: log, encoding: .utf8).hasSuffix("still here\n"))   // the descriptor's file kept its name
+}
+
+/// Any `ota` clears another app's leftover staging an hour old, unless that app's add is
+/// running (its lock is held); a fresh one stays (F44).
+@Test func anOtaClearsOtherAppsLeftoversButNotARunningAdd() throws {
+    let store = otaScratch()
+    defer { try? FileManager.default.removeItem(at: store) }
+    let fm = FileManager.default, old = Date(timeIntervalSinceNow: -7200)
+    func app(_ name: String, staging: [(String, Date)]) throws -> URL {
+        let a = store.appendingPathComponent(name)
+        try fm.createDirectory(at: a, withIntermediateDirectories: true)
+        fm.createFile(atPath: a.appendingPathComponent(".lock").path, contents: nil)
+        for (n, made) in staging {
+            let d = a.appendingPathComponent(n)
+            try fm.createDirectory(at: d, withIntermediateDirectories: true)
+            try fm.setAttributes([.creationDate: made], ofItemAtPath: d.path)
+        }
+        return a
+    }
+    let mine = try app("com.example.Mine", staging: [])
+    let idle = try app("com.example.Idle", staging: [(".adding-old", old), (".adding-new", .now)])
+    let busy = try app("com.example.Busy", staging: [(".adding-old", old)])
+    let held = open(busy.appendingPathComponent(".lock").path, O_RDWR)
+    defer { close(held) }
+    #expect(flock(held, LOCK_EX) == 0)                      // an add running there
+    OTA.sweepOthersStaging(in: store, besides: mine)
+    #expect(!fm.fileExists(atPath: idle.appendingPathComponent(".adding-old").path))
+    #expect(fm.fileExists(atPath: idle.appendingPathComponent(".adding-new").path))
+    #expect(fm.fileExists(atPath: busy.appendingPathComponent(".adding-old").path))
+}
+
+/// A command we suggest for a device whose name starts with "-" names it by id: the name
+/// would be read as an option (F13).
+@Test func aSuggestedCommandNamesADashDeviceByID() {
+    var p = profile("-iPad")
+    #expect(CLI.commandName(p) == p.id.uuidString)
+    p.displayName = "Kid's iPad"
+    #expect(CLI.commandName(p) == "'Kid'\\''s iPad'")
+}
+
+// MARK: - Start reasons and the shared supervisor (1.5c)
+
+/// One table for what each reason may do (2a). Only Start lifts a retry block or takes from
+/// a `roamrun up`; Find RemotePairing Port and Start skip the scan pause; what a person did,
+/// or a new network, starts the retries short again; only a new address restarts.
+@Test(arguments: StartReason.allCases)
+func startPolicyTable(_ r: StartReason) {
+    let p = StartPolicy.of(r)
+    #expect(p.mayTakeFromCLI == (r == .manual), "\(r)")
+    #expect(p.clears == (r == .manual ? Set(RetryBlock.allCases) : []), "\(r)")
+    #expect(p.clearsScanPause == [.manual, .rescan].contains(r), "\(r)")
+    #expect(p.resetsBackoff == [.manual, .rescan, .edit, .networkChange].contains(r), "\(r)")
+    #expect(p.restarts == (r == .networkChange), "\(r)")
+}
+
+/// Retries wait longer after each failure in a row: 30 s, 1, 2, 4, 8 minutes, then 10.
+@MainActor @Test func retriesBackOffUpToTenMinutes() {
+    #expect((1...7).map { DeviceMemory.backoff(afterFailures: $0) } == [30, 60, 120, 240, 480, 600, 600])
+    let m = DeviceMemory(), t = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    m.failed(at: t, unreachable: true); m.failed(at: t, unreachable: true)
+    #expect(!m.retryDue(now: t + 59) && m.retryDue(now: t + 60))
+    m.resetBackoff()
+    #expect(m.retryDue(now: t) && m.failures == 0)
+}
+
+/// Waiting for a `roamrun up` to end, the start keeps what the strongest reason meant: a
+/// rescan or an edit made meanwhile isn't lost to a plain retry.
+@Test func aStartWaitingForTheCLIKeepsTheStrongestReason() {
+    #expect(StartReason.stronger(.retry, .edit) == .edit)
+    #expect(StartReason.stronger(.edit, .retry) == .edit)
+    #expect(StartReason.stronger(.networkChange, .rescan) == .rescan)
+    #expect(StartReason.stronger(.rescan, .edit) == .rescan)
+    #expect(StartReason.stronger(.edit, .networkChange) == .networkChange)   // a tie: the later
+    #expect(StartReason.stronger(.resume, .retry) == .retry)
+}
+
+/// The wait runs from when the failed attempt began (a tick), so it is never shorter than
+/// the step it is on, however long the attempt took to fail.
+@MainActor @Test func theWaitRunsFromTheAttemptsStart() {
+    let m = DeviceMemory(), tick = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    m.failed(at: tick + 12, since: tick, unreachable: true)
+    #expect(!m.retryDue(now: tick + 28) && m.retryDue(now: tick + 30))
+    m.failed(at: tick + 40, since: tick + 30, unreachable: true)   // second: 60 s
+    #expect(!m.retryDue(now: tick + 88) && m.retryDue(now: tick + 90))
+}
+
+/// Failing while up (a helper died, the device stopped answering), the first retry is the
+/// next tick, as in 0.1.19, not 30 s from the failure, which misses that tick.
+@MainActor @Test func failingWhileUpRetriesAtTheNextTick() async {
+    let rig = Rig()
+    defer { rig.done() }
+    await rig.bridge.start(.retry)
+    #expect(rig.bridge.memory.failures == 0)
+    rig.bridge.fail("the log stream ended")
+    #expect(rig.bridge.memory.failures == 1 && rig.bridge.memory.retryDue(now: rig.world.now))
+}
+
+/// A bridge that keeps failing to start counts it, and one that comes up starts over.
+@MainActor @Test func aFailedStartGrowsTheWaitAndASuccessResetsIt() async {
+    let rig = Rig()
+    defer { rig.done() }
+    rig.world.lan = nil                                      // no LAN address: every start fails
+    await rig.bridge.start(.retry)
+    await rig.bridge.start(.retry)
+    await rig.bridge.start(.retry)
+    #expect(rig.bridge.memory.failures == 3)
+    #expect(!rig.bridge.memory.retryDue(now: rig.world.now + 119) && rig.bridge.memory.retryDue(now: rig.world.now + 120))
+    rig.world.lan = "127.0.0.1"
+    await rig.bridge.start(.retry)
+    #expect(rig.bridge.status == .waiting && rig.bridge.memory.failures == 0)
+}
+
+/// The supervisor's tick: a bridge still in its wait isn't restarted, unless a cheap look
+/// finds the port of a device that didn't answer answering again — then at once.
+@MainActor @Test func theSupervisorWaitsOutTheBackoffButNotAnAnsweringPort() async {
+    let rig = Rig()
+    defer { rig.done() }
+    rig.world.answering = []                                 // the device doesn't answer: unreachable
+    await rig.bridge.start(.manual)
+    await rig.bridge.start(.retry)                           // two failures: 60 s to wait
+    #expect(rig.bridge.memory.failures == 2 && rig.bridge.memory.lastFailureUnreachable)
+    var started: [StartReason] = []
+    let sup = BridgeSupervisor(all: { [rig.bridge] }, wanted: { _ in true },
+                               start: { _, r in started.append(r) }, now: { rig.world.now })
+    sup.retry()
+    try? await Task.sleep(for: .milliseconds(200))           // its look at the port, still shut
+    #expect(started.isEmpty)
+    rig.world.answering = ["127.0.0.1"]
+    #expect(await eventuallyOnMain { sup.retry(); return started.contains(.retry) })
+    #expect(rig.bridge.memory.failures == 0)
+}
+
+/// A failure on this Mac's side (here: no LAN address) isn't fixed by the device answering,
+/// so its wait isn't cut short by a port that answers.
+@MainActor @Test func aPortThatAnswersDoesntCutAWaitForThisMacsOwnFailure() async {
+    let rig = Rig()
+    defer { rig.done() }
+    rig.world.lan = nil
+    await rig.bridge.start(.manual)
+    await rig.bridge.start(.retry)
+    #expect(!rig.bridge.memory.lastFailureUnreachable)
+    var started = 0
+    let sup = BridgeSupervisor(all: { [rig.bridge] }, wanted: { _ in true },
+                               start: { _, _ in started += 1 }, now: { rig.world.now })
+    for _ in 0..<3 { sup.retry(); try? await Task.sleep(for: .milliseconds(50)) }
+    #expect(started == 0)
+    rig.world.now += 61
+    sup.retry()
+    #expect(started == 1)                                    // waited out, then retried
+}
+
+/// A failure just after a tick is still due on the tick its wait points at, not the one after
+/// (the timer's drift is within the second of slack).
+@MainActor @Test func aRetryIsntPushedToTheTickAfter() {
+    let m = DeviceMemory(), tick = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let rig = Rig(memory: m)
+    defer { rig.done() }
+    rig.bridge.fail("down")                                  // errored, as it would be
+    m.resetBackoff()
+    m.failed(at: tick + 0.4, unreachable: true)              // the retry started at the tick failed soon after
+    var started = 0
+    let sup = BridgeSupervisor(all: { [rig.bridge] }, wanted: { _ in true },
+                               start: { _, _ in started += 1 }, now: { tick + 30 })
+    sup.retry()
+    #expect(started == 1)
+}
+
+/// A blocked bridge stopped for a new address, or rebuilt: its start is turned away, it says
+/// why again, and stays an error — so `roamrun up` still gives up instead of sitting at Off.
+@MainActor @Test func aBlockedBridgeTurnedAwayKeepsItsErrorAndTheCLIStillGivesUp() async {
+    let rig = Rig()
+    defer { rig.done() }
+    await rig.bridge.start(.manual)
+    rig.watcher.subscribers[rig.id]?.onExit("log stream exited (status 64): Must be admin")
+    guard case .error(let why) = rig.bridge.state else { Issue.record("not an error"); return }
+    var gaveUp = 0
+    let sup = BridgeSupervisor(all: { [rig.bridge] }, wanted: { _ in true }, start: { list, reason in
+        for b in list {                                      // as roamrun up's start does
+            if StartPolicy.of(reason).restarts { b.stop() }
+            b.requestStart(reason)
+        }
+    }, gaveUp: { _ in gaveUp += 1 })
+    sup.lanAddressChanged()
+    #expect(await eventuallyOnMain { rig.bridge.state == .error(why) })
+    sup.retry()
+    #expect(gaveUp == 1)
+}
+
+/// Waking: whatever failed before the sleep, the next retry is a short wait again.
+@MainActor @Test func wakingStartsTheRetriesShortAgain() async {
+    let rig = Rig()
+    defer { rig.done() }
+    rig.world.lan = nil
+    await rig.bridge.start(.manual)
+    await rig.bridge.start(.retry)
+    #expect(rig.bridge.memory.failures == 2)
+    BridgeSupervisor(all: { [rig.bridge] }, wanted: { _ in true }, start: { _, _ in }).woke()
+    #expect(rig.bridge.memory.failures == 0)
+}
+
+/// The claim follows the reason: against an errored `roamrun up` entry, the app's only Start
+/// takes the device; a `roamrun up` takes it whatever the reason.
+@MainActor @Test(arguments: StartReason.allCases, [false, true])
+func claimByReason(_ r: StartReason, fromCLI: Bool) {
+    let rig = Rig()
+    rig.world.cli = fromCLI
+    defer { rig.done() }
+    let other = StatusFile.Entry(pid: 4242, cli: true, udid: nil, status: BridgeStatus.error.title, detail: "", ready: false,
+                                 tunnelPorts: [], updated: .now, state: BridgeStatus.error.rawValue)
+    #expect(StatusFile.write(rig.id, other, in: rig.dir, live: { _ in true }) == .written)
+    let takes = fromCLI || r == .manual   // 2a: Find RemotePairing Port no longer takes (F16)
+    #expect((rig.bridge.claimDevice(r) == .written) == takes, "\(r) fromCLI: \(fromCLI)")
+}
+
+/// Which bridges the supervisor hands back, and with which reason.
+@MainActor @Test func theSupervisorRetriesRestartsPausesAndNudgesTheRightBridges() async {
+    let on = Rig(), off = Rig(), stuck = Rig(), active = Rig()
+    defer { [on, off, stuck, active].forEach { $0.done() } }
+    for r in [on, off, stuck] { r.world.lan = nil; await r.bridge.start(.manual) }   // errored: no LAN address
+    await active.bridge.start(.manual)
+    // A block retrying can't clear, on `stuck`: no admin rights for `log stream`.
+    stuck.world.lan = "127.0.0.1"
+    await stuck.bridge.start(.manual)
+    stuck.watcher.subscribers[stuck.id]?.onExit("log stream exited (status 64): Must be admin")
+    #expect(!stuck.bridge.autoRetry && stuck.bridge.status == .error)
+
+    var started: [(UUID, StartReason)] = []
+    var gaveUp: [UUID] = []
+    let wanted: Set<UUID> = [on.id, stuck.id, active.id]
+    let sup = BridgeSupervisor(all: { [on.bridge, off.bridge, stuck.bridge, active.bridge] },
+                               wanted: { wanted.contains($0.profile.id) },
+                               start: { list, reason in started += list.map { ($0.profile.id, reason) } },
+                               gaveUp: { gaveUp.append($0.profile.id) })
+    sup.retry()
+    #expect(started.map(\.0) == [on.id] && started.allSatisfy { $0.1 == .retry })   // not `off`: not left on
+    #expect(gaveUp == [stuck.id])
+
+    started = []
+    sup.lanAddressChanged()
+    #expect(Set(started.map(\.0)) == [on.id, stuck.id, active.id] && started.allSatisfy { $0.1 == .networkChange })
+
+    let renewedBefore = active.record.renewed
+    sup.woke()
+    #expect(active.record.renewed == renewedBefore + 1)   // only an active one re-announces
+
+    sup.lanAddressLost()
+    #expect(active.bridge.status == .error)
+    #expect(on.bridge.status == .error)                   // already errored: left as it was
+}
+
+/// Standing aside, the supervisor's 10 s look goes to resumeIfAway.
+@MainActor @Test func theSupervisorLooksAgainAtBridgesStandingAside() async {
+    let rig = Rig()
+    defer { rig.done() }
+    rig.world.onLAN = true
+    await rig.bridge.start(.manual)
+    rig.world.onLAN = false
+    let sup = BridgeSupervisor(all: { [rig.bridge] }, wanted: { _ in true }, start: { _, _ in })
+    // As the 10 s timer would: again and again until three misses in a row resume it. A look
+    // while the last one still runs is skipped, as it is in the app.
+    #expect(await eventuallyOnMain {
+        sup.lookAgainIfAway()
+        return rig.bridge.status == .waiting
+    })
 }
 
 @MainActor @Test func aManualClaimDoesntAuthorizeLaterUpdatesOrTeardownToTakeOver() {
@@ -2585,7 +3877,7 @@ extension RelayOnLocalhost {
     defer { bridge.stop() }
 
     for held in [BridgeStatus.error, .local] {
-        #expect(bridge.claimDevice(automatic: false) == .written)
+        #expect(bridge.claimDevice(.manual) == .written)
         bridge.fail("the app's bridge is retryable")
         let cli = StatusFile.Entry(pid: 4242, cli: true, udid: nil, status: held.title, detail: "CLI's entry",
                                    ready: false, tunnelPorts: [], updated: .now, state: held.rawValue)
@@ -2595,10 +3887,10 @@ extension RelayOnLocalhost {
         #expect(StatusFile.read(in: dir, live: live)[p.id] == cli)
         bridge.stop()   // teardown publishes changes before the state becomes Off
         #expect(StatusFile.read(in: dir, live: live)[p.id] == cli)
-        #expect(bridge.claimDevice(automatic: true) == .heldBy(cli))
+        #expect(bridge.claimDevice(.retry) == .heldBy(cli))
         #expect(StatusFile.read(in: dir, live: live)[p.id] == cli)
         // A new Start action may still take over. Its later updates stay ours too.
-        #expect(bridge.claimDevice(automatic: false) == .written)
+        #expect(bridge.claimDevice(.manual) == .written)
         bridge.fail("owned update")
         #expect(StatusFile.read(in: dir, live: live)[p.id]?.detail == "owned update")
         bridge.stop()
@@ -2618,7 +3910,7 @@ extension RelayOnLocalhost {
     #expect(StatusFile.write(twin, cli, in: dir, live: live) == .written)
     let bridge = ProxyBridge(profile: p, statusDir: dir, statusLive: live)
     defer { bridge.stop() }
-    #expect(bridge.claimDevice(automatic: true) == .heldBy(cli))
+    #expect(bridge.claimDevice(.retry) == .heldBy(cli))
     #expect(StatusFile.read(in: dir, live: live) == [twin: cli])
 }
 
@@ -2667,4 +3959,53 @@ extension RelayOnLocalhost {
     #expect(Relay.shouldLogRefusal(last: nil, now: now))
     #expect(!Relay.shouldLogRefusal(last: now.addingTimeInterval(-300), now: now))
     #expect(Relay.shouldLogRefusal(last: now.addingTimeInterval(-600), now: now))
+}
+
+/// The log view scrolls when its device's count moves: a line of another device's logged
+/// right after must not hide it, and the count keeps going past the log's limit.
+@MainActor @Test func logCountsLinesPerDevice() {
+    let log = LogStore(), a = UUID(), b = UUID()
+    log.log("Opening relay", device: a)
+    log.log("Starting bridge", device: b)
+    log.log("app-wide")
+    #expect(log.appended[a] == 1 && log.appended[b] == 1)
+    for _ in 0..<600 { log.log("line", device: a) }
+    #expect(log.appended[a] == 601 && log.lines.count == 500)
+}
+
+/// The download floor: a peer far below it goes after five minutes, a slow but real
+/// download doesn't, and nothing goes before five minutes whatever the rate.
+@Test func otaDownloadFloor() {
+    #expect(!OTAServer.tooSlow(sent: 0, after: 299))
+    #expect(OTAServer.tooSlow(sent: 100_000, after: 300))           // ~330 B/s
+    #expect(!OTAServer.tooSlow(sent: 300 * 8 * 1024, after: 300))   // right at 8 KB/s
+    #expect(!OTAServer.tooSlow(sent: 50_000_000, after: 3600))      // ~14 KB/s for an hour
+}
+
+/// The write between two looks at whether OTA is still on: turned off before it, nothing
+/// is written; turned off while `serve` ran, what it wrote is given back and forgotten.
+enum PublishCase: String, CaseIterable { case portChanged, offBefore, offDuring, stillOn }
+
+@Test(arguments: PublishCase.allCases)
+func publishStepsAsideWhenTurnedOff(_ c: PublishCase) async {
+    final class Answers: @unchecked Sendable { var left: [Bool]; init(_ a: [Bool]) { left = a } }
+    let mine = "http://127.0.0.1:61816"
+    let fake = FakeServe()
+    let answers = Answers(c == .offBefore ? [false] : c == .offDuring ? [true, false] : [true, true])
+    let checked: TailscaleClient.Serving = c == .portChanged ? mounted(41443, "http://127.0.0.1:8788") : .nothing
+    let step = await AppCoordinator.publish(mine, on: 41443, expecting: checked, tools: fake.tools) {
+        answers.left.removeFirst()
+    }
+    switch c {
+    case .portChanged, .offBefore:
+        #expect(step == (c == .portChanged ? .changed : .notWanted))
+        #expect(fake.serves.isEmpty && fake.record.isEmpty)
+    case .offDuring:
+        #expect(step == .withdrawn)
+        #expect(fake.serves == [41443] && fake.offs == [41443] && fake.record.isEmpty)
+        #expect(fake.states[41443] == nil)
+    case .stillOn:
+        #expect(step == .ran(after: mounted(41443, mine), said: ""))
+        #expect(fake.offs.isEmpty && fake.record == ["41443 \(mine)"])
+    }
 }

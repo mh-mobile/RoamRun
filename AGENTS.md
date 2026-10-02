@@ -14,7 +14,8 @@ see `skills/roamrun/SKILL.md` — installed with `roamrun init` or
   is running, e.g. `/Applications`). `make dmg` packages.
 - `make test` runs the unit tests (log parsing, port attribution, status-file
   ownership, names). They never touch the real status/profile files or start a
-  bridge — keep it that way (no `AppCoordinator` in tests).
+  real bridge — keep it that way (no `AppCoordinator` in tests). A bridge on a
+  fully faked `BridgeEnv` is fine: it only opens relays on 127.0.0.1.
 - Only one RoamRun app runs at a time (matched by bundle id): a dev build won't
   start while an installed copy is running — quit that one first.
 - UI screenshots without screen-recording rights: build with `make app SNAPSHOT=1`

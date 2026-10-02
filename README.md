@@ -76,7 +76,7 @@ sequenceDiagram
 - macOS 13+ on Apple Silicon (Intel Macs aren't supported), with an **administrator account** (RoamRun reads remotepairingd's log with `log stream`, which macOS only allows admins)
 - iOS 17.4 or later on the iPhone (the generation whose CoreDevice tunnel is TCP; the QUIC/UDP tunnel of 17.0–17.3 isn't supported)
 - Also verified with iPad and Apple Vision Pro, which work the same way ("iPhone" below includes them). Vision Pro has no USB and is developed for over Wi-Fi anyway, which makes it a natural fit for working away from the Mac
-- Xcode (`devicectl` must be available)
+- Xcode with `devicectl` (Xcode 15 or later) whose Device Support range covers the iPhone's iOS, and that runs on your macOS — both are in [Apple's table](https://developer.apple.com/support/xcode/). Building your app may need a newer SDK, depending on the APIs it uses; that is your project's requirement, not RoamRun's. `roamrun logs` and `run --logs` need Xcode 16 or later, where `devicectl` gained `--console`
 - Tailscale (or any mesh VPN with a manually entered IP), connected on both the Mac and the iPhone
 - The iPhone paired with this Mac once (over USB, or with Xcode 27 + iOS 27 on the same Wi-Fi via Device Hub › "+" › "Pair Nearby Device…"), with Developer Mode on
 - To connect, the iPhone must be **on some Wi-Fi network** (cellular alone won't do: remotepairingd only listens while the iPhone is on Wi-Fi). Once it shows **Ready for Xcode** (bridged from another Wi‑Fi), it can move to cellular and keep the session Xcode has, if you turn on Settings › Network › **Keep debugging on cellular** (off by default: every Run then uses the iPhone's data)
@@ -139,7 +139,7 @@ The app binary doubles as a CLI (handy over SSH or in scripts). To put `roamrun`
 - **Built from source:** the same, once the app is in `/Applications`; or `make install-cli` to use the build in the repo folder (`BINDIR=$HOME/bin` also works)
 
 ```sh
-roamrun devices               # saved devices (name, UDID) and their status
+roamrun devices               # saved devices (name, UDID, id) and their status
 roamrun up <name>             # start a bridge and show progress until Ready; Ctrl-C stops and cleans up
 roamrun up <name> -d          # start in the background (survives closing the terminal; log in ~/Library/Logs/RoamRun/)
                               #   waits up to 60s for Ready and exits 1 if it isn't — the bridge keeps trying either way
@@ -156,7 +156,7 @@ roamrun ota [<name>] <App.ipa> [--replace] # publish the build so a device can i
                                            #   bridge — install only, needs Ad Hoc or Enterprise signing (see below)
 ```
 
-Options: `--json` (`devices`, `status`, `doctor`), `--wait N` (`status`: wait up to N seconds for Ready; each round runs two devicectl calls per device before the deadline is looked at again, so it can return several seconds after N; an N below 10 also shortens each of those calls, to a floor of 5 seconds), `-v` (`up`: show the activity log), `--workspace W` / `--project P` / `--configuration C` (`run`), `--replace` (`ota`: drop builds already listed under the same version and build number). `roamrun --help` lists everything; a command rejects options it doesn't take (exit 2).
+Options: `--json` (`devices`, `status`, `doctor`; `devices` doesn't ask CoreDevice, so its `ready` only means the bridge is Ready or the device is on this Wi‑Fi — `status` also asks CoreDevice once the device's UDID is known), `--wait N` (`status`: wait up to N seconds for Ready; each round runs one `devicectl list devices`, plus a lock check per ready device, before the deadline is looked at again, so it can return several seconds after N; an N below 10 also shortens each of those calls, to a floor of 5 seconds), `-v` (`up`: show the activity log), `--workspace W` / `--project P` / `--configuration C` (`run`), `--replace` (`ota`: drop builds already listed under the same version and build number). `roamrun --help` lists everything; a command rejects options it doesn't take (exit 2).
 
 The CLI uses the app's settings, so a bridge started with `roamrun up` follows **Keep debugging on cellular** too. Without access to the app's Settings (over SSH, for example), turn it on or off with `defaults`:
 
@@ -264,7 +264,8 @@ What it needs:
 - **HTTPS in your tailnet** — MagicDNS and HTTPS certificates turned on. RoamRun
   serves on a port of its own (41443 by default, `defaults write
   io.github.mh-mobile.roamrun otaPort -int …` to change it; 443, 8443 and 10000
-  are refused and fall back to 41443, since Funnel could publish those) and gives
+  are refused and fall back to 41443, since Funnel could publish those, and so
+  are ports below 1024 and above 65535) and gives
   it back when it quits. It never touches your tailnet's `:443`, where whatever else you
   serve lives — and because Tailscale Funnel currently publishes only 443, 8443
   and 10000, a port outside those three can't be put on the internet. RoamRun
@@ -294,7 +295,7 @@ Leave the Mac at home and run the whole build-and-try loop from the iPhone in yo
 
 **Prerequisite: the iPhone must be on a Wi-Fi network with internet access.** Cellular alone doesn't work (the iPhone's RemotePairing only listens while on Wi-Fi). What does work: get to **Ready for Xcode** on some other Wi‑Fi, then move to cellular with **Keep debugging on cellular** on (Settings › Network). Only from Ready for Xcode: when the iPhone is "On this Wi‑Fi" (the Mac's own network), Xcode reaches it over the LAN, not through RoamRun, so leaving home straight onto cellular ends the session either way.
 
-**Tip: to leave home without losing the session**, keep the iPhone off the Mac's own network even at home. Join a Wi‑Fi that another device makes: a travel router, or a spare phone or tablet sharing its connection. That device can itself be on your home Wi‑Fi, as long as it gives the iPhone a network of its own and doesn't just extend yours. RoamRun then shows **Ready for Xcode** instead of "On this Wi‑Fi", and Tailscale connects the two directly inside your home, so it stays fast. With Keep debugging on cellular on, walking out of range onto cellular keeps the session. Xcode keeps the session it has, and RoamRun shows "Ready for Xcode · Cellular". A new session needs Wi-Fi again, for example after the iPhone restarts or Tailscale drops. With the setting off, RoamRun closes the session when the iPhone leaves Wi-Fi ("Waiting for device · Cellular") and reconnects once it is back; after 30 minutes on cellular it goes back to looking for the device as it does when one stops answering. Joining a Wi-Fi network marked "No Internet Connection" and sending traffic over cellular doesn't work either — we tested it. Use café or hotel Wi-Fi, a pocket Wi-Fi router, or tethering from another device (a second iPhone's Personal Hotspot works; the iPhone sharing its own hotspot doesn't, since it isn't on Wi-Fi itself).
+**Tip: to leave home without losing the session**, keep the iPhone off the Mac's own network even at home. Join a Wi‑Fi that another device makes: a travel router, or a spare phone or tablet sharing its connection. That device can itself be on your home Wi‑Fi, as long as it gives the iPhone a network of its own and doesn't just extend yours. RoamRun then shows **Ready for Xcode** instead of "On this Wi‑Fi", and Tailscale connects the two directly inside your home, so it stays fast. With Keep debugging on cellular on, walking out of range onto cellular keeps the session. Xcode keeps the session it has, and RoamRun shows "Ready for Xcode · Cellular". A new session needs Wi-Fi again, for example after the iPhone restarts or Tailscale drops. With the setting off, RoamRun closes the session when the iPhone leaves Wi-Fi ("Waiting for device · Cellular") and reconnects once it is back, however long it was away. If the iPhone restarts while on cellular and its RemotePairing port changes, it can't reconnect on its own: use Find RemotePairing Port in the app. Joining a Wi-Fi network marked "No Internet Connection" and sending traffic over cellular doesn't work either — we tested it. Use café or hotel Wi-Fi, a pocket Wi-Fi router, or tethering from another device (a second iPhone's Personal Hotspot works; the iPhone sharing its own hotspot doesn't, since it isn't on Wi-Fi itself).
 
 **About the network path:** Tailscale normally connects the Mac and the iPhone directly (`tailscale status` shows `direct <address>` on the iPhone's line). On public Wi-Fi that blocks UDP and similar networks, traffic goes through Tailscale's relay servers (DERP; shown as `relay "tok"` etc.). That works, but it's slower. On Wi-Fi with a sign-in page, sign in first. Verified over cellular tethering (about 80 ms latency, direct): installing, launching, and debugging from Xcode with breakpoints.
 
@@ -349,10 +350,10 @@ If you used `roamrun ota`, one more thing lives outside that table: RoamRun asks
 `tailscale serve` to carry one port — whichever `otaPort` names, 41443 by
 default — and gives it back when it quits, but not if it is force-quit or
 crashes. `tailscale serve --https=41443 --set-path=/ off` clears it, and so does opening
-RoamRun again: it recognises a leftover of its own on that port and gives it
-back. The one it can't find is one it made on a *different* port, if `otaPort`
-was changed while the app wasn't running — it only ever looks at the port
-configured now.
+RoamRun again: it recognises a leftover of its own and gives it back. It looks on
+the port configured now and on every port named by the last 5 distinct registrations it recorded, so a
+leftover from before `otaPort` was changed is found too. Only one older than
+that is missed.
 
 **Quit RoamRun before uninstalling.** `brew uninstall --zap` deletes the settings
 that record which entry was RoamRun's, so an entry left by an app that was never

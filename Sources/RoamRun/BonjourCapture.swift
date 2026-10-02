@@ -30,6 +30,7 @@ final class BonjourCapture: ObservableObject {
     /// flood can't lock real devices out.
     private var seen: [String: Date] = [:]
     private var hostSeen: [String: Date] = [:]
+    private var launchFailing = false
     private var serviceType = "_remotepairing._tcp"
     private var domain = "local"
 
@@ -67,14 +68,24 @@ final class BonjourCapture: ObservableObject {
         do {
             try task.run()
             process = task
+            launchFailing = false
             onLog?("Bonjour scan started (\(serviceType))")
         } catch {
-            onLog?("Failed to start dns-sd -Z: \(error.localizedDescription)")
+            // As if it had died at once: without this one failure ends scanning for good.
+            // Said once per run of failures, not every 5 s.
+            if !launchFailing { onLog?("Failed to start dns-sd -Z: \(error.localizedDescription); retrying every 5s") }
+            launchFailing = true
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(5))
+                guard let self, !self.stopped, self.scan == mine, self.process == nil else { return }
+                self.start(serviceType: self.serviceType, domain: self.domain)
+            }
         }
     }
 
     func stop() {
         stopped = true
+        launchFailing = false   // the next start's failure is news again
         scan += 1
         process?.terminate()
         process = nil
