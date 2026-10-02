@@ -23,7 +23,9 @@ enum CLI {
 
       devices [--json]               List saved devices (with UDID) and their bridge status
       up <name> [-v] [-d]            Bridge a device until Ctrl-C (-v: activity log; -d: run in the background —
-                                     waits up to 60s for Ready and exits 1 if it isn't, but keeps trying)
+                                     waits up to 60s for Ready or On this Wi-Fi (exit 0); otherwise exits 1
+                                     and keeps trying, unless the bridge itself quit: then exit 1 at once
+                                     with the reason)
       down <name>                    Stop a bridge, whether the app or another `roamrun up` runs it
       status [name] [--wait N] [--json]
                                      Bridge status, UDID and lock state; exits 0 only if Xcode can use
@@ -1198,7 +1200,7 @@ enum CLI {
               fix: "Connect \(lan) to the network — the bridge listens where Xcode looks for devices. To use another interface, pick it in RoamRun (Open RoamRun › ⚙ Settings › Network).")
         let orphans = DNSServiceProxy.orphanedHelperCount()
         check(orphans == 0, orphans == 0 ? "No leftover helper processes" : "\(orphans) leftover helper process(es) from a crash",
-              fix: "Open RoamRun (it cleans them up at launch) or Settings › Clean Up Leftover Helpers.", warnOnly: true)
+              fix: "Open RoamRun (it cleans them up at launch) or ⚙ Settings › Troubleshooting › Clean Up Leftover Helpers.", warnOnly: true)
 
         let live = StatusFile.read()
         let cli = TailscaleClient.fromSettings()

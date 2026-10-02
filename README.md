@@ -142,8 +142,8 @@ The app binary doubles as a CLI (handy over SSH or in scripts). To put `roamrun`
 roamrun devices               # saved devices (name, UDID, id) and their status
 roamrun up <name>             # start a bridge and show progress until Ready; Ctrl-C stops and cleans up
 roamrun up <name> -d          # start in the background (survives closing the terminal; log in ~/Library/Logs/RoamRun/)
-                              #   waits up to 60s for Ready and exits 1 if it isn't — the bridge keeps trying either way
-roamrun status <name>         # exits 0 when Ready (for waiting in scripts; without a name: when any device is)
+                              #   waits up to 60s for Ready (or On this Wi‑Fi) and exits 1 if not — the bridge keeps trying unless it exits with an error retrying can't fix (see the log)
+roamrun status <name>         # exits 0 when Xcode can use the device (Ready, or On this Wi‑Fi and reachable; without a name: when any device is)
 roamrun down <name>           # stop a bridge, whether the app or another terminal's `up` runs it
 roamrun doctor                # check Mac → Tailscale → iPhone step by step and say how to fix
 roamrun run <name> [--scheme S] [--logs]   # in the project folder: build → install → launch (--scheme: only if it has several; --logs: stream output; like Xcode, it may create provisioning profiles)
@@ -156,7 +156,7 @@ roamrun ota [<name>] <App.ipa> [--replace] # publish the build so a device can i
                                            #   bridge — install only, needs Ad Hoc or Enterprise signing (see below)
 ```
 
-Options: `--json` (`devices`, `status`, `doctor`; `devices` doesn't ask CoreDevice, so its `ready` only means the bridge is Ready or the device is on this Wi‑Fi — `status` also asks CoreDevice once the device's UDID is known), `--wait N` (`status`: wait up to N seconds for Ready; each round runs one `devicectl list devices`, plus a lock check per ready device, before the deadline is looked at again, so it can return several seconds after N; an N below 10 also shortens each of those calls, to a floor of 5 seconds), `-v` (`up`: show the activity log), `--workspace W` / `--project P` / `--configuration C` (`run`), `--replace` (`ota`: drop builds already listed under the same version and build number). `roamrun --help` lists everything; a command rejects options it doesn't take (exit 2).
+Options: `--json` (`devices`, `status`, `doctor`; `devices` doesn't ask CoreDevice, so its `ready` only means the bridge is Ready or the device is on this Wi‑Fi — `status` also asks CoreDevice once the device's UDID is known), `--wait N` (`status`: wait up to N seconds for Ready; each round runs one `devicectl list devices`, plus a lock check per ready device, before the deadline is looked at again, so it can return several seconds after N; each of those calls is also cut to the time left, between 5 and 10 seconds), `-v` (`up`: show the activity log), `--workspace W` / `--project P` / `--configuration C` (`run`), `--replace` (`ota`: drop builds already listed under the same version and build number). `roamrun --help` lists everything; a command rejects options it doesn't take (exit 2).
 
 The CLI uses the app's settings, so a bridge started with `roamrun up` follows **Keep debugging on cellular** too. Without access to the app's Settings (over SSH, for example), turn it on or off with `defaults`:
 
@@ -323,7 +323,7 @@ Main files in `Sources/RoamRun/`:
 | `DNSServiceProxy.swift` | Stand-in advertisement through a `dns-sd -P` child process, plus orphan cleanup |
 | `Relays.swift` | TCP byte relay on NWListener/NWConnection (accepts connections from this Mac only) |
 | `TunnelPortWatcher.swift` | Detects tunnel ports from `log stream` and attributes them to their device |
-| `InterfaceMonitor.swift` | Picks the LAN interface (en0 unless set in Settings) and notices its IP changes (getifaddrs + NWPathMonitor) |
+| `InterfaceMonitor.swift` | Picks the LAN interface (the one set in Settings; else en0, or the first other en* with an address when en0 has none) and notices its IP changes (getifaddrs + NWPathMonitor) |
 | `ReachabilityProbe.swift` | TCP reachability and the RemotePairing handshake check |
 | `ProxyBridge.swift` | Orchestrates the above (one instance per device) |
 | `OTA.swift` | Builds kept for over-the-air installs: storage, signing checks, icons |
@@ -378,7 +378,7 @@ defaults delete com.roamrun.app 2>/dev/null      # left by versions before 0.1.1
 
 - **It depends on Apple's private protocols.** It assumes how CoreDevice / RemotePairing behave since iOS 17 (Bonjour `_remotepairing._tcp` → control channel → tunnel), and future iOS / macOS / Xcode versions may break it. When in trouble, run `roamrun doctor` first.
 - **If macOS blocks RoamRun's local-network access, the device always looks "away".** Every probe to this Wi-Fi fails at once, so RoamRun goes on bridging (and advertising) a device sitting right next to it; over the mesh VPN everything else keeps working, so nothing else gives it away. From 0.1.14 RoamRun says so in the window, the activity log, `roamrun status` and `roamrun doctor`. Allow RoamRun in System Settings › Privacy & Security › Local Network. If the switch is already on, the permission is stuck and the app has to be reinstalled; the only way confirmed to clear it is `brew uninstall --zap --cask roamrun` then `brew install --cask mh-mobile/tap/roamrun`. **`--zap` also deletes your saved devices**, so copy `~/Library/Application Support/RoamRun/profiles.json` aside and put it back **before opening RoamRun again** — once open, it writes its own list over the file. (This came from changing the bundle id in 0.1.12; with the id and signature now fixed it shouldn't recur.) ([#23](https://github.com/mh-mobile/RoamRun/issues/23))
-- The bridge listens on **en0** (Wi-Fi on most Macs). If this Mac reaches its LAN through another interface (e.g. Ethernet on a Mac mini), pick it in Open RoamRun › ⚙ Settings › Network
+- The bridge listens on **en0** (Wi-Fi on most Macs), or another en* port when en0 has no address. If this Mac reaches its LAN through another interface (e.g. Ethernet on a Mac mini), pick it in Open RoamRun › ⚙ Settings › Network
 - The iPhone must be **connected to some Wi-Fi network** to connect (another device's tethering is fine, cellular alone or the iPhone's own hotspot is not: remotepairingd only listens while on Wi-Fi). After that it can stay on cellular only from Ready for Xcode (not from On this Wi‑Fi), with Keep debugging on cellular turned on
 - After sleep or a network change, Tailscale on iOS sometimes shows "MagicSock function ReceiveIPv4 is not running" and stops passing traffic while still looking connected. Turn the VPN off and on, and keep the Tailscale app up to date
 - When the iPhone sleeps, Tailscale (a VPN extension) pauses too and the iPhone becomes unreachable. While debugging, keep the iPhone unlocked with its screen on (set a longer Auto-Lock)
