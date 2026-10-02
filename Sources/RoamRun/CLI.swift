@@ -867,6 +867,25 @@ enum CLI {
     }
 
     /// Another process bridges the device. Ready → nothing to do; still coming up → say so.
+    /// Another `roamrun up` already runs for it, in any state. Its errors are retried, not
+    /// given up: a second would take the entry back and forth with it, and `down` stops only
+    /// whichever holds the entry then — the other bridges again once the device answers.
+    private static func refuseSecondUp(_ profile: DeviceProfile) {
+        guard let e = otherUp(StatusFile.read()[profile.id], me: getpid()) else { return }
+        if e.kind == .local {
+            print("\(profile.displayName) is on this Wi\u{2011}Fi and already watched by roamrun up (pid \(e.pid)) — it takes over when the device leaves.")
+            exit(0)
+        }
+        stop("\(profile.displayName) is already handled by roamrun up (pid \(e.pid)): \(e.status). It keeps retrying; " +
+             "roamrun down \(commandName(profile)) stops it.")
+    }
+
+    /// The entry when it is another live `roamrun up`'s (`read` drops dead ones), in any state.
+    nonisolated static func otherUp(_ e: StatusFile.Entry?, me: Int32) -> StatusFile.Entry? {
+        guard let e, e.cli == true, e.pid != me else { return nil }
+        return e
+    }
+
     private static func alreadyBridged(_ profile: DeviceProfile, _ e: StatusFile.Entry) -> Never {
         if e.ready {
             print("\(profile.displayName) is already bridged by \(owner(e)) — ready for Xcode.")
@@ -922,11 +941,7 @@ enum CLI {
         if StatusFile.otherOwner(of: profile.id) != nil, let e = StatusFile.read()[profile.id] {
             alreadyBridged(profile, e)
         }
-        // Another `roamrun up` already watches it (standing aside on this Wi‑Fi): a second would just yield.
-        if let e = StatusFile.read()[profile.id], e.cli == true, e.pid != getpid(), e.kind == .local {
-            print("\(profile.displayName) is on this Wi\u{2011}Fi and already watched by roamrun up (pid \(e.pid)) — it takes over when the device leaves.")
-            exit(0)
-        }
+        refuseSecondUp(profile)   // before the log below is rotated away from the one running
         let logURL = detachedLog(profile)
         try? FileManager.default.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         // Keep the previous run's log (an earlier failure may point at it).
@@ -1017,6 +1032,7 @@ enum CLI {
         if StatusFile.otherOwner(of: profile.id) != nil, let e = StatusFile.read()[profile.id] {
             alreadyBridged(profile, e)
         }
+        refuseSecondUp(profile)
         var logRotation: Timer?
         if detachedChild {
             // Own session: closing the terminal / ending SSH doesn't reach us.

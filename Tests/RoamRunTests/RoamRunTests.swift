@@ -4009,3 +4009,18 @@ func publishStepsAsideWhenTurnedOff(_ c: PublishCase) async {
         #expect(fake.offs.isEmpty && fake.record == ["41443 \(mine)"])
     }
 }
+
+/// A second `roamrun up` for a device another one handles is refused in every state, an
+/// errored one too: both would retry, take the entry from each other, and `down` stops one.
+@Test func aSecondUpIsRefusedWhateverTheFirstIsDoing() {
+    func e(_ pid: Int32, cli: Bool?, _ s: BridgeStatus) -> StatusFile.Entry {
+        .init(pid: pid, cli: cli, udid: nil, status: s.title, detail: "", ready: s == .ready, tunnelPorts: [], updated: .now)
+    }
+    for s in [BridgeStatus.error, .starting, .waiting, .ready, .local] {
+        #expect(CLI.otherUp(e(200, cli: true, s), me: 300) != nil, "\(s)")
+    }
+    #expect(CLI.otherUp(e(300, cli: true, .error), me: 300) == nil)    // its own entry
+    #expect(CLI.otherUp(e(200, cli: false, .error), me: 300) == nil)   // the app's: claim rules decide
+    #expect(CLI.otherUp(e(200, cli: nil, .error), me: 300) == nil)     // an old entry with no `cli`
+    #expect(CLI.otherUp(nil, me: 300) == nil)
+}
