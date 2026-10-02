@@ -1112,7 +1112,10 @@ final class AppCoordinator: ObservableObject {
         }
         // Against the port saved now, not at the click: a retry may have found and saved it
         // meanwhile, and "moving" to it would tear down the session it just brought up.
-        if found == (profiles.first { $0.id == profile.id }?.remotePairingPort ?? profile.remotePairingPort) {
+        let saved = profiles.first { $0.id == profile.id }
+        // The device moved to another address meanwhile: a port found at the old one isn't its.
+        if let saved, saved.providerIP != host { return "The device moved to \(saved.providerIP) during the scan; nothing changed." }
+        if found == (saved?.remotePairingPort ?? profile.remotePairingPort) {
             logStore.log("\"\(profile.displayName)\": RemotePairing port is still \(found)", device: profile.id)
             return "Still on port \(found)."
         } else {

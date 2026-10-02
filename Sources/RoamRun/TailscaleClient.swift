@@ -37,19 +37,22 @@ struct TailscaleClient {
 
     /// PATH as the user's own shell sets it (rc files included). An app opened
     /// from Finder only gets launchd's minimal PATH, missing e.g. ~/go/bin or Nix.
-    /// Kept once found, not before: a slow rc at login (past the timeout) would otherwise
-    /// leave the CLI unfound until the app restarts.
+    /// Kept once found; a miss is tried again a minute later, not on every call (each try
+    /// blocks up to 3 s). A slow rc at login would otherwise leave the CLI unfound for good.
     static var shellPATH: String {
-        if let known = pathLock.withLock({ knownPATH }) { return known }
+        let (known, missedAt) = pathLock.withLock { (knownPATH, lastMiss) }
+        if let known { return known }
+        if let missedAt, Date.now.timeIntervalSince(missedAt) < 60 { return "" }
         let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.hasPrefix("/") ? $0 : nil } ?? "/bin/zsh"
         let out = Proc.run(shell, ["-ilc", #"printf '\n__RR_PATH__%s' "$PATH""#], timeout: 3).out
-        guard let r = out.range(of: "__RR_PATH__", options: .backwards) else { return "" }
-        let found = out[r.upperBound...].trimmingCharacters(in: .newlines)
-        if !found.isEmpty { pathLock.withLock { knownPATH = found } }
+        let found = out.range(of: "__RR_PATH__", options: .backwards)
+            .map { out[$0.upperBound...].trimmingCharacters(in: .newlines) } ?? ""
+        pathLock.withLock { if found.isEmpty { lastMiss = .now } else { knownPATH = found } }
         return found
     }
     private static let pathLock = NSLock()
     nonisolated(unsafe) private static var knownPATH: String?
+    nonisolated(unsafe) private static var lastMiss: Date?
 
     /// The client with the CLI path from Settings. The app owns the defaults
     /// domain; the CLI reads it by suite name.
