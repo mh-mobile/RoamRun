@@ -4009,3 +4009,37 @@ func publishStepsAsideWhenTurnedOff(_ c: PublishCase) async {
         #expect(fake.offs.isEmpty && fake.record == ["41443 \(mine)"])
     }
 }
+
+/// Agents run SKILL.md's commands as written, and people copy the READMEs': each `roamrun …`
+/// in their code (fenced blocks and inline code) must be a command the CLI knows, with options it takes.
+@Test(arguments: ["skills/roamrun/SKILL.md", "README.md", "README.ja.md"])
+func everyDocumentedCommandParses(_ doc: String) throws {
+    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    let text = try String(contentsOf: root.appendingPathComponent(doc), encoding: .utf8)
+    var code: [String] = []
+    var fenced = false
+    for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+        if line.hasPrefix("```") { fenced.toggle(); continue }
+        if fenced { code.append(String(line)) } else { code += line.matches(of: #/`([^`]+)`/#).map { String($0.1) } }
+    }
+    var checked = 0
+    for snippet in code {
+        // Only where `roamrun` starts a command, not as another tool's argument; comments dropped.
+        let line = snippet.split(separator: " #", maxSplits: 1).first.map(String.init) ?? snippet
+        for m in line.matches(of: #/(?:^\s*|[(;&|]\s*)roamrun\s+([^|;&>)\n]*)/#) {
+            let words = m.1.split(whereSeparator: \.isWhitespace).map {
+                $0.trimmingCharacters(in: CharacterSet(charactersIn: "[]<>'\"")).replacingOccurrences(of: "...", with: "")
+            }.filter { !$0.isEmpty }
+            guard let command = words.first else { continue }
+            #expect(CLI.commands.contains(command), "\(doc): roamrun \(m.1)")
+            checked += 1
+            if command == "init" {
+                let known: Set = ["--client", "--print", "--uninstall", "claude", "codex", "cursor", "gemini", "copilot", "name"]
+                #expect(Set(words.dropFirst()).isSubset(of: known), "\(doc): roamrun \(m.1)")
+            } else if case .failure(let e) = CLI.parse(words) {
+                Issue.record("\(doc): roamrun \(m.1) — \(e.message)")
+            }
+        }
+    }
+    #expect(checked > 15)   // the extraction itself still finds them
+}
