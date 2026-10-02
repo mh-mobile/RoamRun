@@ -12,6 +12,7 @@ struct AddDeviceView: View {
     @State private var provider: MeshProvider = .tailscale
     @State private var manualIP = ""
     @State private var name = ""
+    @State private var autoName: String?
     /// host -> whether the advertised host:port actually answers.
     /// mDNS cache keeps dead records for ~75min, so zone-dump hits alone
     /// don't mean the device is still here.
@@ -98,7 +99,12 @@ struct AddDeviceView: View {
         }
         .onChange(of: selectedHost) { _ in
             refusal = nil
-            if name.isEmpty, let s = newest(for: selectedHost) { name = coordinator.uniqueName(s.shortHost) }
+            // Follows the selection until the user types their own: picking another device
+            // mustn't save it under the first one's name.
+            if name.isEmpty || name == autoName, let s = newest(for: selectedHost) {
+                name = coordinator.uniqueName(s.shortHost)
+                autoName = name
+            }
         }
         // A refusal is about what was asked then: any change makes it stale.
         .onChange(of: meshDeviceID) { _ in refusal = nil }
