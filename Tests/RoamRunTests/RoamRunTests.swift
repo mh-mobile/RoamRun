@@ -851,14 +851,14 @@ extension TimingSensitive {
         @Test func aPeerThatSaysNothingLetsGoOfItsSlot() async throws {
             let (server, port) = try started()
             defer { server.stop() }
-            // Eight is every connection there is, and a peer that connects and stays
+            // The cap is every connection there is, and a peer that connects and stays
             // quiet produces no callback to check a deadline in — which is why the
             // deadline is on the idle timer rather than inside the read loop.
-            let silent = (0..<8).map { _ in
+            let silent = (0..<OTAServer.maxConnections).map { _ in
                 Task { _ = await ask(port, "", hold: 30) }
             }
             try await Task.sleep(for: .seconds(1))
-            // The ninth is refused outright rather than queued behind them.
+            // One more is refused outright rather than queued behind them.
             #expect(await ask(port, "GET /nope HTTP/1.1\r\nHost: m\r\n\r\n") == nil)
             // And they are let go of well inside the idle limit, not held for 120 s.
             try await Task.sleep(for: .seconds(16))
@@ -2641,14 +2641,20 @@ func aNewAddressAndPortAreFoundTogether(scanFinds: Bool) async {
     let tmp = scratchDir()
     defer { try? FileManager.default.removeItem(at: tmp) }
     let fm = FileManager.default
-    for name in ["roamrun-ipa-old", "roamrun-install-old", "roamrun-ipa-fresh", "someone-elses"] {
+    for name in ["roamrun-ipa-old", "roamrun-install-old", "roamrun-ipa-fresh", "someone-elses",
+                 "roamrun-ipa-4242-X", "roamrun-ipa-4343-X"] {
         try fm.createDirectory(at: tmp.appendingPathComponent(name), withIntermediateDirectories: true)
     }
     let longAgo = Date.now.addingTimeInterval(-7200)
     try fm.setAttributes([.creationDate: longAgo], ofItemAtPath: tmp.appendingPathComponent("roamrun-ipa-old").path)
     try fm.setAttributes([.creationDate: longAgo], ofItemAtPath: tmp.appendingPathComponent("someone-elses").path)
     try fm.setAttributes([.creationDate: longAgo], ofItemAtPath: tmp.appendingPathComponent("roamrun-install-old").path)
-    CLI.sweepStaleUnpacks(in: tmp)
+    for n in ["roamrun-ipa-4242-X", "roamrun-ipa-4343-X"] {
+        try fm.setAttributes([.creationDate: longAgo], ofItemAtPath: tmp.appendingPathComponent(n).path)
+    }
+    CLI.sweepStaleUnpacks(in: tmp, alive: { $0 == 4242 })
+    #expect(fm.fileExists(atPath: tmp.appendingPathComponent("roamrun-ipa-4242-X").path))    // an install still running
+    #expect(!fm.fileExists(atPath: tmp.appendingPathComponent("roamrun-ipa-4343-X").path))   // its process is gone
     #expect(!fm.fileExists(atPath: tmp.appendingPathComponent("roamrun-ipa-old").path))
     #expect(!fm.fileExists(atPath: tmp.appendingPathComponent("roamrun-install-old").path))   // the signing check's unpacking
     #expect(fm.fileExists(atPath: tmp.appendingPathComponent("roamrun-ipa-fresh").path))   // maybe an install running now

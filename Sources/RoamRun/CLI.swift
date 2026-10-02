@@ -694,7 +694,8 @@ enum CLI {
             exec(["/usr/bin/xcrun", "devicectl", "device", "install", "app", "--device", udid, path])
         }
         // devicectl documents .app bundles only: unpack the .ipa and hand it the .app inside.
-        let dir = tmp.appendingPathComponent("roamrun-ipa-\(UUID().uuidString)")
+        // Our pid in the name: the install can outlast the sweep's hour (a big app over a slow link).
+        let dir = tmp.appendingPathComponent("roamrun-ipa-\(getpid())-\(UUID().uuidString)")
         let cleanUp = { try? FileManager.default.removeItem(at: dir) }   // exit() skips defer
         let unzip = Proc.run("/usr/bin/ditto", ["-x", "-k", path, dir.path], timeout: 300)
         guard unzip.status == 0 else { cleanUp(); stop("couldn't unpack \(path): \(firstLine(unzip.err) ?? "ditto exited \(unzip.status)")") }
@@ -716,12 +717,14 @@ enum CLI {
     }
 
     /// Unpacked archives an interrupted `install` or `ota` (or their signing and icon
-    /// checks) left behind. An hour is longer than any of them, so one running in
-    /// another terminal is never touched.
-    nonisolated static func sweepStaleUnpacks(in tmp: URL, now: Date = .now) {
+    /// checks) left behind. An hour is longer than the checks; an install can take longer,
+    /// so its folder carries its pid and stays while that process lives.
+    nonisolated static func sweepStaleUnpacks(in tmp: URL, now: Date = .now,
+                                              alive: (Int32) -> Bool = { kill($0, 0) == 0 || errno == EPERM }) {
         let fm = FileManager.default
         let ours = ["roamrun-ipa-", "roamrun-install-", "roamrun-ota-", "roamrun-icon-"]
         for name in (try? fm.contentsOfDirectory(atPath: tmp.path)) ?? [] where ours.contains(where: name.hasPrefix) {
+            if name.hasPrefix("roamrun-ipa-"), let pid = Int32(name.dropFirst(12).prefix { $0 != "-" }), alive(pid) { continue }
             let url = tmp.appendingPathComponent(name)
             let made = (try? url.resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? now
             if made < now.addingTimeInterval(-3600) { try? fm.removeItem(at: url) }

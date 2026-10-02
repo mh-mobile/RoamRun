@@ -122,9 +122,10 @@ final class OTAServer: @unchecked Sendable {
 
     // MARK: - One request
 
-    /// Enough for a phone and a laptop at once; past that something is wrong and
-    /// the menu bar app's descriptors matter more than the extra download.
-    private static let maxConnections = 8
+    /// One page load is the page, an icon per app and Safari's favicon tries, each on its
+    /// own connection from `tailscale serve`, beside any download: 8 dropped icons. Past
+    /// this something is wrong; the head deadline, idle timer and download floor free the rest.
+    static let maxConnections = 32
     private static let idleLimit: TimeInterval = 120
     /// The whole head, not time between bytes: one byte every 119 s would keep an
     /// idle timer happy for ever, and eight of those are every connection there is.
