@@ -86,8 +86,9 @@ read — treat that like locked.
 
 If the bridge already runs in the menu bar app, just use it — `status` shows
 the owner, and `up` exits 0 when another process already has it ready (exit 1
-if that one is still coming up, or retrying after an error: don't start another,
-wait, or `roamrun down` it first). Status "On this Wi‑Fi" means the iPhone is on
+if that one is still coming up, or is another `roamrun up` retrying after an
+error: don't start another, wait, or `roamrun down` it first; from the app's
+bridge in an error, `up` takes the device over). Status "On this Wi‑Fi" means the iPhone is on
 the Mac's own network: no bridge is needed, Xcode sees it directly, and it
 counts as ready while CoreDevice can reach it (`ready` true; when CoreDevice
 reports it unavailable or can't be asked, it stays `state` local with `ready`
