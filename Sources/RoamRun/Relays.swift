@@ -38,6 +38,13 @@ final class Relay: @unchecked Sendable {
     /// A tunnel relay: its pairs may not take the control channels' reserve.
     let spare: Bool
     private var lastRefusalLog: Date?
+    /// When the device last refused a dial (`clock`), until it answers one.
+    private var upstreamRefusedAt: UInt64?
+    /// Dials refused in a row, and connections closed without dialing meanwhile.
+    private var refusedDials = 0
+    private var heldOff = 0
+    /// Connections closed without dialing the device, in all (tests).
+    private(set) var heldOffTotal = 0
     /// The start() waiting for the listener's first verdict.
     private var starting: CheckedContinuation<Void, Error>?
     private var failureReported = false
@@ -98,6 +105,18 @@ final class Relay: @unchecked Sendable {
         last.map { now.timeIntervalSince($0) >= refusalLogInterval } ?? true
     }
 
+    /// After the device refuses a dial, how long connections are closed here without
+    /// dialing it. Off Wi‑Fi its RemotePairing port refuses and remotepairingd redials
+    /// ~12 times a second, for hours: each was a round trip to the device over the mesh
+    /// VPN (cellular data, its radio kept up) and two log lines.
+    /// Under `Link.waitAfter`: one stray refusal on Wi‑Fi must not read as the device gone.
+    static let upstreamHold: TimeInterval = 3
+
+    /// `refusedAt`, `now`: in `clock`'s nanoseconds.
+    static func holdsOff(refusedAt: UInt64?, now: UInt64) -> Bool {
+        refusedAt.map { now < $0 + UInt64(upstreamHold * 1e9) } ?? false
+    }
+
     /// The callback is given here, not assigned afterwards: start() returns with the
     /// listener already accepting, and the calls that read it run off the main actor.
     /// Nanoseconds that keep counting while the Mac sleeps. Uptime stopped: bytes from before a
@@ -140,7 +159,7 @@ final class Relay: @unchecked Sendable {
 
     func start() async throws {
         guard let port = NWEndpoint.Port(rawValue: localPort) else { throw RelayError.invalidPort(localPort) }
-        lock.withLock { stopped = false; failureReported = false }
+        lock.withLock { stopped = false; failureReported = false; upstreamRefusedAt = nil; refusedDials = 0; heldOff = 0 }
         let params = Self.tcpParams()
         params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(localIP), port: port)
         let listener = try NWListener(using: params)
@@ -270,11 +289,19 @@ final class Relay: @unchecked Sendable {
             return
         }
         guard let rport = NWEndpoint.Port(rawValue: remotePort) else { inbound.cancel(); return }
+        let (hold, quiet) = lock.withLock { () -> (Bool, Bool) in
+            // Not a tunnel relay: its port may start answering right after a refusal.
+            let hold = !spare && Self.holdsOff(refusedAt: upstreamRefusedAt, now: clock())
+            if hold { heldOff += 1; heldOffTotal += 1 }
+            return (hold, refusedDials > 0)
+        }
+        if hold { inbound.cancel(); return }
         let outbound = NWConnection(host: NWEndpoint.Host(remoteIP), port: rport, using: Self.tcpParams(keepalive: true))
         let stats = ConnStats(clock: clock)
         let port = remotePort
-        let finish: @Sendable (String) -> Void = { [weak self] reason in
-            stats.logOnce("tcp :\(port) sent=\(stats.up)B recv=\(stats.down)B \(reason)")
+        // nil: closed without a line (a refusal after the first of a run).
+        let finish: @Sendable (String?) -> Void = { [weak self] reason in
+            stats.logOnce(reason.map { "tcp :\(port) sent=\(stats.up)B recv=\(stats.down)B \($0)" })
             outbound.stateUpdateHandler = nil   // it holds this closure, which holds outbound
             inbound.cancel(); outbound.cancel()
             self?.untrack(inbound, outbound)
@@ -283,8 +310,14 @@ final class Relay: @unchecked Sendable {
         // remotepairingd sits on an accepted socket that leads nowhere.
         outbound.stateUpdateHandler = { [weak self] state in
             switch state {
-            case .ready: self?.markEstablished(inbound)
-            case .waiting(let e), .failed(let e): finish("upstream \(e.localizedDescription)")
+            case .ready:
+                self?.upstreamAnswered()
+                self?.markEstablished(inbound)
+            case .waiting(let e), .failed(let e):
+                guard case .posix(.ECONNREFUSED) = e else { finish("upstream \(e.localizedDescription)"); return }
+                let first = self?.upstreamRefused() ?? true
+                let held = self?.spare == false ? " — dialing it at most every \(Int(Self.upstreamHold))s until it answers" : ""
+                finish(first ? "upstream \(e.localizedDescription)\(held)" : nil)
             default: break
             }
         }
@@ -297,13 +330,31 @@ final class Relay: @unchecked Sendable {
         }
         inbound.start(queue: .global(qos: .utility))
         outbound.start(queue: .global(qos: .utility))
-        relayLog.log("tcp relay open :\(self.localPort) -> \(self.remoteIP):\(self.remotePort)")
+        if !quiet { relayLog.log("tcp relay open :\(self.localPort) -> \(self.remoteIP):\(self.remotePort)") }
         pump(from: inbound, to: outbound, stats: stats, isUp: true, finish: finish)
         pump(from: outbound, to: inbound, stats: stats, isUp: false, finish: finish)
     }
 
+    /// True for the first refusal of a run: the one that is logged.
+    private func upstreamRefused() -> Bool {
+        lock.withLock {
+            upstreamRefusedAt = clock()
+            refusedDials += 1
+            return refusedDials == 1
+        }
+    }
+
+    private func upstreamAnswered() {
+        let (dials, held) = lock.withLock { () -> (Int, Int) in
+            defer { upstreamRefusedAt = nil; refusedDials = 0; heldOff = 0 }
+            return (refusedDials, heldOff)
+        }
+        guard dials > 0 else { return }
+        relayLog.log("tcp :\(self.remotePort) answers again after \(dials) refused dial(s); \(held) connection(s) closed without dialing meanwhile")
+    }
+
     private func pump(from: NWConnection, to: NWConnection, stats: ConnStats,
-                      isUp: Bool, finish: @escaping @Sendable (String) -> Void) {
+                      isUp: Bool, finish: @escaping @Sendable (String?) -> Void) {
         let handle: @Sendable (Data?, NWConnection.ContentContext?, Bool, NWError?) -> Void = { [weak self] data, _, isComplete, error in
             if let error {
                 finish("err=\(error.localizedDescription)")
@@ -442,11 +493,12 @@ private final class ConnStats: @unchecked Sendable {
         return doneDirections == 2
     }
 
-    func logOnce(_ message: String) {
+    /// nil: nothing is said, and nothing after it either.
+    func logOnce(_ message: String?) {
         lock.lock()
         defer { lock.unlock() }
         guard !logged else { return }
         logged = true
-        relayLog.log("\(message, privacy: .public)")
+        if let message { relayLog.log("\(message, privacy: .public)") }
     }
 }

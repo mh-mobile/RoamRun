@@ -207,7 +207,7 @@ private struct WelcomeView: View {
             VStack(spacing: 6) {
                 Text("Debug your iPhone from anywhere")
                     .font(.title2.weight(.semibold))
-                Text("Xcode's wireless debugging only works on the same Wi‑Fi.\nRoamRun carries it over Tailscale, so the device can be on any network.")
+                Text("Xcode's wireless debugging only works on the same Wi‑Fi.\nRoamRun carries it over Tailscale, so the device can be on any Wi‑Fi network.")
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
             }
