@@ -45,6 +45,10 @@ one line each with the signal that decided: `log stream --level debug
 --predicate 'subsystem == "io.github.mh-mobile.roamrun" AND category == "home"'`. The rules
 live in `HomeRule` (ProxyBridge.swift) and are unit-tested — change them there.
 
+What a bridge did earlier — each change of status or network, with what the relays
+showed — is kept in the system log, without UDIDs or addresses: `log show --last 6h
+--predicate 'subsystem == "io.github.mh-mobile.roamrun" AND category == "status"'`.
+
 Tunnel ports are the most Apple-dependent part: relays open for newest…newest+16
 and are reaped outside newest−32…newest+16. Each discovered port is logged at
 debug level with whether a lookahead relay was already there (hit/miss) and the
