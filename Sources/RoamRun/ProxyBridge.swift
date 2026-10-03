@@ -93,16 +93,35 @@ final class ProxyBridge: ObservableObject {
         n.map { "\(s.rawValue)/\($0.rawValue)" } ?? s.rawValue
     }
 
-    private func sayIfChanged() {
-        let now = Self.said(status, network)
-        guard now != lastSaid else { return }
+    /// The line just said (tests).
+    var onStatusLine: ((String) -> Void)?
+    /// What the relays showed before a teardown closed them: the next line says that,
+    /// not the nothing left afterwards.
+    private var shownBefore: String?
+    /// teardown() resets `link` on its way to the state that follows: not a change of its own.
+    private var tearingDown = false
+
+    private func relaysShow() -> String {
         let control = (controlRelay?.openCount ?? 0) > 0 ? "control open"
             : controlGoneSince.map { "control gone \(Int(env.now().timeIntervalSince($0)))s" } ?? "no control"
         let open = tunnelRelays.values.filter { $0.openCount > 0 }.count
-        let heard = tunnelCarriesTraffic ? "device heard" : "device silent"
-        Self.statusLog.log("\(self.profile.displayName, privacy: .public): \(self.lastSaid, privacy: .public) -> \(now, privacy: .public) (\(control, privacy: .public), \(open) of \(self.tunnelRelays.count) tunnel relays open, \(heard, privacy: .public))")
-        lastSaid = now
+        return "\(control), \(open) of \(tunnelRelays.count) tunnel relays open, \(tunnelCarriesTraffic ? "device heard" : "device silent")"
     }
+
+    /// Before anything the change itself closes, so the line says what led to it.
+    private func sayIfChanged() {
+        guard !tearingDown else { return }
+        let shown = shownBefore ?? relaysShow()
+        shownBefore = nil
+        let now = Self.said(status, network)
+        guard now != lastSaid else { return }
+        let line = "\(profile.displayName): \(lastSaid) -> \(now) (\(shown))"
+        Self.statusLog.log("\(line, privacy: .public)")
+        lastSaid = now
+        onStatusLine?(line)
+    }
+
+    func setLinkForTests(_ l: Link) { link = l }
 
     /// Spoofed SRV target whose A record we publish pointing at this Mac.
     var spoofHost: String {
@@ -368,6 +387,9 @@ final class ProxyBridge: ObservableObject {
 
     /// Releases everything a start acquired; safe to call when nothing is up.
     private func teardown() {
+        shownBefore = relaysShow()
+        tearingDown = true
+        defer { tearingDown = false }
         renewTimer?.invalidate()
         renewTimer = nil
         claimTimer?.invalidate()
@@ -741,6 +763,7 @@ final class ProxyBridge: ObservableObject {
     }
 
     private func linkChanged(from old: Link) {
+        sayIfChanged()   // before a pause closes the tunnel below
         if pausedOnCellular {
             if case .paused = old {} else {
                 log("on cellular — closed the tunnel (Keep debugging on cellular is off); back on Wi‑Fi it reconnects")
