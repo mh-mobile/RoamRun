@@ -82,6 +82,27 @@ final class ProxyBridge: ObservableObject {
     /// if a future iOS allocates tunnel ports differently.
     private static let tunnelLog = Logger(subsystem: AppID.bundle, category: "tunnel")
     private var lastTunnelPort: UInt16?
+    /// Each change of status or network, one line at default level (so the system keeps it):
+    /// the history `status` can't give afterwards. The name and what the relays showed — no
+    /// UDID or address, so it is readable in `log show`.
+    private static let statusLog = Logger(subsystem: AppID.bundle, category: "status")
+    /// What was last said there (internal: tests read it).
+    private(set) var lastSaid = BridgeStatus.off.rawValue
+
+    static func said(_ s: BridgeStatus, _ n: DeviceNetwork?) -> String {
+        n.map { "\(s.rawValue)/\($0.rawValue)" } ?? s.rawValue
+    }
+
+    private func sayIfChanged() {
+        let now = Self.said(status, network)
+        guard now != lastSaid else { return }
+        let control = (controlRelay?.openCount ?? 0) > 0 ? "control open"
+            : controlGoneSince.map { "control gone \(Int(env.now().timeIntervalSince($0)))s" } ?? "no control"
+        let open = tunnelRelays.values.filter { $0.openCount > 0 }.count
+        let heard = tunnelCarriesTraffic ? "device heard" : "device silent"
+        Self.statusLog.log("\(self.profile.displayName, privacy: .public): \(self.lastSaid, privacy: .public) -> \(now, privacy: .public) (\(control, privacy: .public), \(open) of \(self.tunnelRelays.count) tunnel relays open, \(heard, privacy: .public))")
+        lastSaid = now
+    }
 
     /// Spoofed SRV target whose A record we publish pointing at this Mac.
     var spoofHost: String {
@@ -752,6 +773,7 @@ final class ProxyBridge: ObservableObject {
 
     @discardableResult
     private func publishStatus(claim: Bool = false, deferToCLI: Bool = false) -> StatusFile.WriteResult {
+        sayIfChanged()
         let r = writeStatus(claim: claim, deferToCLI: deferToCLI)
         if case .failed(let why) = r {
             if !statusWritePending { log("couldn't write the status file (\(why)); trying again") }

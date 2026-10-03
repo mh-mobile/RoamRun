@@ -2516,6 +2516,19 @@ func linkFollowsTheTable(_ row: Int) {
     #expect(!m.onCellular)
 }
 
+/// The status log follows what `status` says, change by change.
+@MainActor @Test func eachStatusChangeIsSaidOnce() async {
+    let rig = Rig()
+    defer { rig.done() }
+    #expect(rig.bridge.lastSaid == "off")
+    rig.world.onLAN = true
+    await rig.bridge.start(.retry)
+    #expect(rig.bridge.status == .local && rig.bridge.lastSaid == "local")
+    rig.bridge.stop()
+    #expect(rig.bridge.lastSaid == "off")
+    #expect(ProxyBridge.said(.ready, .cellular) == "ready/cellular" && ProxyBridge.said(.waiting, nil) == "waiting")
+}
+
 /// A new address that doesn't answer at the known port: scanned (it pings), and taken only
 /// with the port the scan found there; a scan that finds nothing keeps the old address.
 @MainActor @Test(arguments: [true, false])
