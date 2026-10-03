@@ -2541,7 +2541,9 @@ func whatFollowsReadyIsSaidAsOneChange(_ c: AfterReady) async {
     rig.bridge.onStatusLine = { lines.append($0) }
     await rig.bridge.start(.manual)
     rig.watcher.subscribers[rig.id]?.onPort(rig.bridge.profile.remotePairingPort + 2, "127.0.0.1")
-    #expect(await eventuallyOnMain { rig.bridge.tunnelRelayPorts.count == 17 })
+    // Not all 17 of the window, necessarily: a parallel test's bridge may hold one of the ports.
+    #expect(await eventuallyOnMain { rig.bridge.bindsInFlight == 0 && !rig.bridge.tunnelRelayPorts.isEmpty })
+    let relays = rig.bridge.tunnelRelayPorts.count
     rig.bridge.setLinkForTests(.wifi)
     #expect(rig.bridge.status == .ready && lines.last?.contains("waiting -> ready/wifi") == true)
     lines = []
@@ -2559,7 +2561,7 @@ func whatFollowsReadyIsSaidAsOneChange(_ c: AfterReady) async {
     }
     #expect(lines.count == 1, "\(c): \(lines)")
     #expect(lines.first?.contains("ready/wifi -> \(to) ") == true, "\(c): \(lines)")
-    #expect(lines.first?.contains("of 17 tunnel relays") == true, "\(c): \(lines)")   // as they were before it
+    #expect(lines.first?.contains("of \(relays) tunnel relays") == true, "\(c): \(lines)")   // as they were before it
 }
 
 /// A new address that doesn't answer at the known port: scanned (it pings), and taken only
