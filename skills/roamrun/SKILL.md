@@ -61,8 +61,8 @@ not match the installed CLI until then (`roamrun --help` is authoritative).
   read that section rather than only doctor's first fail. `--replace` keeps one row
   per version and build number instead of stacking one per rebuild. If `ota` exits 1
   with a message saying the build is stored, don't run it again: the build is kept,
-  and what's left is the Tailscale or port problem the message names. Tell the user. Tell them what
-  they'll get and let them decide. The name is optional: without one the build is
+  and what's left is the Tailscale or port problem the message names — say that to the user.
+  Before any `ota`, tell them what they'll get and let them decide. The name is optional: without one the build is
   checked against every device RoamRun knows and it says which are covered, which
   is what you want when you don't know which device the user has to hand. A build
   covering none of the devices it knows is stored with a warning rather than

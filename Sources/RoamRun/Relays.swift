@@ -108,7 +108,8 @@ final class Relay: @unchecked Sendable {
     /// After the device refuses a dial, how long connections are closed here without
     /// dialing it. Off Wi‑Fi its RemotePairing port refuses and remotepairingd redials
     /// ~12 times a second, for hours: each was a round trip to the device over the mesh
-    /// VPN (cellular data, its radio kept up) and two log lines.
+    /// VPN (cellular data, its radio kept up) and two log lines. Held, it redials on this
+    /// Mac only, and faster (~20 a second expected: its own ~50 ms wait is what's left).
     /// Under `Link.waitAfter`: one stray refusal on Wi‑Fi must not read as the device gone.
     static let upstreamHold: TimeInterval = 3
 
