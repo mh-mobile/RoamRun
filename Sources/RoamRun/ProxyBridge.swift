@@ -82,6 +82,46 @@ final class ProxyBridge: ObservableObject {
     /// if a future iOS allocates tunnel ports differently.
     private static let tunnelLog = Logger(subsystem: AppID.bundle, category: "tunnel")
     private var lastTunnelPort: UInt16?
+    /// Each change of status or network, one line at default level (so the system keeps it):
+    /// the history `status` can't give afterwards. The name and what the relays showed — no
+    /// UDID or address, so it is readable in `log show`.
+    private static let statusLog = Logger(subsystem: AppID.bundle, category: "status")
+    /// What was last said there (internal: tests read it).
+    private(set) var lastSaid = BridgeStatus.off.rawValue
+
+    static func said(_ s: BridgeStatus, _ n: DeviceNetwork?) -> String {
+        n.map { "\(s.rawValue)/\($0.rawValue)" } ?? s.rawValue
+    }
+
+    /// The line just said (tests).
+    var onStatusLine: ((String) -> Void)?
+    /// What the relays showed before a teardown closed them: the next line says that,
+    /// not the nothing left afterwards.
+    private var shownBefore: String?
+    /// teardown() resets `link` on its way to the state that follows: not a change of its own.
+    private var tearingDown = false
+
+    private func relaysShow() -> String {
+        let control = (controlRelay?.openCount ?? 0) > 0 ? "control open"
+            : controlGoneSince.map { "control gone \(Int(env.now().timeIntervalSince($0)))s" } ?? "no control"
+        let open = tunnelRelays.values.filter { $0.openCount > 0 }.count
+        return "\(control), \(open) of \(tunnelRelays.count) tunnel relays open, \(tunnelCarriesTraffic ? "device heard" : "device silent")"
+    }
+
+    /// Before anything the change itself closes, so the line says what led to it.
+    private func sayIfChanged() {
+        guard !tearingDown else { return }
+        let shown = shownBefore ?? relaysShow()
+        shownBefore = nil
+        let now = Self.said(status, network)
+        guard now != lastSaid else { return }
+        let line = "\(profile.displayName): \(lastSaid) -> \(now) (\(shown))"
+        Self.statusLog.log("\(line, privacy: .public)")
+        lastSaid = now
+        onStatusLine?(line)
+    }
+
+    func setLinkForTests(_ l: Link) { link = l }
 
     /// Spoofed SRV target whose A record we publish pointing at this Mac.
     var spoofHost: String {
@@ -347,6 +387,9 @@ final class ProxyBridge: ObservableObject {
 
     /// Releases everything a start acquired; safe to call when nothing is up.
     private func teardown() {
+        shownBefore = relaysShow()
+        tearingDown = true
+        defer { tearingDown = false }
         renewTimer?.invalidate()
         renewTimer = nil
         claimTimer?.invalidate()
@@ -722,6 +765,7 @@ final class ProxyBridge: ObservableObject {
     }
 
     private func linkChanged(from old: Link) {
+        sayIfChanged()   // before a pause closes the tunnel below
         if pausedOnCellular {
             if case .paused = old {} else {
                 log("on cellular — closed the tunnel (Keep debugging on cellular is off); back on Wi‑Fi it reconnects")
@@ -754,6 +798,7 @@ final class ProxyBridge: ObservableObject {
 
     @discardableResult
     private func publishStatus(claim: Bool = false, deferToCLI: Bool = false) -> StatusFile.WriteResult {
+        sayIfChanged()
         let r = writeStatus(claim: claim, deferToCLI: deferToCLI)
         if case .failed(let why) = r {
             if !statusWritePending { log("couldn't write the status file (\(why)); trying again") }

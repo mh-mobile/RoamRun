@@ -6,6 +6,28 @@ run this before tagging a release. Use a build of the release commit (a fresh
 clone), quit any installed RoamRun first, and keep the device unlocked with its
 screen on.
 
+## What to run
+
+Not everything every time. Always: items 1-4, 10, 12-14 (about 15 minutes).
+On top, by what the release changed:
+
+| Changed | Run |
+|---|---|
+| Bridge start/stop, helpers, status file, `up`/`down` | 5, 6, 8 |
+| `run`, `logs`, launch options | 7 |
+| Relays, tunnel ports, more than one device | 9 |
+| Home detection, Local Network | 11 |
+| `roamrun ota`, the OTA server or `tailscale serve` | 15 |
+| Pausing on cellular, sleep and wake | 16, 17 |
+| Windows, menus, accessibility | UI at scale and for everyone |
+
+`scripts/release-check.sh <name> <bundle id>` runs items 1-3, 5, the CLI half of 6, and 8
+unattended (device away, app quit) and prints ok/FAIL per step.
+
+Known, not regressions: a device (an iPhone, say) on USB can keep a bridged one from getting
+Ready; unplug it. Xcode's session doesn't survive the Mac sleeping for minutes: iOS drops the
+tunnel and Xcode has to run again.
+
 ## One device, away (e.g. on a phone's hotspot)
 
 1. `roamrun up <name> -d`, then `roamrun status <name> --wait 60` → Ready (exit 0).
@@ -58,6 +80,15 @@ screen on.
     and install. Then check `tailscale serve status` shows one entry on the OTA
     port and nothing else moved, that quitting RoamRun gives it back, that
     force-quitting leaves it behind, and that opening RoamRun again reclaims it.
+
+## Pausing and sleep
+
+16. **Keep debugging on cellular** off, the device bridged away, then on cellular only:
+    it shows Waiting for device · Cellular and stays that way for 30+ minutes: no error,
+    no port scan in the log. Sleep the Mac for a minute meanwhile: on wake nothing is
+    re-registered (no "re-announcing" while paused). Back on a Wi‑Fi: Ready again.
+17. With an Xcode debug session running, sleep the Mac for a few seconds: the session
+    carries on.
 
 ## Install paths
 

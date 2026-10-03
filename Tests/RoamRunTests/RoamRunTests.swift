@@ -780,6 +780,7 @@ import ServiceManagement
 // MARK: - Relay, end to end on localhost (fake device = an echo server)
 
 import Network
+import os
 
 /// Echoes everything back (or, `silent`, accepts and never answers). Keeps its
 /// connections, so a test can close them all at a moment of its choosing.
@@ -995,11 +996,12 @@ private final class OnceBox: @unchecked Sendable {
 }
 
 /// A started relay on a free local port (random, retried if taken).
-private func startedRelay(upstream: UInt16, spare: Bool = false) async throws -> Relay {
+private func startedRelay(upstream: UInt16, spare: Bool = false,
+                          clock: @escaping @Sendable () -> UInt64 = { Relay.continuousNow() }) async throws -> Relay {
     var lastError: Error?
     for _ in 0..<10 {
         let r = Relay(localIP: "127.0.0.1", localPort: UInt16.random(in: 40000...49000), remoteIP: "127.0.0.1",
-                      remotePort: upstream, spare: spare)
+                      remotePort: upstream, spare: spare, clock: clock)
         do { try await r.start(); return r } catch { lastError = error }
     }
     throw lastError!
@@ -1021,6 +1023,26 @@ extension TimingSensitive {
             let got = await roundTrip(port: relay.localPort, payload: Data("hi".utf8), timeout: 8)
             #expect(got == nil || got?.isEmpty == true)
             #expect(Date().timeIntervalSince(start) < 7)   // closed, not left hanging until our timeout
+        }
+
+        @Test func aRefusingUpstreamIsDialedOnlyOnceAHold() async throws {
+            let server = try EchoServer(); let dead = await server.start(); server.stop()
+            let now = OSAllocatedUnfairLock<UInt64>(initialState: 1_000_000_000)
+            let relay = try await startedRelay(upstream: dead, clock: { now.withLock { $0 } }); defer { relay.stop() }
+            for _ in 0..<3 { _ = await roundTrip(port: relay.localPort, payload: Data("hi".utf8), timeout: 8) }
+            #expect(relay.heldOffTotal == 2)   // the first was dialed and refused; the next two weren't dialed
+            now.withLock { $0 += UInt64((Relay.upstreamHold + 1) * 1e9) }
+            _ = await roundTrip(port: relay.localPort, payload: Data("hi".utf8), timeout: 8)
+            #expect(relay.heldOffTotal == 2)   // the hold is over: dialed again
+            _ = await roundTrip(port: relay.localPort, payload: Data("hi".utf8), timeout: 8)
+            #expect(relay.heldOffTotal == 3)   // and refused again: held again
+        }
+
+        @Test func aTunnelRelayDialsEveryTime() async throws {
+            let server = try EchoServer(); let dead = await server.start(); server.stop()
+            let relay = try await startedRelay(upstream: dead, spare: true); defer { relay.stop() }
+            for _ in 0..<3 { _ = await roundTrip(port: relay.localPort, payload: Data("hi".utf8), timeout: 8) }
+            #expect(relay.heldOffTotal == 0)
         }
 
         @Test func connectionsBeyondTheCapAreRefused() async throws {
@@ -2516,6 +2538,54 @@ func linkFollowsTheTable(_ row: Int) {
     #expect(!m.onCellular)
 }
 
+/// The status log follows what `status` says, change by change.
+@MainActor @Test func eachStatusChangeIsSaidOnce() async {
+    let rig = Rig()
+    defer { rig.done() }
+    #expect(rig.bridge.lastSaid == "off")
+    rig.world.onLAN = true
+    await rig.bridge.start(.retry)
+    #expect(rig.bridge.status == .local && rig.bridge.lastSaid == "local")
+    rig.bridge.stop()
+    #expect(rig.bridge.lastSaid == "off")
+    #expect(ProxyBridge.said(.ready, .cellular) == "ready/cellular" && ProxyBridge.said(.waiting, nil) == "waiting")
+}
+
+enum AfterReady: String, CaseIterable { case cellular, paused, stopped, helperDied }
+
+/// From Ready on Wi‑Fi, the one line each change leaves — with what the relays showed
+/// before it, and no "waiting" of teardown's own in between.
+@MainActor @Test(arguments: AfterReady.allCases)
+func whatFollowsReadyIsSaidAsOneChange(_ c: AfterReady) async {
+    let rig = Rig()
+    defer { rig.done() }
+    var lines: [String] = []
+    rig.bridge.onStatusLine = { lines.append($0) }
+    await rig.bridge.start(.manual)
+    rig.watcher.subscribers[rig.id]?.onPort(rig.bridge.profile.remotePairingPort + 2, "127.0.0.1")
+    // Not all 17 of the window, necessarily: a parallel test's bridge may hold one of the ports.
+    #expect(await eventuallyOnMain { rig.bridge.bindsInFlight == 0 && !rig.bridge.tunnelRelayPorts.isEmpty })
+    let relays = rig.bridge.tunnelRelayPorts.count
+    rig.bridge.setLinkForTests(.wifi)
+    #expect(rig.bridge.status == .ready && lines.last?.contains("waiting -> ready/wifi") == true)
+    lines = []
+    switch c {
+    case .cellular: rig.bridge.setLinkForTests(.cellular)
+    case .paused: rig.bridge.setLinkForTests(.paused(since: rig.world.now))
+    case .stopped: rig.bridge.stop()
+    case .helperDied: rig.watcher.subscribers[rig.id]?.onExit("log stream exited")
+    }
+    let to = switch c {
+    case .cellular: "ready/cellular"
+    case .paused: "waiting/cellular"
+    case .stopped: "off"
+    case .helperDied: "error"
+    }
+    #expect(lines.count == 1, "\(c): \(lines)")
+    #expect(lines.first?.contains("ready/wifi -> \(to) ") == true, "\(c): \(lines)")
+    #expect(lines.first?.contains("of \(relays) tunnel relays") == true, "\(c): \(lines)")   // as they were before it
+}
+
 /// A new address that doesn't answer at the known port: scanned (it pings), and taken only
 /// with the port the scan found there; a scan that finds nothing keeps the old address.
 @MainActor @Test(arguments: [true, false])
@@ -3960,6 +4030,16 @@ func claimByReason(_ r: StartReason, fromCLI: Bool) {
     #expect(Relay.refusal(relayPairs: 3, total: top - reserve, spare: true) == .reservedForControl)
     #expect(Relay.refusal(relayPairs: 3, total: top - reserve - 1, spare: true) == nil)
     #expect(Relay.refusal(relayPairs: 3, total: top - 1, spare: false) == nil)   // control may use the reserve
+}
+
+@Test func aRefusedUpstreamIsLeftAloneForTheHoldOnly() {
+    let s: UInt64 = 1_000_000_000
+    #expect(!Relay.holdsOff(refusedAt: nil, now: 100 * s))
+    #expect(Relay.holdsOff(refusedAt: 100 * s, now: 100 * s))
+    let hold = UInt64(Relay.upstreamHold)
+    #expect(Relay.holdsOff(refusedAt: 100 * s, now: (100 + hold) * s - 1))
+    #expect(!Relay.holdsOff(refusedAt: 100 * s, now: (100 + hold) * s))
+    #expect(Relay.upstreamHold + 1 < Link.waitAfter)   // a held redial lands before the link reads as waiting
 }
 
 @Test func aRefusalIsLoggedOnlyEveryTenMinutesPerRelay() {
