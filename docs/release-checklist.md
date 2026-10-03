@@ -99,8 +99,9 @@ tunnel and Xcode has to run again.
     one per dial), one `answers again` line at its end, and a `status` line for each
     change, the one on leaving Wi‑Fi with the tunnel relays still open. The `answers again`
     line's count of connections closed without dialing, over the spell's seconds, stays
-    around 20 a second (remotepairingd waits ~50 ms before it redials): far more means it
-    now spins on the closed connections.
+    around 20 a second: far more means it now spins on the closed connections. (Without
+    the hold it was ~12 a second — remotepairingd waits ~50 ms before it redials, and each
+    dial took a round trip to the device as well; held, only the wait is left.)
 
 ## Install paths
 
