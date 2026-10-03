@@ -109,7 +109,8 @@ final class Relay: @unchecked Sendable {
     /// dialing it. Off Wi‑Fi its RemotePairing port refuses and remotepairingd redials
     /// ~12 times a second, for hours: each was a round trip to the device over the mesh
     /// VPN (cellular data, its radio kept up) and two log lines.
-    static let upstreamHold: TimeInterval = 5
+    /// Under `Link.waitAfter`: one stray refusal on Wi‑Fi must not read as the device gone.
+    static let upstreamHold: TimeInterval = 3
 
     /// `refusedAt`, `now`: in `clock`'s nanoseconds.
     static func holdsOff(refusedAt: UInt64?, now: UInt64) -> Bool {
@@ -158,7 +159,7 @@ final class Relay: @unchecked Sendable {
 
     func start() async throws {
         guard let port = NWEndpoint.Port(rawValue: localPort) else { throw RelayError.invalidPort(localPort) }
-        lock.withLock { stopped = false; failureReported = false; upstreamRefusedAt = nil }
+        lock.withLock { stopped = false; failureReported = false; upstreamRefusedAt = nil; refusedDials = 0; heldOff = 0 }
         let params = Self.tcpParams()
         params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(localIP), port: port)
         let listener = try NWListener(using: params)

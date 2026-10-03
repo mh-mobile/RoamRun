@@ -3980,8 +3980,10 @@ func claimByReason(_ r: StartReason, fromCLI: Bool) {
     let s: UInt64 = 1_000_000_000
     #expect(!Relay.holdsOff(refusedAt: nil, now: 100 * s))
     #expect(Relay.holdsOff(refusedAt: 100 * s, now: 100 * s))
-    #expect(Relay.holdsOff(refusedAt: 100 * s, now: 104 * s))
-    #expect(!Relay.holdsOff(refusedAt: 100 * s, now: 105 * s))
+    let hold = UInt64(Relay.upstreamHold)
+    #expect(Relay.holdsOff(refusedAt: 100 * s, now: (100 + hold) * s - 1))
+    #expect(!Relay.holdsOff(refusedAt: 100 * s, now: (100 + hold) * s))
+    #expect(Relay.upstreamHold + 1 < Link.waitAfter)   // a held redial lands before the link reads as waiting
 }
 
 @Test func aRefusalIsLoggedOnlyEveryTenMinutesPerRelay() {
