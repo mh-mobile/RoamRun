@@ -59,7 +59,9 @@ not match the installed CLI until then (`roamrun --help` is authoritative).
   prints it again. Its "Over the air" check is a `warning`, not a `fail`, when the
   page isn't published (the app isn't open, or it needs up to half a minute), so
   read that section rather than only doctor's first fail. `--replace` keeps one row
-  per version and build number instead of stacking one per rebuild. Tell them what
+  per version and build number instead of stacking one per rebuild. If `ota` exits 1
+  with a message saying the build is stored, don't run it again: the build is kept,
+  and what's left is the Tailscale or port problem the message names. Tell the user. Tell them what
   they'll get and let them decide. The name is optional: without one the build is
   checked against every device RoamRun knows and it says which are covered, which
   is what you want when you don't know which device the user has to hand. A build
@@ -71,7 +73,7 @@ not match the installed CLI until then (`roamrun --help` is authoritative).
 
 ```sh
 roamrun devices                       # saved devices + UDID + id (use the id for a name starting with "-")
-roamrun up iPhone -d                  # bridge in the background; returns when ready (exit 1 after 60 s if not — it keeps trying)
+roamrun up iPhone -d                  # bridge in the background; exit 0 when ready or On this Wi‑Fi. Exit 1 after 60 s if not (it keeps trying), or at once if "the background bridge exited" — then nothing is running: act on that message
 # Stop here unless all three pass — don't build or install on a device that isn't ready.
 roamrun status iPhone --wait 60 --json > /tmp/rr.json || { roamrun doctor iPhone; exit 1; }   # act on doctor's first fail
 UDID=$(jq -er '.[0].udid // empty' /tmp/rr.json) || exit 1         # for xcodebuild AND devicectl
@@ -84,7 +86,8 @@ read — treat that like locked.
 
 If the bridge already runs in the menu bar app, just use it — `status` shows
 the owner, and `up` exits 0 when another process already has it ready (exit 1
-if that one is still coming up). Status "On this Wi‑Fi" means the iPhone is on
+if that one is still coming up, or retrying after an error: don't start another,
+wait, or `roamrun down` it first). Status "On this Wi‑Fi" means the iPhone is on
 the Mac's own network: no bridge is needed, Xcode sees it directly, and it
 counts as ready while CoreDevice can reach it (`ready` true; when CoreDevice
 reports it unavailable or can't be asked, it stays `state` local with `ready`

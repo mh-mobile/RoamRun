@@ -23,7 +23,9 @@ enum CLI {
 
       devices [--json]               List saved devices (with UDID) and their bridge status
       up <name> [-v] [-d]            Bridge a device until Ctrl-C (-v: activity log; -d: run in the background —
-                                     waits up to 60s for Ready and exits 1 if it isn't, but keeps trying)
+                                     waits up to 60s for Ready or On this Wi-Fi (exit 0); otherwise exits 1
+                                     and keeps trying, unless the bridge itself quit: then exit 1 at once
+                                     with the reason)
       down <name>                    Stop a bridge, whether the app or another `roamrun up` runs it
       status [name] [--wait N] [--json]
                                      Bridge status, UDID and lock state; exits 0 only if Xcode can use
@@ -692,7 +694,8 @@ enum CLI {
             exec(["/usr/bin/xcrun", "devicectl", "device", "install", "app", "--device", udid, path])
         }
         // devicectl documents .app bundles only: unpack the .ipa and hand it the .app inside.
-        let dir = tmp.appendingPathComponent("roamrun-ipa-\(UUID().uuidString)")
+        // Our pid in the name: the install can outlast the sweep's hour (a big app over a slow link).
+        let dir = tmp.appendingPathComponent("roamrun-ipa-\(getpid())-\(UUID().uuidString)")
         let cleanUp = { try? FileManager.default.removeItem(at: dir) }   // exit() skips defer
         let unzip = Proc.run("/usr/bin/ditto", ["-x", "-k", path, dir.path], timeout: 300)
         guard unzip.status == 0 else { cleanUp(); stop("couldn't unpack \(path): \(firstLine(unzip.err) ?? "ditto exited \(unzip.status)")") }
@@ -714,12 +717,14 @@ enum CLI {
     }
 
     /// Unpacked archives an interrupted `install` or `ota` (or their signing and icon
-    /// checks) left behind. An hour is longer than any of them, so one running in
-    /// another terminal is never touched.
-    nonisolated static func sweepStaleUnpacks(in tmp: URL, now: Date = .now) {
+    /// checks) left behind. An hour is longer than the checks; an install can take longer,
+    /// so its folder carries its pid and stays while that process lives.
+    nonisolated static func sweepStaleUnpacks(in tmp: URL, now: Date = .now,
+                                              alive: (Int32) -> Bool = { kill($0, 0) == 0 || errno == EPERM }) {
         let fm = FileManager.default
         let ours = ["roamrun-ipa-", "roamrun-install-", "roamrun-ota-", "roamrun-icon-"]
         for name in (try? fm.contentsOfDirectory(atPath: tmp.path)) ?? [] where ours.contains(where: name.hasPrefix) {
+            if name.hasPrefix("roamrun-ipa-"), let pid = Int32(name.dropFirst(12).prefix { $0 != "-" }), alive(pid) { continue }
             let url = tmp.appendingPathComponent(name)
             let made = (try? url.resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? now
             if made < now.addingTimeInterval(-3600) { try? fm.removeItem(at: url) }
@@ -867,6 +872,25 @@ enum CLI {
     }
 
     /// Another process bridges the device. Ready → nothing to do; still coming up → say so.
+    /// Another `roamrun up` already runs for it, in any state. Its errors are retried, not
+    /// given up: a second would take the entry back and forth with it, and `down` stops only
+    /// whichever holds the entry then — the other bridges again once the device answers.
+    private static func refuseSecondUp(_ profile: DeviceProfile) {
+        guard let e = otherUp(StatusFile.read()[profile.id], me: getpid()) else { return }
+        if e.kind == .local {
+            print("\(profile.displayName) is on this Wi\u{2011}Fi and already watched by roamrun up (pid \(e.pid)) — it takes over when the device leaves.")
+            exit(0)
+        }
+        stop("\(profile.displayName) is already handled by roamrun up (pid \(e.pid)): \(e.status). It keeps retrying; " +
+             "roamrun down \(commandName(profile)) stops it.")
+    }
+
+    /// The entry when it is another live `roamrun up`'s (`read` drops dead ones), in any state.
+    nonisolated static func otherUp(_ e: StatusFile.Entry?, me: Int32) -> StatusFile.Entry? {
+        guard let e, e.cli == true, e.pid != me else { return nil }
+        return e
+    }
+
     private static func alreadyBridged(_ profile: DeviceProfile, _ e: StatusFile.Entry) -> Never {
         if e.ready {
             print("\(profile.displayName) is already bridged by \(owner(e)) — ready for Xcode.")
@@ -922,11 +946,7 @@ enum CLI {
         if StatusFile.otherOwner(of: profile.id) != nil, let e = StatusFile.read()[profile.id] {
             alreadyBridged(profile, e)
         }
-        // Another `roamrun up` already watches it (standing aside on this Wi‑Fi): a second would just yield.
-        if let e = StatusFile.read()[profile.id], e.cli == true, e.pid != getpid(), e.kind == .local {
-            print("\(profile.displayName) is on this Wi\u{2011}Fi and already watched by roamrun up (pid \(e.pid)) — it takes over when the device leaves.")
-            exit(0)
-        }
+        refuseSecondUp(profile)   // before the log below is rotated away from the one running
         let logURL = detachedLog(profile)
         try? FileManager.default.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         // Keep the previous run's log (an earlier failure may point at it).
@@ -1017,6 +1037,7 @@ enum CLI {
         if StatusFile.otherOwner(of: profile.id) != nil, let e = StatusFile.read()[profile.id] {
             alreadyBridged(profile, e)
         }
+        refuseSecondUp(profile)
         var logRotation: Timer?
         if detachedChild {
             // Own session: closing the terminal / ending SSH doesn't reach us.
@@ -1182,7 +1203,7 @@ enum CLI {
               fix: "Connect \(lan) to the network — the bridge listens where Xcode looks for devices. To use another interface, pick it in RoamRun (Open RoamRun › ⚙ Settings › Network).")
         let orphans = DNSServiceProxy.orphanedHelperCount()
         check(orphans == 0, orphans == 0 ? "No leftover helper processes" : "\(orphans) leftover helper process(es) from a crash",
-              fix: "Open RoamRun (it cleans them up at launch) or Settings › Clean Up Leftover Helpers.", warnOnly: true)
+              fix: "Open RoamRun (it cleans them up at launch) or ⚙ Settings › Troubleshooting › Clean Up Leftover Helpers.", warnOnly: true)
 
         let live = StatusFile.read()
         let cli = TailscaleClient.fromSettings()

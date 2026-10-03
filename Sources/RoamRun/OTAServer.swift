@@ -122,12 +122,13 @@ final class OTAServer: @unchecked Sendable {
 
     // MARK: - One request
 
-    /// Enough for a phone and a laptop at once; past that something is wrong and
-    /// the menu bar app's descriptors matter more than the extra download.
-    private static let maxConnections = 8
+    /// One page load is the page, an icon per app and Safari's favicon tries, each on its
+    /// own connection from `tailscale serve`, beside any download: 8 dropped icons. Past
+    /// this something is wrong; the head deadline, idle timer and download floor free the rest.
+    static let maxConnections = 32
     private static let idleLimit: TimeInterval = 120
     /// The whole head, not time between bytes: one byte every 119 s would keep an
-    /// idle timer happy for ever, and eight of those are every connection there is.
+    /// idle timer happy for ever, and the cap's worth of those is every connection there is.
     private static let headLimit: TimeInterval = 15
 
     private func serve(_ conn: NWConnection) {
@@ -152,7 +153,7 @@ final class OTAServer: @unchecked Sendable {
             }
         }
         // Armed to the head's deadline, not the idle limit: a peer that connects
-        // and never sends produces no callback to check a deadline in, and eight
+        // and never sends produces no callback to check a deadline in, and the cap's worth
         // of those are every connection there is. `pump` re-arms it to the idle
         // limit once a body is going out, where slow really is only slow.
         idle.arm(Self.headLimit)
@@ -326,7 +327,7 @@ final class OTAServer: @unchecked Sendable {
         })
     }
 
-    /// A peer trickling a few bytes at a time never trips the idle timer, and eight of
+    /// A peer trickling a few bytes at a time never trips the idle timer, and the cap's worth of
     /// them are every connection there is. Low on purpose: 8 KB/s still brings a 100 MB
     /// build down in under four hours, so only a peer that isn't really downloading goes.
     static func tooSlow(sent: Int64, after seconds: TimeInterval) -> Bool {

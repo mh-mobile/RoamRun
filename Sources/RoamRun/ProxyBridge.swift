@@ -590,9 +590,11 @@ final class ProxyBridge: ObservableObject {
                         // Still covered while a relay is on it (an earlier bind of the same port
                         // won) or another bind of it is under way (it was taken back meanwhile).
                         if tunnelRelays[p] == nil && binding[p] == nil { coveredPorts.remove(p) }
-                        // Every bridge listens on the same address, so the usual cause is
-                        // another device's bridge whose lookahead window covers this port.
-                        log("failed to open relay for tunnel port \(p) — another device's bridge may already hold it: \(error.localizedDescription)")
+                        // Every bridge listens on the same address, so another device's bridge whose
+                        // lookahead window covers this port is one cause. Not the only one: tunnel
+                        // ports are in the ephemeral range, so any outgoing connection can hold one.
+                        log("failed to open relay for tunnel port \(p) — in use by another device's bridge or a " +
+                            "connection on this Mac: \(error.localizedDescription)")
                     }
                 }
             }
