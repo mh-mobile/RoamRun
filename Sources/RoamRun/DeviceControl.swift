@@ -149,6 +149,8 @@ final class DeviceControlHub: @unchecked Sendable {
         var session: DeviceSession
         /// The last look's size: what a tap's pixels are of.
         var looked: (width: Int, height: Int)?
+        /// When the last input ended: a look right after it waits for the screen to settle.
+        var acted: Date?
     }
 
     private let directory: URL
@@ -223,12 +225,24 @@ final class DeviceControlHub: @unchecked Sendable {
         }
     }
 
+    // ponytail: a fixed wait, enough for a transition or a scroll coming to rest. Comparing
+    // frames until they stop changing, if it proves short (a playing video never stops).
+    static let settle: TimeInterval = 1
+
+    /// How long a look still has to wait after the last input.
+    static func settleWait(acted: Date?, now: Date = Date()) -> TimeInterval {
+        guard let acted else { return 0 }
+        return min(settle, max(0, settle - now.timeIntervalSince(acted)))
+    }
+
     private static let lookFirst = "look first: a point is given in the pixels of a look, and each look serves one action"
 
     private func answer(_ request: DeviceControlWire.Request) -> DeviceControlWire.Response {
         guard let h = lock.withLock({ held[request.device] }) else {
             return .failure("device control isn't set up for this device")
         }
+        // Failed or not: an input may have reached the device before the failure showed.
+        defer { if !["state", "look"].contains(request.op) { lock.withLock { held[request.device]?.acted = Date() } } }
         do {
             switch request.op {
             case "state":
@@ -256,6 +270,7 @@ final class DeviceControlHub: @unchecked Sendable {
                 return .init(ok: true)
             case "look":
                 guard let path = request.path else { return .failure("no file") }
+                Thread.sleep(forTimeInterval: Self.settleWait(acted: h.acted))
                 let image = try h.session.look()
                 guard let out = CGImageDestinationCreateWithURL(URL(fileURLWithPath: path) as CFURL, UTType.png.identifier as CFString, 1, nil) else {
                     return .failure("can't write \(path)")

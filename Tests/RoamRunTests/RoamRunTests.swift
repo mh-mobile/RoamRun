@@ -4048,6 +4048,16 @@ func publishStepsAsideWhenTurnedOff(_ c: PublishCase) async {
     #expect(DeviceControlHub.fraction(x: nil, y: 10, of: size) == nil)
 }
 
+/// A look right after an input waits out the rest of the settling time; a later one doesn't wait.
+@Test func aLookWaitsForTheScreenToSettleAfterAnInput() {
+    let now = Date()
+    #expect(DeviceControlHub.settleWait(acted: nil, now: now) == 0)
+    #expect(DeviceControlHub.settleWait(acted: now, now: now) == DeviceControlHub.settle)
+    #expect(abs(DeviceControlHub.settleWait(acted: now.addingTimeInterval(-0.4), now: now) - (DeviceControlHub.settle - 0.4)) < 0.001)
+    #expect(DeviceControlHub.settleWait(acted: now.addingTimeInterval(-5), now: now) == 0)
+    #expect(DeviceControlHub.settleWait(acted: now.addingTimeInterval(60), now: now) == DeviceControlHub.settle)   // a clock set back
+}
+
 import ImageIO
 
 /// `roamrun mcp`: the handshake, the tool list, and a tap whose point — given in the image the
