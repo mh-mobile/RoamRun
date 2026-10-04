@@ -718,15 +718,17 @@ enum CLI {
 
     /// Unpacked archives an interrupted `install` or `ota` (or their signing and icon
     /// checks) left behind. An hour is longer than the checks; an install can take longer,
-    /// so its folder carries its pid and stays while that process lives.
+    /// so its folder carries its pid and stays while that process lives — that process: one
+    /// that started after the folder was made only has its pid.
     nonisolated static func sweepStaleUnpacks(in tmp: URL, now: Date = .now,
-                                              alive: (Int32) -> Bool = { kill($0, 0) == 0 || errno == EPERM }) {
+                                              started: (Int32) -> Double? = StatusFile.startTime(of:)) {
         let fm = FileManager.default
         let ours = ["roamrun-ipa-", "roamrun-install-", "roamrun-ota-", "roamrun-icon-"]
         for name in (try? fm.contentsOfDirectory(atPath: tmp.path)) ?? [] where ours.contains(where: name.hasPrefix) {
-            if name.hasPrefix("roamrun-ipa-"), let pid = Int32(name.dropFirst(12).prefix { $0 != "-" }), alive(pid) { continue }
             let url = tmp.appendingPathComponent(name)
             let made = (try? url.resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? now
+            if name.hasPrefix("roamrun-ipa-"), let pid = Int32(name.dropFirst(12).prefix { $0 != "-" }),
+               let since = started(pid), since <= made.timeIntervalSince1970 + 1 { continue }
             if made < now.addingTimeInterval(-3600) { try? fm.removeItem(at: url) }
         }
     }
@@ -946,6 +948,9 @@ enum CLI {
         if StatusFile.otherOwner(of: profile.id) != nil, let e = StatusFile.read()[profile.id] {
             alreadyBridged(profile, e)
         }
+        // Two started together both found nobody, and the second rotated the first's log away
+        // from under it: from the check to the child's own claim, one at a time per device.
+        let turn = upTurn(for: profile.id, in: ProfileStore.directory)
         refuseSecondUp(profile)   // before the log below is rotated away from the one running
         let logURL = detachedLog(profile)
         try? FileManager.default.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -974,6 +979,7 @@ enum CLI {
                 stop("the background bridge exited\(tail.map { ": \($0)" } ?? "") — see \(logURL.path)")
             }
             guard let e = StatusFile.read()[profile.id], e.pid == child.processIdentifier else { continue }
+            if let turn { close(turn) }   // the child holds the device now: the next `up` sees it
             if e.status != last { last = e.status; print("  \(e.status)") }
             lastKind = e.kind
             if e.ready || e.kind == .local { break }
@@ -992,6 +998,17 @@ enum CLI {
           Stop: roamrun down \(commandName(profile))
         """)
         exit(lastKind == .ready || lastKind == .local ? 0 : 1)
+    }
+
+    /// This `up -d`'s turn at the device: waits for another's to end (it ends when its child has
+    /// claimed the device, or with its process). The descriptor to close, or nil when no lock
+    /// could be made — then as before, unserialized.
+    nonisolated static func upTurn(for id: UUID, in directory: URL, wait: Bool = true) -> Int32? {
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let fd = open(directory.appendingPathComponent("up-\(id.uuidString).lock").path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { return nil }
+        guard flock(fd, wait ? LOCK_EX : LOCK_EX | LOCK_NB) == 0 else { close(fd); return nil }
+        return fd
     }
 
     /// Where `up -d`'s bridge writes; the previous run's is kept beside it as `.log.1`.
