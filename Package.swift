@@ -23,14 +23,19 @@ if ProcessInfo.processInfo.environment["ROAMRUN_DEVICE"] != nil {
             name: "RoamRunDevice",
             path: "Rust/RoamRunDevice/include"
         ),
-        .executableTarget(
-            name: "DeviceProbe",
+        .target(
+            name: "DeviceControl",
             dependencies: ["RoamRunDevice"],
-            path: "Sources/DeviceProbe",
+            path: "Sources/DeviceControl",
             linkerSettings: [
                 .unsafeFlags(["-L", ".build/device/release"]),
                 .linkedLibrary("roamrun_device"),
             ]
+        ),
+        .executableTarget(
+            name: "DeviceProbe",
+            dependencies: ["DeviceControl"],
+            path: "Sources/DeviceProbe"
         ),
     ]
 }
