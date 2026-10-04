@@ -18,8 +18,16 @@ import VideoToolbox
 //                                                          CAN SCROLL THE DEVICE: accessibility's
 //                                                          captions for what is on the screen
 // Only `tap` sends the device input; `elements` moves no finger but the screen may follow it.
+// --udid <udid> anywhere: frames are cut to the screen's own size, asked of devicectl (the
+// stream pads them and doesn't say by how much). Without it they are saved as they come.
 print("roamrun-device \(String(cString: rr_device_version()))")
 var args = Array(CommandLine.arguments.dropFirst())
+var screen: (width: Int, height: Int)?
+if let flag = args.firstIndex(of: "--udid"), flag + 1 < args.count {
+    screen = screenSize(udid: args[flag + 1])
+    if screen == nil { print("devicectl didn't give the screen's size: frames keep the stream's padding (under 1% of each side)") }
+    args.removeSubrange(flag...flag + 1)
+}
 let tapping = args.first == "tap"
 let listing = args.first == "elements"
 if tapping || listing { args.removeFirst() }
@@ -51,7 +59,7 @@ func ms(_ since: Date) -> Int { Int(Date().timeIntervalSince(since) * 1000) }
     rr_bytes_free(bytes, length)
     let received = ms(started)
     do {
-        let image = try decodeKeyFrame(frame)
+        let image = cut(try decodeKeyFrame(frame), to: screen)
         guard let out = CGImageDestinationCreateWithURL(URL(fileURLWithPath: path) as CFURL, UTType.png.identifier as CFString, 1, nil) else {
             throw FrameError.message("can't write \(path)")
         }
@@ -93,6 +101,35 @@ if listing {
 }
 
 enum FrameError: Error { case message(String) }
+
+/// The primary display's size in pixels, as the device holds it (portrait for a phone).
+func screenSize(udid: String) -> (width: Int, height: Int)? {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+    p.arguments = ["devicectl", "--quiet", "device", "info", "displays", "--device", udid, "--json-output", "-"]
+    let out = Pipe()
+    p.standardOutput = out
+    p.standardError = FileHandle.nullDevice
+    guard (try? p.run()) != nil else { return nil }
+    let data = out.fileHandleForReading.readDataToEndOfFile()
+    p.waitUntilExit()
+    guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let displays = (root["result"] as? [String: Any])?["displays"] as? [[String: Any]],
+          let size = (displays.first { $0["primary"] as? Bool == true } ?? displays.first)?["nativeSize"] as? [Int],
+          size.count == 2, size[0] > 0, size[1] > 0 else { return nil }
+    return (size[0], size[1])
+}
+
+/// The frame without the stream's padding, which is on the right and at the bottom. A frame
+/// that is neither the screen's size nor a little more (either way round) is left alone.
+func cut(_ image: CGImage, to screen: (width: Int, height: Int)?) -> CGImage {
+    guard let screen else { return image }
+    for (w, h) in [(screen.width, screen.height), (screen.height, screen.width)]
+    where (w...w + 32).contains(image.width) && (h...h + 32).contains(image.height) {
+        return image.cropping(to: CGRect(x: 0, y: 0, width: w, height: h)) ?? image
+    }
+    return image
+}
 
 final class Output: @unchecked Sendable { var pixels: CVImageBuffer? }
 
