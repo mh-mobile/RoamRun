@@ -22,7 +22,9 @@ On top, by what the release changed:
 | Windows, menus, accessibility | UI at scale and for everyone |
 
 `scripts/release-check.sh <name> <bundle id>` runs items 1-3, 5, the CLI half of 6, and 8
-unattended (device away, app quit) and prints ok/FAIL per step.
+unattended (device away, app quit) and prints ok/FAIL per step. It kills helpers and removes
+the status file, so it refuses to start while any bridge runs: `roamrun down` each first (an
+`up -d` outlives its terminal).
 
 Known, not regressions: a device (an iPhone, say) on USB can keep a bridged one from getting
 Ready; unplug it. Xcode's session doesn't survive the Mac sleeping for minutes: iOS drops the
