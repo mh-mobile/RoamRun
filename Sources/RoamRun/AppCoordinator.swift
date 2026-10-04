@@ -919,6 +919,10 @@ final class AppCoordinator: ObservableObject {
         bridges[id] = nil
         bridgeObservers[id] = nil
         memories[id] = nil
+        #if DEVICE_CONTROL
+        // Its pairing for device control goes with it, as the dialog says: added again, it is set up again.
+        if let target = profiles.first(where: { $0.id == id }).flatMap(Self.controlTarget) { deviceControl.unpair(target) }
+        #endif
         profiles.removeAll { $0.id == id }
         wasActiveIDs.remove(id)
         persist()

@@ -311,11 +311,18 @@ enum CLI {
 
     struct ArgumentError: Error, Equatable { let message: String }
 
-    /// `--help` anywhere, except as the value of `--arg` (`--arg -h` is for the app).
+    /// `--help` anywhere, except as the value of `--arg` (`--arg -h` is for the app) and as the
+    /// text to type or paste.
     nonisolated static func wantsHelp(_ args: [String]) -> Bool {
         ["help", "--help", "-h"].contains(args[0])
-            || args.indices.dropFirst().contains { ["--help", "-h"].contains(args[$0]) && args[$0 - 1] != "--arg" }
+            || args.indices.dropFirst().contains {
+                ["--help", "-h"].contains(args[$0]) && args[$0 - 1] != "--arg" && !(textCommands.contains(args[0]) && $0 == 2)
+            }
     }
+
+    /// Commands whose word after the device's name is text for the device, whatever it starts
+    /// with: `roamrun type iPhone -1`, `roamrun paste iPhone --help`.
+    nonisolated static let textCommands: Set<String> = ["type", "paste"]
 
     /// Too few words is left to each command (its message lists the saved devices).
     nonisolated static func parse(_ args: [String]) -> Result<Parsed, ArgumentError> {
@@ -324,6 +331,11 @@ enum CLI {
         var i = 1
         while i < args.count {
             let a = args[i]
+            if textCommands.contains(args[0]), i == 2, p.words.count == 1 {
+                p.words.append(a)
+                i += 1
+                continue
+            }
             // `--name=value`, split at the first "=": `--env=A=b` is --env with A=b.
             if a.hasPrefix("--"), let eq = a.firstIndex(of: "="), spec.options.contains(a[...eq] + "") {
                 let name = String(a[..<eq]), value = String(a[a.index(after: eq)...])
@@ -791,8 +803,18 @@ enum CLI {
         f.dateFormat = "yyyyMMdd-HHmmss"
         let file = URL(fileURLWithPath: path ?? "\(fileSafe(profile.displayName))-look-\(f.string(from: .now)).png").standardizedFileURL
         guard file.pathExtension.lowercased() == "png" else { fail("the file must end in .png") }
-        let r = askApp(.init(op: "look", device: profile.id, path: file.path))
+        // The app writes it where only RoamRun keeps things; it is this command, run by the user in
+        // their own folder, that puts it there (the app would be asked for access to it instead).
+        let made = DeviceControlWire.socketFolder(in: ProfileStore.directory).appendingPathComponent("look-\(UUID().uuidString).png")
+        let r = askApp(.init(op: "look", device: profile.id, path: made.path))
         guard r.ok, let w = r.width, let h = r.height else { stop("look failed: \(r.error ?? "no answer")") }
+        do {
+            try? FileManager.default.removeItem(at: file)
+            try FileManager.default.moveItem(at: made, to: file)
+        } catch {
+            try? FileManager.default.removeItem(at: made)
+            stop("look failed: can't write \(file.path)")
+        }
         print(file.path)
         print("\(w) x \(h)")
         exit(0)

@@ -286,6 +286,7 @@ final class DeviceControlHub: @unchecked Sendable {
     /// Lets the device pair with this Mac (iOS 27 and later, on the same network), one at a time.
     /// The new pairing replaces the saved one only once it opened a connection of its own.
     func pair(_ target: Target, as name: String, step: @escaping @Sendable (PairingStep) -> Void) {
+        lock.withLock { if !pairingUnderWay { pairingCancelled = false } }   // here, not in the block: a cancel may come before it runs
         DispatchQueue.global(qos: .userInitiated).async { [self] in
             let file = DeviceControlWire.pairingFile(udid: target.udid, in: directory)
             let fresh = file.appendingPathExtension("new")
@@ -293,7 +294,6 @@ final class DeviceControlHub: @unchecked Sendable {
             let free = lock.withLock { () -> Bool in
                 guard !pairingUnderWay else { return false }
                 pairingUnderWay = true
-                pairingCancelled = false
                 return true
             }
             guard free else { return step(.failed("Another pairing is under way.")) }
@@ -309,12 +309,16 @@ final class DeviceControlHub: @unchecked Sendable {
                 let paired = try listening.accept(to: fresh.path) { step(.code($0)) }
                 step(.checking)
                 onLog?("device control: \(paired.name) (\(paired.model), \(paired.udid)) paired", target.id)
-                // From the side that will use it, at the address it will use: what tells this
-                // device from another that picked this Mac.
-                let check = DeviceSession(ip: target.ip, port: target.port, pairingFile: fresh.path)
-                defer { check.close() }
-                do { try check.connect() } catch {
-                    throw DeviceSession.Failure.message("\(paired.name) paired, but that pairing opens no connection to \(target.name) (\(error)). Nothing was saved. If it was another device, its pairing with this Mac can be removed there, in Settings.")
+                // The device now knows this pairing and no older one of ours. When it is the one
+                // asked for, the pairing is kept whether or not a connection can be made right now
+                // (its VPN off, its port moved): dropping it would leave the device with no pairing
+                // this Mac holds. Another device's is proved by connecting, at the address it will be used at.
+                if paired.udid != target.udid {
+                    let check = DeviceSession(ip: target.ip, port: target.port, pairingFile: fresh.path)
+                    defer { check.close() }
+                    do { try check.connect() } catch {
+                        throw DeviceSession.Failure.message("\(paired.name) paired, which isn't \(target.name) (\(error)). Nothing was saved; its pairing with this Mac can be removed there, in Settings.")
+                    }
                 }
                 try Self.adopt(fresh, as: file)
                 reopen(target.id)
@@ -449,6 +453,10 @@ final class DeviceControlHub: @unchecked Sendable {
         return (50...5000).contains(asked) ? asked : nil
     }
 
+    private func look(of device: UUID) -> (width: Int, height: Int)? {
+        lock.withLock { held[device]?.looked }
+    }
+
     private static let lookFirst = "look first: a point is given in the pixels of a look, and each look serves one action"
 
     private func answer(_ request: DeviceControlWire.Request) -> DeviceControlWire.Response {
@@ -466,7 +474,8 @@ final class DeviceControlHub: @unchecked Sendable {
                 let found = try h.session.elements(limit: Self.elementLimit(request.limit))
                 return .init(ok: true, captions: found.captions, complete: found.complete)
             case "swipe":
-                guard let size = spendLook(of: request.device) else { return .failure(Self.lookFirst) }
+                // A request refused for what it says leaves the look to be used: it is spent by what reaches the device.
+                guard let size = look(of: request.device) else { return .failure(Self.lookFirst) }
                 guard let from = Self.fraction(x: request.x, y: request.y, of: size),
                       let to = Self.fraction(x: request.x2, y: request.y2, of: size) else {
                     return .failure("both points must be inside the last look (\(size.width) x \(size.height))")
@@ -474,6 +483,7 @@ final class DeviceControlHub: @unchecked Sendable {
                 guard let duration = Self.swipeDuration(request.milliseconds) else {
                     return .failure("a swipe takes 50...5000 ms")
                 }
+                _ = spendLook(of: request.device)
                 try h.session.swipe(from: from, to: to, milliseconds: duration)
                 return .init(ok: true)
             case "type", "paste", "press":
@@ -490,7 +500,12 @@ final class DeviceControlHub: @unchecked Sendable {
                 return .init(ok: true)
             case "look":
                 guard let path = request.path else { return .failure("no file") }
-                Thread.sleep(forTimeInterval: Self.settleWait(acted: h.acted))
+                // What an earlier look showed is no longer what a point may be read off, whether or not this one succeeds.
+                let acted = lock.withLock { () -> Date? in
+                    held[request.device]?.looked = nil
+                    return held[request.device]?.acted   // as it is now, not as it was when the request came
+                }
+                Thread.sleep(forTimeInterval: Self.settleWait(acted: acted))
                 let image = try h.session.look()
                 guard let out = CGImageDestinationCreateWithURL(URL(fileURLWithPath: path) as CFURL, UTType.png.identifier as CFString, 1, nil) else {
                     return .failure("can't write \(path)")
@@ -501,10 +516,11 @@ final class DeviceControlHub: @unchecked Sendable {
                 return .init(ok: true, width: image.width, height: image.height)
             case "tap":
                 // In the pixels of what was last looked at: there is no tapping a screen not seen.
-                guard let size = spendLook(of: request.device) else { return .failure(Self.lookFirst) }
+                guard let size = look(of: request.device) else { return .failure(Self.lookFirst) }
                 guard let point = Self.fraction(x: request.x, y: request.y, of: size) else {
                     return .failure("the point must be inside the last look (\(size.width) x \(size.height))")
                 }
+                _ = spendLook(of: request.device)
                 try h.session.tap(x: point.x, y: point.y)
                 return .init(ok: true)
             default:

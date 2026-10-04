@@ -196,13 +196,15 @@ tools when you have them; the rules below hold for both.
   been a `look`, and any action (or `elements`) uses it up: look, act, look again.
   Read the point off the image you just looked at, in its own pixels (the size
   printed after the path); never reuse a point from an older one.
+  A point refused for being outside the image leaves the look to be used.
 - `roamrun swipe iPhone 590 1800 590 900 [ms]` drags; start on something that
   does nothing when pressed if you can.
 - `roamrun elements iPhone [limit]` prints what accessibility says is on the
   screen, one caption a line ("Home, tab, selected"). It gives **no positions** —
   a caption can't be tapped by name; find it in a `look`. The screen may scroll
   to what it visits. Nothing on the home screen; under a system alert, only the alert.
-- `roamrun type iPhone "text"` types US-keyboard characters; a newline in the
+- `roamrun type iPhone "text"` types US-keyboard characters (the text may
+  start with `-`); a newline in the
   text is Return (`$'search this\n'` in a shell — the two characters `\n` are typed as such).
   It comes out right only while the device's keyboard is an English one: look
   first, and switch with the globe key if it shows Japanese (there Space

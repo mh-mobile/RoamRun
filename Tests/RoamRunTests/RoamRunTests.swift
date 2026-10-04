@@ -4241,6 +4241,21 @@ private func silentPort() throws -> (fd: Int32, port: UInt16) {
     #expect(hub.session(of: id) == nil)
 }
 
+/// The text to type or paste is text, whatever it starts with: `-1`, `--json`, `-h`.
+@Test func textForTheDeviceMayStartWithADash() throws {
+    for command in ["type", "paste"] {
+        for text in ["-1", "--json", "-h", "--help", "- milk", ""] {
+            #expect(try CLI.parse([command, "iPhone", text]).get().words == ["iPhone", text], "\(command) \(text)")
+            #expect(!CLI.wantsHelp([command, "iPhone", text]))
+        }
+        #expect(CLI.wantsHelp([command, "--help"]) && CLI.wantsHelp([command, "iPhone", "x", "-h"]))
+        #expect(throws: CLI.ArgumentError.self) { try CLI.parse([command, "iPhone", "a", "b"]).get() }   // one text
+    }
+    // Elsewhere a dash still starts an option, and one a command doesn't take is refused.
+    #expect(throws: CLI.ArgumentError.self) { try CLI.parse(["tap", "iPhone", "-5", "10"]).get() }
+    #expect(throws: CLI.ArgumentError.self) { try CLI.parse(["press", "iPhone", "-h2"]).get() }
+}
+
 /// Whatever number a caller sends for a walk's length or a swipe's duration, the app survives it:
 /// the one is brought into what a walk can do, the other refused outside what the library takes.
 @Test func anyNumberACallerSendsIsBoundedOrRefused() {
