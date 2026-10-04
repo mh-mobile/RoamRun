@@ -27,6 +27,8 @@ enum DeviceControlWire {
         var height: Int?
         var captions: [String]?
         var complete: Bool?
+        /// For "state": whether the connection to the device stands.
+        var open: Bool?
         static func failure(_ why: String) -> Response { Response(ok: false, error: why) }
     }
 
@@ -229,6 +231,8 @@ final class DeviceControlHub: @unchecked Sendable {
         }
         do {
             switch request.op {
+            case "state":
+                return .init(ok: true, open: h.session.isOpen)
             case "elements":
                 _ = spendLook(of: request.device)   // the walk can scroll the screen
                 let found = try h.session.elements(limit: request.limit ?? 40)

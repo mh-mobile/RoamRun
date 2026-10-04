@@ -21,7 +21,33 @@ enum CLI {
     // ponytail: bundle-id migration only; drop after a few releases.
     static let legacyStopNotification = Notification.Name(AppID.legacy + ".stopBridge")
 
-    private static let usage = """
+    private static let usage: String = {
+        #if DEVICE_CONTROL
+        baseUsage + "\n\n" + deviceUsage
+        #else
+        baseUsage
+        #endif
+    }()
+
+    #if DEVICE_CONTROL
+    private static let deviceUsage = """
+    Operating a device (experimental; the RoamRun app holds the connection, and the device needs
+    a pairing of RoamRun's own):
+      look <name> [file.png]         Save the device's screen now as PNG; prints the path, then its size
+      tap <name> <x> <y>             Tap a point given in the pixels of the last look
+      swipe <name> <x1> <y1> <x2> <y2> [ms]
+                                     Drag from one point of the last look to another
+      elements <name> [limit]        What accessibility says is on the screen, one caption a line
+                                     (no positions; the screen may scroll)
+      type <name> <text>             Type on the device's keyboard (US keys; right only while that
+                                     keyboard is an English one)
+      paste <name> <text>            Any text, by the device's pasteboard (it asks the user each time)
+      press <name> <button>          home, lock, volume-up or volume-down
+    Each look serves one action: look, act, look again.
+    """
+    #endif
+
+    private static let baseUsage = """
     Usage: roamrun <command>
 
     AI agents: `roamrun init` installs the RoamRun skill for Claude Code, Codex,
@@ -509,6 +535,9 @@ enum CLI {
                 if let udid = r.udid { print("  UDID: \(udid)") }
                 if let detail = r.detail { print("  \(detail)") }
                 if r.locked == true { print("  ⚠ The device is locked — ask the user to unlock it and keep the screen on before installing or launching.") }
+                #if DEVICE_CONTROL
+                if let id = UUID(uuidString: r.id), let line = controlState(id, udid: r.udid).line { print("  Device control: \(line)") }
+                #endif
             }
         }
         exit(rows.contains { $0.ready } ? 0 : 1)
@@ -705,6 +734,30 @@ enum CLI {
     /// Through the tunnel like everything else: works over the bridge.
     #if DEVICE_CONTROL
     // Experimental (device control): the app holds the connection; these ask it.
+
+    /// Where a device stands with being operated. `line` is nil when there is nothing to say
+    /// (no pairing of our own: it was never set up).
+    enum ControlState: Equatable {
+        case notSetUp, connected, notConnected, noApp
+
+        var line: String? {
+            switch self {
+            case .notSetUp: nil
+            case .connected: "connected"
+            case .notConnected: "paired, not connected — the app keeps trying; it can connect only while the device is on a Wi‑Fi"
+            case .noApp: "paired; the RoamRun app, which holds the connection, isn't running (or is a build without device control)"
+            }
+        }
+    }
+
+    private static func controlState(_ id: UUID, udid: String?) -> ControlState {
+        guard let udid, FileManager.default.fileExists(atPath: DeviceControlWire.pairingFile(udid: udid, in: ProfileStore.directory).path) else {
+            return .notSetUp
+        }
+        guard let r = try? DeviceControlWire.ask(.init(op: "state", device: id), in: ProfileStore.directory) else { return .noApp }
+        // A pairing the app hasn't picked up yet answers as not set up there.
+        return r.ok && r.open == true ? .connected : .notConnected
+    }
 
     private static func askApp(_ request: DeviceControlWire.Request) -> DeviceControlWire.Response {
         do {
@@ -1299,6 +1352,18 @@ enum CLI {
         if profiles.isEmpty { check(false, "No devices saved", fix: "Add one in the RoamRun app.") }
         for p in profiles {
             section("\n\(p.displayName) (\(p.providerIP))", p.displayName)
+            #if DEVICE_CONTROL
+            switch controlState(p.id, udid: p.udid ?? live[p.id]?.udid) {
+            case .notSetUp: break
+            case .connected: check(true, "Device control: connected")
+            case .notConnected:
+                check(false, "Device control: paired, but not connected",
+                      fix: "It connects while the device is on a Wi‑Fi, awake and reachable over the VPN — and then stays connected on cellular. Ask the user to unlock it on Wi‑Fi.", warnOnly: true)
+            case .noApp:
+                check(false, "Device control: the RoamRun app isn't running (or is a build without it)",
+                      fix: "Open RoamRun: it holds the connection that look, tap and the rest use.", warnOnly: true)
+            }
+            #endif
             if !checkAll, live[p.id] == nil {
                 note("Bridge is off — not checked (roamrun doctor \(commandName(p)) checks it anyway)")
                 continue

@@ -1209,9 +1209,8 @@ final class AppCoordinator: ObservableObject {
     #if DEVICE_CONTROL
     private let deviceControl = DeviceControlHub(directory: ProfileStore.directory)
 
-    /// The devices as saved now, to the hub that keeps their control connections.
-    // ponytail: called at launch only — a device added, re-addressed or paired later is picked up
-    // at the next launch. Call it where `profiles` changes when that matters.
+    /// The devices as saved now, to the hub that keeps their control connections: at launch, and
+    /// whenever the list is saved. (A pairing made while the app runs is seen at the next of those.)
     private func syncDeviceControl() {
         deviceControl.update(profiles.compactMap { p in
             p.udid.map { .init(id: p.id, name: p.displayName, ip: p.providerIP, port: p.remotePairingPort, udid: $0) }
@@ -1290,6 +1289,9 @@ final class AppCoordinator: ObservableObject {
     /// Saves the device list; a failed write would lose changes at the next launch, so say so.
     private func persist() {
         guard Snapshot.fakeProfiles == nil else { return }   // screenshot mode's fake devices never reach disk
+        #if DEVICE_CONTROL
+        defer { syncDeviceControl() }
+        #endif
         if let saved = store.save(base: savedProfiles, wanted: profiles) {
             savedProfiles = saved
             if saved != profiles {   // `roamrun up` had saved a newer endpoint, or devices we never read came back
