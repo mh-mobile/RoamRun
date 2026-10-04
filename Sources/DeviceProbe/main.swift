@@ -10,14 +10,16 @@ import VideoToolbox
 // DeviceProbe <device ip> <port> <pairing file> <out.png> [n]
 //                                                          n frames of the screen (default 1) over
 //                                                          one connection; the last is saved
-// DeviceProbe tap <device ip> <port> <pairing file> <x> <y> [after.png]
-//                                                          OPERATES THE DEVICE: one tap at x, y
-//                                                          (fractions 0...1 of the screen), then
-//                                                          a frame of what followed
+// These OPERATE THE DEVICE; points are fractions 0...1 of the screen. With [after.png], a
+// frame of what followed is saved:
+// DeviceProbe tap    <device ip> <port> <pairing file> <x> <y> [after.png]
+// DeviceProbe swipe  <device ip> <port> <pairing file> <x1> <y1> <x2> <y2> <ms> [after.png]
+// DeviceProbe type   <device ip> <port> <pairing file> <text> [after.png]
+// DeviceProbe button <device ip> <port> <pairing file> <home|lock|volume-up|volume-down> [after.png]
 // DeviceProbe elements <device ip> <port> <pairing file> [limit]
 //                                                          CAN SCROLL THE DEVICE: accessibility's
 //                                                          captions for what is on the screen
-// Only `tap` sends the device input; `elements` moves no finger but the screen may follow it.
+// `elements` sends no input, but the screen may follow it.
 // --udid <udid> anywhere: frames are cut to the screen's own size, asked of devicectl (the
 // stream pads them and doesn't say by how much). Without it they are saved as they come.
 print("roamrun-device \(String(cString: rr_device_version()))")
@@ -28,9 +30,8 @@ if let flag = args.firstIndex(of: "--udid"), flag + 1 < args.count {
     if screen == nil { print("devicectl didn't give the screen's size: frames keep the stream's padding (under 1% of each side)") }
     args.removeSubrange(flag...flag + 1)
 }
-let tapping = args.first == "tap"
-let listing = args.first == "elements"
-if tapping || listing { args.removeFirst() }
+let verb = ["tap", "swipe", "type", "button", "elements"].contains(args.first ?? "") ? args.removeFirst() : ""
+let listing = verb == "elements"
 guard args.count >= 3, let port = UInt16(args[1]) else { exit(0) }
 
 let opening = Date()
@@ -82,14 +83,35 @@ if listing {
     } else {
         print(text)
     }
-} else if tapping {
-    guard args.count >= 5, let x = Double(args[3]), let y = Double(args[4]) else { exit(2) }
-    guard let json = rr_device_tap(device, x, y) else { fatalError("bad arguments") }
-    print("tap: \(String(cString: json))")
+} else if !verb.isEmpty {
+    let rest = Array(args.dropFirst(3))
+    let number = { (i: Int) in i < rest.count ? Double(rest[i]) : nil }
+    var after: String?
+    let json: UnsafeMutablePointer<CChar>?
+    switch verb {
+    case "tap":
+        guard let x = number(0), let y = number(1) else { exit(2) }
+        json = rr_device_tap(device, x, y)
+        after = rest.count > 2 ? rest[2] : nil
+    case "swipe":
+        guard let x1 = number(0), let y1 = number(1), let x2 = number(2), let y2 = number(3), let duration = number(4) else { exit(2) }
+        json = rr_device_swipe(device, x1, y1, x2, y2, UInt32(max(duration, 0)))
+        after = rest.count > 5 ? rest[5] : nil
+    case "type":
+        guard let text = rest.first else { exit(2) }
+        json = rr_device_type(device, text)
+        after = rest.count > 1 ? rest[1] : nil
+    default:
+        guard let name = rest.first else { exit(2) }
+        json = rr_device_button(device, name)
+        after = rest.count > 1 ? rest[1] : nil
+    }
+    guard let json else { fatalError("bad arguments") }
+    print("\(verb): \(String(cString: json))")
     rr_string_free(json)
-    if args.count >= 6 {
+    if let after {
         Thread.sleep(forTimeInterval: 0.7)   // let the interface settle before looking
-        saveFrame(to: args[5], "after")
+        saveFrame(to: after, "after")
     }
 } else if args.count == 3 {
     guard let json = rr_device_info(device) else { fatalError("no info") }

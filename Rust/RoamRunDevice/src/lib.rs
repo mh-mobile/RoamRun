@@ -1,11 +1,11 @@
-//! RoamRun's C ABI over idevice. Experimental. rr_device_tap operates the device;
-//! rr_device_elements can scroll it.
+//! RoamRun's C ABI over idevice. Experimental. rr_device_tap, _swipe, _type and _button
+//! operate the device; rr_device_elements can scroll it.
 
 use std::ffi::{c_char, CStr, CString};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use idevice::core_device::hid::UniversalHidServiceClient;
+use idevice::core_device::hid::{ButtonState, IndigoHidClient, UniversalHidServiceClient};
 use idevice::dvt::message::AuxValue;
 use idevice::dvt::remote_server::RemoteServerClient;
 use idevice::core_device::{
@@ -15,11 +15,11 @@ use idevice::core_device::{
 use idevice::remote_pairing::{connect_tls_psk_tunnel_native, RemotePairingClient, RpPairingFile, RpPairingSocket};
 use idevice::rsd::RsdHandshake;
 use idevice::tcp::adapter::Adapter;
-use idevice::tcp::handle::AdapterHandle;
+use idevice::tcp::handle::{AdapterHandle, UdpSocketHandle};
 use idevice::{ReadWrite, RsdService};
 use tokio::net::TcpStream;
 
-const VERSION: &CStr = c"0.2.0";
+const VERSION: &CStr = c"0.3.0";
 const LABEL: &str = "roamrun";
 /// Each call: a device that stops answering mid-way must not hang the caller.
 const DEADLINE: Duration = Duration::from_secs(20);
@@ -36,6 +36,7 @@ struct Link {
     handle: AdapterHandle,
     handshake: RsdHandshake,
     hid: Option<UniversalHidServiceClient<Box<dyn ReadWrite>>>,
+    keys: Option<IndigoHidClient<Box<dyn ReadWrite>>>,
     verified_ms: u128,
     tunnel_ms: u128,
     rsd_ms: u128,
@@ -172,23 +173,107 @@ pub unsafe extern "C" fn rr_device_keyframe(device: *mut RRDevice, length: *mut 
     }
 }
 
+/// One thing done to the device.
+enum Input {
+    Tap(f64, f64),
+    Swipe { from: (f64, f64), to: (f64, f64), ms: u32 },
+    Type(Vec<(u64, bool)>),
+    Button(u64, u64, u64),
+}
+
 /// # Safety
-/// `device` came from rr_device_open and wasn't closed.
-#[no_mangle]
-pub unsafe extern "C" fn rr_device_tap(device: *mut RRDevice, x: f64, y: f64) -> *mut c_char {
+/// `device` came from rr_device_open and wasn't closed, or is null.
+unsafe fn run(device: *mut RRDevice, input: Result<Input, String>) -> *mut c_char {
     let Some(device) = (unsafe { device.as_ref() }) else { return std::ptr::null_mut() };
-    // Refused, not clamped: a point off the screen is a caller's mistake, and pressing the edge isn't what it meant.
-    if !(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y) {
-        return c_string(failure("x and y must be within 0...1"));
-    }
+    let input = match input {
+        Ok(input) => input,
+        Err(why) => return c_string(failure(&why)),
+    };
     let mut link = device.link.lock().unwrap_or_else(|e| e.into_inner());
     let started = Instant::now();
     let result = device.runtime.block_on(async {
-        tokio::time::timeout(DEADLINE, tap(&mut link, x, y)).await.unwrap_or_else(|_| Err("timed out".into()))
+        tokio::time::timeout(DEADLINE, perform(&mut link, input)).await.unwrap_or_else(|_| Err("timed out".into()))
     });
     c_string(match result {
         Ok(()) => format!("{{\"ok\":true,\"ms\":{}}}", started.elapsed().as_millis()),
         Err(why) => failure(&why),
+    })
+}
+
+/// Refused, not clamped: a point off the screen is a caller's mistake, and pressing the edge isn't what it meant.
+fn on_screen(points: &[f64]) -> Result<(), String> {
+    if points.iter().all(|v| (0.0..=1.0).contains(v)) { Ok(()) } else { Err("x and y must be within 0...1".into()) }
+}
+
+/// # Safety
+/// `device` came from rr_device_open and wasn't closed.
+#[no_mangle]
+pub unsafe extern "C" fn rr_device_tap(device: *mut RRDevice, x: f64, y: f64) -> *mut c_char {
+    unsafe { run(device, on_screen(&[x, y]).map(|()| Input::Tap(x, y))) }
+}
+
+/// # Safety
+/// `device` came from rr_device_open and wasn't closed.
+#[no_mangle]
+pub unsafe extern "C" fn rr_device_swipe(device: *mut RRDevice, x1: f64, y1: f64, x2: f64, y2: f64, duration_ms: u32) -> *mut c_char {
+    let input = on_screen(&[x1, y1, x2, y2]).and_then(|()| {
+        if (50..=5000).contains(&duration_ms) { Ok(Input::Swipe { from: (x1, y1), to: (x2, y2), ms: duration_ms }) }
+        else { Err("duration must be 50...5000 ms".into()) }
+    });
+    unsafe { run(device, input) }
+}
+
+/// # Safety
+/// `device` came from rr_device_open and wasn't closed; `text` is null or a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn rr_device_type(device: *mut RRDevice, text: *const c_char) -> *mut c_char {
+    let text = (!text.is_null()).then(|| unsafe { CStr::from_ptr(text) }.to_str().ok()).flatten();
+    // Every key is found before any is sent: half a text typed is worse than none.
+    let input = text.ok_or("bad text".to_string()).and_then(|t| {
+        t.chars().map(|c| key(c).ok_or(format!("can't type {c:?}: only what a US keyboard has"))).collect::<Result<Vec<_>, _>>()
+    });
+    unsafe { run(device, input.map(Input::Type)) }
+}
+
+/// # Safety
+/// `device` came from rr_device_open and wasn't closed; `name` is null or a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn rr_device_button(device: *mut RRDevice, name: *const c_char) -> *mut c_char {
+    let name = (!name.is_null()).then(|| unsafe { CStr::from_ptr(name) }.to_str().ok()).flatten();
+    let input = BUTTONS.iter().find(|b| Some(b.0) == name)
+        .map(|&(_, page, code, hold)| Input::Button(page, code, hold))
+        .ok_or(format!("no such button; one of: {}", BUTTONS.map(|b| b.0).join(", ")));
+    unsafe { run(device, input) }
+}
+
+/// Hardware buttons: name, HID usage page and code (consumer page), and how long to hold.
+const BUTTONS: [(&str, u64, u64, u64); 4] = [
+    ("home", 0x0C, 0x40, 80),
+    ("lock", 0x0C, 0x30, 200),
+    ("volume-up", 0x0C, 0xE9, 80),
+    ("volume-down", 0x0C, 0xEA, 80),
+];
+const LEFT_SHIFT: u64 = 0xE1;
+
+/// The key of a US keyboard that types `c`, and whether with Shift (HID keyboard page usages).
+fn key(c: char) -> Option<(u64, bool)> {
+    const PLAIN: &str = "-=[]\\;'`,./";
+    const PLAIN_USAGE: [u64; 11] = [0x2D, 0x2E, 0x2F, 0x30, 0x31, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38];
+    const SHIFTED: &str = "_+{}|:\"~<>?";
+    const DIGIT_SHIFTED: &str = "!@#$%^&*()";
+    Some(match c {
+        'a'..='z' => (0x04 + (c as u64 - 'a' as u64), false),
+        'A'..='Z' => (0x04 + (c as u64 - 'A' as u64), true),
+        '1'..='9' => (0x1E + (c as u64 - '1' as u64), false),
+        '0' => (0x27, false),
+        '\n' => (0x28, false),
+        ' ' => (0x2C, false),
+        _ => {
+            if let Some(i) = PLAIN.find(c) { (PLAIN_USAGE[i], false) }
+            else if let Some(i) = SHIFTED.find(c) { (PLAIN_USAGE[i], true) }
+            else if let Some(i) = DIGIT_SHIFTED.find(c) { (0x1E + i as u64, true) }
+            else { return None }
+        }
     })
 }
 
@@ -311,19 +396,66 @@ async fn connect(ip: &str, port: u16, file: &str) -> Result<Link, String> {
 
     let rsd = handle.connect(info.server_rsd_port).await.map_err(|e| format!("RSD: {e:?}"))?;
     let handshake = RsdHandshake::new(rsd).await.map_err(|e| format!("RSD handshake: {e:?}"))?;
-    Ok(Link { handle, handshake, hid: None, verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
+    Ok(Link { handle, handshake, hid: None, keys: None, verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
 }
 
-async fn tap(link: &mut Link, x: f64, y: f64) -> Result<(), String> {
-    if link.hid.is_none() {
-        link.hid = Some(UniversalHidServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)
-            .await.map_err(|e| format!("HID service: {e:?}"))?);
-    }
+/// The device drops input that isn't accompanied by a screen stream, so one runs around it.
+async fn perform(link: &mut Link, input: Input) -> Result<(), String> {
+    let mut stream = start_stream(link).await?;
+    let done = send(link, input).await;
+    stream.stop().await;
+    done
+}
+
+async fn send(link: &mut Link, input: Input) -> Result<(), String> {
     // The touchscreen takes 0...65535 across each axis.
     let unit = |v: f64| (v * 65535.0).round() as u16;
-    let sent = link.hid.as_mut().expect("just set").tap(unit(x), unit(y)).await;
-    if sent.is_err() { link.hid = None; }   // a dead connection isn't kept for the next call
-    sent.map_err(|e| format!("tap: {e:?}"))
+    match input {
+        Input::Tap(..) | Input::Swipe { .. } => {
+            if link.hid.is_none() {
+                link.hid = Some(UniversalHidServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)
+                    .await.map_err(|e| format!("HID service: {e:?}"))?);
+            }
+            let hid = link.hid.as_mut().expect("just set");
+            let sent = match input {
+                Input::Tap(x, y) => hid.tap(unit(x), unit(y)).await,
+                // A sample every ~16 ms: slow enough to read as a drag, not a tap.
+                Input::Swipe { from, to, ms } => hid.drag(unit(from.0), unit(from.1), unit(to.0), unit(to.1), (ms / 16).max(2), 16).await,
+                _ => unreachable!(),
+            };
+            if sent.is_err() { link.hid = None; }   // a dead connection isn't kept for the next call
+            sent.map_err(|e| format!("touch: {e:?}"))
+        }
+        Input::Type(..) | Input::Button(..) => {
+            if link.keys.is_none() {
+                link.keys = Some(IndigoHidClient::connect_rsd(&mut link.handle, &mut link.handshake)
+                    .await.map_err(|e| format!("HID service: {e:?}"))?);
+            }
+            let keys = link.keys.as_mut().expect("just set");
+            let sent = async {
+                match input {
+                    Input::Type(strokes) => {
+                        for (usage, shift) in strokes {
+                            if shift { keys.send_keyboard(LEFT_SHIFT, ButtonState::Down).await?; }
+                            keys.send_keyboard(usage, ButtonState::Down).await?;
+                            keys.send_keyboard(usage, ButtonState::Up).await?;
+                            if shift { keys.send_keyboard(LEFT_SHIFT, ButtonState::Up).await?; }
+                            tokio::time::sleep(Duration::from_millis(12)).await;   // or strokes run together
+                        }
+                    }
+                    Input::Button(page, code, hold) => {
+                        keys.send_button(page, code, ButtonState::Down).await?;
+                        tokio::time::sleep(Duration::from_millis(hold)).await;
+                        keys.send_button(page, code, ButtonState::Up).await?;
+                    }
+                    _ => unreachable!(),
+                }
+                Ok::<(), idevice::IdeviceError>(())
+            }.await;
+            if sent.is_err() { link.keys = None; }
+            sent.map_err(|e| format!("keys: {e:?}"))
+        }
+    }
 }
 
 /// What the device is told about this end of the stream; the values of an offer it accepts.
@@ -341,10 +473,20 @@ fn call_info() -> CallInfoBlob {
 
 const SUPPORTED_FEATURES: u64 = 140;
 
-// ponytail: the stream is started and stopped around each frame (~0.4 s), so a single key
-// frame decodes on its own and nothing is received in between. Keeping it running and asking
-// for a key frame over RTCP is the faster way, when frames are wanted many times a second.
-async fn keyframe(link: &mut Link) -> Result<Vec<u8>, String> {
+/// A screen stream that is running.
+struct Stream {
+    display: DisplayServiceClient<Box<dyn ReadWrite>>,
+    video: UdpSocketHandle,
+    _audio: UdpSocketHandle,
+}
+
+impl Stream {
+    async fn stop(&mut self) {
+        let _ = self.display.stop_media_stream().await;
+    }
+}
+
+async fn start_stream(link: &mut Link) -> Result<Stream, String> {
     let mut display = DisplayServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)
         .await.map_err(|e| format!("display service: {e:?}"))?;
     let audio = link.handle.bind_udp(0).await.map_err(|e| format!("udp: {e:?}"))?;
@@ -360,21 +502,28 @@ async fn keyframe(link: &mut Link) -> Result<Vec<u8>, String> {
     let offer = build_screen_video_offer(&call(), &call_info(), ssrc).map_err(|e| format!("video offer: {e:?}"))?;
     display.start_media_stream(build_start_video_parameters(&ours, video.local_port(), &theirs, 50001, offer, SUPPORTED_FEATURES, 1, session))
         .await.map_err(|e| format!("video start: {e:?}"))?;
+    Ok(Stream { display, video, _audio: audio })
+}
 
+// ponytail: the stream is started and stopped around each frame and each input (~0.4 s), so a
+// single key frame decodes on its own and nothing is received in between. Keeping it running
+// and asking for a key frame over RTCP is the faster way, when frames are wanted many times a second.
+async fn keyframe(link: &mut Link) -> Result<Vec<u8>, String> {
+    let mut stream = start_stream(link).await?;
     // The stream opens with a key frame; its last packet carries the RTP marker.
     let mut frames = HevcDepacketizer::new();
-    let (mut stream, mut key) = (None, false);
+    let (mut source, mut key) = (None, false);
     let frame = loop {
-        let datagram = match video.recv().await {
+        let datagram = match stream.video.recv().await {
             Ok(d) => d,
             Err(e) => {
-                let _ = display.stop_media_stream().await;
+                stream.stop().await;
                 return Err(format!("video: {e:?}"));
             }
         };
         if is_rtcp(&datagram.data) { continue; }
         let Some(packet) = RtpPacket::parse(&datagram.data) else { continue };
-        if *stream.get_or_insert(packet.ssrc) != packet.ssrc { continue; }
+        if *source.get_or_insert(packet.ssrc) != packet.ssrc { continue; }
         let p = packet.payload;
         // A fragmented unit (type 49) names its real type in its third byte; 16...23 are key frames.
         key |= if p.len() >= 3 && (p[0] >> 1) & 0x3f == 49 { (16..=23).contains(&(p[2] & 0x3f)) }
@@ -386,6 +535,6 @@ async fn keyframe(link: &mut Link) -> Result<Vec<u8>, String> {
             key = false;
         }
     };
-    let _ = display.stop_media_stream().await;
+    stream.stop().await;
     Ok(frame)
 }

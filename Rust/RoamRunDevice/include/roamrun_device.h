@@ -37,13 +37,30 @@ char *rr_device_info(RRDevice *device);
  */
 uint8_t *rr_device_keyframe(RRDevice *device, size_t *length, char **error);
 
-/**
- * One tap on the device's screen at (x, y), each a fraction 0...1 of the screen as the
- * device holds it (not rotated to the interface). THIS OPERATES THE DEVICE: whatever is
- * there gets pressed. Look at a fresh frame first. Values outside 0...1 are refused.
- * Returns JSON ({"ok":true,…} or {"ok":false,"error":…}) to free with rr_string_free.
+/*
+ * The calls below OPERATE THE DEVICE: look at a fresh frame first. Each returns JSON
+ * ({"ok":true,"ms":…} or {"ok":false,"error":…}) to free with rr_string_free. Points are
+ * fractions 0...1 of the screen as the device holds it (not rotated to the interface); one
+ * outside 0...1 is refused, not moved to the edge. A screen stream runs for the length of
+ * each: the device drops input that comes without one.
  */
+
+/** One tap at (x, y): whatever is there gets pressed. */
 char *rr_device_tap(RRDevice *device, double x, double y);
+
+/** A finger down at (x1, y1), moved to (x2, y2) over duration_ms (50...5000), and lifted. */
+char *rr_device_swipe(RRDevice *device, double x1, double y1, double x2, double y2,
+                      uint32_t duration_ms);
+
+/**
+ * Types `text` as a hardware keyboard would, into whatever has the keyboard's focus. Only
+ * what a US keyboard has (ASCII, and newline for Return); anything else is refused before
+ * a key is sent. What appears depends on the device's hardware-keyboard layout.
+ */
+char *rr_device_type(RRDevice *device, const char *text);
+
+/** Presses a hardware button: "home", "lock", "volume-up" or "volume-down". */
+char *rr_device_button(RRDevice *device, const char *name);
 
 /**
  * What accessibility says is on the screen: JSON {"ok":true,"elements":[{"caption":…}],
