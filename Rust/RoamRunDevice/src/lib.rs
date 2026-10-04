@@ -44,6 +44,8 @@ struct Link {
     /// The screen stream, kept between calls while they keep coming.
     stream: Option<Stream>,
     stream_used: Instant,
+    /// When a stream was last stopped: one started right on its heels has been refused, and has stalled.
+    stream_stopped: Option<Instant>,
     /// How the stream has been used, for whoever asks: started, key frames asked of a running
     /// one, and how many of those came.
     stream_starts: u32,
@@ -84,7 +86,10 @@ fn watch_idle_stream(held: &Arc<Held>) {
         let Some(held) = held.upgrade() else { return };
         let mut link = held.link.lock().unwrap_or_else(|e| e.into_inner());
         if link.stream.is_some() && link.stream_used.elapsed() >= STREAM_IDLE {
-            if let Some(mut stream) = link.stream.take() { held.runtime.block_on(stream.stop()); }
+            if let Some(mut stream) = link.stream.take() {
+                held.runtime.block_on(stream.stop());
+                link.stream_stopped = Some(Instant::now());
+            }
         }
     });
 }
@@ -396,12 +401,17 @@ fn unwrapped(value: &plist::Value) -> &plist::Value {
 /// Captions in the inspector's order, and whether the walk came round (true) or was cut short.
 async fn elements(link: &mut Link, limit: usize, until: Instant) -> Result<(Vec<String>, bool), String> {
     let port = link.handshake.services.get(WANTED[3].1).ok_or("no accessibility service on this device")?.port;
-    let stream = link.handle.connect(port).await.map_err(|e| format!("accessibility service: {e:?}"))?;
-    // A lockdown service bridged onto RSD: it wants a check-in before its own protocol.
-    let mut plain = idevice::Idevice::new(Box::new(stream), LABEL);
-    plain.rsd_checkin().await.map_err(|e| format!("accessibility check-in: {e:?}"))?;
-    let mut client = RemoteServerClient::new(plain.get_socket().ok_or("accessibility socket")?);
     let call = |name: &'static str, argument: plist::Value| (name, Some(vec![AuxValue::archived_value(argument)]));
+    // Getting to the service has the deadline every call has: one that takes the connection and
+    // then says nothing would otherwise be waited on for ever.
+    let handle = &mut link.handle;
+    let mut client = tokio::time::timeout(DEADLINE, async {
+        let stream = handle.connect(port).await.map_err(|e| format!("accessibility service: {e:?}"))?;
+        // A lockdown service bridged onto RSD: it wants a check-in before its own protocol.
+        let mut plain = idevice::Idevice::new(Box::new(stream), LABEL);
+        plain.rsd_checkin().await.map_err(|e| format!("accessibility check-in: {e:?}"))?;
+        Ok::<_, String>(RemoteServerClient::new(plain.get_socket().ok_or("accessibility socket")?))
+    }).await.unwrap_or_else(|_| Err("the accessibility service didn't answer".into()))?;
 
     // The greeting both ends send first; then: watch nothing, draw nothing on the device.
     let capabilities: plist::Dictionary = [
@@ -430,8 +440,10 @@ async fn elements(link: &mut Link, limit: usize, until: Instant) -> Result<(Vec<
         client.root_channel().call_method(Some(name), arguments, false).await.map_err(|e| format!("{name} {e:?}"))?;
 
         // The element comes back as the device's own call to us, among others.
+        // One wait for the element, however many other messages come meanwhile, and never past the walk's end.
+        let wait = tokio::time::Instant::from_std((Instant::now() + ELEMENT).min(until));
         let focus = loop {
-            let Ok(message) = tokio::time::timeout(ELEMENT, client.read_message(0)).await else { break None };
+            let Ok(message) = tokio::time::timeout_at(wait, client.read_message(0)).await else { break None };
             let message = message.map_err(|e| format!("accessibility: {e:?}"))?;
             let changed = message.data.as_ref().and_then(|d| d.as_string()).is_some_and(|s| s.contains("CurrentElementChanged"));
             if !changed { continue; }
@@ -461,7 +473,12 @@ async fn connect(ip: &str, port: u16, file: &str) -> Result<Link, String> {
     let mut client = RemotePairingClient::new(RpPairingSocket::new(control), LABEL);
     // Verify only: a pairing the device doesn't know must fail here, not start a new one.
     client.attempt_pair_verify().await.map_err(|e| format!("handshake: {e:?}"))?;
-    client.validate_pairing(&mut pairing).await.map_err(|e| format!("the device doesn't accept this pairing: {e:?}"))?;
+    // Said in words the caller knows a refusal by (REFUSED in the header): only when the device
+    // answered and said no, not when the exchange itself broke off.
+    client.validate_pairing(&mut pairing).await.map_err(|e| match e {
+        idevice::IdeviceError::RemotePairing(_) => format!("the device doesn't accept this pairing: {e:?}"),
+        _ => format!("the pairing couldn't be verified: {e:?}"),
+    })?;
     let verified_ms = started.elapsed().as_millis();
 
     let tunnel_port = client.create_tcp_listener().await.map_err(|e| format!("tunnel listener: {e:?}"))?;
@@ -477,7 +494,7 @@ async fn connect(ip: &str, port: u16, file: &str) -> Result<Link, String> {
 
     let rsd = handle.connect(info.server_rsd_port).await.map_err(|e| format!("RSD: {e:?}"))?;
     let handshake = RsdHandshake::new(rsd).await.map_err(|e| format!("RSD handshake: {e:?}"))?;
-    Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
+    Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_stopped: None, stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
 }
 
 /// The device drops input that isn't accompanied by a screen stream, so one runs with it: the
@@ -487,6 +504,7 @@ async fn perform(link: &mut Link, input: Input) -> Result<(), String> {
     if let Some(stream) = kept.as_mut() {
         if !stream.alive().await {
             stream.stop().await;
+            link.stream_stopped = Some(Instant::now());
             kept = None;
         }
     }
@@ -593,7 +611,7 @@ const SUPPORTED_FEATURES: u64 = 140;
 struct Stream {
     display: DisplayServiceClient<Box<dyn ReadWrite>>,
     video: UdpSocketHandle,
-    _audio: UdpSocketHandle,
+    audio: UdpSocketHandle,
     /// Ours, as declared in the offer: the device heeds feedback only from it.
     ssrc: u32,
     /// The device's, once a packet has shown it.
@@ -617,16 +635,24 @@ const REPORT_WAIT: Duration = Duration::from_millis(1500);
 /// of those made within half a second, all of those made a second after), and waiting it out
 /// is quicker than the 2 s of finding that out and starting the stream over.
 const KEYFRAME_APART: Duration = Duration::from_millis(1050);
+/// How long a stop gets to be answered.
+const STOP_WAIT: Duration = Duration::from_secs(3);
+/// How long after a stop a start waits.
+const AFTER_STOP: Duration = Duration::from_millis(300);
 
 impl Stream {
+    /// Told to stop, and not waited on for longer than STOP_WAIT: a device that no longer answers
+    /// would otherwise hold up every call after this one.
     async fn stop(&mut self) {
-        let _ = self.display.stop_media_stream().await;
+        let _ = tokio::time::timeout(STOP_WAIT, self.display.stop_media_stream()).await;
     }
 
     /// Takes what has arrived without waiting; true if any video did. A running stream sends
     /// some sixty frames a second, moving picture or not.
     async fn drain(&mut self) -> bool {
         let mut video = false;
+        // Nothing is done with the sound, but what arrives is taken: unread, it only piles up.
+        while let Ok(Ok(_)) = tokio::time::timeout(Duration::ZERO, self.audio.recv()).await {}
         while let Ok(Ok(datagram)) = tokio::time::timeout(Duration::ZERO, self.video.recv()).await {
             if is_rtcp(&datagram.data) {
                 self.feedback_port = Some(datagram.source_port);
@@ -710,6 +736,9 @@ impl Stream {
 }
 
 async fn start_stream(link: &mut Link) -> Result<Stream, String> {
+    if let Some(early) = link.stream_stopped.and_then(|at| AFTER_STOP.checked_sub(at.elapsed())) {
+        tokio::time::sleep(early).await;
+    }
     let mut display = DisplayServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)
         .await.map_err(|e| format!("display service: {e:?}"))?;
     let audio = link.handle.bind_udp(0).await.map_err(|e| format!("udp: {e:?}"))?;
@@ -723,10 +752,19 @@ async fn start_stream(link: &mut Link) -> Result<Stream, String> {
     display.start_media_stream(build_start_audio_parameters(&ours, audio.local_port(), &theirs, 50000, offer, SUPPORTED_FEATURES, session))
         .await.map_err(|e| format!("audio start: {e:?}"))?;
     let ssrc = uuid::Uuid::new_v4().as_u128() as u32;
-    let offer = build_screen_video_offer(&call(), &call_info(), ssrc).map_err(|e| format!("video offer: {e:?}"))?;
-    display.start_media_stream(build_start_video_parameters(&ours, video.local_port(), &theirs, VIDEO_SENDER_PORT, offer, SUPPORTED_FEATURES, 1, session))
-        .await.map_err(|e| format!("video start: {e:?}"))?;
-    Ok(Stream { display, video, _audio: audio, ssrc, media: None, feedback_port: None, requests: 0, keyframe_at: Instant::now() })
+    let video_started = match build_screen_video_offer(&call(), &call_info(), ssrc) {
+        Ok(offer) => display.start_media_stream(build_start_video_parameters(&ours, video.local_port(), &theirs, VIDEO_SENDER_PORT, offer, SUPPORTED_FEATURES, 1, session))
+            .await.map_err(|e| format!("video start: {e:?}")),
+        Err(e) => Err(format!("video offer: {e:?}")),
+    };
+    let mut stream = Stream { display, video, audio, ssrc, media: None, feedback_port: None, requests: 0, keyframe_at: Instant::now() };
+    if let Err(why) = video_started {
+        // The sound's half did start: it is ended, not left running on the device.
+        stream.stop().await;
+        link.stream_stopped = Some(Instant::now());
+        return Err(why);
+    }
+    Ok(stream)
 }
 
 /// How long a stream just started gets to send the key frame it opens with.
@@ -750,8 +788,7 @@ async fn keyframe(link: &mut Link) -> Result<Vec<u8>, String> {
             }
         }
         stream.stop().await;
-        // A start right on the heels of a stop has been refused, and has stalled.
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        link.stream_stopped = Some(Instant::now());
     }
     let mut stream = start_stream(link).await?;
     match tokio::time::timeout(FIRST_KEYFRAME, stream.next_keyframe()).await {
@@ -762,10 +799,12 @@ async fn keyframe(link: &mut Link) -> Result<Vec<u8>, String> {
         }
         Ok(Err(why)) => {
             stream.stop().await;
+            link.stream_stopped = Some(Instant::now());
             Err(why)
         }
         Err(_) => {
             stream.stop().await;
+            link.stream_stopped = Some(Instant::now());
             Err("the stream started but sent no key frame".into())
         }
     }
@@ -917,8 +956,11 @@ async fn accept_pairing(pairing: &RRPairing, path: &str, show: &(impl Fn(&str) +
 fn write_private(path: &str, bytes: &[u8]) -> Result<(), String> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
-    let _ = std::fs::remove_file(path);
-    std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)
+    // Beside it first, then moved into place: a write that fails leaves what was there.
+    let beside = format!("{path}.writing");
+    let _ = std::fs::remove_file(&beside);
+    std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&beside)
         .and_then(|mut f| f.write_all(bytes))
-        .map_err(|e| format!("can't write the pairing: {e}"))
+        .and_then(|()| std::fs::rename(&beside, path))
+        .map_err(|e| { let _ = std::fs::remove_file(&beside); format!("can't write the pairing: {e}") })
 }

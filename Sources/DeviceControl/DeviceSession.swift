@@ -127,8 +127,13 @@ public final class DeviceSession: @unchecked Sendable {
     public func swipe(from: (x: Double, y: Double), to: (x: Double, y: Double), milliseconds: Int) throws {
         _ = try answer(repeatable: false) { rr_device_swipe($0, from.x, from.y, to.x, to.y, UInt32(clamping: max(milliseconds, 0))) }
     }
-    public func type(_ text: String) throws { _ = try answer(repeatable: false) { rr_device_type($0, text) } }
-    public func paste(_ text: String) throws { _ = try answer(repeatable: false) { rr_device_paste($0, text) } }
+    public func type(_ text: String) throws { try whole(text); _ = try answer(repeatable: false) { rr_device_type($0, text) } }
+    public func paste(_ text: String) throws { try whole(text); _ = try answer(repeatable: false) { rr_device_paste($0, text) } }
+
+    /// The library takes text up to its first NUL: text with one would arrive cut short, and be reported sent.
+    private func whole(_ text: String) throws {
+        if text.utf8.contains(0) { throw Failure.message("the text holds a NUL character, which can't be sent") }
+    }
     public func press(_ button: String) throws { _ = try answer(repeatable: false) { rr_device_button($0, button) } }
 
     /// A call that answers {"ok":…} JSON; its "error" becomes the failure.

@@ -17,7 +17,9 @@ typedef struct RRDevice RRDevice;
 /**
  * Verifies the pairing in `pairing_file` with the device at `ip`:`port` (its RemotePairing
  * port) and opens the tunnel. Never starts a new pairing; sends the device no input.
- * NULL on failure, with *error (if given) set to a message to free with rr_string_free.
+ * NULL on failure, with *error (if given) set to a message to free with rr_string_free. A
+ * message that holds "doesn't accept this pairing" means the device answered and refused it
+ * (removed there); any other failure is of the connection.
  */
 RRDevice *rr_device_open(const char *ip, uint16_t port, const char *pairing_file, char **error);
 
@@ -31,8 +33,9 @@ void rr_device_close(RRDevice *device);
 char *rr_device_info(RRDevice *device);
 
 /**
- * One key frame of the device's screen, as Annex-B HEVC with its parameter sets first: starts
- * the screen stream, takes the first complete key frame and stops it. Receives only.
+ * One key frame of the device's screen, as Annex-B HEVC with its parameter sets first. The
+ * screen stream is started for it and kept for a few seconds after (a later call asks the
+ * running one for a key frame); the device shows a screen-sharing session meanwhile. No input.
  * NULL on failure, with *error (if given) set. Free the frame with rr_bytes_free.
  */
 uint8_t *rr_device_keyframe(RRDevice *device, size_t *length, char **error);
@@ -104,8 +107,9 @@ RRPairing *rr_pairing_listen(const char *name, const char *model, const char *ho
                              char **advert, char **error);
 
 /**
- * Waits for a device to pair, however long that takes. `code` is called with the six digits
- * to show the user (on another thread, before this returns). On success the pairing is
+ * Waits for a device to pair, however long one takes to come; once the code is shown it has
+ * three minutes to be entered. After rr_pairing_cancel this returns at once. `code` is called
+ * with the six digits to show the user (on another thread, before this returns). On success the pairing is
  * written to `pairing_file`, readable by its owner only, and the JSON is {"ok":true,
  * "udid":…,"name":…,"model":…}; otherwise {"ok":false,"error":…}. Free with rr_string_free.
  */
