@@ -11,7 +11,7 @@ enum CLI {
     nonisolated static let commands: Set<String> = {
         var all: Set<String> = ["devices", "up", "down", "status", "doctor", "run", "install", "ota", "logs", "screenshot", "init", "version", "--version", "help", "--help", "-h"]
         #if DEVICE_CONTROL
-        all.formUnion(["look", "tap", "swipe", "type", "paste", "press", "elements"])
+        all.formUnion(["look", "tap", "swipe", "type", "paste", "press", "elements", "mcp"])
         #endif
         return all
     }()
@@ -43,6 +43,7 @@ enum CLI {
                                      keyboard is an English one)
       paste <name> <text>            Any text, by the device's pasteboard (it asks the user each time)
       press <name> <button>          home, lock, volume-up or volume-down
+      mcp                            The same as MCP tools, over stdin/stdout (for an agent's MCP config)
     Each look serves one action: look, act, look again.
     """
     #endif
@@ -196,6 +197,10 @@ enum CLI {
                 }
                 ota(targets, path: path, replacing: parsed.flags.contains("--replace"))
             #if DEVICE_CONTROL
+            case "mcp":
+                // Off the main thread: it reads stdin until the client closes it.
+                let server = DeviceMCP(profiles: profiles) { try DeviceControlWire.ask($0, in: ProfileStore.directory) }
+                Thread.detachNewThread { server.serve(); exit(0) }
             case "look":
                 guard name != nil, let p = targets.first else { fail("usage: roamrun look <name> [file.png]. " + names(profiles)) }
                 look(p, path: words.count >= 2 ? words[words.startIndex + 1] : nil)
@@ -242,6 +247,7 @@ enum CLI {
         all["paste"] = ([], 0...2)
         all["press"] = ([], 0...2)
         all["elements"] = ([], 0...2)
+        all["mcp"] = ([], 0...0)
         #endif
         return all
     }()

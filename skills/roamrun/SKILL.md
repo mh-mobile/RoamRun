@@ -177,6 +177,11 @@ roamrun tap iPhone 590 1280          # a point in the pixels of that image
 roamrun look iPhone /tmp/now.png     # what it became
 ```
 
+The same is there as MCP tools (`look` returns the image itself, scaled to what
+you are shown, and points are that image's pixels): the user adds it once with
+`claude mcp add roamrun -- roamrun mcp`, or the like for another agent. Use the
+tools when you have them; the rules below hold for both.
+
 - **Each look serves one action.** `tap` and `swipe` are refused until there has
   been a `look`, and any action (or `elements`) uses it up: look, act, look again.
   Read the point off the image you just looked at, in its own pixels (the size

@@ -4048,6 +4048,64 @@ func publishStepsAsideWhenTurnedOff(_ c: PublishCase) async {
     #expect(DeviceControlHub.fraction(x: nil, y: 10, of: size) == nil)
 }
 
+import ImageIO
+
+/// `roamrun mcp`: the handshake, the tool list, and a tap whose point — given in the image the
+/// look returned — reaches the app in the pixels of the look itself.
+@Test func theMCPServerScalesPointsBackToTheLook() throws {
+    let device = profile("iPhone")
+    var asked: [DeviceControlWire.Request] = []
+    let server = DeviceMCP(profiles: [device]) { request in
+        asked.append(request)
+        if request.op == "look", let path = request.path {
+            // A screen twice the size a look returns: 2000 x 4000 comes back as 640 x 1280.
+            let context = CGContext(data: nil, width: 2000, height: 4000, bitsPerComponent: 8, bytesPerRow: 0,
+                                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+            let out = CGImageDestinationCreateWithURL(URL(fileURLWithPath: path) as CFURL, "public.png" as CFString, 1, nil)!
+            CGImageDestinationAddImage(out, context.makeImage()!, nil)
+            CGImageDestinationFinalize(out)
+            return .init(ok: true, width: 2000, height: 4000)
+        }
+        return .init(ok: true)
+    }
+    func send(_ json: String) throws -> [String: Any] {
+        let answer = try #require(server.handle(Data(json.utf8)))
+        return try #require(try JSONSerialization.jsonObject(with: answer) as? [String: Any])
+    }
+    func result(_ json: String) throws -> [String: Any] { try #require(try send(json)["result"] as? [String: Any]) }
+    func call(_ tool: String, _ arguments: String) throws -> [String: Any] {
+        try result(#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"\#(tool)","arguments":\#(arguments)}}"#)
+    }
+
+    let hello = try result(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#)
+    #expect(hello["protocolVersion"] as? String == "2025-06-18")
+    #expect(server.handle(Data(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#.utf8)) == nil)   // a notification gets no answer
+    let tools = try #require(try result(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)["tools"] as? [[String: Any]])
+    #expect(Set(tools.compactMap { $0["name"] as? String }) == ["devices", "look", "tap", "swipe", "elements", "type", "paste", "press"])
+
+    // No look yet: refused here, and the app isn't even asked.
+    #expect(try call("tap", #"{"device":"iPhone","x":10,"y":10}"#)["isError"] as? Bool == true)
+    #expect(asked.isEmpty)
+
+    let look = try call("look", #"{"device":"iphone"}"#)   // names match as the CLI's do
+    let content = try #require(look["content"] as? [[String: Any]])
+    #expect(content.first?["type"] as? String == "image" && content.first?["mimeType"] as? String == "image/jpeg")
+    #expect((content.last?["text"] as? String)?.hasPrefix("640 x 1280") == true)
+
+    // A point outside the image is refused in the image's terms, the app not asked, the look kept.
+    let outside = try call("tap", #"{"device":"iPhone","x":640,"y":10}"#)
+    #expect(outside["isError"] as? Bool == true && ((outside["content"] as? [[String: Any]])?.first?["text"] as? String)?.contains("640 x 1280") == true)
+    #expect(asked.count == 1)
+    #expect(try call("tap", #"{"device":"iPhone","x":320,"y":640}"#)["isError"] as? Bool == false)
+    #expect(asked.last == .init(op: "tap", device: device.id, x: 1000, y: 2000))
+    // That look is spent: the next point needs a new one.
+    #expect(try call("tap", #"{"device":"iPhone","x":320,"y":640}"#)["isError"] as? Bool == true)
+    #expect(asked.count == 2)
+
+    #expect(try call("look", #"{"device":"nobody"}"#)["isError"] as? Bool == true)
+    #expect(try send(#"{"jsonrpc":"2.0","id":9,"method":"resources/list"}"#)["error"] != nil)
+}
+
 /// What the CLI sends for each command reaches the app as it was written.
 @Test func everyRequestSurvivesTheWire() throws {
     let id = UUID()
