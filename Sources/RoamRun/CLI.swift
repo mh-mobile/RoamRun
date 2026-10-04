@@ -15,6 +15,12 @@ enum CLI {
         #endif
         return all
     }()
+    /// The words as numbers a point or a duration can be: nil when one isn't a number, or is NaN or infinite.
+    nonisolated static func finite(_ words: some Sequence<String>) -> [Double]? {
+        let numbers = words.compactMap { Double($0) }.filter(\.isFinite)
+        return numbers.count == Array(words).count ? numbers : nil
+    }
+
     /// What only a build with device control has (to the others they are unknown commands).
     nonisolated static let deviceCommands: Set<String> = ["look", "tap", "swipe", "type", "paste", "press", "elements", "mcp"]
     /// Posted by `roamrun down`; the app stops the bridge whose id is `object`.
@@ -209,18 +215,16 @@ enum CLI {
                 guard name != nil, let p = targets.first else { fail("usage: roamrun look <name> [file.png]. " + names(profiles)) }
                 look(p, path: words.count >= 2 ? words[words.startIndex + 1] : nil)
             case "tap":
-                guard name != nil, let p = targets.first, words.count == 3,
-                      let x = Double(words[words.startIndex + 1]), let y = Double(words[words.startIndex + 2]) else {
+                guard name != nil, let p = targets.first, words.count == 3, let point = finite(words.dropFirst()) else {
                     fail("usage: roamrun tap <name> <x> <y> — pixels of the last `roamrun look`. " + names(profiles))
                 }
-                tap(p, x: x, y: y)
+                tap(p, x: point[0], y: point[1])
             case "swipe":
-                let numbers = words.dropFirst().map { Double($0) }
-                guard name != nil, let p = targets.first, (4...5).contains(numbers.count), !numbers.contains(nil) else {
+                guard name != nil, let p = targets.first, let numbers = finite(words.dropFirst()), (4...5).contains(numbers.count),
+                      let ms = numbers.count == 5 ? Int(exactly: numbers[4].rounded()) : 300 else {
                     fail("usage: roamrun swipe <name> <x1> <y1> <x2> <y2> [milliseconds] — pixels of the last `roamrun look`. " + names(profiles))
                 }
-                operate(p, .init(op: "swipe", device: p.id, x: numbers[0], y: numbers[1], x2: numbers[2], y2: numbers[3],
-                                 milliseconds: numbers.count == 5 ? Int(numbers[4]!) : nil))
+                operate(p, .init(op: "swipe", device: p.id, x: numbers[0], y: numbers[1], x2: numbers[2], y2: numbers[3], milliseconds: ms))
             case "type", "paste", "press":
                 guard name != nil, let p = targets.first, words.count == 2 else {
                     fail("usage: roamrun \(args[0]) <name> \(args[0] == "press" ? "<home|lock|volume-up|volume-down>" : "<text>"). " + names(profiles))

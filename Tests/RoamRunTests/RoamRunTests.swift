@@ -4171,6 +4171,21 @@ func publishStepsAsideWhenTurnedOff(_ c: PublishCase) async {
     #expect(Date().timeIntervalSince(started) < 2)
 }
 
+/// Whatever number a caller sends for a walk's length or a swipe's duration, the app survives it:
+/// the one is brought into what a walk can do, the other refused outside what the library takes.
+@Test func anyNumberACallerSendsIsBoundedOrRefused() {
+    #expect(DeviceControlHub.elementLimit(nil) == 40)
+    #expect(DeviceControlHub.elementLimit(0) == 1 && DeviceControlHub.elementLimit(-7) == 1)
+    #expect(DeviceControlHub.elementLimit(4_294_967_296) == 1000 && DeviceControlHub.elementLimit(.max) == 1000)
+    #expect(DeviceControlHub.swipeDuration(nil) == 300 && DeviceControlHub.swipeDuration(50) == 50)
+    #expect(DeviceControlHub.swipeDuration(5_000_000_000) == nil && DeviceControlHub.swipeDuration(49) == nil)
+    #expect(DeviceControlHub.swipeDuration(-1) == nil && DeviceControlHub.swipeDuration(.max) == nil)
+    // The CLI's own: a point or a duration is a finite number, or the command is refused.
+    #expect(CLI.finite(["1", "2.5", "1e3"]) == [1, 2.5, 1000])
+    #expect(CLI.finite(["1", "inf"]) == nil && CLI.finite(["nan", "1"]) == nil && CLI.finite(["1", "x"]) == nil)
+    #expect(CLI.finite(["1e999", "1"]) == nil)
+}
+
 /// A point comes in the pixels of a look and goes to the device as a fraction of its screen;
 /// one outside the look is no point at all.
 @Test func aLooksPixelsBecomeFractionsOfTheScreen() {

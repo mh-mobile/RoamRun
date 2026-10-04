@@ -402,6 +402,15 @@ final class DeviceControlHub: @unchecked Sendable {
     /// from one that wasn't sent.
     private static let inputLog = Logger(subsystem: AppID.bundle, category: "input")
 
+    /// How many elements a walk is asked for: whatever number a caller sends, one the walk can do.
+    static func elementLimit(_ asked: Int?) -> Int { min(max(asked ?? 40, 1), 1000) }
+
+    /// A swipe's duration, or nil for one the device isn't asked for (the library takes 50...5000 ms).
+    static func swipeDuration(_ asked: Int?) -> Int? {
+        guard let asked else { return 300 }
+        return (50...5000).contains(asked) ? asked : nil
+    }
+
     private static let lookFirst = "look first: a point is given in the pixels of a look, and each look serves one action"
 
     private func answer(_ request: DeviceControlWire.Request) -> DeviceControlWire.Response {
@@ -416,7 +425,7 @@ final class DeviceControlHub: @unchecked Sendable {
                 return .init(ok: true, open: h.session.isOpen, refused: h.session.isRefused)
             case "elements":
                 _ = spendLook(of: request.device)   // the walk can scroll the screen
-                let found = try h.session.elements(limit: request.limit ?? 40)
+                let found = try h.session.elements(limit: Self.elementLimit(request.limit))
                 return .init(ok: true, captions: found.captions, complete: found.complete)
             case "swipe":
                 guard let size = spendLook(of: request.device) else { return .failure(Self.lookFirst) }
@@ -424,7 +433,10 @@ final class DeviceControlHub: @unchecked Sendable {
                       let to = Self.fraction(x: request.x2, y: request.y2, of: size) else {
                     return .failure("both points must be inside the last look (\(size.width) x \(size.height))")
                 }
-                try h.session.swipe(from: from, to: to, milliseconds: request.milliseconds ?? 300)
+                guard let duration = Self.swipeDuration(request.milliseconds) else {
+                    return .failure("a swipe takes 50...5000 ms")
+                }
+                try h.session.swipe(from: from, to: to, milliseconds: duration)
                 return .init(ok: true)
             case "type", "paste", "press":
                 _ = spendLook(of: request.device)

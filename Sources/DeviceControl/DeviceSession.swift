@@ -101,7 +101,7 @@ public final class DeviceSession: @unchecked Sendable {
     /// Accessibility's captions; `complete` is false when the walk was cut short. Can scroll the screen.
     public func elements(limit: Int = 40) throws -> (captions: [String], complete: Bool) {
         // Not repeated: each walk moves the screen.
-        let object = try answer(repeatable: false) { rr_device_elements($0, UInt32(max(limit, 1))) }
+        let object = try answer(repeatable: false) { rr_device_elements($0, UInt32(clamping: max(limit, 1))) }
         let captions = (object["elements"] as? [[String: Any]] ?? []).map { $0["caption"] as? String ?? "" }
         return (captions, object["complete"] as? Bool ?? false)
     }
@@ -109,7 +109,7 @@ public final class DeviceSession: @unchecked Sendable {
     // These operate the device. Points are fractions 0...1 of the screen.
     public func tap(x: Double, y: Double) throws { _ = try answer(repeatable: false) { rr_device_tap($0, x, y) } }
     public func swipe(from: (x: Double, y: Double), to: (x: Double, y: Double), milliseconds: Int) throws {
-        _ = try answer(repeatable: false) { rr_device_swipe($0, from.x, from.y, to.x, to.y, UInt32(max(milliseconds, 0))) }
+        _ = try answer(repeatable: false) { rr_device_swipe($0, from.x, from.y, to.x, to.y, UInt32(clamping: max(milliseconds, 0))) }
     }
     public func type(_ text: String) throws { _ = try answer(repeatable: false) { rr_device_type($0, text) } }
     public func paste(_ text: String) throws { _ = try answer(repeatable: false) { rr_device_paste($0, text) } }
