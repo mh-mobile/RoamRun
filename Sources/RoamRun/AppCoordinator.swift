@@ -1242,20 +1242,25 @@ final class AppCoordinator: ObservableObject {
     private var controlScans: [UUID: Date] = [:]
 
     /// Whether a failed attempt to open device control's connection is a reason to look for the
-    /// device's RemotePairing port: the port didn't take the connection (the pairing wasn't even
-    /// asked about), the device is on this Wi‑Fi — where the bridge stands aside and so never
-    /// finds a port that moved with a restart — and it wasn't looked for in the last ten minutes.
-    nonisolated static func controlWantsPortScan(why: String, onThisWiFi: Bool, lastScan: Date?, now: Date = Date()) -> Bool {
-        onThisWiFi && why.hasPrefix("RemotePairing port:") && (lastScan.map { now.timeIntervalSince($0) >= 600 } ?? true)
+    /// device's RemotePairing port (it can move when the device restarts): the device answered
+    /// and refused the port — it is reachable, so the search finds it in its first ports, and a
+    /// device away or asleep, which doesn't answer, isn't searched —, no bridge is at work on it
+    /// (one that is finds the port itself), and it wasn't looked for in the last ten minutes.
+    nonisolated static func controlWantsPortScan(why: String, bridgeAtWork: Bool, lastScan: Date?, now: Date = Date()) -> Bool {
+        !bridgeAtWork && why.hasPrefix("RemotePairing port: Connection refused")
+            && (lastScan.map { now.timeIntervalSince($0) >= 600 } ?? true)
     }
 
     private func controlUnreached(_ id: UUID, _ why: String) {
         guard let profile = profiles.first(where: { $0.id == id }) else { return }
         // A `roamrun up` that holds the device saves what it finds to the file only: read here.
         if externalBridges[id] != nil { persist() }
-        var onThisWiFi = false
-        if case .local = bridges[id]?.state { onThisWiFi = true }
-        guard Self.controlWantsPortScan(why: why, onThisWiFi: onThisWiFi, lastScan: controlScans[id]) else { return }
+        var bridgeAtWork = externalBridges[id] != nil
+        switch bridges[id]?.state {
+        case .off, .local, nil: break
+        default: bridgeAtWork = true
+        }
+        guard Self.controlWantsPortScan(why: why, bridgeAtWork: bridgeAtWork, lastScan: controlScans[id]) else { return }
         controlScans[id] = Date()
         Task { _ = await scanRemotePairingPort(profile) }   // logs what it finds; a port that moved is saved, and the hub told
     }

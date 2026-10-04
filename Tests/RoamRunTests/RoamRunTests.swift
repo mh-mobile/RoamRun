@@ -4338,17 +4338,18 @@ private func silentPort() throws -> (fd: Int32, port: UInt16) {
     #expect(sizes.size(of: "A", now: t0.addingTimeInterval(121))?.height == 2556 && asked == 3)   // kept
 }
 
-/// Device control looks for a device's port itself only where nobody else does (at home, the
-/// bridge standing aside), only when it was the port that failed, and not more than every ten minutes.
-@Test func deviceControlLooksForAMovedPortOnlyAtHome() {
+/// Device control looks for a device's port itself only when no bridge does, only when the
+/// device answered and refused the port, and not more than every ten minutes.
+@Test func deviceControlLooksForAMovedPortWhenNoBridgeDoes() {
     let refused = "RemotePairing port: Connection refused (os error 61)"
     let now = Date()
-    #expect(AppCoordinator.controlWantsPortScan(why: refused, onThisWiFi: true, lastScan: nil, now: now))
-    #expect(!AppCoordinator.controlWantsPortScan(why: refused, onThisWiFi: false, lastScan: nil, now: now))   // away: thousands of probes over cellular
-    #expect(!AppCoordinator.controlWantsPortScan(why: "the device doesn't accept this pairing: x", onThisWiFi: true, lastScan: nil, now: now))
-    #expect(!AppCoordinator.controlWantsPortScan(why: "tunnel port 49999: timed out", onThisWiFi: true, lastScan: nil, now: now))
-    #expect(!AppCoordinator.controlWantsPortScan(why: refused, onThisWiFi: true, lastScan: now.addingTimeInterval(-599), now: now))
-    #expect(AppCoordinator.controlWantsPortScan(why: refused, onThisWiFi: true, lastScan: now.addingTimeInterval(-600), now: now))
+    #expect(AppCoordinator.controlWantsPortScan(why: refused, bridgeAtWork: false, lastScan: nil, now: now))
+    #expect(!AppCoordinator.controlWantsPortScan(why: refused, bridgeAtWork: true, lastScan: nil, now: now))   // it finds the port itself
+    // A device that doesn't answer (away, asleep) isn't searched: thousands of probes for nothing.
+    #expect(!AppCoordinator.controlWantsPortScan(why: "RemotePairing port: Operation timed out (os error 60)", bridgeAtWork: false, lastScan: nil, now: now))
+    #expect(!AppCoordinator.controlWantsPortScan(why: "the device doesn't accept this pairing: x", bridgeAtWork: false, lastScan: nil, now: now))
+    #expect(!AppCoordinator.controlWantsPortScan(why: refused, bridgeAtWork: false, lastScan: now.addingTimeInterval(-599), now: now))
+    #expect(AppCoordinator.controlWantsPortScan(why: refused, bridgeAtWork: false, lastScan: now.addingTimeInterval(-600), now: now))
 }
 
 /// What is advertised for a pairing is "key=value" behind its length, 255 bytes at most, and a
