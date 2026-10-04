@@ -4338,6 +4338,19 @@ private func silentPort() throws -> (fd: Int32, port: UInt16) {
     #expect(sizes.size(of: "A", now: t0.addingTimeInterval(121))?.height == 2556 && asked == 3)   // kept
 }
 
+/// Device control looks for a device's port itself only where nobody else does (at home, the
+/// bridge standing aside), only when it was the port that failed, and not more than every ten minutes.
+@Test func deviceControlLooksForAMovedPortOnlyAtHome() {
+    let refused = "RemotePairing port: Connection refused (os error 61)"
+    let now = Date()
+    #expect(AppCoordinator.controlWantsPortScan(why: refused, onThisWiFi: true, lastScan: nil, now: now))
+    #expect(!AppCoordinator.controlWantsPortScan(why: refused, onThisWiFi: false, lastScan: nil, now: now))   // away: thousands of probes over cellular
+    #expect(!AppCoordinator.controlWantsPortScan(why: "the device doesn't accept this pairing: x", onThisWiFi: true, lastScan: nil, now: now))
+    #expect(!AppCoordinator.controlWantsPortScan(why: "tunnel port 49999: timed out", onThisWiFi: true, lastScan: nil, now: now))
+    #expect(!AppCoordinator.controlWantsPortScan(why: refused, onThisWiFi: true, lastScan: now.addingTimeInterval(-599), now: now))
+    #expect(AppCoordinator.controlWantsPortScan(why: refused, onThisWiFi: true, lastScan: now.addingTimeInterval(-600), now: now))
+}
+
 /// A device that can't be reached is tried less and less often, up to every five minutes.
 @Test func aDeviceOutOfReachIsTriedLessOften() {
     #expect((1...6).map { DeviceControlHub.retryDelay(afterFailures: $0) } == [30, 60, 120, 240, 300, 300])
