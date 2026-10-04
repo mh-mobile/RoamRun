@@ -55,7 +55,12 @@ char *rr_device_swipe(RRDevice *device, double x1, double y1, double x2, double 
 /**
  * Types `text` as a hardware keyboard would, into whatever has the keyboard's focus. Only
  * what a US keyboard has (ASCII, and newline for Return); anything else is refused before
- * a key is sent. What appears depends on the device's hardware-keyboard layout.
+ * a key is sent.
+ * The text appears as given only while the device's keyboard is an English one. With a
+ * Japanese one the keys go to its conversion: Space converts, Return confirms instead of
+ * breaking the line, and characters go missing. Look at a frame first; the globe key
+ * switches keyboards (the Japanese keyboard's own "ABC" key does not). For text that must
+ * arrive whatever the keyboard, there is rr_device_paste.
  */
 char *rr_device_type(RRDevice *device, const char *text);
 
