@@ -229,12 +229,10 @@ final class DeviceControlHub: @unchecked Sendable {
     /// replaced (another port, a new pairing) gets a new one of these, so that what was seen or
     /// done through the old session never counts for the new.
     private final class Held: @unchecked Sendable {
+        /// Under the hub's lock (a rename changes it while the session stays).
         var target: Target
         let session: any ControlledDevice
-        /// Held for the whole of a command, from checking its look to what it leaves behind:
-        /// one look serves one action, however many arrive at once. Guards `looked` and `acted`.
-        let command = NSLock()
-        /// The last look's size: what a tap's pixels are of.
+        /// The last look's size: what a tap's pixels are of. (This and `acted` under the device's gate.)
         var looked: (width: Int, height: Int)?
         /// When the last input ended: a look right after it waits for the screen to settle.
         var acted: Date?
@@ -255,6 +253,10 @@ final class DeviceControlHub: @unchecked Sendable {
     private let directory: URL
     private let lock = NSLock()
     private var held: [UUID: Held] = [:]
+    /// One per device, for as long as the hub lives — not per session: held for the whole of a
+    /// command, from checking its look to what it leaves behind, so that one look serves one
+    /// action and one command at a time reaches the device, also across a change of session.
+    private var gates: [UUID: NSLock] = [:]
     private var listener: DeviceControlWire.Listener?
     private var timer: DispatchSourceTimer?
     /// The last update's, for when a pairing is made or removed in between.
@@ -531,19 +533,30 @@ final class DeviceControlHub: @unchecked Sendable {
     private static let lookFirst = "look first: a point is given in the pixels of a look, and each look serves one action"
 
     func answer(_ request: DeviceControlWire.Request) -> DeviceControlWire.Response {
-        guard let h = lock.withLock({ held[request.device] }) else {
-            return .failure("device control isn't set up for this device: the user sets it up in the RoamRun app, on the device's page")
-        }
+        let notSetUp = DeviceControlWire.Response.failure("device control isn't set up for this device: the user sets it up in the RoamRun app, on the device's page")
         // How it stands is said at once, whatever runs on the device.
-        if request.op == "state" { return .init(ok: true, open: h.session.isOpen, refused: h.session.isRefused) }
+        if request.op == "state" {
+            guard let h = lock.withLock({ held[request.device] }) else { return notSetUp }
+            return .init(ok: true, open: h.session.isOpen, refused: h.session.isRefused)
+        }
         // Everything else one at a time per device, and whole: a look is checked, spent and acted
-        // on without another command coming in between; what it leaves (the look, the time of the
-        // input) is left on the session it was done through, not on whichever is held by now.
-        return h.command.withLock { perform(request, on: h) }
+        // on without another command coming in between. The session is the one held once the
+        // gate is had: a command that waited out another doesn't act on a session replaced
+        // meanwhile. What it leaves (the look, the time of the input) stays on that session.
+        let gate = lock.withLock { () -> NSLock in
+            if let gate = gates[request.device] { return gate }
+            let gate = NSLock()
+            gates[request.device] = gate
+            return gate
+        }
+        return gate.withLock {
+            guard let (h, name) = lock.withLock({ held[request.device].map { ($0, $0.target.name) } }) else { return notSetUp }
+            return perform(request, on: h, named: name)
+        }
     }
 
-    /// Under `h.command`.
-    private func perform(_ request: DeviceControlWire.Request, on h: Held) -> DeviceControlWire.Response {
+    /// Under the device's gate.
+    private func perform(_ request: DeviceControlWire.Request, on h: Held, named name: String) -> DeviceControlWire.Response {
         // Failed or not: an input may have reached the device before the failure showed.
         defer { if request.op != "look" { h.acted = Date() } }
         /// The look's size, for a point to be read against; taken away by `spend` once the request is one that goes to the device.
@@ -574,7 +587,7 @@ final class DeviceControlHub: @unchecked Sendable {
                 case "type":
                     let started = Date()
                     try h.session.type(text)
-                    Self.inputLog.debug("\(h.target.name, privacy: .public): typed \(text.count) keys, \(text.filter { $0 == " " }.count) spaces, in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
+                    Self.inputLog.debug("\(name, privacy: .public): typed \(text.count) keys, \(text.filter { $0 == " " }.count) spaces, in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
                 case "paste": try h.session.paste(text)
                 default: try h.session.press(text)
                 }

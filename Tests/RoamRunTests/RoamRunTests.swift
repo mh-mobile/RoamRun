@@ -4357,6 +4357,44 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
     #expect(fresh.calls == ["look", "tap"])
 }
 
+/// One command at a time reaches a device, also when its session is replaced while one runs:
+/// a command for the new session waits for the one still running through the old.
+@Test func aCommandWaitsForTheOneRunningThroughAReplacedSession() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (hub, made) = try standInHub(dir)
+    defer { hub.stop() }
+    let id = UUID()
+    func target(port: UInt16) -> DeviceControlHub.Target { .init(id: id, name: "iPhone", ip: "127.0.0.1", port: port, udid: "UDID-1") }
+    hub.update([target(port: 1)])
+    let old = try #require(made().first)
+    old.hold = DispatchSemaphore(value: 0)
+    let png = dir.appendingPathComponent("look.png").path
+    let first = DispatchSemaphore(value: 0), second = DispatchSemaphore(value: 0)
+    Thread.detachNewThread {
+        _ = hub.answer(.init(op: "look", device: id, path: png))
+        first.signal()
+    }
+    old.lookBegan.wait()
+    hub.update([target(port: 2)])   // a new session while the look runs through the old
+    let fresh = try #require(made().last)
+    #expect(fresh !== old)
+    let answer = OSAllocatedUnfairLock<DeviceControlWire.Response?>(initialState: nil)
+    Thread.detachNewThread {
+        let r = hub.answer(.init(op: "press", device: id, text: "home"))
+        answer.withLock { $0 = r }
+        second.signal()
+    }
+    #expect(second.wait(timeout: .now() + 0.5) == .timedOut)   // it waits
+    #expect(fresh.calls.isEmpty && old.calls == ["look"])
+    #expect(hub.answer(.init(op: "state", device: id)).ok)     // how it stands is still said at once
+    old.hold?.signal()
+    first.wait()
+    #expect(second.wait(timeout: .now() + 5) == .success)
+    #expect(answer.withLock { $0?.ok } == true)
+    #expect(fresh.calls == ["press"] && old.calls == ["look"])   // through the session held by then
+}
+
 /// A failed input is never sent again, but its connection is no longer taken for sound — unless
 /// it was refused for what it asked, before anything was sent.
 @Test func aFailedInputLeavesItsConnectionInDoubt() {

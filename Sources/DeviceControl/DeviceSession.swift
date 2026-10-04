@@ -50,6 +50,7 @@ public final class DeviceSession: @unchecked Sendable {
     /// until a call works or a new one is made.
     private var broken = false
     private var refused = false
+    private var closed = false
     /// What `isOpen` and `isRefused` answer with, under a lock of its own: `lock` is held for
     /// as long as a call to the device takes, and asking how things stand mustn't wait for that.
     private let standingLock = NSLock()
@@ -63,13 +64,18 @@ public final class DeviceSession: @unchecked Sendable {
 
     deinit { rr_device_close(device) }
 
+    /// For good: a session closed is one replaced, and nothing opens it again (a call that
+    /// still holds it fails, instead of making a connection beside its successor's).
     public func close() {
         lock.withLock {
+            closed = true
             rr_device_close(device)
             device = nil
             noteStanding()
         }
     }
+
+    private static let replaced = Failure.message("this connection was closed (the device has a new one): look again")
 
     /// As of the last call that finished; never waits for one that runs.
     public var isOpen: Bool { standingLock.withLock { standing.open } }
@@ -89,6 +95,7 @@ public final class DeviceSession: @unchecked Sendable {
     public func connect() throws {
         try lock.withLock {
             defer { noteStanding() }
+            guard !closed else { throw Self.replaced }
             guard device == nil || broken else { return }
             let fresh = try open()
             rr_device_close(device)
@@ -182,6 +189,7 @@ public final class DeviceSession: @unchecked Sendable {
     private func perform<T>(repeatable: Bool, _ body: (OpaquePointer) throws -> T) throws -> T {
         try lock.withLock {
             defer { noteStanding() }
+            guard !closed else { throw Self.replaced }
             if device == nil {
                 device = try open()
                 onEvent?("opened")
