@@ -4126,8 +4126,15 @@ func publishStepsAsideWhenTurnedOff(_ c: PublishCase) async {
     let other = try #require(CLI.upTurn(for: UUID(), in: dir, wait: false))   // another device's is its own
     close(other)
     close(first)
-    let second = try #require(CLI.upTurn(for: id, in: dir, wait: false))
-    close(second)
+    var second = CLI.upTurn(for: id, in: dir, wait: false)
+    #expect(second != nil)
+    // Ended once, however often it is asked (each round of the wait asks): nothing is left to
+    // close a second time — by then the number may be another file's.
+    CLI.endTurn(&second)
+    #expect(second == nil)
+    CLI.endTurn(&second)
+    let third = try #require(CLI.upTurn(for: id, in: dir, wait: false))   // and the turn is free
+    close(third)
 }
 
 /// Agents run SKILL.md's commands as written, and people copy the READMEs': each `roamrun …`

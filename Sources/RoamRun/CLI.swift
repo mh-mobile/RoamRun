@@ -950,7 +950,7 @@ enum CLI {
         }
         // Two started together both found nobody, and the second rotated the first's log away
         // from under it: from the check to the child's own claim, one at a time per device.
-        let turn = upTurn(for: profile.id, in: ProfileStore.directory)
+        var turn = upTurn(for: profile.id, in: ProfileStore.directory)
         refuseSecondUp(profile)   // before the log below is rotated away from the one running
         let logURL = detachedLog(profile)
         try? FileManager.default.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -979,7 +979,7 @@ enum CLI {
                 stop("the background bridge exited\(tail.map { ": \($0)" } ?? "") — see \(logURL.path)")
             }
             guard let e = StatusFile.read()[profile.id], e.pid == child.processIdentifier else { continue }
-            if let turn { close(turn) }   // the child holds the device now: the next `up` sees it
+            endTurn(&turn)   // the child holds the device now: the next `up` sees it
             if e.status != last { last = e.status; print("  \(e.status)") }
             lastKind = e.kind
             if e.ready || e.kind == .local { break }
@@ -1009,6 +1009,13 @@ enum CLI {
         guard fd >= 0 else { return nil }
         guard flock(fd, wait ? LOCK_EX : LOCK_EX | LOCK_NB) == 0 else { close(fd); return nil }
         return fd
+    }
+
+    /// Ends a turn, once: asked again (each round of the wait asks) it closes nothing — the
+    /// number may be another file's by then.
+    nonisolated static func endTurn(_ turn: inout Int32?) {
+        if let fd = turn { close(fd) }
+        turn = nil
     }
 
     /// Where `up -d`'s bridge writes; the previous run's is kept beside it as `.log.1`.
