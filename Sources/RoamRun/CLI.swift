@@ -8,7 +8,13 @@ import Foundation
 enum CLI {
     /// This process was started as the CLI (vs. the menu bar app).
     nonisolated static var isRunning: Bool { commands.contains(CommandLine.arguments.dropFirst().first ?? "") }
-    nonisolated static let commands: Set<String> = ["devices", "up", "down", "status", "doctor", "run", "install", "ota", "logs", "screenshot", "init", "version", "--version", "help", "--help", "-h"]
+    nonisolated static let commands: Set<String> = {
+        var all: Set<String> = ["devices", "up", "down", "status", "doctor", "run", "install", "ota", "logs", "screenshot", "init", "version", "--version", "help", "--help", "-h"]
+        #if DEVICE_CONTROL
+        all.formUnion(["look", "tap"])
+        #endif
+        return all
+    }()
     /// Posted by `roamrun down`; the app stops the bridge whose id is `object`.
     static let stopNotification = Notification.Name(AppID.bundle + ".stopBridge")
     /// What a RoamRun before 0.1.12 listens for, should it still run next to this CLI.
@@ -163,6 +169,17 @@ enum CLI {
                     fail("usage: roamrun ota [<name>] <path to .ipa>")
                 }
                 ota(targets, path: path, replacing: parsed.flags.contains("--replace"))
+            #if DEVICE_CONTROL
+            case "look":
+                guard name != nil, let p = targets.first else { fail("usage: roamrun look <name> [file.png]. " + names(profiles)) }
+                look(p, path: words.count >= 2 ? words[words.startIndex + 1] : nil)
+            case "tap":
+                guard name != nil, let p = targets.first, words.count == 3,
+                      let x = Double(words[words.startIndex + 1]), let y = Double(words[words.startIndex + 2]) else {
+                    fail("usage: roamrun tap <name> <x> <y> — pixels of the last `roamrun look`. " + names(profiles))
+                }
+                tap(p, x: x, y: y)
+            #endif
             default: print(usage); exit(0)
             }
         }
@@ -174,7 +191,16 @@ enum CLI {
     // MARK: - Arguments
 
     /// What each command accepts: options (value-taking ones marked) and how many words.
-    nonisolated private static let specs: [String: (options: Set<String>, words: ClosedRange<Int>)] = [
+    nonisolated private static let specs: [String: (options: Set<String>, words: ClosedRange<Int>)] = {
+        var all = baseSpecs
+        #if DEVICE_CONTROL
+        all["look"] = ([], 0...2)
+        all["tap"] = ([], 0...3)
+        #endif
+        return all
+    }()
+
+    nonisolated private static let baseSpecs: [String: (options: Set<String>, words: ClosedRange<Int>)] = [
         "devices": (["--json"], 0...0),
         "status": (["--json", "--wait="], 0...1),
         "doctor": (["--json"], 0...1),
@@ -657,6 +683,40 @@ enum CLI {
     }
 
     /// Through the tunnel like everything else: works over the bridge.
+    #if DEVICE_CONTROL
+    // Experimental (device control): the app holds the connection; these ask it.
+
+    private static func askApp(_ request: DeviceControlWire.Request) -> DeviceControlWire.Response {
+        do {
+            return try DeviceControlWire.ask(request, in: ProfileStore.directory)
+        } catch DeviceControlWire.WireError.noApp {
+            stop("the RoamRun app isn't running (or is a build without device control): it holds the connection to the device")
+        } catch {
+            stop("couldn't ask the RoamRun app: \(error)")
+        }
+    }
+
+    /// The device's screen now, as PNG. Prints the path, then the size a tap's point is in.
+    private static func look(_ profile: DeviceProfile, path: String?) -> Never {
+        let f = DateFormatter()
+        f.dateFormat = "yyyyMMdd-HHmmss"
+        let file = URL(fileURLWithPath: path ?? "\(fileSafe(profile.displayName))-look-\(f.string(from: .now)).png").standardizedFileURL
+        guard file.pathExtension.lowercased() == "png" else { fail("the file must end in .png") }
+        let r = askApp(.init(op: "look", device: profile.id, path: file.path))
+        guard r.ok, let w = r.width, let h = r.height else { stop("look failed: \(r.error ?? "no answer")") }
+        print(file.path)
+        print("\(w) x \(h)")
+        exit(0)
+    }
+
+    /// One tap, at a point in the pixels of the last look. Operates the device.
+    private static func tap(_ profile: DeviceProfile, x: Double, y: Double) -> Never {
+        let r = askApp(.init(op: "tap", device: profile.id, x: x, y: y))
+        guard r.ok else { stop("tap failed: \(r.error ?? "no answer")") }
+        exit(0)
+    }
+    #endif
+
     private static func screenshot(_ profile: DeviceProfile, path: String?) -> Never {
         let f = DateFormatter()
         f.dateFormat = "yyyyMMdd-HHmmss"

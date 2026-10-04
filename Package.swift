@@ -3,21 +3,27 @@ import PackageDescription
 
 import Foundation
 
+// Experimental (device control): with ROAMRUN_DEVICE set (`make app DEVICE=1`), after
+// `make device-lib` built the Rust library, the app holds connections to devices and the CLI
+// has `look` and `tap`. Without it nothing here needs Rust.
+let deviceControl = ProcessInfo.processInfo.environment["ROAMRUN_DEVICE"] != nil
+
 var targets: [Target] = [
     .executableTarget(
         name: "RoamRun",
-        path: "Sources/RoamRun"
+        dependencies: deviceControl ? ["DeviceControl"] : [],
+        path: "Sources/RoamRun",
+        swiftSettings: deviceControl ? [.define("DEVICE_CONTROL")] : []
     ),
     .testTarget(
         name: "RoamRunTests",
         dependencies: ["RoamRun"],
-        path: "Tests/RoamRunTests"
+        path: "Tests/RoamRunTests",
+        swiftSettings: deviceControl ? [.define("DEVICE_CONTROL")] : []
     ),
 ]
 
-// Experimental (device control): only with ROAMRUN_DEVICE set, after `make device-lib` built
-// the library. Without it the app and its tests don't need Rust.
-if ProcessInfo.processInfo.environment["ROAMRUN_DEVICE"] != nil {
+if deviceControl {
     targets += [
         .systemLibrary(
             name: "RoamRunDevice",

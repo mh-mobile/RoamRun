@@ -4009,3 +4009,28 @@ func publishStepsAsideWhenTurnedOff(_ c: PublishCase) async {
         #expect(fake.offs.isEmpty && fake.record == ["41443 \(mine)"])
     }
 }
+
+#if DEVICE_CONTROL
+/// `roamrun look` / `tap` reach the app over a socket only this user can open; with no app
+/// listening, they are told so.
+@Test func theControlSocketAnswersAndIsThisUsersAlone() throws {
+    // Not scratchDir(): a socket's path has to fit in 104 bytes, and the temporary folder's is long.
+    let dir = URL(fileURLWithPath: "/tmp/rr-\(UUID().uuidString.prefix(8))")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let id = UUID()
+    let request = DeviceControlWire.Request(op: "tap", device: id, x: 10, y: 20)
+    #expect(throws: DeviceControlWire.WireError.self) { try DeviceControlWire.ask(request, in: dir) }   // nobody listening
+
+    let listener = try #require(DeviceControlWire.Listener(directory: dir) { r in
+        r == request ? .init(ok: true, width: 3, height: 4) : .failure("not what was sent")
+    })
+    let mode = { (path: String) in try FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] as? Int }
+    #expect(try mode(DeviceControlWire.socketFolder(in: dir).path) == 0o700)   // nobody else gets as far as the socket
+    #expect(try mode(DeviceControlWire.socketPath(in: dir)) == 0o600)
+    #expect(try DeviceControlWire.ask(request, in: dir) == .init(ok: true, width: 3, height: 4))
+    #expect(try DeviceControlWire.ask(.init(op: "look", device: id), in: dir) == .failure("not what was sent"))
+    listener.stop()
+    #expect(throws: DeviceControlWire.WireError.self) { try DeviceControlWire.ask(request, in: dir) }   // stopped: gone
+}
+#endif

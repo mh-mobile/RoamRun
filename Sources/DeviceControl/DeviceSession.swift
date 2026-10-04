@@ -46,6 +46,13 @@ public final class DeviceSession: @unchecked Sendable {
         lock.withLock { rr_device_close(device); device = nil }
     }
 
+    public var isOpen: Bool { lock.withLock { device != nil } }
+
+    /// Opens the connection if there is none; nothing is asked of the device beyond that.
+    public func connect() throws {
+        try perform(repeatable: false) { _ in }
+    }
+
     /// The services the device has, as the library reports them (JSON).
     public func info() throws -> String {
         try perform(repeatable: true) { d in

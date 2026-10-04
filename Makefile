@@ -16,8 +16,9 @@ all: app
 
 # xcrun pins Xcode's toolchain; a swiftly `swift` first in PATH breaks the build.
 # SNAPSHOT=1 compiles in the MB_SNAPSHOT screenshot mode (dev only; never in a dmg).
-build:
-	xcrun swift build -c release $(if $(SNAPSHOT),-Xswiftc -DSNAPSHOT)
+# DEVICE=1 builds in the experimental device control (needs Rust: see device-lib).
+build: $(if $(DEVICE),device-lib)
+	$(if $(DEVICE),ROAMRUN_DEVICE=1) xcrun swift build -c release $(if $(SNAPSHOT),-Xswiftc -DSNAPSHOT)
 
 app: build
 	rm -rf $(BUNDLE)

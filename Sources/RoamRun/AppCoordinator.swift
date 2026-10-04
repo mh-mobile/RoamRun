@@ -94,6 +94,11 @@ final class AppCoordinator: ObservableObject {
             launchWarning = Self.unreadableListWarning
         }
         for p in profiles { install(newBridge(p)) }
+        #if DEVICE_CONTROL
+        deviceControl.onLog = { [weak self] message, id in Task { @MainActor in self?.logStore.log(message, device: id) } }
+        syncDeviceControl()
+        deviceControl.start()
+        #endif
 
         capture.onLog = { [weak self] m in self?.logStore.log(m) }
         capture.ownedHosts = Set(profiles.map { ProxyBridge(profile: $0).spoofHost })
@@ -1201,7 +1206,23 @@ final class AppCoordinator: ObservableObject {
 
     /// Terminate all helper children (zone dump, proxy registrations, log
     /// watchers, relays) so nothing is orphaned when the app quits.
+    #if DEVICE_CONTROL
+    private let deviceControl = DeviceControlHub(directory: ProfileStore.directory)
+
+    /// The devices as saved now, to the hub that keeps their control connections.
+    // ponytail: called at launch only — a device added, re-addressed or paired later is picked up
+    // at the next launch. Call it where `profiles` changes when that matters.
+    private func syncDeviceControl() {
+        deviceControl.update(profiles.compactMap { p in
+            p.udid.map { .init(id: p.id, name: p.displayName, ip: p.providerIP, port: p.remotePairingPort, udid: $0) }
+        })
+    }
+    #endif
+
     func shutdown() {
+        #if DEVICE_CONTROL
+        deviceControl.stop()
+        #endif
         capture.stop()
         stopOTA()   // the serve entry would otherwise point at a dead port
         for bridge in bridges.values { bridge.stop() }
