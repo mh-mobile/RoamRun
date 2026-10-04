@@ -1,5 +1,5 @@
-//! RoamRun's C ABI over idevice. Experimental. rr_device_tap, _swipe, _type and _button
-//! operate the device; rr_device_elements can scroll it.
+//! RoamRun's C ABI over idevice. Experimental. rr_device_tap, _swipe, _type, _paste and
+//! _button operate the device; rr_device_elements can scroll it.
 
 use std::ffi::{c_char, CStr, CString};
 use std::sync::Mutex;
@@ -10,7 +10,8 @@ use idevice::dvt::message::AuxValue;
 use idevice::dvt::remote_server::RemoteServerClient;
 use idevice::core_device::{
     build_screen_audio_offer, build_screen_video_offer, build_start_audio_parameters, build_start_video_parameters,
-    is_rtcp, CallInfoBlob, DisplayServiceClient, HevcDepacketizer, RtpPacket,
+    is_rtcp, CallInfoBlob, DisplayServiceClient, HevcDepacketizer, PasteboardServiceClient, RtpPacket,
+    GENERAL_PASTEBOARD,
 };
 use idevice::remote_pairing::{connect_tls_psk_tunnel_native, RemotePairingClient, RpPairingFile, RpPairingSocket};
 use idevice::rsd::RsdHandshake;
@@ -178,6 +179,7 @@ enum Input {
     Tap(f64, f64),
     Swipe { from: (f64, f64), to: (f64, f64), ms: u32 },
     Type(Vec<(u64, bool)>),
+    Paste(String),
     Button(u64, u64, u64),
 }
 
@@ -236,6 +238,14 @@ pub unsafe extern "C" fn rr_device_type(device: *mut RRDevice, text: *const c_ch
 }
 
 /// # Safety
+/// `device` came from rr_device_open and wasn't closed; `text` is null or a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn rr_device_paste(device: *mut RRDevice, text: *const c_char) -> *mut c_char {
+    let text = (!text.is_null()).then(|| unsafe { CStr::from_ptr(text) }.to_str().ok()).flatten();
+    unsafe { run(device, text.map(|t| Input::Paste(t.to_string())).ok_or("bad text".to_string())) }
+}
+
+/// # Safety
 /// `device` came from rr_device_open and wasn't closed; `name` is null or a NUL-terminated string.
 #[no_mangle]
 pub unsafe extern "C" fn rr_device_button(device: *mut RRDevice, name: *const c_char) -> *mut c_char {
@@ -254,6 +264,8 @@ const BUTTONS: [(&str, u64, u64, u64); 4] = [
     ("volume-down", 0x0C, 0xEA, 80),
 ];
 const LEFT_SHIFT: u64 = 0xE1;
+const LEFT_COMMAND: u64 = 0xE3;
+const KEY_V: u64 = 0x19;
 
 /// The key of a US keyboard that types `c`, and whether with Shift (HID keyboard page usages).
 fn key(c: char) -> Option<(u64, bool)> {
@@ -425,6 +437,25 @@ async fn send(link: &mut Link, input: Input) -> Result<(), String> {
             };
             if sent.is_err() { link.hid = None; }   // a dead connection isn't kept for the next call
             sent.map_err(|e| format!("touch: {e:?}"))
+        }
+        Input::Paste(text) => {
+            // The text goes onto the device's pasteboard, then Command-V as a keyboard would press it.
+            let mut board = PasteboardServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)
+                .await.map_err(|e| format!("pasteboard service: {e:?}"))?;
+            board.set_text(&text, GENERAL_PASTEBOARD).await.map_err(|e| format!("pasteboard: {e:?}"))?;
+            if link.keys.is_none() {
+                link.keys = Some(IndigoHidClient::connect_rsd(&mut link.handle, &mut link.handshake)
+                    .await.map_err(|e| format!("HID service: {e:?}"))?);
+            }
+            let keys = link.keys.as_mut().expect("just set");
+            let sent = async {
+                keys.send_keyboard(LEFT_COMMAND, ButtonState::Down).await?;
+                keys.send_keyboard(KEY_V, ButtonState::Down).await?;
+                keys.send_keyboard(KEY_V, ButtonState::Up).await?;
+                keys.send_keyboard(LEFT_COMMAND, ButtonState::Up).await
+            }.await;
+            if sent.is_err() { link.keys = None; }
+            sent.map_err(|e| format!("keys: {e:?}"))
         }
         Input::Type(..) | Input::Button(..) => {
             if link.keys.is_none() {

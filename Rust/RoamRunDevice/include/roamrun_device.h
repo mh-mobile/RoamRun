@@ -59,6 +59,14 @@ char *rr_device_swipe(RRDevice *device, double x1, double y1, double x2, double 
  */
 char *rr_device_type(RRDevice *device, const char *text);
 
+/**
+ * Any text, into whatever has the keyboard's focus: puts it on the device's pasteboard and
+ * presses Command-V. It REPLACES what was on the device's pasteboard. iOS then ASKS, each
+ * time, whether the app may paste from another source: nothing is pasted until "Allow
+ * Paste" is pressed on the device (look at a frame, and tap it if that is wanted).
+ */
+char *rr_device_paste(RRDevice *device, const char *text);
+
 /** Presses a hardware button: "home", "lock", "volume-up" or "volume-down". */
 char *rr_device_button(RRDevice *device, const char *name);
 

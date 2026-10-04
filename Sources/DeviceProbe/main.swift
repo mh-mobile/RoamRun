@@ -15,6 +15,7 @@ import VideoToolbox
 // DeviceProbe tap    <device ip> <port> <pairing file> <x> <y> [after.png]
 // DeviceProbe swipe  <device ip> <port> <pairing file> <x1> <y1> <x2> <y2> <ms> [after.png]
 // DeviceProbe type   <device ip> <port> <pairing file> <text> [after.png]
+// DeviceProbe paste  <device ip> <port> <pairing file> <text> [after.png]   (replaces its pasteboard)
 // DeviceProbe button <device ip> <port> <pairing file> <home|lock|volume-up|volume-down> [after.png]
 // DeviceProbe elements <device ip> <port> <pairing file> [limit]
 //                                                          CAN SCROLL THE DEVICE: accessibility's
@@ -30,7 +31,7 @@ if let flag = args.firstIndex(of: "--udid"), flag + 1 < args.count {
     if screen == nil { print("devicectl didn't give the screen's size: frames keep the stream's padding (under 1% of each side)") }
     args.removeSubrange(flag...flag + 1)
 }
-let verb = ["tap", "swipe", "type", "button", "elements"].contains(args.first ?? "") ? args.removeFirst() : ""
+let verb = ["tap", "swipe", "type", "paste", "button", "elements"].contains(args.first ?? "") ? args.removeFirst() : ""
 let listing = verb == "elements"
 guard args.count >= 3, let port = UInt16(args[1]) else { exit(0) }
 
@@ -97,9 +98,9 @@ if listing {
         guard let x1 = number(0), let y1 = number(1), let x2 = number(2), let y2 = number(3), let duration = number(4) else { exit(2) }
         json = rr_device_swipe(device, x1, y1, x2, y2, UInt32(max(duration, 0)))
         after = rest.count > 5 ? rest[5] : nil
-    case "type":
+    case "type", "paste":
         guard let text = rest.first else { exit(2) }
-        json = rr_device_type(device, text)
+        json = verb == "type" ? rr_device_type(device, text) : rr_device_paste(device, text)
         after = rest.count > 1 ? rest[1] : nil
     default:
         guard let name = rest.first else { exit(2) }
