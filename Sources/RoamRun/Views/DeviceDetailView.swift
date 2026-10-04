@@ -369,7 +369,7 @@ private struct DeviceControlRow: View {
         .confirmationDialog("Remove device control for “\(profile.displayName)”?", isPresented: $confirmRemove) {
             Button("Remove", role: .destructive) { coordinator.removeControlPairing(profile) }
         } message: {
-            Text("RoamRun forgets its pairing. The device keeps its side until it is removed there, in Settings.")
+            Text("RoamRun forgets its pairing, and nothing can use the device's side of it any more. To take it off the device's list too: on the device, Settings › Privacy & Security › Developer Mode, choose “\(AppCoordinator.controlHostName)”, then unpair.")
         }
     }
 

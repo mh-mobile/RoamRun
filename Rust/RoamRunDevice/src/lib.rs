@@ -789,19 +789,20 @@ const ENTER_CODE: Duration = Duration::from_secs(180);
 const TICK: Duration = Duration::from_millis(250);
 
 /// # Safety
-/// `name` and `model` are null or NUL-terminated strings; `advert` and `error` are null or writable.
+/// `name`, `model` and `host` are null or NUL-terminated strings; `advert` and `error` are null or writable.
 #[no_mangle]
-pub unsafe extern "C" fn rr_pairing_listen(name: *const c_char, model: *const c_char, advert: *mut *mut c_char, error: *mut *mut c_char) -> *mut RRPairing {
+pub unsafe extern "C" fn rr_pairing_listen(name: *const c_char, model: *const c_char, host: *const c_char, advert: *mut *mut c_char, error: *mut *mut c_char) -> *mut RRPairing {
     let arg = |p: *const c_char| (!p.is_null()).then(|| unsafe { CStr::from_ptr(p) }.to_str().ok()).flatten();
-    let listening = match (arg(name), arg(model)) {
-        (Some(name), Some(model)) => tokio::runtime::Builder::new_multi_thread().worker_threads(1).thread_stack_size(STACK).enable_all().build()
+    let listening = match (arg(name), arg(model), arg(host)) {
+        (Some(name), Some(model), Some(host)) => tokio::runtime::Builder::new_multi_thread().worker_threads(1).thread_stack_size(STACK).enable_all().build()
             .map_err(|e| format!("no runtime: {e}"))
             .and_then(|runtime| {
                 // Both families: the device reaches this Mac by whichever address its name resolves to.
                 let listener = runtime.block_on(TcpListener::bind("[::]:0")).map_err(|e| format!("can't listen: {e}"))?;
                 let port = listener.local_addr().map_err(|e| format!("no port: {e}"))?.port();
-                // One identity per Mac name: pairing again replaces the device's record of it.
-                let file = RpPairingFile::generate(&format!("{LABEL} {name}"));
+                // One identity per `host`, whatever it is named: pairing again replaces the
+                // device's record of it, and another Mac of the same name doesn't.
+                let file = RpPairingFile::generate(&format!("{LABEL} {host}"));
                 let info = PairableHostInfo::generate(name, model);
                 let txt = info.mdns_txt_records(file.identifier()).iter()
                     .map(|(k, v)| format!("{}:{}", quoted(k), quoted(v))).collect::<Vec<_>>().join(",");

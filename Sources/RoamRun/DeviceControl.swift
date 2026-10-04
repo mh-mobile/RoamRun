@@ -228,7 +228,7 @@ final class DeviceControlHub: @unchecked Sendable {
                 lock.withLock { pairing = nil; pairingUnderWay = false }
             }
             do {
-                let listening = try DevicePairing(name: name)
+                let listening = try DevicePairing(name: name, host: Self.hostID(in: directory))
                 // A cancel that came before there was anything to cancel still counts.
                 if lock.withLock({ () -> Bool in pairing = listening; return pairingCancelled }) { listening.cancel() }
                 step(.waiting(listening.name))
@@ -249,6 +249,16 @@ final class DeviceControlHub: @unchecked Sendable {
                 step(.failed("\(error)"))
             }
         }
+    }
+
+    /// What a device knows this Mac by: made once and kept with the pairings, so a Mac renamed
+    /// stays the one it was, and two of one name stay two.
+    static func hostID(in directory: URL) -> String {
+        let file = directory.appendingPathComponent("device-control-host")
+        if let saved = try? String(contentsOf: file, encoding: .utf8), UUID(uuidString: saved) != nil { return saved }
+        let fresh = UUID().uuidString
+        try? Data(fresh.utf8).write(to: file, options: .atomic)
+        return fresh
     }
 
     /// Puts a new pairing in the saved one's place. The one it replaces is kept beside it

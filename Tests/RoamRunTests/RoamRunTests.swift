@@ -4048,6 +4048,23 @@ func publishStepsAsideWhenTurnedOff(_ c: PublishCase) async {
     #expect(DeviceControlHub.fraction(x: nil, y: 10, of: size) == nil)
 }
 
+/// A device knows this Mac by one identity, made once: the same at every pairing, another's elsewhere.
+@Test func aMacKeepsOneIdentityForItsPairings() throws {
+    func scratch() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("rr-host-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+    let (here, there) = (try scratch(), try scratch())
+    defer { [here, there].forEach { try? FileManager.default.removeItem(at: $0) } }
+    let first = DeviceControlHub.hostID(in: here)
+    #expect(UUID(uuidString: first) != nil)
+    #expect(DeviceControlHub.hostID(in: here) == first)
+    #expect(DeviceControlHub.hostID(in: there) != first)
+    try Data("not an id".utf8).write(to: here.appendingPathComponent("device-control-host"))   // damaged: made anew
+    #expect(UUID(uuidString: DeviceControlHub.hostID(in: here)) != nil)
+}
+
 /// A new pairing takes the saved one's place only by moving it aside, where it can be had back.
 @Test func aNewPairingKeepsTheOneItReplaces() throws {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("rr-adopt-\(UUID().uuidString)")

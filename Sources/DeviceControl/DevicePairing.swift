@@ -21,11 +21,12 @@ public final class DevicePairing: @unchecked Sendable {
     public let name: String
 
     /// Starts listening and advertising. Both networks have to be the same one: the device
-    /// finds this by Bonjour.
-    public init(name: String) throws {
+    /// finds this by Bonjour. `host` is this Mac's own, the same each time: what the device
+    /// knows it by, whatever it is named.
+    public init(name: String, host: String) throws {
         var said: UnsafeMutablePointer<CChar>?
         var error: UnsafeMutablePointer<CChar>?
-        guard let pairing = rr_pairing_listen(name, Self.model, &said, &error) else {
+        guard let pairing = rr_pairing_listen(name, Self.model, host, &said, &error) else {
             defer { rr_string_free(error) }
             throw DeviceSession.Failure.message(error.map { String(cString: $0) } ?? "can't listen")
         }

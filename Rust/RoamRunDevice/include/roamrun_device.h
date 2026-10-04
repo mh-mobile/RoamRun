@@ -96,9 +96,12 @@ typedef struct RRPairing RRPairing;
  * Starts listening. *advert (free with rr_string_free) is JSON {"port":…,"identifier":…,
  * "txt":{…}}: publish a _remotepairing-pairable-host._tcp service named `identifier` on that
  * port with those TXT records, on the network the device is on. `model` is this Mac's model
- * identifier ("Mac16,1"). NULL on failure, with *error (if given) set.
+ * identifier ("Mac16,1"). `host` is what tells this Mac from another, whatever either is
+ * named: the same one each time, or a pairing made again adds to the device's list instead of
+ * replacing. NULL on failure, with *error (if given) set.
  */
-RRPairing *rr_pairing_listen(const char *name, const char *model, char **advert, char **error);
+RRPairing *rr_pairing_listen(const char *name, const char *model, const char *host,
+                             char **advert, char **error);
 
 /**
  * Waits for a device to pair, however long that takes. `code` is called with the six digits

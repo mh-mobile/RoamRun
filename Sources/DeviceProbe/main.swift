@@ -38,7 +38,8 @@ if verb == "pair" {
     guard let file = args.first else { exit(2) }
     setvbuf(stdout, nil, _IOLBF, 0)
     do {
-        let pairing = try DevicePairing(name: args.count > 1 ? args[1] : "RoamRun (\(Host.current().localizedName ?? "Mac"))")
+        let name = args.count > 1 ? args[1] : "RoamRun (\(Host.current().localizedName ?? "Mac"))"
+        let pairing = try DevicePairing(name: name, host: name)
         print("waiting: pick \"\(pairing.name)\" on the device")
         let paired = try pairing.accept(to: file) { print("code: \($0)") }
         print("paired: \(paired.name) (\(paired.model)) \(paired.udid) -> \(file)")

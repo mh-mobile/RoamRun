@@ -1219,6 +1219,9 @@ final class AppCoordinator: ObservableObject {
         p.udid.map { .init(id: p.id, name: p.displayName, ip: p.providerIP, port: p.remotePairingPort, udid: $0) }
     }
 
+    /// What the device's Settings list this Mac as, for device control.
+    nonisolated static var controlHostName: String { "RoamRun (\(Host.current().localizedName ?? "Mac"))" }
+
     struct ControlPairing: Equatable {
         var device: UUID
         var step: DeviceControlHub.PairingStep
@@ -1235,7 +1238,7 @@ final class AppCoordinator: ObservableObject {
         guard let target = Self.controlTarget(profile) else { return }
         let id = profile.id
         controlPairing = .init(device: id, step: .waiting(""))
-        deviceControl.pair(target, as: "RoamRun (\(Host.current().localizedName ?? "Mac"))") { [weak self] step in
+        deviceControl.pair(target, as: Self.controlHostName) { [weak self] step in
             Task { @MainActor in
                 guard self?.controlPairing?.device == id else { return }   // dismissed meanwhile
                 self?.controlPairing = .init(device: id, step: step)
