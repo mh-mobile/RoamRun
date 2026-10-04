@@ -2,6 +2,7 @@
 import DeviceControl
 import Foundation
 import ImageIO
+import OSLog
 import UniformTypeIdentifiers
 
 /// How `roamrun look`, `tap` and the rest ask the app, which holds the connections: one JSON
@@ -235,6 +236,10 @@ final class DeviceControlHub: @unchecked Sendable {
         return min(settle, max(0, settle - now.timeIntervalSince(acted)))
     }
 
+    /// What a `type` sent (debug level), never the text itself: tells a key the device dropped
+    /// from one that wasn't sent.
+    private static let inputLog = Logger(subsystem: AppID.bundle, category: "input")
+
     private static let lookFirst = "look first: a point is given in the pixels of a look, and each look serves one action"
 
     private func answer(_ request: DeviceControlWire.Request) -> DeviceControlWire.Response {
@@ -263,7 +268,10 @@ final class DeviceControlHub: @unchecked Sendable {
                 _ = spendLook(of: request.device)
                 guard let text = request.text else { return .failure("nothing to send") }
                 switch request.op {
-                case "type": try h.session.type(text)
+                case "type":
+                    let started = Date()
+                    try h.session.type(text)
+                    Self.inputLog.debug("\(h.target.name, privacy: .public): typed \(text.count) keys, \(text.filter { $0 == " " }.count) spaces, in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
                 case "paste": try h.session.paste(text)
                 default: try h.session.press(text)
                 }
