@@ -222,7 +222,9 @@ final class DeviceControlHub: @unchecked Sendable {
         var udid: String
 
         /// The same device at the same place: what a connection is to.
-        func reaches(_ other: Target) -> Bool { ip == other.ip && port == other.port && udid == other.udid }
+        func reaches(_ other: Target) -> Bool {
+            ip == other.ip && port == other.port && udid.caseInsensitiveCompare(other.udid) == .orderedSame   // a UDID is one, however it is spelled
+        }
     }
 
     /// One device as it is held: its session, and what belongs to that session alone. A session
@@ -325,9 +327,9 @@ final class DeviceControlHub: @unchecked Sendable {
         /// The six digits to enter on the device.
         case code(String)
         case checking
-        case done
-        /// Saved, but no connection could be made with it just now (the reason).
-        case doneUnreached(String)
+        /// Saved under this UDID (the device's own, when none was known). `unreached`: no
+        /// connection could be made with it just now, and why.
+        case done(udid: String, unreached: String?)
         case failed(String)
     }
 
@@ -340,11 +342,43 @@ final class DeviceControlHub: @unchecked Sendable {
 
     /// Lets the device pair with this Mac (iOS 27 and later, on the same network), one at a time.
     /// The new pairing replaces the saved one only once it opened a connection of its own.
-    func pair(_ target: Target, as name: String, step: @escaping @Sendable (PairingStep) -> Void) {
+    /// The device a pairing is asked for. Its UDID may not be known yet: one added on this
+    /// Mac's own Wi‑Fi has never been bridged, and the pairing itself is what tells it.
+    struct PairingRequest: Sendable {
+        var id: UUID
+        var name: String
+        var ip: String
+        var port: UInt16
+        var udid: String?
+        /// The other saved devices' UDIDs and names: a device already saved isn't saved twice.
+        var others: [(udid: String, name: String)] = []
+    }
+
+    /// What a pairing that came in is to this request.
+    enum PairingVerdict: Equatable {
+        /// The device asked for, by its UDID.
+        case expected
+        /// Not known to be it: kept only if the pairing opens a connection at the request's address.
+        case toProve
+        /// Another saved device (its name).
+        case savedAs(String)
+        /// It gave no UDID, and none is known to name the pairing by.
+        case nameless
+    }
+
+    static func verdict(expected: String?, paired: String, others: [(udid: String, name: String)]) -> PairingVerdict {
+        func same(_ a: String, _ b: String) -> Bool { a.caseInsensitiveCompare(b) == .orderedSame }
+        if let expected, same(expected, paired) { return .expected }
+        if let other = others.first(where: { same($0.udid, paired) }) { return .savedAs(other.name) }
+        if expected == nil, paired.isEmpty { return .nameless }
+        return .toProve
+    }
+
+    func pair(_ device: PairingRequest, as name: String, step: @escaping @Sendable (PairingStep) -> Void) {
         lock.withLock { if !pairingUnderWay { pairingCancelled = false } }   // here, not in the block: a cancel may come before it runs
         DispatchQueue.global(qos: .userInitiated).async { [self] in
-            let file = DeviceControlWire.pairingFile(udid: target.udid, in: directory)
-            let fresh = file.appendingPathExtension("new")
+            // By the device's id, not its UDID: that may only be learned here. One pairing at a time.
+            let fresh = directory.appendingPathComponent("device-pairing-new-\(device.id.uuidString).plist")
             // Taken before anything is advertised: two of these would name themselves alike.
             let free = lock.withLock { () -> Bool in
                 guard !pairingUnderWay else { return false }
@@ -363,31 +397,52 @@ final class DeviceControlHub: @unchecked Sendable {
                 step(.waiting(listening.name))
                 let paired = try listening.accept(to: fresh.path) { step(.code($0)) }
                 step(.checking)
-                onLog?("device control: \(paired.name) (\(paired.model), \(paired.udid)) paired", target.id)
+                onLog?("device control: \(paired.name) (\(paired.model), \(paired.udid)) paired", device.id)
                 // The device now knows this pairing and no older one of ours. When it is the one
                 // asked for, the pairing is kept whether or not a connection can be made right now
                 // (its VPN off, its port moved): dropping it would leave the device with no pairing
-                // this Mac holds. Another device's is proved by connecting, at the address it will be used at.
-                if paired.udid != target.udid {
-                    let check = DeviceSession(ip: target.ip, port: target.port, pairingFile: fresh.path)
+                // this Mac holds. One not known to be it is proved by connecting at the address it
+                // will be used at — proof against a device that is honest about itself, which is
+                // what the bridge trusts that address with too.
+                switch Self.verdict(expected: device.udid, paired: paired.udid, others: device.others) {
+                case .expected: break
+                case .savedAs(let other):
+                    throw DeviceSession.Failure.message("\(paired.name) paired, which is saved here as “\(other)”, not “\(device.name)”. Nothing was saved, and its earlier pairing with this Mac no longer works: set device control up again on “\(other)”.")
+                case .nameless:
+                    throw DeviceSession.Failure.message("\(paired.name) paired without saying which device it is. Nothing was saved.")
+                case .toProve:
+                    let check = DeviceSession(ip: device.ip, port: device.port, pairingFile: fresh.path)
                     defer { check.close() }
                     do { try check.connect() } catch {
-                        throw DeviceSession.Failure.message("\(paired.name) paired, which isn't \(target.name) (\(error)). Nothing was saved; its pairing with this Mac can be removed there, in Settings.")
+                        let port = "\(error)".hasPrefix("RemotePairing port: Connection refused")
+                            ? " The device answered but not on port \(device.port): Technical details › Find RemotePairing Port, then set up again."
+                            : " Is its VPN on?"
+                        throw DeviceSession.Failure.message("\(paired.name) paired, but that pairing opens no connection to “\(device.name)” at \(device.ip) (\(error)).\(port) Nothing was saved; if it was another device, its pairing with this Mac can be removed there, in Settings.")
                     }
                 }
-                try Self.adopt(fresh, as: file)
+                // Named by the UDID the device is saved under, as it is spelled there; or by its own.
+                let udid = device.udid ?? paired.udid
+                let target = Target(id: device.id, name: device.name, ip: device.ip, port: device.port, udid: udid)
+                try Self.adopt(fresh, as: DeviceControlWire.pairingFile(udid: udid, in: directory))
+                // Held from now on, also when the list of saved devices doesn't have its UDID yet.
+                lock.withLock { if !targets.contains(where: { $0.id == target.id }) { targets.append(target) } }
                 reopen(target.id)
                 // Said as it is: saved, and whether it also connects right now.
-                do {
-                    try session(of: target.id)?.connect()
-                    step(.done)
-                } catch {
-                    step(.doneUnreached("\(error)"))
-                }
+                var unreached: String?
+                do { try session(of: target.id)?.connect() } catch { unreached = "\(error)" }
+                step(.done(udid: udid, unreached: unreached))
             } catch {
                 step(.failed("\(error)"))
             }
         }
+    }
+
+    /// Removes the pairing saved under `udid`, held or not: one made for a device that turned
+    /// out not to be saved under it.
+    func forgetPairing(udid: String, of id: UUID) {
+        try? FileManager.default.removeItem(at: DeviceControlWire.pairingFile(udid: udid, in: directory))
+        lock.withLock { targets.removeAll { $0.id == id && $0.udid.caseInsensitiveCompare(udid) == .orderedSame } }
+        reopen(id)
     }
 
     /// What a device knows this Mac by: made once and kept with the pairings, so a Mac renamed

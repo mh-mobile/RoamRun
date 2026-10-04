@@ -1065,6 +1065,8 @@ final class AppCoordinator: ObservableObject {
         bridge.onLog = { [weak self] m in self?.logStore.log(m, device: id) }
         bridge.onUDID = { [weak self] udid in
             guard let self, let i = self.profiles.firstIndex(where: { $0.id == id }) else { return }
+            // The same one spelled another way stays as it is saved: its pairing's file is named by it.
+            if self.profiles[i].udid?.caseInsensitiveCompare(udid) == .orderedSame { return }
             self.profiles[i].udid = udid
             self.persist()
             self.learnDeviceTypes()
@@ -1274,21 +1276,63 @@ final class AppCoordinator: ObservableObject {
     /// The pairing for device control being made now, if any.
     @Published private(set) var controlPairing: ControlPairing?
 
-    /// nil until the device's UDID is known (it names the pairing).
-    func controlState(_ profile: DeviceProfile) -> (paired: Bool, open: Bool, refused: Bool)? {
-        controlUDID(profile).map { deviceControl.state(of: profile.id, udid: $0) }
+    /// A device whose UDID isn't known yet (it names the pairing) has none: it can be set up,
+    /// and the pairing tells the UDID.
+    func controlState(_ profile: DeviceProfile) -> (paired: Bool, open: Bool, refused: Bool) {
+        controlUDID(profile).map { deviceControl.state(of: profile.id, udid: $0) } ?? (false, false, false)
     }
 
     func startControlPairing(_ profile: DeviceProfile) {
-        guard let target = controlTarget(profile) else { return }
         let pairing = ControlPairing(device: profile.id, step: .waiting(""))
         controlPairing = pairing
-        deviceControl.pair(target, as: Self.controlHostName) { [weak self] step in
-            Task { @MainActor in
-                guard self?.controlPairing?.attempt == pairing.attempt else { return }   // dismissed, or begun again, meanwhile
-                self?.controlPairing?.step = step
+        let id = profile.id
+        let request = DeviceControlHub.PairingRequest(
+            id: id, name: profile.displayName, ip: profile.providerIP, port: profile.remotePairingPort, udid: controlUDID(profile),
+            others: profiles.filter { $0.id != id }.compactMap { p in controlUDID(p).map { ($0, p.displayName) } })
+        Task {
+            // Without a UDID the pairing has to open a connection at the device's address to be
+            // kept: found out before the user is asked to enter a code, not after.
+            if request.udid == nil, !(await ReachabilityProbe.checkTCP(host: request.ip, port: request.port, timeout: 4)) {
+                guard controlPairing?.attempt == pairing.attempt else { return }
+                controlPairing?.step = .failed("“\(request.name)” doesn't answer at \(request.ip):\(request.port), where the pairing would be checked. Is its VPN on and its screen unlocked? If it restarted, Technical details › Find RemotePairing Port.")
+                return
+            }
+            guard controlPairing?.attempt == pairing.attempt else { return }   // dismissed meanwhile
+            deviceControl.pair(request, as: Self.controlHostName) { step in
+                Task { @MainActor in self.controlPairingStep(step, of: id, attempt: pairing.attempt) }
             }
         }
+    }
+
+    /// What to do with the UDID a pairing was saved under.
+    enum PairedUDID: Equatable { case save, known, conflicts }
+
+    nonisolated static func pairedUDID(saved: String?, paired: String) -> PairedUDID {
+        guard let saved else { return .save }
+        return saved.caseInsensitiveCompare(paired) == .orderedSame ? .known : .conflicts
+    }
+
+    private func controlPairingStep(_ step: DeviceControlHub.PairingStep, of id: UUID, attempt: UUID) {
+        var shown = step
+        // A pairing that got as far as being saved is dealt with whether or not its sheet is
+        // still up: its UDID goes to the device it was made for, or its file goes.
+        if case .done(let udid, _) = step {
+            let i = profiles.firstIndex { $0.id == id }
+            switch Self.pairedUDID(saved: i.flatMap { controlUDID(profiles[$0]) }, paired: udid) {
+            case .known: break
+            case .save where i != nil:
+                profiles[i!].udid = udid
+                memories[id]?.adopt(udid)   // the running bridge's, so that what it reports later is compared with it
+                persist()
+                learnDeviceTypes()
+            default:
+                deviceControl.forgetPairing(udid: udid, of: id)
+                shown = .failed(i == nil ? "The device is no longer saved; its pairing wasn't kept."
+                                         : "“\(profiles[i!].displayName)” was found to be another device meanwhile; the pairing wasn't kept. Set it up again.")
+            }
+        }
+        guard controlPairing?.attempt == attempt else { return }   // dismissed, or begun again, meanwhile
+        controlPairing?.step = shown
     }
 
     /// Stops a pairing under way and puts its sheet away.
