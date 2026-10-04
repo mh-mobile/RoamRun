@@ -156,6 +156,9 @@ enum DeviceControlWire {
             try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             guard chmod(folder.path, 0o700) == 0 else { close(fd); return nil }
             unlink(path)   // a previous run's; only one app runs
+            // Looks a CLI was to move to their place and didn't (it was interrupted): screens aren't left lying.
+            for left in (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+            where left.lastPathComponent.hasPrefix("look-") { try? FileManager.default.removeItem(at: left) }
             DeviceControlWire.noSIGPIPE(fd)
             guard DeviceControlWire.withAddress(path, { bind(fd, $0, $1) }) == 0, listen(fd, 64) == 0 else { close(fd); return nil }
             chmod(path, 0o600)
