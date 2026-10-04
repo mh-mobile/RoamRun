@@ -36,8 +36,9 @@ app: build
 	@echo "Built $(BUNDLE)"
 
 # Pure logic only (parsers, ownership rules); the bridge itself needs a real iPhone.
-test:
-	xcrun swift test
+# DEVICE=1 also compiles and runs device control's.
+test: $(if $(DEVICE),device-lib)
+	$(if $(DEVICE),ROAMRUN_DEVICE=1) xcrun swift test
 
 # Experimental (device control): RoamRun's own Rust library over idevice (pinned in its
 # Cargo.toml and Cargo.lock), for macOS. Needs Rust 1.88+; nothing else here depends on it.
