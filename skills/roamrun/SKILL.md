@@ -59,8 +59,10 @@ not match the installed CLI until then (`roamrun --help` is authoritative).
   prints it again. Its "Over the air" check is a `warning`, not a `fail`, when the
   page isn't published (the app isn't open, or it needs up to half a minute), so
   read that section rather than only doctor's first fail. `--replace` keeps one row
-  per version and build number instead of stacking one per rebuild. Tell them what
-  they'll get and let them decide. The name is optional: without one the build is
+  per version and build number instead of stacking one per rebuild. If `ota` exits 1
+  with a message saying the build is stored, don't run it again: the build is kept,
+  and what's left is the Tailscale or port problem the message names — say that to the user.
+  Before any `ota`, tell them what they'll get and let them decide. The name is optional: without one the build is
   checked against every device RoamRun knows and it says which are covered, which
   is what you want when you don't know which device the user has to hand. A build
   covering none of the devices it knows is stored with a warning rather than
@@ -71,7 +73,7 @@ not match the installed CLI until then (`roamrun --help` is authoritative).
 
 ```sh
 roamrun devices                       # saved devices + UDID + id (use the id for a name starting with "-")
-roamrun up iPhone -d                  # bridge in the background; returns when ready (exit 1 after 60 s if not — it keeps trying)
+roamrun up iPhone -d                  # bridge in the background; exit 0 when ready or On this Wi‑Fi. Exit 1 after 60 s if not (it keeps trying), or at once if "the background bridge exited" — then nothing is running: act on that message
 # Stop here unless all three pass — don't build or install on a device that isn't ready.
 roamrun status iPhone --wait 60 --json > /tmp/rr.json || { roamrun doctor iPhone; exit 1; }   # act on doctor's first fail
 UDID=$(jq -er '.[0].udid // empty' /tmp/rr.json) || exit 1         # for xcodebuild AND devicectl
@@ -84,7 +86,9 @@ read — treat that like locked.
 
 If the bridge already runs in the menu bar app, just use it — `status` shows
 the owner, and `up` exits 0 when another process already has it ready (exit 1
-if that one is still coming up). Status "On this Wi‑Fi" means the iPhone is on
+if that one is still coming up, or is another `roamrun up` retrying after an
+error: don't start another, wait, or `roamrun down` it first; from the app's
+bridge in an error, `up` takes the device over). Status "On this Wi‑Fi" means the iPhone is on
 the Mac's own network: no bridge is needed, Xcode sees it directly, and it
 counts as ready while CoreDevice can reach it (`ready` true; when CoreDevice
 reports it unavailable or can't be asked, it stays `state` local with `ready`
@@ -236,6 +240,9 @@ already-running app, and never exits on its own — run it in the background:
   updated, and to check it's on Wi-Fi.
 - `The peer is no longer reachable` → macOS rebuilds the control channel about
   every 42 s; retry the command once, then run `doctor`.
+- To see when a session was lost and what came before (`status` only says now):
+  `/usr/bin/log show --last 6h --predicate 'subsystem == "io.github.mh-mobile.roamrun" AND category == "status"'`
+  — one line per change, e.g. `iPhone: ready/wifi -> ready/cellular (control gone 62s, …)`.
 
 Exit codes: `0` ok/ready, `1` not ready or a check failed, `2` usage error.
 In `status --json`, `ready` says whether Xcode can use the device now: it also asks CoreDevice, once the device's UDID is known (before the first connection there is none, and the bridge's word stands). `devices --json` doesn't ask CoreDevice: its `ready` only says the bridge is Ready or the device is on this Wi‑Fi, so check `status <name> --json` before building. In both, `state` (off, starting, waiting, preparing, ready, error, local) says how RoamRun is handling it; `status` is display text. `network` is `wifi` or `cellular` while ready over the bridge. `cellular` means a session set up while Ready for Xcode on another Wi‑Fi is still running on cellular (a device that goes from "On this Wi‑Fi" straight to cellular loses its session). Every build you install then uses the user's cellular data, and a new session needs Wi‑Fi again. While waiting, `cellular` means RoamRun closed the session because the device is on cellular and the user left **Keep debugging on cellular** off. Ask the user to join Wi‑Fi; turning the setting on only helps the next time the device leaves Wi‑Fi. Don't retry.

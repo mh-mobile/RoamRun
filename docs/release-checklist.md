@@ -6,6 +6,28 @@ run this before tagging a release. Use a build of the release commit (a fresh
 clone), quit any installed RoamRun first, and keep the device unlocked with its
 screen on.
 
+## What to run
+
+Not everything every time. Always: items 1-4, 10, 12-14 (about 15 minutes).
+On top, by what the release changed:
+
+| Changed | Run |
+|---|---|
+| Bridge start/stop, helpers, status file, `up`/`down` | 5, 6, 8 |
+| `run`, `logs`, launch options | 7 |
+| Relays, tunnel ports, more than one device | 9, 18 |
+| Home detection, Local Network | 11 |
+| `roamrun ota`, the OTA server or `tailscale serve` | 15 |
+| Pausing on cellular, sleep and wake | 16, 17, 18 |
+| Windows, menus, accessibility | UI at scale and for everyone |
+
+`scripts/release-check.sh <name> <bundle id>` runs items 1-3, 5, the CLI half of 6, and 8
+unattended (device away, app quit) and prints ok/FAIL per step.
+
+Known, not regressions: a device (an iPhone, say) on USB can keep a bridged one from getting
+Ready; unplug it. Xcode's session doesn't survive the Mac sleeping for minutes: iOS drops the
+tunnel and Xcode has to run again.
+
 ## One device, away (e.g. on a phone's hotspot)
 
 1. `roamrun up <name> -d`, then `roamrun status <name> --wait 60` → Ready (exit 0).
@@ -20,6 +42,9 @@ screen on.
    `roamrun up <name> -d`. The CLI takes the device, and within ~10 s the app
    steps back — only one `dns-sd -P … roamrun.local` for that device is left
    (`ps -ax`). `roamrun down <name>` stops both (the app doesn't take it back).
+   And with a `roamrun up <name> -d` running and the app quit: a second `roamrun up <name>`
+   exits at once saying the first handles it (exit 0 when Ready or on this Wi‑Fi, 1 while it
+   is coming up or retrying), and `<name>.log` in `~/Library/Logs/RoamRun/` is not rotated.
 7. Launch options, with an app that prints `ProcessInfo.processInfo.arguments`,
    its environment and the URL it opens (or check them in the debugger):
    `roamrun run <name> --logs --arg -RRTest --arg yes --env RR_VALUE=123 --url <a URL it handles>`
@@ -59,6 +84,25 @@ screen on.
     port and nothing else moved, that quitting RoamRun gives it back, that
     force-quitting leaves it behind, and that opening RoamRun again reclaims it.
 
+## Pausing and sleep
+
+16. **Keep debugging on cellular** off, the device bridged away, then on cellular only:
+    it shows Waiting for device · Cellular and stays that way for 30+ minutes: no error,
+    no port scan in the log. Sleep the Mac for a minute meanwhile: on wake nothing is
+    re-registered (no "re-announcing" while paused). Back on a Wi‑Fi: Ready again.
+17. With an Xcode debug session running, sleep the Mac for a few seconds: the session
+    carries on.
+18. **Keep debugging on cellular** on, Ready on another Wi‑Fi, then on cellular only for ten
+    minutes, then back on that Wi‑Fi → Ready again within a minute. Afterwards
+    `/usr/bin/log show --last 30m --predicate 'subsystem == "io.github.mh-mobile.roamrun" AND (category == "relay" OR category == "status")'`
+    shows one `Connection refused … dialing it at most every 3s` line for the spell (not
+    one per dial), one `answers again` line at its end, and a `status` line for each
+    change, the one on leaving Wi‑Fi with the tunnel relays still open. The `answers again`
+    line's count of connections closed without dialing, over the spell's seconds, stays
+    around 20 a second: far more means it now spins on the closed connections. (Without
+    the hold it was ~12 a second — remotepairingd waits ~50 ms before it redials, and each
+    dial took a round trip to the device as well; held, only the wait is left.)
+
 ## Install paths
 
 12. Download the release dmg in a browser, install, open: it opens with no
@@ -85,6 +129,8 @@ screen on.
 
 ## Debug logs worth a look after an iOS or Xcode update
 
+- What a bridge did and when (kept by the system, no `--level debug`): `log show` with
+  `category == "status"`, as in item 18.
 - Home/away decisions: `log stream --level debug --predicate 'subsystem == "io.github.mh-mobile.roamrun" AND category == "home"'`
 - Tunnel lookahead hits and port jumps: same with `category == "tunnel"` — misses
   or large jumps mean the relay window (+16 / −32) needs retuning.

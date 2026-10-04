@@ -780,6 +780,7 @@ import ServiceManagement
 // MARK: - Relay, end to end on localhost (fake device = an echo server)
 
 import Network
+import os
 
 /// Echoes everything back (or, `silent`, accepts and never answers). Keeps its
 /// connections, so a test can close them all at a moment of its choosing.
@@ -851,14 +852,14 @@ extension TimingSensitive {
         @Test func aPeerThatSaysNothingLetsGoOfItsSlot() async throws {
             let (server, port) = try started()
             defer { server.stop() }
-            // Eight is every connection there is, and a peer that connects and stays
+            // The cap is every connection there is, and a peer that connects and stays
             // quiet produces no callback to check a deadline in — which is why the
             // deadline is on the idle timer rather than inside the read loop.
-            let silent = (0..<8).map { _ in
+            let silent = (0..<OTAServer.maxConnections).map { _ in
                 Task { _ = await ask(port, "", hold: 30) }
             }
             try await Task.sleep(for: .seconds(1))
-            // The ninth is refused outright rather than queued behind them.
+            // One more is refused outright rather than queued behind them.
             #expect(await ask(port, "GET /nope HTTP/1.1\r\nHost: m\r\n\r\n") == nil)
             // And they are let go of well inside the idle limit, not held for 120 s.
             try await Task.sleep(for: .seconds(16))
@@ -995,11 +996,12 @@ private final class OnceBox: @unchecked Sendable {
 }
 
 /// A started relay on a free local port (random, retried if taken).
-private func startedRelay(upstream: UInt16, spare: Bool = false) async throws -> Relay {
+private func startedRelay(upstream: UInt16, spare: Bool = false,
+                          clock: @escaping @Sendable () -> UInt64 = { Relay.continuousNow() }) async throws -> Relay {
     var lastError: Error?
     for _ in 0..<10 {
         let r = Relay(localIP: "127.0.0.1", localPort: UInt16.random(in: 40000...49000), remoteIP: "127.0.0.1",
-                      remotePort: upstream, spare: spare)
+                      remotePort: upstream, spare: spare, clock: clock)
         do { try await r.start(); return r } catch { lastError = error }
     }
     throw lastError!
@@ -1021,6 +1023,26 @@ extension TimingSensitive {
             let got = await roundTrip(port: relay.localPort, payload: Data("hi".utf8), timeout: 8)
             #expect(got == nil || got?.isEmpty == true)
             #expect(Date().timeIntervalSince(start) < 7)   // closed, not left hanging until our timeout
+        }
+
+        @Test func aRefusingUpstreamIsDialedOnlyOnceAHold() async throws {
+            let server = try EchoServer(); let dead = await server.start(); server.stop()
+            let now = OSAllocatedUnfairLock<UInt64>(initialState: 1_000_000_000)
+            let relay = try await startedRelay(upstream: dead, clock: { now.withLock { $0 } }); defer { relay.stop() }
+            for _ in 0..<3 { _ = await roundTrip(port: relay.localPort, payload: Data("hi".utf8), timeout: 8) }
+            #expect(relay.heldOffTotal == 2)   // the first was dialed and refused; the next two weren't dialed
+            now.withLock { $0 += UInt64((Relay.upstreamHold + 1) * 1e9) }
+            _ = await roundTrip(port: relay.localPort, payload: Data("hi".utf8), timeout: 8)
+            #expect(relay.heldOffTotal == 2)   // the hold is over: dialed again
+            _ = await roundTrip(port: relay.localPort, payload: Data("hi".utf8), timeout: 8)
+            #expect(relay.heldOffTotal == 3)   // and refused again: held again
+        }
+
+        @Test func aTunnelRelayDialsEveryTime() async throws {
+            let server = try EchoServer(); let dead = await server.start(); server.stop()
+            let relay = try await startedRelay(upstream: dead, spare: true); defer { relay.stop() }
+            for _ in 0..<3 { _ = await roundTrip(port: relay.localPort, payload: Data("hi".utf8), timeout: 8) }
+            #expect(relay.heldOffTotal == 0)
         }
 
         @Test func connectionsBeyondTheCapAreRefused() async throws {
@@ -2516,6 +2538,54 @@ func linkFollowsTheTable(_ row: Int) {
     #expect(!m.onCellular)
 }
 
+/// The status log follows what `status` says, change by change.
+@MainActor @Test func eachStatusChangeIsSaidOnce() async {
+    let rig = Rig()
+    defer { rig.done() }
+    #expect(rig.bridge.lastSaid == "off")
+    rig.world.onLAN = true
+    await rig.bridge.start(.retry)
+    #expect(rig.bridge.status == .local && rig.bridge.lastSaid == "local")
+    rig.bridge.stop()
+    #expect(rig.bridge.lastSaid == "off")
+    #expect(ProxyBridge.said(.ready, .cellular) == "ready/cellular" && ProxyBridge.said(.waiting, nil) == "waiting")
+}
+
+enum AfterReady: String, CaseIterable { case cellular, paused, stopped, helperDied }
+
+/// From Ready on Wi‑Fi, the one line each change leaves — with what the relays showed
+/// before it, and no "waiting" of teardown's own in between.
+@MainActor @Test(arguments: AfterReady.allCases)
+func whatFollowsReadyIsSaidAsOneChange(_ c: AfterReady) async {
+    let rig = Rig()
+    defer { rig.done() }
+    var lines: [String] = []
+    rig.bridge.onStatusLine = { lines.append($0) }
+    await rig.bridge.start(.manual)
+    rig.watcher.subscribers[rig.id]?.onPort(rig.bridge.profile.remotePairingPort + 2, "127.0.0.1")
+    // Not all 17 of the window, necessarily: a parallel test's bridge may hold one of the ports.
+    #expect(await eventuallyOnMain { rig.bridge.bindsInFlight == 0 && !rig.bridge.tunnelRelayPorts.isEmpty })
+    let relays = rig.bridge.tunnelRelayPorts.count
+    rig.bridge.setLinkForTests(.wifi)
+    #expect(rig.bridge.status == .ready && lines.last?.contains("waiting -> ready/wifi") == true)
+    lines = []
+    switch c {
+    case .cellular: rig.bridge.setLinkForTests(.cellular)
+    case .paused: rig.bridge.setLinkForTests(.paused(since: rig.world.now))
+    case .stopped: rig.bridge.stop()
+    case .helperDied: rig.watcher.subscribers[rig.id]?.onExit("log stream exited")
+    }
+    let to = switch c {
+    case .cellular: "ready/cellular"
+    case .paused: "waiting/cellular"
+    case .stopped: "off"
+    case .helperDied: "error"
+    }
+    #expect(lines.count == 1, "\(c): \(lines)")
+    #expect(lines.first?.contains("ready/wifi -> \(to) ") == true, "\(c): \(lines)")
+    #expect(lines.first?.contains("of \(relays) tunnel relays") == true, "\(c): \(lines)")   // as they were before it
+}
+
 /// A new address that doesn't answer at the known port: scanned (it pings), and taken only
 /// with the port the scan found there; a scan that finds nothing keeps the old address.
 @MainActor @Test(arguments: [true, false])
@@ -2641,14 +2711,20 @@ func aNewAddressAndPortAreFoundTogether(scanFinds: Bool) async {
     let tmp = scratchDir()
     defer { try? FileManager.default.removeItem(at: tmp) }
     let fm = FileManager.default
-    for name in ["roamrun-ipa-old", "roamrun-install-old", "roamrun-ipa-fresh", "someone-elses"] {
+    for name in ["roamrun-ipa-old", "roamrun-install-old", "roamrun-ipa-fresh", "someone-elses",
+                 "roamrun-ipa-4242-X", "roamrun-ipa-4343-X"] {
         try fm.createDirectory(at: tmp.appendingPathComponent(name), withIntermediateDirectories: true)
     }
     let longAgo = Date.now.addingTimeInterval(-7200)
     try fm.setAttributes([.creationDate: longAgo], ofItemAtPath: tmp.appendingPathComponent("roamrun-ipa-old").path)
     try fm.setAttributes([.creationDate: longAgo], ofItemAtPath: tmp.appendingPathComponent("someone-elses").path)
     try fm.setAttributes([.creationDate: longAgo], ofItemAtPath: tmp.appendingPathComponent("roamrun-install-old").path)
-    CLI.sweepStaleUnpacks(in: tmp)
+    for n in ["roamrun-ipa-4242-X", "roamrun-ipa-4343-X"] {
+        try fm.setAttributes([.creationDate: longAgo], ofItemAtPath: tmp.appendingPathComponent(n).path)
+    }
+    CLI.sweepStaleUnpacks(in: tmp, alive: { $0 == 4242 })
+    #expect(fm.fileExists(atPath: tmp.appendingPathComponent("roamrun-ipa-4242-X").path))    // an install still running
+    #expect(!fm.fileExists(atPath: tmp.appendingPathComponent("roamrun-ipa-4343-X").path))   // its process is gone
     #expect(!fm.fileExists(atPath: tmp.appendingPathComponent("roamrun-ipa-old").path))
     #expect(!fm.fileExists(atPath: tmp.appendingPathComponent("roamrun-install-old").path))   // the signing check's unpacking
     #expect(fm.fileExists(atPath: tmp.appendingPathComponent("roamrun-ipa-fresh").path))   // maybe an install running now
@@ -3301,7 +3377,9 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
     #expect(TailscaleClient.ping(r(15, "", "tailscale timed out after 8s", timedOut: true)) == .couldNotRun("tailscale timed out after 8s"))
     // This Mac's own Tailscale: not an answer about the device.
     for err in ["failed to connect to local Tailscale daemon for /localapi/v0/ping; not running?",
-                "Tailscale is stopped.", "Logged out.", "Access denied: ping access denied"] {
+                "Tailscale is stopped.", "Logged out.", "Access denied: ping access denied",
+                "failed to connect to local Tailscale service; is Tailscale running?",   // the app quit
+                "Machine is not yet approved by tailnet admin.", "unexpected state: NoState"] {
         #expect(TailscaleClient.ping(r(1, "", err)) == .couldNotRun(err), "\(err)")
     }
 }
@@ -3954,6 +4032,16 @@ func claimByReason(_ r: StartReason, fromCLI: Bool) {
     #expect(Relay.refusal(relayPairs: 3, total: top - 1, spare: false) == nil)   // control may use the reserve
 }
 
+@Test func aRefusedUpstreamIsLeftAloneForTheHoldOnly() {
+    let s: UInt64 = 1_000_000_000
+    #expect(!Relay.holdsOff(refusedAt: nil, now: 100 * s))
+    #expect(Relay.holdsOff(refusedAt: 100 * s, now: 100 * s))
+    let hold = UInt64(Relay.upstreamHold)
+    #expect(Relay.holdsOff(refusedAt: 100 * s, now: (100 + hold) * s - 1))
+    #expect(!Relay.holdsOff(refusedAt: 100 * s, now: (100 + hold) * s))
+    #expect(Relay.upstreamHold + 1 < Link.waitAfter)   // a held redial lands before the link reads as waiting
+}
+
 @Test func aRefusalIsLoggedOnlyEveryTenMinutesPerRelay() {
     let now = Date()
     #expect(Relay.shouldLogRefusal(last: nil, now: now))
@@ -4172,3 +4260,67 @@ import ImageIO
     #expect(try JSONDecoder().decode(DeviceControlWire.Response.self, from: JSONEncoder().encode(answer)) == answer)
 }
 #endif
+
+/// Agents run SKILL.md's commands as written, and people copy the READMEs': each `roamrun …`
+/// in their code (fenced blocks and inline code) must be a command the CLI knows, with options it takes.
+@Test(arguments: ["skills/roamrun/SKILL.md", "README.md", "README.ja.md"])
+func everyDocumentedCommandParses(_ doc: String) throws {
+    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    let text = try String(contentsOf: root.appendingPathComponent(doc), encoding: .utf8)
+    var code: [String] = []
+    var fenced = false
+    for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+        if line.hasPrefix("```") { fenced.toggle(); continue }
+        if fenced { code.append(String(line)) } else { code += line.matches(of: #/`([^`]+)`/#).map { String($0.1) } }
+    }
+    var checked = 0
+    for snippet in code {
+        // Only where `roamrun` starts a command, not as another tool's argument; comments dropped.
+        // Placeholders (<name>) become a word first: their ">" isn't a redirection.
+        let line = (snippet.split(separator: " #", maxSplits: 1).first.map(String.init) ?? snippet)
+            .replacing(#/<[^<>\s]+>/#, with: "x")
+        for m in line.matches(of: #/(?:^\s*|[(;&|]\s*)roamrun\s+([^|;&>)\n]*)/#) {
+            var words = m.1.split(whereSeparator: \.isWhitespace).map {
+                $0.trimmingCharacters(in: CharacterSet(charactersIn: "[]'\"")).replacingOccurrences(of: "...", with: "")
+                    .replacingOccurrences(of: "…", with: "")
+            }.filter { !$0.isEmpty }
+            // A placeholder value (--wait N, --url URL) stands for a valid one.
+            for i in words.indices.dropFirst() where words[i].allSatisfy({ $0.isUppercase }) {
+                switch words[i - 1] {
+                case "--wait": words[i] = "1"
+                case "--url": words[i] = "x://y"
+                case "--env": words[i] = "A=b"
+                default: break
+                }
+            }
+            guard let command = words.first else { continue }
+            // Device control's commands are checked by a build that has them (`make test DEVICE=1`).
+            if !CLI.commands.contains(command), CLI.deviceCommands.contains(command) { continue }
+            #expect(CLI.commands.contains(command), "\(doc): roamrun \(m.1)")
+            checked += 1
+            if command == "init" {
+                let known: Set = ["--client", "--print", "--uninstall", "claude", "codex", "cursor", "gemini", "copilot", "x"]
+                let given = words.dropFirst().map { $0.hasPrefix("--client=") ? "--client" : $0 }
+                #expect(Set(given).isSubset(of: known), "\(doc): roamrun \(m.1)")
+            } else if case .failure(let e) = CLI.parse(words) {
+                Issue.record("\(doc): roamrun \(m.1) — \(e.message)")
+            }
+        }
+    }
+    #expect(checked > 15)   // the extraction itself still finds them
+}
+
+/// A second `roamrun up` for a device another one handles is refused in every state, an
+/// errored one too: both would retry, take the entry from each other, and `down` stops one.
+@Test func aSecondUpIsRefusedWhateverTheFirstIsDoing() {
+    func e(_ pid: Int32, cli: Bool?, _ s: BridgeStatus) -> StatusFile.Entry {
+        .init(pid: pid, cli: cli, udid: nil, status: s.title, detail: "", ready: s == .ready, tunnelPorts: [], updated: .now)
+    }
+    for s in [BridgeStatus.error, .starting, .waiting, .ready, .local] {
+        #expect(CLI.otherUp(e(200, cli: true, s), me: 300) != nil, "\(s)")
+    }
+    #expect(CLI.otherUp(e(300, cli: true, .error), me: 300) == nil)    // its own entry
+    #expect(CLI.otherUp(e(200, cli: false, .error), me: 300) == nil)   // the app's: claim rules decide
+    #expect(CLI.otherUp(e(200, cli: nil, .error), me: 300) == nil)     // an old entry with no `cli`
+    #expect(CLI.otherUp(nil, me: 300) == nil)
+}
