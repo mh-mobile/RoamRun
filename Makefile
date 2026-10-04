@@ -38,6 +38,7 @@ app: build
 # Pure logic only (parsers, ownership rules); the bridge itself needs a real iPhone.
 # DEVICE=1 also compiles and runs device control's.
 test: $(if $(DEVICE),device-lib)
+	$(if $(DEVICE),cd Rust/RoamRunDevice && $(CARGO) test --locked --target-dir $(CURDIR)/.build/device)
 	$(if $(DEVICE),ROAMRUN_DEVICE=1) xcrun swift test
 
 # Experimental (device control): RoamRun's own Rust library over idevice (pinned in its

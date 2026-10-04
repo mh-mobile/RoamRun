@@ -113,6 +113,8 @@ public final class DeviceSession: @unchecked Sendable {
         // Not repeated: each walk moves the screen.
         let object = try answer(repeatable: false) { rr_device_elements($0, UInt32(clamping: max(limit, 1))) }
         let captions = (object["elements"] as? [[String: Any]] ?? []).map { $0["caption"] as? String ?? "" }
+        // How it ended (round, quiet, limit, deadline) and how long it took: what tells a screen read whole from one cut short.
+        onEvent?("elements: \(captions.count), ended \(object["ended"] as? String ?? "?") in \(object["ms"] as? Int ?? 0) ms")
         return (captions, object["complete"] as? Bool ?? false)
     }
 

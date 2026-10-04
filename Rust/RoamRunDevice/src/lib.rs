@@ -264,9 +264,7 @@ unsafe fn run(device: *mut RRDevice, input: Result<Input, String>) -> *mut c_cha
     let started = Instant::now();
     let result = with_room(|| {
         let mut link = device.link.lock().unwrap_or_else(|e| e.into_inner());
-        device.runtime.block_on(async {
-            tokio::time::timeout(DEADLINE, perform(&mut link, input)).await.unwrap_or_else(|_| Err("timed out".into()))
-        })
+        device.runtime.block_on(perform(&mut link, input))
     });
     c_string(match result {
         Ok(()) => format!("{{\"ok\":true,\"ms\":{}}}", started.elapsed().as_millis()),
@@ -304,6 +302,7 @@ pub unsafe extern "C" fn rr_device_type(device: *mut RRDevice, text: *const c_ch
     let text = (!text.is_null()).then(|| unsafe { CStr::from_ptr(text) }.to_str().ok()).flatten();
     // Every key is found before any is sent: half a text typed is worse than none.
     let input = text.ok_or("bad text".to_string()).and_then(|t| {
+        if t.chars().count() > LONGEST_TYPED { return Err(format!("too long to type: {LONGEST_TYPED} characters at most (paste takes any length)")); }
         t.chars().map(|c| key(c).ok_or(format!("can't type {c:?}: only what a US keyboard has"))).collect::<Result<Vec<_>, _>>()
     });
     unsafe { run(device, input.map(Input::Type)) }
@@ -373,8 +372,8 @@ pub unsafe extern "C" fn rr_device_elements(device: *mut RRDevice, limit: u32) -
         device.runtime.block_on(elements(&mut link, limit.max(1) as usize, started + WALK))
     });
     c_string(match result {
-        Ok((captions, complete)) => format!(
-            "{{\"ok\":true,\"elements\":[{}],\"complete\":{complete},\"ms\":{}}}",
+        Ok((captions, complete, ended)) => format!(
+            "{{\"ok\":true,\"elements\":[{}],\"complete\":{complete},\"ended\":\"{ended}\",\"ms\":{}}}",
             captions.iter().map(|c| format!("{{\"caption\":{}}}", quoted(c))).collect::<Vec<_>>().join(","),
             started.elapsed().as_millis()
         ),
@@ -399,7 +398,7 @@ fn unwrapped(value: &plist::Value) -> &plist::Value {
 }
 
 /// Captions in the inspector's order, and whether the walk came round (true) or was cut short.
-async fn elements(link: &mut Link, limit: usize, until: Instant) -> Result<(Vec<String>, bool), String> {
+async fn elements(link: &mut Link, limit: usize, until: Instant) -> Result<(Vec<String>, bool, &'static str), String> {
     let port = link.handshake.services.get(WANTED[3].1).ok_or("no accessibility service on this device")?.port;
     let call = |name: &'static str, argument: plist::Value| (name, Some(vec![AuxValue::archived_value(argument)]));
     // Getting to the service has the deadline every call has: one that takes the connection and
@@ -428,8 +427,10 @@ async fn elements(link: &mut Link, limit: usize, until: Instant) -> Result<(Vec<
 
     let mut captions = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for step in 0..limit {
-        if Instant::now() >= until { return Ok((captions, false)); }
+    let mut asked_twice = false;
+    let mut step = 0;
+    while step < limit {
+        if Instant::now() >= until { return Ok((captions, false, "deadline")); }
         // From the first element each time a walk starts: the focus is wherever the last one left it.
         let options: plist::Dictionary = [
             ("allowNonAX".to_string(), wrapped(plist::Value::Boolean(false))),
@@ -452,18 +453,27 @@ async fn elements(link: &mut Link, limit: usize, until: Instant) -> Result<(Vec<
                 _ => None,
             });
         };
-        // Nothing came: no element there (the home screen), or the end of what can be visited.
-        let Some(focus) = focus else { return Ok((captions, step > 0)) };
+        // Nothing came: no element there (the home screen), the end of what can be visited — or an
+        // answer that was only slow. Asked once more before it is taken for the end.
+        let Some(focus) = focus else {
+            if !asked_twice && Instant::now() < until {
+                asked_twice = true;
+                continue;
+            }
+            return Ok((captions, step > 0, "quiet"));
+        };
+        asked_twice = false;
         let inner = unwrapped(unwrapped(&focus)).as_dictionary();
         let field = |key: &str| inner.and_then(|d| d.get(key)).map(unwrapped);
         // The element's token says when the walk has come round to where it began.
         let token = field("ElementValue_v1").map(|e| format!("{:?}", unwrapped(e)));
         if let Some(token) = token {
-            if !seen.insert(token) { return Ok((captions, true)); }
+            if !seen.insert(token) { return Ok((captions, true, "round")); }
         }
         captions.push(field("CaptionTextValue_v1").and_then(|v| v.as_string()).unwrap_or("").to_string());
+        step += 1;
     }
-    Ok((captions, false))
+    Ok((captions, false, "limit"))
 }
 
 async fn connect(ip: &str, port: u16, file: &str) -> Result<Link, String> {
@@ -497,97 +507,164 @@ async fn connect(ip: &str, port: u16, file: &str) -> Result<Link, String> {
     Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_stopped: None, stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
 }
 
-/// The device drops input that isn't accompanied by a screen stream, so one runs with it: the
-/// one kept from before if frames still come on it, a new one otherwise.
-async fn perform(link: &mut Link, input: Input) -> Result<(), String> {
-    let mut kept = link.stream.take();
-    if let Some(stream) = kept.as_mut() {
-        if !stream.alive().await {
-            stream.stop().await;
-            link.stream_stopped = Some(Instant::now());
-            kept = None;
-        }
-    }
-    let stream = match kept {
-        Some(stream) => stream,
-        // Nothing has been sent yet, so a start that fails is tried once more.
-        None => match start_stream(link).await {
-            Ok(stream) => stream,
-            Err(_) => start_stream(link).await?,
-        },
+/// The most that is typed in one call: beyond it, a slip in the middle is too costly, and paste does it in one.
+const LONGEST_TYPED: usize = 2000;
+
+/// How long an input may take to send, once everything is ready for it: its own length, and
+/// room for a slow link. (Typing took some 60 ms a key over Wi‑Fi.)
+fn input_time(input: &Input) -> Duration {
+    let own = match input {
+        Input::Tap(..) => 100,
+        Input::Swipe { ms, .. } => *ms as u64,
+        Input::Type(strokes) => strokes.len() as u64 * 200,
+        Input::Paste(_) => 5_000,
+        Input::Button(_, _, hold) => *hold,
     };
-    link.stream = Some(stream);
-    let done = send(link, input).await;
+    Duration::from_millis(own) + Duration::from_secs(10)
+}
+
+/// The device drops input that isn't accompanied by a screen stream, so one runs with it: the
+/// one kept from before if frames still come on it, a new one otherwise. Getting that far has
+/// the deadline every call has; the input then gets the time its own length needs, so that the
+/// deadline doesn't fall in the middle of it.
+async fn perform(link: &mut Link, input: Input) -> Result<(), String> {
+    tokio::time::timeout(DEADLINE, stream_for_input(link)).await.unwrap_or_else(|_| Err("timed out".into()))?;
+    let done = match tokio::time::timeout(input_time(&input), send(link, &input)).await {
+        Ok(done) => done,
+        Err(_) => {
+            let_go(link).await;
+            Err("timed out part-way: look at the device before going on".into())
+        }
+    };
     link.stream_used = Instant::now();
     done
 }
 
-async fn send(link: &mut Link, input: Input) -> Result<(), String> {
+async fn stream_for_input(link: &mut Link) -> Result<(), String> {
+    // Looked at where it is kept: taken out, it would be dropped unstopped if this were cut short.
+    let alive = match link.stream.as_mut() {
+        Some(stream) => stream.alive().await,
+        None => false,
+    };
+    if alive { return Ok(()); }
+    if let Some(mut stream) = link.stream.take() {
+        stream.stop().await;
+        link.stream_stopped = Some(Instant::now());
+    }
+    // Nothing has been sent yet, so a start that fails is tried once more.
+    let stream = match start_stream(link).await {
+        Ok(stream) => stream,
+        Err(_) => start_stream(link).await?,
+    };
+    link.stream = Some(stream);
+    Ok(())
+}
+
+/// After an input cut short: the modifier keys are let go as far as that can still be said, and
+/// the connections it used aren't kept (what the device makes of a finger left down is its own).
+async fn let_go(link: &mut Link) {
+    if let Some(keys) = link.keys.as_mut() {
+        let _ = tokio::time::timeout(Duration::from_secs(1), async {
+            let _ = keys.send_keyboard(LEFT_SHIFT, ButtonState::Up).await;
+            let _ = keys.send_keyboard(LEFT_COMMAND, ButtonState::Up).await;
+        }).await;
+    }
+    link.keys = None;
+    link.hid = None;
+}
+
+/// A connection kept from an earlier call that the device has closed since (it does when it
+/// locks): the write fails before anything is sent, so making a new one and sending is no repeat.
+fn gone(error: &idevice::IdeviceError) -> bool {
+    matches!(error, idevice::IdeviceError::Socket(e) if e.kind() == std::io::ErrorKind::NotConnected)
+}
+
+/// One thing a keyboard or a button does.
+enum Step {
+    Key(u64, ButtonState),
+    Button(u64, u64, ButtonState),
+    Wait(u64),
+}
+
+/// The steps, on the key connection: the one kept, or a new one. A kept one found gone at the
+/// first step is replaced and the steps sent; a failure after something was sent is not repeated.
+async fn press(link: &mut Link, steps: &[Step]) -> Result<(), String> {
+    for attempt in 0..2 {
+        let kept = link.keys.is_some();
+        if !kept {
+            link.keys = Some(IndigoHidClient::connect_rsd(&mut link.handle, &mut link.handshake)
+                .await.map_err(|e| format!("HID service: {e:?}"))?);
+        }
+        let keys = link.keys.as_mut().expect("just set");
+        let mut sent_any = false;
+        let mut failed = None;
+        for step in steps {
+            let sent = match *step {
+                Step::Key(usage, state) => keys.send_keyboard(usage, state).await,
+                Step::Button(page, code, state) => keys.send_button(page, code, state).await,
+                Step::Wait(ms) => { tokio::time::sleep(Duration::from_millis(ms)).await; continue }
+            };
+            match sent {
+                Ok(()) => sent_any = true,
+                Err(e) => { failed = Some(e); break }
+            }
+        }
+        let Some(e) = failed else { return Ok(()) };
+        link.keys = None;   // a dead connection isn't kept for the next call
+        if attempt == 0 && kept && !sent_any && gone(&e) { continue; }
+        return Err(format!("keys: {e:?}"));
+    }
+    unreachable!("the second attempt returns")
+}
+
+async fn send(link: &mut Link, input: &Input) -> Result<(), String> {
     // The touchscreen takes 0...65535 across each axis.
     let unit = |v: f64| (v * 65535.0).round() as u16;
     match input {
         Input::Tap(..) | Input::Swipe { .. } => {
-            if link.hid.is_none() {
-                link.hid = Some(UniversalHidServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)
-                    .await.map_err(|e| format!("HID service: {e:?}"))?);
+            for attempt in 0..2 {
+                let kept = link.hid.is_some();
+                if !kept {
+                    link.hid = Some(UniversalHidServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)
+                        .await.map_err(|e| format!("HID service: {e:?}"))?);
+                }
+                let hid = link.hid.as_mut().expect("just set");
+                let sent = match *input {
+                    Input::Tap(x, y) => hid.tap(unit(x), unit(y)).await,
+                    // A sample every ~16 ms: slow enough to read as a drag, not a tap.
+                    Input::Swipe { from, to, ms } => hid.drag(unit(from.0), unit(from.1), unit(to.0), unit(to.1), (ms / 16).max(2), 16).await,
+                    _ => unreachable!(),
+                };
+                let Err(e) = sent else { return Ok(()) };
+                link.hid = None;   // a dead connection isn't kept for the next call
+                if attempt == 0 && kept && gone(&e) { continue; }
+                return Err(format!("touch: {e:?}"));
             }
-            let hid = link.hid.as_mut().expect("just set");
-            let sent = match input {
-                Input::Tap(x, y) => hid.tap(unit(x), unit(y)).await,
-                // A sample every ~16 ms: slow enough to read as a drag, not a tap.
-                Input::Swipe { from, to, ms } => hid.drag(unit(from.0), unit(from.1), unit(to.0), unit(to.1), (ms / 16).max(2), 16).await,
-                _ => unreachable!(),
-            };
-            if sent.is_err() { link.hid = None; }   // a dead connection isn't kept for the next call
-            sent.map_err(|e| format!("touch: {e:?}"))
+            unreachable!("the second attempt returns")
         }
         Input::Paste(text) => {
             // The text goes onto the device's pasteboard, then Command-V as a keyboard would press it.
             let mut board = PasteboardServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)
                 .await.map_err(|e| format!("pasteboard service: {e:?}"))?;
-            board.set_text(&text, GENERAL_PASTEBOARD).await.map_err(|e| format!("pasteboard: {e:?}"))?;
-            if link.keys.is_none() {
-                link.keys = Some(IndigoHidClient::connect_rsd(&mut link.handle, &mut link.handshake)
-                    .await.map_err(|e| format!("HID service: {e:?}"))?);
-            }
-            let keys = link.keys.as_mut().expect("just set");
-            let sent = async {
-                keys.send_keyboard(LEFT_COMMAND, ButtonState::Down).await?;
-                keys.send_keyboard(KEY_V, ButtonState::Down).await?;
-                keys.send_keyboard(KEY_V, ButtonState::Up).await?;
-                keys.send_keyboard(LEFT_COMMAND, ButtonState::Up).await
-            }.await;
-            if sent.is_err() { link.keys = None; }
-            sent.map_err(|e| format!("keys: {e:?}"))
+            board.set_text(text, GENERAL_PASTEBOARD).await.map_err(|e| format!("pasteboard: {e:?}"))?;
+            press(link, &[
+                Step::Key(LEFT_COMMAND, ButtonState::Down), Step::Key(KEY_V, ButtonState::Down),
+                Step::Key(KEY_V, ButtonState::Up), Step::Key(LEFT_COMMAND, ButtonState::Up),
+            ]).await
         }
-        Input::Type(..) | Input::Button(..) => {
-            if link.keys.is_none() {
-                link.keys = Some(IndigoHidClient::connect_rsd(&mut link.handle, &mut link.handshake)
-                    .await.map_err(|e| format!("HID service: {e:?}"))?);
+        Input::Type(strokes) => {
+            let mut steps = Vec::with_capacity(strokes.len() * 5);
+            for &(usage, shift) in strokes {
+                if shift { steps.push(Step::Key(LEFT_SHIFT, ButtonState::Down)); }
+                steps.push(Step::Key(usage, ButtonState::Down));
+                steps.push(Step::Key(usage, ButtonState::Up));
+                if shift { steps.push(Step::Key(LEFT_SHIFT, ButtonState::Up)); }
+                steps.push(Step::Wait(12));   // or strokes run together
             }
-            let keys = link.keys.as_mut().expect("just set");
-            let sent = async {
-                match input {
-                    Input::Type(strokes) => {
-                        for (usage, shift) in strokes {
-                            if shift { keys.send_keyboard(LEFT_SHIFT, ButtonState::Down).await?; }
-                            keys.send_keyboard(usage, ButtonState::Down).await?;
-                            keys.send_keyboard(usage, ButtonState::Up).await?;
-                            if shift { keys.send_keyboard(LEFT_SHIFT, ButtonState::Up).await?; }
-                            tokio::time::sleep(Duration::from_millis(12)).await;   // or strokes run together
-                        }
-                    }
-                    Input::Button(page, code, hold) => {
-                        keys.send_button(page, code, ButtonState::Down).await?;
-                        tokio::time::sleep(Duration::from_millis(hold)).await;
-                        keys.send_button(page, code, ButtonState::Up).await?;
-                    }
-                    _ => unreachable!(),
-                }
-                Ok::<(), idevice::IdeviceError>(())
-            }.await;
-            if sent.is_err() { link.keys = None; }
-            sent.map_err(|e| format!("keys: {e:?}"))
+            press(link, &steps).await
+        }
+        Input::Button(page, code, hold) => {
+            press(link, &[Step::Button(*page, *code, ButtonState::Down), Step::Wait(*hold), Step::Button(*page, *code, ButtonState::Up)]).await
         }
     }
 }
@@ -774,19 +851,21 @@ const FIRST_KEYFRAME: Duration = Duration::from_secs(6);
 /// is one datagram, and can be lost); when none comes for the asking, or no stream runs, the
 /// stream is started over, which opens with one.
 async fn keyframe(link: &mut Link) -> Result<Vec<u8>, String> {
-    if let Some(mut stream) = link.stream.take() {
+    // Asked where it is kept: taken out, it would be dropped unstopped if this were cut short.
+    if let Some(stream) = link.stream.as_mut() {
         if stream.drain().await {
             for _ in 0..2 {
                 stream.request_keyframe().await;
                 link.keyframes_asked += 1;
                 if let Ok(Ok(frame)) = tokio::time::timeout(KEYFRAME_WAIT, stream.next_keyframe()).await {
                     link.keyframes_answered += 1;
-                    link.stream = Some(stream);
                     link.stream_used = Instant::now();
                     return Ok(frame);
                 }
             }
         }
+    }
+    if let Some(mut stream) = link.stream.take() {
         stream.stop().await;
         link.stream_stopped = Some(Instant::now());
     }
@@ -963,4 +1042,53 @@ fn write_private(path: &str, bytes: &[u8]) -> Result<(), String> {
         .and_then(|mut f| f.write_all(bytes))
         .and_then(|()| std::fs::rename(&beside, path))
         .map_err(|e| { let _ = std::fs::remove_file(&beside); format!("can't write the pairing: {e}") })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An input's deadline grows with what it has to send: a long text isn't cut in the middle.
+    #[test]
+    fn an_input_gets_the_time_its_length_needs() {
+        let ten = Duration::from_secs(10);
+        assert_eq!(input_time(&Input::Tap(0.5, 0.5)), ten + Duration::from_millis(100));
+        assert_eq!(input_time(&Input::Swipe { from: (0.0, 0.0), to: (1.0, 1.0), ms: 5000 }), ten + Duration::from_secs(5));
+        let long = Input::Type(vec![(0x04, false); LONGEST_TYPED]);
+        assert_eq!(input_time(&long), ten + Duration::from_secs(400));   // 2000 keys at 200 ms each
+        assert!(input_time(&Input::Type(vec![(0x04, false); 5])) < DEADLINE);
+    }
+
+    /// Every character a US keyboard has maps to its key, shifted or not; anything else to none.
+    #[test]
+    fn keys_are_those_of_a_us_keyboard() {
+        assert_eq!(key('a'), Some((0x04, false)));
+        assert_eq!(key('Z'), Some((0x1D, true)));
+        assert_eq!(key('1'), Some((0x1E, false)));
+        assert_eq!(key('0'), Some((0x27, false)));
+        assert_eq!(key('!'), Some((0x1E, true)));
+        assert_eq!(key(')'), Some((0x27, true)));
+        assert_eq!(key(' '), Some((0x2C, false)));
+        assert_eq!(key('\n'), Some((0x28, false)));
+        assert_eq!(key('-'), Some((0x2D, false)));
+        assert_eq!(key('_'), Some((0x2D, true)));
+        assert_eq!(key('?'), Some((0x38, true)));
+        assert_eq!(key('あ'), None);
+        assert_eq!(key('\t'), None);
+    }
+
+    /// Only a write to a connection that is no longer there is one nothing was sent on.
+    #[test]
+    fn only_a_connection_that_is_gone_is_sent_on_anew() {
+        let io = |kind| idevice::IdeviceError::Socket(std::io::Error::new(kind, "x"));
+        assert!(gone(&io(std::io::ErrorKind::NotConnected)));
+        assert!(!gone(&io(std::io::ErrorKind::BrokenPipe)));
+        assert!(!gone(&io(std::io::ErrorKind::ConnectionReset)));
+        assert!(!gone(&io(std::io::ErrorKind::TimedOut)));
+    }
+
+    #[test]
+    fn json_strings_are_quoted_whole() {
+        assert_eq!(quoted("a\"b\\c\n\u{0}"), "\"a\\\"b\\\\c\\u000a\\u0000\"");
+    }
 }
