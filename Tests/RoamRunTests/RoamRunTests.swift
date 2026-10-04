@@ -4033,4 +4033,34 @@ func publishStepsAsideWhenTurnedOff(_ c: PublishCase) async {
     listener.stop()
     #expect(throws: DeviceControlWire.WireError.self) { try DeviceControlWire.ask(request, in: dir) }   // stopped: gone
 }
+
+/// A point comes in the pixels of a look and goes to the device as a fraction of its screen;
+/// one outside the look is no point at all.
+@Test func aLooksPixelsBecomeFractionsOfTheScreen() {
+    let size = (width: 1000, height: 2000)
+    let p = DeviceControlHub.fraction(x: 250, y: 500, of: size)
+    #expect(p?.x == 0.25 && p?.y == 0.25)
+    #expect(DeviceControlHub.fraction(x: 0, y: 0, of: size) != nil)
+    #expect(DeviceControlHub.fraction(x: 999.5, y: 1999.5, of: size) != nil)
+    #expect(DeviceControlHub.fraction(x: 1000, y: 10, of: size) == nil)   // the width itself is past the last pixel
+    #expect(DeviceControlHub.fraction(x: 10, y: 2000, of: size) == nil)
+    #expect(DeviceControlHub.fraction(x: -1, y: 10, of: size) == nil)
+    #expect(DeviceControlHub.fraction(x: nil, y: 10, of: size) == nil)
+}
+
+/// What the CLI sends for each command reaches the app as it was written.
+@Test func everyRequestSurvivesTheWire() throws {
+    let id = UUID()
+    let requests: [DeviceControlWire.Request] = [
+        .init(op: "look", device: id, path: "/tmp/a.png"),
+        .init(op: "swipe", device: id, x: 1, y: 2, x2: 3, y2: 4, milliseconds: 400),
+        .init(op: "paste", device: id, text: "東京 \"quoted\"\nsecond line"),
+        .init(op: "elements", device: id, limit: 15),
+    ]
+    for r in requests {
+        #expect(try JSONDecoder().decode(DeviceControlWire.Request.self, from: JSONEncoder().encode(r)) == r)
+    }
+    let answer = DeviceControlWire.Response(ok: true, captions: ["ホーム, ヘッダ", "a\nb"], complete: false)
+    #expect(try JSONDecoder().decode(DeviceControlWire.Response.self, from: JSONEncoder().encode(answer)) == answer)
+}
 #endif

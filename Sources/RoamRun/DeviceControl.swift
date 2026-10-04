@@ -4,8 +4,8 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-/// How `roamrun look` / `tap` ask the app, which holds the connections: one JSON line each way
-/// over a Unix socket only this user can open.
+/// How `roamrun look`, `tap` and the rest ask the app, which holds the connections: one JSON
+/// line each way over a Unix socket only this user can open.
 enum DeviceControlWire {
     struct Request: Codable, Equatable {
         var op: String
@@ -13,6 +13,11 @@ enum DeviceControlWire {
         var path: String?
         var x: Double?
         var y: Double?
+        var x2: Double?
+        var y2: Double?
+        var milliseconds: Int?
+        var text: String?
+        var limit: Int?
     }
 
     struct Response: Codable, Equatable {
@@ -20,6 +25,8 @@ enum DeviceControlWire {
         var error: String?
         var width: Int?
         var height: Int?
+        var captions: [String]?
+        var complete: Bool?
         static func failure(_ why: String) -> Response { Response(ok: false, error: why) }
     }
 
@@ -199,12 +206,50 @@ final class DeviceControlHub: @unchecked Sendable {
         }
     }
 
+    /// A point given in a look's pixels, as fractions of the screen; nil when outside it.
+    static func fraction(x: Double?, y: Double?, of size: (width: Int, height: Int)) -> (x: Double, y: Double)? {
+        guard let x, let y, (0..<Double(size.width)).contains(x), (0..<Double(size.height)).contains(y) else { return nil }
+        return (x / Double(size.width), y / Double(size.height))
+    }
+
+    /// The last look, taken away: whatever follows may change the screen, and the next point
+    /// has to come from a look at what it became.
+    private func spendLook(of device: UUID) -> (width: Int, height: Int)? {
+        lock.withLock {
+            defer { held[device]?.looked = nil }
+            return held[device]?.looked
+        }
+    }
+
+    private static let lookFirst = "look first: a point is given in the pixels of a look, and each look serves one action"
+
     private func answer(_ request: DeviceControlWire.Request) -> DeviceControlWire.Response {
         guard let h = lock.withLock({ held[request.device] }) else {
             return .failure("device control isn't set up for this device")
         }
         do {
             switch request.op {
+            case "elements":
+                _ = spendLook(of: request.device)   // the walk can scroll the screen
+                let found = try h.session.elements(limit: request.limit ?? 40)
+                return .init(ok: true, captions: found.captions, complete: found.complete)
+            case "swipe":
+                guard let size = spendLook(of: request.device) else { return .failure(Self.lookFirst) }
+                guard let from = Self.fraction(x: request.x, y: request.y, of: size),
+                      let to = Self.fraction(x: request.x2, y: request.y2, of: size) else {
+                    return .failure("both points must be inside the last look (\(size.width) x \(size.height))")
+                }
+                try h.session.swipe(from: from, to: to, milliseconds: request.milliseconds ?? 300)
+                return .init(ok: true)
+            case "type", "paste", "press":
+                _ = spendLook(of: request.device)
+                guard let text = request.text else { return .failure("nothing to send") }
+                switch request.op {
+                case "type": try h.session.type(text)
+                case "paste": try h.session.paste(text)
+                default: try h.session.press(text)
+                }
+                return .init(ok: true)
             case "look":
                 guard let path = request.path else { return .failure("no file") }
                 let image = try h.session.look()
@@ -217,13 +262,11 @@ final class DeviceControlHub: @unchecked Sendable {
                 return .init(ok: true, width: image.width, height: image.height)
             case "tap":
                 // In the pixels of what was last looked at: there is no tapping a screen not seen.
-                guard let size = lock.withLock({ held[request.device]?.looked }) else {
-                    return .failure("look first: a tap is given in the pixels of the last look")
-                }
-                guard let x = request.x, let y = request.y, (0..<Double(size.width)).contains(x), (0..<Double(size.height)).contains(y) else {
+                guard let size = spendLook(of: request.device) else { return .failure(Self.lookFirst) }
+                guard let point = Self.fraction(x: request.x, y: request.y, of: size) else {
                     return .failure("the point must be inside the last look (\(size.width) x \(size.height))")
                 }
-                try h.session.tap(x: x / Double(size.width), y: y / Double(size.height))
+                try h.session.tap(x: point.x, y: point.y)
                 return .init(ok: true)
             default:
                 return .failure("unknown request")

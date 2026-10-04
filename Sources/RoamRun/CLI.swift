@@ -11,7 +11,7 @@ enum CLI {
     nonisolated static let commands: Set<String> = {
         var all: Set<String> = ["devices", "up", "down", "status", "doctor", "run", "install", "ota", "logs", "screenshot", "init", "version", "--version", "help", "--help", "-h"]
         #if DEVICE_CONTROL
-        all.formUnion(["look", "tap"])
+        all.formUnion(["look", "tap", "swipe", "type", "paste", "press", "elements"])
         #endif
         return all
     }()
@@ -179,6 +179,21 @@ enum CLI {
                     fail("usage: roamrun tap <name> <x> <y> — pixels of the last `roamrun look`. " + names(profiles))
                 }
                 tap(p, x: x, y: y)
+            case "swipe":
+                let numbers = words.dropFirst().map { Double($0) }
+                guard name != nil, let p = targets.first, (4...5).contains(numbers.count), !numbers.contains(nil) else {
+                    fail("usage: roamrun swipe <name> <x1> <y1> <x2> <y2> [milliseconds] — pixels of the last `roamrun look`. " + names(profiles))
+                }
+                operate(p, .init(op: "swipe", device: p.id, x: numbers[0], y: numbers[1], x2: numbers[2], y2: numbers[3],
+                                 milliseconds: numbers.count == 5 ? Int(numbers[4]!) : nil))
+            case "type", "paste", "press":
+                guard name != nil, let p = targets.first, words.count == 2 else {
+                    fail("usage: roamrun \(args[0]) <name> \(args[0] == "press" ? "<home|lock|volume-up|volume-down>" : "<text>"). " + names(profiles))
+                }
+                operate(p, .init(op: args[0], device: p.id, text: words[words.startIndex + 1]))
+            case "elements":
+                guard name != nil, let p = targets.first else { fail("usage: roamrun elements <name> [limit]. " + names(profiles)) }
+                elements(p, limit: words.count >= 2 ? Int(words[words.startIndex + 1]) : nil)
             #endif
             default: print(usage); exit(0)
             }
@@ -196,6 +211,11 @@ enum CLI {
         #if DEVICE_CONTROL
         all["look"] = ([], 0...2)
         all["tap"] = ([], 0...3)
+        all["swipe"] = ([], 0...6)
+        all["type"] = ([], 0...2)
+        all["paste"] = ([], 0...2)
+        all["press"] = ([], 0...2)
+        all["elements"] = ([], 0...2)
         #endif
         return all
     }()
@@ -711,8 +731,24 @@ enum CLI {
 
     /// One tap, at a point in the pixels of the last look. Operates the device.
     private static func tap(_ profile: DeviceProfile, x: Double, y: Double) -> Never {
-        let r = askApp(.init(op: "tap", device: profile.id, x: x, y: y))
-        guard r.ok else { stop("tap failed: \(r.error ?? "no answer")") }
+        operate(profile, .init(op: "tap", device: profile.id, x: x, y: y))
+    }
+
+    /// Something done to the device: silent when it went, the reason when it didn't.
+    private static func operate(_ profile: DeviceProfile, _ request: DeviceControlWire.Request) -> Never {
+        let r = askApp(request)
+        guard r.ok else { stop("\(request.op) failed: \(r.error ?? "no answer")") }
+        exit(0)
+    }
+
+    /// Accessibility's captions, one a line. Can scroll the screen.
+    private static func elements(_ profile: DeviceProfile, limit: Int?) -> Never {
+        let r = askApp(.init(op: "elements", device: profile.id, limit: limit))
+        guard r.ok, let captions = r.captions else { stop("elements failed: \(r.error ?? "no answer")") }
+        captions.forEach { print($0) }
+        if r.complete != true {
+            FileHandle.standardError.write(Data("roamrun: \(captions.count) elements; the walk was cut short, there may be more\n".utf8))
+        }
         exit(0)
     }
     #endif
