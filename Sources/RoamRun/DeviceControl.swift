@@ -35,7 +35,36 @@ enum DeviceControlWire {
         static func failure(_ why: String) -> Response { Response(ok: false, error: why) }
     }
 
-    enum WireError: Error { case noApp, message(String) }
+    enum WireError: Error, CustomStringConvertible {
+        case noApp, message(String)
+        var description: String {
+            switch self {
+            case .noApp: "the RoamRun app isn't running"
+            case .message(let m): m
+            }
+        }
+    }
+
+    /// The longest a line may be: a long paste, or many elements.
+    static let longestLine = 1 << 20
+    /// How long the app waits for a request once a client has connected.
+    static let requestWait: TimeInterval = 10
+    /// How long the CLI waits for the answer: longer than any call takes with its retries.
+    static let answerWait: TimeInterval = 150
+
+    /// A write to a socket whose other end has gone must fail, not end the process with SIGPIPE.
+    /// Set before the socket has a peer (on the listening one, whose accepted ones inherit it):
+    /// on one whose peer has already left, the option can no longer be set.
+    private static func noSIGPIPE(_ fd: Int32) {
+        var on: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+    }
+
+    /// The other end saying nothing is given up on after `wait`.
+    private static func readWait(_ fd: Int32, _ wait: TimeInterval) {
+        var limit = timeval(tv_sec: Int(wait), tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &limit, socklen_t(MemoryLayout<timeval>.size))
+    }
 
     /// In a folder of its own that only this user can enter: what keeps others out, whatever
     /// mode the socket itself is made with.
@@ -68,7 +97,7 @@ enum DeviceControlWire {
     private static func readLine(_ fd: Int32) -> Data {
         var data = Data()
         var buffer = [UInt8](repeating: 0, count: 4096)
-        while data.count < 1 << 16 {
+        while data.count < longestLine {
             let n = read(fd, &buffer, buffer.count)
             guard n > 0 else { break }
             data.append(buffer, count: n)
@@ -77,10 +106,20 @@ enum DeviceControlWire {
         return data
     }
 
-    private static func writeLine<T: Encodable>(_ value: T, to fd: Int32) {
-        guard var data = try? JSONEncoder().encode(value) else { return }
+    /// False when it couldn't be said (NaN has no JSON) or the other end has gone.
+    @discardableResult
+    private static func writeLine<T: Encodable>(_ value: T, to fd: Int32) -> Bool {
+        guard var data = try? JSONEncoder().encode(value) else { return false }
         data.append(0x0A)
-        data.withUnsafeBytes { _ = write(fd, $0.baseAddress, $0.count) }
+        return data.withUnsafeBytes { bytes in
+            var sent = 0
+            while sent < bytes.count {
+                let n = write(fd, bytes.baseAddress! + sent, bytes.count - sent)
+                guard n > 0 else { return false }
+                sent += n
+            }
+            return true
+        }
     }
 
     /// The CLI's side: one request, one answer.
@@ -88,10 +127,13 @@ enum DeviceControlWire {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw WireError.message("no socket") }
         defer { close(fd) }
+        noSIGPIPE(fd)
+        readWait(fd, answerWait)
         guard withAddress(socketPath(in: directory), { connect(fd, $0, $1) }) == 0 else { throw WireError.noApp }
-        writeLine(request, to: fd)
-        guard let response = try? JSONDecoder().decode(Response.self, from: readLine(fd)) else {
-            throw WireError.message("the app didn't answer")
+        guard writeLine(request, to: fd) else { throw WireError.message("couldn't send the request (a number that isn't one?)") }
+        let line = readLine(fd)
+        guard let response = try? JSONDecoder().decode(Response.self, from: line) else {
+            throw WireError.message(line.isEmpty ? "the app didn't answer" : "the app's answer couldn't be read")
         }
         return response
     }
@@ -101,6 +143,8 @@ enum DeviceControlWire {
     final class Listener: @unchecked Sendable {
         private let fd: Int32
         private let path: String
+        private let stopped = NSLock()
+        private var isStopped = false
 
         init?(directory: URL, handler: @escaping @Sendable (Request) -> Response) {
             let path = DeviceControlWire.socketPath(in: directory)
@@ -112,17 +156,26 @@ enum DeviceControlWire {
             try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             guard chmod(folder.path, 0o700) == 0 else { close(fd); return nil }
             unlink(path)   // a previous run's; only one app runs
-            guard DeviceControlWire.withAddress(path, { bind(fd, $0, $1) }) == 0, listen(fd, 8) == 0 else { close(fd); return nil }
+            DeviceControlWire.noSIGPIPE(fd)
+            guard DeviceControlWire.withAddress(path, { bind(fd, $0, $1) }) == 0, listen(fd, 64) == 0 else { close(fd); return nil }
             chmod(path, 0o600)
             self.fd = fd
             self.path = path
-            Thread.detachNewThread { [fd] in
+            Thread.detachNewThread { [weak self, fd] in
                 while true {
                     let client = accept(fd, nil, nil)
-                    guard client >= 0 else { return }   // closed by stop()
+                    guard client >= 0 else {
+                        // stop() closed it; anything else (a client that gave up) is one accept lost.
+                        if self?.stopped.withLock({ self?.isStopped }) ?? true { return }
+                        usleep(50_000)
+                        continue
+                    }
                     DispatchQueue.global(qos: .userInitiated).async {
                         defer { close(client) }
-                        let request = try? JSONDecoder().decode(Request.self, from: DeviceControlWire.readLine(client))
+                        DeviceControlWire.readWait(client, DeviceControlWire.requestWait)
+                        let line = DeviceControlWire.readLine(client)
+                        guard !line.isEmpty else { return }   // said nothing: nobody to answer
+                        let request = try? JSONDecoder().decode(Request.self, from: line)
                         DeviceControlWire.writeLine(request.map(handler) ?? .failure("unreadable request"), to: client)
                     }
                 }
@@ -130,6 +183,7 @@ enum DeviceControlWire {
         }
 
         func stop() {
+            stopped.withLock { isStopped = true }
             close(fd)
             unlink(path)
         }

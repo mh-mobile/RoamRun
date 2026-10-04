@@ -4122,6 +4122,55 @@ func publishStepsAsideWhenTurnedOff(_ c: PublishCase) async {
     #expect(throws: DeviceControlWire.WireError.self) { try DeviceControlWire.ask(request, in: dir) }   // stopped: gone
 }
 
+/// A client that goes away before its answer (Ctrl-C during a look) costs the app nothing: the
+/// write to it fails instead of ending the process, and the next client is served.
+@Test func aClientThatLeavesBeforeItsAnswerDoesNotEndTheApp() throws {
+    let dir = URL(fileURLWithPath: "/tmp/rr-\(UUID().uuidString.prefix(8))")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let answered = DispatchSemaphore(value: 0)
+    let listener = try #require(DeviceControlWire.Listener(directory: dir) { _ in
+        Thread.sleep(forTimeInterval: 0.2)   // the client has gone by the time this is written
+        defer { answered.signal() }
+        return .init(ok: true)
+    })
+    defer { listener.stop() }
+    func connected() throws -> Int32 {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let path = Array(DeviceControlWire.socketPath(in: dir).utf8)
+        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: path) }
+        let result = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+        }
+        try #require(result == 0)
+        return fd
+    }
+    let request = try JSONEncoder().encode(DeviceControlWire.Request(op: "look", device: UUID())) + Data([0x0A])
+    let leaving = try connected()
+    request.withUnsafeBytes { _ = write(leaving, $0.baseAddress, $0.count) }
+    close(leaving)
+    #expect(answered.wait(timeout: .now() + 5) == .success)
+    Thread.sleep(forTimeInterval: 0.1)   // the write to the closed socket has happened
+    close(try connected())   // one that says nothing at all
+    #expect(try DeviceControlWire.ask(.init(op: "state", device: UUID()), in: dir) == .init(ok: true))
+}
+
+/// A number JSON can't carry (NaN, from `roamrun tap x nan 1`) is refused at once, not waited on forever.
+@Test func aRequestThatCannotBeSentIsRefusedNotWaitedOn() throws {
+    let dir = URL(fileURLWithPath: "/tmp/rr-\(UUID().uuidString.prefix(8))")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let listener = try #require(DeviceControlWire.Listener(directory: dir) { _ in .init(ok: true) })
+    defer { listener.stop() }
+    let started = Date()
+    #expect(throws: DeviceControlWire.WireError.self) {
+        try DeviceControlWire.ask(.init(op: "tap", device: UUID(), x: .nan, y: 1), in: dir)
+    }
+    #expect(Date().timeIntervalSince(started) < 2)
+}
+
 /// A point comes in the pixels of a look and goes to the device as a fraction of its screen;
 /// one outside the look is no point at all.
 @Test func aLooksPixelsBecomeFractionsOfTheScreen() {
