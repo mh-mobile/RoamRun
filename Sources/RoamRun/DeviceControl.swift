@@ -49,8 +49,9 @@ enum DeviceControlWire {
     static let longestLine = 1 << 20
     /// How long the app waits for a request once a client has connected.
     static let requestWait: TimeInterval = 10
-    /// How long the CLI waits for the answer: longer than any call takes with its retries.
-    static let answerWait: TimeInterval = 150
+    /// How long the CLI waits for the answer: longer than any call may take (the longest text
+    /// typed is given some seven minutes by the library).
+    static let answerWait: TimeInterval = 480
 
     /// A write to a socket whose other end has gone must fail, not end the process with SIGPIPE.
     /// Set before the socket has a peer (on the listening one, whose accepted ones inherit it):

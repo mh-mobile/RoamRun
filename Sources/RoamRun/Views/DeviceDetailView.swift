@@ -350,7 +350,17 @@ private struct DeviceControlRow: View {
 
     var body: some View {
         // The connection comes and goes with the device; what is said is read anew every few seconds.
+        // The sheet and the dialog hang on what stays, not on what is drawn anew.
         TimelineView(.periodic(from: .now, by: 3)) { _ in row }
+            .sheet(isPresented: Binding(get: { coordinator.controlPairing?.device == profile.id },
+                                        set: { if !$0 { coordinator.endControlPairing() } })) {
+                ControlPairingSheet(profile: profile)
+            }
+            .confirmationDialog("Remove device control for “\(profile.displayName)”?", isPresented: $confirmRemove) {
+                Button("Remove", role: .destructive) { coordinator.removeControlPairing(profile) }
+            } message: {
+                Text("RoamRun forgets its pairing, and nothing can use the device's side of it any more. To take it off the device's list too: on the device, Settings › Privacy & Security › Developer Mode, choose “\(AppCoordinator.controlHostName)”, then unpair.")
+            }
             .onDisappear {   // the sheet goes with this view; so does what it was showing
                 if coordinator.controlPairing?.device == profile.id { coordinator.endControlPairing() }
             }
@@ -369,15 +379,6 @@ private struct DeviceControlRow: View {
             }
             Button(state?.paired == true ? "Pair Again…" : "Set Up…") { coordinator.startControlPairing(profile) }
                 .disabled(state == nil)
-        }
-        .sheet(isPresented: Binding(get: { coordinator.controlPairing?.device == profile.id },
-                                    set: { if !$0 { coordinator.endControlPairing() } })) {
-            ControlPairingSheet(profile: profile)
-        }
-        .confirmationDialog("Remove device control for “\(profile.displayName)”?", isPresented: $confirmRemove) {
-            Button("Remove", role: .destructive) { coordinator.removeControlPairing(profile) }
-        } message: {
-            Text("RoamRun forgets its pairing, and nothing can use the device's side of it any more. To take it off the device's list too: on the device, Settings › Privacy & Security › Developer Mode, choose “\(AppCoordinator.controlHostName)”, then unpair.")
         }
     }
 

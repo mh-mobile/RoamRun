@@ -428,13 +428,15 @@ async fn elements(link: &mut Link, limit: usize, until: Instant) -> Result<(Vec<
     let mut captions = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut asked_twice = false;
+    // How the walk gets to its first element: 0 asks for the first; 1 takes a step away; 2 asks for the first again.
+    let mut start = 0u8;
     let mut step = 0;
     while step < limit {
         if Instant::now() >= until { return Ok((captions, false, "deadline")); }
         // From the first element each time a walk starts: the focus is wherever the last one left it.
         let options: plist::Dictionary = [
             ("allowNonAX".to_string(), wrapped(plist::Value::Boolean(false))),
-            ("direction".to_string(), wrapped(plist::Value::Integer((if step == 0 { FIRST } else { NEXT }).into()))),
+            ("direction".to_string(), wrapped(plist::Value::Integer((if step > 0 || start == 1 { NEXT } else { FIRST }).into()))),
             ("includeContainers".to_string(), wrapped(plist::Value::Boolean(true))),
         ].into_iter().collect();
         let (name, arguments) = call("deviceInspectorMoveWithOptions:", wrapped(plist::Value::Dictionary(options)));
@@ -453,15 +455,27 @@ async fn elements(link: &mut Link, limit: usize, until: Instant) -> Result<(Vec<
                 _ => None,
             });
         };
-        // Nothing came: no element there (the home screen), the end of what can be visited — or an
-        // answer that was only slow. Asked once more before it is taken for the end.
         let Some(focus) = focus else {
-            if !asked_twice && Instant::now() < until {
+            if step == 0 {
+                // No answer to "the first": the focus may be on it already (a walk that came round
+                // leaves it there), and a move that changes nothing reports nothing. A step away
+                // and back makes it say so. Still nothing after that: no element there (the home screen).
+                if start < 2 && Instant::now() < until {
+                    start += 1;
+                    continue;
+                }
+            } else if !asked_twice && Instant::now() < until {
+                // The end of what can be visited — or an answer that was only slow: asked once more.
                 asked_twice = true;
                 continue;
             }
-            return Ok((captions, step > 0, "quiet"));
+            // A screen read whole ends by coming round (seen on the device); silence is a walk cut short.
+            return Ok((captions, false, "quiet"));
         };
+        if step == 0 && start == 1 {
+            start = 2;   // that was the step away, not the first element
+            continue;
+        }
         asked_twice = false;
         let inner = unwrapped(unwrapped(&focus)).as_dictionary();
         let field = |key: &str| inner.and_then(|d| d.get(key)).map(unwrapped);

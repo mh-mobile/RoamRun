@@ -197,6 +197,8 @@ tools when you have them; the rules below hold for both.
   Read the point off the image you just looked at, in its own pixels (the size
   printed after the path); never reuse a point from an older one.
   A point refused for being outside the image leaves the look to be used.
+  The image is the screen as the device holds it, upright: an app in landscape
+  shows turned on its side in it, and its points are still the image's.
 - `roamrun swipe iPhone 590 1800 590 900 [ms]` drags; start on something that
   does nothing when pressed if you can.
 - `roamrun elements iPhone [limit]` prints what accessibility says is on the
