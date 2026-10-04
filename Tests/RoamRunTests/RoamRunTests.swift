@@ -4302,10 +4302,10 @@ private func silentPort() throws -> (fd: Int32, port: UInt16) {
     #expect(UUID(uuidString: DeviceControlHub.hostID(in: here)) != nil)
 }
 
-/// A new pairing takes the saved one's place only by moving it aside, where it can be had back.
-@Test func aNewPairingKeepsTheOneItReplaces() throws {
-    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("rr-adopt-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+/// A new pairing takes the saved one's place whole, and nothing of the old one is kept: the
+/// device no longer takes it, and it holds a private key.
+@Test func aNewPairingReplacesTheSavedOne() throws {
+    let dir = scratchDir()
     defer { try? FileManager.default.removeItem(at: dir) }
     let file = dir.appendingPathComponent("device-pairing-X.plist")
     func fresh(_ text: String) throws -> URL {
@@ -4313,16 +4313,35 @@ private func silentPort() throws -> (fd: Int32, port: UInt16) {
         try Data(text.utf8).write(to: url)
         return url
     }
-    func read(_ url: URL) -> String? { (try? Data(contentsOf: url)).map { String(decoding: $0, as: UTF8.self) } }
-    let previous = file.appendingPathExtension("previous")
-
-    try DeviceControlHub.adopt(fresh("first"), as: file)   // none before: nothing to keep
-    #expect(read(file) == "first" && read(previous) == nil)
+    func names() -> [String] { ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).sorted() }
+    try DeviceControlHub.adopt(fresh("first"), as: file)
+    #expect(names() == ["device-pairing-X.plist"])
+    try Data("older".utf8).write(to: file.appendingPathExtension("previous"))   // what an earlier RoamRun kept
     try DeviceControlHub.adopt(fresh("second"), as: file)
-    #expect(read(file) == "second" && read(previous) == "first")
-    try DeviceControlHub.adopt(fresh("third"), as: file)   // only the last one is kept
-    #expect(read(file) == "third" && read(previous) == "second")
-    #expect(read(file.appendingPathExtension("new")) == nil)
+    #expect(names() == ["device-pairing-X.plist"])
+    #expect(try String(contentsOf: file, encoding: .utf8) == "second")
+    #expect(throws: (any Error).self) { try DeviceControlHub.adopt(file.appendingPathExtension("new"), as: file) }   // nothing to adopt
+    #expect(try String(contentsOf: file, encoding: .utf8) == "second")
+}
+
+/// A screen's size is asked until it is answered, a minute apart, and then kept: a look that
+/// came while devicectl couldn't reach the device no longer leaves every later one uncut.
+@Test func aScreensSizeIsAskedAgainUntilItIsKnown() {
+    var answers: [(width: Int, height: Int)?] = [nil, nil, (1179, 2556)]
+    var asked = 0
+    let sizes = ScreenSizes(ask: { _ in asked += 1; return answers.removeFirst() }, retry: 60)
+    let t0 = Date()
+    #expect(sizes.size(of: "A", now: t0) == nil && asked == 1)
+    #expect(sizes.size(of: "A", now: t0.addingTimeInterval(59)) == nil && asked == 1)   // not yet again
+    #expect(sizes.size(of: "A", now: t0.addingTimeInterval(60)) == nil && asked == 2)
+    #expect(sizes.size(of: "A", now: t0.addingTimeInterval(120))?.width == 1179 && asked == 3)
+    #expect(sizes.size(of: "A", now: t0.addingTimeInterval(121))?.height == 2556 && asked == 3)   // kept
+}
+
+/// A device that can't be reached is tried less and less often, up to every five minutes.
+@Test func aDeviceOutOfReachIsTriedLessOften() {
+    #expect((1...6).map { DeviceControlHub.retryDelay(afterFailures: $0) } == [30, 60, 120, 240, 300, 300])
+    #expect(DeviceControlHub.retryDelay(afterFailures: 0) == 30 && DeviceControlHub.retryDelay(afterFailures: 1000) == 300)
 }
 
 /// A look right after an input waits out the rest of the settling time; a later one doesn't wait.
@@ -4342,7 +4361,8 @@ import ImageIO
 @Test func theMCPServerScalesPointsBackToTheLook() throws {
     let device = profile("iPhone")
     var asked: [DeviceControlWire.Request] = []
-    let server = DeviceMCP(profiles: [device]) { request in
+    var saved = [device]
+    let server = DeviceMCP(profiles: { saved }) { request in
         asked.append(request)
         if request.op == "look", let path = request.path {
             // A screen twice the size a look returns: 2000 x 4000 comes back as 640 x 1280.
@@ -4391,6 +4411,12 @@ import ImageIO
 
     #expect(try call("look", #"{"device":"nobody"}"#)["isError"] as? Bool == true)
     #expect(try send(#"{"jsonrpc":"2.0","id":9,"method":"resources/list"}"#)["error"] != nil)
+
+    // A device saved after the server started is there at the next call.
+    saved.append(profile("iPad"))
+    let listed = try #require((try call("devices", "{}")["content"] as? [[String: Any]])?.first?["text"] as? String)
+    #expect(listed == "iPhone\niPad")
+    #expect(try call("look", #"{"device":"iPad"}"#)["isError"] as? Bool == false)
 }
 
 /// What the CLI sends for each command reaches the app as it was written.

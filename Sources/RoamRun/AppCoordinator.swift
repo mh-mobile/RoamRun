@@ -921,7 +921,7 @@ final class AppCoordinator: ObservableObject {
         memories[id] = nil
         #if DEVICE_CONTROL
         // Its pairing for device control goes with it, as the dialog says: added again, it is set up again.
-        if let target = profiles.first(where: { $0.id == id }).flatMap(Self.controlTarget) { deviceControl.unpair(target) }
+        if let target = profiles.first(where: { $0.id == id }).flatMap(controlTarget) { deviceControl.unpair(target) }
         #endif
         profiles.removeAll { $0.id == id }
         wasActiveIDs.remove(id)
@@ -1221,11 +1221,17 @@ final class AppCoordinator: ObservableObject {
     /// The devices as saved now, to the hub that keeps their control connections: at launch, and
     /// whenever the list is saved. (A pairing made while the app runs is seen at the next of those.)
     private func syncDeviceControl() {
-        deviceControl.update(profiles.compactMap(Self.controlTarget))
+        deviceControl.update(profiles.compactMap(controlTarget))
     }
 
-    private static func controlTarget(_ p: DeviceProfile) -> DeviceControlHub.Target? {
-        p.udid.map { .init(id: p.id, name: p.displayName, ip: p.providerIP, port: p.remotePairingPort, udid: $0) }
+    private func controlTarget(_ p: DeviceProfile) -> DeviceControlHub.Target? {
+        controlUDID(p).map { .init(id: p.id, name: p.displayName, ip: p.providerIP, port: p.remotePairingPort, udid: $0) }
+    }
+
+    /// The device's UDID, which names its pairing: saved with it, or as whoever bridges it now has learned it
+    /// (a `roamrun up` saves it to the file only).
+    private func controlUDID(_ p: DeviceProfile) -> String? {
+        p.udid ?? bridges[p.id]?.udid ?? externalBridges[p.id]?.udid
     }
 
     /// What the device's Settings list this Mac as, for device control.
@@ -1234,23 +1240,25 @@ final class AppCoordinator: ObservableObject {
     struct ControlPairing: Equatable {
         var device: UUID
         var step: DeviceControlHub.PairingStep
+        /// Which attempt: one cancelled and begun again mustn't show the first one's end.
+        var attempt = UUID()
     }
     /// The pairing for device control being made now, if any.
     @Published private(set) var controlPairing: ControlPairing?
 
     /// nil until the device's UDID is known (it names the pairing).
     func controlState(_ profile: DeviceProfile) -> (paired: Bool, open: Bool, refused: Bool)? {
-        profile.udid.map { deviceControl.state(of: profile.id, udid: $0) }
+        controlUDID(profile).map { deviceControl.state(of: profile.id, udid: $0) }
     }
 
     func startControlPairing(_ profile: DeviceProfile) {
-        guard let target = Self.controlTarget(profile) else { return }
-        let id = profile.id
-        controlPairing = .init(device: id, step: .waiting(""))
+        guard let target = controlTarget(profile) else { return }
+        let pairing = ControlPairing(device: profile.id, step: .waiting(""))
+        controlPairing = pairing
         deviceControl.pair(target, as: Self.controlHostName) { [weak self] step in
             Task { @MainActor in
-                guard self?.controlPairing?.device == id else { return }   // dismissed meanwhile
-                self?.controlPairing = .init(device: id, step: step)
+                guard self?.controlPairing?.attempt == pairing.attempt else { return }   // dismissed, or begun again, meanwhile
+                self?.controlPairing?.step = step
             }
         }
     }
@@ -1262,7 +1270,7 @@ final class AppCoordinator: ObservableObject {
     }
 
     func removeControlPairing(_ profile: DeviceProfile) {
-        guard let target = Self.controlTarget(profile) else { return }
+        guard let target = controlTarget(profile) else { return }
         deviceControl.unpair(target)
         objectWillChange.send()
     }

@@ -209,7 +209,7 @@ enum CLI {
             #if DEVICE_CONTROL
             case "mcp":
                 // Off the main thread: it reads stdin until the client closes it.
-                let server = DeviceMCP(profiles: profiles) { try DeviceControlWire.ask($0, in: ProfileStore.directory) }
+                let server = DeviceMCP(profiles: { store.load() }) { try DeviceControlWire.ask($0, in: ProfileStore.directory) }
                 Thread.detachNewThread { server.serve(); exit(0) }
             case "look":
                 guard name != nil, let p = targets.first else { fail("usage: roamrun look <name> [file.png]. " + names(profiles)) }

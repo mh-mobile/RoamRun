@@ -39,8 +39,6 @@ public final class DeviceSession: @unchecked Sendable {
     /// as long as a call to the device takes, and asking how things stand mustn't wait for that.
     private let standingLock = NSLock()
     private var standing = (open: false, refused: false)
-    private var screen: (width: Int, height: Int)?
-    private var askedScreen = false
     /// Said as things happen (opened, tried again, reopened), for whoever shows or logs it.
     public var onEvent: (@Sendable (String) -> Void)?
 
@@ -106,12 +104,8 @@ public final class DeviceSession: @unchecked Sendable {
             defer { rr_bytes_free(bytes, length) }
             return Data(bytes: bytes, count: length)
         }
-        let size = lock.withLock { () -> (width: Int, height: Int)? in
-            // Asked once: the size doesn't change, and devicectl may not be reachable later.
-            if !askedScreen, let udid { askedScreen = true; screen = screenSize(udid: udid) }
-            return screen
-        }
-        return cut(try decodeKeyFrame(frame), to: size)
+        // Outside the session's lock: devicectl can take seconds, and another call needn't wait for it.
+        return cut(try decodeKeyFrame(frame), to: udid.flatMap { ScreenSizes.shared.size(of: $0) })
     }
 
     /// Accessibility's captions; `complete` is false when the walk was cut short. Can scroll the screen.

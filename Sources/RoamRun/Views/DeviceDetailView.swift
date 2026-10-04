@@ -349,8 +349,16 @@ private struct DeviceControlRow: View {
     @State private var confirmRemove = false
 
     var body: some View {
+        // The connection comes and goes with the device; what is said is read anew every few seconds.
+        TimelineView(.periodic(from: .now, by: 3)) { _ in row }
+            .onDisappear {   // the sheet goes with this view; so does what it was showing
+                if coordinator.controlPairing?.device == profile.id { coordinator.endControlPairing() }
+            }
+    }
+
+    private var row: some View {
         let state = coordinator.controlState(profile)
-        HStack(alignment: .firstTextBaseline) {
+        return HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Device control (experimental)").font(.headline)
                 Text(summary(state)).font(.callout).foregroundStyle(.secondary)
@@ -404,6 +412,10 @@ private struct ControlPairingSheet: View {
                 ProgressView("Checking the connection…")
             case .done:
                 Label("Device control is set up.", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+            case .doneUnreached(let why):
+                Label("Paired. The device can't be reached over the VPN right now, so device control connects when it can.",
+                      systemImage: "checkmark.circle").foregroundStyle(.green)
+                Text(why).font(.caption).foregroundStyle(.secondary)
             case .failed(let why):
                 Label(why, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
             case nil:
@@ -412,7 +424,7 @@ private struct ControlPairingSheet: View {
             HStack {
                 Spacer()
                 switch coordinator.controlPairing?.step {
-                case .done:
+                case .done, .doneUnreached:
                     Button("Done") { coordinator.endControlPairing() }.keyboardShortcut(.defaultAction)
                 case .failed:
                     Button("Close") { coordinator.endControlPairing() }.keyboardShortcut(.cancelAction)

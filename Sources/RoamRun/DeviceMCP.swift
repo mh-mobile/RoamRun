@@ -12,15 +12,17 @@ import UniformTypeIdentifiers
 final class DeviceMCP: @unchecked Sendable {
     typealias Ask = (DeviceControlWire.Request) throws -> DeviceControlWire.Response
 
-    private let profiles: [DeviceProfile]
+    /// Read at each call: a device added or renamed since the server started is there.
+    private let saved: () -> [DeviceProfile]
+    private var profiles: [DeviceProfile] { saved() }
     private let ask: Ask
     /// The longer side of the image a look returns.
     static let longSide = 1280
     /// Per device: the size of the last image given out, and of the look behind it.
     private var shown: [UUID: (shown: CGSize, real: CGSize)] = [:]
 
-    init(profiles: [DeviceProfile], ask: @escaping Ask) {
-        self.profiles = profiles
+    init(profiles: @escaping () -> [DeviceProfile], ask: @escaping Ask) {
+        self.saved = profiles
         self.ask = ask
     }
 
@@ -71,6 +73,7 @@ final class DeviceMCP: @unchecked Sendable {
 
     private func call(_ tool: String, _ arguments: [String: Any]) throws -> [[String: Any]] {
         func text(_ s: String) -> [[String: Any]] { [["type": "text", "text": s]] }
+        let profiles = self.profiles
         if tool == "devices" {
             return text(profiles.isEmpty ? "No devices saved in RoamRun." : profiles.map(\.displayName).joined(separator: "\n"))
         }

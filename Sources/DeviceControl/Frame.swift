@@ -13,6 +13,8 @@ public func screenSize(udid: String) -> (width: Int, height: Int)? {
     p.standardOutput = out
     p.standardError = FileHandle.nullDevice
     guard (try? p.run()) != nil else { return nil }
+    // devicectl that can't reach the device is not waited on: a look waits for this.
+    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 15) { if p.isRunning { p.terminate() } }
     let data = out.fileHandleForReading.readDataToEndOfFile()
     p.waitUntilExit()
     guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -20,6 +22,35 @@ public func screenSize(udid: String) -> (width: Int, height: Int)? {
           let size = (displays.first { $0["primary"] as? Bool == true } ?? displays.first)?["nativeSize"] as? [Int],
           size.count == 2, size[0] > 0, size[1] > 0 else { return nil }
     return (size[0], size[1])
+}
+
+/// Each device's screen size: asked once it has been answered, and while it hasn't, asked again
+/// only after `retry` (a look mustn't wait for devicectl every time). Kept for as long as the app runs.
+public final class ScreenSizes: @unchecked Sendable {
+    public static let shared = ScreenSizes(ask: screenSize(udid:))
+
+    private let ask: (String) -> (width: Int, height: Int)?
+    private let retry: TimeInterval
+    private let lock = NSLock()
+    private var known: [String: (width: Int, height: Int)] = [:]
+    private var failed: [String: Date] = [:]
+
+    public init(ask: @escaping (String) -> (width: Int, height: Int)?, retry: TimeInterval = 60) {
+        self.ask = ask
+        self.retry = retry
+    }
+
+    public func size(of udid: String, now: Date = Date()) -> (width: Int, height: Int)? {
+        let (size, due) = lock.withLock { (known[udid], failed[udid].map { now.timeIntervalSince($0) >= retry } ?? true) }
+        if let size { return size }
+        guard due else { return nil }
+        let answer = ask(udid)   // not under the lock: it can take seconds
+        lock.withLock {
+            known[udid] = answer
+            failed[udid] = answer == nil ? now : nil
+        }
+        return answer
+    }
 }
 
 /// The frame without the stream's padding, which is on the right and at the bottom. A frame

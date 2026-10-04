@@ -214,6 +214,10 @@ final class DeviceControlHub: @unchecked Sendable {
         var looked: (width: Int, height: Int)?
         /// When the last input ended: a look right after it waits for the screen to settle.
         var acted: Date?
+        /// Opening it in the background: one attempt at a time, and further apart while they fail.
+        var connecting = false
+        var failures = 0
+        var nextTry = Date.distantPast
     }
 
     private let directory: URL
@@ -227,6 +231,8 @@ final class DeviceControlHub: @unchecked Sendable {
     private var pairingUnderWay = false
     private var pairingCancelled = false
     var onLog: (@Sendable (String, UUID) -> Void)?
+    /// A background attempt to open a device's connection failed, and why.
+    var onUnreached: (@Sendable (UUID, String) -> Void)?
 
     init(directory: URL) { self.directory = directory }
 
@@ -276,6 +282,8 @@ final class DeviceControlHub: @unchecked Sendable {
         case code(String)
         case checking
         case done
+        /// Saved, but no connection could be made with it just now (the reason).
+        case doneUnreached(String)
         case failed(String)
     }
 
@@ -325,7 +333,13 @@ final class DeviceControlHub: @unchecked Sendable {
                 }
                 try Self.adopt(fresh, as: file)
                 reopen(target.id)
-                step(.done)
+                // Said as it is: saved, and whether it also connects right now.
+                do {
+                    try session(of: target.id)?.connect()
+                    step(.done)
+                } catch {
+                    step(.doneUnreached("\(error)"))
+                }
             } catch {
                 step(.failed("\(error)"))
             }
@@ -342,15 +356,13 @@ final class DeviceControlHub: @unchecked Sendable {
         return fresh
     }
 
-    /// Puts a new pairing in the saved one's place. The one it replaces is kept beside it
-    /// (".previous"), to put back by hand if the device still takes it.
+    /// Puts a new pairing in the saved one's place. The one it replaces is of no use any more
+    /// (the device knows this Mac by one identity, and now by the new key), so nothing of it is kept.
     static func adopt(_ fresh: URL, as file: URL) throws {
-        if FileManager.default.fileExists(atPath: file.path) {
-            let previous = file.appendingPathExtension("previous")
-            try? FileManager.default.removeItem(at: previous)
-            try FileManager.default.moveItem(at: file, to: previous)
+        guard rename(fresh.path, file.path) == 0 else {
+            throw DeviceSession.Failure.message("can't save the pairing: \(String(cString: strerror(errno)))")
         }
-        try FileManager.default.moveItem(at: fresh, to: file)
+        try? FileManager.default.removeItem(at: file.appendingPathExtension("previous"))   // an older RoamRun's
     }
 
     func cancelPairing() {
@@ -411,10 +423,34 @@ final class DeviceControlHub: @unchecked Sendable {
         _ = group.wait(timeout: .now() + 2)
     }
 
+    /// How long after its nth failure in a row a connection is tried again: a device away or
+    /// asleep is asked less and less often (each try reaches it over whatever network it has).
+    static func retryDelay(afterFailures n: Int) -> TimeInterval {
+        min(30 * pow(2, Double(max(n, 1) - 1)), 300)
+    }
+
+    /// Tries to open what isn't: one attempt per device at a time; none for a pairing the device
+    /// refused (only pairing again helps, and that makes a new session).
     private func keepOpen() {
-        let closed = lock.withLock { held.values.map(\.session) }.filter { !$0.isOpen }
-        for session in closed {
-            DispatchQueue.global(qos: .utility).async { try? session.connect() }
+        let now = Date()
+        let due = lock.withLock { () -> [(UUID, DeviceSession)] in
+            let due = held.filter { !$0.value.connecting && $0.value.nextTry <= now && !$0.value.session.isOpen && !$0.value.session.isRefused }
+            for id in due.keys { held[id]?.connecting = true }
+            return due.map { ($0.key, $0.value.session) }
+        }
+        for (id, session) in due {
+            DispatchQueue.global(qos: .utility).async { [self] in
+                var failure: String?
+                do { try session.connect() } catch { failure = "\(error)" }
+                lock.withLock {
+                    guard held[id]?.session === session else { return }   // replaced meanwhile
+                    let failures = failure == nil ? 0 : (held[id]?.failures ?? 0) + 1
+                    held[id]?.connecting = false
+                    held[id]?.failures = failures
+                    held[id]?.nextTry = failure == nil ? .distantPast : Date().addingTimeInterval(Self.retryDelay(afterFailures: failures))
+                }
+                if let failure { onUnreached?(id, failure) }
+            }
         }
     }
 
