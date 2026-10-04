@@ -199,6 +199,9 @@ final class DeviceControlHub: @unchecked Sendable {
         var ip: String
         var port: UInt16
         var udid: String
+
+        /// The same device at the same place: what a connection is to.
+        func reaches(_ other: Target) -> Bool { ip == other.ip && port == other.port && udid == other.udid }
     }
 
     private struct Held {
@@ -226,23 +229,40 @@ final class DeviceControlHub: @unchecked Sendable {
 
     /// The saved devices as they are now. One whose address or port changed gets a new session.
     func update(_ targets: [Target]) {
-        lock.withLock { self.targets = targets }
-        let paired = targets.filter { FileManager.default.fileExists(atPath: DeviceControlWire.pairingFile(udid: $0.udid, in: directory).path) }
         var gone: [DeviceSession] = []
         lock.withLock {
-            for (id, h) in held where !paired.contains(h.target) {
-                gone.append(h.session)
-                held[id] = nil
+            self.targets = targets
+            let saved = Dictionary(targets.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            for (id, h) in held {
+                // A device renamed keeps its connection (away from Wi‑Fi no new one could be made);
+                // one moved to another address, removed or unpaired doesn't.
+                if let t = saved[id], t.reaches(h.target), hasPairing(t) {
+                    held[id]?.target = t
+                } else {
+                    gone.append(h.session)
+                    held[id] = nil
+                }
             }
-            for t in paired where held[t.id] == nil {
-                let session = DeviceSession(ip: t.ip, port: t.port,
-                                            pairingFile: DeviceControlWire.pairingFile(udid: t.udid, in: directory).path, udid: t.udid)
-                session.onEvent = { [weak self] event in self?.onLog?("device control: \(event)", t.id) }
-                held[t.id] = Held(target: t, session: session)
+            for t in targets where held[t.id] == nil {
+                if let session = session(for: t) { held[t.id] = Held(target: t, session: session) }
             }
         }
-        gone.forEach { $0.close() }
+        Self.closing(gone)
         keepOpen()
+    }
+
+    private func hasPairing(_ t: Target) -> Bool {
+        FileManager.default.fileExists(atPath: DeviceControlWire.pairingFile(udid: t.udid, in: directory).path)
+    }
+
+    /// The session held for a device, if any.
+    func session(of id: UUID) -> DeviceSession? { lock.withLock { held[id]?.session } }
+
+    /// Closing waits for a call that runs on the session, which can take long: never on the
+    /// caller's thread (the main one, when the list is saved).
+    private static func closing(_ sessions: [DeviceSession]) {
+        guard !sessions.isEmpty else { return }
+        DispatchQueue.global(qos: .utility).async { sessions.forEach { $0.close() } }
     }
 
     /// A pairing in the making, as it is shown.
@@ -259,7 +279,7 @@ final class DeviceControlHub: @unchecked Sendable {
     /// Whether a pairing of our own is saved for the device, and whether its connection stands.
     func state(of id: UUID, udid: String) -> (paired: Bool, open: Bool, refused: Bool) {
         let paired = FileManager.default.fileExists(atPath: DeviceControlWire.pairingFile(udid: udid, in: directory).path)
-        let session = lock.withLock { held[id]?.session }
+        let session = session(of: id)
         return (paired, paired && session?.isOpen == true, paired && session?.isRefused == true)
     }
 
@@ -339,10 +359,25 @@ final class DeviceControlHub: @unchecked Sendable {
         onLog?("device control: pairing removed", target.id)
     }
 
-    /// The device's session made anew from what is saved now.
+    /// The device's session made anew from what is saved now. The new one is in place before
+    /// the old one is closed: in between, the device would answer as not set up.
     private func reopen(_ id: UUID) {
-        lock.withLock { held.removeValue(forKey: id)?.session }?.close()
-        update(lock.withLock { targets })
+        let old = lock.withLock { () -> DeviceSession? in
+            let old = held.removeValue(forKey: id)?.session
+            if let t = targets.first(where: { $0.id == id }), let session = session(for: t) { held[id] = Held(target: t, session: session) }
+            return old
+        }
+        Self.closing(old.map { [$0] } ?? [])
+        keepOpen()
+    }
+
+    /// A session for the device, if a pairing of our own is saved for it.
+    private func session(for t: Target) -> DeviceSession? {
+        guard hasPairing(t) else { return nil }
+        let file = DeviceControlWire.pairingFile(udid: t.udid, in: directory)
+        let session = DeviceSession(ip: t.ip, port: t.port, pairingFile: file.path, udid: t.udid)
+        session.onEvent = { [weak self] event in self?.onLog?("device control: \(event)", t.id) }
+        return session
     }
 
     func start() {
@@ -363,11 +398,14 @@ final class DeviceControlHub: @unchecked Sendable {
             defer { held = [:] }
             return held.values.map(\.session)
         }
-        sessions.forEach { $0.close() }
+        // Each is told to end its stream, but quitting doesn't wait on a device that no longer answers.
+        let group = DispatchGroup()
+        for session in sessions { DispatchQueue.global(qos: .userInitiated).async(group: group) { session.close() } }
+        _ = group.wait(timeout: .now() + 2)
     }
 
     private func keepOpen() {
-        let closed = lock.withLock { held.values.map(\.session).filter { !$0.isOpen } }
+        let closed = lock.withLock { held.values.map(\.session) }.filter { !$0.isOpen }
         for session in closed {
             DispatchQueue.global(qos: .utility).async { try? session.connect() }
         }

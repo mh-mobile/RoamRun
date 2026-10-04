@@ -1,6 +1,10 @@
 import Foundation
 import Testing
 @testable import RoamRun
+#if DEVICE_CONTROL
+import CryptoKit
+import DeviceControl
+#endif
 
 // MARK: - Tunnel port attribution
 
@@ -4169,6 +4173,72 @@ func publishStepsAsideWhenTurnedOff(_ c: PublishCase) async {
         try DeviceControlWire.ask(.init(op: "tap", device: UUID(), x: .nan, y: 1), in: dir)
     }
     #expect(Date().timeIntervalSince(started) < 2)
+}
+
+/// A pairing file as the library reads one, for a device that doesn't exist.
+private func scratchPairing(at url: URL) throws {
+    let key = Curve25519.Signing.PrivateKey()
+    let plist: [String: Any] = ["public_key": key.publicKey.rawRepresentation, "private_key": key.rawRepresentation,
+                                "identifier": UUID().uuidString]
+    try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0).write(to: url)
+}
+
+/// A port on this Mac that takes a connection and never says a word: a device that stopped answering.
+private func silentPort() throws -> (fd: Int32, port: UInt16) {
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    var address = sockaddr_in()
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_addr.s_addr = inet_addr("127.0.0.1")
+    var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+    let bound = withUnsafeMutablePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, length) == 0 && listen(fd, 4) == 0 && getsockname(fd, $0, &length) == 0 }
+    }
+    try #require(bound)
+    return (fd, UInt16(bigEndian: address.sin_port))
+}
+
+/// Asking how a device's connection stands never waits for a call that runs on it: the app's
+/// window asks while it draws, and `status` asks while an agent's `elements` is under way.
+@Test func askingHowAConnectionStandsDoesNotWaitForACall() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let file = dir.appendingPathComponent("pairing.plist")
+    try scratchPairing(at: file)
+    let silent = try silentPort()
+    defer { close(silent.fd) }
+    let session = DeviceSession(ip: "127.0.0.1", port: silent.port, pairingFile: file.path)
+    let entered = DispatchSemaphore(value: 0)
+    Thread.detachNewThread {
+        entered.signal()
+        try? session.connect()   // waits on the silent port, up to the library's 20 s
+    }
+    entered.wait()
+    Thread.sleep(forTimeInterval: 0.3)   // it holds the session's lock by now
+    let asked = Date()
+    #expect(!session.isOpen && !session.isRefused)
+    #expect(Date().timeIntervalSince(asked) < 1)
+}
+
+/// A device renamed keeps the connection it has (away from Wi‑Fi no new one could be made);
+/// one found at another port gets a new one.
+@Test func aRenamedDeviceKeepsItsConnection() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try scratchPairing(at: DeviceControlWire.pairingFile(udid: "UDID-1", in: dir))
+    let hub = DeviceControlHub(directory: dir)
+    defer { hub.stop() }
+    let id = UUID()
+    func target(_ name: String, port: UInt16) -> DeviceControlHub.Target {
+        .init(id: id, name: name, ip: "127.0.0.1", port: port, udid: "UDID-1")   // nothing listens there: opening fails at once
+    }
+    hub.update([target("iPhone", port: 1)])
+    let first = try #require(hub.session(of: id))
+    hub.update([target("My iPhone", port: 1)])
+    #expect(hub.session(of: id) === first)
+    hub.update([target("My iPhone", port: 2)])
+    #expect(hub.session(of: id) != nil && hub.session(of: id) !== first)
+    hub.update([])
+    #expect(hub.session(of: id) == nil)
 }
 
 /// Whatever number a caller sends for a walk's length or a swipe's duration, the app survives it:

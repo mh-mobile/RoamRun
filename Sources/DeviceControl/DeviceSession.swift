@@ -35,6 +35,10 @@ public final class DeviceSession: @unchecked Sendable {
     /// until a call works or a new one is made.
     private var broken = false
     private var refused = false
+    /// What `isOpen` and `isRefused` answer with, under a lock of its own: `lock` is held for
+    /// as long as a call to the device takes, and asking how things stand mustn't wait for that.
+    private let standingLock = NSLock()
+    private var standing = (open: false, refused: false)
     private var screen: (width: Int, height: Int)?
     private var askedScreen = false
     /// Said as things happen (opened, tried again, reopened), for whoever shows or logs it.
@@ -47,19 +51,31 @@ public final class DeviceSession: @unchecked Sendable {
     deinit { rr_device_close(device) }
 
     public func close() {
-        lock.withLock { rr_device_close(device); device = nil }
+        lock.withLock {
+            rr_device_close(device)
+            device = nil
+            noteStanding()
+        }
     }
 
-    public var isOpen: Bool { lock.withLock { device != nil && !broken } }
+    /// As of the last call that finished; never waits for one that runs.
+    public var isOpen: Bool { standingLock.withLock { standing.open } }
 
     /// The device refused the pairing when a connection was last tried: it was removed there,
     /// and only pairing again helps.
-    public var isRefused: Bool { lock.withLock { refused } }
+    public var isRefused: Bool { standingLock.withLock { standing.refused } }
+
+    /// Under `lock`, whenever what it guards may have changed.
+    private func noteStanding() {
+        let now = (device != nil && !broken, refused)
+        standingLock.withLock { standing = now }
+    }
 
     /// Opens a connection if none stands; nothing is asked of the device beyond that. One
     /// taken for gone stays in place when no new one can be made: a later call may find it back.
     public func connect() throws {
         try lock.withLock {
+            defer { noteStanding() }
             guard device == nil || broken else { return }
             let fresh = try open()
             rr_device_close(device)
@@ -145,6 +161,7 @@ public final class DeviceSession: @unchecked Sendable {
 
     private func perform<T>(repeatable: Bool, _ body: (OpaquePointer) throws -> T) throws -> T {
         try lock.withLock {
+            defer { noteStanding() }
             if device == nil {
                 device = try open()
                 onEvent?("opened")

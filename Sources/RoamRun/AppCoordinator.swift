@@ -1265,12 +1265,12 @@ final class AppCoordinator: ObservableObject {
     #endif
 
     func shutdown() {
-        #if DEVICE_CONTROL
-        deviceControl.stop()
-        #endif
         capture.stop()
         stopOTA()   // the serve entry would otherwise point at a dead port
         for bridge in bridges.values { bridge.stop() }
+        #if DEVICE_CONTROL
+        deviceControl.stop()   // last: it may wait a moment for a device, and the bridges' helpers mustn't be left meanwhile
+        #endif
     }
 
     private func onInterfaceLost() {
