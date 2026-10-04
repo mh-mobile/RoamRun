@@ -2,6 +2,7 @@
 //! _button operate the device; rr_device_elements can scroll it.
 
 use std::ffi::{c_char, CStr, CString};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -13,14 +14,16 @@ use idevice::core_device::{
     build_start_video_parameters, is_rtcp, CallInfoBlob, DisplayServiceClient, HevcDepacketizer, PasteboardServiceClient, RtpPacket,
     GENERAL_PASTEBOARD,
 };
-use idevice::remote_pairing::{connect_tls_psk_tunnel_native, RemotePairingClient, RpPairingFile, RpPairingSocket};
+use idevice::remote_pairing::{
+    connect_tls_psk_tunnel_native, PairableHost, PairableHostInfo, RemotePairingClient, RpPairingFile, RpPairingSocket,
+};
 use idevice::rsd::RsdHandshake;
 use idevice::tcp::adapter::Adapter;
 use idevice::tcp::handle::{AdapterHandle, UdpSocketHandle};
 use idevice::{ReadWrite, RsdService};
-use tokio::net::TcpStream;
+use tokio::net::{TcpListener, TcpStream};
 
-const VERSION: &CStr = c"0.4.6";
+const VERSION: &CStr = c"0.5.0";
 const LABEL: &str = "roamrun";
 /// Each call: a device that stops answering mid-way must not hang the caller.
 const DEADLINE: Duration = Duration::from_secs(20);
@@ -766,4 +769,155 @@ async fn keyframe(link: &mut Link) -> Result<Vec<u8>, String> {
             Err("the stream started but sent no key frame".into())
         }
     }
+}
+
+/// A pairing a device comes to make: this side listens and shows a code, the device's user
+/// picks it in Settings and enters the code there.
+pub struct RRPairing {
+    runtime: tokio::runtime::Runtime,
+    listener: TcpListener,
+    info: PairableHostInfo,
+    file: Mutex<RpPairingFile>,
+    cancelled: AtomicBool,
+}
+
+/// A device that connects gets this long to ask for a code; one that stays silent is dropped
+/// for the next (a connection alone doesn't mean a device that wants to pair).
+const BEFORE_CODE: Duration = Duration::from_secs(25);
+/// The user's part: reading the code and entering it on the device.
+const ENTER_CODE: Duration = Duration::from_secs(180);
+const TICK: Duration = Duration::from_millis(250);
+
+/// # Safety
+/// `name` and `model` are null or NUL-terminated strings; `advert` and `error` are null or writable.
+#[no_mangle]
+pub unsafe extern "C" fn rr_pairing_listen(name: *const c_char, model: *const c_char, advert: *mut *mut c_char, error: *mut *mut c_char) -> *mut RRPairing {
+    let arg = |p: *const c_char| (!p.is_null()).then(|| unsafe { CStr::from_ptr(p) }.to_str().ok()).flatten();
+    let listening = match (arg(name), arg(model)) {
+        (Some(name), Some(model)) => tokio::runtime::Builder::new_multi_thread().worker_threads(1).thread_stack_size(STACK).enable_all().build()
+            .map_err(|e| format!("no runtime: {e}"))
+            .and_then(|runtime| {
+                // Both families: the device reaches this Mac by whichever address its name resolves to.
+                let listener = runtime.block_on(TcpListener::bind("[::]:0")).map_err(|e| format!("can't listen: {e}"))?;
+                let port = listener.local_addr().map_err(|e| format!("no port: {e}"))?.port();
+                // One identity per Mac name: pairing again replaces the device's record of it.
+                let file = RpPairingFile::generate(&format!("{LABEL} {name}"));
+                let info = PairableHostInfo::generate(name, model);
+                let txt = info.mdns_txt_records(file.identifier()).iter()
+                    .map(|(k, v)| format!("{}:{}", quoted(k), quoted(v))).collect::<Vec<_>>().join(",");
+                let said = format!("{{\"port\":{port},\"identifier\":{},\"txt\":{{{txt}}}}}", quoted(file.identifier()));
+                Ok((RRPairing { runtime, listener, info, file: Mutex::new(file), cancelled: AtomicBool::new(false) }, said))
+            }),
+        _ => Err("bad arguments".into()),
+    };
+    match listening {
+        Ok((pairing, said)) => {
+            if !advert.is_null() { unsafe { *advert = c_string(said) }; }
+            Box::into_raw(Box::new(pairing))
+        }
+        Err(why) => {
+            unsafe { set_error(error, why) };
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// # Safety
+/// `pairing` came from rr_pairing_listen and wasn't freed; `pairing_file` is null or a
+/// NUL-terminated string; `code` may be called, from another thread, until this returns.
+#[no_mangle]
+pub unsafe extern "C" fn rr_pairing_accept(
+    pairing: *mut RRPairing, pairing_file: *const c_char,
+    code: Option<unsafe extern "C" fn(*const c_char, *mut std::ffi::c_void)>, context: *mut std::ffi::c_void,
+) -> *mut c_char {
+    let Some(pairing) = (unsafe { pairing.as_ref() }) else { return std::ptr::null_mut() };
+    let path = (!pairing_file.is_null()).then(|| unsafe { CStr::from_ptr(pairing_file) }.to_str().ok()).flatten();
+    let (Some(path), Some(code)) = (path, code) else { return c_string(failure("bad arguments")) };
+    let context = context as usize;   // an address, carried to the thread that shows the code
+    let show = move |pin: &str| {
+        if let Ok(pin) = CString::new(pin) { unsafe { code(pin.as_ptr(), context as *mut std::ffi::c_void) } }
+    };
+    let result = with_room(|| pairing.runtime.block_on(accept_pairing(pairing, path, &show)));
+    c_string(match result {
+        Ok(peer) => format!("{{\"ok\":true,\"udid\":{},\"name\":{},\"model\":{}}}",
+                            quoted(&peer.remotepairing_udid), quoted(&peer.name), quoted(&peer.model)),
+        Err(why) => failure(&why),
+    })
+}
+
+/// Makes a running rr_pairing_accept return, and the next one return at once.
+///
+/// # Safety
+/// `pairing` came from rr_pairing_listen and wasn't freed, or is null.
+#[no_mangle]
+pub unsafe extern "C" fn rr_pairing_cancel(pairing: *mut RRPairing) {
+    if let Some(pairing) = unsafe { pairing.as_ref() } { pairing.cancelled.store(true, Ordering::Relaxed); }
+}
+
+/// # Safety
+/// `pairing` came from rr_pairing_listen, no rr_pairing_accept runs on it, and it isn't used again; or null.
+#[no_mangle]
+pub unsafe extern "C" fn rr_pairing_free(pairing: *mut RRPairing) {
+    if !pairing.is_null() {
+        let RRPairing { runtime, listener, .. } = *unsafe { Box::from_raw(pairing) };
+        { let _in = runtime.enter(); drop(listener); }   // its socket closes inside the runtime that made it
+    }
+}
+
+async fn accept_pairing(pairing: &RRPairing, path: &str, show: &(impl Fn(&str) + Sync)) -> Result<idevice::remote_pairing::PeerDevice, String> {
+    let cancelled = || pairing.cancelled.load(Ordering::Relaxed);
+    loop {
+        let stream = loop {
+            if cancelled() { return Err("cancelled".into()); }
+            if let Ok(accepted) = tokio::time::timeout(TICK, pairing.listener.accept()).await {
+                break accepted.map_err(|e| format!("can't accept: {e}"))?.0;
+            }
+        };
+        let mut file = pairing.file.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let mut host = PairableHost::new(RpPairingSocket::new_device(stream), pairing.info.clone());
+        let shown: Mutex<Option<Instant>> = Mutex::new(None);
+        let when_shown = || *shown.lock().unwrap_or_else(|e| e.into_inner());
+        let connected = Instant::now();
+        let outcome = {
+            let exchange = host.accept(&mut file, |pin| {
+                *shown.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+                show(&pin);
+                std::future::ready(())
+            });
+            tokio::pin!(exchange);
+            loop {
+                tokio::select! {
+                    done = &mut exchange => break Some(done),
+                    _ = tokio::time::sleep(TICK) => {
+                        if cancelled() { return Err("cancelled".into()); }
+                        match when_shown() {
+                            None if connected.elapsed() >= BEFORE_CODE => break None,
+                            Some(at) if at.elapsed() >= ENTER_CODE => return Err("the code wasn't entered in time".into()),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        };
+        match outcome {
+            Some(Ok(peer)) => {
+                write_private(path, &file.to_bytes())?;
+                return Ok(peer);
+            }
+            // After the code was shown, a failure is the pairing's (a wrong code, a change of mind).
+            Some(Err(e)) if when_shown().is_some() => return Err(format!("the pairing didn't complete: {e:?}")),
+            // Before it, it was no device that wanted to pair: the next one is waited for.
+            _ => continue,
+        }
+    }
+}
+
+/// The pairing holds this side's private key: a file only its owner can read, from the start.
+fn write_private(path: &str, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let _ = std::fs::remove_file(path);
+    std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)
+        .and_then(|mut f| f.write_all(bytes))
+        .map_err(|e| format!("can't write the pairing: {e}"))
 }

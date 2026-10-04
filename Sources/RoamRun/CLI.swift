@@ -744,13 +744,14 @@ enum CLI {
     /// Where a device stands with being operated. `line` is nil when there is nothing to say
     /// (no pairing of our own: it was never set up).
     enum ControlState: Equatable {
-        case notSetUp, connected, notConnected, noApp
+        case notSetUp, connected, notConnected, refused, noApp
 
         var line: String? {
             switch self {
             case .notSetUp: nil
             case .connected: "connected"
             case .notConnected: "paired, not connected — the app keeps trying; it can connect only while the device is on a Wi‑Fi"
+            case .refused: "the device no longer has this pairing (it was removed there) — the user pairs again in the RoamRun app, on the device's page"
             case .noApp: "paired; the RoamRun app, which holds the connection, isn't running (or is a build without device control)"
             }
         }
@@ -762,7 +763,8 @@ enum CLI {
         }
         guard let r = try? DeviceControlWire.ask(.init(op: "state", device: id), in: ProfileStore.directory) else { return .noApp }
         // A pairing the app hasn't picked up yet answers as not set up there.
-        return r.ok && r.open == true ? .connected : .notConnected
+        guard r.ok, r.open != true else { return r.ok ? .connected : .notConnected }
+        return r.refused == true ? .refused : .notConnected
     }
 
     private static func askApp(_ request: DeviceControlWire.Request) -> DeviceControlWire.Response {
@@ -1365,6 +1367,9 @@ enum CLI {
             case .notConnected:
                 check(false, "Device control: paired, but not connected",
                       fix: "It connects while the device is on a Wi‑Fi, awake and reachable over the VPN — and then stays connected on cellular. Ask the user to unlock it on Wi‑Fi.", warnOnly: true)
+            case .refused:
+                check(false, "Device control: the device no longer has RoamRun's pairing",
+                      fix: "It was removed on the device. Ask the user to pair again: the RoamRun app, the device's page, Device control › Pair Again… (same Wi‑Fi, iOS 27 or later).", warnOnly: true)
             case .noApp:
                 check(false, "Device control: the RoamRun app isn't running (or is a build without it)",
                       fix: "Open RoamRun: it holds the connection that look, tap and the rest use.", warnOnly: true)

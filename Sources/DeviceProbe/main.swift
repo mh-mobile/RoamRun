@@ -17,6 +17,9 @@ import UniformTypeIdentifiers
 // DeviceProbe type   <ip> <port> <pairing file> <text> [after.png]
 // DeviceProbe paste  <ip> <port> <pairing file> <text> [after.png]   (replaces its pasteboard)
 // DeviceProbe button <ip> <port> <pairing file> <home|lock|volume-up|volume-down> [after.png]
+// DeviceProbe pair   <pairing file> [name]                 waits for a device to pair with this Mac
+//     (iOS 27+, same network): on the device, Settings > Privacy & Security > Developer Mode
+//     lists [name]; the code printed here is entered there. Sends the device no input.
 // --udid <udid> anywhere: frames are cut to the screen's own size, asked of devicectl.
 var args = Array(CommandLine.arguments.dropFirst())
 var udid: String?
@@ -30,6 +33,20 @@ args.removeFirst()
 if verb == "selftest" {
     selfTest()
     exit(0)
+}
+if verb == "pair" {
+    guard let file = args.first else { exit(2) }
+    setvbuf(stdout, nil, _IOLBF, 0)
+    do {
+        let pairing = try DevicePairing(name: args.count > 1 ? args[1] : "RoamRun (\(Host.current().localizedName ?? "Mac"))")
+        print("waiting: pick \"\(pairing.name)\" on the device")
+        let paired = try pairing.accept(to: file) { print("code: \($0)") }
+        print("paired: \(paired.name) (\(paired.model)) \(paired.udid) -> \(file)")
+        exit(0)
+    } catch {
+        print("pair: \(error)")
+        exit(1)
+    }
 }
 guard args.count >= 3, let port = UInt16(args[1]) else { exit(2) }
 let rest = Array(args.dropFirst(3))

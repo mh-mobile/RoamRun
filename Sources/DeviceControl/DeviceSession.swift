@@ -31,6 +31,10 @@ public final class DeviceSession: @unchecked Sendable {
     private let ip: String, port: UInt16, pairingFile: String, udid: String?
     private let lock = NSLock()
     private var device: OpaquePointer?
+    /// A read failed even after trying again and reopening: the connection is taken for gone
+    /// until a call works or a new one is made.
+    private var broken = false
+    private var refused = false
     private var screen: (width: Int, height: Int)?
     private var askedScreen = false
     /// Said as things happen (opened, tried again, reopened), for whoever shows or logs it.
@@ -46,11 +50,23 @@ public final class DeviceSession: @unchecked Sendable {
         lock.withLock { rr_device_close(device); device = nil }
     }
 
-    public var isOpen: Bool { lock.withLock { device != nil } }
+    public var isOpen: Bool { lock.withLock { device != nil && !broken } }
 
-    /// Opens the connection if there is none; nothing is asked of the device beyond that.
+    /// The device refused the pairing when a connection was last tried: it was removed there,
+    /// and only pairing again helps.
+    public var isRefused: Bool { lock.withLock { refused } }
+
+    /// Opens a connection if none stands; nothing is asked of the device beyond that. One
+    /// taken for gone stays in place when no new one can be made: a later call may find it back.
     public func connect() throws {
-        try perform(repeatable: false) { _ in }
+        try lock.withLock {
+            guard device == nil || broken else { return }
+            let fresh = try open()
+            rr_device_close(device)
+            device = fresh
+            broken = false
+            onEvent?("opened")
+        }
     }
 
     /// The services the device has, as the library reports them (JSON).
@@ -116,10 +132,16 @@ public final class DeviceSession: @unchecked Sendable {
         var error: UnsafeMutablePointer<CChar>?
         guard let opened = rr_device_open(ip, port, pairingFile, &error) else {
             defer { rr_string_free(error) }
-            throw Failure.message(error.map { String(cString: $0) } ?? "can't open")
+            let why = error.map { String(cString: $0) } ?? "can't open"
+            refused = why.contains(Self.refusal)
+            throw Failure.message(why)
         }
+        refused = false
         return opened
     }
+
+    /// How the library words a pairing the device doesn't know (rr_device_open's error).
+    static let refusal = "doesn't accept this pairing"
 
     private func perform<T>(repeatable: Bool, _ body: (OpaquePointer) throws -> T) throws -> T {
         try lock.withLock {
@@ -127,25 +149,37 @@ public final class DeviceSession: @unchecked Sendable {
                 device = try open()
                 onEvent?("opened")
             }
-            return try Recovery.run(repeatable: repeatable, attempt: {
-                do { return try body(device!) } catch {
-                    onEvent?("failed: \(error)")
-                    throw error
-                }
-            }, pause: {
-                onEvent?("trying again on the same connection")
-                Thread.sleep(forTimeInterval: 1)
-            }, reopen: {
-                // The old connection goes only once a new one stands.
-                guard let fresh = try? open() else {
-                    onEvent?("no new connection can be made; keeping the old one")
-                    return false
-                }
-                rr_device_close(device)
-                device = fresh
-                onEvent?("reopened")
-                return true
-            })
+            do {
+                let result = try recovering(repeatable: repeatable, body)
+                broken = false
+                return result
+            } catch {
+                // An input's failure may be its arguments'; a read's, after all that, is the connection's.
+                if repeatable { broken = true }
+                throw error
+            }
         }
+    }
+
+    private func recovering<T>(repeatable: Bool, _ body: (OpaquePointer) throws -> T) throws -> T {
+        try Recovery.run(repeatable: repeatable, attempt: {
+            do { return try body(device!) } catch {
+                onEvent?("failed: \(error)")
+                throw error
+            }
+        }, pause: {
+            onEvent?("trying again on the same connection")
+            Thread.sleep(forTimeInterval: 1)
+        }, reopen: {
+            // The old connection goes only once a new one stands.
+            guard let fresh = try? open() else {
+                onEvent?("no new connection can be made; keeping the old one")
+                return false
+            }
+            rr_device_close(device)
+            device = fresh
+            onEvent?("reopened")
+            return true
+        })
     }
 }

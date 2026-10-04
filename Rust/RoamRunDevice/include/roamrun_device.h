@@ -86,6 +86,35 @@ char *rr_device_button(RRDevice *device, const char *name);
  */
 char *rr_device_elements(RRDevice *device, uint32_t limit);
 
+/**
+ * A pairing a device comes to make (iOS 27 and later): this side listens and shows a code;
+ * on the device, Settings lists it by `name` and asks for the code.
+ */
+typedef struct RRPairing RRPairing;
+
+/**
+ * Starts listening. *advert (free with rr_string_free) is JSON {"port":…,"identifier":…,
+ * "txt":{…}}: publish a _remotepairing-pairable-host._tcp service named `identifier` on that
+ * port with those TXT records, on the network the device is on. `model` is this Mac's model
+ * identifier ("Mac16,1"). NULL on failure, with *error (if given) set.
+ */
+RRPairing *rr_pairing_listen(const char *name, const char *model, char **advert, char **error);
+
+/**
+ * Waits for a device to pair, however long that takes. `code` is called with the six digits
+ * to show the user (on another thread, before this returns). On success the pairing is
+ * written to `pairing_file`, readable by its owner only, and the JSON is {"ok":true,
+ * "udid":…,"name":…,"model":…}; otherwise {"ok":false,"error":…}. Free with rr_string_free.
+ */
+char *rr_pairing_accept(RRPairing *pairing, const char *pairing_file,
+                        void (*code)(const char *code, void *context), void *context);
+
+/** Makes a running rr_pairing_accept return. Any thread. */
+void rr_pairing_cancel(RRPairing *pairing);
+
+/** Stops listening. Not while rr_pairing_accept runs. NULL is fine. */
+void rr_pairing_free(RRPairing *pairing);
+
 void rr_bytes_free(uint8_t *bytes, size_t length);
 
 void rr_string_free(char *string);

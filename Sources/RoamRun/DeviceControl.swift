@@ -30,6 +30,8 @@ enum DeviceControlWire {
         var complete: Bool?
         /// For "state": whether the connection to the device stands.
         var open: Bool?
+        /// For "state": the device no longer knows the pairing (it was removed there).
+        var refused: Bool?
         static func failure(_ why: String) -> Response { Response(ok: false, error: why) }
     }
 
@@ -159,12 +161,18 @@ final class DeviceControlHub: @unchecked Sendable {
     private var held: [UUID: Held] = [:]
     private var listener: DeviceControlWire.Listener?
     private var timer: DispatchSourceTimer?
+    /// The last update's, for when a pairing is made or removed in between.
+    private var targets: [Target] = []
+    private var pairing: DevicePairing?
+    private var pairingUnderWay = false
+    private var pairingCancelled = false
     var onLog: (@Sendable (String, UUID) -> Void)?
 
     init(directory: URL) { self.directory = directory }
 
     /// The saved devices as they are now. One whose address or port changed gets a new session.
     func update(_ targets: [Target]) {
+        lock.withLock { self.targets = targets }
         let paired = targets.filter { FileManager.default.fileExists(atPath: DeviceControlWire.pairingFile(udid: $0.udid, in: directory).path) }
         var gone: [DeviceSession] = []
         lock.withLock {
@@ -181,6 +189,96 @@ final class DeviceControlHub: @unchecked Sendable {
         }
         gone.forEach { $0.close() }
         keepOpen()
+    }
+
+    /// A pairing in the making, as it is shown.
+    enum PairingStep: Equatable, Sendable {
+        /// Listening under this name: the device's user picks it in Settings.
+        case waiting(String)
+        /// The six digits to enter on the device.
+        case code(String)
+        case checking
+        case done
+        case failed(String)
+    }
+
+    /// Whether a pairing of our own is saved for the device, and whether its connection stands.
+    func state(of id: UUID, udid: String) -> (paired: Bool, open: Bool, refused: Bool) {
+        let paired = FileManager.default.fileExists(atPath: DeviceControlWire.pairingFile(udid: udid, in: directory).path)
+        let session = lock.withLock { held[id]?.session }
+        return (paired, paired && session?.isOpen == true, paired && session?.isRefused == true)
+    }
+
+    /// Lets the device pair with this Mac (iOS 27 and later, on the same network), one at a time.
+    /// The new pairing replaces the saved one only once it opened a connection of its own.
+    func pair(_ target: Target, as name: String, step: @escaping @Sendable (PairingStep) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            let file = DeviceControlWire.pairingFile(udid: target.udid, in: directory)
+            let fresh = file.appendingPathExtension("new")
+            // Taken before anything is advertised: two of these would name themselves alike.
+            let free = lock.withLock { () -> Bool in
+                guard !pairingUnderWay else { return false }
+                pairingUnderWay = true
+                pairingCancelled = false
+                return true
+            }
+            guard free else { return step(.failed("Another pairing is under way.")) }
+            defer {
+                try? FileManager.default.removeItem(at: fresh)
+                lock.withLock { pairing = nil; pairingUnderWay = false }
+            }
+            do {
+                let listening = try DevicePairing(name: name)
+                // A cancel that came before there was anything to cancel still counts.
+                if lock.withLock({ () -> Bool in pairing = listening; return pairingCancelled }) { listening.cancel() }
+                step(.waiting(listening.name))
+                let paired = try listening.accept(to: fresh.path) { step(.code($0)) }
+                step(.checking)
+                onLog?("device control: \(paired.name) (\(paired.model), \(paired.udid)) paired", target.id)
+                // From the side that will use it, at the address it will use: what tells this
+                // device from another that picked this Mac.
+                let check = DeviceSession(ip: target.ip, port: target.port, pairingFile: fresh.path)
+                defer { check.close() }
+                do { try check.connect() } catch {
+                    throw DeviceSession.Failure.message("\(paired.name) paired, but that pairing opens no connection to \(target.name) (\(error)). Nothing was saved. If it was another device, its pairing with this Mac can be removed there, in Settings.")
+                }
+                try Self.adopt(fresh, as: file)
+                reopen(target.id)
+                step(.done)
+            } catch {
+                step(.failed("\(error)"))
+            }
+        }
+    }
+
+    /// Puts a new pairing in the saved one's place. The one it replaces is kept beside it
+    /// (".previous"), to put back by hand if the device still takes it.
+    static func adopt(_ fresh: URL, as file: URL) throws {
+        if FileManager.default.fileExists(atPath: file.path) {
+            let previous = file.appendingPathExtension("previous")
+            try? FileManager.default.removeItem(at: previous)
+            try FileManager.default.moveItem(at: file, to: previous)
+        }
+        try FileManager.default.moveItem(at: fresh, to: file)
+    }
+
+    func cancelPairing() {
+        lock.withLock { () -> DevicePairing? in pairingCancelled = true; return pairing }?.cancel()
+    }
+
+    /// Forgets this Mac's pairing with the device (the device's record of it stays, in its Settings).
+    func unpair(_ target: Target) {
+        let file = DeviceControlWire.pairingFile(udid: target.udid, in: directory)
+        try? FileManager.default.removeItem(at: file)
+        try? FileManager.default.removeItem(at: file.appendingPathExtension("previous"))
+        reopen(target.id)
+        onLog?("device control: pairing removed", target.id)
+    }
+
+    /// The device's session made anew from what is saved now.
+    private func reopen(_ id: UUID) {
+        lock.withLock { held.removeValue(forKey: id)?.session }?.close()
+        update(lock.withLock { targets })
     }
 
     func start() {
@@ -244,14 +342,14 @@ final class DeviceControlHub: @unchecked Sendable {
 
     private func answer(_ request: DeviceControlWire.Request) -> DeviceControlWire.Response {
         guard let h = lock.withLock({ held[request.device] }) else {
-            return .failure("device control isn't set up for this device")
+            return .failure("device control isn't set up for this device: the user sets it up in the RoamRun app, on the device's page")
         }
         // Failed or not: an input may have reached the device before the failure showed.
         defer { if !["state", "look"].contains(request.op) { lock.withLock { held[request.device]?.acted = Date() } } }
         do {
             switch request.op {
             case "state":
-                return .init(ok: true, open: h.session.isOpen)
+                return .init(ok: true, open: h.session.isOpen, refused: h.session.isRefused)
             case "elements":
                 _ = spendLook(of: request.device)   // the walk can scroll the screen
                 let found = try h.session.elements(limit: request.limit ?? 40)

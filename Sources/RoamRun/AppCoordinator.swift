@@ -1212,9 +1212,47 @@ final class AppCoordinator: ObservableObject {
     /// The devices as saved now, to the hub that keeps their control connections: at launch, and
     /// whenever the list is saved. (A pairing made while the app runs is seen at the next of those.)
     private func syncDeviceControl() {
-        deviceControl.update(profiles.compactMap { p in
-            p.udid.map { .init(id: p.id, name: p.displayName, ip: p.providerIP, port: p.remotePairingPort, udid: $0) }
-        })
+        deviceControl.update(profiles.compactMap(Self.controlTarget))
+    }
+
+    private static func controlTarget(_ p: DeviceProfile) -> DeviceControlHub.Target? {
+        p.udid.map { .init(id: p.id, name: p.displayName, ip: p.providerIP, port: p.remotePairingPort, udid: $0) }
+    }
+
+    struct ControlPairing: Equatable {
+        var device: UUID
+        var step: DeviceControlHub.PairingStep
+    }
+    /// The pairing for device control being made now, if any.
+    @Published private(set) var controlPairing: ControlPairing?
+
+    /// nil until the device's UDID is known (it names the pairing).
+    func controlState(_ profile: DeviceProfile) -> (paired: Bool, open: Bool, refused: Bool)? {
+        profile.udid.map { deviceControl.state(of: profile.id, udid: $0) }
+    }
+
+    func startControlPairing(_ profile: DeviceProfile) {
+        guard let target = Self.controlTarget(profile) else { return }
+        let id = profile.id
+        controlPairing = .init(device: id, step: .waiting(""))
+        deviceControl.pair(target, as: "RoamRun (\(Host.current().localizedName ?? "Mac"))") { [weak self] step in
+            Task { @MainActor in
+                guard self?.controlPairing?.device == id else { return }   // dismissed meanwhile
+                self?.controlPairing = .init(device: id, step: step)
+            }
+        }
+    }
+
+    /// Stops a pairing under way and puts its sheet away.
+    func endControlPairing() {
+        deviceControl.cancelPairing()
+        controlPairing = nil
+    }
+
+    func removeControlPairing(_ profile: DeviceProfile) {
+        guard let target = Self.controlTarget(profile) else { return }
+        deviceControl.unpair(target)
+        objectWillChange.send()
     }
     #endif
 

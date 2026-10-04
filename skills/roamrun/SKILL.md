@@ -171,6 +171,12 @@ RoamRun's own (`roamrun status iPhone` then has a `Device control:` line; an
 holds the connection, so it has to be running; it connects while the device is
 on a Wi‑Fi and keeps the connection when it moves to cellular.
 
+The pairing is the user's to make, once, in the RoamRun app: the device's page,
+**Device control › Set Up…**, with the device (iOS 27 or later) on the same
+Wi‑Fi as the Mac. The app shows a code; the user picks RoamRun on the device
+(Settings › Privacy & Security › Developer Mode) and enters it there. Don't try
+to do that part through device control.
+
 ```sh
 roamrun look iPhone /tmp/now.png     # the screen now: prints the path, then "1179 x 2556"
 roamrun tap iPhone 590 1280          # a point in the pixels of that image

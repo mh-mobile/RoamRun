@@ -4048,6 +4048,29 @@ func publishStepsAsideWhenTurnedOff(_ c: PublishCase) async {
     #expect(DeviceControlHub.fraction(x: nil, y: 10, of: size) == nil)
 }
 
+/// A new pairing takes the saved one's place only by moving it aside, where it can be had back.
+@Test func aNewPairingKeepsTheOneItReplaces() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("rr-adopt-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let file = dir.appendingPathComponent("device-pairing-X.plist")
+    func fresh(_ text: String) throws -> URL {
+        let url = file.appendingPathExtension("new")
+        try Data(text.utf8).write(to: url)
+        return url
+    }
+    func read(_ url: URL) -> String? { (try? Data(contentsOf: url)).map { String(decoding: $0, as: UTF8.self) } }
+    let previous = file.appendingPathExtension("previous")
+
+    try DeviceControlHub.adopt(fresh("first"), as: file)   // none before: nothing to keep
+    #expect(read(file) == "first" && read(previous) == nil)
+    try DeviceControlHub.adopt(fresh("second"), as: file)
+    #expect(read(file) == "second" && read(previous) == "first")
+    try DeviceControlHub.adopt(fresh("third"), as: file)   // only the last one is kept
+    #expect(read(file) == "third" && read(previous) == "second")
+    #expect(read(file.appendingPathExtension("new")) == nil)
+}
+
 /// A look right after an input waits out the rest of the settling time; a later one doesn't wait.
 @Test func aLookWaitsForTheScreenToSettleAfterAnInput() {
     let now = Date()
