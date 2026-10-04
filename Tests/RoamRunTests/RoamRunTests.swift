@@ -1042,6 +1042,21 @@ extension TimingSensitive {
             #expect(relay.heldOffTotal == 3)   // and refused again: held again
         }
 
+        /// "At most every 3 s" also when connections come together: the one that is dialed
+        /// after a hold begins the next hold, before its own refusal has come back.
+        @Test func connectionsThatComeTogetherAfterAHoldAreDialedOnce() async throws {
+            let server = try EchoServer(); let dead = await server.start(); server.stop()
+            let now = OSAllocatedUnfairLock<UInt64>(initialState: 1_000_000_000)
+            let relay = try await startedRelay(upstream: dead, clock: { now.withLock { $0 } }); defer { relay.stop() }
+            _ = await roundTrip(port: relay.localPort, payload: Data("hi".utf8), timeout: 8)   // dialed, refused
+            now.withLock { $0 += UInt64((Relay.upstreamHold + 1) * 1e9) }
+            let port = relay.localPort
+            await withTaskGroup(of: Void.self) { group in
+                for _ in 0..<4 { group.addTask { _ = await roundTrip(port: port, payload: Data("hi".utf8), timeout: 8) } }
+            }
+            #expect(relay.heldOffTotal == 3)   // one of the four was dialed
+        }
+
         @Test func aTunnelRelayDialsEveryTime() async throws {
             let server = try EchoServer(); let dead = await server.start(); server.stop()
             let relay = try await startedRelay(upstream: dead, spare: true); defer { relay.stop() }
@@ -2716,19 +2731,21 @@ func aNewAddressAndPortAreFoundTogether(scanFinds: Bool) async {
     defer { try? FileManager.default.removeItem(at: tmp) }
     let fm = FileManager.default
     for name in ["roamrun-ipa-old", "roamrun-install-old", "roamrun-ipa-fresh", "someone-elses",
-                 "roamrun-ipa-4242-X", "roamrun-ipa-4343-X"] {
+                 "roamrun-ipa-4242-X", "roamrun-ipa-4343-X", "roamrun-ipa-4444-X"] {
         try fm.createDirectory(at: tmp.appendingPathComponent(name), withIntermediateDirectories: true)
     }
     let longAgo = Date.now.addingTimeInterval(-7200)
     try fm.setAttributes([.creationDate: longAgo], ofItemAtPath: tmp.appendingPathComponent("roamrun-ipa-old").path)
     try fm.setAttributes([.creationDate: longAgo], ofItemAtPath: tmp.appendingPathComponent("someone-elses").path)
     try fm.setAttributes([.creationDate: longAgo], ofItemAtPath: tmp.appendingPathComponent("roamrun-install-old").path)
-    for n in ["roamrun-ipa-4242-X", "roamrun-ipa-4343-X"] {
+    for n in ["roamrun-ipa-4242-X", "roamrun-ipa-4343-X", "roamrun-ipa-4444-X"] {
         try fm.setAttributes([.creationDate: longAgo], ofItemAtPath: tmp.appendingPathComponent(n).path)
     }
-    CLI.sweepStaleUnpacks(in: tmp, alive: { $0 == 4242 })
+    let before = longAgo.timeIntervalSince1970 - 5, after = Date.now.timeIntervalSince1970 - 60
+    CLI.sweepStaleUnpacks(in: tmp, started: { [4242: before, 4444: after][$0] })
     #expect(fm.fileExists(atPath: tmp.appendingPathComponent("roamrun-ipa-4242-X").path))    // an install still running
     #expect(!fm.fileExists(atPath: tmp.appendingPathComponent("roamrun-ipa-4343-X").path))   // its process is gone
+    #expect(!fm.fileExists(atPath: tmp.appendingPathComponent("roamrun-ipa-4444-X").path))   // its pid is another process's now
     #expect(!fm.fileExists(atPath: tmp.appendingPathComponent("roamrun-ipa-old").path))
     #expect(!fm.fileExists(atPath: tmp.appendingPathComponent("roamrun-install-old").path))   // the signing check's unpacking
     #expect(fm.fileExists(atPath: tmp.appendingPathComponent("roamrun-ipa-fresh").path))   // maybe an install running now
@@ -4607,6 +4624,29 @@ import ImageIO
     #expect(try JSONDecoder().decode(DeviceControlWire.Response.self, from: JSONEncoder().encode(answer)) == answer)
 }
 #endif
+
+
+/// Two `roamrun up -d` for one device take turns from the check to the child's claim: the second
+/// waits, and then finds the first (it used to rotate the first's log away from under it).
+@Test func detachedUpsForOneDeviceTakeTurns() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let id = UUID()
+    let first = try #require(CLI.upTurn(for: id, in: dir))
+    #expect(CLI.upTurn(for: id, in: dir, wait: false) == nil)        // taken
+    let other = try #require(CLI.upTurn(for: UUID(), in: dir, wait: false))   // another device's is its own
+    close(other)
+    close(first)
+    var second = CLI.upTurn(for: id, in: dir, wait: false)
+    #expect(second != nil)
+    // Ended once, however often it is asked (each round of the wait asks): nothing is left to
+    // close a second time — by then the number may be another file's.
+    CLI.endTurn(&second)
+    #expect(second == nil)
+    CLI.endTurn(&second)
+    let third = try #require(CLI.upTurn(for: id, in: dir, wait: false))   // and the turn is free
+    close(third)
+}
 
 /// Agents run SKILL.md's commands as written, and people copy the READMEs': each `roamrun …`
 /// in their code (fenced blocks and inline code) must be a command the CLI knows, with options it takes.

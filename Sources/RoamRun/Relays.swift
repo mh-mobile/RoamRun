@@ -294,6 +294,9 @@ final class Relay: @unchecked Sendable {
             // Not a tunnel relay: its port may start answering right after a refusal.
             let hold = !spare && Self.holdsOff(refusedAt: upstreamRefusedAt, now: clock())
             if hold { heldOff += 1; heldOffTotal += 1 }
+            // The dial that ends a hold begins the next: connections that come before it is
+            // answered or refused are held, not dialed beside it.
+            else if !spare, upstreamRefusedAt != nil { upstreamRefusedAt = clock() }
             return (hold, refusedDials > 0)
         }
         if hold { inbound.cancel(); return }

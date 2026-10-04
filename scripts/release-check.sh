@@ -1,7 +1,8 @@
 #!/bin/bash
 # The CLI half of docs/release-checklist.md (items 1-3, 5, 6, 8), with no one at the keyboard.
 # Put the device away first (another Wi‑Fi, e.g. a phone's hotspot), unlocked with its screen
-# on, and quit the RoamRun app. Usage:
+# on, and quit the RoamRun app and every other bridge (`roamrun down` each: an `up -d` outlives
+# its terminal; this refuses to run beside one). Usage:
 #   scripts/release-check.sh <device name> <bundle id of an app installed on it>
 # ROAMRUN picks the binary (default: the one in RoamRun.app built here by `make app`).
 set -u
@@ -15,7 +16,24 @@ ready_within() { "$rr" status "$name" --wait "$1" >/dev/null 2>&1; }
 udid=$("$rr" status "$name" --json 2>/dev/null | /usr/bin/python3 -c 'import json,sys; d=json.load(sys.stdin); d=d[0] if isinstance(d,list) else d; print(d.get("udid") or "")')
 [ -n "$udid" ] || { echo "no UDID known for $name"; exit 2; }
 launch() { xcrun devicectl device process launch --device "$udid" --terminate-existing "$bundle" >/dev/null 2>&1; }
-helper() { pgrep -f "$1" | while read -r p; do [ "$(ps -o comm= -p "$p")" = "$2" ] && echo "$p"; done | head -1; }
+# This device's bridge and its helpers only: another device's are not this check's to kill.
+bridge_pid() { "$rr" devices --json 2>/dev/null | /usr/bin/python3 -c 'import json,sys
+for d in json.load(sys.stdin):
+    if d.get("name") == sys.argv[1] and d.get("pid"): print(d["pid"])' "$name"; }
+# A helper runs under a watchdog shell, which is the bridge's child.
+parent() { ps -o ppid= -p "$1" 2>/dev/null | tr -d ' '; }
+helper() {
+    local bridge; bridge=$(bridge_pid); [ -n "$bridge" ] || return
+    pgrep -f "$1" | while read -r p; do
+        [ "$(ps -o comm= -p "$p")" = "$2" ] && [ "$(parent "$(parent "$p")")" = "$bridge" ] && echo "$p"
+    done | head -1
+}
+
+# Items 5, 6 and 8 kill helpers, remove status.json and count what is left: with another bridge
+# running they would break it, or pass on its account.
+others=$("$rr" devices --json 2>/dev/null | /usr/bin/python3 -c 'import json,sys
+print(", ".join(d["name"] for d in json.load(sys.stdin) if d.get("state") != "off"))')
+[ -z "$others" ] || { echo "a bridge is running ($others): stop it first (roamrun down <name>, or quit the app)"; exit 2; }
 
 # 1-3
 "$rr" up "$name" -d >/dev/null 2>&1
