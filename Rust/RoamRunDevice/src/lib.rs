@@ -51,6 +51,8 @@ struct Link {
     stream_starts: u32,
     keyframes_asked: u32,
     keyframes_answered: u32,
+    /// Inputs sent on a new connection because the kept one was found gone.
+    resent: u32,
     verified_ms: u128,
     tunnel_ms: u128,
     rsd_ms: u128,
@@ -264,10 +266,12 @@ unsafe fn run(device: *mut RRDevice, input: Result<Input, String>) -> *mut c_cha
     let started = Instant::now();
     let result = with_room(|| {
         let mut link = device.link.lock().unwrap_or_else(|e| e.into_inner());
-        device.runtime.block_on(perform(&mut link, input))
+        let before = link.resent;
+        device.runtime.block_on(perform(&mut link, input)).map(|()| link.resent != before)
     });
     c_string(match result {
-        Ok(()) => format!("{{\"ok\":true,\"ms\":{}}}", started.elapsed().as_millis()),
+        // "reconnected": the kept connection was gone, and the input went on a new one.
+        Ok(anew) => format!("{{\"ok\":true,\"ms\":{},\"reconnected\":{anew}}}", started.elapsed().as_millis()),
         Err(why) => failure(&why),
     })
 }
@@ -518,7 +522,7 @@ async fn connect(ip: &str, port: u16, file: &str) -> Result<Link, String> {
 
     let rsd = handle.connect(info.server_rsd_port).await.map_err(|e| format!("RSD: {e:?}"))?;
     let handshake = RsdHandshake::new(rsd).await.map_err(|e| format!("RSD handshake: {e:?}"))?;
-    Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_stopped: None, stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
+    Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_stopped: None, stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, resent: 0, verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
 }
 
 /// The most that is typed in one call: beyond it, a slip in the middle is too costly, and paste does it in one.
@@ -625,7 +629,10 @@ async fn press(link: &mut Link, steps: &[Step]) -> Result<(), String> {
         }
         let Some(e) = failed else { return Ok(()) };
         link.keys = None;   // a dead connection isn't kept for the next call
-        if attempt == 0 && kept && !sent_any && gone(&e) { continue; }
+        if attempt == 0 && kept && !sent_any && gone(&e) {
+            link.resent += 1;
+            continue;
+        }
         return Err(format!("keys: {e:?}"));
     }
     unreachable!("the second attempt returns")
@@ -651,7 +658,10 @@ async fn send(link: &mut Link, input: &Input) -> Result<(), String> {
                 };
                 let Err(e) = sent else { return Ok(()) };
                 link.hid = None;   // a dead connection isn't kept for the next call
-                if attempt == 0 && kept && gone(&e) { continue; }
+                if attempt == 0 && kept && gone(&e) {
+                    link.resent += 1;
+                    continue;
+                }
                 return Err(format!("touch: {e:?}"));
             }
             unreachable!("the second attempt returns")

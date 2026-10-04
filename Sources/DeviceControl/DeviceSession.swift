@@ -141,6 +141,7 @@ public final class DeviceSession: @unchecked Sendable {
                 throw Failure.message("unreadable answer")
             }
             guard object["ok"] as? Bool == true else { throw Failure.message(object["error"] as? String ?? "failed") }
+            if object["reconnected"] as? Bool == true { onEvent?("the kept input connection was gone; sent on a new one") }
             return object
         }
     }
