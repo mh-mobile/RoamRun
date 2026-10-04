@@ -4351,6 +4351,17 @@ private func silentPort() throws -> (fd: Int32, port: UInt16) {
     #expect(AppCoordinator.controlWantsPortScan(why: refused, onThisWiFi: true, lastScan: now.addingTimeInterval(-600), now: now))
 }
 
+/// What is advertised for a pairing is "key=value" behind its length, 255 bytes at most, and a
+/// name too long for that is cut between characters.
+@Test func aPairingsAdvertIsCutBetweenCharacters() throws {
+    let short = DevicePairing.txtRecord(["ver": "26", "name": "Mac"])
+    #expect(Array(short) == [8] + Array("name=Mac".utf8) + [6] + Array("ver=26".utf8))
+    let long = DevicePairing.txtRecord(["name": String(repeating: "あ", count: 100)])   // 5 + 300 bytes
+    #expect(long.count == 1 + Int(long[0]) && long[0] <= 255)
+    let text = try #require(String(data: long.dropFirst(), encoding: .utf8))   // still whole characters
+    #expect(text == "name=" + String(repeating: "あ", count: 83))
+}
+
 /// A device that can't be reached is tried less and less often, up to every five minutes.
 @Test func aDeviceOutOfReachIsTriedLessOften() {
     #expect((1...6).map { DeviceControlHub.retryDelay(afterFailures: $0) } == [30, 60, 120, 240, 300, 300])

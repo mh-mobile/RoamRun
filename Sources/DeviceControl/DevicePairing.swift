@@ -85,11 +85,13 @@ public final class DevicePairing: @unchecked Sendable {
     }
 
     /// DNS-SD's TXT form: each "key=value" behind its length.
-    static func txtRecord(_ pairs: [String: String]) -> Data {
+    public static func txtRecord(_ pairs: [String: String]) -> Data {
         pairs.sorted { $0.key < $1.key }.reduce(into: Data()) { data, pair in
-            let entry = Array("\(pair.key)=\(pair.value)".utf8.prefix(255))
-            data.append(UInt8(entry.count))
-            data.append(contentsOf: entry)
+            // 255 bytes at most, cut between characters: half of one isn't text.
+            var entry = "\(pair.key)=\(pair.value)"
+            while entry.utf8.count > 255 { entry.removeLast() }
+            data.append(UInt8(entry.utf8.count))
+            data.append(contentsOf: entry.utf8)
         }
     }
 
