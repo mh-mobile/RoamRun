@@ -81,7 +81,13 @@ case "info":
     do { print(try session.info()) } catch { print("can't open: \(error)") }
 case "look":
     guard let path = rest.first else { exit(2) }
-    for n in 1...max(rest.count > 1 ? Int(rest[1]) ?? 1 : 1, 1) { save(to: path, "frame \(n)") }
+    // A third word: seconds to wait between frames (the stream is stopped after 15 unused).
+    let pause = number(2) ?? 0
+    for n in 1...max(rest.count > 1 ? Int(rest[1]) ?? 1 : 1, 1) {
+        if n > 1, pause > 0 { Thread.sleep(forTimeInterval: pause) }
+        save(to: path, "frame \(n)")
+    }
+    print((try? session.info()) ?? "")
 case "elements":
     do {
         let started = Date()

@@ -2,15 +2,15 @@
 //! _button operate the device; rr_device_elements can scroll it.
 
 use std::ffi::{c_char, CStr, CString};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use idevice::core_device::hid::{ButtonState, IndigoHidClient, UniversalHidServiceClient};
 use idevice::dvt::message::AuxValue;
 use idevice::dvt::remote_server::RemoteServerClient;
 use idevice::core_device::{
-    build_screen_audio_offer, build_screen_video_offer, build_start_audio_parameters, build_start_video_parameters,
-    is_rtcp, CallInfoBlob, DisplayServiceClient, HevcDepacketizer, PasteboardServiceClient, RtpPacket,
+    build_keyframe_request, build_screen_audio_offer, build_screen_video_offer, build_start_audio_parameters,
+    build_start_video_parameters, is_rtcp, CallInfoBlob, DisplayServiceClient, HevcDepacketizer, PasteboardServiceClient, RtpPacket,
     GENERAL_PASTEBOARD,
 };
 use idevice::remote_pairing::{connect_tls_psk_tunnel_native, RemotePairingClient, RpPairingFile, RpPairingSocket};
@@ -20,7 +20,7 @@ use idevice::tcp::handle::{AdapterHandle, UdpSocketHandle};
 use idevice::{ReadWrite, RsdService};
 use tokio::net::TcpStream;
 
-const VERSION: &CStr = c"0.3.1";
+const VERSION: &CStr = c"0.4.6";
 const LABEL: &str = "roamrun";
 /// Each call: a device that stops answering mid-way must not hang the caller.
 const DEADLINE: Duration = Duration::from_secs(20);
@@ -38,6 +38,14 @@ struct Link {
     handshake: RsdHandshake,
     hid: Option<UniversalHidServiceClient<Box<dyn ReadWrite>>>,
     keys: Option<IndigoHidClient<Box<dyn ReadWrite>>>,
+    /// The screen stream, kept between calls while they keep coming.
+    stream: Option<Stream>,
+    stream_used: Instant,
+    /// How the stream has been used, for whoever asks: started, key frames asked of a running
+    /// one, and how many of those came.
+    stream_starts: u32,
+    keyframes_asked: u32,
+    keyframes_answered: u32,
     verified_ms: u128,
     tunnel_ms: u128,
     rsd_ms: u128,
@@ -45,8 +53,37 @@ struct Link {
 
 /// What the C side holds. The runtime has a thread of its own: the tunnel is served between calls.
 pub struct RRDevice {
+    held: Arc<Held>,
+}
+
+/// The device's own, shared with the thread that watches its stream. Not for the C side.
+#[doc(hidden)]
+pub struct Held {
     runtime: tokio::runtime::Runtime,
     link: Mutex<Link>,
+}
+
+impl std::ops::Deref for RRDevice {
+    type Target = Held;
+    fn deref(&self) -> &Held { &self.held }
+}
+
+/// A stream nothing has used for this long is stopped: the device shows a screen-sharing
+/// session for as long as one runs, and frames keep arriving (150 to 200 KB a second, which
+/// counts on cellular). Long enough for look, think, act; a stopped one costs ~0.5 s to start.
+const STREAM_IDLE: Duration = Duration::from_secs(5);
+
+/// Stops the stream once it has sat unused, for as long as the device is held.
+fn watch_idle_stream(held: &Arc<Held>) {
+    let held = Arc::downgrade(held);
+    let _ = std::thread::Builder::new().stack_size(STACK).spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(1));
+        let Some(held) = held.upgrade() else { return };
+        let mut link = held.link.lock().unwrap_or_else(|e| e.into_inner());
+        if link.stream.is_some() && link.stream_used.elapsed() >= STREAM_IDLE {
+            if let Some(mut stream) = link.stream.take() { held.runtime.block_on(stream.stop()); }
+        }
+    });
 }
 
 /// The stack this library's work gets. The tunnel's network stack puts large buffers on it: on
@@ -127,7 +164,9 @@ pub unsafe extern "C" fn rr_device_open(ip: *const c_char, port: u16, pairing_fi
                 let link = with_room(|| runtime.block_on(async {
                     tokio::time::timeout(DEADLINE, connect(ip, port, file)).await.unwrap_or_else(|_| Err("timed out".into()))
                 }))?;
-                Ok(RRDevice { runtime, link: Mutex::new(link) })
+                let held = Arc::new(Held { runtime, link: Mutex::new(link) });
+                watch_idle_stream(&held);
+                Ok(RRDevice { held })
             }),
         _ => Err("bad arguments".into()),
     };
@@ -145,7 +184,13 @@ pub unsafe extern "C" fn rr_device_open(ip: *const c_char, port: u16, pairing_fi
 #[no_mangle]
 pub unsafe extern "C" fn rr_device_close(device: *mut RRDevice) {
     if !device.is_null() {
-        drop(unsafe { Box::from_raw(device) });
+        let device = unsafe { Box::from_raw(device) };
+        // A stream still running is ended, not left for the device to time out.
+        let _ = with_room(|| {
+            let mut link = device.link.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(mut stream) = link.stream.take() { device.runtime.block_on(stream.stop()); }
+            Ok(())
+        });
     }
 }
 
@@ -157,8 +202,10 @@ pub unsafe extern "C" fn rr_device_info(device: *mut RRDevice) -> *mut c_char {
     let link = device.link.lock().unwrap_or_else(|e| e.into_inner());
     let has = WANTED.map(|(word, name)| format!("{}:{}", quoted(word), link.handshake.services.contains_key(name)));
     c_string(format!(
-        "{{\"ok\":true,\"verifiedMs\":{},\"tunnelMs\":{},\"rsdMs\":{},\"services\":{},\"has\":{{{}}}}}",
-        link.verified_ms, link.tunnel_ms, link.rsd_ms, link.handshake.services.len(), has.join(",")
+        "{{\"ok\":true,\"verifiedMs\":{},\"tunnelMs\":{},\"rsdMs\":{},\"services\":{},\"has\":{{{}}},\"stream\":{{\"running\":{},\"starts\":{},\"keyframesAsked\":{},\"keyframesAnswered\":{},\"feedbackPort\":{}}}}}",
+        link.verified_ms, link.tunnel_ms, link.rsd_ms, link.handshake.services.len(), has.join(","),
+        link.stream.is_some(), link.stream_starts, link.keyframes_asked, link.keyframes_answered,
+        link.stream.as_ref().and_then(|s| s.feedback_port).map_or("null".to_string(), |p| p.to_string())
     ))
 }
 
@@ -427,14 +474,30 @@ async fn connect(ip: &str, port: u16, file: &str) -> Result<Link, String> {
 
     let rsd = handle.connect(info.server_rsd_port).await.map_err(|e| format!("RSD: {e:?}"))?;
     let handshake = RsdHandshake::new(rsd).await.map_err(|e| format!("RSD handshake: {e:?}"))?;
-    Ok(Link { handle, handshake, hid: None, keys: None, verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
+    Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
 }
 
-/// The device drops input that isn't accompanied by a screen stream, so one runs around it.
+/// The device drops input that isn't accompanied by a screen stream, so one runs with it: the
+/// one kept from before if frames still come on it, a new one otherwise.
 async fn perform(link: &mut Link, input: Input) -> Result<(), String> {
-    let mut stream = start_stream(link).await?;
+    let mut kept = link.stream.take();
+    if let Some(stream) = kept.as_mut() {
+        if !stream.alive().await {
+            stream.stop().await;
+            kept = None;
+        }
+    }
+    let stream = match kept {
+        Some(stream) => stream,
+        // Nothing has been sent yet, so a start that fails is tried once more.
+        None => match start_stream(link).await {
+            Ok(stream) => stream,
+            Err(_) => start_stream(link).await?,
+        },
+    };
+    link.stream = Some(stream);
     let done = send(link, input).await;
-    stream.stop().await;
+    link.stream_used = Instant::now();
     done
 }
 
@@ -528,11 +591,118 @@ struct Stream {
     display: DisplayServiceClient<Box<dyn ReadWrite>>,
     video: UdpSocketHandle,
     _audio: UdpSocketHandle,
+    /// Ours, as declared in the offer: the device heeds feedback only from it.
+    ssrc: u32,
+    /// The device's, once a packet has shown it.
+    media: Option<u32>,
+    /// Where the device's own RTCP came from, if any has: where ours goes.
+    feedback_port: Option<u16>,
+    requests: u8,
+    /// When the last key frame came (or the stream began, which opens with one).
+    keyframe_at: Instant,
 }
+
+/// The device sends video from this port, and takes feedback there or on the next.
+const VIDEO_SENDER_PORT: u16 = 50001;
+/// How long a kept stream gets to answer a request for a key frame (it comes in ~0.15 s when
+/// it comes) before it is asked again, and then started over.
+const KEYFRAME_WAIT: Duration = Duration::from_millis(700);
+/// How long to wait for the device's own report, which says where it takes requests. It sends
+/// one about every second.
+const REPORT_WAIT: Duration = Duration::from_millis(1500);
+/// A request made sooner than this after a key frame goes unanswered (measured on iOS 27: none
+/// of those made within half a second, all of those made a second after), and waiting it out
+/// is quicker than the 2 s of finding that out and starting the stream over.
+const KEYFRAME_APART: Duration = Duration::from_millis(1050);
 
 impl Stream {
     async fn stop(&mut self) {
         let _ = self.display.stop_media_stream().await;
+    }
+
+    /// Takes what has arrived without waiting; true if any video did. A running stream sends
+    /// some sixty frames a second, moving picture or not.
+    async fn drain(&mut self) -> bool {
+        let mut video = false;
+        while let Ok(Ok(datagram)) = tokio::time::timeout(Duration::ZERO, self.video.recv()).await {
+            if is_rtcp(&datagram.data) {
+                self.feedback_port = Some(datagram.source_port);
+            } else if let Some(packet) = RtpPacket::parse(&datagram.data) {
+                self.media.get_or_insert(packet.ssrc);
+                video = true;
+            }
+        }
+        video
+    }
+
+    /// Whether frames still come: what arrived since last time, or failing that the next 300 ms.
+    async fn alive(&mut self) -> bool {
+        if self.drain().await { return true; }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        self.drain().await
+    }
+
+    /// Asks the device for a key frame now (it sends one at the start and then only changes).
+    async fn request_keyframe(&mut self) {
+        // The device heeds a request sent to where its own reports come from, and not one sent
+        // to the ports it is said to listen on (measured on iOS 27): its first report is waited for.
+        if self.feedback_port.is_none() {
+            let _ = tokio::time::timeout(REPORT_WAIT, async {
+                while self.feedback_port.is_none() {
+                    let Ok(datagram) = self.video.recv().await else { return };
+                    if is_rtcp(&datagram.data) {
+                        self.feedback_port = Some(datagram.source_port);
+                    } else if let Some(packet) = RtpPacket::parse(&datagram.data) {
+                        self.media.get_or_insert(packet.ssrc);
+                    }
+                }
+            }).await;
+        }
+        let Some(media) = self.media else { return };
+        let early = KEYFRAME_APART.saturating_sub(self.keyframe_at.elapsed());
+        if !early.is_zero() {
+            tokio::time::sleep(early).await;
+            self.drain().await;   // what came meanwhile is older than the frame asked for
+        }
+        self.requests = self.requests.wrapping_add(1);
+        let request = build_keyframe_request(self.ssrc, LABEL, media, &[], self.requests);
+        // To where its feedback came from; before any has, to both places it may listen.
+        match self.feedback_port {
+            Some(port) => { let _ = self.video.send_to(port, request).await; }
+            None => {
+                let _ = self.video.send_to(VIDEO_SENDER_PORT, request.clone()).await;
+                let _ = self.video.send_to(VIDEO_SENDER_PORT + 1, request).await;
+            }
+        }
+    }
+
+    /// The next complete key frame, as Annex-B with its parameter sets first.
+    async fn next_keyframe(&mut self) -> Result<Vec<u8>, String> {
+        let mut frames = HevcDepacketizer::new();
+        let mut key = false;
+        loop {
+            let datagram = self.video.recv().await.map_err(|e| format!("video: {e:?}"))?;
+            if is_rtcp(&datagram.data) {
+                self.feedback_port = Some(datagram.source_port);
+                continue;
+            }
+            let Some(packet) = RtpPacket::parse(&datagram.data) else { continue };
+            if *self.media.get_or_insert(packet.ssrc) != packet.ssrc { continue; }
+            let p = packet.payload;
+            // A fragmented unit (type 49) names its real type in its third byte; 16...23 are key frames.
+            key |= if p.len() >= 3 && (p[0] >> 1) & 0x3f == 49 { (16..=23).contains(&(p[2] & 0x3f)) }
+                   else { p.len() >= 2 && (16..=23).contains(&((p[0] >> 1) & 0x3f)) };
+            frames.push(packet.sequence_number, packet.timestamp, p);
+            // A frame's last packet carries the RTP marker.
+            if packet.marker {
+                let out = frames.take_output();
+                if key && frames.has_parameter_sets() && !out.is_empty() {
+                    self.keyframe_at = Instant::now();
+                    return Ok(out);
+                }
+                key = false;
+            }
+        }
     }
 }
 
@@ -542,6 +712,7 @@ async fn start_stream(link: &mut Link) -> Result<Stream, String> {
     let audio = link.handle.bind_udp(0).await.map_err(|e| format!("udp: {e:?}"))?;
     let video = link.handle.bind_udp(0).await.map_err(|e| format!("udp: {e:?}"))?;
     let (ours, theirs) = (link.handle.host_ip().to_string(), link.handle.peer_ip().to_string());
+    link.stream_starts += 1;
     let session = uuid::Uuid::new_v4();
     let call = || uuid::Uuid::new_v4().to_string().to_uppercase();
     // Audio first: it is what establishes the session the video then joins.
@@ -550,41 +721,49 @@ async fn start_stream(link: &mut Link) -> Result<Stream, String> {
         .await.map_err(|e| format!("audio start: {e:?}"))?;
     let ssrc = uuid::Uuid::new_v4().as_u128() as u32;
     let offer = build_screen_video_offer(&call(), &call_info(), ssrc).map_err(|e| format!("video offer: {e:?}"))?;
-    display.start_media_stream(build_start_video_parameters(&ours, video.local_port(), &theirs, 50001, offer, SUPPORTED_FEATURES, 1, session))
+    display.start_media_stream(build_start_video_parameters(&ours, video.local_port(), &theirs, VIDEO_SENDER_PORT, offer, SUPPORTED_FEATURES, 1, session))
         .await.map_err(|e| format!("video start: {e:?}"))?;
-    Ok(Stream { display, video, _audio: audio })
+    Ok(Stream { display, video, _audio: audio, ssrc, media: None, feedback_port: None, requests: 0, keyframe_at: Instant::now() })
 }
 
-// ponytail: the stream is started and stopped around each frame and each input (~0.4 s), so a
-// single key frame decodes on its own and nothing is received in between. Keeping it running
-// and asking for a key frame over RTCP is the faster way, when frames are wanted many times a second.
+/// How long a stream just started gets to send the key frame it opens with.
+const FIRST_KEYFRAME: Duration = Duration::from_secs(6);
+
+/// One key frame. From a stream already running it is asked for, twice if need be (a request
+/// is one datagram, and can be lost); when none comes for the asking, or no stream runs, the
+/// stream is started over, which opens with one.
 async fn keyframe(link: &mut Link) -> Result<Vec<u8>, String> {
-    let mut stream = start_stream(link).await?;
-    // The stream opens with a key frame; its last packet carries the RTP marker.
-    let mut frames = HevcDepacketizer::new();
-    let (mut source, mut key) = (None, false);
-    let frame = loop {
-        let datagram = match stream.video.recv().await {
-            Ok(d) => d,
-            Err(e) => {
-                stream.stop().await;
-                return Err(format!("video: {e:?}"));
+    if let Some(mut stream) = link.stream.take() {
+        if stream.drain().await {
+            for _ in 0..2 {
+                stream.request_keyframe().await;
+                link.keyframes_asked += 1;
+                if let Ok(Ok(frame)) = tokio::time::timeout(KEYFRAME_WAIT, stream.next_keyframe()).await {
+                    link.keyframes_answered += 1;
+                    link.stream = Some(stream);
+                    link.stream_used = Instant::now();
+                    return Ok(frame);
+                }
             }
-        };
-        if is_rtcp(&datagram.data) { continue; }
-        let Some(packet) = RtpPacket::parse(&datagram.data) else { continue };
-        if *source.get_or_insert(packet.ssrc) != packet.ssrc { continue; }
-        let p = packet.payload;
-        // A fragmented unit (type 49) names its real type in its third byte; 16...23 are key frames.
-        key |= if p.len() >= 3 && (p[0] >> 1) & 0x3f == 49 { (16..=23).contains(&(p[2] & 0x3f)) }
-               else { p.len() >= 2 && (16..=23).contains(&((p[0] >> 1) & 0x3f)) };
-        frames.push(packet.sequence_number, packet.timestamp, p);
-        if packet.marker {
-            let out = frames.take_output();
-            if key && frames.has_parameter_sets() && !out.is_empty() { break out; }
-            key = false;
         }
-    };
-    stream.stop().await;
-    Ok(frame)
+        stream.stop().await;
+        // A start right on the heels of a stop has been refused, and has stalled.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    let mut stream = start_stream(link).await?;
+    match tokio::time::timeout(FIRST_KEYFRAME, stream.next_keyframe()).await {
+        Ok(Ok(frame)) => {
+            link.stream = Some(stream);
+            link.stream_used = Instant::now();
+            Ok(frame)
+        }
+        Ok(Err(why)) => {
+            stream.stop().await;
+            Err(why)
+        }
+        Err(_) => {
+            stream.stop().await;
+            Err("the stream started but sent no key frame".into())
+        }
+    }
 }
