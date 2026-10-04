@@ -20,7 +20,7 @@ use idevice::tcp::handle::{AdapterHandle, UdpSocketHandle};
 use idevice::{ReadWrite, RsdService};
 use tokio::net::TcpStream;
 
-const VERSION: &CStr = c"0.3.0";
+const VERSION: &CStr = c"0.3.1";
 const LABEL: &str = "roamrun";
 /// Each call: a device that stops answering mid-way must not hang the caller.
 const DEADLINE: Duration = Duration::from_secs(20);
@@ -47,6 +47,19 @@ struct Link {
 pub struct RRDevice {
     runtime: tokio::runtime::Runtime,
     link: Mutex<Link>,
+}
+
+/// The stack this library's work gets. The tunnel's network stack puts large buffers on it: on
+/// a caller's own thread (a dispatch worker has 512 KB) that overflowed.
+const STACK: usize = 8 << 20;
+
+/// Runs `work` on a thread with room for it, and waits.
+fn with_room<T: Send>(work: impl FnOnce() -> Result<T, String> + Send) -> Result<T, String> {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new().stack_size(STACK).spawn_scoped(scope, work)
+            .map_err(|e| format!("no thread: {e}"))?
+            .join().unwrap_or_else(|_| Err("the library failed unexpectedly".into()))
+    })
 }
 
 #[no_mangle]
@@ -108,12 +121,12 @@ fn quoted(s: &str) -> String {
 pub unsafe extern "C" fn rr_device_open(ip: *const c_char, port: u16, pairing_file: *const c_char, error: *mut *mut c_char) -> *mut RRDevice {
     let arg = |p: *const c_char| (!p.is_null()).then(|| unsafe { CStr::from_ptr(p) }.to_str().ok()).flatten();
     let opened = match (arg(ip), arg(pairing_file)) {
-        (Some(ip), Some(file)) => tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build()
+        (Some(ip), Some(file)) => tokio::runtime::Builder::new_multi_thread().worker_threads(1).thread_stack_size(STACK).enable_all().build()
             .map_err(|e| format!("no runtime: {e}"))
             .and_then(|runtime| {
-                let link = runtime.block_on(async {
+                let link = with_room(|| runtime.block_on(async {
                     tokio::time::timeout(DEADLINE, connect(ip, port, file)).await.unwrap_or_else(|_| Err("timed out".into()))
-                })?;
+                }))?;
                 Ok(RRDevice { runtime, link: Mutex::new(link) })
             }),
         _ => Err("bad arguments".into()),
@@ -157,9 +170,11 @@ pub unsafe extern "C" fn rr_device_keyframe(device: *mut RRDevice, length: *mut 
         unsafe { set_error(error, "bad arguments".into()) };
         return std::ptr::null_mut();
     };
-    let mut link = device.link.lock().unwrap_or_else(|e| e.into_inner());
-    let result = device.runtime.block_on(async {
-        tokio::time::timeout(DEADLINE, keyframe(&mut link)).await.unwrap_or_else(|_| Err("timed out".into()))
+    let result = with_room(|| {
+        let mut link = device.link.lock().unwrap_or_else(|e| e.into_inner());
+        device.runtime.block_on(async {
+            tokio::time::timeout(DEADLINE, keyframe(&mut link)).await.unwrap_or_else(|_| Err("timed out".into()))
+        })
     });
     match result {
         Ok(frame) => {
@@ -191,10 +206,12 @@ unsafe fn run(device: *mut RRDevice, input: Result<Input, String>) -> *mut c_cha
         Ok(input) => input,
         Err(why) => return c_string(failure(&why)),
     };
-    let mut link = device.link.lock().unwrap_or_else(|e| e.into_inner());
     let started = Instant::now();
-    let result = device.runtime.block_on(async {
-        tokio::time::timeout(DEADLINE, perform(&mut link, input)).await.unwrap_or_else(|_| Err("timed out".into()))
+    let result = with_room(|| {
+        let mut link = device.link.lock().unwrap_or_else(|e| e.into_inner());
+        device.runtime.block_on(async {
+            tokio::time::timeout(DEADLINE, perform(&mut link, input)).await.unwrap_or_else(|_| Err("timed out".into()))
+        })
     });
     c_string(match result {
         Ok(()) => format!("{{\"ok\":true,\"ms\":{}}}", started.elapsed().as_millis()),
@@ -294,10 +311,12 @@ fn key(c: char) -> Option<(u64, bool)> {
 #[no_mangle]
 pub unsafe extern "C" fn rr_device_elements(device: *mut RRDevice, limit: u32) -> *mut c_char {
     let Some(device) = (unsafe { device.as_ref() }) else { return std::ptr::null_mut() };
-    let mut link = device.link.lock().unwrap_or_else(|e| e.into_inner());
     let started = Instant::now();
     // Its own deadline inside: a walk cut short still returns what it found.
-    let result = device.runtime.block_on(elements(&mut link, limit.max(1) as usize, started + WALK));
+    let result = with_room(|| {
+        let mut link = device.link.lock().unwrap_or_else(|e| e.into_inner());
+        device.runtime.block_on(elements(&mut link, limit.max(1) as usize, started + WALK))
+    });
     c_string(match result {
         Ok((captions, complete)) => format!(
             "{{\"ok\":true,\"elements\":[{}],\"complete\":{complete},\"ms\":{}}}",
