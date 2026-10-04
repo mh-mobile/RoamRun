@@ -16,7 +16,7 @@ public final class DevicePairing: @unchecked Sendable {
     }
 
     private let pairing: OpaquePointer
-    private var advert: DNSServiceRef?
+    private let advert: DNSServiceRef?
     /// What the device's Settings lists this Mac as.
     public let name: String
 
@@ -26,17 +26,24 @@ public final class DevicePairing: @unchecked Sendable {
     public init(name: String, host: String) throws {
         var said: UnsafeMutablePointer<CChar>?
         var error: UnsafeMutablePointer<CChar>?
-        guard let pairing = rr_pairing_listen(name, Self.model, host, &said, &error) else {
+        guard let listening = rr_pairing_listen(name, Self.model, host, &said, &error) else {
             defer { rr_string_free(error) }
             throw DeviceSession.Failure.message(error.map { String(cString: $0) } ?? "can't listen")
         }
         defer { rr_string_free(said) }
-        self.pairing = pairing
-        self.name = name
+        // This initializer's until the object is whole: every way out before that frees them here.
+        var advert: DNSServiceRef?
+        var whole = false
+        defer {
+            if !whole {
+                if let advert { DNSServiceRefDeallocate(advert) }
+                rr_pairing_free(listening)
+            }
+        }
         guard let said, let object = try? JSONSerialization.jsonObject(with: Data(String(cString: said).utf8)) as? [String: Any],
               let port = object["port"] as? Int, let identifier = object["identifier"] as? String,
               let txt = object["txt"] as? [String: String] else {
-            throw DeviceSession.Failure.message("unreadable advert")   // deinit stops the listening
+            throw DeviceSession.Failure.message("unreadable advert")
         }
         // Held by mDNSResponder for as long as the reference lives; nothing to wait on.
         let record = Self.txtRecord(txt)
@@ -51,6 +58,10 @@ public final class DevicePairing: @unchecked Sendable {
                 ? "macOS didn't let RoamRun announce itself on the local network. Allow it in System Settings › Privacy & Security › Local Network, then try again."
                 : "can't announce on the local network (\(status))")
         }
+        self.pairing = listening
+        self.advert = advert
+        self.name = name
+        whole = true
     }
 
     deinit {

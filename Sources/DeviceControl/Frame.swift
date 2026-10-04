@@ -12,11 +12,21 @@ public func screenSize(udid: String) -> (width: Int, height: Int)? {
     let out = Pipe()
     p.standardOutput = out
     p.standardError = FileHandle.nullDevice
+    let done = DispatchSemaphore(value: 0)
+    let read = Output()
     guard (try? p.run()) != nil else { return nil }
-    // devicectl that can't reach the device is not waited on: a look waits for this.
-    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 15) { if p.isRunning { p.terminate() } }
-    let data = out.fileHandleForReading.readDataToEndOfFile()
-    p.waitUntilExit()
+    DispatchQueue.global(qos: .utility).async {
+        read.data = out.fileHandleForReading.readDataToEndOfFile()
+        done.signal()
+    }
+    // A look waits for this: devicectl that can't reach the device gets 15 s, is then told to
+    // end, and a second later is ended. Whatever it does, this returns.
+    guard done.wait(timeout: .now() + 15) == .success else {
+        p.terminate()
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1) { if p.isRunning { kill(p.processIdentifier, SIGKILL) } }
+        return nil
+    }
+    let data = read.data
     guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let displays = (root["result"] as? [String: Any])?["displays"] as? [[String: Any]],
           let size = (displays.first { $0["primary"] as? Bool == true } ?? displays.first)?["nativeSize"] as? [Int],
@@ -64,7 +74,10 @@ public func cut(_ image: CGImage, to screen: (width: Int, height: Int)?) -> CGIm
     return image
 }
 
-final class Output: @unchecked Sendable { var pixels: CVImageBuffer? }
+final class Output: @unchecked Sendable {
+    var pixels: CVImageBuffer?
+    var data = Data()
+}
 
 /// The NAL units of an Annex-B stream (each after a 00 00 01 start code).
 func nalUnits(_ data: Data) -> [Data] {

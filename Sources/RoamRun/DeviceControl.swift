@@ -194,6 +194,23 @@ enum DeviceControlWire {
     }
 }
 
+/// What the hub does with a device: a `DeviceSession`, or a stand-in for one in tests.
+protocol ControlledDevice: AnyObject, Sendable {
+    var isOpen: Bool { get }
+    var isRefused: Bool { get }
+    func connect() throws
+    func close()
+    func look() throws -> CGImage
+    func elements(limit: Int) throws -> (captions: [String], complete: Bool)
+    func tap(x: Double, y: Double) throws
+    func swipe(from: (x: Double, y: Double), to: (x: Double, y: Double), milliseconds: Int) throws
+    func type(_ text: String) throws
+    func paste(_ text: String) throws
+    func press(_ button: String) throws
+}
+
+extension DeviceSession: ControlledDevice {}
+
 /// The devices the app controls: a connection kept open to each that has a pairing of our own,
 /// so it is there when the device leaves Wi‑Fi (away from it none can be opened).
 final class DeviceControlHub: @unchecked Sendable {
@@ -208,18 +225,32 @@ final class DeviceControlHub: @unchecked Sendable {
         func reaches(_ other: Target) -> Bool { ip == other.ip && port == other.port && udid == other.udid }
     }
 
-    private struct Held {
+    /// One device as it is held: its session, and what belongs to that session alone. A session
+    /// replaced (another port, a new pairing) gets a new one of these, so that what was seen or
+    /// done through the old session never counts for the new.
+    private final class Held: @unchecked Sendable {
         var target: Target
-        var session: DeviceSession
+        let session: any ControlledDevice
+        /// Held for the whole of a command, from checking its look to what it leaves behind:
+        /// one look serves one action, however many arrive at once. Guards `looked` and `acted`.
+        let command = NSLock()
         /// The last look's size: what a tap's pixels are of.
         var looked: (width: Int, height: Int)?
         /// When the last input ended: a look right after it waits for the screen to settle.
         var acted: Date?
         /// Opening it in the background: one attempt at a time, and further apart while they fail.
+        /// (These three under the hub's lock.)
         var connecting = false
         var failures = 0
         var nextTry = Date.distantPast
+
+        init(target: Target, session: any ControlledDevice) {
+            self.target = target
+            self.session = session
+        }
     }
+
+    typealias Opener = @Sendable (_ target: Target, _ pairingFile: String, _ said: @escaping @Sendable (String) -> Void) -> any ControlledDevice
 
     private let directory: URL
     private let lock = NSLock()
@@ -235,11 +266,21 @@ final class DeviceControlHub: @unchecked Sendable {
     /// A background attempt to open a device's connection failed, and why.
     var onUnreached: (@Sendable (UUID, String) -> Void)?
 
-    init(directory: URL) { self.directory = directory }
+    private let open: Opener
+
+    /// `open` makes the session for a device; tests give stand-ins.
+    init(directory: URL, open: @escaping Opener = { target, file, said in
+        let session = DeviceSession(ip: target.ip, port: target.port, pairingFile: file, udid: target.udid)
+        session.onEvent = said
+        return session
+    }) {
+        self.directory = directory
+        self.open = open
+    }
 
     /// The saved devices as they are now. One whose address or port changed gets a new session.
     func update(_ targets: [Target]) {
-        var gone: [DeviceSession] = []
+        var gone: [any ControlledDevice] = []
         lock.withLock {
             self.targets = targets
             let saved = Dictionary(targets.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
@@ -266,11 +307,11 @@ final class DeviceControlHub: @unchecked Sendable {
     }
 
     /// The session held for a device, if any.
-    func session(of id: UUID) -> DeviceSession? { lock.withLock { held[id]?.session } }
+    func session(of id: UUID) -> (any ControlledDevice)? { lock.withLock { held[id]?.session } }
 
     /// Closing waits for a call that runs on the session, which can take long: never on the
     /// caller's thread (the main one, when the list is saved).
-    private static func closing(_ sessions: [DeviceSession]) {
+    private static func closing(_ sessions: [any ControlledDevice]) {
         guard !sessions.isEmpty else { return }
         DispatchQueue.global(qos: .utility).async { sessions.forEach { $0.close() } }
     }
@@ -382,7 +423,7 @@ final class DeviceControlHub: @unchecked Sendable {
     /// The device's session made anew from what is saved now. The new one is in place before
     /// the old one is closed: in between, the device would answer as not set up.
     private func reopen(_ id: UUID) {
-        let old = lock.withLock { () -> DeviceSession? in
+        let old = lock.withLock { () -> (any ControlledDevice)? in
             let old = held.removeValue(forKey: id)?.session
             if let t = targets.first(where: { $0.id == id }), let session = session(for: t) { held[id] = Held(target: t, session: session) }
             return old
@@ -392,12 +433,11 @@ final class DeviceControlHub: @unchecked Sendable {
     }
 
     /// A session for the device, if a pairing of our own is saved for it.
-    private func session(for t: Target) -> DeviceSession? {
+    private func session(for t: Target) -> (any ControlledDevice)? {
         guard hasPairing(t) else { return nil }
-        let file = DeviceControlWire.pairingFile(udid: t.udid, in: directory)
-        let session = DeviceSession(ip: t.ip, port: t.port, pairingFile: file.path, udid: t.udid)
-        session.onEvent = { [weak self] event in self?.onLog?("device control: \(event)", t.id) }
-        return session
+        return open(t, DeviceControlWire.pairingFile(udid: t.udid, in: directory).path) { [weak self] event in
+            self?.onLog?("device control: \(event)", t.id)
+        }
     }
 
     func start() {
@@ -414,7 +454,7 @@ final class DeviceControlHub: @unchecked Sendable {
     func stop() {
         timer?.cancel()
         listener?.stop()
-        let sessions = lock.withLock { () -> [DeviceSession] in
+        let sessions = lock.withLock { () -> [any ControlledDevice] in
             defer { held = [:] }
             return held.values.map(\.session)
         }
@@ -434,7 +474,7 @@ final class DeviceControlHub: @unchecked Sendable {
     /// refused (only pairing again helps, and that makes a new session).
     private func keepOpen() {
         let now = Date()
-        let due = lock.withLock { () -> [(UUID, DeviceSession)] in
+        let due = lock.withLock { () -> [(UUID, any ControlledDevice)] in
             let due = held.filter { !$0.value.connecting && $0.value.nextTry <= now && !$0.value.session.isOpen && !$0.value.session.isRefused }
             for id in due.keys { held[id]?.connecting = true }
             return due.map { ($0.key, $0.value.session) }
@@ -459,15 +499,6 @@ final class DeviceControlHub: @unchecked Sendable {
     static func fraction(x: Double?, y: Double?, of size: (width: Int, height: Int)) -> (x: Double, y: Double)? {
         guard let x, let y, (0..<Double(size.width)).contains(x), (0..<Double(size.height)).contains(y) else { return nil }
         return (x / Double(size.width), y / Double(size.height))
-    }
-
-    /// The last look, taken away: whatever follows may change the screen, and the next point
-    /// has to come from a look at what it became.
-    private func spendLook(of device: UUID) -> (width: Int, height: Int)? {
-        lock.withLock {
-            defer { held[device]?.looked = nil }
-            return held[device]?.looked
-        }
     }
 
     // ponytail: a fixed wait, enough for a transition or a scroll coming to rest. Comparing
@@ -499,23 +530,33 @@ final class DeviceControlHub: @unchecked Sendable {
 
     private static let lookFirst = "look first: a point is given in the pixels of a look, and each look serves one action"
 
-    private func answer(_ request: DeviceControlWire.Request) -> DeviceControlWire.Response {
+    func answer(_ request: DeviceControlWire.Request) -> DeviceControlWire.Response {
         guard let h = lock.withLock({ held[request.device] }) else {
             return .failure("device control isn't set up for this device: the user sets it up in the RoamRun app, on the device's page")
         }
+        // How it stands is said at once, whatever runs on the device.
+        if request.op == "state" { return .init(ok: true, open: h.session.isOpen, refused: h.session.isRefused) }
+        // Everything else one at a time per device, and whole: a look is checked, spent and acted
+        // on without another command coming in between; what it leaves (the look, the time of the
+        // input) is left on the session it was done through, not on whichever is held by now.
+        return h.command.withLock { perform(request, on: h) }
+    }
+
+    /// Under `h.command`.
+    private func perform(_ request: DeviceControlWire.Request, on h: Held) -> DeviceControlWire.Response {
         // Failed or not: an input may have reached the device before the failure showed.
-        defer { if !["state", "look"].contains(request.op) { lock.withLock { held[request.device]?.acted = Date() } } }
+        defer { if request.op != "look" { h.acted = Date() } }
+        /// The look's size, for a point to be read against; taken away by `spend` once the request is one that goes to the device.
+        func spend() { h.looked = nil }
         do {
             switch request.op {
-            case "state":
-                return .init(ok: true, open: h.session.isOpen, refused: h.session.isRefused)
             case "elements":
-                _ = spendLook(of: request.device)   // the walk can scroll the screen
+                spend()   // the walk can scroll the screen
                 let found = try h.session.elements(limit: Self.elementLimit(request.limit))
                 return .init(ok: true, captions: found.captions, complete: found.complete)
             case "swipe":
                 // A request refused for what it says leaves the look to be used: it is spent by what reaches the device.
-                guard let size = look(of: request.device) else { return .failure(Self.lookFirst) }
+                guard let size = h.looked else { return .failure(Self.lookFirst) }
                 guard let from = Self.fraction(x: request.x, y: request.y, of: size),
                       let to = Self.fraction(x: request.x2, y: request.y2, of: size) else {
                     return .failure("both points must be inside the last look (\(size.width) x \(size.height))")
@@ -523,11 +564,11 @@ final class DeviceControlHub: @unchecked Sendable {
                 guard let duration = Self.swipeDuration(request.milliseconds) else {
                     return .failure("a swipe takes 50...5000 ms")
                 }
-                _ = spendLook(of: request.device)
+                spend()
                 try h.session.swipe(from: from, to: to, milliseconds: duration)
                 return .init(ok: true)
             case "type", "paste", "press":
-                _ = spendLook(of: request.device)
+                spend()
                 guard let text = request.text else { return .failure("nothing to send") }
                 switch request.op {
                 case "type":
@@ -541,26 +582,23 @@ final class DeviceControlHub: @unchecked Sendable {
             case "look":
                 guard let path = request.path else { return .failure("no file") }
                 // What an earlier look showed is no longer what a point may be read off, whether or not this one succeeds.
-                let acted = lock.withLock { () -> Date? in
-                    held[request.device]?.looked = nil
-                    return held[request.device]?.acted   // as it is now, not as it was when the request came
-                }
-                Thread.sleep(forTimeInterval: Self.settleWait(acted: acted))
+                spend()
+                Thread.sleep(forTimeInterval: Self.settleWait(acted: h.acted))
                 let image = try h.session.look()
                 guard let out = CGImageDestinationCreateWithURL(URL(fileURLWithPath: path) as CFURL, UTType.png.identifier as CFString, 1, nil) else {
                     return .failure("can't write \(path)")
                 }
                 CGImageDestinationAddImage(out, image, nil)
                 guard CGImageDestinationFinalize(out) else { return .failure("can't write \(path)") }
-                lock.withLock { held[request.device]?.looked = (image.width, image.height) }
+                h.looked = (image.width, image.height)
                 return .init(ok: true, width: image.width, height: image.height)
             case "tap":
                 // In the pixels of what was last looked at: there is no tapping a screen not seen.
-                guard let size = look(of: request.device) else { return .failure(Self.lookFirst) }
+                guard let size = h.looked else { return .failure(Self.lookFirst) }
                 guard let point = Self.fraction(x: request.x, y: request.y, of: size) else {
                     return .failure("the point must be inside the last look (\(size.width) x \(size.height))")
                 }
-                _ = spendLook(of: request.device)
+                spend()
                 try h.session.tap(x: point.x, y: point.y)
                 return .init(ok: true)
             default:

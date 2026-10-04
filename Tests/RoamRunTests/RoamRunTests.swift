@@ -4256,6 +4256,115 @@ private func silentPort() throws -> (fd: Int32, port: UInt16) {
     #expect(throws: CLI.ArgumentError.self) { try CLI.parse(["press", "iPhone", "-h2"]).get() }
 }
 
+/// A device that isn't one: what the hub asks of it is counted, and a look can be held up.
+private final class StandInDevice: ControlledDevice, @unchecked Sendable {
+    private let lock = NSLock()
+    private var counted: [String] = []
+    var calls: [String] { lock.withLock { counted } }
+    /// A look waits here when set, and says it has begun.
+    var hold: DispatchSemaphore?
+    let lookBegan = DispatchSemaphore(value: 0)
+    var isOpen: Bool { true }
+    var isRefused: Bool { false }
+    func connect() throws {}
+    func close() {}
+    private func count(_ call: String) { lock.withLock { counted.append(call) } }
+    func look() throws -> CGImage {
+        count("look")
+        lookBegan.signal()
+        hold?.wait()
+        return CGContext(data: nil, width: 100, height: 200, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                         bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!.makeImage()!
+    }
+    func elements(limit: Int) throws -> (captions: [String], complete: Bool) { count("elements"); return ([], true) }
+    func tap(x: Double, y: Double) throws { count("tap"); Thread.sleep(forTimeInterval: 0.01) }
+    func swipe(from: (x: Double, y: Double), to: (x: Double, y: Double), milliseconds: Int) throws { count("swipe") }
+    func type(_ text: String) throws { count("type") }
+    func paste(_ text: String) throws { count("paste") }
+    func press(_ button: String) throws { count("press") }
+}
+
+/// A hub over stand-ins, one made for each session the hub opens.
+private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: DeviceControlHub, made: () -> [StandInDevice]) {
+    try scratchPairing(at: DeviceControlWire.pairingFile(udid: udid, in: dir))
+    let made = OSAllocatedUnfairLock<[StandInDevice]>(initialState: [])
+    let hub = DeviceControlHub(directory: dir) { _, _, _ in
+        let device = StandInDevice()
+        made.withLock { $0.append(device) }
+        return device
+    }
+    return (hub, { made.withLock { $0 } })
+}
+
+/// One look serves one action, however many arrive at once: of taps sent together after a
+/// look, one reaches the device and the others are told to look first.
+@Test func oneLookServesOneActionHoweverManyArriveAtOnce() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (hub, made) = try standInHub(dir)
+    defer { hub.stop() }
+    let id = UUID()
+    hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
+    let device = try #require(made().first)
+    let png = dir.appendingPathComponent("look.png").path
+    for round in 1...40 {
+        #expect(hub.answer(.init(op: "look", device: id, path: png)).ok)
+        let answers = OSAllocatedUnfairLock<[DeviceControlWire.Response]>(initialState: [])
+        DispatchQueue.concurrentPerform(iterations: 6) { n in
+            // Taps, and what else spends a look: none may slip in between another's check and its act.
+            let request: DeviceControlWire.Request = n == 5 ? .init(op: "press", device: id, text: "home") : .init(op: "tap", device: id, x: 10, y: 10)
+            let answer = hub.answer(request)
+            if request.op == "tap" { answers.withLock { $0.append(answer) } }
+        }
+        let taps = device.calls.filter { $0 == "tap" }.count
+        #expect(taps <= round)   // never more than one a look
+        #expect(answers.withLock { $0.filter(\.ok).count } <= 1)
+        guard taps <= round else { break }
+    }
+    #expect(device.calls.filter { $0 == "look" }.count == 40)
+}
+
+/// What was seen through a session counts for that session only: a look still under way when
+/// the device gets a new session (another port, a new pairing) doesn't let a tap go to the new one.
+@Test func aLookThroughAReplacedSessionServesNoAction() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (hub, made) = try standInHub(dir)
+    defer { hub.stop() }
+    let id = UUID()
+    func target(port: UInt16) -> DeviceControlHub.Target { .init(id: id, name: "iPhone", ip: "127.0.0.1", port: port, udid: "UDID-1") }
+    hub.update([target(port: 1)])
+    let old = try #require(made().first)
+    old.hold = DispatchSemaphore(value: 0)
+    let png = dir.appendingPathComponent("look.png").path
+    let looked = DispatchSemaphore(value: 0)
+    Thread.detachNewThread {
+        _ = hub.answer(.init(op: "look", device: id, path: png))
+        looked.signal()
+    }
+    old.lookBegan.wait()
+    hub.update([target(port: 2)])   // found at another port while the look runs
+    old.hold?.signal()
+    looked.wait()
+    let fresh = try #require(made().last)
+    #expect(fresh !== old)
+    let tap = hub.answer(.init(op: "tap", device: id, x: 10, y: 10))
+    #expect(!tap.ok && tap.error?.hasPrefix("look first") == true)
+    #expect(!fresh.calls.contains("tap") && !old.calls.contains("tap"))
+    // And through the new one, as ever: look, then act.
+    #expect(hub.answer(.init(op: "look", device: id, path: png)).ok)
+    #expect(hub.answer(.init(op: "tap", device: id, x: 10, y: 10)).ok)
+    #expect(fresh.calls == ["look", "tap"])
+}
+
+/// A failed input is never sent again, but its connection is no longer taken for sound — unless
+/// it was refused for what it asked, before anything was sent.
+@Test func aFailedInputLeavesItsConnectionInDoubt() {
+    #expect(DeviceSession.leavesConnectionInDoubt(DeviceSession.Failure.message("touch: not connected")))
+    #expect(DeviceSession.leavesConnectionInDoubt(DeviceSession.Failure.message("timed out")))
+    #expect(!DeviceSession.leavesConnectionInDoubt(DeviceSession.Failure.invalid("can't type 'あ'")))
+}
+
 /// Whatever number a caller sends for a walk's length or a swipe's duration, the app survives it:
 /// the one is brought into what a walk can do, the other refused outside what the library takes.
 @Test func anyNumberACallerSendsIsBoundedOrRefused() {

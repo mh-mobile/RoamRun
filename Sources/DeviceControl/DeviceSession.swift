@@ -25,7 +25,22 @@ public enum Recovery {
 public final class DeviceSession: @unchecked Sendable {
     public enum Failure: Error, CustomStringConvertible {
         case message(String)
-        public var description: String { if case .message(let m) = self { m } else { "" } }
+        /// Refused for what was asked, before anything went to the device.
+        case invalid(String)
+        public var description: String {
+            switch self {
+            case .message(let m), .invalid(let m): m
+            }
+        }
+    }
+
+    /// Whether a call's failure leaves its connection in doubt. A read is tried again and on a
+    /// new connection first, so its failure does. An input is never sent twice, but one that
+    /// failed for anything other than what it asked says the same about the connection: it is
+    /// taken for gone (a new one is made in the background) instead of standing as connected.
+    public static func leavesConnectionInDoubt(_ error: Error) -> Bool {
+        if case Failure.invalid = error { return false }
+        return true
     }
 
     private let ip: String, port: UInt16, pairingFile: String, udid: String?
@@ -128,7 +143,7 @@ public final class DeviceSession: @unchecked Sendable {
 
     /// The library takes text up to its first NUL: text with one would arrive cut short, and be reported sent.
     private func whole(_ text: String) throws {
-        if text.utf8.contains(0) { throw Failure.message("the text holds a NUL character, which can't be sent") }
+        if text.utf8.contains(0) { throw Failure.invalid("the text holds a NUL character, which can't be sent") }
     }
     public func press(_ button: String) throws { _ = try answer(repeatable: false) { rr_device_button($0, button) } }
 
@@ -140,7 +155,10 @@ public final class DeviceSession: @unchecked Sendable {
             guard let object = try? JSONSerialization.jsonObject(with: Data(String(cString: json).utf8)) as? [String: Any] else {
                 throw Failure.message("unreadable answer")
             }
-            guard object["ok"] as? Bool == true else { throw Failure.message(object["error"] as? String ?? "failed") }
+            guard object["ok"] as? Bool == true else {
+                let why = object["error"] as? String ?? "failed"
+                throw object["invalid"] as? Bool == true ? Failure.invalid(why) : Failure.message(why)
+            }
             if object["reconnected"] as? Bool == true { onEvent?("the kept input connection was gone; sent on a new one") }
             return object
         }
@@ -173,8 +191,7 @@ public final class DeviceSession: @unchecked Sendable {
                 broken = false
                 return result
             } catch {
-                // An input's failure may be its arguments'; a read's, after all that, is the connection's.
-                if repeatable { broken = true }
+                if Self.leavesConnectionInDoubt(error) { broken = true }
                 throw error
             }
         }

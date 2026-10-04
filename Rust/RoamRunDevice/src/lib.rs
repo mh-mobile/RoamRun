@@ -261,7 +261,9 @@ unsafe fn run(device: *mut RRDevice, input: Result<Input, String>) -> *mut c_cha
     let Some(device) = (unsafe { device.as_ref() }) else { return std::ptr::null_mut() };
     let input = match input {
         Ok(input) => input,
-        Err(why) => return c_string(failure(&why)),
+        // Refused for what it says, before anything went to the device: "invalid" tells the
+        // caller its connection is none the worse for it.
+        Err(why) => return c_string(format!("{{\"ok\":false,\"invalid\":true,\"error\":{}}}", quoted(&why))),
     };
     let started = Instant::now();
     let result = with_room(|| {
