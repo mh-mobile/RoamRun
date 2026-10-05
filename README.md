@@ -353,6 +353,11 @@ Main files in `Sources/RoamRun/`:
 | `AppCoordinator.swift` | Profiles, bridge control, presence checks |
 | `StatusFile.swift` | Bridge status shared by the app and the CLI (who owns which device) |
 | `CLI.swift` | The `roamrun` command (same binary as the app) |
+| `DeviceControl.swift` | Device control: the connections the app holds, the pairing, and the socket the CLI and MCP tools ask through |
+| `DeviceControlKey.swift` | The Keychain key the saved pairings are sealed with |
+| `DeviceMCP.swift` | `roamrun mcp`: the same commands as MCP tools |
+
+Device control's connection itself is in `Sources/DeviceControl/` (Swift) over `Rust/RoamRunDevice/` (RoamRun's C interface to the idevice crate).
 
 ## What it creates on your Mac, and uninstalling
 
@@ -360,7 +365,7 @@ RoamRun writes only to these places (it never touches system settings or other a
 
 | Location | Contents |
 |---|---|
-| `~/Library/Application Support/RoamRun/` | Saved devices (`profiles.json`), bridge status, and `ota/` — the last 5 builds per app kept for over-the-air installs (excluded from Time Machine; delete the folder to reclaim the space) |
+| `~/Library/Application Support/RoamRun/` | Saved devices (`profiles.json`), bridge status, device control's socket (`control/`) and the name this Mac pairs under (`device-control-host`), and `ota/` — the last 5 builds per app kept for over-the-air installs (excluded from Time Machine; delete the folder to reclaim the space) |
 | `~/Library/Logs/RoamRun/` | Logs of `roamrun up -d` |
 | `io.github.mh-mobile.roamrun` (defaults; `com.roamrun.app` before 0.1.12) | Settings and which bridges were running |
 | `/usr/local/bin/roamrun` | Only if you installed the CLI from the app or `make install-cli` (never overwrites an existing file or another tool's link); Homebrew links `/opt/homebrew/bin/roamrun` instead |
