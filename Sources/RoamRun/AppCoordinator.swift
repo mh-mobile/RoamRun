@@ -932,6 +932,17 @@ final class AppCoordinator: ObservableObject {
         return found.port
     }
 
+    /// A saved device a pairing was brought for is kept — with the UDID, if it had none — only
+    /// once the list is written, and that is asked whatever changed: a device can be here and
+    /// not in the file (a save that failed when it was added, or when its UDID was learned).
+    /// nil: not written, or no such device.
+    nonisolated static func keepSaved(_ id: UUID, udid: String, in profiles: [DeviceProfile], save: ([DeviceProfile]) -> Bool) -> DeviceProfile? {
+        var changed = profiles
+        guard let i = changed.firstIndex(where: { $0.id == id }) else { return nil }
+        if changed[i].udid == nil { changed[i].udid = udid }
+        return save(changed) ? changed[i] : nil
+    }
+
     /// One import at a time: two for one device would each find it not saved, and save it twice.
     nonisolated private let importing = NSLock()
 
@@ -949,16 +960,16 @@ final class AppCoordinator: ObservableObject {
             }
             return .success(place.profile.displayName)
         case .success(let place):
-            guard let i = profiles.firstIndex(where: { $0.id == place.profile.id }) else { return .failure(unsaved) }
-            if profiles[i].udid == nil {
-                profiles[i].udid = udid
-                guard persist() else {
-                    profiles[i].udid = nil
-                    deviceControl.forgetPairing(udid: udid, of: place.profile.id)
-                    return .failure(unsaved)
-                }
+            let id = place.profile.id, before = profiles
+            guard let kept = Self.keepSaved(id, udid: udid, in: profiles, save: { changed in
+                profiles = changed
+                return persist()
+            }) else {
+                profiles = before
+                deviceControl.forgetPairing(udid: udid, of: id)
+                return .failure(unsaved)
             }
-            return .success(profiles[i].displayName)
+            return .success(kept.displayName)
         }
     }
 

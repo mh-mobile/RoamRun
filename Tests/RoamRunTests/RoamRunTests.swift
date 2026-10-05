@@ -4868,11 +4868,67 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
     defer { first.stop() }
     #expect(DeviceControlWire.Listener(directory: dir) { _ in .init(ok: true, name: "second") } == nil)
     #expect(try DeviceControlWire.ask(.init(op: "state", device: UUID()), in: dir).name == "first")
-    // One left by a run that ended is replaced.
+    // Once it has ended, the next takes over — and the one that ended, asked to stop again,
+    // doesn't remove the socket that is the next one's by then.
     first.stop()
     let next = try #require(DeviceControlWire.Listener(directory: dir) { _ in .init(ok: true, name: "next") })
     defer { next.stop() }
+    first.stop()
     #expect(try DeviceControlWire.ask(.init(op: "state", device: UUID()), in: dir).name == "next")
+    // A socket left by a run that ended without removing it (its lock went with it) is replaced.
+    next.stop()
+    let sock = DeviceControlWire.socketPath(in: dir)
+    FileManager.default.createFile(atPath: sock, contents: nil)
+    let after = try #require(DeviceControlWire.Listener(directory: dir) { _ in .init(ok: true, name: "after") })
+    defer { after.stop() }
+    #expect(try DeviceControlWire.ask(.init(op: "state", device: UUID()), in: dir).name == "after")
+}
+
+/// Many started at once for one folder: one listens, and its socket is there to be asked —
+/// none of the others removed it on its way out.
+@Test func ofManyStartedAtOnceOneListens() throws {
+    let dir = URL(fileURLWithPath: "/tmp/rr-\(UUID().uuidString.prefix(8))")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    for _ in 0..<20 {
+        let made = OSAllocatedUnfairLock<[DeviceControlWire.Listener]>(initialState: [])
+        DispatchQueue.concurrentPerform(iterations: 8) { n in
+            if let l = DeviceControlWire.Listener(directory: dir, handler: { _ in .init(ok: true, name: "\(n)") }) { made.withLock { $0.append(l) } }
+        }
+        let listening = made.withLock { $0 }
+        #expect(listening.count == 1)
+        #expect((try? DeviceControlWire.ask(.init(op: "state", device: UUID()), in: dir))?.ok == true)
+        listening.forEach { $0.stop() }
+    }
+}
+
+/// A saved device a pairing was brought for counts as kept only once the list is written, also
+/// when nothing about it changes: it can be here and not in the file, and the pairing's file is
+/// removed on this answer.
+@Test func aSavedDeviceIsKeptOnlyOnceTheListIsWritten() {
+    func device(_ name: String, udid: String?) -> DeviceProfile {
+        var d = DeviceProfile(displayName: name, instanceName: name, serviceType: "_remotepairing._tcp", domain: "local.",
+                              remotePairingPort: 49152, bonjourHost: "x.local.", txt: [:],
+                              providerID: "tailscale", providerHostName: name, providerIP: "100.64.0.1")
+        d.udid = udid
+        return d
+    }
+    let known = device("iPhone", udid: "0000-ABCD"), unknown = device("iPad", udid: nil)
+    let list = [known, unknown]
+    var asked: [[DeviceProfile]] = []
+    // Its UDID known already: nothing to change, and still asked to be written.
+    #expect(AppCoordinator.keepSaved(known.id, udid: "0000-abcd", in: list, save: { asked.append($0); return true }) == known)
+    #expect(asked == [list])
+    #expect(AppCoordinator.keepSaved(known.id, udid: "0000-abcd", in: list, save: { _ in false }) == nil)
+    // Not known yet: written with it, or not kept.
+    asked = []
+    #expect(AppCoordinator.keepSaved(unknown.id, udid: "U2", in: list, save: { asked.append($0); return true })?.udid == "U2")
+    #expect(asked.first?.first { $0.id == unknown.id }?.udid == "U2" && asked.first?.first { $0.id == known.id } == known)
+    #expect(AppCoordinator.keepSaved(unknown.id, udid: "U2", in: list, save: { _ in false }) == nil)
+    // Removed meanwhile: nothing to keep, and nothing asked.
+    asked = []
+    #expect(AppCoordinator.keepSaved(UUID(), udid: "U2", in: list, save: { asked.append($0); return true }) == nil)
+    #expect(asked.isEmpty)
 }
 
 /// The port a pairing's file carries is the device's when it was made. Refused there, the device

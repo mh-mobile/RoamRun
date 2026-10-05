@@ -166,6 +166,9 @@ enum DeviceControlWire {
     final class Listener: @unchecked Sendable {
         private let fd: Int32
         private let path: String
+        /// Held for as long as this listens: the socket's name is one process's at a time, from
+        /// before it is made until after it is removed.
+        private let held: Int32
         private let stopped = NSLock()
         private var isStopped = false
 
@@ -178,21 +181,26 @@ enum DeviceControlWire {
             let folder = DeviceControlWire.socketFolder(in: directory)
             try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             guard chmod(folder.path, 0o700) == 0 else { close(fd); return nil }
-            // A previous run's is replaced; one something answers on is another app's (a second
-            // copy started beside it), and stays its.
-            let probe = socket(AF_UNIX, SOCK_STREAM, 0)
-            let answered = probe >= 0 && DeviceControlWire.withAddress(path, { connect(probe, $0, $1) }) == 0
-            if probe >= 0 { close(probe) }
-            guard !answered else { close(fd); return nil }
-            unlink(path)
+            // One at a time, by a lock the system lets go of when its holder ends: a copy started
+            // beside the app doesn't take its socket, and one that is ending removes its own —
+            // tried by asking whether something answers, an ending one answered no and then
+            // removed the socket its successor had made meanwhile.
+            let held = open(folder.appendingPathComponent("listener.lock").path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+            guard held >= 0, flock(held, LOCK_EX | LOCK_NB) == 0 else {
+                if held >= 0 { close(held) }
+                close(fd)
+                return nil
+            }
+            unlink(path)   // a run's that ended without removing it
             // Looks a CLI was to move to their place and didn't (it was interrupted): screens aren't left lying.
             for left in (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
             where left.lastPathComponent.hasPrefix("look-") { try? FileManager.default.removeItem(at: left) }
             DeviceControlWire.noSIGPIPE(fd)
-            guard DeviceControlWire.withAddress(path, { bind(fd, $0, $1) }) == 0, listen(fd, 64) == 0 else { close(fd); return nil }
+            guard DeviceControlWire.withAddress(path, { bind(fd, $0, $1) }) == 0, listen(fd, 64) == 0 else { close(fd); close(held); return nil }
             chmod(path, 0o600)
             self.fd = fd
             self.path = path
+            self.held = held
             Thread.detachNewThread { [weak self, fd] in
                 while true {
                     let client = accept(fd, nil, nil)
@@ -215,9 +223,11 @@ enum DeviceControlWire {
         }
 
         func stop() {
-            stopped.withLock { isStopped = true }
-            close(fd)
+            // Once: asked again, the name may be a successor's by then.
+            guard stopped.withLock({ () -> Bool in defer { isStopped = true }; return !isStopped }) else { return }
             unlink(path)
+            close(fd)
+            close(held)   // last: until here nobody else makes the socket
         }
     }
 }
