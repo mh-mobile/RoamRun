@@ -356,7 +356,7 @@ private struct DeviceControlRow: View {
             .confirmationDialog("Remove device control for “\(profile.displayName)”?", isPresented: $confirmRemove) {
                 Button("Remove", role: .destructive) { coordinator.removeControlPairing(profile) }
             } message: {
-                Text("RoamRun forgets its pairing, and nothing can use the device's side of it any more. To take it off the device's list too: on the device, Settings › Privacy & Security › Developer Mode, choose “\(AppCoordinator.controlHostName)”, then unpair.")
+                Text("RoamRun forgets its pairing, and nothing can use the device's side of it any more. To take it off the device's list too: on the device, Settings › Privacy & Security › Developer Mode, choose its entry, then unpair — “\(AppCoordinator.controlHostName)” when it was set up here under this Mac's present name, or the name it was made under (`pairing create --as`) when it was brought in.")
             }
             .onDisappear {   // the sheet goes with this view; so does what it was showing
                 if coordinator.controlPairing?.device == profile.id { coordinator.endControlPairing() }

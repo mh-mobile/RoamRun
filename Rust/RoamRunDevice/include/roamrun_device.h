@@ -17,14 +17,23 @@ typedef struct RRDevice RRDevice;
 /**
  * Verifies the pairing (`pairing_len` bytes of a property list, never a path) with the device at `ip`:`port` (its RemotePairing
  * port) and opens the tunnel. Never starts a new pairing; sends the device no input.
+ * It is the device that checks the pairing: what answers there isn't proved to be the device by it.
  * NULL on failure, with *error (if given) set to a message to free with rr_string_free. A
  * message that holds "doesn't accept this pairing" means the device answered and refused it
  * (removed there); any other failure is of the connection.
  */
 RRDevice *rr_device_open(const char *ip, uint16_t port, const uint8_t *pairing, size_t pairing_len, char **error);
 
-/** Ends the tunnel. NULL is fine. */
+/** Ends the tunnel. NULL is fine. Not while another call on it runs: the device is freed. */
 void rr_device_close(RRDevice *device);
+
+/**
+ * `flag` — one byte, zero, that stays where it is while the device is open — is looked at
+ * between the keys of a long input: once raised (rr_flag_raise, from any thread), what is left
+ * isn't sent and the call fails. For letting go of a device without waiting out a text.
+ */
+void rr_device_stop_at(RRDevice *device, const uint8_t *flag);
+void rr_flag_raise(uint8_t *flag);
 
 /**
  * JSON: how long opening took and which of the services device control needs are there.
@@ -126,6 +135,7 @@ void rr_pairing_cancel(RRPairing *pairing);
 /** Stops listening. Not while rr_pairing_accept runs. NULL is fine. */
 void rr_pairing_free(RRPairing *pairing);
 
+/** Frees what a call returned as bytes; `length` is the length that call gave. */
 void rr_bytes_free(uint8_t *bytes, size_t length);
 
 void rr_string_free(char *string);

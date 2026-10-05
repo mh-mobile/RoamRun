@@ -65,11 +65,23 @@ public final class DeviceSession: @unchecked Sendable {
         self.ip = ip; self.port = port; self.pairing = pairing; self.udid = udid
     }
 
-    deinit { rr_device_close(device) }
+    /// Raised when this is closed: a long text under way stops between two keys, instead of
+    /// being typed out on a device that was let go of.
+    private let stopping: UnsafeMutablePointer<UInt8> = {
+        let flag = UnsafeMutablePointer<UInt8>.allocate(capacity: 1)
+        flag.initialize(to: 0)
+        return flag
+    }()
+
+    deinit {
+        rr_device_close(device)
+        stopping.deallocate()
+    }
 
     /// For good: a session closed is one replaced, and nothing opens it again (a call that
     /// still holds it fails, instead of making a connection beside its successor's).
     public func close() {
+        rr_flag_raise(stopping)
         lock.withLock {
             closed = true
             rr_device_close(device)
@@ -188,6 +200,7 @@ public final class DeviceSession: @unchecked Sendable {
             throw Failure.message(why)
         }
         refused = false
+        rr_device_stop_at(opened, stopping)
         return opened
     }
 

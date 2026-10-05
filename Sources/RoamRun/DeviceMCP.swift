@@ -7,7 +7,8 @@ import UniformTypeIdentifiers
 /// line). A thin front: every tool asks the app, as the CLI's commands do.
 /// What differs is the look: the image comes back in the answer, scaled down to what a model
 /// is shown anyway, and points are taken in that image's pixels.
-/// One at a time, from the one thread that serves it.
+/// Tools run one at a time, in the order asked; what the client says meanwhile is still read,
+/// so that it can take a call back.
 final class DeviceMCP: @unchecked Sendable {
     typealias Ask = (DeviceControlWire.Request) throws -> DeviceControlWire.Response
 
@@ -21,16 +22,55 @@ final class DeviceMCP: @unchecked Sendable {
     /// that was — a point is sent with it, so it isn't read against a look another made since.
     private var shown: [UUID: (shown: CGSize, real: CGSize, look: Int?)] = [:]
 
-    init(profiles: @escaping () -> [DeviceProfile], ask: @escaping Ask) {
+    /// Where the app writes a look for this to read: the folder it keeps looks in.
+    private let looks: URL
+    /// The request to the app under way, which `ask` makes with it: given up when its call is taken back.
+    private let asking: DeviceControlWire.Asking
+    private let work = DispatchQueue(label: "roamrun.mcp")
+    private let calls = NSLock()
+    /// Under `calls`: the call running now, and those taken back before their turn.
+    private var running: String?
+    private var takenBack: Set<String> = []
+
+    init(profiles: @escaping () -> [DeviceProfile], looks: URL, asking: DeviceControlWire.Asking = .init(), ask: @escaping Ask) {
         self.saved = profiles
+        self.looks = looks
+        self.asking = asking
         self.ask = ask
     }
 
     /// Serves until stdin closes.
     func serve() {
         while let line = readLine(strippingNewline: true) {
-            guard let answer = handle(Data(line.utf8)) else { continue }
-            FileHandle.standardOutput.write(answer + Data([0x0A]))
+            let message = Data(line.utf8)
+            let object = try? JSONSerialization.jsonObject(with: message) as? [String: Any]
+            if object?["method"] as? String == "notifications/cancelled" {
+                if let id = (object?["params"] as? [String: Any])?["requestId"] { takeBack("\(id)") }
+                continue
+            }
+            let id = object?["id"].map { "\($0)" }
+            work.async {
+                // Taken back before its turn: not begun, and (as MCP has it) not answered.
+                let begin = self.calls.withLock { () -> Bool in
+                    if let id, self.takenBack.remove(id) != nil { return false }
+                    self.running = id
+                    self.asking.again()
+                    return true
+                }
+                guard begin else { return }
+                let answer = self.handle(message)
+                self.calls.withLock { self.running = nil }
+                if let answer { FileHandle.standardOutput.write(answer + Data([0x0A])) }
+            }
+        }
+        work.sync {}   // what was asked before stdin closed is finished
+    }
+
+    /// A call taken back by the client: one waiting its turn at the app isn't begun there; one
+    /// the device is already doing runs out.
+    func takeBack(_ id: String) {
+        calls.withLock {
+            if running == id { asking.giveUp() } else { takenBack.insert(id) }
         }
     }
 
@@ -109,7 +149,7 @@ final class DeviceMCP: @unchecked Sendable {
         }
         switch tool {
         case "look":
-            let file = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-look-\(UUID().uuidString).png")
+            let file = looks.appendingPathComponent("look-\(UUID().uuidString).png")
             defer { try? FileManager.default.removeItem(at: file) }
             let looked = try send(.init(op: "look", device: device.id, path: file.path))
             guard let (jpeg, size, original) = Self.scaled(file) else { throw Failure(description: "couldn't read the look") }

@@ -321,17 +321,28 @@ iPhone から Mac を操作する方法は 3 つあります。どの方法で�
 | `StatusFile.swift` | アプリと CLI で共有するブリッジの状態（どの端末をどちらが動かしているか） |
 | `CLI.swift` | `roamrun` コマンド（アプリと同じバイナリ） |
 
+## 実機を見る・操作する（デバイス操作）
+
+look・tap・swipe・type・paste・press・elements の各コマンドと `roamrun mcp` で、実機の画面を見て操作できます。コマンドと使い方は [README.md](README.md#seeing-and-operating-the-device) を参照してください。使う前に知っておくこと:
+
+- **RoamRun が自分のペアリング（秘密鍵）を持ちます。** デバイスのページの **Set Up…** で作り、ログインキーチェーンの鍵で封印して保存します。この鍵を持ち、デバイスに届く者は、デバイス側の確認なしに画面を見て操作できます。
+- **`roamrun pairing create` が書き出すファイルは鍵そのものです**（封印されていません）。パスワードと同じように運び、コピーを残さないでください。取り込んだ Mac では `pairing import` が封印して元のファイルを消します。取り消すときは、デバイスの 設定 › プライバシーとセキュリティ › デベロッパモード でその項目を削除します。
+- **見ている間・操作している間は、デバイスの音が取られます。** 最後の look / 操作から約 5 秒間、スピーカーは無音になり（音楽は止まり、あとで自動的に再開）、音声入力（音声入力キーボード、聞き取るアプリ）は聞こえません。画面を見続けさせると、その間ずっと続きます。
+- **この Mac のあなたのユーザーで動くプロセスは、起動中の RoamRun にデバイスの操作を頼めます**（`roamrun` コマンドがそうしています）。
+- ペアリングは Mac をデバイスに証明するもので、デバイスを Mac に証明するものではありません。詳しくは [SECURITY.md](SECURITY.md) を参照してください。
+
 ## Mac に作るもの・アンインストール
 
 RoamRun が書き込むのは次の場所だけです（システム設定や他のアプリには触れません。`roamrun ota` を使う場合は、これに加えて `tailscale serve` にポートが 1 つ登録されます。下記参照）。
 
 | 場所 | 内容 |
 |---|---|
-| `~/Library/Application Support/RoamRun/` | 登録済みデバイス（`profiles.json`）、ブリッジの状態、および `ota/` — OTA 用にアプリごと直近 5 件のビルドを保管（Time Machine の対象外。容量を戻すにはフォルダごと削除） |
+| `~/Library/Application Support/RoamRun/` | 登録済みデバイス（`profiles.json`）、ブリッジの状態、ロックファイル、デバイス操作のソケットと受け渡し中の look（`control/`）、ペアリング用のこの Mac の識別子（`device-control-host`）、封印したペアリング（`device-pairing-<UDID>.sealed`）、および `ota/` — OTA 用にアプリごと直近 5 件のビルドを保管（Time Machine の対象外。容量を戻すにはフォルダごと削除） |
 | `~/Library/Logs/RoamRun/` | `roamrun up -d` のログ |
 | `io.github.mh-mobile.roamrun`（defaults。0.1.12 より前は `com.roamrun.app`） | 設定・前回動いていたブリッジ |
 | `/usr/local/bin/roamrun` | アプリか `make install-cli` で CLI を入れた場合のみ（既存のファイルや他のツールのリンクは上書きしません）。Homebrew は代わりに `/opt/homebrew/bin/roamrun` にリンクします |
 | `~/.claude/skills/roamrun/` など | `roamrun init` を実行した場合のみ（既存の他のスキルやリンクには触れません） |
+| ログインキーチェーン: “RoamRun device control” | デバイス操作を設定した場合のみ。保存したペアリングを封印する鍵 |
 
 ブリッジ中に起動する補助プロセス（`dns-sd` / `log stream`）は、RoamRun が強制終了しても通常 1 秒ほどで自動で終了し、LAN への広告も消えます。
 
@@ -344,6 +355,7 @@ rm -rf ~/Library/Application\ Support/RoamRun ~/Library/Logs/RoamRun
 tailscale serve --https=41443 --set-path=/ off   # roamrun ota を使った場合（otaPort のポート）
 defaults delete io.github.mh-mobile.roamrun      # 上の行の後で（otaPort がここにあります）
 defaults delete com.roamrun.app 2>/dev/null      # 0.1.12 より前の版が残したもの
+security delete-generic-password -s io.github.mh-mobile.roamrun.device-control   # デバイス操作を設定した場合
 # 最後に /Applications/RoamRun.app を削除（「ログイン時に開く」を有効にしていた場合は先に無効化）
 ```
 

@@ -213,7 +213,10 @@ enum CLI {
                 }
             case "mcp":
                 // Off the main thread: it reads stdin until the client closes it.
-                let server = DeviceMCP(profiles: { store.load() }) { try DeviceControlWire.ask($0, in: ProfileStore.directory) }
+                let asking = DeviceControlWire.Asking()
+                let server = DeviceMCP(profiles: { store.load() }, looks: DeviceControlWire.socketFolder(in: ProfileStore.directory), asking: asking) {
+                    try DeviceControlWire.ask($0, in: ProfileStore.directory, asking: asking)
+                }
                 Thread.detachNewThread { server.serve(); exit(0) }
             case "look":
                 guard name != nil, let p = targets.first else { fail("usage: roamrun look <name> [file.png]. " + names(profiles)) }
@@ -780,7 +783,7 @@ enum CLI {
     }
 
     private static func controlState(_ id: UUID, udid: String?) -> ControlState {
-        guard let udid, FileManager.default.fileExists(atPath: DeviceControlWire.pairingFile(udid: udid, in: ProfileStore.directory).path) else {
+        guard let udid, DeviceControlWire.hasPairing(udid: udid, in: ProfileStore.directory) else {
             return .notSetUp
         }
         let r: DeviceControlWire.Response
@@ -906,7 +909,8 @@ enum CLI {
         let path = URL(fileURLWithPath: file).standardizedFileURL.path
         guard FileManager.default.fileExists(atPath: path) else { fail("\(path) doesn't exist") }
         let r = askApp(.init(op: "import", device: UUID(), path: path, text: name))
-        guard r.ok else { stop("import failed: \(r.error ?? "no answer")") }
+        // Not taken in, the file is where it was — and what it was.
+        guard r.ok else { stop("import failed: \(r.error ?? "no answer")\n\(path) was left as it is: a pairing in it is still a key to the device.") }
         print("\(r.name ?? "The device") is saved with its pairing. Try: roamrun look \(r.name.map(shellName) ?? "<name>")")
         // Said as it is: a key left where it was is not one that is gone.
         if let left = r.error {
@@ -926,6 +930,7 @@ enum CLI {
             throw ArgumentError(message: "it is a folder")
         }
         try Data(contentsOf: made).write(to: file, options: .atomic)
+        chmod(file.path, 0o600)   // a screen, with whatever was on it
     }
 
     private static func askApp(_ request: DeviceControlWire.Request) -> DeviceControlWire.Response {

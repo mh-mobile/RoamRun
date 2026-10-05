@@ -4327,7 +4327,7 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
     let id = UUID()
     hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
     let device = try #require(made().first)
-    let png = dir.appendingPathComponent("look.png").path
+    let png = lookFile(in: dir)
     for round in 1...40 {
         #expect(hub.answer(.init(op: "look", device: id, path: png)).ok)
         let answers = OSAllocatedUnfairLock<[DeviceControlWire.Response]>(initialState: [])
@@ -4357,7 +4357,7 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
     hub.update([target(port: 1)])
     let old = try #require(made().first)
     old.hold = DispatchSemaphore(value: 0)
-    let png = dir.appendingPathComponent("look.png").path
+    let png = lookFile(in: dir)
     let looked = DispatchSemaphore(value: 0)
     Thread.detachNewThread {
         _ = hub.answer(.init(op: "look", device: id, path: png))
@@ -4390,7 +4390,7 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
     hub.update([target(port: 1)])
     let old = try #require(made().first)
     old.hold = DispatchSemaphore(value: 0)
-    let png = dir.appendingPathComponent("look.png").path
+    let png = lookFile(in: dir)
     let first = DispatchSemaphore(value: 0), second = DispatchSemaphore(value: 0)
     Thread.detachNewThread {
         _ = hub.answer(.init(op: "look", device: id, path: png))
@@ -4638,6 +4638,13 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
     #expect(hub.state(of: target.id, udid: "UDID-9") == (true, true, false))
 }
 
+/// Where the app writes a look: only in the folder it keeps them in.
+private func lookFile(in dir: URL) -> String {
+    let folder = DeviceControlWire.socketFolder(in: dir)
+    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    return folder.appendingPathComponent("look-\(UUID().uuidString).png").path
+}
+
 /// The file a pairing travels in holds the device with it, and is read only as that.
 @Test func aSharedPairingIsReadOnlyAsOne() throws {
     var device = DeviceProfile(displayName: "iPhone", instanceName: "abc", serviceType: "_remotepairing._tcp", domain: "local.",
@@ -4868,7 +4875,7 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
     let id = UUID()
     hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
     let device = try #require(made().first)
-    let png = dir.appendingPathComponent("look.png").path
+    let png = lookFile(in: dir)
     func taps() -> Int { device.calls.filter { $0 == "tap" || $0 == "swipe" }.count }
 
     let mine = try #require(hub.answer(.init(op: "look", device: id, path: png)).look)
@@ -4946,7 +4953,7 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
                       remotePairingPort: 49152, bonjourHost: "x.local.", txt: [:], providerID: "tailscale", providerHostName: name, providerIP: "100.64.0.1")
     }
     var asked: [DeviceControlWire.Request] = []
-    let server = DeviceMCP(profiles: { [device("Device"), device("device"), device("iPad")] }) { request in
+    let server = DeviceMCP(profiles: { [device("Device"), device("device"), device("iPad")] }, looks: FileManager.default.temporaryDirectory) { request in
         asked.append(request)
         return .init(ok: true)
     }
@@ -4984,7 +4991,7 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
 
     // A look that is held up has the device; a press asked for meanwhile waits behind it.
     device.hold = DispatchSemaphore(value: 0)
-    Thread.detachNewThread { _ = hub.answer(.init(op: "look", device: id, path: dir.appendingPathComponent("l.png").path)) }
+    Thread.detachNewThread { _ = hub.answer(.init(op: "look", device: id, path: lookFile(in: dir))) }
     device.lookBegan.wait()
     let fd = socket(AF_UNIX, SOCK_STREAM, 0)
     var address = sockaddr_un()
@@ -5237,7 +5244,7 @@ import ImageIO
     let device = profile("iPhone")
     var asked: [DeviceControlWire.Request] = []
     var saved = [device]
-    let server = DeviceMCP(profiles: { saved }) { request in
+    let server = DeviceMCP(profiles: { saved }, looks: FileManager.default.temporaryDirectory) { request in
         asked.append(request)
         if request.op == "look", let path = request.path {
             // A screen twice the size a look returns: 2000 x 4000 comes back as 640 x 1280.
@@ -5399,4 +5406,156 @@ func everyDocumentedCommandParses(_ doc: String) throws {
     #expect(CLI.otherUp(e(200, cli: false, .error), me: 300) == nil)   // the app's: claim rules decide
     #expect(CLI.otherUp(e(200, cli: nil, .error), me: 300) == nil)     // an old entry with no `cli`
     #expect(CLI.otherUp(nil, me: 300) == nil)
+}
+
+/// A pairing whose file wouldn't go was emptied: it isn't back when RoamRun is opened again, and
+/// one set up anew in its place is used.
+@Test func aPairingThatCouldNotBeRemovedIsNotBackAfterAStart() throws {
+    let dir = scratchDir()
+    defer {
+        chmod(dir.path, 0o700)
+        try? FileManager.default.removeItem(at: dir)
+    }
+    let (hub, _) = try standInHub(dir)
+    let id = UUID()
+    let target = DeviceControlHub.Target(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")
+    hub.update([target])
+    #expect(chmod(dir.path, 0o500) == 0)
+    #expect(hub.unpair(target) == .emptied)
+    #expect(!hub.state(of: id, udid: "UDID-1").paired)
+    #expect(!DeviceControlWire.hasPairing(udid: "UDID-1", in: dir))   // what `roamrun status` reads
+    hub.stop()
+    let (again, _) = { () -> (DeviceControlHub, () -> [StandInDevice]) in
+        let made = OSAllocatedUnfairLock<[StandInDevice]>(initialState: [])
+        return (DeviceControlHub(directory: dir, key: { _ in scratchKey }) { _, _, _ in
+            let device = StandInDevice()
+            made.withLock { $0.append(device) }
+            return device
+        }, { made.withLock { $0 } })
+    }()
+    defer { again.stop() }
+    again.update([target])
+    #expect(!again.answer(.init(op: "press", device: id, text: "home")).ok)
+    chmod(dir.path, 0o700)
+    try again.sealPairing(Data("<plist/>".utf8), with: scratchKey, udid: "UDID-1")
+    again.update([target])
+    #expect(again.answer(.init(op: "press", device: id, text: "home")).ok)
+}
+
+/// One that could be neither removed nor emptied is said to be left, and is out of use meanwhile.
+@Test func aPairingThatCouldNotEvenBeEmptiedIsSaidToBeLeft() throws {
+    let dir = scratchDir()
+    let file = DeviceControlWire.pairingFile(udid: "UDID-1", in: dir)
+    defer {
+        chflags(file.path, 0)
+        try? FileManager.default.removeItem(at: dir)
+    }
+    let (hub, _) = try standInHub(dir)
+    defer { hub.stop() }
+    let id = UUID()
+    let target = DeviceControlHub.Target(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")
+    hub.update([target])
+    #expect(chflags(file.path, UInt32(UF_IMMUTABLE)) == 0)
+    #expect(hub.unpair(target) == .left)
+    #expect(!hub.state(of: id, udid: "UDID-1").paired)
+    #expect(!hub.answer(.init(op: "press", device: id, text: "home")).ok)
+}
+
+/// A look's number isn't counted from the same place by every run of the app: one kept from
+/// before a restart isn't taken for one made since.
+@Test func looksAreNotNumberedAlikeByEveryStart() throws {
+    func first() throws -> Int {
+        let dir = scratchDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let (hub, _) = try standInHub(dir)
+        defer { hub.stop() }
+        let id = UUID()
+        hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
+        return try #require(hub.answer(.init(op: "look", device: id, path: lookFile(in: dir))).look)
+    }
+    #expect(try first() != first())
+}
+
+/// The app writes a look only where it keeps looks, whatever file it is asked for.
+@Test func aLookIsWrittenOnlyWhereLooksAreKept() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (hub, _) = try standInHub(dir)
+    defer { hub.stop() }
+    let id = UUID()
+    hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
+    let outside = dir.appendingPathComponent("look-1.png")
+    #expect(!hub.answer(.init(op: "look", device: id, path: outside.path)).ok)
+    #expect(!FileManager.default.fileExists(atPath: outside.path))
+    let around = DeviceControlWire.socketFolder(in: dir).appendingPathComponent("../look-2.png").path
+    #expect(!hub.answer(.init(op: "look", device: id, path: around)).ok)
+    #expect(!hub.answer(.init(op: "look", device: id, path: DeviceControlWire.socketFolder(in: dir).appendingPathComponent("sock").path)).ok)
+    #expect(hub.answer(.init(op: "look", device: id, path: lookFile(in: dir))).ok)
+}
+
+/// A pairing brought in is told whether whoever brought it still waits.
+@Test func anImportIsToldWhetherItsAskerWaits() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (hub, _) = try standInHub(dir)
+    defer { hub.stop() }
+    hub.onImport = { _, _, wanted in wanted() ? .init(ok: true) : .failure(DeviceControlHub.nobodyWaits) }
+    #expect(hub.answer(.init(op: "import", device: UUID(), path: "/x"), wanted: { true }).ok)
+    #expect(hub.answer(.init(op: "import", device: UUID(), path: "/x"), wanted: { false }).error == DeviceControlHub.nobodyWaits)
+}
+
+/// A file brought in names its device only in what RoamRun itself would have written.
+@Test func aSharedPairingNamesItsDeviceOnlyAsRoamRunWould() throws {
+    func read(_ change: (inout DeviceProfile) -> Void) throws -> SharedPairing? {
+        var device = DeviceProfile(displayName: "iPhone", instanceName: "abc", serviceType: "_remotepairing._tcp", domain: "local.",
+                                   remotePairingPort: 49152, bonjourHost: "x.local.", txt: [:],
+                                   providerID: "tailscale", providerHostName: "iphone", providerIP: "100.64.0.1")
+        device.udid = "00008130-000C1C5C307A8D3A"
+        change(&device)
+        return SharedPairing.read(try JSONEncoder().encode(SharedPairing(device: device, pairing: "<plist/>")))
+    }
+    #expect(try read { _ in } != nil)
+    #expect(try read { $0.udid = "x,name=Any iOS Device" } == nil)
+    #expect(try read { $0.udid = "../../x" } == nil)
+    #expect(try read { $0.providerIP = "example.com" } == nil)
+    #expect(try read { $0.providerIP = "fd7a:115c:a1e0::1" } != nil)
+    #expect(try read { $0.serviceType = "_ssh._tcp" } == nil)
+    #expect(try read { $0.domain = "example.com" } == nil)
+}
+
+/// A request given up while it waits its turn: the app finds its asker gone. Given up before
+/// it was sent, it isn't sent.
+@Test func aRequestGivenUpIsSeenAsLeft() throws {
+    let dir = URL(fileURLWithPath: "/tmp/rr-\(UUID().uuidString.prefix(8))")   // a socket's path is short
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let reached = DispatchSemaphore(value: 0), given = DispatchSemaphore(value: 0)
+    let still = OSAllocatedUnfairLock<Bool?>(initialState: nil)
+    let made = DeviceControlWire.Listener(directory: dir, answering: { _, wanted in
+        reached.signal()
+        given.wait()
+        for _ in 0..<50 where wanted() { usleep(20_000) }
+        let waits = wanted()
+        still.withLock { $0 = waits }
+        return .init(ok: true)
+    })
+    let listener = try #require(made)
+    defer { listener.stop() }
+    let asking = DeviceControlWire.Asking()
+    let done = DispatchSemaphore(value: 0)
+    Thread.detachNewThread {
+        _ = try? DeviceControlWire.ask(.init(op: "press", device: UUID(), text: "lock"), in: dir, asking: asking)
+        done.signal()
+    }
+    reached.wait()
+    asking.giveUp()
+    given.signal()
+    done.wait()
+    for _ in 0..<100 where still.withLock({ $0 }) == nil { usleep(20_000) }
+    #expect(still.withLock { $0 } == false)
+    #expect(throws: (any Error).self) { try DeviceControlWire.ask(.init(op: "press", device: UUID(), text: "lock"), in: dir, asking: asking) }
+    asking.again()
+    #expect(reached.wait(timeout: .now()) == .timedOut)   // nothing was sent meanwhile
+    given.signal()
+    #expect(try DeviceControlWire.ask(.init(op: "press", device: UUID(), text: "lock"), in: dir, asking: asking).ok)
 }

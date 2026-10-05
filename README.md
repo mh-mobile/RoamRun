@@ -222,11 +222,11 @@ roamrun pairing create iPhone ~/iphone-for-cloud.json --as cloud-mac   # here: p
 roamrun pairing import ~/iphone-for-cloud.json                         # there, once the file is on it: saves the device and its pairing, removes the file
 ```
 
-`import` keeps the pairing only if it connects, so the device has to be reachable then; if it restarted since the file was made, its port has changed and `import` looks for it. The other Mac needs RoamRun running in a session at its screen (a Mac nobody is logged in at can't start the app) and a way to reach the device's VPN address. The file is a key: whoever has it and reaches the device can see and operate it, so move it as you would a password, and don't keep copies. Each pairing made this way is listed on the device under its own name (Settings › Privacy & Security › Developer Mode) and can be removed there alone; this Mac's own pairing is another entry and stays.
+`import` keeps the pairing only if it connects, so the device has to be reachable then; if it restarted since the file was made, its port has changed and `import` looks for it (for a device not yet saved on that Mac; for one that is, find its port there first: its page › Technical details › Find RemotePairing Port). The other Mac needs RoamRun running in a session at its screen (a Mac nobody is logged in at can't start the app) and a way to reach the device's VPN address. The file is a key: whoever has it and reaches the device can see and operate it, so move it as you would a password, and don't keep copies. Each pairing made this way is listed on the device under its own name (Settings › Privacy & Security › Developer Mode) and can be removed there alone; this Mac's own pairing is another entry and stays.
 
 **While the device is looked at or operated, its sound is taken.** Each look and each action runs a screen-sharing session on the device, kept for about five seconds after the last one, and the device sends its sound into it: its speaker goes silent (music stops, and starts again by itself afterwards) and voice input on it — dictation, an app that listens — doesn't hear. So a screen that is being watched, look after look, has no sound and no voice input for as long as the watching goes on. Stop looking for a few seconds and both are back.
 
-These press what is really on the screen, and a `look` shows whatever is there — notifications and messages too. The device lists each connection as a screen-sharing session, and RoamRun's pairing under Developer Mode, where you can remove it. The pairing holds a private key; how it is kept, and who can use it, is in [SECURITY.md](SECURITY.md).
+These press what is really on the screen, and a `look` shows whatever is there — notifications and messages too. A `look` written to a file is yours only (0600) and stays until you delete it. The device shows each look or action as a screen-sharing session, and lists RoamRun's pairing under Developer Mode, where you can remove it. The pairing holds a private key; how it is kept, and who can use it, is in [SECURITY.md](SECURITY.md).
 
 ## Installing without the bridge: over the air
 
@@ -376,7 +376,7 @@ RoamRun writes only to these places (it never touches system settings or other a
 
 | Location | Contents |
 |---|---|
-| `~/Library/Application Support/RoamRun/` | Saved devices (`profiles.json`), bridge status, device control's socket (`control/`) and the name this Mac pairs under (`device-control-host`), and `ota/` — the last 5 builds per app kept for over-the-air installs (excluded from Time Machine; delete the folder to reclaim the space) |
+| `~/Library/Application Support/RoamRun/` | Saved devices (`profiles.json`), bridge status, lock files, device control's socket and looks on their way to a command (`control/`) and this Mac's identity for pairing (`device-control-host`), and `ota/` — the last 5 builds per app kept for over-the-air installs (excluded from Time Machine; delete the folder to reclaim the space) |
 | `~/Library/Logs/RoamRun/` | Logs of `roamrun up -d` |
 | `io.github.mh-mobile.roamrun` (defaults; `com.roamrun.app` before 0.1.12) | Settings and which bridges were running |
 | `/usr/local/bin/roamrun` | Only if you installed the CLI from the app or `make install-cli` (never overwrites an existing file or another tool's link); Homebrew links `/opt/homebrew/bin/roamrun` instead |

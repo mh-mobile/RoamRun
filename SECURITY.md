@@ -41,16 +41,24 @@ bounded.
   key kept in your login Keychain that macOS gives to RoamRun only — a copy of
   the file alone opens nothing, and another program asking for the key makes
   macOS ask you. It is not protection against something that runs as RoamRun or
-  that you allow in that prompt. The device lists the pairing in Settings ›
-  Privacy & Security › Developer Mode, where it can be removed; while a
-  connection is open, the device shows it as screen sharing. While **Set Up…**
-  waits (and only then), the Mac announces itself on the local network
-  (`_remotepairing-pairable-host._tcp`, with the Mac's name) and listens on a port
-  for the device to pair; the six-digit code is what keeps another device on that
-  network from pairing instead — one that did would be given nothing, and its
-  pairing is kept only if it is the device you set up. The connection itself goes
-  from the Mac to the device's VPN address, verified with that pairing and
-  encrypted by the tunnel it opens; screen images and input travel in it. Any process of your
+  that you allow in that prompt: RoamRun reads its key without one, so a prompt
+  about that item — also one naming RoamRun, after something else replaced the
+  item — is not to be allowed. The device lists the pairing in Settings ›
+  Privacy & Security › Developer Mode, where it can be removed; during each look
+  or action, and for about five seconds after, the device shows screen sharing
+  (the connection kept between them shows nothing). While **Set Up…** or
+  `roamrun pairing create` waits (and only then), the Mac announces itself on the
+  local network (`_remotepairing-pairable-host._tcp`, with the Mac's name or the
+  name given to `--as`) and listens on a port, on every interface, for the device
+  to pair; the six-digit code is what keeps another device from pairing instead —
+  one that did would be given nothing, and its pairing is kept only if it names
+  itself as the device you set up. The connection itself goes from the Mac to the
+  device's VPN address and is encrypted by the tunnel it opens; screen images and
+  input travel in it. **The pairing proves the Mac to the device, not the device
+  to the Mac**: whatever answers at that address is taken for the device, and
+  would be sent what is typed and pasted. On a Tailscale address that is the
+  device, as Tailscale has it; for a device saved under an address of an ordinary
+  network, it is whoever holds that address there. Any process of your
   user can ask the running app to look at or operate a paired device (the
   `roamrun` commands do), as it could ask it to stop a bridge.
 - **A pairing made for another Mac is a key in a file.** `roamrun pairing create`
@@ -117,7 +125,9 @@ bounded.
 - Files: `~/Library/Application Support/RoamRun/` (device profiles, mode 0600,
   bridge status, and `ota/` — the .ipa files you stored, 5 per app), `~/Library/Logs/RoamRun/`, and the
   `io.github.mh-mobile.roamrun` defaults (`com.roamrun.app` before 0.1.12).
-  With device control set up: sealed pairings (`device-pairing-<UDID>.sealed`, 0600) there too, and one
+  With device control: its socket and the looks on their way to whoever asked (`control/`, yours
+  only), this Mac's identity for pairing (`device-control-host`), sealed pairings
+  (`device-pairing-<UDID>.sealed`, 0600), and one
   item in the login Keychain, which removing the app leaves:
   `security delete-generic-password -s io.github.mh-mobile.roamrun.device-control`.
   The CLI link and agent skills are installed only on request and

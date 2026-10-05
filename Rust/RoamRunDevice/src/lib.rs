@@ -55,9 +55,20 @@ struct Link {
     keyframes_answered: u32,
     /// Inputs sent on a new connection because the kept one was found gone.
     resent: u32,
+    /// Raised by the caller from another thread when the device is to be let go of: a long
+    /// input stops between two keys. The caller's, and outlives this.
+    stop: Stop,
     verified_ms: u128,
     tunnel_ms: u128,
     rsd_ms: u128,
+}
+
+struct Stop(*const AtomicBool);
+// Only read, and atomic.
+unsafe impl Send for Stop {}
+
+impl Stop {
+    fn raised(&self) -> bool { !self.0.is_null() && unsafe { &*self.0 }.load(Ordering::Relaxed) }
 }
 
 /// What the C side holds. The runtime has a thread of its own: the tunnel is served between calls.
@@ -194,6 +205,22 @@ pub unsafe extern "C" fn rr_device_open(ip: *const c_char, port: u16, pairing: *
 }
 
 /// # Safety
+/// `device` came from rr_device_open and wasn't closed; `flag` is one byte, zero, that stays
+/// where it is for as long as the device is open.
+#[no_mangle]
+pub unsafe extern "C" fn rr_device_stop_at(device: *mut RRDevice, flag: *const u8) {
+    let device = unsafe { &*device };
+    device.link.lock().unwrap_or_else(|e| e.into_inner()).stop = Stop(flag.cast());
+}
+
+/// # Safety
+/// `flag` is the byte given to rr_device_stop_at. Any thread.
+#[no_mangle]
+pub unsafe extern "C" fn rr_flag_raise(flag: *mut u8) {
+    unsafe { &*flag.cast::<AtomicBool>() }.store(true, Ordering::Relaxed);
+}
+
+/// # Safety
 /// `device` came from rr_device_open and isn't used again, or is null.
 #[no_mangle]
 pub unsafe extern "C" fn rr_device_close(device: *mut RRDevice) {
@@ -313,7 +340,7 @@ pub unsafe extern "C" fn rr_device_type(device: *mut RRDevice, text: *const c_ch
     // Every key is found before any is sent: half a text typed is worse than none.
     let input = text.ok_or("bad text".to_string()).and_then(|t| {
         if t.chars().count() > LONGEST_TYPED { return Err(format!("too long to type: {LONGEST_TYPED} characters at most (paste takes any length)")); }
-        t.chars().map(|c| key(c).ok_or(format!("can't type {c:?}: only what a US keyboard has"))).collect::<Result<Vec<_>, _>>()
+        t.chars().enumerate().map(|(i, c)| key(c).ok_or(format!("can't type character {} of the text: only what a US keyboard has (paste takes anything)", i + 1))).collect::<Result<Vec<_>, _>>()
     });
     unsafe { run(device, input.map(Input::Type)) }
 }
@@ -517,7 +544,7 @@ async fn connect(ip: &str, port: u16, file: &[u8]) -> Result<Link, String> {
     // Said in words the caller knows a refusal by (REFUSED in the header): only when the device
     // answered and said no, not when the exchange itself broke off.
     client.validate_pairing(&mut pairing).await.map_err(|e| match e {
-        idevice::IdeviceError::RemotePairing(_) => format!("the device doesn't accept this pairing: {e:?}"),
+        idevice::IdeviceError::RemotePairing(idevice::remote_pairing::errors::RemotePairingError::PairVerifyFailed) => format!("the device doesn't accept this pairing: {e:?}"),
         _ => format!("the pairing couldn't be verified: {e:?}"),
     })?;
     let verified_ms = started.elapsed().as_millis();
@@ -535,7 +562,7 @@ async fn connect(ip: &str, port: u16, file: &[u8]) -> Result<Link, String> {
 
     let rsd = handle.connect(info.server_rsd_port).await.map_err(|e| format!("RSD: {e:?}"))?;
     let handshake = RsdHandshake::new(rsd).await.map_err(|e| format!("RSD handshake: {e:?}"))?;
-    Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_stopped: None, stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, resent: 0, verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
+    Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_stopped: None, stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, resent: 0, stop: Stop(std::ptr::null()), verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
 }
 
 /// The most that is typed in one call: beyond it, a slip in the middle is too costly, and paste does it in one.
@@ -682,6 +709,17 @@ enum Step {
     Wait(u64),
 }
 
+const STOPPED: &str = "stopped: this connection is being closed";
+
+/// How many keys are held once `step` is sent.
+fn down_after(down: i32, step: &Step) -> i32 {
+    match step {
+        Step::Key(_, ButtonState::Down) | Step::Button(_, _, ButtonState::Down) => down + 1,
+        Step::Key(_, ButtonState::Up) | Step::Button(_, _, ButtonState::Up) => down - 1,
+        Step::Wait(_) => down,
+    }
+}
+
 /// The steps, on the key connection: the one kept, or a new one. A kept one found gone at the
 /// first step is replaced and the steps sent; a failure after something was sent is not repeated.
 async fn press(link: &mut Link, steps: &[Step]) -> Result<(), String> {
@@ -694,7 +732,11 @@ async fn press(link: &mut Link, steps: &[Step]) -> Result<(), String> {
         let keys = link.keys.as_mut().expect("just set");
         let mut sent_any = false;
         let mut failed = None;
+        let mut down = 0;
         for step in steps {
+            // Between two keys, none held: what is left isn't sent to a device being let go of.
+            if down == 0 && link.stop.raised() { return Err(STOPPED.into()); }
+            down = down_after(down, step);
             let sent = match *step {
                 Step::Key(usage, state) => keys.send_keyboard(usage, state).await,
                 Step::Button(page, code, state) => keys.send_button(page, code, state).await,
@@ -1182,6 +1224,17 @@ mod tests {
         // Not the ones every host had.
         assert_ne!(serial, "AAAAAAAAAAAA");
         assert_eq!(own_hardware("").0, "000000000000");   // nothing to go by: still twelve characters
+    }
+
+    /// A long text is stopped only where no key is held: never with Shift down.
+    #[test]
+    fn typing_can_stop_only_between_strokes() {
+        let steps = [Step::Key(LEFT_SHIFT, ButtonState::Down), Step::Key(0x04, ButtonState::Down),
+                     Step::Key(0x04, ButtonState::Up), Step::Key(LEFT_SHIFT, ButtonState::Up), Step::Wait(12)];
+        let mut down = 0;
+        let free: Vec<bool> = steps.iter().map(|s| { let was = down == 0; down = down_after(down, s); was }).collect();
+        assert_eq!(free, [true, false, false, false, true]);
+        assert_eq!(down, 0);
     }
 
     /// An input's deadline grows with what it has to send: a long text isn't cut in the middle.

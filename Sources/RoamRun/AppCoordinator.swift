@@ -97,7 +97,7 @@ final class AppCoordinator: ObservableObject {
         for p in profiles { install(newBridge(p)) }
         deviceControl.onLog = { [weak self] message, id in Task { @MainActor in self?.logStore.log(message, device: id) } }
         deviceControl.onUnreached = { [weak self] id, why in Task { @MainActor in self?.controlUnreached(id, why) } }
-        deviceControl.onImport = { [weak self] path, name in self?.importPairing(path: path, as: name) ?? .failure("stopping") }
+        deviceControl.onImport = { [weak self] path, name, wanted in self?.importPairing(path: path, as: name, wanted: wanted) ?? .failure("stopping") }
         syncDeviceControl()
         // A screenshot run stands beside the app that is running: it takes neither its socket nor
         // its devices (a connection is a screen-sharing session on the device).
@@ -975,9 +975,12 @@ final class AppCoordinator: ObservableObject {
 
     /// Asked for by `roamrun pairing import`, on the thread that answers it: the device is found
     /// or added, the pairing kept only if it connects, and then the file is removed.
-    nonisolated private func importPairing(path: String, as name: String?) -> DeviceControlWire.Response {
+    nonisolated private func importPairing(path: String, as name: String?, wanted: @Sendable () -> Bool) -> DeviceControlWire.Response {
         importing.lock()
         defer { importing.unlock() }
+        // Whoever asked may have left while it waited its turn, or while the pairing was tried:
+        // nothing is saved for them then, and their file stays. Once saving begins it is seen through.
+        guard wanted() else { return .failure(DeviceControlHub.nobodyWaits) }
         let file = URL(fileURLWithPath: path)
         let fd: Int32, data: Data
         do { (fd, data) = try DeviceControlHub.readTaken(path) } catch { return .failure("\(error)") }
@@ -998,8 +1001,8 @@ final class AppCoordinator: ObservableObject {
         var device = shared.device
         let pairing = Data(shared.pairing.utf8)
         // Tried, the device saved, the pairing sealed, the file removed — in that order, each only
-        // after the one before: a step that fails leaves what was here as it was (a pairing the
-        // device had before among it), and the file where it is.
+        // after the one before: a step that fails leaves the file where it is and a pairing the
+        // device had before as it was (a saved device may have learned its UDID by then).
         let sealing: SymmetricKey
         do { sealing = try deviceControl.tryPairing(pairing, for: target) } catch {
             // The file carries the port the device had when it was made, and that changes when the
@@ -1011,6 +1014,7 @@ final class AppCoordinator: ObservableObject {
             device.remotePairingPort = port
             do { sealing = try deviceControl.tryPairing(pairing, for: target) } catch { return .failure("\(error)") }
         }
+        guard wanted() else { return .failure(DeviceControlHub.nobodyWaits) }
         // The device saved and its pairing sealed in one turn of the main thread, where a device
         // is removed too: removed before, it is placed again here; removed after, its pairing is
         // there to go with it. Nothing gets in between.
@@ -1447,8 +1451,9 @@ final class AppCoordinator: ObservableObject {
         if case .done(let udid, _) = step {
             let i = profiles.firstIndex { $0.id == id }
             switch Self.pairedUDID(saved: i.flatMap { controlUDID(profiles[$0]) }, paired: udid) {
-            case .known: break
-            case .save where i != nil:
+            // Known from the bridge alone, the list not having it (a save that failed then): saved now.
+            case .known where profiles[i!].udid != nil: break
+            case .save where i != nil, .known:
                 profiles[i!].udid = udid
                 if persist() {
                     memories[id]?.adopt(udid)   // the running bridge's, so that what it reports later is compared with it
@@ -1478,7 +1483,9 @@ final class AppCoordinator: ObservableObject {
 
     func removeControlPairing(_ profile: DeviceProfile) {
         guard let target = controlTarget(profile) else { return }
-        deviceControl.unpair(target)
+        if deviceControl.unpair(target) == .left {
+            launchWarning = "The pairing for “\(profile.displayName)” couldn't be removed from this Mac (\(ProfileStore.directory.path)). It is out of use until RoamRun is opened again: unpair on the device, or delete the file."
+        }
         objectWillChange.send()
     }
 
