@@ -29,21 +29,22 @@ for p in sorted((packages[i] for i in used), key=lambda p: (p["name"], p["versio
     if not files and os.path.isfile(kept):
         files = [kept]
     if not files:
-        bare.append(f'{name} — {p["license"]} — {", ".join(p["authors"]) or "its authors"} — {p["repository"] or "crates.io"}')
+        bare.append(f'{name} ({p["license"]}, {p["repository"] or "crates.io"})')
     for f in files:
         with open(f, encoding="utf-8", errors="replace") as text:
             body = "\n".join(line.rstrip() for line in text.read().strip().splitlines())
             # The same words laid out differently (indentation, http or https in its links) are one text.
             same = " ".join(body.replace("http://", "https://").split())
-            inside = os.path.dirname(os.path.relpath(f, folder)) if f != kept else ""
-            texts.setdefault(same, [body, []])[1].append(f'{name} ({p["license"]})' + (f", in {inside}" if inside else ""))
+            where = "packaged without a text: see Rust/RoamRunDevice/licenses" if f == kept else os.path.dirname(os.path.relpath(f, folder))
+            texts.setdefault(same, [body, []])[1].append(f'{name} ({p["license"]})' + (f", in {where}" if where and f != kept else f", {where}" if where else ""))
+
+# Every crate with its text: one without is put in licenses/ by hand, not passed over.
+if bare:
+    sys.exit("no license text for: " + "; ".join(bare) + " — add Rust/RoamRunDevice/licenses/<crate name>.txt")
 
 print("RoamRun's device control is built from these Rust crates, each under the license it names")
 print("(one of them, where it offers a choice). Their texts follow.")
 print(f"\n{len(used)} crates. Made by scripts/third-party-licenses.py (make licenses); don't edit.\n")
-if bare:
-    print("Published without a license text, in the crate or its repository; under the license named:\n")
-    print("\n".join(f"  {b}" for b in bare))
 # Lines no license text has, so where one ends can't be mistaken.
 for text, names in sorted(texts.values(), key=lambda t: (t[1][0], t[0])):
     print("\n" + "#" * 80)

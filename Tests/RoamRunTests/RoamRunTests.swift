@@ -4554,9 +4554,22 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
     defer { hub.stop() }
     let id = UUID()
     hub.update([.init(id: id, name: "x", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
-    let deadline = Date().addingTimeInterval(5)
-    while hub.session(of: id)?.isRefused != true, Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
+    // Tried here, not waited for: when the hub's own try runs is the queue's to say.
+    let held = try #require(hub.session(of: id))
+    #expect(throws: (any Error).self) { try held.connect() }
     #expect(hub.state(of: id, udid: "UDID-1") == (true, false, true))
+}
+
+/// What a build before the sealing left as it was is removed when the app starts: each holds a
+/// private key the device may still take. Nothing else in the folder is touched.
+@Test func pairingsLeftUnsealedAreRemoved() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let kept = ["device-pairing-A.sealed", "profiles.json", "device-control-host", "other.plist"]
+    let gone = ["device-pairing-A.plist", "device-pairing-B.plist", "device-pairing-B.plist.previous"]
+    for name in kept + gone { try Data("x".utf8).write(to: dir.appendingPathComponent(name)) }
+    DeviceControlHub.removeUnsealed(in: dir)
+    #expect(Set(try FileManager.default.contentsOfDirectory(atPath: dir.path)) == Set(kept))
 }
 
 /// The key is made only when the Keychain says there is none, and only to save a pairing:
@@ -4601,6 +4614,20 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
     #expect(try key.key(make: true).withUnsafeBytes { Data($0) } == saved)
     #expect(try key.key(make: false).withUnsafeBytes { Data($0) } == saved)   // kept: the Keychain is read once
     #expect(asked.withLock { $0 } == 3)
+}
+
+/// The key removed from the Keychain while the app runs is put back when a device is set up —
+/// the same one: a new one would lose what is saved, and none would lose it at the next start.
+@Test func aKeyRemovedFromTheKeychainIsPutBackWhenADeviceIsSetUp() throws {
+    let kept = OSAllocatedUnfairLock<Data?>(initialState: Data(repeating: 7, count: 32))
+    let key = DeviceControlKey(read: { kept.withLock { $0.map { (errSecSuccess, $0) } ?? (errSecItemNotFound, nil) } },
+                               add: { fresh in kept.withLock { $0 = fresh }; return errSecSuccess })
+    let first = try key.key(make: false).withUnsafeBytes { Data($0) }
+    kept.withLock { $0 = nil }                                              // removed by hand
+    #expect(try key.key(make: false).withUnsafeBytes { Data($0) } == first)   // still at hand
+    #expect(kept.withLock { $0 } == nil)
+    #expect(try key.key(make: true).withUnsafeBytes { Data($0) } == first)
+    #expect(kept.withLock { $0 } == first)                                  // back, and the same
 }
 
 /// A screen's size is asked until it is answered, a minute apart, and then kept: a look that

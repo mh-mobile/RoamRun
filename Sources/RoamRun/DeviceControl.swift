@@ -496,6 +496,15 @@ final class DeviceControlHub: @unchecked Sendable {
         try? FileManager.default.removeItem(at: unsealed(of: file))
     }
 
+    /// Pairings a build before the sealing kept as they were, and what it kept of older ones:
+    /// each holds a private key the device may still take, and nothing reads them any more.
+    static func removeUnsealed(in directory: URL) {
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        where name.hasPrefix("device-pairing-") && (name.hasSuffix(".plist") || name.hasSuffix(".plist.previous")) {
+            try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))
+        }
+    }
+
     func cancelPairing() {
         lock.withLock { () -> DevicePairing? in pairingCancelled = true; return pairing }?.cancel()
     }
@@ -530,6 +539,7 @@ final class DeviceControlHub: @unchecked Sendable {
     }
 
     func start() {
+        Self.removeUnsealed(in: directory)
         listener = DeviceControlWire.Listener(directory: directory) { [weak self] in self?.answer($0) ?? .failure("stopping") }
         // ponytail: a look every 30 s for a connection to open, none at one already open — a dead
         // one is found by the next call (and recovered as Recovery says). A heartbeat, if that is too late.

@@ -36,10 +36,12 @@ final class DeviceControlKey: @unchecked Sendable {
 
     @Sendable func key(make: Bool) throws -> SymmetricKey {
         try lock.withLock {
-            if let held { return held }
+            // To set a device up, the Keychain is asked even with the key at hand: one removed
+            // from it meanwhile is put back, or what is saved now couldn't be read after a restart.
+            if let held, !make { return held }
             if !make, let refused { throw refused }
             do {
-                let key = try Self.key(make: make, read: read, add: add)
+                let key = try Self.key(make: make, read: read, add: add, atHand: held)
                 held = key
                 refused = nil
                 return key
@@ -52,7 +54,8 @@ final class DeviceControlKey: @unchecked Sendable {
 
     /// A key is made only when the Keychain says there is none: after a refusal (the user's, or
     /// a Keychain that can't ask) a new one would leave every saved pairing unreadable.
-    static func key(make: Bool, read: () -> (OSStatus, Data?), add: (Data) -> OSStatus) throws -> SymmetricKey {
+    /// `atHand`: the key this process already uses, which is what is saved then, not a new one.
+    static func key(make: Bool, read: () -> (OSStatus, Data?), add: (Data) -> OSStatus, atHand: SymmetricKey? = nil) throws -> SymmetricKey {
         func failure(_ status: OSStatus) -> DeviceSession.Failure {
             .message("the Keychain didn't give RoamRun its key for device control (\(SecCopyErrorMessageString(status, nil) as String? ?? "\(status)"))")
         }
@@ -60,7 +63,7 @@ final class DeviceControlKey: @unchecked Sendable {
         if status == errSecSuccess, let data { return SymmetricKey(data: data) }
         guard status == errSecItemNotFound else { throw failure(status) }
         guard make else { throw DeviceSession.Failure.message("this Mac's key for device control is gone from the Keychain: set device control up again") }
-        let fresh = SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }
+        let fresh = (atHand ?? SymmetricKey(size: .bits256)).withUnsafeBytes { Data($0) }
         switch add(fresh) {
         case errSecSuccess: return SymmetricKey(data: fresh)
         case errSecDuplicateItem:   // made in between: that one is the key

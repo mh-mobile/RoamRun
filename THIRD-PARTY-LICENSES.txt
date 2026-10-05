@@ -3,10 +3,6 @@ RoamRun's device control is built from these Rust crates, each under the license
 
 148 crates. Made by scripts/third-party-licenses.py (make licenses); don't edit.
 
-Published without a license text, in the crate or its repository; under the license named:
-
-  ns-keyed-archive 0.1.5 — MIT OR Apache-2.0 — Jackson Coxson — https://github.com/jkcoxson/ns_keyed_archive
-  plist-macro 0.1.6 — MIT — Jackson Coxson — https://github.com/jkcoxson/plist_macro
 
 ################################################################################
 adler2 2.0.1 (0BSD OR MIT OR Apache-2.0)
@@ -3141,7 +3137,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ################################################################################
-idevice 0.1.68 (MIT)
+idevice 0.1.68 (MIT), packaged without a text: see Rust/RoamRunDevice/licenses
 #-------------------------------------------------------------------------------
 Copyright 2026 Jackson Coxson
 
@@ -3892,6 +3888,30 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+
+################################################################################
+ns-keyed-archive 0.1.5 (MIT OR Apache-2.0), packaged without a text: see Rust/RoamRunDevice/licenses
+plist-macro 0.1.6 (MIT), packaged without a text: see Rust/RoamRunDevice/licenses
+#-------------------------------------------------------------------------------
+Copyright (c) Jackson Coxson
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 ################################################################################
 nskeyedarchiver_converter 0.1.3 (MIT OR Apache-2.0)
