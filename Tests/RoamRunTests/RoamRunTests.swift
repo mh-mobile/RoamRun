@@ -4608,6 +4608,30 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
     #expect(!FileManager.default.fileExists(atPath: DeviceControlWire.pairingFile(udid: "UDID-8", in: dir).path))
 }
 
+/// A pairing brought for a device that already has one is tried without anything being written:
+/// if its device then can't be saved, the pairing that worked before is still the one here.
+@Test func tryingAPairingLeavesTheOneSavedBefore() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let before = try scratchPairing(), brought = try scratchPairing()
+    let target = DeviceControlHub.Target(id: UUID(), name: "iPhone", ip: "100.64.0.1", port: 49152, udid: "UDID-9")
+    let file = DeviceControlWire.pairingFile(udid: "UDID-9", in: dir)
+    try DeviceControlHub.save(DeviceControlHub.seal(before, with: scratchKey), as: file)
+    let sealedBefore = try Data(contentsOf: file)
+    let hub = DeviceControlHub(directory: dir, key: { _ in scratchKey }) { _, _, _ in StandInDevice() }
+    defer { hub.stop() }
+
+    let sealing = try hub.tryPairing(brought, for: target)
+    #expect(try Data(contentsOf: file) == sealedBefore)            // not a byte of it
+    #expect(hub.session(of: target.id) == nil)                     // nor held yet
+    // The device couldn't be saved: nothing more is asked of the hub, and the earlier one opens.
+    #expect(try DeviceControlHub.unseal(Data(contentsOf: file), with: scratchKey) == before)
+
+    try hub.keepPairing(brought, sealedWith: sealing, for: target)
+    #expect(try DeviceControlHub.unseal(Data(contentsOf: file), with: scratchKey) == brought)
+    #expect(hub.state(of: target.id, udid: "UDID-9") == (true, true, false))
+}
+
 /// The file a pairing travels in holds the device with it, and is read only as that.
 @Test func aSharedPairingIsReadOnlyAsOne() throws {
     var device = DeviceProfile(displayName: "iPhone", instanceName: "abc", serviceType: "_remotepairing._tcp", domain: "local.",

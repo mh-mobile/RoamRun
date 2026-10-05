@@ -528,21 +528,33 @@ final class DeviceControlHub: @unchecked Sendable {
         }
     }
 
-    /// Takes a pairing made elsewhere for this device: kept only if it opens a connection, and
-    /// sealed with this Mac's key, which is had first.
-    func adoptPairing(_ pairing: Data, for target: Target) throws {
+    /// A pairing made elsewhere is taken in two steps, with the saving of its device between
+    /// them: tried first, with nothing written — a pairing saved for the device before stays as
+    /// it is until this one is sure to be kept. The key it will be sealed with is had now, so
+    /// that nothing after the device is saved depends on the Keychain.
+    func tryPairing(_ pairing: Data, for target: Target) throws -> SymmetricKey {
         let sealing = try key(true)
         let check = open(target, { pairing }) { _ in }
         defer { check.close() }
         do { try check.connect() } catch {
             throw DeviceSession.Failure.message("this pairing opens no connection to “\(target.name)” at \(target.ip) (\(error)). Nothing was saved.")
         }
+        return sealing
+    }
+
+    /// The second step: sealed in the saved one's place, and held from now on.
+    func keepPairing(_ pairing: Data, sealedWith sealing: SymmetricKey, for target: Target) throws {
         try Self.save(Self.seal(pairing, with: sealing), as: DeviceControlWire.pairingFile(udid: target.udid, in: directory))
         lock.withLock { targets.removeAll { $0.id == target.id }; targets.append(target) }
         reopen(target.id)
         // Connected when this returns, as it just was: asked how it stands, it says so.
         try? session(of: target.id)?.connect()
         onLog?("device control: a pairing made on another Mac was taken in", target.id)
+    }
+
+    /// Both steps at once, where no device is to be saved in between.
+    func adoptPairing(_ pairing: Data, for target: Target) throws {
+        try keepPairing(pairing, sealedWith: tryPairing(pairing, for: target), for: target)
     }
 
     /// A pairing file is read as the one file it is: not through a link (the link would be removed

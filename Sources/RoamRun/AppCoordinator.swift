@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import AppKit
 import ServiceManagement
@@ -948,17 +949,17 @@ final class AppCoordinator: ObservableObject {
 
     /// The device a pairing that connected is for is saved now — worked out again, the saved
     /// devices being what they are by now (one removed, or added, while the pairing was tried).
-    /// nil: the list couldn't be saved, and nothing of this import is kept.
-    private func keep(_ device: DeviceProfile, udid: String, as name: String?) -> Result<String, DeviceControlWire.WireError> {
+    /// A failure leaves them as they were; no pairing has been written yet.
+    private func keep(_ device: DeviceProfile, udid: String, as name: String?) -> Result<(saved: DeviceProfile, isNew: Bool), DeviceControlWire.WireError> {
         let unsaved = DeviceControlWire.WireError.message("the device couldn't be saved here (\(ProfileStore.directory.path)/profiles.json): nothing was kept")
         switch profiles.placement(of: device, udid: udid, as: name) {
         case .failure(let why): return .failure(why)
         case .success(let place) where place.isNew:
             guard save(new: place.profile) else {
-                deleteProfile(place.profile.id)   // with the pairing just sealed under its UDID
+                deleteProfile(place.profile.id)
                 return .failure(unsaved)
             }
-            return .success(place.profile.displayName)
+            return .success((place.profile, true))
         case .success(let place):
             let id = place.profile.id, before = profiles
             guard let kept = Self.keepSaved(id, udid: udid, in: profiles, save: { changed in
@@ -966,10 +967,9 @@ final class AppCoordinator: ObservableObject {
                 return persist()
             }) else {
                 profiles = before
-                deviceControl.forgetPairing(udid: udid, of: id)
                 return .failure(unsaved)
             }
-            return .success(kept.displayName)
+            return .success((kept, false))
         }
     }
 
@@ -997,7 +997,11 @@ final class AppCoordinator: ObservableObject {
         var target = DeviceControlHub.Target(id: p.id, name: p.displayName, ip: p.providerIP, port: p.remotePairingPort, udid: p.udid ?? udid)   // as it is spelled here, when known
         var device = shared.device
         let pairing = Data(shared.pairing.utf8)
-        do { try deviceControl.adoptPairing(pairing, for: target) } catch {
+        // Tried, the device saved, the pairing sealed, the file removed — in that order, each only
+        // after the one before: a step that fails leaves what was here as it was (a pairing the
+        // device had before among it), and the file where it is.
+        let sealing: SymmetricKey
+        do { sealing = try deviceControl.tryPairing(pairing, for: target) } catch {
             // The file carries the port the device had when it was made, and that changes when the
             // device restarts. A device not saved here has no page to find it from: it is looked
             // for now, at the address the file names, and the pairing tried there.
@@ -1005,20 +1009,23 @@ final class AppCoordinator: ObservableObject {
                   port != target.port else { return .failure("\(error)") }
             target.port = port
             device.remotePairingPort = port
-            do { try deviceControl.adoptPairing(pairing, for: target) } catch { return .failure("\(error)") }
+            do { sealing = try deviceControl.tryPairing(pairing, for: target) } catch { return .failure("\(error)") }
         }
-        // The file is removed only once the device is saved with it: until then it is the one
-        // place the pairing is sure to be.
         let kept = DispatchQueue.main.sync { MainActor.assumeIsolated { keep(device, udid: udid, as: name) } }
-        DispatchQueue.main.async { MainActor.assumeIsolated { self.syncDeviceControl() } }
+        let saved: DeviceProfile, isNew: Bool
         switch kept {
-        case .failure(let why):
-            // Sealed a moment ago for a device that then couldn't be saved: not left without one.
-            deviceControl.forgetPairing(udid: target.udid, of: target.id)
-            return .failure("\(why)")
-        // Taken in either way; a file that stays is said to (in `error`, with `ok`).
-        case .success(let saved): return .init(ok: true, error: DeviceControlHub.removeTaken(file, readThrough: fd), name: saved)
+        case .failure(let why): return .failure("\(why)")
+        case .success(let k): (saved, isNew) = k
         }
+        let now = DeviceControlHub.Target(id: saved.id, name: saved.displayName, ip: saved.providerIP, port: saved.remotePairingPort, udid: saved.udid ?? udid)
+        do { try deviceControl.keepPairing(pairing, sealedWith: sealing, for: now) } catch {
+            // Added for this alone: not left behind without it.
+            if isNew { DispatchQueue.main.sync { MainActor.assumeIsolated { deleteProfile(saved.id) } } }
+            return .failure("\(error)")
+        }
+        DispatchQueue.main.async { MainActor.assumeIsolated { self.syncDeviceControl() } }
+        // Taken in either way; a file that stays is said to (in `error`, with `ok`).
+        return .init(ok: true, error: DeviceControlHub.removeTaken(file, readThrough: fd), name: saved.displayName)
     }
 
     func deleteProfile(_ id: UUID) {
