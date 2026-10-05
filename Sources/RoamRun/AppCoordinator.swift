@@ -1011,18 +1011,29 @@ final class AppCoordinator: ObservableObject {
             device.remotePairingPort = port
             do { sealing = try deviceControl.tryPairing(pairing, for: target) } catch { return .failure("\(error)") }
         }
-        let kept = DispatchQueue.main.sync { MainActor.assumeIsolated { keep(device, udid: udid, as: name) } }
-        let saved: DeviceProfile, isNew: Bool
+        // The device saved and its pairing sealed in one turn of the main thread, where a device
+        // is removed too: removed before, it is placed again here; removed after, its pairing is
+        // there to go with it. Nothing gets in between.
+        let kept = DispatchQueue.main.sync {
+            MainActor.assumeIsolated { () -> Result<DeviceProfile, DeviceControlWire.WireError> in
+                switch keep(device, udid: udid, as: name) {
+                case .failure(let why): return .failure(why)
+                case .success(let (saved, isNew)):
+                    do { try deviceControl.sealPairing(pairing, with: sealing, udid: saved.udid ?? udid) } catch {
+                        if isNew { deleteProfile(saved.id) }   // added for this alone: not left behind without it
+                        return .failure(.message("\(error)"))
+                    }
+                    return .success(saved)
+                }
+            }
+        }
+        let saved: DeviceProfile
         switch kept {
         case .failure(let why): return .failure("\(why)")
-        case .success(let k): (saved, isNew) = k
+        case .success(let s): saved = s
         }
-        let now = DeviceControlHub.Target(id: saved.id, name: saved.displayName, ip: saved.providerIP, port: saved.remotePairingPort, udid: saved.udid ?? udid)
-        do { try deviceControl.keepPairing(pairing, sealedWith: sealing, for: now) } catch {
-            // Added for this alone: not left behind without it.
-            if isNew { DispatchQueue.main.sync { MainActor.assumeIsolated { deleteProfile(saved.id) } } }
-            return .failure("\(error)")
-        }
+        // The connection takes its time, and is made off that thread.
+        deviceControl.hold(.init(id: saved.id, name: saved.displayName, ip: saved.providerIP, port: saved.remotePairingPort, udid: saved.udid ?? udid))
         DispatchQueue.main.async { MainActor.assumeIsolated { self.syncDeviceControl() } }
         // Taken in either way; a file that stays is said to (in `error`, with `ok`).
         return .init(ok: true, error: DeviceControlHub.removeTaken(file, readThrough: fd), name: saved.displayName)

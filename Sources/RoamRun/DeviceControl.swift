@@ -542,14 +542,25 @@ final class DeviceControlHub: @unchecked Sendable {
         return sealing
     }
 
-    /// The second step: sealed in the saved one's place, and held from now on.
-    func keepPairing(_ pairing: Data, sealedWith sealing: SymmetricKey, for target: Target) throws {
-        try Self.save(Self.seal(pairing, with: sealing), as: DeviceControlWire.pairingFile(udid: target.udid, in: directory))
+    /// The second step, in two parts. Sealed in the saved one's place: quick, no network and no
+    /// Keychain, so that whoever saves the device can do both without letting anything in between
+    /// (a device removed after it was saved and before its pairing was would leave the pairing).
+    func sealPairing(_ pairing: Data, with sealing: SymmetricKey, udid: String) throws {
+        try Self.save(Self.seal(pairing, with: sealing), as: DeviceControlWire.pairingFile(udid: udid, in: directory))
+    }
+
+    /// And held from now on, connected when this returns.
+    func hold(_ target: Target) {
         lock.withLock { targets.removeAll { $0.id == target.id }; targets.append(target) }
         reopen(target.id)
         // Connected when this returns, as it just was: asked how it stands, it says so.
         try? session(of: target.id)?.connect()
         onLog?("device control: a pairing made on another Mac was taken in", target.id)
+    }
+
+    func keepPairing(_ pairing: Data, sealedWith sealing: SymmetricKey, for target: Target) throws {
+        try sealPairing(pairing, with: sealing, udid: target.udid)
+        hold(target)
     }
 
     /// Both steps at once, where no device is to be saved in between.

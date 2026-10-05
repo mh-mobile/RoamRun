@@ -4627,8 +4627,12 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
     // The device couldn't be saved: nothing more is asked of the hub, and the earlier one opens.
     #expect(try DeviceControlHub.unseal(Data(contentsOf: file), with: scratchKey) == before)
 
-    try hub.keepPairing(brought, sealedWith: sealing, for: target)
+    // Sealing is the file alone — no connection made, nothing held: it can be done in one turn
+    // with the saving of the device. Holding comes after.
+    try hub.sealPairing(brought, with: sealing, udid: "UDID-9")
     #expect(try DeviceControlHub.unseal(Data(contentsOf: file), with: scratchKey) == brought)
+    #expect(hub.session(of: target.id) == nil)
+    hub.hold(target)
     #expect(hub.state(of: target.id, udid: "UDID-9") == (true, true, false))
 }
 
