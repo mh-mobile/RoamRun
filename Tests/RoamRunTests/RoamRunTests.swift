@@ -5850,6 +5850,11 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     #expect(!first.contains(b) && first.known(b) == false && first.contains(a))
     #expect(first.set(b, false) && !first.contains(b))
     #expect(first.set(b, true) && first.contains(b) && first.known(b) == true)
+    // A switch-on that waited its turn doesn't undo an off asked after it was.
+    let waiting = first.now()
+    first.offNow(b)
+    #expect(first.set(b, true, asked: waiting) && !first.contains(b))
+    #expect(first.set(b, false) && first.set(b, true) && first.contains(b))
     // Refused: nobody is on, it is said, and switching writes nothing over what is there.
     reads.withLock { $0 = errSecAuthFailed }
     let refused = list()
@@ -6103,4 +6108,25 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     for _ in 0..<8 { hold.signal() }
     ended.wait()
     #expect(DeviceControlHub.pairingMark(udid: "UDID-1", in: dir) == brought)
+}
+
+/// What the switch may keep is told by the pairings that are there, whatever the list of devices
+/// has: one whose device isn't in the list (an entry gone bad) keeps its mark; one whose file is
+/// gone doesn't.
+@Test func marksInUseAreThoseOfThePairingsThatAreThere() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (hub, _) = try standInHub(dir, udid: "UDID-A")
+    defer { hub.stop() }
+    try scratchPairing(at: DeviceControlWire.pairingFile(udid: "UDID-B", in: dir))
+    let a = try #require(DeviceControlHub.pairingMark(udid: "UDID-A", in: dir))
+    let b = try #require(DeviceControlHub.pairingMark(udid: "UDID-B", in: dir))
+    let said = OSAllocatedUnfairLock<[Set<String>]>(initialState: [])
+    hub.onInUse = { marks in said.withLock { $0.append(marks) } }
+    hub.update([.init(id: UUID(), name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-A")])   // B isn't in the list
+    hub.renewChanged()
+    #expect(said.withLock { $0.last } == [a, b])
+    try FileManager.default.removeItem(at: DeviceControlWire.pairingFile(udid: "UDID-B", in: dir))
+    hub.renewChanged()
+    #expect(said.withLock { $0.last } == [a])
 }

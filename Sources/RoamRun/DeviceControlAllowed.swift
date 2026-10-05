@@ -16,6 +16,9 @@ final class DeviceControlAllowed: @unchecked Sendable {
     private var unreadable = false
     /// Switched off here and now, whatever the Keychain has been told yet (it may be busy, or asking).
     private var off: Set<String> = []
+    /// Counts what is asked, so that a switch-on that was waiting doesn't undo an off asked after it.
+    private var asked: UInt64 = 0
+    private var offAt: [String: UInt64] = [:]
     /// The Keychain has something else than `held` (a write that failed): written at the next chance.
     private var unwritten = false
     /// One call to the Keychain at a time.
@@ -59,8 +62,9 @@ final class DeviceControlAllowed: @unchecked Sendable {
 
     @Sendable func contains(_ mark: String) -> Bool {
         // Known already: answered without waiting behind a write for another device.
-        let (isOff, known) = lock.withLock { (off.contains(mark), held) }
-        if isOff { return false }
+        // …nor behind one that is asking the user, when the list is known not to be readable.
+        let (isOff, known, failed) = lock.withLock { (off.contains(mark), held, unreadable) }
+        if isOff || failed { return false }
         if let known { return known.contains(mark) }
         return io.withLock { list(again: false)?.contains(mark) ?? false } && !lock.withLock { off.contains(mark) }
     }
@@ -69,7 +73,16 @@ final class DeviceControlAllowed: @unchecked Sendable {
     @Sendable func known(_ mark: String) -> Bool? { lock.withLock { off.contains(mark) ? false : held?.contains(mark) } }
 
     /// Off from this moment, before the Keychain is told (`set` follows): never waits.
-    func offNow(_ mark: String) { lock.withLock { _ = off.insert(mark) } }
+    func offNow(_ mark: String) {
+        lock.withLock {
+            asked += 1
+            offAt[mark] = asked
+            off.insert(mark)
+        }
+    }
+
+    /// When something is asked: given to `set` for a switch-on that may wait its turn.
+    func now() -> UInt64 { lock.withLock { asked += 1; return asked } }
 
     /// The Keychain's list couldn't be read: nothing is on, and nothing can be switched until it can.
     var isUnreadable: Bool { lock.withLock { unreadable } }
@@ -79,9 +92,10 @@ final class DeviceControlAllowed: @unchecked Sendable {
         io.withLock {
             guard let now = list(again: false) else { return }
             let next = now.intersection(inUse)
-            guard next != now else { return }
+            // Also the chance to write what an earlier write failed to.
+            guard next != now || lock.withLock({ unwritten }) else { return }
             let kept = (try? JSONEncoder().encode(next)).map { write($0) == errSecSuccess } ?? false
-            lock.withLock { held = next; unwritten = unwritten || !kept }
+            lock.withLock { held = next; unwritten = !kept }
         }
     }
 
@@ -89,20 +103,23 @@ final class DeviceControlAllowed: @unchecked Sendable {
     /// again unsaid); it is switched off here all the same, and is on again after a restart —
     /// which the caller says. A list that can't be read isn't written over.
     @discardableResult
-    func set(_ mark: String, _ allowed: Bool) -> Bool {
+    func set(_ mark: String, _ allowed: Bool, asked when: UInt64? = nil) -> Bool {
         if !allowed { offNow(mark) }
+        let when = when ?? now()
+        /// Switched off since this switch-on was asked: the off stands.
+        func overtaken() -> Bool { allowed && (offAt[mark] ?? 0) > when }
         return io.withLock {
             guard var next = list(again: true) else { return false }
             let was = next
             if allowed { next.insert(mark) } else { next.remove(mark) }
             guard next != was || lock.withLock({ unwritten }) else {
-                if allowed { lock.withLock { _ = off.remove(mark) } }
+                if allowed { lock.withLock { if !overtaken() { off.remove(mark) } } }
                 return true
             }
             let kept = (try? JSONEncoder().encode(next)).map { write($0) == errSecSuccess } ?? false
             lock.withLock {
                 if kept || !allowed { held = next }
-                if kept, allowed { off.remove(mark) }
+                if kept, allowed, !overtaken() { off.remove(mark) }
                 unwritten = !kept
             }
             return kept

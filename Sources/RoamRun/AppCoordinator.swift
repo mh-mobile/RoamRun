@@ -100,7 +100,10 @@ final class AppCoordinator: ObservableObject {
         deviceControl.allowed = DeviceControlAllowed.shared.contains
         // Unreadable is off, as every request finds it; not read yet is not yet known.
         deviceControl.allowedKnown = { DeviceControlAllowed.shared.known($0) ?? (DeviceControlAllowed.shared.isUnreadable ? false : nil) }
-        deviceControl.onReplaced = { [switching] mark in switching.async { DeviceControlAllowed.shared.set(mark, false) } }
+        deviceControl.onReplaced = { [switching] mark in
+            DeviceControlAllowed.shared.offNow(mark)   // from this moment, whatever the queue is waiting on
+            switching.async { DeviceControlAllowed.shared.set(mark, false) }
+        }
         deviceControl.onInUse = { [switching] marks in switching.async { DeviceControlAllowed.shared.prune(keeping: marks) } }
         deviceControl.onImport = { [weak self] path, name, wanted in self?.importPairing(path: path, as: name, wanted: wanted) ?? .failure("stopping") }
         syncDeviceControl()
@@ -1058,8 +1061,11 @@ final class AppCoordinator: ObservableObject {
         // Taken in either way; a file that stays is said to (in `error`, with `ok`).
         // Brought in to be used: switched on, as one set up here is — and said when it couldn't be.
         // In its turn among the switch's writes: after the one that drops the pairing it replaced.
-        let mark = sealedMark
-        let on = switching.sync { mark.map { DeviceControlAllowed.shared.set($0, true) } ?? false }
+        // …and only while it is still what this run last sealed for the device: a pairing made
+        // here meanwhile (Set Up) took its place, and its own switch.
+        let mark = sealedMark.flatMap { deviceControl.sealedMark(udid: saved.udid ?? udid) == $0 ? $0 : nil }
+        let asked = DeviceControlAllowed.shared.now()
+        let on = switching.sync { mark.map { DeviceControlAllowed.shared.set($0, true, asked: asked) } ?? false }
         let left = DeviceControlHub.removeTaken(file, readThrough: fd)
         let off = on ? nil : "device control is switched off for it (the Keychain didn't keep it switched on): the user switches it on in the RoamRun app, on the device's page"
         let said = [left, off].compactMap { $0 }
@@ -1470,8 +1476,9 @@ final class AppCoordinator: ObservableObject {
             marks.forEach(DeviceControlAllowed.shared.offNow)
             hub.interrupt(id)
         }
+        let asked = DeviceControlAllowed.shared.now()   // on: not to undo an off asked while this waits
         switching.async {
-            let kept = marks.map { DeviceControlAllowed.shared.set($0, allowed) }.allSatisfy { $0 }
+            let kept = marks.map { DeviceControlAllowed.shared.set($0, allowed, asked: asked) }.allSatisfy { $0 }
             if !allowed { hub.interrupt(id) }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {

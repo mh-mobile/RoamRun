@@ -680,8 +680,9 @@ final class DeviceControlHub: @unchecked Sendable {
                 // also when the list of saved devices doesn't have its UDID yet.
                 try lock.withLock {
                     guard !pairingsCancelled.contains(attempt) else { throw DeviceSession.Failure.message(Self.pairingCancelled) }
-                    try sealPairing(paired.pairing, with: sealing, udid: udid)
-                    pairingKept = (udid, device.id, Self.pairingMark(udid: udid, in: directory))
+                    // The mark of what was written, not of what is there a moment later.
+                    let mark = try sealPairing(paired.pairing, with: sealing, udid: udid)
+                    pairingKept = (udid, device.id, mark)
                     if !targets.contains(where: { $0.id == target.id }) { targets.append(target) }
                 }
                 reopen(target.id)
@@ -993,12 +994,16 @@ final class DeviceControlHub: @unchecked Sendable {
         changed.forEach(reopen)
         // What is in use now, for the switch to drop the rest: a mark whose pairing is nowhere
         // (its file moved away, its device deleted meanwhile) isn't left on for when it comes back.
-        let (marks, any) = lock.withLock { () -> (Set<String>, Bool) in
-            var marks = Set(held.values.map(\.mark))
-            for t in targets { if let m = Self.pairingMark(udid: t.udid, in: directory) { marks.insert(m) } }
-            return (marks, !targets.isEmpty)
+        // By the pairings that are there, not by the list of devices: a list read only in part
+        // (an entry gone bad) would have the others' switches dropped.
+        guard let files = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return }
+        var marks = lock.withLock { Set(held.values.map(\.mark)) }
+        for file in files where file.lastPathComponent.hasPrefix("device-pairing-") && file.pathExtension == "sealed" {
+            if let sealed = try? Data(contentsOf: file), !sealed.isEmpty {
+                marks.insert(SHA256.hash(data: sealed).map { String(format: "%02x", $0) }.joined())
+            }
         }
-        if any { onInUse?(marks) }   // with no devices known (a list that couldn't be read) nothing is concluded
+        onInUse?(marks)
     }
 
     private func keepOpen() {
