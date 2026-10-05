@@ -802,12 +802,19 @@ enum CLI {
         // written after the code was entered, another could be put there in between.
         let fd: Int32
         do { fd = try reserve(out.path) } catch { fail((error as? ArgumentError)?.message ?? "\(error)") }
-        reserved = strdup(out.path)
-        signal(SIGINT) { _ in if let reserved = CLI.reserved { unlink(reserved) }; _exit(130) }
+        // Interrupted, hung up on (an SSH session that ends) or told to end: nothing is left.
+        reserved = (strdup(out.path), fd)
+        for sign in [SIGINT, SIGHUP, SIGTERM] {
+            signal(sign) { sign in
+                if let made = CLI.reserved { CLI.removeReserved(made.path, made.fd) }
+                _exit(128 + sign)
+            }
+        }
         /// Nothing is left where the pairing was to go.
         func stop(_ why: String) -> Never {
+            CLI.reserved = nil
+            out.path.withCString { CLI.removeReserved($0, fd) }
             close(fd)
-            unlink(out.path)
             CLI.stop(why)
         }
         let label = label ?? "RoamRun (\(out.deletingPathExtension().lastPathComponent))"
@@ -838,6 +845,12 @@ enum CLI {
             guard let data = try? JSONEncoder().encode(shared), Self.write(data, to: fd) else {
                 stop("can't write \(out.path). \(withdraw)")
             }
+            // Written to what was made at the start: if that name is another file's by now, the
+            // pairing isn't where it is said to be.
+            guard DeviceControlWire.names(out.path, theFileOf: fd) else {
+                stop("\(out.path) was replaced while the pairing was made: the pairing isn't in it. \(withdraw)")
+            }
+            reserved = nil   // done: an interrupt from here on leaves the file
             close(fd)
             print("Wrote \(out.path)" + (unreached.map { " (it couldn't be tried from here: \($0))" } ?? ", and it connects."))
             print("It is a key to \(profile.displayName): whoever has it and reaches \(profile.providerIP) can see and operate the device. On the other Mac: roamrun pairing import <that file>")
@@ -848,8 +861,15 @@ enum CLI {
         }
     }
 
-    /// The path a pairing is being written to, for the handler that removes it when interrupted.
-    nonisolated(unsafe) private static var reserved: UnsafeMutablePointer<CChar>?
+    /// The file a pairing is being written to, for the handler that removes it when interrupted.
+    nonisolated(unsafe) private static var reserved: (path: UnsafeMutablePointer<CChar>, fd: Int32)?
+
+    /// Removes what was made for a pairing — that file, not whatever its name has come to be.
+    /// Only what a signal handler may call.
+    nonisolated static func removeReserved(_ path: UnsafePointer<CChar>, _ fd: Int32) {
+        var held = stat(), named = stat()
+        if fstat(fd, &held) == 0, lstat(path, &named) == 0, held.st_dev == named.st_dev, held.st_ino == named.st_ino { unlink(path) }
+    }
 
     /// A new file of the owner's alone, or nothing: never one that is there, never through a link.
     nonisolated static func reserve(_ path: String) throws -> Int32 {

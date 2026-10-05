@@ -4657,18 +4657,96 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
 }
 
 /// The file a pairing came in is a key for as long as it is there: one that couldn't be removed
-/// is said to be, not passed over.
+/// is said to be, not passed over — and it is the file that was read that is removed, not
+/// whatever its name has come to be.
 @Test func aPairingFileLeftBehindIsSaidToBe() throws {
     let dir = scratchDir()
     defer { try? FileManager.default.removeItem(at: dir) }
     let file = dir.appendingPathComponent("k.json")
     try Data("x".utf8).write(to: file)
-    let left = try #require(DeviceControlHub.removeTaken(file) { _ in throw CocoaError(.fileWriteVolumeReadOnly) })
+    var (fd, data) = try DeviceControlHub.readTaken(file.path)
+    #expect(data == Data("x".utf8))
+    let left = try #require(DeviceControlHub.removeTaken(file, readThrough: fd) { _ in throw CocoaError(.fileWriteVolumeReadOnly) })
     #expect(left.contains(file.path) && left.contains("delete it yourself"))
     #expect(FileManager.default.fileExists(atPath: file.path))
-    #expect(DeviceControlHub.removeTaken(file) == nil)
+    #expect(DeviceControlHub.removeTaken(file, readThrough: fd) == nil)
     #expect(!FileManager.default.fileExists(atPath: file.path))
-    #expect(DeviceControlHub.removeTaken(file) != nil)   // already gone: not ours to call removed
+    close(fd)
+
+    // Moved aside and another put in its place while it was read: that one is not removed, and
+    // the one read is said to be still about.
+    try Data("the pairing".utf8).write(to: file)
+    (fd, data) = try DeviceControlHub.readTaken(file.path)
+    defer { close(fd) }
+    try FileManager.default.moveItem(at: file, to: dir.appendingPathComponent("kept.json"))
+    try Data("another's".utf8).write(to: file)
+    let moved = try #require(DeviceControlHub.removeTaken(file, readThrough: fd))
+    #expect(moved.contains("another name"))
+    #expect(try String(contentsOf: file, encoding: .utf8) == "another's")
+}
+
+/// A pairing is taken in from the one file it is in. Through a link, the link would be removed
+/// and the pairing left where it is; with a second name, it would stay under that.
+@Test func aPairingIsReadOnlyFromTheFileItself() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let real = dir.appendingPathComponent("real.json")
+    try Data("the pairing".utf8).write(to: real)
+    func refused(_ path: String, saying part: String) {
+        do {
+            let (fd, _) = try DeviceControlHub.readTaken(path)
+            close(fd)
+            Issue.record("\(path) was read")
+        } catch { #expect("\(error)".contains(part), "\(error)") }
+    }
+    let link = dir.appendingPathComponent("link.json").path
+    try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: real.path)
+    refused(link, saying: "is a link")
+    let second = dir.appendingPathComponent("second.json")
+    try FileManager.default.linkItem(at: real, to: second)
+    refused(real.path, saying: "another name")
+    try FileManager.default.removeItem(at: second)
+    refused(dir.path, saying: "isn't a file")
+    let pipe = dir.appendingPathComponent("pipe").path
+    #expect(mkfifo(pipe, 0o600) == 0)
+    refused(pipe, saying: "isn't a file")                      // and without waiting for a writer
+    let big = dir.appendingPathComponent("big.json")
+    try Data(count: 1 << 20).write(to: big)
+    refused(big.path, saying: "isn't a pairing")
+    refused(dir.appendingPathComponent("none.json").path, saying: "can't read")
+    // With its one name again, it is read.
+    let (fd, data) = try DeviceControlHub.readTaken(real.path)
+    close(fd)
+    #expect(data == Data("the pairing".utf8))
+    #expect(try String(contentsOf: real, encoding: .utf8) == "the pairing")
+}
+
+/// What was made for a pairing is what is removed when it fails or is interrupted: not a file
+/// another put under that name meanwhile.
+@Test func onlyTheFileMadeForAPairingIsRemoved() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let path = dir.appendingPathComponent("k.json").path
+    var fd = try CLI.reserve(path)
+    #expect(DeviceControlWire.names(path, theFileOf: fd))
+    try FileManager.default.removeItem(atPath: path)
+    try "another's".write(toFile: path, atomically: true, encoding: .utf8)
+    #expect(!DeviceControlWire.names(path, theFileOf: fd))
+    CLI.removeReserved(path, fd)
+    #expect(try String(contentsOfFile: path, encoding: .utf8) == "another's")
+    close(fd)
+    try FileManager.default.removeItem(atPath: path)
+
+    fd = try CLI.reserve(path)
+    defer { close(fd) }
+    CLI.removeReserved(path, fd)
+    #expect(!FileManager.default.fileExists(atPath: path))
+    // A link put where it was is not followed either.
+    let other = dir.appendingPathComponent("theirs.txt").path
+    try "theirs".write(toFile: other, atomically: true, encoding: .utf8)
+    try FileManager.default.createSymbolicLink(atPath: path, withDestinationPath: other)
+    CLI.removeReserved(path, fd)
+    #expect(FileManager.default.fileExists(atPath: other) && (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) != nil)
 }
 
 /// A pairing travels under the UDID of the device it was made with, not one saved earlier for

@@ -939,8 +939,10 @@ final class AppCoordinator: ObservableObject {
     /// or added, the pairing kept only if it connects, and then the file is removed.
     nonisolated private func importPairing(path: String, as name: String?) -> DeviceControlWire.Response {
         let file = URL(fileURLWithPath: path)
-        guard let size = (try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size < 1 << 20,
-              let data = try? Data(contentsOf: file), let shared = SharedPairing.read(data), let udid = shared.device.udid else {
+        let fd: Int32, data: Data
+        do { (fd, data) = try DeviceControlHub.readTaken(path) } catch { return .failure("\(error)") }
+        defer { close(fd) }
+        guard let shared = SharedPairing.read(data), let udid = shared.device.udid else {
             return .failure("\(path) isn't a pairing made by `roamrun pairing create`")
         }
         let placed = DispatchQueue.main.sync { MainActor.assumeIsolated { place(shared.device, udid: udid, as: name) } }
@@ -957,7 +959,7 @@ final class AppCoordinator: ObservableObject {
         }
         DispatchQueue.main.async { MainActor.assumeIsolated { self.syncDeviceControl() } }
         // Taken in either way; a file that stays is said to (in `error`, with `ok`).
-        return .init(ok: true, error: DeviceControlHub.removeTaken(file), name: target.name)
+        return .init(ok: true, error: DeviceControlHub.removeTaken(file, readThrough: fd), name: target.name)
     }
 
     func deleteProfile(_ id: UUID) {

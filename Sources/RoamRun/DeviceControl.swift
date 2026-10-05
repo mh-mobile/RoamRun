@@ -51,6 +51,13 @@ enum DeviceControlWire {
         }
     }
 
+    /// Whether `path` still names the file `fd` is open on: a name can come to be another file's,
+    /// or a link's, while the one it was is held open.
+    static func names(_ path: String, theFileOf fd: Int32) -> Bool {
+        var held = stat(), named = stat()
+        return fstat(fd, &held) == 0 && lstat(path, &named) == 0 && held.st_dev == named.st_dev && held.st_ino == named.st_ino
+    }
+
     /// The longest a line may be: a long paste, or many elements.
     static let longestLine = 1 << 20
     /// How long the app waits for a request once a client has connected.
@@ -488,11 +495,40 @@ final class DeviceControlHub: @unchecked Sendable {
         onLog?("device control: a pairing made on another Mac was taken in", target.id)
     }
 
-    /// The file a pairing came in is removed once it is taken in. nil when it is gone; else what
-    /// to tell whoever brought it: it is still a key to the device.
-    static func removeTaken(_ file: URL, remove: (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) }) -> String? {
+    /// A pairing file is read as the one file it is: not through a link (the link would be removed
+    /// and the file left), not one that has another name (it would stay under that), and no more
+    /// than a pairing can be. The descriptor is the caller's to close, after `removeTaken`.
+    static func readTaken(_ path: String) throws -> (fd: Int32, data: Data) {
+        let fd = Darwin.open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
+        guard fd >= 0 else {
+            throw DeviceSession.Failure.message(errno == ELOOP ? "\(path) is a link: give the file itself" : "can't read \(path): \(String(cString: strerror(errno)))")
+        }
+        var s = stat()
+        let why: String? = fstat(fd, &s) != 0 || s.st_mode & S_IFMT != S_IFREG ? "\(path) isn't a file"
+            : s.st_nlink != 1 ? "\(path) has another name too (a hard link): the pairing would stay under it"
+            : s.st_size >= 1 << 20 ? "\(path) isn't a pairing made by `roamrun pairing create`" : nil
+        if let why {
+            close(fd)
+            throw DeviceSession.Failure.message(why)
+        }
+        var data = Data(count: Int(s.st_size))
+        let got = data.withUnsafeMutableBytes { pread(fd, $0.baseAddress, $0.count, 0) }
+        guard got == data.count else {
+            close(fd)
+            throw DeviceSession.Failure.message("can't read \(path)")
+        }
+        return (fd, data)
+    }
+
+    /// The file a pairing was read from is removed once it is taken in. nil when it is gone; else
+    /// what to tell whoever brought it: it is still a key to the device.
+    static func removeTaken(_ file: URL, readThrough fd: Int32, remove: (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) }) -> String? {
+        let still = "it still lets whoever has it see and operate the device"
+        guard DeviceControlWire.names(file.path, theFileOf: fd) else {
+            return "\(file.path) came to name another file while it was read: what the pairing was read from wasn't removed, and may be there under another name — \(still)"
+        }
         do { try remove(file) } catch {
-            return "\(file.path) couldn't be removed (\(error.localizedDescription)): delete it yourself — it still lets whoever has it see and operate the device"
+            return "\(file.path) couldn't be removed (\(error.localizedDescription)): delete it yourself — \(still)"
         }
         return nil
     }
