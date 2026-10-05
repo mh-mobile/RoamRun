@@ -388,9 +388,9 @@ private struct DeviceControlRow: View {
 
     private func summary(_ state: (paired: Bool, open: Bool, refused: Bool), allowed: Bool) -> String {
         if !state.paired { return "Lets agents see and operate this device (roamrun look, tap, mcp). Needs iOS 27 and a pairing of RoamRun's own." }
-        if state.refused { return "This pairing can no longer be used: it was removed on the device, or this Mac can't read what it saved. Pair again." }
+        if state.refused { return "This pairing can no longer be used: it was removed on the device, was made before RoamRun kept the device's key with it, or this Mac can't read what it saved. Pair again." }
         if coordinator.controlAnother(profile) {
-            return "What answers at this device's address isn't the device this pairing was made with, so nothing is sent to it. If the device was erased or replaced, pair again; if not, something else has its address."
+            return "What answers at this device's address isn't the device this pairing was made with, so it is told nothing of this Mac's and sent no input. If the device was erased or replaced, pair again; if not, something else has its address."
         }
         if !allowed, coordinator.controlListUnreadable {
             return "Paired, off: the Keychain didn't give RoamRun its list of devices switched on. Switch it on to be asked again."

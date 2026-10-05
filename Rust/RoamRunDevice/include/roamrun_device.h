@@ -21,8 +21,10 @@ typedef struct RRDevice RRDevice;
  * was made with. A pairing that doesn't hold that device's key fails with a message that holds
  * "doesn't hold the device's key": like a refusal, only pairing again helps.
  * NULL on failure, with *error (if given) set to a message to free with rr_string_free. A
- * message that holds "doesn't accept this pairing" means the device answered and refused it
- * (removed there); any other failure is of the connection.
+ * message that holds "doesn't accept this pairing" means the device proved itself and refused
+ * it (removed there); one that holds "isn't the device this pairing was made with" means that
+ * what answered didn't prove itself (it was told nothing of this side's); any other failure
+ * is of the connection.
  */
 RRDevice *rr_device_open(const char *ip, uint16_t port, const uint8_t *pairing, size_t pairing_len, char **error);
 
@@ -30,9 +32,10 @@ RRDevice *rr_device_open(const char *ip, uint16_t port, const uint8_t *pairing, 
 void rr_device_close(RRDevice *device);
 
 /**
- * `flag` — one byte, zero, that stays where it is while the device is open — is looked at
- * between the keys of a long input: once raised (rr_flag_raise, from any thread), what is left
- * isn't sent and the call fails. For letting go of a device without waiting out a text.
+ * `flag` — one byte, zero, that stays where it is while the device is open — is looked at when
+ * a call begins, between the keys of a long input and at each step of a walk of the elements:
+ * once raised (rr_flag_raise, from any thread), what is left isn't done and the call fails with
+ * a message that begins "stopped:". For letting go of a device without waiting out a text.
  */
 void rr_device_stop_at(RRDevice *device, const uint8_t *flag);
 void rr_flag_raise(uint8_t *flag);

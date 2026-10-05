@@ -549,12 +549,13 @@ async fn elements(link: &mut Link, limit: usize, until: Instant) -> Result<(Vec<
     Ok((captions, false, "limit"))
 }
 
-/// UNCHECKED in the header: only pairing again helps.
+/// The words the header gives for a pairing without the device's key: only pairing again helps.
 const UNCHECKED: &str = "this pairing doesn't hold the device's key (it was made before RoamRun checked who answers): pair again";
 
 async fn connect(ip: &str, port: u16, file: &[u8]) -> Result<Link, String> {
     let started = Instant::now();
-    let mut pairing = RpPairingFile::from_bytes(file).map_err(|e| format!("pairing: {e:?}"))?;
+    // Unreadable is for good, like one without the device's key: said in the same words.
+    let mut pairing = RpPairingFile::from_bytes(file).map_err(|e| format!("this pairing can't be read ({e:?}): it doesn't hold the device's key as RoamRun reads it — pair again"))?;
     // The device proves itself at every connection, by the key it gave when the pairing was
     // made: a pairing without that key would take whatever answers for the device.
     if pairing.peer_public_key.is_none() { return Err(UNCHECKED.into()); }
@@ -562,7 +563,7 @@ async fn connect(ip: &str, port: u16, file: &[u8]) -> Result<Link, String> {
     let mut client = RemotePairingClient::new(RpPairingSocket::new(control), LABEL);
     // Verify only: a pairing the device doesn't know must fail here, not start a new one.
     client.attempt_pair_verify().await.map_err(|e| format!("handshake: {e:?}"))?;
-    // Said in words the caller knows a refusal by (REFUSED in the header): only when the device
+    // Said in words the caller knows a refusal by (the header's "doesn't accept this pairing"): only when the device
     // answered and said no, not when the exchange itself broke off.
     client.validate_pairing(&mut pairing).await.map_err(|e| match e {
         idevice::IdeviceError::RemotePairing(idevice::remote_pairing::errors::RemotePairingError::PairVerifyFailed) => format!("the device doesn't accept this pairing: {e:?}"),
@@ -591,14 +592,27 @@ async fn connect(ip: &str, port: u16, file: &[u8]) -> Result<Link, String> {
 /// The most that is typed in one call: beyond it, a slip in the middle is too costly, and paste does it in one.
 const LONGEST_TYPED: usize = 2000;
 
-/// How long an input may take to send, once everything is ready for it: its own length, and
-/// room for a slow link. (Typing took some 60 ms a key over Wi‑Fi.)
 /// Between two strokes of a text. The device takes keys at its own pace — about 45 ms a
 /// character was seen (iOS 27, a note) — and keeps what comes faster for later: sent at 15 ms
 /// a character, a long text was still being typed a minute after this had returned, where
 /// nothing here could stop it and the next look showed half of it. Slower than the device.
 const STROKE_PAUSE: u64 = 60;
 
+/// A text as the keys it is typed with: each stroke whole, and the device's time after it.
+fn type_steps(strokes: &[(u64, bool)]) -> Vec<Step> {
+    let mut steps = Vec::with_capacity(strokes.len() * 5);
+    for &(usage, shift) in strokes {
+        if shift { steps.push(Step::Key(LEFT_SHIFT, ButtonState::Down)); }
+        steps.push(Step::Key(usage, ButtonState::Down));
+        steps.push(Step::Key(usage, ButtonState::Up));
+        if shift { steps.push(Step::Key(LEFT_SHIFT, ButtonState::Up)); }
+        steps.push(Step::Wait(if shift { STROKE_PAUSE * 3 / 2 } else { STROKE_PAUSE }));
+    }
+    steps
+}
+
+/// How long an input may take to send, once everything is ready for it: its own length, and
+/// room for a slow link.
 fn input_time(input: &Input) -> Duration {
     let own = match input {
         Input::Tap(..) => 100,
@@ -745,7 +759,7 @@ enum Step {
     Wait(u64),
 }
 
-const STOPPED: &str = "stopped: this connection is being closed";
+const STOPPED: &str = "stopped: told to stop where it was (the device was switched off or let go of, or whoever asked left)";
 
 // Looked at where a call begins too: none begins on a device being let go of.
 /// How many keys are held once `step` is sent.
@@ -774,13 +788,6 @@ async fn press(link: &mut Link, steps: &[Step]) -> Result<(), String> {
             // Between two keys, none held: what is left isn't sent to a device being let go of.
             if down == 0 && link.stop.raised() { return Err(STOPPED.into()); }
             down = down_after(down, step);
-            match *step {
-                Step::Key(usage, ButtonState::Down) if usage != LEFT_SHIFT && usage != LEFT_COMMAND => link.held = Some((false, 0, usage)),
-                Step::Button(page, code, ButtonState::Down) => link.held = Some((true, page, code)),
-                Step::Key(usage, ButtonState::Up) if link.held == Some((false, 0, usage)) => link.held = None,
-                Step::Button(page, code, ButtonState::Up) if link.held == Some((true, page, code)) => link.held = None,
-                _ => {}
-            }
             let sent = match *step {
                 Step::Key(usage, state) => keys.send_keyboard(usage, state).await,
                 Step::Button(page, code, state) => keys.send_button(page, code, state).await,
@@ -790,8 +797,17 @@ async fn press(link: &mut Link, steps: &[Step]) -> Result<(), String> {
                 Ok(()) => sent_any = true,
                 Err(e) => { failed = Some(e); break }
             }
+            // Once it is sent: down is what `let_go` has to let go of, and up is no longer that.
+            match *step {
+                Step::Key(usage, ButtonState::Down) if usage != LEFT_SHIFT && usage != LEFT_COMMAND => link.held = Some((false, 0, usage)),
+                Step::Button(page, code, ButtonState::Down) => link.held = Some((true, page, code)),
+                Step::Key(usage, ButtonState::Up) if link.held == Some((false, 0, usage)) => link.held = None,
+                Step::Button(page, code, ButtonState::Up) if link.held == Some((true, page, code)) => link.held = None,
+                _ => {}
+            }
         }
         let Some(e) = failed else { return Ok(()) };
+        link.held = None;   // the connection it was down on is gone
         link.keys = None;   // a dead connection isn't kept for the next call
         if again(attempt, kept, sent_any, &e) {
             link.resent += 1;
@@ -820,17 +836,7 @@ async fn send(link: &mut Link, input: &Input) -> Result<(), String> {
                 Step::Key(KEY_V, ButtonState::Up), Step::Key(LEFT_COMMAND, ButtonState::Up),
             ]).await
         }
-        Input::Type(strokes) => {
-            let mut steps = Vec::with_capacity(strokes.len() * 5);
-            for &(usage, shift) in strokes {
-                if shift { steps.push(Step::Key(LEFT_SHIFT, ButtonState::Down)); }
-                steps.push(Step::Key(usage, ButtonState::Down));
-                steps.push(Step::Key(usage, ButtonState::Up));
-                if shift { steps.push(Step::Key(LEFT_SHIFT, ButtonState::Up)); }
-                steps.push(Step::Wait(if shift { STROKE_PAUSE * 3 / 2 } else { STROKE_PAUSE }));
-            }
-            press(link, &steps).await
-        }
+        Input::Type(strokes) => press(link, &type_steps(strokes)).await,
         Input::Button(page, code, hold) => {
             press(link, &[Step::Button(*page, *code, ButtonState::Down), Step::Wait(*hold), Step::Button(*page, *code, ButtonState::Up)]).await
         }
@@ -1272,15 +1278,20 @@ mod tests {
         assert_eq!(own_hardware("").0, "000000000000");   // nothing to go by: still twelve characters
     }
 
-    /// A long text is stopped only where no key is held: never with Shift down.
+    /// A text as it is really sent: stopped only where no key is held (never with Shift down),
+    /// and no faster than the device takes it — within the time its length is given.
     #[test]
-    fn typing_can_stop_only_between_strokes() {
-        let steps = [Step::Key(LEFT_SHIFT, ButtonState::Down), Step::Key(0x04, ButtonState::Down),
-                     Step::Key(0x04, ButtonState::Up), Step::Key(LEFT_SHIFT, ButtonState::Up), Step::Wait(12)];
+    fn a_text_is_typed_stroke_by_stroke_at_the_devices_pace() {
+        let steps = type_steps(&[(0x04, true), (0x05, false)]);   // "Ab"
         let mut down = 0;
         let free: Vec<bool> = steps.iter().map(|s| { let was = down == 0; down = down_after(down, s); was }).collect();
-        assert_eq!(free, [true, false, false, false, true]);
+        assert_eq!(free, [true, false, false, false, true, true, false, true]);
         assert_eq!(down, 0);
+        let waits: Vec<u64> = steps.iter().filter_map(|s| if let Step::Wait(ms) = s { Some(*ms) } else { None }).collect();
+        assert_eq!(waits, [90, 60]);
+        assert!(waits.iter().all(|&ms| ms > 45), "slower than the device was seen to take keys");
+        let longest: u64 = type_steps(&vec![(0x04, true); LONGEST_TYPED]).iter().filter_map(|s| if let Step::Wait(ms) = s { Some(*ms) } else { None }).sum();
+        assert!(Duration::from_millis(longest) < input_time(&Input::Type(vec![(0x04, true); LONGEST_TYPED])));
     }
 
     /// An input's deadline grows with what it has to send: a long text isn't cut in the middle.

@@ -98,7 +98,9 @@ final class AppCoordinator: ObservableObject {
         deviceControl.onLog = { [weak self] message, id in Task { @MainActor in self?.logStore.log(message, device: id) } }
         deviceControl.onUnreached = { [weak self] id, why in Task { @MainActor in self?.controlUnreached(id, why) } }
         deviceControl.allowed = DeviceControlAllowed.shared.contains
-        deviceControl.allowedKnown = DeviceControlAllowed.shared.known
+        // Unreadable is off, as every request finds it; not read yet is not yet known.
+        deviceControl.allowedKnown = { DeviceControlAllowed.shared.known($0) ?? (DeviceControlAllowed.shared.isUnreadable ? false : nil) }
+        deviceControl.onReplaced = { [switching] mark in switching.async { DeviceControlAllowed.shared.set(mark, false) } }
         deviceControl.onImport = { [weak self] path, name, wanted in self?.importPairing(path: path, as: name, wanted: wanted) ?? .failure("stopping") }
         syncDeviceControl()
         // A screenshot run stands beside the app that is running: it takes neither its socket nor
@@ -1051,7 +1053,8 @@ final class AppCoordinator: ObservableObject {
         DispatchQueue.main.async { MainActor.assumeIsolated { self.syncDeviceControl() } }
         // Taken in either way; a file that stays is said to (in `error`, with `ok`).
         // Brought in to be used: switched on, as one set up here is — and said when it couldn't be.
-        let on = DeviceControlHub.pairingMark(udid: saved.udid ?? udid, in: ProfileStore.directory).map { DeviceControlAllowed.shared.set($0, true) } ?? false
+        // In its turn among the switch's writes: after the one that drops the pairing it replaced.
+        let on = switching.sync { DeviceControlHub.pairingMark(udid: saved.udid ?? udid, in: ProfileStore.directory).map { DeviceControlAllowed.shared.set($0, true) } ?? false }
         let left = DeviceControlHub.removeTaken(file, readThrough: fd)
         let off = on ? nil : "device control is switched off for it (the Keychain didn't keep it switched on): the user switches it on in the RoamRun app, on the device's page"
         let said = [left, off].compactMap { $0 }
@@ -1424,8 +1427,6 @@ final class AppCoordinator: ObservableObject {
     /// The pairing for device control being made now, if any.
     @Published private(set) var controlPairing: ControlPairing?
 
-    /// A device whose UDID isn't known yet (it names the pairing) has none: it can be set up,
-    /// and the pairing tells the UDID.
     /// Whether commands and agents may operate the device. Off until the Keychain was read.
     func controlAllowed(_ profile: DeviceProfile) -> Bool {
         controlUDID(profile).flatMap { DeviceControlHub.pairingMark(udid: $0, in: ProfileStore.directory) }.flatMap(DeviceControlAllowed.shared.known) ?? false
@@ -1445,8 +1446,10 @@ final class AppCoordinator: ObservableObject {
         guard let mark = udid.flatMap({ DeviceControlHub.pairingMark(udid: $0, in: ProfileStore.directory) }) else { return }
         let hub = deviceControl
         switching.async {
+            // Off: what the device is doing for someone now stops where it can — at once, and
+            // again once the Keychain (which may ask, and wait) has it.
+            if !allowed { hub.interrupt(id) }
             let kept = DeviceControlAllowed.shared.set(mark, allowed)
-            // Off: what the device is doing for someone now stops where it can.
             if !allowed { hub.interrupt(id) }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
@@ -1463,6 +1466,8 @@ final class AppCoordinator: ObservableObject {
     /// What answers at the device's address isn't the device its pairing was made with.
     func controlAnother(_ profile: DeviceProfile) -> Bool { deviceControl.isAnother(profile.id) }
 
+    /// A device whose UDID isn't known yet (it names the pairing) has none: it can be set up,
+    /// and the pairing tells the UDID.
     func controlState(_ profile: DeviceProfile) -> (paired: Bool, open: Bool, refused: Bool) {
         controlUDID(profile).map { deviceControl.state(of: profile.id, udid: $0) } ?? (false, false, false)
     }

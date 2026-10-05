@@ -450,6 +450,8 @@ final class DeviceControlHub: @unchecked Sendable {
     /// Whether commands and agents may use a pairing, named by its mark (`pairingMark`): the
     /// device's switch in the app. Asked at every request, off the main thread.
     var allowed: @Sendable (String) -> Bool = { _ in true }
+    /// A saved pairing was written over: its mark, for the switch to drop. Not to wait in.
+    var onReplaced: (@Sendable (String) -> Void)?
     /// The same as far as it is known without waiting, for saying how a device stands.
     var allowedKnown: @Sendable (String) -> Bool? = { _ in true }
 
@@ -463,12 +465,14 @@ final class DeviceControlHub: @unchecked Sendable {
     /// The call a device is busy with stops where it can: its switch was turned off.
     func interrupt(_ id: UUID) { session(of: id)?.interrupt() }
 
-    /// Runs `body`, and calls `stop` once if whoever asked leaves meanwhile.
+    /// Runs `body`, and calls `stop` if it is no longer wanted meanwhile (its asker left, its
+    /// device was switched off) — again and again for as long as that is so: the call may only now be about to begin, and
+    /// begins by taking back a stop that was asked before it.
     static func whileWanted<T>(_ wanted: @escaping @Sendable () -> Bool, else stop: @escaping @Sendable () -> Void, _ body: () throws -> T) rethrows -> T {
         let done = DispatchSemaphore(value: 0), ended = DispatchSemaphore(value: 0)
         DispatchQueue.global(qos: .utility).async {
             while done.wait(timeout: .now() + 0.3) == .timedOut {
-                if !wanted() { stop(); break }
+                if !wanted() { stop() }
             }
             ended.signal()
         }
@@ -549,9 +553,10 @@ final class DeviceControlHub: @unchecked Sendable {
         case failed(String)
     }
 
-    /// Whether a pairing of our own is saved for the device, and whether its connection stands.
     /// Whether what answers for the device isn't the device its pairing was made with.
     func isAnother(_ id: UUID) -> Bool { session(of: id)?.isAnother == true }
+
+    /// Whether a pairing of our own is saved for the device, and whether its connection stands.
 
     func state(of id: UUID, udid: String) -> (paired: Bool, open: Bool, refused: Bool) {
         let paired = hasPairing(udid: udid)
@@ -699,8 +704,12 @@ final class DeviceControlHub: @unchecked Sendable {
     /// Keychain, so that whoever saves the device can do both without letting anything in between
     /// (a device removed after it was saved and before its pairing was would leave the pairing).
     func sealPairing(_ pairing: Data, with sealing: SymmetricKey, udid: String) throws {
+        let before = Self.pairingMark(udid: udid, in: directory)
         try Self.save(Self.seal(pairing, with: sealing), as: DeviceControlWire.pairingFile(udid: udid, in: directory))
         unremovedLock.withLock { _ = unremoved.remove(udid.lowercased()) }
+        // The pairing this took the place of may still be one the device knows (one brought in
+        // has an identity of its own): it isn't left switched on for whoever kept a copy of it.
+        if let before, before != Self.pairingMark(udid: udid, in: directory) { onReplaced?(before) }
     }
 
     /// And held from now on, connected when this returns.
@@ -997,6 +1006,7 @@ final class DeviceControlHub: @unchecked Sendable {
 
     private static let lookFirst = "look first: a point is given in the pixels of a look, and each look serves one action"
     static let nobodyWaits = "nobody is waiting for this any more"
+    static let notGiven = "not given: whoever asked has left, or the device was switched off meanwhile"
     static let lookedSince = "the device was looked at again since the look this point is from (by another): look again"
 
     private func listen() {
@@ -1017,8 +1027,9 @@ final class DeviceControlHub: @unchecked Sendable {
         // How it stands is said at once, whatever runs on the device.
         if request.op == "state" {
             guard let h = lock.withLock({ held[request.device] }) else { return notSetUp }
+            // Not read yet (the first moments of a run), the Keychain is asked: said off, every command would be too.
             return .init(ok: true, open: h.session.isOpen, refused: h.session.isRefused,
-                         allowed: Self.pairingMark(udid: h.target.udid, in: directory).flatMap(allowedKnown),
+                         allowed: Self.pairingMark(udid: h.target.udid, in: directory).map { allowedKnown($0) ?? allowed($0) },
                          another: h.session.isAnother ? true : nil)
         }
         // Everything else one at a time per device, and whole: a look is checked, spent and acted
@@ -1038,7 +1049,10 @@ final class DeviceControlHub: @unchecked Sendable {
             guard let (h, name) = lock.withLock({ held[request.device].map { ($0, $0.target.name) } }) else { return notSetUp }
             // By the pairing that would be used, whatever device it is saved under by now.
             guard let mark = Self.pairingMark(udid: h.target.udid, in: directory), allowed(mark) else { return .failure(Self.switchedOff) }
-            return perform(request, on: h, named: name, wanted: wanted)
+            // Wanted, for a call that takes its time: asked for by someone still there, of a
+            // pairing still switched on (it was, a moment ago: it may be switched off meanwhile).
+            let known = allowedKnown
+            return perform(request, on: h, named: name, wanted: { wanted() && known(mark) != false })
         }
     }
 
@@ -1052,7 +1066,9 @@ final class DeviceControlHub: @unchecked Sendable {
             switch request.op {
             case "elements":
                 spend()   // the walk can scroll the screen
-                let found = try h.session.elements(limit: Self.elementLimit(request.limit))
+                let walked = h.session
+                let limit = Self.elementLimit(request.limit)
+                let found = try Self.whileWanted(wanted, else: { walked.interrupt() }) { try walked.elements(limit: limit) }
                 return .init(ok: true, captions: found.captions, complete: found.complete)
             case "swipe":
                 // A request refused for what it says leaves the look to be used: it is spent by what reaches the device.
@@ -1097,7 +1113,7 @@ final class DeviceControlHub: @unchecked Sendable {
                 // Whoever asked left while it was taken: nobody is there to take the screen away.
                 guard wanted() else {
                     try? FileManager.default.removeItem(atPath: path)
-                    return .failure(Self.nobodyWaits)
+                    return .failure(Self.notGiven)
                 }
                 let id = lock.withLock { () -> Int in looks += 1; return looks }
                 h.looked = (image.width, image.height, id)

@@ -202,7 +202,7 @@ final class DeviceMCP: @unchecked Sendable {
             guard let value = arguments[tool == "press" ? "button" : "text"] as? String else { throw Failure(description: "nothing to send") }
             // Typed at the device's pace: more would outlast a client's patience, and go on being typed after it gave up.
             guard tool != "type" || value.count <= Self.longestTyped else {
-                throw Failure(description: "too long to type here: \(Self.longestTyped) characters at most (about half a minute). paste takes any length")
+                throw Failure(description: "too long to type here: \(Self.longestTyped) characters at most (half a minute or more). paste takes any length")
             }
             shown[device.id] = nil
             _ = try send(.init(op: tool, device: device.id, text: value))
@@ -262,7 +262,7 @@ final class DeviceMCP: @unchecked Sendable {
              required: ["x1", "y1", "x2", "y2"]),
         tool("elements", "What accessibility says is on the screen, one caption a line (\"Home, tab, selected\"). No positions: find a caption in a look to tap it. The screen may scroll to what is visited. Nothing on the home screen.",
              ["limit": ["type": "integer", "description": "How many at most (default 40)"]]),
-        tool("type", "Type text on the device's keyboard, into whatever has its focus. US-keyboard characters only; a newline is Return. Right only while the device's keyboard is an English one — look first: under a Japanese one the text comes out wrong, and a long one can throw the app out. Typed at the device's pace, about 16 characters a second and 500 at most: paste for anything longer.",
+        tool("type", "Type text on the device's keyboard, into whatever has its focus. US-keyboard characters only; a newline is Return. Right only while the device's keyboard is an English one — look first: under a Japanese one the text comes out wrong, and a long one can throw the app out. Typed at the device's pace, at most about 16 characters a second, 500 a call: paste for anything longer.",
              ["text": ["type": "string"]], required: ["text"]),
         tool("paste", "Put any text into whatever has the keyboard's focus, by the device's pasteboard (which it replaces). iOS then asks \"Allow Paste\" on the device each time: look, and tap it only if the user wants that.",
              ["text": ["type": "string"]], required: ["text"]),

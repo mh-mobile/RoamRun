@@ -4304,9 +4304,9 @@ private final class StandInDevice: ControlledDevice, @unchecked Sendable {
     let lookBegan = DispatchSemaphore(value: 0)
     var isOpen: Bool { true }
     var isRefused: Bool { false }
-    /// A connection waits here when set, and says it has begun.
     /// What answers isn't the device the pairing was made with.
     var isAnother = false
+    /// A connection waits here when set, and says it has begun.
     var connectHold: DispatchSemaphore?
     let connectBegan = DispatchSemaphore(value: 0)
     func connect() throws {
@@ -5545,7 +5545,7 @@ func everyDocumentedCommandParses(_ doc: String) throws {
     let asked = OSAllocatedUnfairLock(initialState: 0)
     // There when its turn came, gone once the look was taken.
     let answer = hub.answer(.init(op: "look", device: id, path: png), wanted: { asked.withLock { $0 += 1; return $0 == 1 } })
-    #expect(answer.error == DeviceControlHub.nobodyWaits)
+    #expect(answer.error == DeviceControlHub.notGiven)
     #expect(!FileManager.default.fileExists(atPath: png))
     #expect(hub.answer(.init(op: "look", device: id, path: png)).ok)
     #expect(FileManager.default.fileExists(atPath: png))
@@ -5956,6 +5956,43 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     for words in [DeviceSession.refusal, DeviceSession.unchecked, DeviceSession.notTheDevice, "\"\(DeviceSession.stopped)"] {
         #expect(source.contains(words), "\(words)")
     }
-    #expect(!DeviceSession.leavesConnectionInDoubt(DeviceSession.Failure.message("stopped: this connection is being closed")))
+    #expect(!DeviceSession.leavesConnectionInDoubt(DeviceSession.Failure.message("stopped: told to stop where it was")))
     #expect(DeviceSession.leavesConnectionInDoubt(DeviceSession.Failure.message("keys: BrokenPipe")))
+}
+
+/// A pairing written over is dropped from the switch: the one it replaced may still be one the
+/// device knows, and isn't left on for whoever kept a copy of its file.
+@Test func aPairingWrittenOverIsSaidSoItsSwitchGoes() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (hub, _) = try standInHub(dir)
+    defer { hub.stop() }
+    let replaced = OSAllocatedUnfairLock<[String]>(initialState: [])
+    hub.onReplaced = { mark in replaced.withLock { $0.append(mark) } }
+    let old = try #require(DeviceControlHub.pairingMark(udid: "UDID-1", in: dir))
+    try hub.sealPairing(try scratchPairing(), with: scratchKey, udid: "UDID-1")
+    #expect(replaced.withLock { $0 } == [old])
+    #expect(DeviceControlHub.pairingMark(udid: "UDID-1", in: dir) != old)
+    try hub.sealPairing(try scratchPairing(), with: scratchKey, udid: "UDID-2")   // nothing there before: nothing replaced
+    #expect(replaced.withLock { $0 }.count == 1)
+}
+
+/// A read that failed for being told to stop isn't tried again, nor on a new connection.
+@Test func whatWasToldToStopIsNotTriedAgain() {
+    var attempts = 0, reopened = 0
+    #expect(throws: (any Error).self) {
+        try Recovery.run(repeatable: true, attempt: { () -> Int in
+            attempts += 1
+            throw DeviceSession.Failure.message("stopped: told to stop where it was")
+        }, pause: {}, reopen: { reopened += 1; return true })
+    }
+    #expect(attempts == 1 && reopened == 0)
+    attempts = 0
+    #expect(throws: (any Error).self) {
+        try Recovery.run(repeatable: true, attempt: { () -> Int in
+            attempts += 1
+            throw DeviceSession.Failure.message("frames: timed out")
+        }, pause: {}, reopen: { reopened += 1; return true })
+    }
+    #expect(attempts == 3 && reopened == 1)
 }

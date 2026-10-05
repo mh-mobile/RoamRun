@@ -182,14 +182,15 @@ Wi‑Fi as the Mac. The app shows a code; the user picks RoamRun on the device
 to do that part through device control.
 
 If `roamrun status` says that what answers at the device's address isn't the
-device the pairing was made with, nothing is sent there: tell the user — the
+device the pairing was made with, it is told nothing of this Mac's and sent no
+input: tell the user — the
 device was erased or replaced (they pair again), or something else has its
 address. Don't try other addresses yourself.
 
 The device's page has a switch for device control. While it is off, every
 command here fails with "device control is switched off for this device", and
 `roamrun status` says "switched off" (`"deviceControl": "switchedOff"` in
-`status --json`; the other values there are `connected`, `notConnected`,
+`status --json` and `devices --json`; the other values there are `connected`, `notConnected`,
 `refused` — the user pairs again —, `another`, `noApp`, `keptOut`, and `null`
 where it isn't set up): only the user can switch it on (it is
 theirs to decide, like the pairing) — tell them, and don't look for a way round.
@@ -235,7 +236,8 @@ have the user add the MCP tools, which run outside it.
   first, and switch with the globe key if it shows Japanese (there Space
   converts and Return confirms: the text comes out wrong, and a long one can
   throw the app back to the home screen). It is typed at the device's own pace,
-  about 16 characters a second, and has all arrived when the command returns:
+  at most about 16 characters a second (500 take half a minute or more), and
+  has all arrived when the command returns:
   for anything long, `paste` (the MCP tool takes 500 characters at most). `roamrun paste iPhone "任意の文字列"` puts any
   text in by the device's pasteboard — it replaces the pasteboard, and iOS asks
   "Allow Paste" each time: look, and tap it only if the user wants that.

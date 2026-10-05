@@ -11,10 +11,11 @@ public enum Recovery {
     /// An input is never repeated: it may have reached the device before the failure showed.
     public static func run<T>(repeatable: Bool, attempt: () throws -> T, pause: () -> Void, reopen: () -> Bool) throws -> T {
         do { return try attempt() } catch {
-            guard repeatable else { throw error }
+            // What failed for being told to stop, or for what it asked, fails again the same way.
+            guard repeatable, DeviceSession.leavesConnectionInDoubt(error) else { throw error }
             pause()
             do { return try attempt() } catch {
-                guard reopen() else { throw error }
+                guard DeviceSession.leavesConnectionInDoubt(error), reopen() else { throw error }
                 return try attempt()
             }
         }
@@ -70,7 +71,7 @@ public final class DeviceSession: @unchecked Sendable {
         self.ip = ip; self.port = port; self.pairing = pairing; self.udid = udid
     }
 
-    /// Raised when this is closed: a long text under way stops between two keys, instead of
+    /// Raised when this is closed, and for the call under way by `interrupt`: a long text stops between two keys, instead of
     /// being typed out on a device that was let go of.
     private let stopping: UnsafeMutablePointer<UInt8> = {
         let flag = UnsafeMutablePointer<UInt8>.allocate(capacity: 1)
@@ -98,8 +99,11 @@ public final class DeviceSession: @unchecked Sendable {
     /// At once, whatever runs: a long text stops between two keys, and a call that waits here
     /// (for the connection to open, or its turn) doesn't begin on the device. `close` follows.
     public func letGo() {
-        rr_flag_raise(stopping)
-        standingLock.withLock { leaving = true }
+        // Under the lock a call lowers the flag under: let go of, it stays raised.
+        standingLock.withLock {
+            leaving = true
+            rr_flag_raise(stopping)
+        }
     }
 
     /// The call under way is to stop where it can (a text, between two keys; a walk, at its next
@@ -116,7 +120,7 @@ public final class DeviceSession: @unchecked Sendable {
     public var isRefused: Bool { standingLock.withLock { standing.refused } }
 
     /// Something answers at the device's address that isn't the device this pairing was made
-    /// with: nothing is sent to it. The device erased or replaced — or something else there.
+    /// with: it is told nothing of this Mac's and sent no input. The device erased or replaced — or something else there.
     public var isAnother: Bool { standingLock.withLock { standing.another } }
 
     /// Under `lock`, whenever what it guards may have changed.
@@ -230,9 +234,10 @@ public final class DeviceSession: @unchecked Sendable {
 
     /// How the library words a pairing the device doesn't know (rr_device_open's error).
     public static let refusal = "doesn't accept this pairing"
-    /// And a pairing made before the device's key was kept with it: only pairing again helps there too.
     /// How it words a call stopped at this side's bidding.
     public static let stopped = "stopped:"
+    /// And a pairing made before the device's key was kept with it, or one it can't read: only
+    /// pairing again helps there too.
     public static let unchecked = "doesn't hold the device's key"
     /// How it words an answer that isn't the device's own: not a refusal — pairing again isn't
     /// what to do when something else has taken the device's address.
@@ -243,7 +248,7 @@ public final class DeviceSession: @unchecked Sendable {
             defer { noteStanding() }
             guard !closed else { throw Self.replaced }
             // A stop asked of the call before this one was for that call.
-            if !standingLock.withLock({ leaving }) { rr_flag_lower(stopping) }
+            standingLock.withLock { if !leaving { rr_flag_lower(stopping) } }
             if device == nil {
                 device = try open()
                 onEvent?("opened")

@@ -39,15 +39,16 @@ final class DeviceControlAllowed: @unchecked Sendable {
     }
 
     /// Under `io`. Read once a process: nothing else writes it that is to be believed. A read
-    /// that failed (refused, or not a list) isn't taken for an empty list: asked again only when
+    /// that failed (refused) isn't taken for an empty list: asked again only when
     /// the user switches something (`again`), not at every request — it may ask them each time.
     private func list(again: Bool) -> Set<String>? {
         let (known, failed) = lock.withLock { (held, unreadable) }
         if let known { return known }
         if failed, !again { return nil }
         let (status, data) = read()
+        // Given, and not a list (an earlier build's, or garbled): nothing is on, and it is written anew.
         let found: Set<String>? = status == errSecItemNotFound ? []
-            : status == errSecSuccess ? data.flatMap { try? JSONDecoder().decode(Set<String>.self, from: $0) } : nil
+            : status == errSecSuccess ? (data.flatMap { try? JSONDecoder().decode(Set<String>.self, from: $0) } ?? []) : nil
         lock.withLock { held = found; unreadable = found == nil }
         return found
     }

@@ -122,7 +122,10 @@ tunnel and Xcode has to run again.
     delete the Keychain item for account `pairings` and add one of your own
     (`security add-generic-password -s io.github.mh-mobile.roamrun.device-control -a pairings -w
     $(printf 'x%.0s' {1..32})`), open this release and **Pair Again…** → macOS asks about the
-    item (a key another program put there isn't read unasked); deny it.
+    item (a key another program put there isn't read unasked); deny it. The same for the list of what
+    is switched on: with RoamRun quit, delete the item for account `allowed` and add one with `-A`
+    (and once with `-T <the app's binary>`) holding `["x"]`; open RoamRun → macOS asks, or the
+    device's switch reads off; it is never on unasked.
 20. `roamrun look <name> /tmp/a.png`, then `tap`, `swipe`, `type`, `paste`, `press home` and
     `elements`, a `look` after each: each did what it says. The same through `roamrun mcp`
     from an agent.
@@ -131,11 +134,13 @@ tunnel and Xcode has to run again.
 22. Quit and reopen RoamRun: connected again without a prompt. Install this release over
     the previous one: the same.
 23. Remove RoamRun's entry on the device: `roamrun status <name>` and the page say the
-    pairing can no longer be used and offer **Pair Again…**, which works.
+    pairing can no longer be used and offer **Pair Again…**, which works. (If they say instead
+    that something else answers at the device's address, this iOS refuses before it proves
+    itself: note it — the build then takes a removed pairing for a stranger, and isn't released so.)
 24. **Remove Device**: its `.sealed` file is gone. While `roamrun type <name> "<a few hundred
     characters>"` runs into a note (the device's keyboard an English one), **Remove…** the
     pairing: the typing stops within a moment — where it had got to, no further — and the
-    command says the connection was closed. Before that, `roamrun type <name> "<600 numbered
+    command says it was told to stop. Before that, `roamrun type <name> "<600 numbered
     characters>"` and a `look` right after: the last of them is there (none still on their way). Once more
     in another app's field (a search field, a message draft not sent): the pace was measured in a note.
 25. `roamrun pairing create <name> ~/k.json --as "RoamRun (check)"`, the code entered on the

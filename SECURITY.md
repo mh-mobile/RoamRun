@@ -141,8 +141,8 @@ bounded.
   `io.github.mh-mobile.roamrun` defaults (`com.roamrun.app` before 0.1.12).
   With device control: its socket and the looks on their way to whoever asked (`control/`, yours
   only), this Mac's identity for pairing (`device-control-host`), sealed pairings
-  (`device-pairing-<UDID>.sealed`, 0600), and one
-  item in the login Keychain, which removing the app leaves:
+  (`device-pairing-<UDID>.sealed`, 0600), and two
+  items in the login Keychain, which removing the app leaves:
   `security delete-generic-password -s io.github.mh-mobile.roamrun.device-control`
   (twice: the key, and the list of devices switched on).
   The CLI link and agent skills are installed only on request and

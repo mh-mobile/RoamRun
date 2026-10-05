@@ -525,7 +525,15 @@ enum CLI {
 
     private static func devices(_ profiles: [DeviceProfile], json: Bool) -> Never {
         let live = StatusFile.read()
-        if json { printJSON(profiles.map { row($0, live[$0.id], deep: false) }); exit(0) }
+        if json {
+            // Device control too, asked of the app as `status` does: the key is in every row, and null only where it isn't set up.
+            printJSON(profiles.map { p -> Row in
+                var r = row(p, live[p.id], deep: false)
+                r.deviceControl = controlState(p.id, udid: r.udid).key
+                return r
+            })
+            exit(0)
+        }
         guard !profiles.isEmpty else { print(noDevices); exit(0) }
         let w = max(4, profiles.map(\.displayName.count).max() ?? 4)
         print("NAME".padding(toLength: w + 2, withPad: " ", startingAt: 0)
@@ -801,8 +809,8 @@ enum CLI {
             case .notSetUp: nil
             case .connected: "connected"
             case .notConnected: "paired, not connected — the app keeps trying; it can connect only while the device is on a Wi‑Fi"
-            case .refused: "the pairing can no longer be used (removed on the device, or this Mac can't read what it saved) — the user pairs again in the RoamRun app, on the device's page"
-            case .another: "paired, but what answers at its address isn't the device the pairing was made with — nothing is sent to it. Erased or replaced: the user pairs again in the RoamRun app; otherwise something else has its address"
+            case .refused: "the pairing can no longer be used (removed on the device, made by a build that didn't keep the device's key with it, or this Mac can't read what it saved) — the user pairs again in the RoamRun app, on the device's page"
+            case .another: "paired, but what answers at its address isn't the device the pairing was made with — it is told nothing of this Mac's and sent no input. Erased or replaced: the user pairs again in the RoamRun app; otherwise something else has its address"
             case .switchedOff: "paired, switched off — the user switches it on in the RoamRun app, on the device's page"
             case .noApp: "paired; the RoamRun app, which holds the connection, isn't running (or is a build without device control)"
             case .keptOut: "paired; this process isn't allowed to reach the RoamRun app (a sandbox around it?) — run it outside, or use the MCP tools"
@@ -943,8 +951,9 @@ enum CLI {
         let r = askApp(.init(op: "import", device: UUID(), path: path, text: name))
         // Not taken in, the file is where it was — and what it was.
         guard r.ok else { stop("import failed: \(r.error ?? "no answer")\n\(path) was left as it is: a pairing in it is still a key to the device.") }
-        print("\(r.name ?? "The device") is saved with its pairing. Try: roamrun look \(r.name.map(shellName) ?? "<name>")")
-        if r.removed != false { print("\(path) is removed.") }
+        print("\(r.name ?? "The device") is saved with its pairing." + (r.error == nil ? " Try: roamrun look \(r.name.map(shellName) ?? "<name>")" : ""))
+        // An app from before it said so says it by saying nothing else.
+        if r.removed == true || (r.removed == nil && r.error == nil) { print("\(path) is removed.") }
         // Said as it is: a key left where it was is not one that is gone, and a device not switched on isn't usable yet.
         if let more = r.error {
             FileHandle.standardError.write(Data("roamrun: \(more)\n".utf8))
@@ -1614,10 +1623,10 @@ enum CLI {
                       fix: "It connects while the device is on a Wi‑Fi, awake and reachable over the VPN — and then stays connected on cellular. Ask the user to unlock it on Wi‑Fi.", warnOnly: true)
             case .refused:
                 check(false, "Device control: RoamRun's pairing can no longer be used",
-                      fix: "It was removed on the device, or this Mac can't read what it saved (its key is gone from the Keychain, or was refused). Ask the user to pair again: the RoamRun app, the device's page, Device control › Pair Again… (same Wi‑Fi, iOS 27 or later).", warnOnly: true)
+                      fix: "It was removed on the device, was made by a build that didn't keep the device's key with it, or this Mac can't read what it saved (its key is gone from the Keychain, or was refused). Ask the user to pair again: the RoamRun app, the device's page, Device control › Pair Again… (same Wi‑Fi, iOS 27 or later).", warnOnly: true)
             case .another:
                 check(false, "Device control: what answers at the device's address isn't the device RoamRun paired with",
-                      fix: "Nothing is sent to it. If the device was erased or replaced, ask the user to pair again (the RoamRun app, the device's page); if not, something else on the network has the device's address — check the address saved for it.")
+                      fix: "It is told nothing of this Mac's and sent no input. If the device was erased or replaced, ask the user to pair again (the RoamRun app, the device's page); if not, something else on the network has the device's address — check the address saved for it.")
             case .switchedOff:
                 check(false, "Device control: switched off for this device",
                       fix: "Commands and agents are refused while its switch is off. Ask the user to switch it on: the RoamRun app, the device's page, Device control.", warnOnly: true)
