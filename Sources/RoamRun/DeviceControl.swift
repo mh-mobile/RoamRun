@@ -437,6 +437,8 @@ final class DeviceControlHub: @unchecked Sendable {
     /// process, whatever is on disk. Lowercased UDIDs, under a lock of their own: they are asked
     /// about from under `lock`.
     private var unremoved: Set<String> = []
+    /// Under the same lock: the marks of the pairings this run sealed, by lowercased UDID.
+    private var sealedMarks: [String: String] = [:]
     private let unremovedLock = NSLock()
     /// Counts the looks, over all devices: each is told apart by its number. Not from the same
     /// place at every start: a look kept from before a restart isn't taken for one made since.
@@ -458,6 +460,8 @@ final class DeviceControlHub: @unchecked Sendable {
     /// Whether commands and agents may use a pairing, named by its mark (`pairingMark`): the
     /// device's switch in the app. Asked at every request, off the main thread.
     var allowed: @Sendable (String) -> Bool = { _ in true }
+    /// The marks of the pairings in use (held, or saved for a device), every half minute.
+    var onInUse: (@Sendable (Set<String>) -> Void)?
     /// A saved pairing was written over: its mark, for the switch to drop. Not to wait in.
     var onReplaced: (@Sendable (String) -> Void)?
     /// The same as far as it is known without waiting, for saying how a device stands.
@@ -714,14 +718,29 @@ final class DeviceControlHub: @unchecked Sendable {
     /// The second step, in two parts. Sealed in the saved one's place: quick, no network and no
     /// Keychain, so that whoever saves the device can do both without letting anything in between
     /// (a device removed after it was saved and before its pairing was would leave the pairing).
-    func sealPairing(_ pairing: Data, with sealing: SymmetricKey, udid: String) throws {
+    /// Gives the mark of what it wrote — of those bytes, not of whatever is in the file a moment
+    /// later: it is this that is switched on.
+    @discardableResult
+    func sealPairing(_ pairing: Data, with sealing: SymmetricKey, udid: String) throws -> String {
         let before = Self.pairingMark(udid: udid, in: directory)
-        try Self.save(Self.seal(pairing, with: sealing), as: DeviceControlWire.pairingFile(udid: udid, in: directory))
-        unremovedLock.withLock { _ = unremoved.remove(udid.lowercased()) }
+        let sealed = try Self.seal(pairing, with: sealing)
+        let mark = SHA256.hash(data: sealed).map { String(format: "%02x", $0) }.joined()
+        try Self.save(sealed, as: DeviceControlWire.pairingFile(udid: udid, in: directory))
+        unremovedLock.withLock {
+            _ = unremoved.remove(udid.lowercased())
+            sealedMarks[udid.lowercased()] = mark
+        }
         // The pairing this took the place of may still be one the device knows (one brought in
         // has an identity of its own): it isn't left switched on for whoever kept a copy of it.
-        if let before, before != Self.pairingMark(udid: udid, in: directory) { onReplaced?(before) }
+        if let before, before != mark { onReplaced?(before) }
+        return mark
     }
+
+    /// The mark of the pairing this run last sealed under `udid`, as it wrote it.
+    func sealedMark(udid: String) -> String? { unremovedLock.withLock { sealedMarks[udid.lowercased()] } }
+
+    /// The mark of the pairing the device's session connects with: what its switch is about.
+    func mark(of id: UUID) -> String? { lock.withLock { held[id]?.mark } }
 
     /// And held from now on, connected when this returns.
     func hold(_ target: Target) {
@@ -916,7 +935,8 @@ final class DeviceControlHub: @unchecked Sendable {
         let session = open(t, { [key] in
             let sealed = try Data(contentsOf: file)
             guard SHA256.hash(data: sealed).map({ String(format: "%02x", $0) }).joined() == mark else {
-                throw DeviceSession.Failure.message("the pairing saved for this device changed: its connection is made anew")
+                // In the words of a call stopped: not a pairing to be made again (put back, it connects).
+                throw DeviceSession.Failure.message("\(DeviceSession.stopped) the pairing saved for this device changed: its connection is made anew")
             }
             return try Self.unseal(sealed, with: key(false))
         }) { [weak self] event in
@@ -971,6 +991,14 @@ final class DeviceControlHub: @unchecked Sendable {
     func renewChanged() {
         let changed = lock.withLock { held.filter { Self.pairingMark(udid: $0.value.target.udid, in: directory) != $0.value.mark }.map(\.key) }
         changed.forEach(reopen)
+        // What is in use now, for the switch to drop the rest: a mark whose pairing is nowhere
+        // (its file moved away, its device deleted meanwhile) isn't left on for when it comes back.
+        let (marks, any) = lock.withLock { () -> (Set<String>, Bool) in
+            var marks = Set(held.values.map(\.mark))
+            for t in targets { if let m = Self.pairingMark(udid: t.udid, in: directory) { marks.insert(m) } }
+            return (marks, !targets.isEmpty)
+        }
+        if any { onInUse?(marks) }   // with no devices known (a list that couldn't be read) nothing is concluded
     }
 
     private func keepOpen() {

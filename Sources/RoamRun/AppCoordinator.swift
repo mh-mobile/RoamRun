@@ -101,6 +101,7 @@ final class AppCoordinator: ObservableObject {
         // Unreadable is off, as every request finds it; not read yet is not yet known.
         deviceControl.allowedKnown = { DeviceControlAllowed.shared.known($0) ?? (DeviceControlAllowed.shared.isUnreadable ? false : nil) }
         deviceControl.onReplaced = { [switching] mark in switching.async { DeviceControlAllowed.shared.set(mark, false) } }
+        deviceControl.onInUse = { [switching] marks in switching.async { DeviceControlAllowed.shared.prune(keeping: marks) } }
         deviceControl.onImport = { [weak self] path, name, wanted in self?.importPairing(path: path, as: name, wanted: wanted) ?? .failure("stopping") }
         syncDeviceControl()
         // A screenshot run stands beside the app that is running: it takes neither its socket nor
@@ -1030,12 +1031,15 @@ final class AppCoordinator: ObservableObject {
         // The device saved and its pairing sealed in one turn of the main thread, where a device
         // is removed too: removed before, it is placed again here; removed after, its pairing is
         // there to go with it. Nothing gets in between.
+        // The mark of what was sealed, as it was written: that is switched on, not whatever is
+        // in the file once the connection has been tried.
+        nonisolated(unsafe) var sealedMark: String?
         let kept = DispatchQueue.main.sync {
             MainActor.assumeIsolated { () -> Result<DeviceProfile, DeviceControlWire.WireError> in
                 switch keep(device, udid: udid, as: name) {
                 case .failure(let why): return .failure(why)
                 case .success(let (saved, isNew)):
-                    do { try deviceControl.sealPairing(pairing, with: sealing, udid: saved.udid ?? udid) } catch {
+                    do { sealedMark = try deviceControl.sealPairing(pairing, with: sealing, udid: saved.udid ?? udid) } catch {
                         if isNew { deleteProfile(saved.id) }   // added for this alone: not left behind without it
                         return .failure(.message("\(error)"))
                     }
@@ -1054,7 +1058,8 @@ final class AppCoordinator: ObservableObject {
         // Taken in either way; a file that stays is said to (in `error`, with `ok`).
         // Brought in to be used: switched on, as one set up here is — and said when it couldn't be.
         // In its turn among the switch's writes: after the one that drops the pairing it replaced.
-        let on = switching.sync { DeviceControlHub.pairingMark(udid: saved.udid ?? udid, in: ProfileStore.directory).map { DeviceControlAllowed.shared.set($0, true) } ?? false }
+        let mark = sealedMark
+        let on = switching.sync { mark.map { DeviceControlAllowed.shared.set($0, true) } ?? false }
         let left = DeviceControlHub.removeTaken(file, readThrough: fd)
         let off = on ? nil : "device control is switched off for it (the Keychain didn't keep it switched on): the user switches it on in the RoamRun app, on the device's page"
         let said = [left, off].compactMap { $0 }
@@ -1428,31 +1433,45 @@ final class AppCoordinator: ObservableObject {
     @Published private(set) var controlPairing: ControlPairing?
 
     /// Whether commands and agents may operate the device. Off until the Keychain was read.
-    func controlAllowed(_ profile: DeviceProfile) -> Bool {
-        controlUDID(profile).flatMap { DeviceControlHub.pairingMark(udid: $0, in: ProfileStore.directory) }.flatMap(DeviceControlAllowed.shared.known) ?? false
+    /// nil: not known yet (the Keychain's list isn't read, or the device has no session).
+    /// About the pairing its session connects with — not about whatever file is under its name.
+    func controlAllowed(_ profile: DeviceProfile) -> Bool? {
+        deviceControl.mark(of: profile.id).flatMap(DeviceControlAllowed.shared.known)
     }
 
     /// The Keychain didn't give its list of what is switched on: nothing is, until it does.
     var controlListUnreadable: Bool { DeviceControlAllowed.shared.isUnreadable }
 
-    func switchControl(_ profile: DeviceProfile, _ allowed: Bool) { setControlAllowed(profile.id, udid: controlUDID(profile), allowed) }
+    /// The switch on the page: of the pairing the device's session connects with. Off, also of
+    /// whatever else goes by the device's name here.
+    func switchControl(_ profile: DeviceProfile, _ allowed: Bool) {
+        setControlAllowed(profile.id, marks: allowed ? [deviceControl.mark(of: profile.id)].compactMap { $0 } : controlMarks(profile), allowed)
+    }
+
+    /// Every mark that could be this device's pairing: its session's, what this run sealed for it, what is saved now.
+    private func controlMarks(_ profile: DeviceProfile) -> [String] {
+        let udid = controlUDID(profile)
+        return Array(Set([deviceControl.mark(of: profile.id),
+                          udid.flatMap(deviceControl.sealedMark(udid:)),
+                          udid.flatMap { DeviceControlHub.pairingMark(udid: $0, in: ProfileStore.directory) }].compactMap { $0 }))
+    }
 
     /// One at a time, in the order asked: a device set up and removed right after ends removed.
     private nonisolated let switching = DispatchQueue(label: "roamrun.device-control.switch")
 
-    /// Kept in the Keychain, which may ask and waits: off the main thread. The pairing is named
-    /// now, by what is saved now: removed right after, it is still the one meant.
-    func setControlAllowed(_ id: UUID, udid: String?, _ allowed: Bool) {
-        guard let mark = udid.flatMap({ DeviceControlHub.pairingMark(udid: $0, in: ProfileStore.directory) }) else { return }
+    /// Kept in the Keychain, which may ask and waits: off the main thread. The pairings are named
+    /// by the caller, by marks it knows — not read from the file now.
+    func setControlAllowed(_ id: UUID, marks: [String], _ allowed: Bool) {
+        guard !marks.isEmpty else { return }
         let hub = deviceControl
         // Off: from this moment, whatever the Keychain is busy with (it may be asking about
         // another device's switch): nothing more begins, and what runs stops where it can.
         if !allowed {
-            DeviceControlAllowed.shared.offNow(mark)
+            marks.forEach(DeviceControlAllowed.shared.offNow)
             hub.interrupt(id)
         }
         switching.async {
-            let kept = DeviceControlAllowed.shared.set(mark, allowed)
+            let kept = marks.map { DeviceControlAllowed.shared.set($0, allowed) }.allSatisfy { $0 }
             if !allowed { hub.interrupt(id) }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
@@ -1518,7 +1537,8 @@ final class AppCoordinator: ObservableObject {
                 let had = profiles[i!].udid
                 profiles[i!].udid = had ?? udid
                 if persist() {
-                    setControlAllowed(id, udid: udid, true)   // set up to be used: on until the user switches it off
+                    // Set up to be used: on until the user switches it off. The pairing this run sealed, as it wrote it.
+                    setControlAllowed(id, marks: [deviceControl.sealedMark(udid: udid)].compactMap { $0 }, true)
                     memories[id]?.adopt(udid)   // the running bridge's, so that what it reports later is compared with it
                     learnDeviceTypes()
                 } else {
@@ -1547,7 +1567,7 @@ final class AppCoordinator: ObservableObject {
     /// A pairing that stays on this Mac (its file can be neither removed nor emptied) is said to:
     /// it would be found again by the device added anew, after a restart.
     private func forgetControlPairing(_ profile: DeviceProfile) {
-        setControlAllowed(profile.id, udid: controlUDID(profile), false)   // named before its file goes
+        setControlAllowed(profile.id, marks: controlMarks(profile), false)   // named before its file goes
         guard let target = controlTarget(profile), deviceControl.unpair(target) == .left else { return }
         launchWarning = "The pairing for “\(profile.displayName)” couldn't be removed from this Mac: \(DeviceControlWire.pairingFile(udid: target.udid, in: ProfileStore.directory).path) still holds it, and RoamRun would use it again after it is opened anew. Delete that file, or unpair on the device (Settings › Privacy & Security › Developer Mode)."
     }

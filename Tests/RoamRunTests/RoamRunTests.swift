@@ -4314,6 +4314,10 @@ private final class StandInDevice: ControlledDevice, @unchecked Sendable {
         connectHold?.wait()
     }
     func letGo() { count("letGo") }
+    /// What the hub gave it: the pairing it would connect with, and what is asked before a call begins.
+    var pairing: (@Sendable () throws -> Data)?
+    private(set) var gated: (@Sendable () -> Bool)?
+    func gate(_ mayBegin: @escaping @Sendable () -> Bool) { gated = mayBegin }
     /// A text waits here when set, until it is interrupted.
     var typeHold: DispatchSemaphore?
     let typeBegan = DispatchSemaphore(value: 0)
@@ -4347,8 +4351,9 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1", paired: Bool = true
                         prepare: @escaping @Sendable (StandInDevice) -> Void = { _ in }) throws -> (hub: DeviceControlHub, made: () -> [StandInDevice]) {
     if paired { try scratchPairing(at: DeviceControlWire.pairingFile(udid: udid, in: dir)) }
     let made = OSAllocatedUnfairLock<[StandInDevice]>(initialState: [])
-    let hub = DeviceControlHub(directory: dir, key: { _ in scratchKey }) { _, _, _ in
+    let hub = DeviceControlHub(directory: dir, key: { _ in scratchKey }) { _, pairing, _ in
         let device = StandInDevice()
+        device.pairing = pairing
         prepare(device)
         made.withLock { $0.append(device) }
         return device
@@ -5835,6 +5840,11 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     #expect(first.contains(a) && !first.contains(b))
     #expect(first.set(b, true) && first.contains(b))
     #expect(list().contains(b))                           // kept
+    // What names no pairing in use is dropped; what does stays.
+    first.prune(keeping: [a])
+    #expect(first.contains(a) && !first.contains(b))
+    #expect(try JSONDecoder().decode(Set<String>.self, from: try #require(stored.withLock { $0 })) == [a])
+    #expect(first.set(b, true))
     // Off at once, before the Keychain is told; on again only by being switched on.
     first.offNow(b)
     #expect(!first.contains(b) && first.known(b) == false && first.contains(a))
@@ -5862,6 +5872,11 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     let unkept = list()
     #expect(!unkept.set(b, true) && !unkept.contains(b))
     #expect(!unkept.set(a, false) && !unkept.contains(a))
+    // Asked again, it is written again (the Keychain still has it): not answered as done.
+    #expect(!unkept.set(a, false))
+    writes.withLock { $0 = errSecSuccess }
+    #expect(unkept.set(a, false))
+    #expect(try JSONDecoder().decode(Set<String>.self, from: try #require(stored.withLock { $0 })) == [])
 }
 
 /// A device switched off is refused to every command, and says so when asked how it stands.
@@ -5950,7 +5965,8 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
         let id = UUID()
         hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
         let device = try #require(made().last)
-        let there = OSAllocatedUnfairLock(initialState: true)
+        let there = OSAllocatedUnfairLock(initialState: true), on = OSAllocatedUnfairLock(initialState: true)
+        hub.allowedKnown = { _ in on.withLock { $0 } }
         let answered = DispatchSemaphore(value: 0)
         Thread.detachNewThread {
             _ = hub.answer(.init(op: "type", device: id, text: "a long text"), wanted: { there.withLock { $0 } })
@@ -5958,7 +5974,8 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
         }
         device.typeBegan.wait()
         #expect(!device.calls.contains("interrupt"))
-        if leaving { there.withLock { $0 = false } } else { hub.interrupt(id) }
+        // Its asker gone — or its pairing switched off under it, as the hub comes to know it.
+        if leaving { there.withLock { $0 = false } } else { on.withLock { $0 = false } }
         #expect(answered.wait(timeout: .now() + 5) == .success)
         #expect(device.calls.contains("interrupt"))
     }
@@ -5986,11 +6003,15 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     let replaced = OSAllocatedUnfairLock<[String]>(initialState: [])
     hub.onReplaced = { mark in replaced.withLock { $0.append(mark) } }
     let old = try #require(DeviceControlHub.pairingMark(udid: "UDID-1", in: dir))
-    try hub.sealPairing(try scratchPairing(), with: scratchKey, udid: "UDID-1")
+    let written = try hub.sealPairing(try scratchPairing(), with: scratchKey, udid: "UDID-1")
     #expect(replaced.withLock { $0 } == [old])
-    #expect(DeviceControlHub.pairingMark(udid: "UDID-1", in: dir) != old)
+    // What it gives is the mark of what it wrote, and stays that whatever the file becomes.
+    #expect(written != old && DeviceControlHub.pairingMark(udid: "UDID-1", in: dir) == written)
+    try Data("another's".utf8).write(to: DeviceControlWire.pairingFile(udid: "UDID-1", in: dir))
+    #expect(hub.sealedMark(udid: "udid-1") == written && DeviceControlHub.pairingMark(udid: "UDID-1", in: dir) != written)
+    try hub.sealPairing(try scratchPairing(), with: scratchKey, udid: "UDID-1")
     try hub.sealPairing(try scratchPairing(), with: scratchKey, udid: "UDID-2")   // nothing there before: nothing replaced
-    #expect(replaced.withLock { $0 }.count == 1)
+    #expect(replaced.withLock { $0 }.count == 2)   // the first, and what was put in the file by hand
 }
 
 /// A read that failed for being told to stop isn't tried again, nor on a new connection.
@@ -6035,6 +6056,13 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     #expect(DeviceControlHub.pairingMark(udid: "UDID-A", in: dir) == b && a != b)
     #expect(hub.answer(.init(op: "press", device: id, text: "home")).error == DeviceControlHub.switchedOff)
     #expect(standing.calls.filter { $0 == "press" }.isEmpty)
+    // Nor does it connect with what is there now — said as a call stopped, not as a pairing to make again.
+    #expect { try standing.pairing?() } throws: { "\($0)".hasPrefix(DeviceSession.stopped) }
+    // And a call that got its turn on it is asked about its own pairing: still off.
+    #expect(standing.gated?() == false)
+    hub.allowed = { $0 == a }
+    #expect(standing.gated?() == true)
+    hub.allowed = { $0 == b }
     // Found out by itself (every half minute), as when the list is saved again: A's session is
     // let go of, and a new one stands for the pairing that is there now.
     hub.renewChanged()

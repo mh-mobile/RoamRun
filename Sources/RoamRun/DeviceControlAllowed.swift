@@ -16,6 +16,8 @@ final class DeviceControlAllowed: @unchecked Sendable {
     private var unreadable = false
     /// Switched off here and now, whatever the Keychain has been told yet (it may be busy, or asking).
     private var off: Set<String> = []
+    /// The Keychain has something else than `held` (a write that failed): written at the next chance.
+    private var unwritten = false
     /// One call to the Keychain at a time.
     private let io = NSLock()
     private let read: () -> (OSStatus, Data?)
@@ -56,7 +58,10 @@ final class DeviceControlAllowed: @unchecked Sendable {
     }
 
     @Sendable func contains(_ mark: String) -> Bool {
-        guard !lock.withLock({ off.contains(mark) }) else { return false }
+        // Known already: answered without waiting behind a write for another device.
+        let (isOff, known) = lock.withLock { (off.contains(mark), held) }
+        if isOff { return false }
+        if let known { return known.contains(mark) }
         return io.withLock { list(again: false)?.contains(mark) ?? false } && !lock.withLock { off.contains(mark) }
     }
 
@@ -69,6 +74,17 @@ final class DeviceControlAllowed: @unchecked Sendable {
     /// The Keychain's list couldn't be read: nothing is on, and nothing can be switched until it can.
     var isUnreadable: Bool { lock.withLock { unreadable } }
 
+    /// Drops what names no pairing in use: a mark is only as good as the pairing it was made for.
+    func prune(keeping inUse: Set<String>) {
+        io.withLock {
+            guard let now = list(again: false) else { return }
+            let next = now.intersection(inUse)
+            guard next != now else { return }
+            let kept = (try? JSONEncoder().encode(next)).map { write($0) == errSecSuccess } ?? false
+            lock.withLock { held = next; unwritten = unwritten || !kept }
+        }
+    }
+
     /// Whether it was written. Not written, it isn't switched on (after a restart it would be off
     /// again unsaid); it is switched off here all the same, and is on again after a restart —
     /// which the caller says. A list that can't be read isn't written over.
@@ -79,7 +95,7 @@ final class DeviceControlAllowed: @unchecked Sendable {
             guard var next = list(again: true) else { return false }
             let was = next
             if allowed { next.insert(mark) } else { next.remove(mark) }
-            guard next != was else {
+            guard next != was || lock.withLock({ unwritten }) else {
                 if allowed { lock.withLock { _ = off.remove(mark) } }
                 return true
             }
@@ -87,6 +103,7 @@ final class DeviceControlAllowed: @unchecked Sendable {
             lock.withLock {
                 if kept || !allowed { held = next }
                 if kept, allowed { off.remove(mark) }
+                unwritten = !kept
             }
             return kept
         }

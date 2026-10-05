@@ -375,8 +375,9 @@ private struct DeviceControlRow: View {
             if state.paired {
                 // Off: every command and agent is refused, whichever asks. Kept in the Keychain,
                 // where another program can't switch it back on.
-                Toggle("On", isOn: Binding(get: { allowed }, set: { coordinator.switchControl(profile, $0) }))
+                Toggle("On", isOn: Binding(get: { allowed == true }, set: { coordinator.switchControl(profile, $0) }))
                     .toggleStyle(.switch).controlSize(.small).labelsHidden()
+                    .disabled(allowed == nil && !coordinator.controlListUnreadable)   // not known yet
                     .help("While off, no command or agent can see or operate this device")
             }
             if state.paired {
@@ -386,12 +387,14 @@ private struct DeviceControlRow: View {
         }
     }
 
-    private func summary(_ state: (paired: Bool, open: Bool, refused: Bool), allowed: Bool) -> String {
+    private func summary(_ state: (paired: Bool, open: Bool, refused: Bool), allowed known: Bool?) -> String {
+        let allowed = known == true
         if !state.paired { return "Lets agents see and operate this device (roamrun look, tap, mcp). Needs iOS 27 and a pairing of RoamRun's own." }
         if state.refused { return "This pairing can no longer be used: it was removed on the device, was made before RoamRun kept the device's key with it, or this Mac can't read what it saved. Pair again." }
         if coordinator.controlAnother(profile) {
             return "What answers at this device's address isn't the device this pairing was made with, so it is told nothing of this Mac's and sent no input. If the device was erased or replaced, pair again; if not, something else has its address."
         }
+        if known == nil, !coordinator.controlListUnreadable { return "Paired. Looking up whether it is switched on…" }
         if !allowed, coordinator.controlListUnreadable {
             return "Paired, off: the Keychain didn't give RoamRun its list of devices switched on. Switch it on to be asked again."
         }
@@ -425,6 +428,8 @@ private struct ControlPairingSheet: View {
                 ProgressView("Checking the connection…")
             case .done(_, nil):
                 Label("Device control is set up.", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                Text("It is switched on: commands and agents can use this device until you switch it off, on its page.")
+                    .font(.callout).foregroundStyle(.secondary)
             case .done(_, let why?):
                 Label("Paired. The device can't be reached over the VPN right now, so device control connects when it can.",
                       systemImage: "checkmark.circle").foregroundStyle(.green)

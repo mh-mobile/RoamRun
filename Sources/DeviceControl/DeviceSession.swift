@@ -221,7 +221,8 @@ public final class DeviceSession: @unchecked Sendable {
         var error: UnsafeMutablePointer<CChar>?
         let pairing: Data
         do { pairing = try self.pairing() } catch {
-            refused = true   // trying again reads the same
+            // Trying again reads the same — unless it was only told to stop (its file is another's for now).
+            refused = !"\(error)".hasPrefix(Self.stopped)
             throw error
         }
         guard let opened = pairing.withUnsafeBytes({ rr_device_open(ip, port, $0.bindMemory(to: UInt8.self).baseAddress, $0.count, &error) }) else {
