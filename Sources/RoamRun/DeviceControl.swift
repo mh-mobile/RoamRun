@@ -32,6 +32,8 @@ enum DeviceControlWire {
         var open: Bool?
         /// For "state": the device no longer knows the pairing (it was removed there).
         var refused: Bool?
+        /// For "import": what the device is saved as here.
+        var name: String?
         static func failure(_ why: String) -> Response { Response(ok: false, error: why) }
     }
 
@@ -194,6 +196,22 @@ enum DeviceControlWire {
     }
 }
 
+/// A pairing made for another Mac, with the device it is for: what `roamrun pairing create`
+/// writes and `pairing import` takes. The file is the key: whoever has it and reaches the device
+/// can see and operate it.
+struct SharedPairing: Codable, Equatable {
+    var roamrunPairing = 1
+    var device: DeviceProfile
+    /// The pairing itself, a property list's text.
+    var pairing: String
+
+    static func read(_ data: Data) -> SharedPairing? {
+        guard let read = try? JSONDecoder().decode(SharedPairing.self, from: data), read.roamrunPairing == 1,
+              !read.pairing.isEmpty, read.device.udid?.isEmpty == false else { return nil }
+        return read
+    }
+}
+
 /// What the hub does with a device: a `DeviceSession`, or a stand-in for one in tests.
 protocol ControlledDevice: AnyObject, Sendable {
     var isOpen: Bool { get }
@@ -272,6 +290,9 @@ final class DeviceControlHub: @unchecked Sendable {
     var onLog: (@Sendable (String, UUID) -> Void)?
     /// A background attempt to open a device's connection failed, and why.
     var onUnreached: (@Sendable (UUID, String) -> Void)?
+    /// A pairing made on another Mac is brought in (the file's path): the app's to do, which
+    /// knows the saved devices.
+    var onImport: (@Sendable (String, String?) -> DeviceControlWire.Response)?
 
     private let open: Opener
     private let key: Key
@@ -440,6 +461,21 @@ final class DeviceControlHub: @unchecked Sendable {
                 step(.failed("\(error)"))
             }
         }
+    }
+
+    /// Takes a pairing made elsewhere for this device: kept only if it opens a connection, and
+    /// sealed with this Mac's key, which is had first.
+    func adoptPairing(_ pairing: Data, for target: Target) throws {
+        let sealing = try key(true)
+        let check = open(target, { pairing }) { _ in }
+        defer { check.close() }
+        do { try check.connect() } catch {
+            throw DeviceSession.Failure.message("this pairing opens no connection to “\(target.name)” at \(target.ip) (\(error)). Nothing was saved.")
+        }
+        try Self.save(Self.seal(pairing, with: sealing), as: DeviceControlWire.pairingFile(udid: target.udid, in: directory))
+        lock.withLock { targets.removeAll { $0.id == target.id }; targets.append(target) }
+        reopen(target.id)
+        onLog?("device control: a pairing made on another Mac was taken in", target.id)
     }
 
     /// Removes the pairing saved under `udid`, held or not: one made for a device that turned
@@ -633,6 +669,9 @@ final class DeviceControlHub: @unchecked Sendable {
 
     func answer(_ request: DeviceControlWire.Request) -> DeviceControlWire.Response {
         let notSetUp = DeviceControlWire.Response.failure("device control isn't set up for this device: the user sets it up in the RoamRun app, on the device's page")
+        if request.op == "import" {
+            return onImport?(request.path ?? "", request.text) ?? .failure("this RoamRun can't take a pairing in")
+        }
         // How it stands is said at once, whatever runs on the device.
         if request.op == "state" {
             guard let h = lock.withLock({ held[request.device] }) else { return notSetUp }

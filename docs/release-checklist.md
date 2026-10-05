@@ -19,7 +19,7 @@ On top, by what the release changed:
 | Home detection, Local Network | 11 |
 | `roamrun ota`, the OTA server or `tailscale serve` | 15 |
 | Pausing on cellular, sleep and wake | 16, 17, 18 |
-| Device control, its library (`Rust/RoamRunDevice`), `idevice`'s version, the Keychain | 19-24 |
+| Device control, its library (`Rust/RoamRunDevice`), `idevice`'s version, the Keychain | 19-25 |
 | Windows, menus, accessibility | UI at scale and for everyone |
 
 `scripts/release-check.sh <name> <bundle id>` runs items 1-3, 5, the CLI half of 6, and 8
@@ -126,6 +126,12 @@ tunnel and Xcode has to run again.
 23. Remove RoamRun's entry on the device: `roamrun status <name>` and the page say the
     pairing can no longer be used and offer **Pair Again…**, which works.
 24. **Remove Device**: its `.sealed` file is gone.
+25. `roamrun pairing create <name> /tmp/k.json --as "RoamRun (check)"`, the code entered on the
+    device: the file is written (0600) and the device lists "RoamRun (check)" beside this
+    Mac's own entry. On another Mac that reaches the device (or a macOS VM on the tailnet):
+    `roamrun pairing import k.json` → the device is in `roamrun devices`, `look` works, the
+    file is gone. Remove "RoamRun (check)" on the device: that Mac's `status` says the pairing
+    can no longer be used, and this Mac's still connects.
 
 ## Install paths
 

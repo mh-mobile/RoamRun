@@ -4560,6 +4560,81 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
     #expect(hub.state(of: id, udid: "UDID-1") == (true, false, true))
 }
 
+/// A pairing made on another Mac is kept only if it opens a connection, and then as this Mac
+/// keeps its own: sealed with its key, and held from then on.
+@Test func aPairingMadeElsewhereIsTakenInOnlyIfItConnects() throws {
+    final class Unreachable: ControlledDevice, @unchecked Sendable {
+        var isOpen: Bool { false }
+        var isRefused: Bool { false }
+        func connect() throws { throw DeviceSession.Failure.message("no route") }
+        func close() {}
+        func look() throws -> CGImage { throw DeviceSession.Failure.message("no") }
+        func elements(limit: Int) throws -> (captions: [String], complete: Bool) { ([], true) }
+        func tap(x: Double, y: Double) throws {}
+        func swipe(from: (x: Double, y: Double), to: (x: Double, y: Double), milliseconds: Int) throws {}
+        func type(_ text: String) throws {}
+        func paste(_ text: String) throws {}
+        func press(_ button: String) throws {}
+    }
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let pairing = try scratchPairing()
+    let target = DeviceControlHub.Target(id: UUID(), name: "iPhone", ip: "100.64.0.1", port: 49152, udid: "UDID-9")
+    let file = DeviceControlWire.pairingFile(udid: "UDID-9", in: dir)
+
+    let away = DeviceControlHub(directory: dir, key: { _ in scratchKey }) { _, _, _ in Unreachable() }
+    defer { away.stop() }
+    #expect(throws: (any Error).self) { try away.adoptPairing(pairing, for: target) }
+    #expect(!FileManager.default.fileExists(atPath: file.path))
+    #expect(away.session(of: target.id) == nil)
+
+    // Checked with the pairing that came, not with one read back.
+    let given = OSAllocatedUnfairLock<[Data]>(initialState: [])
+    let hub = DeviceControlHub(directory: dir, key: { _ in scratchKey }) { _, read, _ in
+        if let data = try? read() { given.withLock { $0.append(data) } }
+        return StandInDevice()
+    }
+    defer { hub.stop() }
+    try hub.adoptPairing(pairing, for: target)
+    #expect(given.withLock { $0.first } == pairing)
+    #expect(try DeviceControlHub.unseal(Data(contentsOf: file), with: scratchKey) == pairing)
+    #expect(hub.session(of: target.id) != nil)
+    #expect(hub.state(of: target.id, udid: "UDID-9").paired)
+
+    // A key the Keychain won't give: nothing is tried, nothing saved.
+    let other = DeviceControlHub.Target(id: UUID(), name: "iPad", ip: "100.64.0.2", port: 49152, udid: "UDID-8")
+    let keyless = DeviceControlHub(directory: dir, key: { _ in throw DeviceSession.Failure.message("refused") }) { _, _, _ in StandInDevice() }
+    defer { keyless.stop() }
+    #expect(throws: (any Error).self) { try keyless.adoptPairing(pairing, for: other) }
+    #expect(!FileManager.default.fileExists(atPath: DeviceControlWire.pairingFile(udid: "UDID-8", in: dir).path))
+}
+
+/// The file a pairing travels in holds the device with it, and is read only as that.
+@Test func aSharedPairingIsReadOnlyAsOne() throws {
+    var device = DeviceProfile(displayName: "iPhone", instanceName: "abc", serviceType: "_remotepairing._tcp", domain: "local.",
+                               remotePairingPort: 49152, bonjourHost: "x.local.", txt: ["a": "b"],
+                               providerID: "tailscale", providerHostName: "iphone", providerIP: "100.64.0.1")
+    device.udid = "UDID-9"
+    let shared = SharedPairing(device: device, pairing: "<plist/>")
+    let data = try JSONEncoder().encode(shared)
+    #expect(SharedPairing.read(data) == shared)
+    #expect(SharedPairing.read(Data("<plist/>".utf8)) == nil)                                    // a bare pairing
+    #expect(SharedPairing.read(try JSONEncoder().encode(device)) == nil)                         // a device alone
+    var nameless = shared; nameless.device.udid = nil
+    #expect(SharedPairing.read(try JSONEncoder().encode(nameless)) == nil)                       // nothing to name the pairing by
+    var empty = shared; empty.pairing = ""
+    #expect(SharedPairing.read(try JSONEncoder().encode(empty)) == nil)
+    var later = shared; later.roamrunPairing = 2
+    #expect(SharedPairing.read(try JSONEncoder().encode(later)) == nil)                          // a form this RoamRun doesn't know
+}
+
+/// `pairing` takes a word that says what to do, not a device's name first.
+@Test func pairingCommandsParse() throws {
+    #expect(try CLI.parse(["pairing", "create", "iPhone", "/tmp/k.json", "--as", "RoamRun (cloud)"]).get().values["--as"] == "RoamRun (cloud)")
+    #expect(try CLI.parse(["pairing", "import", "/tmp/k.json", "--as=Phone"]).get().words == ["import", "/tmp/k.json"])
+    #expect(throws: (any Error).self) { try CLI.parse(["pairing", "create", "a", "b", "c", "d"]).get() }
+}
+
 /// What a build before the sealing left as it was is removed when the app starts: each holds a
 /// private key the device may still take. Nothing else in the folder is touched.
 @Test func pairingsLeftUnsealedAreRemoved() throws {
