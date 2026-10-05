@@ -5824,6 +5824,11 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     #expect(first.contains(a) && !first.contains(b))
     #expect(first.set(b, true) && first.contains(b))
     #expect(list().contains(b))                           // kept
+    // Off at once, before the Keychain is told; on again only by being switched on.
+    first.offNow(b)
+    #expect(!first.contains(b) && first.known(b) == false && first.contains(a))
+    #expect(first.set(b, false) && !first.contains(b))
+    #expect(first.set(b, true) && first.contains(b) && first.known(b) == true)
     // Refused: nobody is on, it is said, and switching writes nothing over what is there.
     reads.withLock { $0 = errSecAuthFailed }
     let refused = list()
@@ -5995,4 +6000,64 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
         }, pause: {}, reopen: { reopened += 1; return true })
     }
     #expect(attempts == 3 && reopened == 1)
+}
+
+/// The switch is asked about the pairing a session connects with: a file put in its place — the
+/// sealed pairing of a device that is on — doesn't make the session that stands usable under it.
+@Test func aSessionIsOnlyAsAllowedAsThePairingItWasMadeFor() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (hub, made) = try standInHub(dir, udid: "UDID-A")
+    defer { hub.stop() }
+    try scratchPairing(at: DeviceControlWire.pairingFile(udid: "UDID-B", in: dir))
+    let a = try #require(DeviceControlHub.pairingMark(udid: "UDID-A", in: dir))
+    let b = try #require(DeviceControlHub.pairingMark(udid: "UDID-B", in: dir))
+    hub.allowed = { $0 == b }   // A is off, B is on
+    let id = UUID()
+    let target = DeviceControlHub.Target(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-A")
+    hub.update([target])
+    let standing = try #require(made().last)
+    #expect(hub.answer(.init(op: "press", device: id, text: "home")).error == DeviceControlHub.switchedOff)
+    // B's sealed file under A's name: the session that stands is still A's, and still off.
+    try FileManager.default.removeItem(at: DeviceControlWire.pairingFile(udid: "UDID-A", in: dir))
+    try FileManager.default.copyItem(at: DeviceControlWire.pairingFile(udid: "UDID-B", in: dir), to: DeviceControlWire.pairingFile(udid: "UDID-A", in: dir))
+    #expect(DeviceControlHub.pairingMark(udid: "UDID-A", in: dir) == b && a != b)
+    #expect(hub.answer(.init(op: "press", device: id, text: "home")).error == DeviceControlHub.switchedOff)
+    #expect(standing.calls.filter { $0 == "press" }.isEmpty)
+    // The list saved again: A's session is let go of, and a new one stands for the pairing that is there now.
+    hub.update([target])
+    #expect(standing.calls.contains("letGo"))
+    #expect(made().count == 2 && made().last !== standing)
+}
+
+/// A pairing cancelled after it was saved takes only what it saved with it: one brought in over
+/// it meanwhile stays.
+@Test func aCancelledPairingRemovesOnlyWhatItSaved() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let hold = DispatchSemaphore(value: 0), began = DispatchSemaphore(value: 0)
+    let (hub, _) = try standInHub(dir, paired: false) { device in
+        device.connectHold = hold
+        Thread.detachNewThread { device.connectBegan.wait(); began.signal() }
+    }
+    defer { hub.stop() }
+    let request = DeviceControlHub.PairingRequest(id: UUID(), name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1", others: [])
+    let listener = StandInPairing(), attempt = UUID()
+    hub.listening = { _, _ in listener }
+    let ended = DispatchSemaphore(value: 0)
+    hub.pair(request, as: "x", attempt: attempt) { step in
+        switch step { case .done, .failed: ended.signal(); default: break }
+    }
+    listener.waiting.wait()
+    listener.pairNow()
+    began.wait()
+    let saved = try #require(DeviceControlHub.pairingMark(udid: "UDID-1", in: dir))
+    try hub.sealPairing(try scratchPairing(), with: scratchKey, udid: "UDID-1")   // another, brought in meanwhile
+    let brought = try #require(DeviceControlHub.pairingMark(udid: "UDID-1", in: dir))
+    #expect(brought != saved)
+    hub.cancelPairing(attempt)
+    #expect(DeviceControlHub.pairingMark(udid: "UDID-1", in: dir) == brought)
+    for _ in 0..<8 { hold.signal() }
+    ended.wait()
+    #expect(DeviceControlHub.pairingMark(udid: "UDID-1", in: dir) == brought)
 }

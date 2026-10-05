@@ -14,6 +14,8 @@ final class DeviceControlAllowed: @unchecked Sendable {
     private let lock = NSLock()
     private var held: Set<String>?
     private var unreadable = false
+    /// Switched off here and now, whatever the Keychain has been told yet (it may be busy, or asking).
+    private var off: Set<String> = []
     /// One call to the Keychain at a time.
     private let io = NSLock()
     private let read: () -> (OSStatus, Data?)
@@ -53,10 +55,16 @@ final class DeviceControlAllowed: @unchecked Sendable {
         return found
     }
 
-    @Sendable func contains(_ mark: String) -> Bool { io.withLock { list(again: false)?.contains(mark) ?? false } }
+    @Sendable func contains(_ mark: String) -> Bool {
+        guard !lock.withLock({ off.contains(mark) }) else { return false }
+        return io.withLock { list(again: false)?.contains(mark) ?? false } && !lock.withLock { off.contains(mark) }
+    }
 
     /// As far as it has been read; nil before that, and when it couldn't be. Never waits.
-    @Sendable func known(_ mark: String) -> Bool? { lock.withLock { held?.contains(mark) } }
+    @Sendable func known(_ mark: String) -> Bool? { lock.withLock { off.contains(mark) ? false : held?.contains(mark) } }
+
+    /// Off from this moment, before the Keychain is told (`set` follows): never waits.
+    func offNow(_ mark: String) { lock.withLock { _ = off.insert(mark) } }
 
     /// The Keychain's list couldn't be read: nothing is on, and nothing can be switched until it can.
     var isUnreadable: Bool { lock.withLock { unreadable } }
@@ -66,13 +74,20 @@ final class DeviceControlAllowed: @unchecked Sendable {
     /// which the caller says. A list that can't be read isn't written over.
     @discardableResult
     func set(_ mark: String, _ allowed: Bool) -> Bool {
-        io.withLock {
+        if !allowed { offNow(mark) }
+        return io.withLock {
             guard var next = list(again: true) else { return false }
             let was = next
             if allowed { next.insert(mark) } else { next.remove(mark) }
-            guard next != was else { return true }
+            guard next != was else {
+                if allowed { lock.withLock { _ = off.remove(mark) } }
+                return true
+            }
             let kept = (try? JSONEncoder().encode(next)).map { write($0) == errSecSuccess } ?? false
-            if kept || !allowed { lock.withLock { held = next } }
+            lock.withLock {
+                if kept || !allowed { held = next }
+                if kept, allowed { off.remove(mark) }
+            }
             return kept
         }
     }

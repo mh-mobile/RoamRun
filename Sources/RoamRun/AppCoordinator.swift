@@ -1445,10 +1445,13 @@ final class AppCoordinator: ObservableObject {
     func setControlAllowed(_ id: UUID, udid: String?, _ allowed: Bool) {
         guard let mark = udid.flatMap({ DeviceControlHub.pairingMark(udid: $0, in: ProfileStore.directory) }) else { return }
         let hub = deviceControl
+        // Off: from this moment, whatever the Keychain is busy with (it may be asking about
+        // another device's switch): nothing more begins, and what runs stops where it can.
+        if !allowed {
+            DeviceControlAllowed.shared.offNow(mark)
+            hub.interrupt(id)
+        }
         switching.async {
-            // Off: what the device is doing for someone now stops where it can — at once, and
-            // again once the Keychain (which may ask, and wait) has it.
-            if !allowed { hub.interrupt(id) }
             let kept = DeviceControlAllowed.shared.set(mark, allowed)
             if !allowed { hub.interrupt(id) }
             DispatchQueue.main.async {

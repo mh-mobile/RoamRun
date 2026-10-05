@@ -110,6 +110,10 @@ public final class DeviceSession: @unchecked Sendable {
     /// step); the device is kept. For a switch turned off, or an asker who left.
     public func interrupt() { rr_flag_raise(stopping) }
 
+    /// Asked when a call has its turn (the lock had, the connection open), before it begins.
+    private var mayBegin: (@Sendable () -> Bool)?
+    public func gate(_ mayBegin: @escaping @Sendable () -> Bool) { standingLock.withLock { self.mayBegin = mayBegin } }
+
     private static let replaced = Failure.message("this connection was closed (the device has a new one): look again")
 
     /// As of the last call that finished; never waits for one that runs.
@@ -268,7 +272,10 @@ public final class DeviceSession: @unchecked Sendable {
         try Recovery.run(repeatable: repeatable, attempt: {
             do {
                 // Let go of while this waited (for the connection, or to try again): not begun.
-                guard !standingLock.withLock({ leaving }) else { throw Self.replaced }
+                let (leaving, mayBegin) = standingLock.withLock { (leaving, mayBegin) }
+                guard !leaving else { throw Self.replaced }
+                // Switched off while this waited its turn: a stop asked then was for this call too.
+                guard mayBegin?() ?? true else { throw Failure.message("\(Self.stopped) its device was switched off before it began") }
                 return try body(device!)
             } catch {
                 onEvent?("failed: \(error)")
