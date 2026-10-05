@@ -1030,19 +1030,21 @@ async fn start_stream(link: &mut Link) -> Result<Stream, String> {
     let offer = build_screen_audio_offer(&call(), &call_info()).map_err(|e| format!("audio offer: {e:?}"))?;
     // Each start has its own limit, well inside a call's: one that stalls (they have) ends here,
     // where the half that did start is stopped, and not at the call's deadline, where it isn't.
-    tokio::time::timeout(STREAM_START, display.start_media_stream(build_start_audio_parameters(&ours, audio.local_port(), &theirs, 50000, offer, SUPPORTED_FEATURES, session)))
-        .await.map_err(|_| "audio start: no answer".to_string())?.map_err(|e| format!("audio start: {e:?}"))?;
+    let audio_started = match tokio::time::timeout(STREAM_START, display.start_media_stream(build_start_audio_parameters(&ours, audio.local_port(), &theirs, 50000, offer, SUPPORTED_FEATURES, session))).await {
+        Ok(started) => started.map_err(|e| format!("audio start: {e:?}")),
+        Err(_) => Err("audio start: no answer".to_string()),
+    };
     let ssrc = uuid::Uuid::new_v4().as_u128() as u32;
-    let video_started = match build_screen_video_offer(&call(), &call_info(), ssrc) {
+    let video_started = match audio_started.and_then(|_| build_screen_video_offer(&call(), &call_info(), ssrc).map_err(|e| format!("video offer: {e:?}"))) {
         Ok(offer) => match tokio::time::timeout(STREAM_START, display.start_media_stream(build_start_video_parameters(&ours, video.local_port(), &theirs, VIDEO_SENDER_PORT, offer, SUPPORTED_FEATURES, 1, session))).await {
             Ok(started) => started.map_err(|e| format!("video start: {e:?}")),
             Err(_) => Err("video start: no answer".into()),
         },
-        Err(e) => Err(format!("video offer: {e:?}")),
+        Err(why) => Err(why),
     };
     let mut stream = Stream { display, video, audio, ssrc, media: None, feedback_port: None, requests: 0, keyframe_at: Instant::now() };
     if let Err(why) = video_started {
-        // The sound's half did start: it is ended, not left running on the device.
+        // The sound's half did start, or may have (no answer isn't no): it is ended, not left running on the device.
         stream.stop().await;
         link.stream_stopped = Some(Instant::now());
         return Err(why);

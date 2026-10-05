@@ -116,7 +116,11 @@ final class DeviceControlAllowed: @unchecked Sendable {
     /// caller says. A list that can't be read isn't written over, and has no such next chance.
     @discardableResult
     func set(_ mark: String, _ allowed: Bool, asked when: UInt64? = nil) -> Bool {
-        if !allowed { offNow(mark) }
+        // Off from now — said now, when nobody said when: said earlier (the page), it is that
+        // moment that counts, or a switch-on asked since would be taken for the older of the two.
+        if !allowed {
+            if when == nil { offNow(mark) } else { lock.withLock { _ = off.insert(mark) } }
+        }
         let when = when ?? now()
         /// Switched off since this switch-on was asked: the off stands.
         func overtaken() -> Bool { allowed && (offAt[mark] ?? 0) > when }

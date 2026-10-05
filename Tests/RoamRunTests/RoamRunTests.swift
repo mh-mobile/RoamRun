@@ -5850,6 +5850,10 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     #expect(!first.contains(b) && first.known(b) == false && first.contains(a))
     #expect(first.set(b, false) && !first.contains(b))
     #expect(first.set(b, true) && first.contains(b) && first.known(b) == true)
+    // Off, then on, both asked before either was written: the later one stands.
+    first.offNow(b)
+    let offAsked = first.now(), onAsked = first.now()
+    #expect(first.set(b, false, asked: offAsked) && first.set(b, true, asked: onAsked) && first.contains(b))
     // A switch-on that waited its turn doesn't undo an off asked after it was.
     let waiting = first.now()
     first.offNow("mark-late")
@@ -6133,11 +6137,17 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     let id = UUID()
     hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-A")])
     #expect(hub.heldMarks() == [a] && changes.withLock { $0 } == 1)
+    // Not readable for the moment (no leave to open it) isn't gone: the session and its mark stay.
+    #expect(chmod(DeviceControlWire.pairingFile(udid: "UDID-A", in: dir).path, 0o000) == 0)
+    hub.renewChanged()
+    hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-A")])
+    #expect(hub.heldMarks() == [a])
+    #expect(chmod(DeviceControlWire.pairingFile(udid: "UDID-A", in: dir).path, 0o600) == 0)
     // Parked under a name no device has: still a sealed pairing in the folder, held by nobody.
     let file = DeviceControlWire.pairingFile(udid: "UDID-A", in: dir), parked = dir.appendingPathComponent("device-pairing-parked.sealed")
     try FileManager.default.moveItem(at: file, to: parked)
     hub.renewChanged()
-    #expect(hub.heldMarks().isEmpty && changes.withLock { $0 } >= 2)
+    #expect(hub.heldMarks() == [] && changes.withLock { $0 } >= 2)
     // Put back: a session again, for the switch to be about (it was dropped meanwhile).
     try FileManager.default.moveItem(at: parked, to: file)
     hub.renewChanged()
@@ -6147,7 +6157,10 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     #expect(DeviceControlHub.pairingMark(udid: "UDID-B", in: dir) != a)
     // Gone from the list: held by none.
     hub.update([])
-    #expect(hub.heldMarks().isEmpty)
+    #expect(hub.heldMarks() == [])
+    // Stopped: nothing is held any more, and that is not what the switch is cut down to.
+    hub.stop()
+    #expect(hub.heldMarks() == nil)
 }
 
 /// A sealed pairing is read only as the small file of its own it is: a link, a pipe or something

@@ -110,15 +110,21 @@ enum DeviceControlWire {
     /// A sealed pairing as it is on disk — read as the small file of its own it is: not through
     /// a link, not from a pipe or a device (reading those would wait), and no more than a
     /// pairing can be. nil for anything else: it is read while the hub's lock is held.
-    static func sealedBytes(_ file: URL) -> Data? {
+    static func sealedBytes(_ file: URL) -> Data? { sealedRead(file).bytes }
+
+    /// The same, saying whether it is known what is there. Not known (it couldn't be opened or
+    /// read for a reason of the moment — too many files open, an interrupt): not the same as
+    /// gone, and nothing is concluded from it.
+    static func sealedRead(_ file: URL) -> (bytes: Data?, known: Bool) {
         let fd = open(file.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
-        guard fd >= 0 else { return nil }
+        guard fd >= 0 else { return (nil, [ENOENT, ELOOP, ENOTDIR].contains(errno)) }
         defer { close(fd) }
         var s = stat()
-        guard fstat(fd, &s) == 0, s.st_mode & S_IFMT == S_IFREG, s.st_size < 1 << 20 else { return nil }
+        guard fstat(fd, &s) == 0 else { return (nil, false) }
+        guard s.st_mode & S_IFMT == S_IFREG, s.st_size < 1 << 20 else { return (nil, true) }
         var data = Data(count: Int(s.st_size))
         let got = data.withUnsafeMutableBytes { pread(fd, $0.baseAddress, $0.count, 0) }
-        return got == data.count ? data : nil
+        return got == data.count ? (data, true) : (nil, false)
     }
 
     /// What a sealed pairing is known by to the switch: a digest of the UDID it is saved under
@@ -463,6 +469,8 @@ final class DeviceControlHub: @unchecked Sendable {
     private var unremoved: Set<String> = []
     /// Under the same lock: the marks of the pairings this run sealed, by lowercased UDID.
     private var sealedMarks: [String: String] = [:]
+    /// Under `lock`: stopped, for good.
+    private var stopped = false
     private let unremovedLock = NSLock()
     /// Counts the looks, over all devices: each is told apart by its number. Not from the same
     /// place at every start: a look kept from before a restart isn't taken for one made since.
@@ -502,7 +510,16 @@ final class DeviceControlHub: @unchecked Sendable {
     /// The marks the sessions that stand connect with: what the switch may keep. A pairing no
     /// session holds (its file moved away, its device gone from the list, another put in its
     /// place) loses its switch — it isn't found on when it is brought back.
-    func heldMarks() -> Set<String> { lock.withLock { Set(held.values.map(\.mark)) } }
+    /// nil once this was stopped: at the end nothing is held, and that isn't what the switch goes by.
+    func heldMarks() -> Set<String>? { lock.withLock { stopped ? nil : Set(held.values.map(\.mark)) } }
+
+    /// Whether the pairing saved for `udid` is another than `mark` by now (or gone). nil: it
+    /// couldn't be read just now, and isn't taken for changed.
+    private func changed(from mark: String, udid: String) -> Bool? {
+        let read = DeviceControlWire.sealedRead(DeviceControlWire.pairingFile(udid: udid, in: directory))
+        guard read.known else { return nil }
+        return read.bytes.flatMap { $0.isEmpty ? nil : DeviceControlWire.mark(of: $0, udid: udid) } != mark
+    }
 
     /// The call a device is busy with stops where it can: its switch was turned off.
     func interrupt(_ id: UUID) { session(of: id)?.interrupt() }
@@ -550,7 +567,8 @@ final class DeviceControlHub: @unchecked Sendable {
                 // A device renamed keeps its connection (away from Wi‑Fi no new one could be made);
                 // one moved to another address, removed or unpaired doesn't.
                 // …nor one whose saved pairing is another than its session's by now.
-                if let t = saved[id], t.reaches(h.target), hasPairing(t), Self.pairingMark(udid: t.udid, in: directory) == h.mark {
+                if let t = saved[id], t.reaches(h.target), !unremovedLock.withLock({ unremoved.contains(t.udid.lowercased()) }),
+                   changed(from: h.mark, udid: t.udid) != true {
                     held[id]?.target = t
                 } else {
                     gone.append(h.session)
@@ -868,8 +886,9 @@ final class DeviceControlHub: @unchecked Sendable {
     /// moved, so a write that fails leaves what was there. The one it replaces is of no use any
     /// more (the device knows this Mac by one identity, and now by the new key).
     static func save(_ sealed: Data, as file: URL) throws {
-        let beside = file.appendingPathExtension("writing")
-        try? FileManager.default.removeItem(at: beside)
+        // A name of its own: two savings for one device at the same instant (one brought in, one
+        // set up) each rename their own bytes, and each knows the mark of what it wrote.
+        let beside = file.appendingPathExtension("writing-\(UUID().uuidString)")
         guard FileManager.default.createFile(atPath: beside.path, contents: sealed, attributes: [.posixPermissions: 0o600]),
               rename(beside.path, file.path) == 0 else {
             let why = String(cString: strerror(errno))
@@ -918,7 +937,7 @@ final class DeviceControlHub: @unchecked Sendable {
     /// each holds a private key the device may still take, and nothing reads them any more.
     static func removeUnsealed(in directory: URL) {
         for name in (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
-        where name.hasPrefix("device-pairing-") && (name.hasSuffix(".plist") || name.hasSuffix(".plist.previous")) {
+        where name.hasPrefix("device-pairing-") && (name.hasSuffix(".plist") || name.hasSuffix(".plist.previous") || name.contains(".sealed.writing")) {
             try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))
         }
     }
@@ -1002,6 +1021,7 @@ final class DeviceControlHub: @unchecked Sendable {
         listener?.stop()
         let sessions = lock.withLock { () -> [any ControlledDevice] in
             defer { held = [:] }
+            stopped = true
             return held.values.map(\.session)
         }
         // Each is told to end its stream, but quitting doesn't wait on a device that no longer answers.
@@ -1022,7 +1042,7 @@ final class DeviceControlHub: @unchecked Sendable {
         // …and a device whose pairing appeared since (put back, or brought in by hand) gets one:
         // without it there is nothing its switch could be about.
         let changed = lock.withLock { () -> [UUID] in
-            held.filter { Self.pairingMark(udid: $0.value.target.udid, in: directory) != $0.value.mark }.map(\.key)
+            held.filter { changed(from: $0.value.mark, udid: $0.value.target.udid) == true }.map(\.key)
                 + targets.filter { held[$0.id] == nil && hasPairing($0) }.map(\.id)
         }
         changed.forEach(reopen)

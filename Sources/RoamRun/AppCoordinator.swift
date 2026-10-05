@@ -106,8 +106,14 @@ final class AppCoordinator: ObservableObject {
         }
         // What the switch may keep is what the sessions connect with — asked when the turn comes,
         // so that a pairing switched on just before is among them.
-        deviceControl.onHeldChanged = { [switching, deviceControl] in
-            switching.async { DeviceControlAllowed.shared.prune(keeping: deviceControl.heldMarks()) }
+        // Not while the list of devices isn't whole (unread, read in part, or a screenshot run's
+        // made-up one): the devices missing from it would lose their switches for that.
+        pruning.isOn = Snapshot.fakeProfiles == nil && store.keptUnreadable == nil && !store.unreadable
+        deviceControl.onHeldChanged = { [switching, deviceControl, pruning] in
+            switching.async {
+                guard pruning.isOn, let marks = deviceControl.heldMarks() else { return }
+                DeviceControlAllowed.shared.prune(keeping: marks)
+            }
         }
         deviceControl.onImport = { [weak self] path, name, wanted in self?.importPairing(path: path, as: name, wanted: wanted) ?? .failure("stopping") }
         syncDeviceControl()
@@ -1476,6 +1482,18 @@ final class AppCoordinator: ObservableObject {
                           udid.flatMap { DeviceControlHub.pairingMark(udid: $0, in: ProfileStore.directory) }].compactMap { $0 }))
     }
 
+    /// Whether the switch's list may be cut down to what the sessions hold: only while the list
+    /// of devices those sessions come from is whole.
+    private final class Flag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var on = false
+        var isOn: Bool {
+            get { lock.withLock { on } }
+            set { lock.withLock { on = newValue } }
+        }
+    }
+    private nonisolated let pruning = Flag()
+
     /// One at a time, in the order asked: a device set up and removed right after ends removed.
     private nonisolated let switching = DispatchQueue(label: "roamrun.device-control.switch")
 
@@ -1683,6 +1701,7 @@ final class AppCoordinator: ObservableObject {
         defer { syncDeviceControl() }
         if let saved = store.save(base: savedProfiles, wanted: profiles) {
             savedProfiles = saved
+            pruning.isOn = true   // written and read back: the list is whole
             if saved != profiles {   // `roamrun up` had saved a newer endpoint, or devices we never read came back
                 let mine = Dictionary(profiles.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
                 let wanted = wasActiveIDs
