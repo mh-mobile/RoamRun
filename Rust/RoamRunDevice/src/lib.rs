@@ -229,6 +229,7 @@ pub unsafe extern "C" fn rr_device_close(device: *mut RRDevice) {
         // A stream still running is ended, not left for the device to time out.
         let _ = with_room(|| {
             let mut link = device.link.lock().unwrap_or_else(|e| e.into_inner());
+            link.stop = Stop(std::ptr::null());   // the caller's, and no longer there after this
             if let Some(mut stream) = link.stream.take() { device.runtime.block_on(stream.stop()); }
             Ok(())
         });

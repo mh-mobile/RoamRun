@@ -5523,6 +5523,42 @@ func everyDocumentedCommandParses(_ doc: String) throws {
     #expect(try read { $0.domain = "example.com" } == nil)
 }
 
+/// The MCP server reads on while a tool runs: a call taken back before its turn isn't begun, and
+/// neither is one still waiting when the client goes.
+@Test func theMCPServerDoesNotBeginWhatIsTakenBackOrLeftBehind() throws {
+    let device = profile("iPhone")
+    func call(_ id: Int, _ button: String) -> String {
+        #"{"jsonrpc":"2.0","id":\#(id),"method":"tools/call","params":{"name":"press","arguments":{"device":"iPhone","button":"\#(button)"}}}"#
+    }
+    /// What reached the app. The first call holds the queue until `freedAfter` lines were read
+    /// (all of them: until the client has gone).
+    func asked(_ lines: [String], freedAfter: Int) -> [String] {
+        let sent = OSAllocatedUnfairLock<[String]>(initialState: [])
+        let first = DispatchSemaphore(value: 0), free = DispatchSemaphore(value: 0)
+        let server = DeviceMCP(profiles: { [device] }, looks: FileManager.default.temporaryDirectory) { request in
+            let n = sent.withLock { $0.append(request.text ?? ""); return $0.count }
+            if n == 1 { first.signal(); free.wait() }
+            return .init(ok: true)
+        }
+        var read = 0
+        server.serve(lines: {
+            if read == 1 { first.wait() }   // the first is under way before more is said
+            if read == freedAfter, read < lines.count { free.signal() }
+            if read == lines.count {
+                if freedAfter < lines.count { usleep(300_000) }   // the rest had its turn before the end
+                else { DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { free.signal() } }
+            }
+            defer { read += 1 }
+            return read < lines.count ? lines[read] : nil
+        }, write: { _ in })
+        return sent.withLock { $0 }
+    }
+    let cancel = #"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":2}}"#
+    #expect(asked([call(1, "home"), call(2, "lock")], freedAfter: 2) == ["home"])                              // the client went
+    #expect(asked([call(1, "home"), call(2, "lock"), cancel, call(3, "home")], freedAfter: 3) == ["home", "home"])   // taken back
+    #expect(asked([call(1, "home"), call(2, "lock"), call(3, "home")], freedAfter: 2) == ["home", "lock", "home"])    // neither
+}
+
 /// A request given up while it waits its turn: the app finds its asker gone. Given up before
 /// it was sent, it isn't sent.
 @Test func aRequestGivenUpIsSeenAsLeft() throws {

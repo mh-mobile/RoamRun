@@ -1055,7 +1055,7 @@ final class AppCoordinator: ObservableObject {
         bridgeObservers[id] = nil
         memories[id] = nil
         // Its pairing for device control goes with it, as the dialog says: added again, it is set up again.
-        if let target = profiles.first(where: { $0.id == id }).flatMap(controlTarget) { deviceControl.unpair(target) }
+        if let p = profiles.first(where: { $0.id == id }) { forgetControlPairing(p) }
         profiles.removeAll { $0.id == id }
         wasActiveIDs.remove(id)
         persist()
@@ -1481,11 +1481,15 @@ final class AppCoordinator: ObservableObject {
         controlPairing = nil
     }
 
+    /// A pairing that stays on this Mac (its file can be neither removed nor emptied) is said to:
+    /// it would be found again by the device added anew, after a restart.
+    private func forgetControlPairing(_ profile: DeviceProfile) {
+        guard let target = controlTarget(profile), deviceControl.unpair(target) == .left else { return }
+        launchWarning = "The pairing for “\(profile.displayName)” couldn't be removed from this Mac: \(DeviceControlWire.pairingFile(udid: target.udid, in: ProfileStore.directory).path) still holds it, and RoamRun would use it again after it is opened anew. Delete that file, or unpair on the device (Settings › Privacy & Security › Developer Mode)."
+    }
+
     func removeControlPairing(_ profile: DeviceProfile) {
-        guard let target = controlTarget(profile) else { return }
-        if deviceControl.unpair(target) == .left {
-            launchWarning = "The pairing for “\(profile.displayName)” couldn't be removed from this Mac (\(ProfileStore.directory.path)). It is out of use until RoamRun is opened again: unpair on the device, or delete the file."
-        }
+        forgetControlPairing(profile)
         objectWillChange.send()
     }
 

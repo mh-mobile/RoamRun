@@ -28,9 +28,11 @@ final class DeviceMCP: @unchecked Sendable {
     private let asking: DeviceControlWire.Asking
     private let work = DispatchQueue(label: "roamrun.mcp")
     private let calls = NSLock()
-    /// Under `calls`: the call running now, and those taken back before their turn.
+    /// Under `calls`: the call running now, those taken back before their turn, and whether
+    /// the client has gone (nothing that hasn't begun is begun for it).
     private var running: String?
     private var takenBack: Set<String> = []
+    private var gone = false
 
     init(profiles: @escaping () -> [DeviceProfile], looks: URL, asking: DeviceControlWire.Asking = .init(), ask: @escaping Ask) {
         self.saved = profiles
@@ -39,9 +41,10 @@ final class DeviceMCP: @unchecked Sendable {
         self.ask = ask
     }
 
-    /// Serves until stdin closes.
-    func serve() {
-        while let line = readLine(strippingNewline: true) {
+    /// Serves until stdin closes; tests give the lines and take the answers.
+    func serve(lines: () -> String? = { readLine(strippingNewline: true) },
+               write: @escaping @Sendable (Data) -> Void = { FileHandle.standardOutput.write($0 + Data([0x0A])) }) {
+        while let line = lines() {
             let message = Data(line.utf8)
             let object = try? JSONSerialization.jsonObject(with: message) as? [String: Any]
             if object?["method"] as? String == "notifications/cancelled" {
@@ -52,6 +55,7 @@ final class DeviceMCP: @unchecked Sendable {
             work.async {
                 // Taken back before its turn: not begun, and (as MCP has it) not answered.
                 let begin = self.calls.withLock { () -> Bool in
+                    if self.gone { return false }
                     if let id, self.takenBack.remove(id) != nil { return false }
                     self.running = id
                     self.asking.again()
@@ -60,10 +64,16 @@ final class DeviceMCP: @unchecked Sendable {
                 guard begin else { return }
                 let answer = self.handle(message)
                 self.calls.withLock { self.running = nil }
-                if let answer { FileHandle.standardOutput.write(answer + Data([0x0A])) }
+                if let answer { write(answer) }
             }
         }
-        work.sync {}   // what was asked before stdin closed is finished
+        // The client has gone: what waits its turn — here, or at the app — isn't begun for
+        // nobody. What the device is already doing runs out.
+        calls.withLock {
+            gone = true
+            asking.giveUp()
+        }
+        work.sync {}
     }
 
     /// A call taken back by the client: one waiting its turn at the app isn't begun there; one

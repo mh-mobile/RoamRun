@@ -41,12 +41,11 @@ bounded.
   key kept in your login Keychain that macOS gives to RoamRun only — a copy of
   the file alone opens nothing, and another program asking for the key makes
   macOS ask you. It is not protection against something that runs as RoamRun or
-  that you allow in that prompt: RoamRun reads its key without one, so a prompt
-  about that item — also one naming RoamRun, after something else replaced the
-  item — is not to be allowed. The device lists the pairing in Settings ›
+  that you allow in that prompt. A released RoamRun reads its key without one, so
+  with it a prompt about that item is a sign that something else replaced it —
+  don't allow it; a build you made yourself, signed otherwise, does get asked. The device lists the pairing in Settings ›
   Privacy & Security › Developer Mode, where it can be removed; during each look
-  or action, and for about five seconds after, the device shows screen sharing
-  (the connection kept between them shows nothing). While **Set Up…** or
+  or action, and for about five seconds after, the device shows screen sharing. While **Set Up…** or
   `roamrun pairing create` waits (and only then), the Mac announces itself on the
   local network (`_remotepairing-pairable-host._tcp`, with the Mac's name or the
   name given to `--as`) and listens on a port, on every interface, for the device

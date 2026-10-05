@@ -125,7 +125,9 @@ tunnel and Xcode has to run again.
     the previous one: the same.
 23. Remove RoamRun's entry on the device: `roamrun status <name>` and the page say the
     pairing can no longer be used and offer **Pair Again…**, which works.
-24. **Remove Device**: its `.sealed` file is gone.
+24. **Remove Device**: its `.sealed` file is gone. While `roamrun type <name> "<a few hundred
+    characters>"` runs into a note, **Remove…** the pairing: the typing stops within a moment,
+    and the command says the connection was closed.
 25. `roamrun pairing create <name> ~/k.json --as "RoamRun (check)"`, the code entered on the
     device: the file is written (0600) and the device lists "RoamRun (check)" beside this
     Mac's own entry. On another Mac that reaches the device (or a macOS VM on the tailnet):
