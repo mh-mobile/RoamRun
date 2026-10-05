@@ -233,6 +233,15 @@ have the user add the MCP tools, which run outside it.
 - An action that fails says why and was not repeated; look before trying again
   (it may have gone through). The device lists each spell of this as a
   screen-sharing session under Settings, where the user can see it.
+- **Looking and acting take the device's sound.** While that session runs — and
+  it is kept about five seconds after the last look or action — the device's
+  speaker is silent (music stops, and resumes by itself after) and voice input
+  on it doesn't hear: dictation, a language app's speaking exercise, a voice
+  assistant. Looking again and again keeps it that way throughout. So when asked
+  to watch a screen or keep looking, **say this to the user first**, and ask
+  whether they need the device's sound or its microphone meanwhile; if they do,
+  look only when they ask, or leave pauses of ten seconds or more between looks
+  so both come back in between.
 
 ## 7. App output
 
