@@ -61,6 +61,8 @@ struct Link {
     /// The key or button down now (not Shift or Command), as (is a button, page or 0, usage):
     /// let go of when an input is cut off between its down and its up.
     held: Option<(bool, u64, u64)>,
+    /// Where a finger is down on the screen, for the same.
+    finger: Option<(u16, u16)>,
     verified_ms: u128,
     tunnel_ms: u128,
     rsd_ms: u128,
@@ -593,7 +595,7 @@ async fn connect(ip: &str, port: u16, file: &[u8]) -> Result<Link, String> {
 
     let rsd = handle.connect(info.server_rsd_port).await.map_err(|e| format!("RSD: {e:?}"))?;
     let handshake = RsdHandshake::new(rsd).await.map_err(|e| format!("RSD handshake: {e:?}"))?;
-    Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_stopped: None, stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, resent: 0, stop: Stop(std::ptr::null()), held: None, verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
+    Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_stopped: None, stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, resent: 0, stop: Stop(std::ptr::null()), held: None, finger: None, verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
 }
 
 /// The most that is typed in one call: beyond it, a slip in the middle is too costly, and paste does it in one.
@@ -670,9 +672,12 @@ async fn stream_for_input(link: &mut Link) -> Result<(), String> {
     Ok(())
 }
 
-/// After an input cut short: the modifier keys are let go as far as that can still be said, and
-/// the connections it used aren't kept (what the device makes of a finger left down is its own).
+/// After an input cut short: the keys and a finger left down are let go as far as that can still
+/// be said, and the connections it used aren't kept.
 async fn let_go(link: &mut Link) {
+    if let (Some(hid), Some((x, y))) = (link.hid.as_mut(), link.finger.take()) {
+        let _ = tokio::time::timeout(Duration::from_secs(1), hid.send_touchscreen(TOUCHSCREEN_STATE_RELEASE, x, y, None)).await;
+    }
     if let Some(keys) = link.keys.as_mut() {
         let held = link.held.take();
         let _ = tokio::time::timeout(Duration::from_secs(1), async {
@@ -686,6 +691,7 @@ async fn let_go(link: &mut Link) {
         }).await;
     }
     link.held = None;
+    link.finger = None;
     link.keys = None;
     link.hid = None;
 }
@@ -744,14 +750,22 @@ async fn touch(link: &mut Link, steps: &[Touch]) -> Result<(), String> {
         for step in steps {
             match *step {
                 Touch::Wait(ms) => tokio::time::sleep(Duration::from_millis(ms)).await,
-                Touch::At(state, x, y) => match hid.send_touchscreen(state, x, y, None).await {
-                    Ok(()) => sent_any = true,
-                    Err(e) => { failed = Some(e); break }
-                },
+                Touch::At(state, x, y) => {
+                    // Noted before it is sent, as a key is: cut off on its way, it may be down.
+                    if state == TOUCHSCREEN_STATE_CONTACT { link.finger = Some((x, y)); }
+                    match hid.send_touchscreen(state, x, y, None).await {
+                        Ok(()) => {
+                            sent_any = true;
+                            if state == TOUCHSCREEN_STATE_RELEASE { link.finger = None; }
+                        }
+                        Err(e) => { failed = Some(e); break }
+                    }
+                }
             }
         }
         let Some(e) = failed else { return Ok(()) };
         link.hid = None;   // a dead connection isn't kept for the next call
+        link.finger = None;
         if again(attempt, kept, sent_any, &e) {
             link.resent += 1;
             continue;
@@ -1014,12 +1028,16 @@ async fn start_stream(link: &mut Link) -> Result<Stream, String> {
     let call = || uuid::Uuid::new_v4().to_string().to_uppercase();
     // Audio first: it is what establishes the session the video then joins.
     let offer = build_screen_audio_offer(&call(), &call_info()).map_err(|e| format!("audio offer: {e:?}"))?;
-    display.start_media_stream(build_start_audio_parameters(&ours, audio.local_port(), &theirs, 50000, offer, SUPPORTED_FEATURES, session))
-        .await.map_err(|e| format!("audio start: {e:?}"))?;
+    // Each start has its own limit, well inside a call's: one that stalls (they have) ends here,
+    // where the half that did start is stopped, and not at the call's deadline, where it isn't.
+    tokio::time::timeout(STREAM_START, display.start_media_stream(build_start_audio_parameters(&ours, audio.local_port(), &theirs, 50000, offer, SUPPORTED_FEATURES, session)))
+        .await.map_err(|_| "audio start: no answer".to_string())?.map_err(|e| format!("audio start: {e:?}"))?;
     let ssrc = uuid::Uuid::new_v4().as_u128() as u32;
     let video_started = match build_screen_video_offer(&call(), &call_info(), ssrc) {
-        Ok(offer) => display.start_media_stream(build_start_video_parameters(&ours, video.local_port(), &theirs, VIDEO_SENDER_PORT, offer, SUPPORTED_FEATURES, 1, session))
-            .await.map_err(|e| format!("video start: {e:?}")),
+        Ok(offer) => match tokio::time::timeout(STREAM_START, display.start_media_stream(build_start_video_parameters(&ours, video.local_port(), &theirs, VIDEO_SENDER_PORT, offer, SUPPORTED_FEATURES, 1, session))).await {
+            Ok(started) => started.map_err(|e| format!("video start: {e:?}")),
+            Err(_) => Err("video start: no answer".into()),
+        },
         Err(e) => Err(format!("video offer: {e:?}")),
     };
     let mut stream = Stream { display, video, audio, ssrc, media: None, feedback_port: None, requests: 0, keyframe_at: Instant::now() };
@@ -1031,6 +1049,9 @@ async fn start_stream(link: &mut Link) -> Result<Stream, String> {
     }
     Ok(stream)
 }
+
+/// How long one half of a stream gets to start (they answer within a second when they do).
+const STREAM_START: Duration = Duration::from_secs(5);
 
 /// How long a stream just started gets to send the key frame it opens with.
 const FIRST_KEYFRAME: Duration = Duration::from_secs(6);

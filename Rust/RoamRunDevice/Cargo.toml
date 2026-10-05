@@ -24,6 +24,6 @@ opt-level = "s"
 
 # idevice with the host's serial number and address settable (a pairing lists on the device by
 # them), and with the device verified at every connection by the key it gave when it paired:
-# its 0.1.68 and four commits. Gone when a release of idevice has both.
+# its 0.1.68 and five commits. Gone when a release of idevice has both.
 [patch.crates-io]
-idevice = { git = "https://github.com/mh-mobile/idevice", rev = "c7527674cec30e4f8b174177e180600b8fa49c65" }
+idevice = { git = "https://github.com/mh-mobile/idevice", rev = "b747c25ce7c6a920ba4438369c17375f0ac95e72" }
