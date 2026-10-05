@@ -488,6 +488,15 @@ final class DeviceControlHub: @unchecked Sendable {
         onLog?("device control: a pairing made on another Mac was taken in", target.id)
     }
 
+    /// The file a pairing came in is removed once it is taken in. nil when it is gone; else what
+    /// to tell whoever brought it: it is still a key to the device.
+    static func removeTaken(_ file: URL, remove: (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) }) -> String? {
+        do { try remove(file) } catch {
+            return "\(file.path) couldn't be removed (\(error.localizedDescription)): delete it yourself — it still lets whoever has it see and operate the device"
+        }
+        return nil
+    }
+
     /// Removes the pairing saved under `udid`, held or not: one made for a device that turned
     /// out not to be saved under it.
     func forgetPairing(udid: String, of id: UUID) {

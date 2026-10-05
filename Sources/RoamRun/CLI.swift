@@ -798,7 +798,18 @@ enum CLI {
     /// there alone; this Mac's own pairing stays as it is.
     private static func createPairing(_ profile: DeviceProfile, others: [DeviceProfile], file: String, label: String?) -> Never {
         let out = URL(fileURLWithPath: file).standardizedFileURL
-        guard !FileManager.default.fileExists(atPath: out.path) else { fail("\(out.path) exists: name a file that doesn't") }
+        // The file is had before the pairing, and written through what was had: checked now and
+        // written after the code was entered, another could be put there in between.
+        let fd: Int32
+        do { fd = try reserve(out.path) } catch { fail((error as? ArgumentError)?.message ?? "\(error)") }
+        reserved = strdup(out.path)
+        signal(SIGINT) { _ in if let reserved = CLI.reserved { unlink(reserved) }; _exit(130) }
+        /// Nothing is left where the pairing was to go.
+        func stop(_ why: String) -> Never {
+            close(fd)
+            unlink(out.path)
+            CLI.stop(why)
+        }
         let label = label ?? "RoamRun (\(out.deletingPathExtension().lastPathComponent))"
         setvbuf(stdout, nil, _IOLBF, 0)
         do {
@@ -822,13 +833,13 @@ enum CLI {
                 stop("\(paired.name) paired, but that pairing opens no connection to “\(profile.displayName)” at \(profile.providerIP) (\(unreached)). Nothing was written. \(withdraw)")
             }
             var device = profile
-            device.udid = profile.udid ?? paired.udid
+            device.udid = Self.sharedUDID(saved: profile.udid, paired: paired.udid)
             let shared = SharedPairing(device: device, pairing: String(decoding: paired.pairing, as: UTF8.self))
-            guard let data = try? JSONEncoder().encode(shared),
-                  FileManager.default.createFile(atPath: out.path, contents: data, attributes: [.posixPermissions: 0o600]) else {
+            guard let data = try? JSONEncoder().encode(shared), Self.write(data, to: fd) else {
                 stop("can't write \(out.path). \(withdraw)")
             }
-            print("Wrote \(out.path)" + (unreached.map { " (not tried: \($0))" } ?? ", and it connects."))
+            close(fd)
+            print("Wrote \(out.path)" + (unreached.map { " (it couldn't be tried from here: \($0))" } ?? ", and it connects."))
             print("It is a key to \(profile.displayName): whoever has it and reaches \(profile.providerIP) can see and operate the device. On the other Mac: roamrun pairing import <that file>")
             print("To withdraw it: remove “\(listening.name)” on the device, in that list.")
             exit(0)
@@ -837,12 +848,51 @@ enum CLI {
         }
     }
 
+    /// The path a pairing is being written to, for the handler that removes it when interrupted.
+    nonisolated(unsafe) private static var reserved: UnsafeMutablePointer<CChar>?
+
+    /// A new file of the owner's alone, or nothing: never one that is there, never through a link.
+    nonisolated static func reserve(_ path: String) throws -> Int32 {
+        let fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard fd >= 0 else {
+            throw ArgumentError(message: errno == EEXIST ? "\(path) exists: name a file that doesn't" : "can't make \(path): \(String(cString: strerror(errno)))")
+        }
+        return fd
+    }
+
+    nonisolated static func write(_ data: Data, to fd: Int32) -> Bool {
+        data.withUnsafeBytes { bytes in
+            var done = 0
+            while done < bytes.count {
+                let n = Darwin.write(fd, bytes.baseAddress! + done, bytes.count - done)
+                if n <= 0 { return false }
+                done += n
+            }
+            return true
+        }
+    }
+
+    /// The UDID a pairing travels under: the paired device's own, which is what it was proved
+    /// with — in the saved one's spelling when that is the same device, and the saved one only
+    /// when the device named none.
+    nonisolated static func sharedUDID(saved: String?, paired: String) -> String? {
+        guard !paired.isEmpty else { return saved }
+        if let saved, saved.caseInsensitiveCompare(paired) == .orderedSame { return saved }
+        return paired
+    }
+
     private static func importPairing(file: String, name: String?) -> Never {
         let path = URL(fileURLWithPath: file).standardizedFileURL.path
         guard FileManager.default.fileExists(atPath: path) else { fail("\(path) doesn't exist") }
         let r = askApp(.init(op: "import", device: UUID(), path: path, text: name))
         guard r.ok else { stop("import failed: \(r.error ?? "no answer")") }
-        print("\(r.name ?? "The device") is saved with its pairing, and \(path) is removed. Try: roamrun look \(r.name.map(shellName) ?? "<name>")")
+        print("\(r.name ?? "The device") is saved with its pairing. Try: roamrun look \(r.name.map(shellName) ?? "<name>")")
+        // Said as it is: a key left where it was is not one that is gone.
+        if let left = r.error {
+            FileHandle.standardError.write(Data("roamrun: \(left)\n".utf8))
+            exit(1)
+        }
+        print("\(path) is removed.")
         exit(0)
     }
 

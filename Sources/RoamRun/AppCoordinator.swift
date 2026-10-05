@@ -955,9 +955,9 @@ final class AppCoordinator: ObservableObject {
             if isNew { DispatchQueue.main.sync { MainActor.assumeIsolated { deleteProfile(target.id) } } }
             return .failure("\(error)")
         }
-        try? FileManager.default.removeItem(at: file)
         DispatchQueue.main.async { MainActor.assumeIsolated { self.syncDeviceControl() } }
-        return .init(ok: true, name: target.name)
+        // Taken in either way; a file that stays is said to (in `error`, with `ok`).
+        return .init(ok: true, error: DeviceControlHub.removeTaken(file), name: target.name)
     }
 
     func deleteProfile(_ id: UUID) {

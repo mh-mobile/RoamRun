@@ -4627,6 +4627,60 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
     #expect(SharedPairing.read(try JSONEncoder().encode(later)) == nil)                          // a form this RoamRun doesn't know
 }
 
+/// Where a pairing is written is had before the pairing is made, new and the owner's alone: a
+/// file that is there — put there while the code was being entered, say — is never written over,
+/// nor one a link leads to.
+@Test func aPairingIsWrittenOnlyToAFileMadeForIt() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let fresh = dir.appendingPathComponent("k.json").path
+    let fd = try CLI.reserve(fresh)
+    #expect(try FileManager.default.attributesOfItem(atPath: fresh)[.posixPermissions] as? Int == 0o600)
+    #expect(CLI.write(Data("the pairing".utf8), to: fd))
+    close(fd)
+    #expect(try String(contentsOfFile: fresh, encoding: .utf8) == "the pairing")
+
+    #expect(throws: (any Error).self) { try CLI.reserve(fresh) }                      // there already
+    #expect(try String(contentsOfFile: fresh, encoding: .utf8) == "the pairing")
+
+    let other = dir.appendingPathComponent("someone's.txt").path
+    try "theirs".write(toFile: other, atomically: true, encoding: .utf8)
+    let link = dir.appendingPathComponent("link.json").path
+    try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: other)
+    #expect(throws: (any Error).self) { try CLI.reserve(link) }                       // a link to a file
+    #expect(try String(contentsOfFile: other, encoding: .utf8) == "theirs")
+    let dangling = dir.appendingPathComponent("dangling.json").path
+    try FileManager.default.createSymbolicLink(atPath: dangling, withDestinationPath: dir.appendingPathComponent("not yet").path)
+    #expect(throws: (any Error).self) { try CLI.reserve(dangling) }                   // a link to nothing: nothing made behind it
+    #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("not yet").path))
+    #expect(throws: (any Error).self) { try CLI.reserve(dir.appendingPathComponent("no such folder/k.json").path) }
+}
+
+/// The file a pairing came in is a key for as long as it is there: one that couldn't be removed
+/// is said to be, not passed over.
+@Test func aPairingFileLeftBehindIsSaidToBe() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let file = dir.appendingPathComponent("k.json")
+    try Data("x".utf8).write(to: file)
+    let left = try #require(DeviceControlHub.removeTaken(file) { _ in throw CocoaError(.fileWriteVolumeReadOnly) })
+    #expect(left.contains(file.path) && left.contains("delete it yourself"))
+    #expect(FileManager.default.fileExists(atPath: file.path))
+    #expect(DeviceControlHub.removeTaken(file) == nil)
+    #expect(!FileManager.default.fileExists(atPath: file.path))
+    #expect(DeviceControlHub.removeTaken(file) != nil)   // already gone: not ours to call removed
+}
+
+/// A pairing travels under the UDID of the device it was made with, not one saved earlier for
+/// whatever answered at that address then.
+@Test func aSharedPairingNamesTheDeviceItWasMadeWith() {
+    #expect(CLI.sharedUDID(saved: nil, paired: "U2") == "U2")
+    #expect(CLI.sharedUDID(saved: "U1", paired: "U2") == "U2")              // proved by connecting: it is U2
+    #expect(CLI.sharedUDID(saved: "0000-ABCD", paired: "0000-abcd") == "0000-ABCD")   // the same one, as it is spelled here
+    #expect(CLI.sharedUDID(saved: "U1", paired: "") == "U1")                // it named none
+    #expect(CLI.sharedUDID(saved: nil, paired: "") == nil)
+}
+
 /// `pairing` takes a word that says what to do, not a device's name first.
 @Test func pairingCommandsParse() throws {
     #expect(try CLI.parse(["pairing", "create", "iPhone", "/tmp/k.json", "--as", "RoamRun (cloud)"]).get().values["--as"] == "RoamRun (cloud)")
