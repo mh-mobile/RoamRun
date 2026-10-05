@@ -68,9 +68,11 @@ bounded.
   on its page: off, every request is refused; a text being typed or a walk of
   the elements stops where it is, and what was waiting its turn isn't begun (a
   tap or a press already on its way arrives). What is on is kept in the login Keychain, where another program can't
-  add to it without macOS asking you, and it names the pairing itself — not the
-  device's entry in the list of saved devices, which any program can rewrite —
-  so a device you switched off stays off; it is on after Set Up, after Pair
+  add to it without macOS asking you, and it names the pairing itself, as it is
+  saved for its device — not the device's entry in the list of saved devices,
+  which any program can rewrite — so a device you switched off stays off. A
+  pairing that a saved device no longer connects with (its file moved away or
+  replaced, its device deleted) loses its switch: brought back, it is off; it is on after Set Up, after Pair
   Again (also for a device you had switched off) and after `pairing import`. Turn it off when nothing of yours is using the device.
 - **Someone on the network can keep a pairing from being made, not make one.**
   While Set Up or `pairing create` waits, a device on that network can connect,

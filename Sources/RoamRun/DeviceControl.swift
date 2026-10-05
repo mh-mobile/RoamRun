@@ -104,8 +104,32 @@ enum DeviceControlWire {
     /// Whether a pairing is saved there. A file with nothing in it is none: one that couldn't be
     /// removed was emptied instead.
     static func hasPairing(udid: String, in directory: URL) -> Bool {
-        let size = (try? FileManager.default.attributesOfItem(atPath: pairingFile(udid: udid, in: directory).path))?[.size] as? Int
-        return (size ?? 0) > 0
+        sealedBytes(pairingFile(udid: udid, in: directory))?.isEmpty == false
+    }
+
+    /// A sealed pairing as it is on disk — read as the small file of its own it is: not through
+    /// a link, not from a pipe or a device (reading those would wait), and no more than a
+    /// pairing can be. nil for anything else: it is read while the hub's lock is held.
+    static func sealedBytes(_ file: URL) -> Data? {
+        let fd = open(file.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        var s = stat()
+        guard fstat(fd, &s) == 0, s.st_mode & S_IFMT == S_IFREG, s.st_size < 1 << 20 else { return nil }
+        var data = Data(count: Int(s.st_size))
+        let got = data.withUnsafeMutableBytes { pread(fd, $0.baseAddress, $0.count, 0) }
+        return got == data.count ? data : nil
+    }
+
+    /// What a sealed pairing is known by to the switch: a digest of the UDID it is saved under
+    /// and of its bytes. The same bytes under another device's name are another mark: a file
+    /// copied there doesn't carry its switch along, and isn't switched with the device it was put under.
+    static func mark(of sealed: Data, udid: String) -> String {
+        var hash = SHA256()
+        hash.update(data: Data(udid.lowercased().utf8))
+        hash.update(data: Data([0]))
+        hash.update(data: sealed)
+        return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     /// What a UDID is made of. It names a file here and is handed to Xcode's tools.
@@ -460,8 +484,9 @@ final class DeviceControlHub: @unchecked Sendable {
     /// Whether commands and agents may use a pairing, named by its mark (a session's `Held.mark`):
     /// the device's switch in the app. Asked at every request, off the main thread.
     var allowed: @Sendable (String) -> Bool = { _ in true }
-    /// The marks of the pairings in use (held by a session, or sealed in the folder), every half minute.
-    var onInUse: (@Sendable (Set<String>) -> Void)?
+    /// The sessions that stand may have changed (and every half minute): `heldMarks` is what the
+    /// switch may keep. Not to wait in, and asked for the marks when it acts, not now.
+    var onHeldChanged: (@Sendable () -> Void)?
     /// A saved pairing was written over: its mark, for the switch to drop. Not to wait in.
     var onReplaced: (@Sendable (String) -> Void)?
     /// The same as far as it is known without waiting, for saying how a device stands.
@@ -470,9 +495,14 @@ final class DeviceControlHub: @unchecked Sendable {
     /// What a saved pairing is known by to the switch: its sealed file's own digest. Not the
     /// device's id or UDID, which are whatever the list of saved devices says.
     static func pairingMark(udid: String, in directory: URL) -> String? {
-        guard let sealed = try? Data(contentsOf: DeviceControlWire.pairingFile(udid: udid, in: directory)), !sealed.isEmpty else { return nil }
-        return SHA256.hash(data: sealed).map { String(format: "%02x", $0) }.joined()
+        guard let sealed = DeviceControlWire.sealedBytes(DeviceControlWire.pairingFile(udid: udid, in: directory)), !sealed.isEmpty else { return nil }
+        return DeviceControlWire.mark(of: sealed, udid: udid)
     }
+
+    /// The marks the sessions that stand connect with: what the switch may keep. A pairing no
+    /// session holds (its file moved away, its device gone from the list, another put in its
+    /// place) loses its switch — it isn't found on when it is brought back.
+    func heldMarks() -> Set<String> { lock.withLock { Set(held.values.map(\.mark)) } }
 
     /// The call a device is busy with stops where it can: its switch was turned off.
     func interrupt(_ id: UUID) { session(of: id)?.interrupt() }
@@ -532,6 +562,7 @@ final class DeviceControlHub: @unchecked Sendable {
             }
         }
         Self.closing(gone)
+        onHeldChanged?()
         keepOpen()
     }
 
@@ -725,7 +756,7 @@ final class DeviceControlHub: @unchecked Sendable {
     func sealPairing(_ pairing: Data, with sealing: SymmetricKey, udid: String) throws -> String {
         let before = Self.pairingMark(udid: udid, in: directory)
         let sealed = try Self.seal(pairing, with: sealing)
-        let mark = SHA256.hash(data: sealed).map { String(format: "%02x", $0) }.joined()
+        let mark = DeviceControlWire.mark(of: sealed, udid: udid)
         try Self.save(sealed, as: DeviceControlWire.pairingFile(udid: udid, in: directory))
         unremovedLock.withLock {
             _ = unremoved.remove(udid.lowercased())
@@ -923,6 +954,7 @@ final class DeviceControlHub: @unchecked Sendable {
             return old
         }
         Self.closing(old.map { [$0] } ?? [])
+        onHeldChanged?()
         keepOpen()
     }
 
@@ -934,8 +966,7 @@ final class DeviceControlHub: @unchecked Sendable {
         // Only the pairing the session was made for: the file put in its place meanwhile (another
         // pairing, one that is switched on) isn't connected with under this one's name.
         let session = open(t, { [key] in
-            let sealed = try Data(contentsOf: file)
-            guard SHA256.hash(data: sealed).map({ String(format: "%02x", $0) }).joined() == mark else {
+            guard let sealed = DeviceControlWire.sealedBytes(file), DeviceControlWire.mark(of: sealed, udid: t.udid) == mark else {
                 // In the words of a call stopped: not a pairing to be made again (put back, it connects).
                 throw DeviceSession.Failure.message("\(DeviceSession.stopped) the pairing saved for this device changed: its connection is made anew")
             }
@@ -988,20 +1019,14 @@ final class DeviceControlHub: @unchecked Sendable {
     /// A session whose saved pairing is another by now (or gone) connects with nothing any more:
     /// it is replaced by one for what is there, instead of standing as a pairing to be made again.
     func renewChanged() {
-        let changed = lock.withLock { held.filter { Self.pairingMark(udid: $0.value.target.udid, in: directory) != $0.value.mark }.map(\.key) }
-        changed.forEach(reopen)
-        // What is in use now, for the switch to drop the rest: a mark whose pairing is nowhere
-        // (its file moved away, its device deleted meanwhile) isn't left on for when it comes back.
-        // By the pairings that are there, not by the list of devices: a list read only in part
-        // (an entry gone bad) would have the others' switches dropped.
-        guard let files = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return }
-        var marks = lock.withLock { Set(held.values.map(\.mark)) }
-        for file in files where file.lastPathComponent.hasPrefix("device-pairing-") && file.pathExtension == "sealed" {
-            if let sealed = try? Data(contentsOf: file), !sealed.isEmpty {
-                marks.insert(SHA256.hash(data: sealed).map { String(format: "%02x", $0) }.joined())
-            }
+        // …and a device whose pairing appeared since (put back, or brought in by hand) gets one:
+        // without it there is nothing its switch could be about.
+        let changed = lock.withLock { () -> [UUID] in
+            held.filter { Self.pairingMark(udid: $0.value.target.udid, in: directory) != $0.value.mark }.map(\.key)
+                + targets.filter { held[$0.id] == nil && hasPairing($0) }.map(\.id)
         }
-        onInUse?(marks)
+        changed.forEach(reopen)
+        onHeldChanged?()   // also when nothing changed: the chance to write what a write failed to
     }
 
     /// Tries to open what isn't: one attempt per device at a time; none for a pairing the device

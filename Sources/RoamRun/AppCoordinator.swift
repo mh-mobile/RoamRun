@@ -104,7 +104,11 @@ final class AppCoordinator: ObservableObject {
             DeviceControlAllowed.shared.offNow(mark)   // from this moment, whatever the queue is waiting on
             switching.async { DeviceControlAllowed.shared.set(mark, false) }
         }
-        deviceControl.onInUse = { [switching] marks in switching.async { DeviceControlAllowed.shared.prune(keeping: marks) } }
+        // What the switch may keep is what the sessions connect with — asked when the turn comes,
+        // so that a pairing switched on just before is among them.
+        deviceControl.onHeldChanged = { [switching, deviceControl] in
+            switching.async { DeviceControlAllowed.shared.prune(keeping: deviceControl.heldMarks()) }
+        }
         deviceControl.onImport = { [weak self] path, name, wanted in self?.importPairing(path: path, as: name, wanted: wanted) ?? .failure("stopping") }
         syncDeviceControl()
         // A screenshot run stands beside the app that is running: it takes neither its socket nor
@@ -1065,7 +1069,8 @@ final class AppCoordinator: ObservableObject {
         // here meanwhile (Set Up) took its place, and its own switch.
         let mark = sealedMark.flatMap { deviceControl.sealedMark(udid: saved.udid ?? udid) == $0 ? $0 : nil }
         let asked = DeviceControlAllowed.shared.now()
-        let on = switching.sync { mark.map { DeviceControlAllowed.shared.set($0, true, asked: asked) } ?? false }
+        // On is what it is known as afterwards: a switch-off that came meanwhile (Remove, the page) stands.
+        let on = switching.sync { mark.map { DeviceControlAllowed.shared.set($0, true, asked: asked) && DeviceControlAllowed.shared.known($0) == true } ?? false }
         let left = DeviceControlHub.removeTaken(file, readThrough: fd)
         let off = on ? nil : mark == nil
             ? "a pairing made on this Mac meanwhile took this one's place: the device uses that one"
@@ -1600,6 +1605,14 @@ final class AppCoordinator: ObservableObject {
         capture.stop()
         stopOTA()   // the serve entry would otherwise point at a dead port
         for bridge in bridges.values { bridge.stop() }
+        // A switch turned off a moment ago is in the Keychain before this ends (as far as a
+        // moment allows: it may be asking the user), or it would be on again at the next start.
+        let written = DispatchSemaphore(value: 0)
+        switching.async {
+            DeviceControlAllowed.shared.flush()
+            written.signal()
+        }
+        _ = written.wait(timeout: .now() + 2)
         deviceControl.stop()   // last: it may wait a moment for a device, and the bridges' helpers mustn't be left meanwhile
     }
 

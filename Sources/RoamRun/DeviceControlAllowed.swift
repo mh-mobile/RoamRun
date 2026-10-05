@@ -3,10 +3,12 @@ import Security
 
 /// The pairings commands and agents may use, kept in the login Keychain beside the key: another
 /// program can't put one on the list (macOS asks about what it wrote there), so a device the
-/// user switched off stays off. A pairing is named by the mark of its sealed file — not by the
-/// device's place in the list of saved devices, which any program of the user can rewrite: a
-/// pairing moved under another device's name, or a device given another's address, is still
-/// the pairing that was switched off. What can't be read is nobody: off is the safe side.
+/// user switched off stays off. A pairing is named by its mark — a digest of its sealed file and
+/// of the UDID it is saved under — not by the device's place in the list of saved devices,
+/// which any program of the user can rewrite: a device given another's address is still the
+/// pairing that was switched off, and a file put under another device's name is another mark.
+/// Only what a session connects with is kept (`prune`): a pairing parked aside and brought back
+/// is off. What can't be read is nobody: off is the safe side.
 final class DeviceControlAllowed: @unchecked Sendable {
     static let shared = DeviceControlAllowed()
     /// Guards what was read; never held while the Keychain is asked (it may ask the user, and
@@ -86,6 +88,15 @@ final class DeviceControlAllowed: @unchecked Sendable {
 
     /// The Keychain's list couldn't be read: nothing is on, and nothing can be switched until it can.
     var isUnreadable: Bool { lock.withLock { unreadable } }
+
+    /// Writes what an earlier write failed to, if anything: before the app ends.
+    func flush() {
+        io.withLock {
+            guard lock.withLock({ unwritten }), let now = lock.withLock({ held }) else { return }
+            let kept = (try? JSONEncoder().encode(now.subtracting(lock.withLock { off }))).map { write($0) == errSecSuccess } ?? false
+            lock.withLock { unwritten = !kept }
+        }
+    }
 
     /// Drops what names no pairing in use: a mark is only as good as the pairing it was made for.
     func prune(keeping inUse: Set<String>) {

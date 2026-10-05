@@ -6065,7 +6065,9 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     // B's sealed file under A's name: the session that stands is still A's, and still off.
     try FileManager.default.removeItem(at: DeviceControlWire.pairingFile(udid: "UDID-A", in: dir))
     try FileManager.default.copyItem(at: DeviceControlWire.pairingFile(udid: "UDID-B", in: dir), to: DeviceControlWire.pairingFile(udid: "UDID-A", in: dir))
-    #expect(DeviceControlHub.pairingMark(udid: "UDID-A", in: dir) == b && a != b)
+    // (Under A's name those bytes are neither A's pairing nor B's to the switch.)
+    let moved = try #require(DeviceControlHub.pairingMark(udid: "UDID-A", in: dir))
+    #expect(moved != a && moved != b)
     #expect(hub.answer(.init(op: "press", device: id, text: "home")).error == DeviceControlHub.switchedOff)
     #expect(standing.calls.filter { $0 == "press" }.isEmpty)
     // Nor does it connect with what is there now — said as a call stopped, not as a pairing to make again.
@@ -6117,23 +6119,55 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     #expect(DeviceControlHub.pairingMark(udid: "UDID-1", in: dir) == brought)
 }
 
-/// What the switch may keep is told by the pairings that are there, whatever the list of devices
-/// has: one whose device isn't in the list (an entry gone bad) keeps its mark; one whose file is
-/// gone doesn't.
-@Test func marksInUseAreThoseOfThePairingsThatAreThere() throws {
+/// What the switch may keep is what the sessions that stand connect with. A pairing parked under
+/// another name, or whose device is gone from the list, is held by none: it loses its switch,
+/// and isn't found on when it is brought back.
+@Test func onlyPairingsASessionHoldsKeepTheirSwitch() throws {
     let dir = scratchDir()
     defer { try? FileManager.default.removeItem(at: dir) }
     let (hub, _) = try standInHub(dir, udid: "UDID-A")
     defer { hub.stop() }
-    try scratchPairing(at: DeviceControlWire.pairingFile(udid: "UDID-B", in: dir))
+    let changes = OSAllocatedUnfairLock(initialState: 0)
+    hub.onHeldChanged = { changes.withLock { $0 += 1 } }
     let a = try #require(DeviceControlHub.pairingMark(udid: "UDID-A", in: dir))
-    let b = try #require(DeviceControlHub.pairingMark(udid: "UDID-B", in: dir))
-    let said = OSAllocatedUnfairLock<[Set<String>]>(initialState: [])
-    hub.onInUse = { marks in said.withLock { $0.append(marks) } }
-    hub.update([.init(id: UUID(), name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-A")])   // B isn't in the list
+    let id = UUID()
+    hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-A")])
+    #expect(hub.heldMarks() == [a] && changes.withLock { $0 } == 1)
+    // Parked under a name no device has: still a sealed pairing in the folder, held by nobody.
+    let file = DeviceControlWire.pairingFile(udid: "UDID-A", in: dir), parked = dir.appendingPathComponent("device-pairing-parked.sealed")
+    try FileManager.default.moveItem(at: file, to: parked)
     hub.renewChanged()
-    #expect(said.withLock { $0.last } == [a, b])
-    try FileManager.default.removeItem(at: DeviceControlWire.pairingFile(udid: "UDID-B", in: dir))
+    #expect(hub.heldMarks().isEmpty && changes.withLock { $0 } >= 2)
+    // Put back: a session again, for the switch to be about (it was dropped meanwhile).
+    try FileManager.default.moveItem(at: parked, to: file)
     hub.renewChanged()
-    #expect(said.withLock { $0.last } == [a])
+    #expect(hub.heldMarks() == [a])
+    // The same bytes under another device's name are another pairing to the switch.
+    try FileManager.default.copyItem(at: file, to: DeviceControlWire.pairingFile(udid: "UDID-B", in: dir))
+    #expect(DeviceControlHub.pairingMark(udid: "UDID-B", in: dir) != a)
+    // Gone from the list: held by none.
+    hub.update([])
+    #expect(hub.heldMarks().isEmpty)
+}
+
+/// A sealed pairing is read only as the small file of its own it is: a link, a pipe or something
+/// too large to be one is no pairing (and isn't waited on, with the hub's lock held).
+@Test func aSealedPairingIsReadOnlyAsAFileOfItsOwn() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let file = DeviceControlWire.pairingFile(udid: "UDID-1", in: dir)
+    try scratchPairing(at: file)
+    #expect(DeviceControlWire.hasPairing(udid: "UDID-1", in: dir))
+    let elsewhere = dir.appendingPathComponent("elsewhere")
+    try FileManager.default.moveItem(at: file, to: elsewhere)
+    try FileManager.default.createSymbolicLink(at: file, withDestinationURL: elsewhere)
+    #expect(!DeviceControlWire.hasPairing(udid: "UDID-1", in: dir) && DeviceControlHub.pairingMark(udid: "UDID-1", in: dir) == nil)
+    try FileManager.default.removeItem(at: file)
+    #expect(mkfifo(file.path, 0o600) == 0)
+    let asked = Date()
+    #expect(!DeviceControlWire.hasPairing(udid: "UDID-1", in: dir))
+    #expect(Date().timeIntervalSince(asked) < 1)
+    try FileManager.default.removeItem(at: file)
+    try Data(count: 1 << 20).write(to: file)
+    #expect(!DeviceControlWire.hasPairing(udid: "UDID-1", in: dir))
 }
