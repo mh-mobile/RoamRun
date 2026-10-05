@@ -4630,6 +4630,32 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
     #expect(kept.withLock { $0 } == first)                                  // back, and the same
 }
 
+/// A key replaced in the Keychain while the app runs is not taken up: pairings saved from then
+/// on would be sealed apart from the ones already saved. And what isn't a key of ours never is.
+@Test func aKeyReplacedInTheKeychainIsNotTakenUp() throws {
+    let ours = Data(repeating: 7, count: 32), other = Data(repeating: 9, count: 32)
+    let kept = OSAllocatedUnfairLock<Data?>(initialState: ours)
+    let added = OSAllocatedUnfairLock(initialState: 0)
+    let key = DeviceControlKey(read: { kept.withLock { $0.map { (errSecSuccess, $0) } ?? (errSecItemNotFound, nil) } },
+                               add: { _ in added.withLock { $0 += 1 }; return errSecSuccess })
+    #expect(try key.key(make: true).withUnsafeBytes { Data($0) } == ours)
+    kept.withLock { $0 = other }
+    #expect(throws: (any Error).self) { try key.key(make: true) }            // to set a device up: refused
+    #expect(try key.key(make: false).withUnsafeBytes { Data($0) } == ours)   // what is saved still opens
+    #expect(kept.withLock { $0 } == other && added.withLock { $0 } == 0)     // and nothing was written over
+    // Not a key at all: of the wrong length, before a pairing or after.
+    for bad in [Data(), Data(repeating: 1, count: 16), Data(repeating: 1, count: 33)] {
+        #expect(throws: (any Error).self) {
+            try DeviceControlKey.key(make: true, read: { (errSecSuccess, bad) }, add: { _ in errSecSuccess })
+        }
+    }
+    // Made by another in between: taken only if it is one.
+    var reads = [(errSecItemNotFound, Data?.none), (errSecSuccess, Data(repeating: 1, count: 5))][...]
+    #expect(throws: (any Error).self) {
+        try DeviceControlKey.key(make: true, read: { reads.popFirst() ?? (errSecItemNotFound, nil) }, add: { _ in errSecDuplicateItem })
+    }
+}
+
 /// A screen's size is asked until it is answered, a minute apart, and then kept: a look that
 /// came while devicectl couldn't reach the device no longer leaves every later one uncut.
 @Test func aScreensSizeIsAskedAgainUntilItIsKnown() {

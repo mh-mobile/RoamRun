@@ -393,7 +393,9 @@ final class DeviceControlHub: @unchecked Sendable {
             do {
                 // Before the device is asked anything: once it pairs it knows no older pairing of
                 // ours, and a Keychain that then refuses would leave it with none this Mac holds.
-                _ = try key(true)
+                // And that key is the one it is sealed with: asked for again after the pairing,
+                // the Keychain could refuse then.
+                let sealing = try key(true)
                 let listening = try DevicePairing(name: name, host: Self.hostID(in: directory))
                 // A cancel that came before there was anything to cancel still counts.
                 if lock.withLock({ () -> Bool in pairing = listening; return pairingCancelled }) { listening.cancel() }
@@ -426,7 +428,7 @@ final class DeviceControlHub: @unchecked Sendable {
                 // Named by the UDID the device is saved under, as it is spelled there; or by its own.
                 let udid = device.udid ?? paired.udid
                 let target = Target(id: device.id, name: device.name, ip: device.ip, port: device.port, udid: udid)
-                try Self.save(Self.seal(paired.pairing, with: key(true)), as: DeviceControlWire.pairingFile(udid: udid, in: directory))
+                try Self.save(Self.seal(paired.pairing, with: sealing), as: DeviceControlWire.pairingFile(udid: udid, in: directory))
                 // Held from now on, also when the list of saved devices doesn't have its UDID yet.
                 lock.withLock { if !targets.contains(where: { $0.id == target.id }) { targets.append(target) } }
                 reopen(target.id)

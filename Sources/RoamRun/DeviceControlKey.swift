@@ -59,8 +59,20 @@ final class DeviceControlKey: @unchecked Sendable {
         func failure(_ status: OSStatus) -> DeviceSession.Failure {
             .message("the Keychain didn't give RoamRun its key for device control (\(SecCopyErrorMessageString(status, nil) as String? ?? "\(status)"))")
         }
+        // What the Keychain holds is taken only as a key of ours, and — with one at hand — only
+        // as that one: another would seal new pairings apart from the saved ones.
+        func taken(_ data: Data) throws -> SymmetricKey {
+            guard data.count == 32 else {
+                throw DeviceSession.Failure.message("what the Keychain holds for device control isn't RoamRun's key (\(data.count) bytes)")
+            }
+            let key = SymmetricKey(data: data)
+            guard atHand == nil || atHand == key else {
+                throw DeviceSession.Failure.message("RoamRun's key for device control was replaced in the Keychain while it ran: quit RoamRun and open it again, then set up the devices it no longer reads")
+            }
+            return key
+        }
         let (status, data) = read()
-        if status == errSecSuccess, let data { return SymmetricKey(data: data) }
+        if status == errSecSuccess, let data { return try taken(data) }
         guard status == errSecItemNotFound else { throw failure(status) }
         guard make else { throw DeviceSession.Failure.message("this Mac's key for device control is gone from the Keychain: set device control up again") }
         let fresh = (atHand ?? SymmetricKey(size: .bits256)).withUnsafeBytes { Data($0) }
@@ -69,7 +81,7 @@ final class DeviceControlKey: @unchecked Sendable {
         case errSecDuplicateItem:   // made in between: that one is the key
             let (status, data) = read()
             guard status == errSecSuccess, let data else { throw failure(status) }
-            return SymmetricKey(data: data)
+            return try taken(data)
         case let status: throw failure(status)
         }
     }
