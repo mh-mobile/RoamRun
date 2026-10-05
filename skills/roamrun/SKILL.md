@@ -202,8 +202,9 @@ On a Mac that is never on the device's Wi‑Fi (a remote one), there is no Set
 Up… to do: the user makes a pairing on a Mac that is (`roamrun pairing create
 <name> <file>`, entering a code on the device) and brings the file over, and
 `roamrun pairing import <file>` saves the device and the pairing, switched on,
-and removes the file. It exits 1 after saving when the file couldn't be removed
-or the device couldn't be switched on, and says which: don't run it again (the
+and removes the file. It exits 1 after saving when the file couldn't be removed,
+the device couldn't be switched on, or a pairing made on that Mac meanwhile took
+its place, and says which: don't run it again (the
 file may be gone) — tell the user. That file is a key to the device — don't
 print it, copy it or leave it behind.
 

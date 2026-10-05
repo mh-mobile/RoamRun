@@ -72,7 +72,11 @@ bounded.
   saved for its device — not the device's entry in the list of saved devices,
   which any program can rewrite — so a device you switched off stays off. A
   pairing that a saved device no longer connects with (its file moved away or
-  replaced, its device deleted) loses its switch: brought back, it is off; it is on after Set Up, after Pair
+  replaced, its device deleted) loses its switch once RoamRun, running, has seen
+  that (it looks every half minute, and whenever the list of devices is saved):
+  brought back after that, it is off. While the list of devices couldn't be read
+  whole, nothing is dropped; a device missing from it then loses its switch when
+  the list is next saved; it is on after Set Up, after Pair
   Again (also for a device you had switched off) and after `pairing import`. Turn it off when nothing of yours is using the device.
 - **Someone on the network can keep a pairing from being made, not make one.**
   While Set Up or `pairing create` waits, a device on that network can connect,
@@ -147,8 +151,8 @@ bounded.
   only), this Mac's identity for pairing (`device-control-host`), sealed pairings
   (`device-pairing-<UDID>.sealed`, 0600), and two
   items in the login Keychain, which removing the app leaves:
-  `security delete-generic-password -s io.github.mh-mobile.roamrun.device-control`
-  (twice: the key, and the list of devices switched on).
+  `security delete-generic-password -s io.github.mh-mobile.roamrun.device-control -a pairings`
+  (the key) and the same with `-a allowed` (the list of devices switched on).
   The CLI link and agent skills are installed only on request and
   never overwrite other files (they do replace an existing RoamRun link or
   RoamRun skill).

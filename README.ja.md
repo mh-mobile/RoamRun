@@ -326,9 +326,9 @@ iPhone から Mac を操作する方法は 3 つあります。どの方法で�
 look・tap・swipe・type・paste・press・elements の各コマンドと `roamrun mcp` で、実機の画面を見て操作できます。コマンドと使い方は [README.md](README.md#seeing-and-operating-the-device) を参照してください。使う前に知っておくこと:
 
 - **RoamRun が自分のペアリング（秘密鍵）を持ちます。** デバイスのページの **Set Up…** で作り、ログインキーチェーンの鍵で封印して保存します。この鍵を持ち、デバイスに届く者は、デバイス側の確認なしに画面を見て操作できます。
-- **`roamrun pairing create` が書き出すファイルは鍵そのものです**（封印されていません）。パスワードと同じように運び、コピーを残さないでください。取り込んだ Mac では `pairing import` が封印して元のファイルを消します。取り消すときは、デバイスの 設定 › プライバシーとセキュリティ › デベロッパモード でその項目を削除します。
+- **`roamrun pairing create` が書き出すファイルは鍵そのものです**（封印されていません）。パスワードと同じように運び、コピーを残さないでください。取り込んだ Mac では `pairing import` が封印して元のファイルを消し、そのデバイスはオンの状態になります。取り消すときは、デバイスの 設定 › プライバシーとセキュリティ › デベロッパモード でその項目を削除します。
 - **見ている間・操作している間は、デバイスの音が取られます。** 最後の look / 操作から約 5 秒間、スピーカーは無音になり（音楽は止まり、あとで自動的に再開）、音声入力（音声入力キーボード、聞き取るアプリ）は聞こえません。画面を見続けさせると、その間ずっと続きます。
-- **デバイス操作は、特定のエージェントやコマンドだけに許可する仕組みではありません。** オンにしている間は、この Mac であなたが実行するどのプログラム（ビルドスクリプト、パッケージのインストール処理、別のエージェント）でも、起動中の RoamRun を通じてデバイスを見て操作できます。デバイスのページの **Device control** のスイッチをオフにすると、すべて断ります。Set Up の直後はオンなので、使っていないときはオフにしてください。
+- **デバイス操作は、特定のエージェントやコマンドだけに許可する仕組みではありません。** オンにしている間は、この Mac であなたが実行するどのプログラム（ビルドスクリプト、パッケージのインストール処理、別のエージェント）でも、起動中の RoamRun を通じてデバイスを見て操作できます。デバイスのページの **Device control** のスイッチをオフにすると、すべて断ります。Set Up・Pair Again（オフにしていたデバイスでも）・`pairing import` の直後はオンなので、使っていないときはオフにしてください。
 - 接続のたびに、Mac とデバイスは互いを確かめます（デバイスは、ペアリング時に渡した鍵で署名します）。デバイスのアドレスで別のものが応答しても、この Mac の身元も入力も送らずに断ります。詳しくは [SECURITY.md](SECURITY.md) を参照してください。
 
 ## Mac に作るもの・アンインストール
@@ -355,8 +355,8 @@ rm -rf ~/Library/Application\ Support/RoamRun ~/Library/Logs/RoamRun
 tailscale serve --https=41443 --set-path=/ off   # roamrun ota を使った場合（otaPort のポート）
 defaults delete io.github.mh-mobile.roamrun      # 上の行の後で（otaPort がここにあります）
 defaults delete com.roamrun.app 2>/dev/null      # 0.1.12 より前の版が残したもの
-security delete-generic-password -s io.github.mh-mobile.roamrun.device-control   # デバイス操作を設定した場合
-security delete-generic-password -s io.github.mh-mobile.roamrun.device-control   # 2 回（項目が 2 つあります）
+security delete-generic-password -s io.github.mh-mobile.roamrun.device-control -a pairings   # デバイス操作を設定した場合: 封印の鍵
+security delete-generic-password -s io.github.mh-mobile.roamrun.device-control -a allowed    # と、オンにしているデバイスの一覧
 # 最後に /Applications/RoamRun.app を削除（「ログイン時に開く」を有効にしていた場合は先に無効化）
 ```
 

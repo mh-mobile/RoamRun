@@ -89,7 +89,7 @@ final class AppCoordinator: ObservableObject {
             logStore.log("couldn't read saved devices; kept the file as \(copy.path)")
             launchWarning = profiles.isEmpty
                 ? "RoamRun couldn't read its saved devices, so the list starts empty. The file was kept as \(copy.path)."
-                : "RoamRun couldn't read some of its saved devices; the others are here. The file was kept as \(copy.path)."
+                : "RoamRun couldn't read some of its saved devices; the others are here. The file was kept as \(copy.path). (A device brought back from it has device control switched off.)"
         } else if store.unreadable {
             logStore.log("couldn't read \(ProfileStore.directory.path)/profiles.json; not writing over it")
             launchWarning = Self.unreadableListWarning
@@ -111,7 +111,10 @@ final class AppCoordinator: ObservableObject {
         pruning.isOn = Snapshot.fakeProfiles == nil && store.keptUnreadable == nil && !store.unreadable
         deviceControl.onHeldChanged = { [switching, deviceControl, pruning] in
             switching.async {
-                guard pruning.isOn, let marks = deviceControl.heldMarks() else { return }
+                guard pruning.isOn, let marks = deviceControl.heldMarks() else {
+                    DeviceControlAllowed.shared.flush()   // still the chance to write what a write failed to
+                    return
+                }
                 DeviceControlAllowed.shared.prune(keeping: marks)
             }
         }
@@ -1396,7 +1399,7 @@ final class AppCoordinator: ObservableObject {
     private let deviceControl = DeviceControlHub(directory: ProfileStore.directory, key: DeviceControlKey.shared.key)
 
     /// The devices as saved now, to the hub that keeps their control connections: at launch, and
-    /// whenever the list is saved. (A pairing made while the app runs is seen at the next of those.)
+    /// whenever the list is saved. (A pairing file that appears in between is seen by the hub within half a minute.)
     private func syncDeviceControl() {
         guard Snapshot.path == nil else { return }
         deviceControl.update(profiles.compactMap(controlTarget))
@@ -1519,7 +1522,7 @@ final class AppCoordinator: ObservableObject {
                         self.launchWarning = allowed
                             ? (unreadable ? "Device control couldn't be switched on: the Keychain didn't give RoamRun its list of what is on." : "Device control couldn't be switched on: the Keychain didn't keep it.")
                             : (unreadable ? "Device control is off for as long as RoamRun runs, but the Keychain's list of what is on couldn't be read to take it out: it may be on again when RoamRun is opened anew."
-                                          : "Device control is switched off, but the Keychain hasn't kept that yet: RoamRun writes it again by itself; were it quit before that, the device would be on again.")
+                                          : "Device control is switched off, but the Keychain hasn't kept that yet: RoamRun writes it again by itself (within half a minute, and when it quits); should that fail too, the device is on again when RoamRun is next opened.")
                     }
                     self.objectWillChange.send()
                 }

@@ -112,7 +112,7 @@ final class DeviceControlAllowed: @unchecked Sendable {
 
     /// Whether it was written. Not written, it isn't switched on (after a restart it would be off
     /// again unsaid); it is switched off here all the same, and written again at the next chance
-    /// (the next switch, or `prune`) — until then it would be on again after a restart, which the
+    /// (the next switch, `prune`, or `flush` — every half minute and at quit) — until then it would be on again after a restart, which the
     /// caller says. A list that can't be read isn't written over, and has no such next chance.
     @discardableResult
     func set(_ mark: String, _ allowed: Bool, asked when: UInt64? = nil) -> Bool {

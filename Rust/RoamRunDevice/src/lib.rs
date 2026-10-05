@@ -782,7 +782,8 @@ enum Step {
     Wait(u64),
 }
 
-/// Looked at where a call begins too: none begins on a device being let go of.
+/// What a call told to stop says (the flag is looked at where a call begins too: none begins on
+/// a device being let go of).
 const STOPPED: &str = "stopped: told to stop where it was (the device was switched off or let go of, or whoever asked left)";
 
 /// How many keys are held once `step` is sent.

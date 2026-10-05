@@ -125,11 +125,16 @@ tunnel and Xcode has to run again.
     item (a key another program put there isn't read unasked); deny it. The same for the list of what
     is switched on, with a device that was switched off: with RoamRun quit, delete the item for
     account `allowed` and add one with `-A` (and once with `-T <the app's binary>`) holding
-    `["<shasum -a 256 of its device-pairing-<UDID>.sealed>"]`; open RoamRun → macOS asks about the
+    `["<its mark>"]` — `{ printf '%s\0' "$(echo <UDID> | tr A-Z a-z)"; cat device-pairing-<UDID>.sealed; } | shasum -a 256` —; open RoamRun → macOS asks about the
     item (deny it), and the device's switch reads off. If it reads on without a question, the list
     can be forged: not released so. (`security add-generic-password -s
-    io.github.mh-mobile.roamrun.device-control -a allowed -A -w '["<that digest>"]'`; afterwards
+    io.github.mh-mobile.roamrun.device-control -a allowed -A -w '["<that mark>"]'`; afterwards
     delete that item with `security delete-generic-password -s … -a allowed` and switch on in the app.)
+    The switch as it is kept: (a) with RoamRun running, move `device-pairing-<UDID>.sealed` away,
+    wait a minute, put it back, wait a minute — the page reads switched off; (b) switch a device
+    off and quit at once (⌘Q), reopen — off; (c) `chmod 000 profiles.json`, open RoamRun, wait a
+    minute, quit, restore the mode, reopen — every switch as it was; (d) **Pair Again…** on a
+    device that was switched off — it reads on, and the sheet says so.
 20. `roamrun look <name> /tmp/a.png`, then `tap`, `swipe`, `type`, `paste`, `press home` and
     `elements`, a `look` after each: each did what it says. The same through `roamrun mcp`
     from an agent.
@@ -140,7 +145,8 @@ tunnel and Xcode has to run again.
 23. Remove RoamRun's entry on the device: `roamrun status <name>` and the page say the
     pairing can no longer be used and offer **Pair Again…**, which works. (If they say instead
     that something else answers at the device's address, this iOS refuses before it proves
-    itself: note it — the build then takes a removed pairing for a stranger, and isn't released so.)
+    itself: note it — the build then takes a removed pairing for a stranger, and isn't released so.
+    Nor if it stays "not connected" and Pair Again is never offered.)
     Also with the pairing in place: lock the device, then restart it, and each time before it
     is unlocked look at `roamrun status <name>` — it says not connected (the app keeps trying),
     not that something else answers at the device's address; note it if it does.

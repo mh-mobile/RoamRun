@@ -5147,7 +5147,8 @@ private func listenerSoon(in dir: URL, _ handler: @escaping @Sendable (DeviceCon
     let dir = scratchDir()
     defer { try? FileManager.default.removeItem(at: dir) }
     let kept = ["device-pairing-A.sealed", "profiles.json", "device-control-host", "other.plist"]
-    let gone = ["device-pairing-A.plist", "device-pairing-B.plist", "device-pairing-B.plist.previous"]
+    let gone = ["device-pairing-A.plist", "device-pairing-B.plist", "device-pairing-B.plist.previous",
+                "device-pairing-A.sealed.writing-0F5B6A7C"]   // a saving that didn't get to its end
     for name in kept + gone { try Data("x".utf8).write(to: dir.appendingPathComponent(name)) }
     DeviceControlHub.removeUnsealed(in: dir)
     #expect(Set(try FileManager.default.contentsOfDirectory(atPath: dir.path)) == Set(kept))
@@ -5845,6 +5846,13 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     #expect(first.contains(a) && !first.contains(b))
     #expect(try JSONDecoder().decode(Set<String>.self, from: try #require(stored.withLock { $0 })) == [a])
     #expect(first.set(b, true))
+    // A write that failed is made again when the app quits, at the latest.
+    writes.withLock { $0 = errSecAuthFailed }
+    #expect(!first.set(b, false))
+    writes.withLock { $0 = errSecSuccess }
+    first.flush()
+    #expect(try JSONDecoder().decode(Set<String>.self, from: try #require(stored.withLock { $0 })) == [a])
+    #expect(first.set(b, true))
     // Off at once, before the Keychain is told; on again only by being switched on.
     first.offNow(b)
     #expect(!first.contains(b) && first.known(b) == false && first.contains(a))
@@ -6123,10 +6131,10 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     #expect(DeviceControlHub.pairingMark(udid: "UDID-1", in: dir) == brought)
 }
 
-/// What the switch may keep is what the sessions that stand connect with. A pairing parked under
-/// another name, or whose device is gone from the list, is held by none: it loses its switch,
-/// and isn't found on when it is brought back.
-@Test func onlyPairingsASessionHoldsKeepTheirSwitch() throws {
+/// What the switch may keep is what the sessions that stand connect with (the app cuts its list
+/// down to `heldMarks`). A pairing parked under another name, or whose device is gone from the
+/// list, is held by none; one that can't be read for the moment still is; stopped, nothing is said.
+@Test func theSwitchMayKeepOnlyWhatASessionHolds() throws {
     let dir = scratchDir()
     defer { try? FileManager.default.removeItem(at: dir) }
     let (hub, _) = try standInHub(dir, udid: "UDID-A")
@@ -6175,11 +6183,16 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     try FileManager.default.moveItem(at: file, to: elsewhere)
     try FileManager.default.createSymbolicLink(at: file, withDestinationURL: elsewhere)
     #expect(!DeviceControlWire.hasPairing(udid: "UDID-1", in: dir) && DeviceControlHub.pairingMark(udid: "UDID-1", in: dir) == nil)
+    // Known to be no pairing — not "couldn't be read just now", which would keep a session standing.
+    #expect(DeviceControlWire.sealedRead(file) == (nil, true))
     try FileManager.default.removeItem(at: file)
     #expect(mkfifo(file.path, 0o600) == 0)
     let asked = Date()
-    #expect(!DeviceControlWire.hasPairing(udid: "UDID-1", in: dir))
+    #expect(DeviceControlWire.sealedRead(file) == (nil, true))
     #expect(Date().timeIntervalSince(asked) < 1)
+    try FileManager.default.removeItem(at: file)
+    try FileManager.default.createDirectory(at: file, withIntermediateDirectories: false)
+    #expect(DeviceControlWire.sealedRead(file) == (nil, true))
     try FileManager.default.removeItem(at: file)
     try Data(count: 1 << 20).write(to: file)
     #expect(!DeviceControlWire.hasPairing(udid: "UDID-1", in: dir))

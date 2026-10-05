@@ -500,8 +500,8 @@ final class DeviceControlHub: @unchecked Sendable {
     /// The same as far as it is known without waiting, for saying how a device stands.
     var allowedKnown: @Sendable (String) -> Bool? = { _ in true }
 
-    /// What a saved pairing is known by to the switch: its sealed file's own digest. Not the
-    /// device's id or UDID, which are whatever the list of saved devices says.
+    /// What the pairing saved under `udid` is known by to the switch (`DeviceControlWire.mark`);
+    /// nil where none is saved, or what is there is no pairing's file.
     static func pairingMark(udid: String, in directory: URL) -> String? {
         guard let sealed = DeviceControlWire.sealedBytes(DeviceControlWire.pairingFile(udid: udid, in: directory)), !sealed.isEmpty else { return nil }
         return DeviceControlWire.mark(of: sealed, udid: udid)
@@ -935,6 +935,7 @@ final class DeviceControlHub: @unchecked Sendable {
 
     /// Pairings a build before the sealing kept as they were, and what it kept of older ones:
     /// each holds a private key the device may still take, and nothing reads them any more.
+    /// And what a saving left half-done (a run that ended in the middle of one).
     static func removeUnsealed(in directory: URL) {
         for name in (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
         where name.hasPrefix("device-pairing-") && (name.hasSuffix(".plist") || name.hasSuffix(".plist.previous") || name.contains(".sealed.writing")) {
@@ -985,8 +986,12 @@ final class DeviceControlHub: @unchecked Sendable {
         // Only the pairing the session was made for: the file put in its place meanwhile (another
         // pairing, one that is switched on) isn't connected with under this one's name.
         let session = open(t, { [key] in
-            guard let sealed = DeviceControlWire.sealedBytes(file), DeviceControlWire.mark(of: sealed, udid: t.udid) == mark else {
-                // In the words of a call stopped: not a pairing to be made again (put back, it connects).
+            // In the words of a call stopped, either way: not a pairing to be made again (put back, it connects).
+            let read = DeviceControlWire.sealedRead(file)
+            guard read.known else {
+                throw DeviceSession.Failure.message("\(DeviceSession.stopped) the pairing saved for this device couldn't be read just now")
+            }
+            guard let sealed = read.bytes, DeviceControlWire.mark(of: sealed, udid: t.udid) == mark else {
                 throw DeviceSession.Failure.message("\(DeviceSession.stopped) the pairing saved for this device changed: its connection is made anew")
             }
             return try Self.unseal(sealed, with: key(false))
