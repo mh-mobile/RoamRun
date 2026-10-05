@@ -12,6 +12,8 @@ DMG = $(APP_NAME)-$(VERSION).dmg
 ifeq ($(origin SIGN_ID),undefined)
 ifeq ($(filter dmg release-dmg,$(MAKECMDGOALS)),)
 SIGN_ID := $(or $(shell security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' | head -1),-)
+# One found here, not asked for: where it can't sign (no screen to allow its key on), ad hoc does.
+SIGN_FOUND := $(filter-out -,$(firstword $(SIGN_ID)))
 endif
 endif
 SIGN_ID ?= -
@@ -40,7 +42,7 @@ app: build
 	cp Resources/AppIcon.icns $(BUNDLE)/Contents/Resources/
 	cp skills/roamrun/SKILL.md $(BUNDLE)/Contents/Resources/roamrun-skill.md
 	cp THIRD-PARTY-LICENSES.txt $(BUNDLE)/Contents/Resources/
-	codesign -s "$(SIGN_ID)" $(SIGN_FLAGS) $(BUNDLE)
+	codesign -s "$(SIGN_ID)" $(SIGN_FLAGS) $(BUNDLE) $(if $(SIGN_FOUND),|| { echo "couldn't sign with $(SIGN_ID): signing ad hoc"; codesign -s - --force --options runtime $(BUNDLE); })
 	@echo "Built $(BUNDLE)"
 
 # Pure logic only (parsers, ownership rules); the bridge itself needs a real iPhone.

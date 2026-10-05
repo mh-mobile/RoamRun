@@ -22,7 +22,8 @@ texts, bare = {}, []
 for p in sorted((packages[i] for i in used), key=lambda p: (p["name"], p["version"])):
     name = f'{p["name"]} {p["version"]}'
     folder = os.path.dirname(p["manifest_path"])
-    files = sorted(os.path.join(folder, f) for f in os.listdir(folder) if f.upper().startswith(NAMES) and os.path.isfile(os.path.join(folder, f)))
+    # Below its top too: a crate can carry others' code, with their license beside it.
+    files = sorted(os.path.join(at, f) for at, _, found in os.walk(folder) for f in found if f.upper().startswith(NAMES))
     # A crate packaged without its license: the text from its repository, kept in licenses/.
     kept = os.path.join(os.path.dirname(packages[root]["manifest_path"]), "licenses", p["name"] + ".txt")
     if not files and os.path.isfile(kept):
@@ -34,7 +35,8 @@ for p in sorted((packages[i] for i in used), key=lambda p: (p["name"], p["versio
             body = "\n".join(line.rstrip() for line in text.read().strip().splitlines())
             # The same words laid out differently (indentation, http or https in its links) are one text.
             same = " ".join(body.replace("http://", "https://").split())
-            texts.setdefault(same, [body, []])[1].append(f'{name} ({p["license"]})')
+            inside = os.path.dirname(os.path.relpath(f, folder)) if f != kept else ""
+            texts.setdefault(same, [body, []])[1].append(f'{name} ({p["license"]})' + (f", in {inside}" if inside else ""))
 
 print("RoamRun's device control is built from these Rust crates, each under the license it names")
 print("(one of them, where it offers a choice). Their texts follow.")
