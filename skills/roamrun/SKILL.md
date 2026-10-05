@@ -197,6 +197,10 @@ The same is there as MCP tools (`look` returns the image itself, scaled to what
 you are shown, and points are that image's pixels): the user adds it once with
 `claude mcp add roamrun -- roamrun mcp`, or the like for another agent. Use the
 tools when you have them; the rules below hold for both.
+If a command says this process isn't allowed to reach the RoamRun app, your
+shell runs in a sandbox that keeps it from the app (the app may well be
+running — don't try to start it): ask to run `roamrun` outside the sandbox, or
+have the user add the MCP tools, which run outside it.
 
 - **Each look serves one action.** `tap` and `swipe` are refused until there has
   been a `look`, and any action (or `elements`) uses it up: look, act, look again.

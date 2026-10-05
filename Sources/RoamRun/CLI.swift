@@ -764,6 +764,8 @@ enum CLI {
     /// (no pairing of our own: it was never set up).
     enum ControlState: Equatable {
         case notSetUp, connected, notConnected, refused, noApp
+        /// The app can't be asked from here (a sandbox around this process).
+        case keptOut
 
         var line: String? {
             switch self {
@@ -772,6 +774,7 @@ enum CLI {
             case .notConnected: "paired, not connected — the app keeps trying; it can connect only while the device is on a Wi‑Fi"
             case .refused: "the pairing can no longer be used (removed on the device, or this Mac can't read what it saved) — the user pairs again in the RoamRun app, on the device's page"
             case .noApp: "paired; the RoamRun app, which holds the connection, isn't running (or is a build without device control)"
+            case .keptOut: "paired; this process isn't allowed to reach the RoamRun app (a sandbox around it?) — run it outside, or use the MCP tools"
             }
         }
     }
@@ -780,7 +783,11 @@ enum CLI {
         guard let udid, FileManager.default.fileExists(atPath: DeviceControlWire.pairingFile(udid: udid, in: ProfileStore.directory).path) else {
             return .notSetUp
         }
-        guard let r = try? DeviceControlWire.ask(.init(op: "state", device: id), in: ProfileStore.directory) else { return .noApp }
+        let r: DeviceControlWire.Response
+        do { r = try DeviceControlWire.ask(.init(op: "state", device: id), in: ProfileStore.directory) } catch {
+            if case DeviceControlWire.WireError.keptOut = error { return .keptOut }
+            return .noApp
+        }
         // A pairing the app hasn't picked up yet answers as not set up there.
         guard r.ok, r.open != true else { return r.ok ? .connected : .notConnected }
         return r.refused == true ? .refused : .notConnected
@@ -1496,6 +1503,9 @@ enum CLI {
             case .noApp:
                 check(false, "Device control: the RoamRun app isn't running (or is a build without it)",
                       fix: "Open RoamRun: it holds the connection that look, tap and the rest use.", warnOnly: true)
+            case .keptOut:
+                check(false, "Device control: this process isn't allowed to reach the RoamRun app",
+                      fix: "A sandbox around it keeps it from the app's socket (the app may well be running). Run roamrun outside the sandbox, or use the MCP tools (`roamrun mcp`).", warnOnly: true)
             }
             if !checkAll, live[p.id] == nil {
                 note("Bridge is off — not checked (roamrun doctor \(commandName(p)) checks it anyway)")
