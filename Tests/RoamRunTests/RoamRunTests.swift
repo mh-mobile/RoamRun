@@ -6024,10 +6024,14 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     #expect(DeviceControlHub.pairingMark(udid: "UDID-A", in: dir) == b && a != b)
     #expect(hub.answer(.init(op: "press", device: id, text: "home")).error == DeviceControlHub.switchedOff)
     #expect(standing.calls.filter { $0 == "press" }.isEmpty)
-    // The list saved again: A's session is let go of, and a new one stands for the pairing that is there now.
-    hub.update([target])
+    // Found out by itself (every half minute), as when the list is saved again: A's session is
+    // let go of, and a new one stands for the pairing that is there now.
+    hub.renewChanged()
     #expect(standing.calls.contains("letGo"))
     #expect(made().count == 2 && made().last !== standing)
+    hub.renewChanged()
+    hub.update([target])
+    #expect(made().count == 2)   // and that one is left alone
 }
 
 /// A pairing cancelled after it was saved takes only what it saved with it: one brought in over

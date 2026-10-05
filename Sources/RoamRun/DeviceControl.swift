@@ -934,6 +934,7 @@ final class DeviceControlHub: @unchecked Sendable {
         timer.schedule(deadline: .now() + 30, repeating: 30)
         timer.setEventHandler { [weak self] in
             self?.listen()   // not had at the start (another copy was ending): had now
+            self?.renewChanged()
             self?.keepOpen()
         }
         timer.resume()
@@ -963,6 +964,13 @@ final class DeviceControlHub: @unchecked Sendable {
 
     /// Tries to open what isn't: one attempt per device at a time; none for a pairing the device
     /// refused or this Mac can't read (only pairing again helps, and that makes a new session).
+    /// A session whose saved pairing is another by now (or gone) connects with nothing any more:
+    /// it is replaced by one for what is there, instead of standing as a pairing to be made again.
+    func renewChanged() {
+        let changed = lock.withLock { held.filter { Self.pairingMark(udid: $0.value.target.udid, in: directory) != $0.value.mark }.map(\.key) }
+        changed.forEach(reopen)
+    }
+
     private func keepOpen() {
         let now = Date()
         let due = lock.withLock { () -> [(UUID, any ControlledDevice)] in

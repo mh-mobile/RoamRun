@@ -114,7 +114,8 @@ public final class DeviceSession: @unchecked Sendable {
     private var mayBegin: (@Sendable () -> Bool)?
     public func gate(_ mayBegin: @escaping @Sendable () -> Bool) { standingLock.withLock { self.mayBegin = mayBegin } }
 
-    private static let replaced = Failure.message("this connection was closed (the device has a new one): look again")
+    /// In the words of a call stopped: not a failure of the connection, and not tried again.
+    private static let replaced = Failure.message("\(stopped) this connection was closed (the device has a new one): look again")
 
     /// As of the last call that finished; never waits for one that runs.
     public var isOpen: Bool { standingLock.withLock { standing.open } }
