@@ -916,6 +916,17 @@ enum CLI {
         exit(0)
     }
 
+    /// A look takes a file's place whole, or none: a folder of that name is left as it is (it was
+    /// removed with what it held), and so is the file there when the write fails.
+    nonisolated static func put(look made: URL, at file: URL) throws {
+        defer { try? FileManager.default.removeItem(at: made) }
+        var folder: ObjCBool = false
+        if FileManager.default.fileExists(atPath: file.path, isDirectory: &folder), folder.boolValue {
+            throw ArgumentError(message: "it is a folder")
+        }
+        try Data(contentsOf: made).write(to: file, options: .atomic)
+    }
+
     private static func askApp(_ request: DeviceControlWire.Request) -> DeviceControlWire.Response {
         do {
             return try DeviceControlWire.ask(request, in: ProfileStore.directory)
@@ -937,12 +948,8 @@ enum CLI {
         let made = DeviceControlWire.socketFolder(in: ProfileStore.directory).appendingPathComponent("look-\(UUID().uuidString).png")
         let r = askApp(.init(op: "look", device: profile.id, path: made.path))
         guard r.ok, let w = r.width, let h = r.height else { stop("look failed: \(r.error ?? "no answer")") }
-        do {
-            try? FileManager.default.removeItem(at: file)
-            try FileManager.default.moveItem(at: made, to: file)
-        } catch {
-            try? FileManager.default.removeItem(at: made)
-            stop("look failed: can't write \(file.path)")
+        do { try put(look: made, at: file) } catch {
+            stop("look failed: can't write \(file.path) (\((error as? ArgumentError)?.message ?? error.localizedDescription))")
         }
         print(file.path)
         print("\(w) x \(h)")

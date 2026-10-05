@@ -6,7 +6,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use idevice::core_device::hid::{ButtonState, IndigoHidClient, UniversalHidServiceClient};
+use idevice::core_device::hid::{
+    ButtonState, IndigoHidClient, UniversalHidServiceClient, TOUCHSCREEN_STATE_CONTACT, TOUCHSCREEN_STATE_RELEASE,
+};
 use idevice::dvt::message::AuxValue;
 use idevice::dvt::remote_server::RemoteServerClient;
 use idevice::core_device::{
@@ -405,6 +407,13 @@ fn unwrapped(value: &plist::Value) -> &plist::Value {
     value.as_dictionary().and_then(|d| d.get("Value")).unwrap_or(value)
 }
 
+/// What is sent has the walk's end as its deadline too, not only what is waited for: a tunnel
+/// that stopped taking bytes would hold the device's lock, and every call after this one.
+async fn within<T>(until: Instant, sending: impl std::future::Future<Output = T>) -> Result<T, String> {
+    tokio::time::timeout_at(tokio::time::Instant::from_std(until), sending).await
+        .map_err(|_| "the accessibility service stopped taking what was sent".to_string())
+}
+
 /// Captions in the inspector's order, and whether the walk came round (true) or was cut short.
 async fn elements(link: &mut Link, limit: usize, until: Instant) -> Result<(Vec<String>, bool, &'static str), String> {
     let port = link.handshake.services.get(WANTED[3].1).ok_or("no accessibility service on this device")?.port;
@@ -430,7 +439,7 @@ async fn elements(link: &mut Link, limit: usize, until: Instant) -> Result<(Vec<
         call("deviceInspectorSetMonitoredEventType:", plist::Value::Integer(0u64.into())),
         call("deviceInspectorShowVisuals:", plist::Value::Boolean(false)),
     ] {
-        client.root_channel().call_method(Some(name), arguments, false).await.map_err(|e| format!("{name} {e:?}"))?;
+        within(until, client.root_channel().call_method(Some(name), arguments, false)).await?.map_err(|e| format!("{name} {e:?}"))?;
     }
 
     let mut captions = Vec::new();
@@ -448,7 +457,7 @@ async fn elements(link: &mut Link, limit: usize, until: Instant) -> Result<(Vec<
             ("includeContainers".to_string(), wrapped(plist::Value::Boolean(true))),
         ].into_iter().collect();
         let (name, arguments) = call("deviceInspectorMoveWithOptions:", wrapped(plist::Value::Dictionary(options)));
-        client.root_channel().call_method(Some(name), arguments, false).await.map_err(|e| format!("{name} {e:?}"))?;
+        within(until, client.root_channel().call_method(Some(name), arguments, false)).await?.map_err(|e| format!("{name} {e:?}"))?;
 
         // The element comes back as the device's own call to us, among others.
         // One wait for the element, however many other messages come meanwhile, and never past the walk's end.
@@ -601,6 +610,71 @@ fn gone(error: &idevice::IdeviceError) -> bool {
     matches!(error, idevice::IdeviceError::Socket(e) if e.kind() == std::io::ErrorKind::NotConnected)
 }
 
+/// Whether what failed is sent again on a new connection: only the first attempt, on a
+/// connection kept from before and found gone, with nothing of this input sent yet — the device
+/// would otherwise be given part of it twice (a swipe half made, then made again).
+fn again(attempt: usize, kept: bool, sent_any: bool, error: &idevice::IdeviceError) -> bool {
+    attempt == 0 && kept && !sent_any && gone(error)
+}
+
+/// One thing a finger does: a report of where it is (down or up), or a wait.
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum Touch {
+    At(u8, u16, u16),
+    Wait(u64),
+}
+
+/// A tap: down, held long enough to count, up.
+fn tap_steps(x: u16, y: u16) -> Vec<Touch> {
+    vec![Touch::At(TOUCHSCREEN_STATE_CONTACT, x, y), Touch::Wait(50), Touch::At(TOUCHSCREEN_STATE_RELEASE, x, y)]
+}
+
+/// A drag: down at the start, on along the line a sample every `every` ms (slow enough to read
+/// as a drag, not a tap), down at the end, up.
+fn drag_steps(from: (u16, u16), to: (u16, u16), samples: u32, every: u64) -> Vec<Touch> {
+    let samples = samples.max(1);
+    let along = |a: u16, b: u16, i: u32| (a as f64 + (b as f64 - a as f64) * (i as f64 / samples as f64)).round() as u16;
+    let mut steps = Vec::with_capacity(samples as usize * 2 + 2);
+    for i in 0..samples {
+        steps.push(Touch::At(TOUCHSCREEN_STATE_CONTACT, along(from.0, to.0, i), along(from.1, to.1, i)));
+        steps.push(Touch::Wait(every));
+    }
+    steps.push(Touch::At(TOUCHSCREEN_STATE_CONTACT, to.0, to.1));
+    steps.push(Touch::At(TOUCHSCREEN_STATE_RELEASE, to.0, to.1));
+    steps
+}
+
+/// The steps, on the touch connection: the one kept, or a new one. As `press` does with keys.
+async fn touch(link: &mut Link, steps: &[Touch]) -> Result<(), String> {
+    for attempt in 0..2 {
+        let kept = link.hid.is_some();
+        if !kept {
+            link.hid = Some(UniversalHidServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)
+                .await.map_err(|e| format!("HID service: {e:?}"))?);
+        }
+        let hid = link.hid.as_mut().expect("just set");
+        let mut sent_any = false;
+        let mut failed = None;
+        for step in steps {
+            match *step {
+                Touch::Wait(ms) => tokio::time::sleep(Duration::from_millis(ms)).await,
+                Touch::At(state, x, y) => match hid.send_touchscreen(state, x, y, None).await {
+                    Ok(()) => sent_any = true,
+                    Err(e) => { failed = Some(e); break }
+                },
+            }
+        }
+        let Some(e) = failed else { return Ok(()) };
+        link.hid = None;   // a dead connection isn't kept for the next call
+        if again(attempt, kept, sent_any, &e) {
+            link.resent += 1;
+            continue;
+        }
+        return Err(format!("touch: {e:?}"));
+    }
+    unreachable!("the second attempt returns")
+}
+
 /// One thing a keyboard or a button does.
 enum Step {
     Key(u64, ButtonState),
@@ -633,7 +707,7 @@ async fn press(link: &mut Link, steps: &[Step]) -> Result<(), String> {
         }
         let Some(e) = failed else { return Ok(()) };
         link.keys = None;   // a dead connection isn't kept for the next call
-        if attempt == 0 && kept && !sent_any && gone(&e) {
+        if again(attempt, kept, sent_any, &e) {
             link.resent += 1;
             continue;
         }
@@ -646,29 +720,9 @@ async fn send(link: &mut Link, input: &Input) -> Result<(), String> {
     // The touchscreen takes 0...65535 across each axis.
     let unit = |v: f64| (v * 65535.0).round() as u16;
     match input {
-        Input::Tap(..) | Input::Swipe { .. } => {
-            for attempt in 0..2 {
-                let kept = link.hid.is_some();
-                if !kept {
-                    link.hid = Some(UniversalHidServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)
-                        .await.map_err(|e| format!("HID service: {e:?}"))?);
-                }
-                let hid = link.hid.as_mut().expect("just set");
-                let sent = match *input {
-                    Input::Tap(x, y) => hid.tap(unit(x), unit(y)).await,
-                    // A sample every ~16 ms: slow enough to read as a drag, not a tap.
-                    Input::Swipe { from, to, ms } => hid.drag(unit(from.0), unit(from.1), unit(to.0), unit(to.1), (ms / 16).max(2), 16).await,
-                    _ => unreachable!(),
-                };
-                let Err(e) = sent else { return Ok(()) };
-                link.hid = None;   // a dead connection isn't kept for the next call
-                if attempt == 0 && kept && gone(&e) {
-                    link.resent += 1;
-                    continue;
-                }
-                return Err(format!("touch: {e:?}"));
-            }
-            unreachable!("the second attempt returns")
+        Input::Tap(x, y) => touch(link, &tap_steps(unit(*x), unit(*y))).await,
+        Input::Swipe { from, to, ms } => {
+            touch(link, &drag_steps((unit(from.0), unit(from.1)), (unit(to.0), unit(to.1)), (ms / 16).max(2), 16)).await
         }
         Input::Paste(text) => {
             // The text goes onto the device's pasteboard, then Command-V as a keyboard would press it.
@@ -1076,6 +1130,41 @@ async fn accept_pairing(pairing: &RRPairing, show: &(impl Fn(&str) + Sync)) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn io(kind: std::io::ErrorKind) -> idevice::IdeviceError { idevice::IdeviceError::Socket(std::io::Error::from(kind)) }
+
+    #[test]
+    fn an_input_is_sent_again_only_when_none_of_it_went() {
+        let gone = io(std::io::ErrorKind::NotConnected);
+        assert!(again(0, true, false, &gone));
+        assert!(!again(0, true, true, &gone));    // part of it reached the device: a swipe isn't made twice
+        assert!(!again(1, true, false, &gone));   // once
+        assert!(!again(0, false, false, &gone));  // a connection just made: not one found gone
+        assert!(!again(0, true, false, &io(std::io::ErrorKind::BrokenPipe)));
+    }
+
+    #[test]
+    fn a_tap_and_a_drag_are_what_a_finger_does() {
+        assert_eq!(tap_steps(10, 20), vec![Touch::At(TOUCHSCREEN_STATE_CONTACT, 10, 20), Touch::Wait(50), Touch::At(TOUCHSCREEN_STATE_RELEASE, 10, 20)]);
+        let drag = drag_steps((0, 100), (100, 0), 4, 16);
+        let at: Vec<_> = drag.iter().filter_map(|s| match s { Touch::At(state, x, y) => Some((*state, *x, *y)), _ => None }).collect();
+        assert_eq!(at, vec![
+            (TOUCHSCREEN_STATE_CONTACT, 0, 100), (TOUCHSCREEN_STATE_CONTACT, 25, 75), (TOUCHSCREEN_STATE_CONTACT, 50, 50),
+            (TOUCHSCREEN_STATE_CONTACT, 75, 25), (TOUCHSCREEN_STATE_CONTACT, 100, 0), (TOUCHSCREEN_STATE_RELEASE, 100, 0),
+        ]);
+        assert_eq!(drag.iter().filter(|s| matches!(s, Touch::Wait(16))).count(), 4);
+        assert_eq!(drag_steps((5, 5), (9, 9), 0, 16).len(), 4);   // never no samples
+    }
+
+    #[test]
+    fn what_is_sent_is_given_up_at_the_deadline() {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        let started = Instant::now();
+        let stalled = runtime.block_on(within(Instant::now() + Duration::from_millis(60), std::future::pending::<()>()));
+        assert!(stalled.is_err());
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(runtime.block_on(within(Instant::now() + Duration::from_secs(5), async { 7 })), Ok(7));
+    }
 
     #[test]
     fn each_identity_has_hardware_of_its_own() {

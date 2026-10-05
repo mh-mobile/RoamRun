@@ -4608,6 +4608,34 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
     #expect(!FileManager.default.fileExists(atPath: DeviceControlWire.pairingFile(udid: "UDID-8", in: dir).path))
 }
 
+/// A pairing brought for a device that already has one is tried without anything being written:
+/// if its device then can't be saved, the pairing that worked before is still the one here.
+@Test func tryingAPairingLeavesTheOneSavedBefore() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let before = try scratchPairing(), brought = try scratchPairing()
+    let target = DeviceControlHub.Target(id: UUID(), name: "iPhone", ip: "100.64.0.1", port: 49152, udid: "UDID-9")
+    let file = DeviceControlWire.pairingFile(udid: "UDID-9", in: dir)
+    try DeviceControlHub.save(DeviceControlHub.seal(before, with: scratchKey), as: file)
+    let sealedBefore = try Data(contentsOf: file)
+    let hub = DeviceControlHub(directory: dir, key: { _ in scratchKey }) { _, _, _ in StandInDevice() }
+    defer { hub.stop() }
+
+    let sealing = try hub.tryPairing(brought, for: target)
+    #expect(try Data(contentsOf: file) == sealedBefore)            // not a byte of it
+    #expect(hub.session(of: target.id) == nil)                     // nor held yet
+    // The device couldn't be saved: nothing more is asked of the hub, and the earlier one opens.
+    #expect(try DeviceControlHub.unseal(Data(contentsOf: file), with: scratchKey) == before)
+
+    // Sealing is the file alone — no connection made, nothing held: it can be done in one turn
+    // with the saving of the device. Holding comes after.
+    try hub.sealPairing(brought, with: sealing, udid: "UDID-9")
+    #expect(try DeviceControlHub.unseal(Data(contentsOf: file), with: scratchKey) == brought)
+    #expect(hub.session(of: target.id) == nil)
+    hub.hold(target)
+    #expect(hub.state(of: target.id, udid: "UDID-9") == (true, true, false))
+}
+
 /// The file a pairing travels in holds the device with it, and is read only as that.
 @Test func aSharedPairingIsReadOnlyAsOne() throws {
     var device = DeviceProfile(displayName: "iPhone", instanceName: "abc", serviceType: "_remotepairing._tcp", domain: "local.",
@@ -4794,6 +4822,150 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
     guard case .failure(let why) = saved.placement(of: clash, udid: "U9", as: nil) else { Issue.record("placed under a taken name"); return }
     #expect("\(why)".contains("--as"))
     #expect(try saved.placement(of: clash, udid: "U9", as: "Second").get().isNew)
+}
+
+/// A look takes the place of a file, never of a folder: one of that name was removed with all
+/// it held. And where it can't be written, what was there stays.
+@Test func aLookTakesAFilesPlaceNotAFolders() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    func made(_ text: String) throws -> URL {
+        let url = dir.appendingPathComponent("made-\(UUID().uuidString).png")
+        try Data(text.utf8).write(to: url)
+        return url
+    }
+    let folder = dir.appendingPathComponent("screens.png")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    try Data("kept".utf8).write(to: folder.appendingPathComponent("earlier.png"))
+    var look = try made("new")
+    #expect(throws: (any Error).self) { try CLI.put(look: look, at: folder) }
+    #expect(try String(contentsOf: folder.appendingPathComponent("earlier.png"), encoding: .utf8) == "kept")
+    #expect(!FileManager.default.fileExists(atPath: look.path))            // not left lying either way
+
+    let file = dir.appendingPathComponent("now.png")
+    try Data("old".utf8).write(to: file)
+    look = try made("new")
+    try CLI.put(look: look, at: file)
+    #expect(try String(contentsOf: file, encoding: .utf8) == "new")
+    #expect(!FileManager.default.fileExists(atPath: look.path))
+
+    look = try made("newer")
+    #expect(throws: (any Error).self) { try CLI.put(look: look, at: dir.appendingPathComponent("no such folder/now.png")) }
+    #expect(try String(contentsOf: file, encoding: .utf8) == "new")
+    try CLI.put(look: try made("first"), at: dir.appendingPathComponent("fresh.png"))
+    #expect(try String(contentsOf: dir.appendingPathComponent("fresh.png"), encoding: .utf8) == "first")
+}
+
+/// A point is read off the look it came from: when another has looked since, the screen it was
+/// read off is not the one that would be pressed.
+@Test func aPointIsOfTheLookItNames() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (hub, made) = try standInHub(dir)
+    defer { hub.stop() }
+    let id = UUID()
+    hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
+    let device = try #require(made().first)
+    let png = dir.appendingPathComponent("look.png").path
+    func taps() -> Int { device.calls.filter { $0 == "tap" || $0 == "swipe" }.count }
+
+    let mine = try #require(hub.answer(.init(op: "look", device: id, path: png)).look)
+    let theirs = try #require(hub.answer(.init(op: "look", device: id, path: png)).look)   // another, meanwhile
+    #expect(mine != theirs)
+    let refused = hub.answer(.init(op: "tap", device: id, x: 10, y: 10, look: mine))
+    #expect(!refused.ok && refused.error == DeviceControlHub.lookedSince)
+    #expect(!hub.answer(.init(op: "swipe", device: id, x: 10, y: 10, x2: 20, y2: 20, look: mine)).ok)
+    #expect(taps() == 0)
+    // The other's look is still theirs to use: a refusal for what was asked doesn't spend it.
+    #expect(hub.answer(.init(op: "tap", device: id, x: 10, y: 10, look: theirs)).ok)
+    #expect(taps() == 1)
+    // A command run by hand names none: it is of the last look, as before.
+    #expect(hub.answer(.init(op: "look", device: id, path: png)).ok)
+    #expect(hub.answer(.init(op: "tap", device: id, x: 10, y: 10)).ok)
+    #expect(taps() == 2)
+}
+
+/// A second copy started beside the app (a screenshot run) doesn't take the socket the app
+/// answers on: commands went to nobody once it had quit.
+@Test func aSocketSomethingAnswersOnIsNotTaken() throws {
+    // Not scratchDir(): a socket's path has to fit in 104 bytes.
+    let dir = URL(fileURLWithPath: "/tmp/rr-\(UUID().uuidString.prefix(8))")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let first = try #require(DeviceControlWire.Listener(directory: dir) { _ in .init(ok: true, name: "first") })
+    defer { first.stop() }
+    #expect(DeviceControlWire.Listener(directory: dir) { _ in .init(ok: true, name: "second") } == nil)
+    #expect(try DeviceControlWire.ask(.init(op: "state", device: UUID()), in: dir).name == "first")
+    // Once it has ended, the next takes over — and the one that ended, asked to stop again,
+    // doesn't remove the socket that is the next one's by then.
+    first.stop()
+    let next = try #require(DeviceControlWire.Listener(directory: dir) { _ in .init(ok: true, name: "next") })
+    defer { next.stop() }
+    first.stop()
+    #expect(try DeviceControlWire.ask(.init(op: "state", device: UUID()), in: dir).name == "next")
+    // A socket left by a run that ended without removing it (its lock went with it) is replaced.
+    next.stop()
+    let sock = DeviceControlWire.socketPath(in: dir)
+    FileManager.default.createFile(atPath: sock, contents: nil)
+    let after = try #require(DeviceControlWire.Listener(directory: dir) { _ in .init(ok: true, name: "after") })
+    defer { after.stop() }
+    #expect(try DeviceControlWire.ask(.init(op: "state", device: UUID()), in: dir).name == "after")
+}
+
+/// Many started at once for one folder: one listens, and its socket is there to be asked —
+/// none of the others removed it on its way out.
+@Test func ofManyStartedAtOnceOneListens() throws {
+    let dir = URL(fileURLWithPath: "/tmp/rr-\(UUID().uuidString.prefix(8))")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    for _ in 0..<20 {
+        let made = OSAllocatedUnfairLock<[DeviceControlWire.Listener]>(initialState: [])
+        DispatchQueue.concurrentPerform(iterations: 8) { n in
+            if let l = DeviceControlWire.Listener(directory: dir, handler: { _ in .init(ok: true, name: "\(n)") }) { made.withLock { $0.append(l) } }
+        }
+        let listening = made.withLock { $0 }
+        #expect(listening.count == 1)
+        #expect((try? DeviceControlWire.ask(.init(op: "state", device: UUID()), in: dir))?.ok == true)
+        listening.forEach { $0.stop() }
+    }
+}
+
+/// A saved device a pairing was brought for counts as kept only once the list is written, also
+/// when nothing about it changes: it can be here and not in the file, and the pairing's file is
+/// removed on this answer.
+@Test func aSavedDeviceIsKeptOnlyOnceTheListIsWritten() {
+    func device(_ name: String, udid: String?) -> DeviceProfile {
+        var d = DeviceProfile(displayName: name, instanceName: name, serviceType: "_remotepairing._tcp", domain: "local.",
+                              remotePairingPort: 49152, bonjourHost: "x.local.", txt: [:],
+                              providerID: "tailscale", providerHostName: name, providerIP: "100.64.0.1")
+        d.udid = udid
+        return d
+    }
+    let known = device("iPhone", udid: "0000-ABCD"), unknown = device("iPad", udid: nil)
+    let list = [known, unknown]
+    var asked: [[DeviceProfile]] = []
+    // Its UDID known already: nothing to change, and still asked to be written.
+    #expect(AppCoordinator.keepSaved(known.id, udid: "0000-abcd", in: list, save: { asked.append($0); return true }) == known)
+    #expect(asked == [list])
+    #expect(AppCoordinator.keepSaved(known.id, udid: "0000-abcd", in: list, save: { _ in false }) == nil)
+    // Not known yet: written with it, or not kept.
+    asked = []
+    #expect(AppCoordinator.keepSaved(unknown.id, udid: "U2", in: list, save: { asked.append($0); return true })?.udid == "U2")
+    #expect(asked.first?.first { $0.id == unknown.id }?.udid == "U2" && asked.first?.first { $0.id == known.id } == known)
+    #expect(AppCoordinator.keepSaved(unknown.id, udid: "U2", in: list, save: { _ in false }) == nil)
+    // Removed meanwhile: nothing to keep, and nothing asked.
+    asked = []
+    #expect(AppCoordinator.keepSaved(UUID(), udid: "U2", in: list, save: { asked.append($0); return true }) == nil)
+    #expect(asked.isEmpty)
+}
+
+/// The port a pairing's file carries is the device's when it was made. Refused there, the device
+/// is looked for on its other ports; any other failure (no route, a pairing it doesn't take)
+/// isn't one a search would mend.
+@Test func aRefusedPortIsWhatASearchMends() {
+    #expect(AppCoordinator.portMoved("this pairing opens no connection to “iPhone” at 100.64.0.1 (RemotePairing port: Connection refused (os error 61)). Nothing was saved."))
+    #expect(!AppCoordinator.portMoved("this pairing opens no connection to “iPhone” at 100.64.0.1 (timed out). Nothing was saved."))
+    #expect(!AppCoordinator.portMoved("the device doesn't accept this pairing: RemotePairing(PairVerifyFailed)"))
 }
 
 /// `pairing` takes a word that says what to do, not a device's name first.
