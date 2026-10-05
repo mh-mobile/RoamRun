@@ -377,7 +377,7 @@ private struct DeviceControlRow: View {
                 // where another program can't switch it back on.
                 Toggle("On", isOn: Binding(get: { allowed == true }, set: { coordinator.switchControl(profile, $0) }))
                     .toggleStyle(.switch).controlSize(.small).labelsHidden()
-                    .disabled(allowed == nil && !coordinator.controlListUnreadable)   // not known yet
+                    .disabled(coordinator.controlSwitchPending(profile))   // not known yet
                     .help("While off, no command or agent can see or operate this device")
             }
             if state.paired {
@@ -394,9 +394,9 @@ private struct DeviceControlRow: View {
         if coordinator.controlAnother(profile) {
             return "What answers at this device's address isn't the device this pairing was made with, so it is told nothing of this Mac's and sent no input. If the device was erased or replaced, pair again; if not, something else has its address."
         }
-        if known == nil, !coordinator.controlListUnreadable { return "Paired. Looking up whether it is switched on…" }
+        if coordinator.controlSwitchPending(profile) { return "Paired. Looking up whether it is switched on…" }
         if !allowed, coordinator.controlListUnreadable {
-            return "Paired, off: the Keychain didn't give RoamRun its list of devices switched on. Switch it on to be asked again."
+            return "Paired, off: the Keychain didn't give RoamRun its list of devices switched on. A released RoamRun isn't asked about it: if macOS asked and you refused, something else had replaced that item — delete it (README, uninstalling) rather than allow it, then switch on here."
         }
         if !allowed { return "Paired, switched off: commands and agents are refused. Any program you run on this Mac can use it while it is on." }
         return state.open ? "Paired and connected." : "Paired. Connects while the device is on Wi‑Fi, awake and reachable."
@@ -434,6 +434,8 @@ private struct ControlPairingSheet: View {
                 Label("Paired. The device can't be reached over the VPN right now, so device control connects when it can.",
                       systemImage: "checkmark.circle").foregroundStyle(.green)
                 Text(why).font(.caption).foregroundStyle(.secondary)
+                Text("It is switched on: commands and agents can use this device until you switch it off, on its page.")
+                    .font(.callout).foregroundStyle(.secondary)
             case .failed(let why):
                 Label(why, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
             case nil:

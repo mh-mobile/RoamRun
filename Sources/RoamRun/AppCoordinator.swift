@@ -112,7 +112,7 @@ final class AppCoordinator: ObservableObject {
         if Snapshot.path == nil {
             deviceControl.start()
             // Which pairings are switched on, read where the Keychain may take its time: a page
-            // shown before that says off for one that is on.
+            // shown before that says it is looking it up.
             Task.detached {
                 _ = DeviceControlAllowed.shared.contains("")
                 await MainActor.run { self.objectWillChange.send() }
@@ -1067,7 +1067,9 @@ final class AppCoordinator: ObservableObject {
         let asked = DeviceControlAllowed.shared.now()
         let on = switching.sync { mark.map { DeviceControlAllowed.shared.set($0, true, asked: asked) } ?? false }
         let left = DeviceControlHub.removeTaken(file, readThrough: fd)
-        let off = on ? nil : "device control is switched off for it (the Keychain didn't keep it switched on): the user switches it on in the RoamRun app, on the device's page"
+        let off = on ? nil : mark == nil
+            ? "a pairing made on this Mac meanwhile took this one's place: the device uses that one"
+            : "device control is switched off for it (the Keychain didn't keep it switched on): the user switches it on in the RoamRun app, on the device's page"
         let said = [left, off].compactMap { $0 }
         return .init(ok: true, error: said.isEmpty ? nil : said.joined(separator: "; "), name: saved.displayName, removed: left == nil)
     }
@@ -1438,11 +1440,18 @@ final class AppCoordinator: ObservableObject {
     /// The pairing for device control being made now, if any.
     @Published private(set) var controlPairing: ControlPairing?
 
-    /// Whether commands and agents may operate the device. Off until the Keychain was read.
-    /// nil: not known yet (the Keychain's list isn't read, or the device has no session).
+    /// Whether commands and agents may operate the device.
+    /// nil: not known yet (the Keychain's list isn't read, or the device has no session: `controlSwitchPending`).
     /// About the pairing its session connects with — not about whatever file is under its name.
     func controlAllowed(_ profile: DeviceProfile) -> Bool? {
         deviceControl.mark(of: profile.id).flatMap(DeviceControlAllowed.shared.known)
+    }
+
+    /// The list is being read: the page says so, and its switch waits. Not for a device without a
+    /// session (there is nothing to switch), nor for a list that couldn't be read (said as that).
+    func controlSwitchPending(_ profile: DeviceProfile) -> Bool {
+        guard let mark = deviceControl.mark(of: profile.id) else { return false }
+        return DeviceControlAllowed.shared.known(mark) == nil && !DeviceControlAllowed.shared.isUnreadable
     }
 
     /// The Keychain didn't give its list of what is switched on: nothing is, until it does.
@@ -1483,8 +1492,11 @@ final class AppCoordinator: ObservableObject {
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     if !kept {
-                        self.launchWarning = allowed ? "Device control couldn't be switched on: the Keychain didn't keep it (or didn't give its list of what is on)."
-                            : "Device control is switched off for now, but the Keychain didn't keep that: it is on again when RoamRun is opened anew. Remove the pairing to be sure."
+                        let unreadable = DeviceControlAllowed.shared.isUnreadable
+                        self.launchWarning = allowed
+                            ? (unreadable ? "Device control couldn't be switched on: the Keychain didn't give RoamRun its list of what is on." : "Device control couldn't be switched on: the Keychain didn't keep it.")
+                            : (unreadable ? "Device control is off for as long as RoamRun runs, but the Keychain's list of what is on couldn't be read to take it out: it may be on again when RoamRun is opened anew."
+                                          : "Device control is switched off, but the Keychain hasn't kept that yet: RoamRun writes it again by itself; were it quit before that, the device would be on again.")
                     }
                     self.objectWillChange.send()
                 }

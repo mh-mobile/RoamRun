@@ -4205,7 +4205,7 @@ private func scratchPairing(withDeviceKey: Bool = true) throws -> Data {
 }
 
 /// A pairing that doesn't hold the device's key (made before it was kept) opens nothing, and
-/// reads as one only pairing again helps: nothing is sent to whatever answers.
+/// reads as one only pairing again helps — at once, without a connection being tried.
 @Test func aPairingWithoutTheDeviceKeyIsNotUsed() throws {
     let silent = try silentPort()
     defer { close(silent.fd) }
@@ -5131,7 +5131,7 @@ private func listenerSoon(in dir: URL, _ handler: @escaping @Sendable (DeviceCon
 @Test func aRefusedPortIsWhatASearchMends() {
     #expect(AppCoordinator.portMoved("this pairing opens no connection to “iPhone” at 100.64.0.1 (RemotePairing port: Connection refused (os error 61)). Nothing was saved."))
     #expect(!AppCoordinator.portMoved("this pairing opens no connection to “iPhone” at 100.64.0.1 (timed out). Nothing was saved."))
-    #expect(!AppCoordinator.portMoved("the device doesn't accept this pairing: RemotePairing(PairVerifyFailed)"))
+    #expect(!AppCoordinator.portMoved("the device doesn't accept this pairing: it proved itself and refused it"))
 }
 
 /// `pairing` takes a word that says what to do, not a device's name first.
@@ -5260,7 +5260,7 @@ private func listenerSoon(in dir: URL, _ handler: @escaping @Sendable (DeviceCon
     #expect(!AppCoordinator.controlWantsPortScan(why: refused, bridgeAtWork: true, lastScan: nil, now: now))   // it finds the port itself
     // A device that doesn't answer (away, asleep) isn't searched: thousands of probes for nothing.
     #expect(!AppCoordinator.controlWantsPortScan(why: "RemotePairing port: Operation timed out (os error 60)", bridgeAtWork: false, lastScan: nil, now: now))
-    #expect(!AppCoordinator.controlWantsPortScan(why: "the device doesn't accept this pairing: x", bridgeAtWork: false, lastScan: nil, now: now))
+    #expect(!AppCoordinator.controlWantsPortScan(why: "the device doesn't accept this pairing: it proved itself and refused it", bridgeAtWork: false, lastScan: nil, now: now))
     #expect(!AppCoordinator.controlWantsPortScan(why: refused, bridgeAtWork: false, lastScan: now.addingTimeInterval(-599), now: now))
     #expect(AppCoordinator.controlWantsPortScan(why: refused, bridgeAtWork: false, lastScan: now.addingTimeInterval(-600), now: now))
 }
@@ -5852,9 +5852,10 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     #expect(first.set(b, true) && first.contains(b) && first.known(b) == true)
     // A switch-on that waited its turn doesn't undo an off asked after it was.
     let waiting = first.now()
-    first.offNow(b)
-    #expect(first.set(b, true, asked: waiting) && !first.contains(b))
-    #expect(first.set(b, false) && first.set(b, true) && first.contains(b))
+    first.offNow("mark-late")
+    #expect(first.set("mark-late", true, asked: waiting) && !first.contains("mark-late"))
+    #expect(try JSONDecoder().decode(Set<String>.self, from: try #require(stored.withLock { $0 })) == [a, b])   // nor written as on
+    #expect(first.set("mark-late", true) && first.contains("mark-late") && first.set("mark-late", false))
     // Refused: nobody is on, it is said, and switching writes nothing over what is there.
     reads.withLock { $0 = errSecAuthFailed }
     let refused = list()
@@ -5991,8 +5992,9 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
 @Test func theLibrarySaysItsFailuresInTheWordsTheAppKnows() throws {
     let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         .appendingPathComponent("Rust/RoamRunDevice/src/lib.rs"), encoding: .utf8)
-    for words in [DeviceSession.refusal, DeviceSession.unchecked, DeviceSession.notTheDevice, "\"\(DeviceSession.stopped)"] {
-        #expect(source.contains(words), "\(words)")
+    // As the first words of a message it makes (a string that begins with them), which is how the app knows them.
+    for words in [DeviceSession.refusal, DeviceSession.unchecked, DeviceSession.notTheDevice, DeviceSession.stopped] {
+        #expect(source.contains("\"\(words)") || source.contains("format!(\"\(words)"), "\(words)")
     }
     #expect(!DeviceSession.leavesConnectionInDoubt(DeviceSession.Failure.message("stopped: told to stop where it was")))
     #expect(DeviceSession.leavesConnectionInDoubt(DeviceSession.Failure.message("keys: BrokenPipe")))

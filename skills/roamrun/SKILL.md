@@ -194,12 +194,18 @@ command here fails with "device control is switched off for this device", and
 `refused` — the user pairs again —, `another`, `noApp`, `keptOut`, and `null`
 where it isn't set up): only the user can switch it on (it is
 theirs to decide, like the pairing) — tell them, and don't look for a way round.
+A command already under way or waiting when it is switched off fails with a
+message that begins "stopped:" (or "not given:" for a look): the same thing —
+don't try it again.
 
 On a Mac that is never on the device's Wi‑Fi (a remote one), there is no Set
 Up… to do: the user makes a pairing on a Mac that is (`roamrun pairing create
 <name> <file>`, entering a code on the device) and brings the file over, and
-`roamrun pairing import <file>` saves the device and the pairing. That file is a
-key to the device — don't print it, copy it or leave it behind.
+`roamrun pairing import <file>` saves the device and the pairing, switched on,
+and removes the file. It exits 1 after saving when the file couldn't be removed
+or the device couldn't be switched on, and says which: don't run it again (the
+file may be gone) — tell the user. That file is a key to the device — don't
+print it, copy it or leave it behind.
 
 ```sh
 roamrun look iPhone /tmp/now.png     # the screen now: prints the path, then "1179 x 2556"

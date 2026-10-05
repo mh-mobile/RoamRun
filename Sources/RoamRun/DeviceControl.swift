@@ -33,7 +33,7 @@ enum DeviceControlWire {
         var complete: Bool?
         /// For "state": whether the connection to the device stands.
         var open: Bool?
-        /// For "state": the device no longer knows the pairing (it was removed there).
+        /// For "state": only pairing again helps (removed on the device, without the device's key, or unreadable here).
         var refused: Bool?
         /// For "import": what the device is saved as here.
         var name: String?
@@ -457,10 +457,10 @@ final class DeviceControlHub: @unchecked Sendable {
     /// A pairing made on another Mac is brought in (the file's path): the app's to do, which
     /// knows the saved devices.
     var onImport: (@Sendable (String, String?, _ wanted: @Sendable () -> Bool) -> DeviceControlWire.Response)?
-    /// Whether commands and agents may use a pairing, named by its mark (`pairingMark`): the
-    /// device's switch in the app. Asked at every request, off the main thread.
+    /// Whether commands and agents may use a pairing, named by its mark (a session's `Held.mark`):
+    /// the device's switch in the app. Asked at every request, off the main thread.
     var allowed: @Sendable (String) -> Bool = { _ in true }
-    /// The marks of the pairings in use (held, or saved for a device), every half minute.
+    /// The marks of the pairings in use (held by a session, or sealed in the folder), every half minute.
     var onInUse: (@Sendable (Set<String>) -> Void)?
     /// A saved pairing was written over: its mark, for the switch to drop. Not to wait in.
     var onReplaced: (@Sendable (String) -> Void)?
@@ -572,15 +572,12 @@ final class DeviceControlHub: @unchecked Sendable {
     func isAnother(_ id: UUID) -> Bool { session(of: id)?.isAnother == true }
 
     /// Whether a pairing of our own is saved for the device, and whether its connection stands.
-
     func state(of id: UUID, udid: String) -> (paired: Bool, open: Bool, refused: Bool) {
         let paired = hasPairing(udid: udid)
         let session = session(of: id)
         return (paired, paired && session?.isOpen == true, paired && session?.isRefused == true)
     }
 
-    /// Lets the device pair with this Mac (iOS 27 and later, on the same network), one at a time.
-    /// The new pairing replaces the saved one only once it opened a connection of its own.
     /// The device a pairing is asked for. Its UDID may not be known yet: one added on this
     /// Mac's own Wi‑Fi has never been bridged, and the pairing itself is what tells it.
     struct PairingRequest: Sendable {
@@ -617,6 +614,9 @@ final class DeviceControlHub: @unchecked Sendable {
         return .toProve
     }
 
+    /// Lets the device pair with this Mac (iOS 27 and later, on the same network), one at a time.
+    /// The new pairing replaces the saved one when the device is the one asked for, or — its
+    /// UDID not known here — once it opened a connection of its own.
     /// `attempt` names this pairing for `cancelPairing`. Cancelled before its pairing is saved,
     /// nothing is saved; cancelled after and before `.done` is said, what was saved is removed.
     func pair(_ device: PairingRequest, as name: String, attempt: UUID = UUID(), step: @escaping @Sendable (PairingStep) -> Void) {
@@ -985,8 +985,6 @@ final class DeviceControlHub: @unchecked Sendable {
         min(30 * pow(2, Double(max(n, 1) - 1)), 300)
     }
 
-    /// Tries to open what isn't: one attempt per device at a time; none for a pairing the device
-    /// refused or this Mac can't read (only pairing again helps, and that makes a new session).
     /// A session whose saved pairing is another by now (or gone) connects with nothing any more:
     /// it is replaced by one for what is there, instead of standing as a pairing to be made again.
     func renewChanged() {
@@ -1006,6 +1004,8 @@ final class DeviceControlHub: @unchecked Sendable {
         onInUse?(marks)
     }
 
+    /// Tries to open what isn't: one attempt per device at a time; none for a pairing the device
+    /// refused or this Mac can't read (only pairing again helps, and that makes a new session).
     private func keepOpen() {
         let now = Date()
         let due = lock.withLock { () -> [(UUID, any ControlledDevice)] in

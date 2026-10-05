@@ -53,7 +53,7 @@ final class DeviceControlAllowed: @unchecked Sendable {
         if let known { return known }
         if failed, !again { return nil }
         let (status, data) = read()
-        // Given, and not a list (an earlier build's, or garbled): nothing is on, and it is written anew.
+        // Given, and not a list (an earlier build's, or garbled): nothing is on, and the next switch writes a list in its place.
         let found: Set<String>? = status == errSecItemNotFound ? []
             : status == errSecSuccess ? (data.flatMap { try? JSONDecoder().decode(Set<String>.self, from: $0) } ?? []) : nil
         lock.withLock { held = found; unreadable = found == nil }
@@ -100,8 +100,9 @@ final class DeviceControlAllowed: @unchecked Sendable {
     }
 
     /// Whether it was written. Not written, it isn't switched on (after a restart it would be off
-    /// again unsaid); it is switched off here all the same, and is on again after a restart —
-    /// which the caller says. A list that can't be read isn't written over.
+    /// again unsaid); it is switched off here all the same, and written again at the next chance
+    /// (the next switch, or `prune`) — until then it would be on again after a restart, which the
+    /// caller says. A list that can't be read isn't written over, and has no such next chance.
     @discardableResult
     func set(_ mark: String, _ allowed: Bool, asked when: UInt64? = nil) -> Bool {
         if !allowed { offNow(mark) }
@@ -110,6 +111,8 @@ final class DeviceControlAllowed: @unchecked Sendable {
         func overtaken() -> Bool { allowed && (offAt[mark] ?? 0) > when }
         return io.withLock {
             guard var next = list(again: true) else { return false }
+            // Switched off since it was asked: nothing of it is taken, kept or written.
+            if lock.withLock({ overtaken() }) { return true }
             let was = next
             if allowed { next.insert(mark) } else { next.remove(mark) }
             guard next != was || lock.withLock({ unwritten }) else {

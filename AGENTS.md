@@ -12,8 +12,8 @@ see `skills/roamrun/SKILL.md` — installed with `roamrun init` or
   It builds device control's Rust library first (`Rust/RoamRunDevice`), with the
   Rust its `rust-toolchain.toml` names (rustup fetches it); `CARGO=` picks another.
   After changing `Cargo.lock`: `make licenses`, and commit the file it writes.
-- Device control keeps a key in the Keychain, which asks about a build signed ad
-  hoc after every rebuild. `make app` signs with an Apple Development certificate
+- Device control keeps a key and a list (which devices are switched on) in the
+  Keychain, which asks about a build signed ad hoc after every rebuild. `make app` signs with an Apple Development certificate
   when the keychain holds one (else ad hoc); `SIGN_ID=` picks another.
 - `make install-cli` links `/usr/local/bin/roamrun` to the build in the repo
   folder (for development; the app's first screen / Settings link the copy that

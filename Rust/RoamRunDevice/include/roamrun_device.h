@@ -60,8 +60,9 @@ uint8_t *rr_device_keyframe(RRDevice *device, size_t *length, char **error);
  * The calls below OPERATE THE DEVICE: look at a fresh frame first. Each returns JSON
  * ({"ok":true,"ms":…} or {"ok":false,"error":…}) to free with rr_string_free. A failure with
  * "invalid":true was refused for what was asked (a point off the screen, a key no keyboard
- * has) and nothing was sent; any other may have reached the device, and says nothing good
- * about the connection. Points are
+ * has) and nothing was sent; one whose error begins "stopped:" was told to stop (rr_flag_raise)
+ * and sent what it had by then, the connection none the worse; any other may have reached the
+ * device, and says nothing good about the connection. Points are
  * fractions 0...1 of the screen as the device holds it (not rotated to the interface); one
  * outside 0...1 is refused, not moved to the edge. A screen stream runs for the length of
  * each: the device drops input that comes without one.

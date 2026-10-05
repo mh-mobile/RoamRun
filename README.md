@@ -219,7 +219,7 @@ Each `look` serves one action: look, act, look again. For an agent, the same are
 
 ```sh
 roamrun pairing create iPhone ~/iphone-for-cloud.json --as cloud-mac   # here: pick "cloud-mac" on the device, enter the code
-roamrun pairing import ~/iphone-for-cloud.json                         # there, once the file is on it: saves the device and its pairing, removes the file
+roamrun pairing import ~/iphone-for-cloud.json                         # there, once the file is on it: saves the device and its pairing (switched on), removes the file
 ```
 
 `import` keeps the pairing only if it connects, so the device has to be reachable then; if it restarted since the file was made, its port has changed and `import` looks for it (for a device not yet saved on that Mac; for one that is, find its port there first: its page › Technical details › Find RemotePairing Port). The other Mac needs RoamRun running in a session at its screen (a Mac nobody is logged in at can't start the app) and a way to reach the device's VPN address. The file is a key: whoever has it and reaches the device can see and operate it, so move it as you would a password, and don't keep copies. Each pairing made this way is listed on the device under its own name (Settings › Privacy & Security › Developer Mode) and can be removed there alone; this Mac's own pairing is another entry and stays.

@@ -47,7 +47,7 @@ enum CLI {
                                      <label> in the device's list, and writes that pairing and the
                                      device to <file>. The file is the key: keep it as one.
       pairing import <file> [--as <name>]
-                                     There: saves the device and its pairing, then removes <file>
+                                     There: saves the device and its pairing (switched on), then removes <file>
     """
 
     private static let baseUsage = """
@@ -414,7 +414,7 @@ enum CLI {
         let detail: String?
         /// nil when unknown (not queried, or the iPhone is unreachable).
         let locked: Bool?
-        /// Device control, in `status`: connected, notConnected, refused (pair again), switchedOff,
+        /// Device control, in `status` and `devices`: connected, notConnected, refused (pair again), switchedOff,
         /// another (not the paired device answers), noApp, keptOut; null where it isn't set up.
         var deviceControl: String?
 

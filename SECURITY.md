@@ -42,7 +42,8 @@ bounded.
   the file alone opens nothing, and another program asking for the key makes
   macOS ask you. It is not protection against something that runs as RoamRun or
   that you allow in that prompt. A released RoamRun reads its key without one, so
-  with it a prompt about that item is a sign that something else replaced it —
+  with it a prompt about that item — or about the other one RoamRun keeps there,
+  the list of devices switched on — is a sign that something else replaced it:
   don't allow it; a build you made yourself, signed otherwise, does get asked. The device lists the pairing in Settings ›
   Privacy & Security › Developer Mode, where it can be removed; during each look
   or action, and for about five seconds after, the device shows screen sharing. While **Set Up…** or
@@ -64,12 +65,13 @@ bounded.
   device (the `roamrun` commands do): the key stays with RoamRun, but RoamRun
   uses it for whoever asks. It is not a permission given to one agent — a build
   script or a package's install step is let in as well. Each device has a switch
-  on its page: off, every request is refused, and a text being typed stops where
-  it is. What is on is kept in the login Keychain, where another program can't
+  on its page: off, every request is refused; a text being typed or a walk of
+  the elements stops where it is, and what was waiting its turn isn't begun (a
+  tap or a press already on its way arrives). What is on is kept in the login Keychain, where another program can't
   add to it without macOS asking you, and it names the pairing itself — not the
   device's entry in the list of saved devices, which any program can rewrite —
-  so a device you switched off stays off; it is on after Set Up and after
-  `pairing import`. Turn it off when nothing of yours is using the device.
+  so a device you switched off stays off; it is on after Set Up, after Pair
+  Again (also for a device you had switched off) and after `pairing import`. Turn it off when nothing of yours is using the device.
 - **Someone on the network can keep a pairing from being made, not make one.**
   While Set Up or `pairing create` waits, a device on that network can connect,
   ask for a code and then say nothing, which holds the wait (three minutes at

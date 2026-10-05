@@ -127,7 +127,9 @@ tunnel and Xcode has to run again.
     account `allowed` and add one with `-A` (and once with `-T <the app's binary>`) holding
     `["<shasum -a 256 of its device-pairing-<UDID>.sealed>"]`; open RoamRun → macOS asks about the
     item (deny it), and the device's switch reads off. If it reads on without a question, the list
-    can be forged: not released so.
+    can be forged: not released so. (`security add-generic-password -s
+    io.github.mh-mobile.roamrun.device-control -a allowed -A -w '["<that digest>"]'`; afterwards
+    delete that item with `security delete-generic-password -s … -a allowed` and switch on in the app.)
 20. `roamrun look <name> /tmp/a.png`, then `tap`, `swipe`, `type`, `paste`, `press home` and
     `elements`, a `look` after each: each did what it says. The same through `roamrun mcp`
     from an agent.
@@ -139,12 +141,14 @@ tunnel and Xcode has to run again.
     pairing can no longer be used and offer **Pair Again…**, which works. (If they say instead
     that something else answers at the device's address, this iOS refuses before it proves
     itself: note it — the build then takes a removed pairing for a stranger, and isn't released so.)
-24. **Remove Device**: its `.sealed` file is gone. While `roamrun type <name> "<a few hundred
-    characters>"` runs into a note (the device's keyboard an English one), **Remove…** the
-    pairing: the typing stops within a moment — where it had got to, no further — and the
-    command says it was told to stop. Before that, `roamrun type <name> "<600 numbered
-    characters>"` and a `look` right after: the last of them is there (none still on their way). Once more
-    in another app's field (a search field, a message draft not sent): the pace was measured in a note.
+24. Into a note, the device's keyboard an English one: `roamrun type <name> "<600 numbered
+    characters>"` and a `look` right after — the last of them is there (none still on their
+    way); once more in another app's field (a search field, a message draft not sent): the pace
+    was measured in a note. Then, each time while `roamrun type <name> "<2000 characters>"` runs:
+    switch the device off on its page; interrupt the command (Ctrl-C); **Remove…** the pairing —
+    the typing stops within a moment, where it had got to and no further, and the command (where
+    it still runs) says it was told to stop. Set it up again, then **Remove Device**: its
+    `.sealed` file is gone.
 25. `roamrun pairing create <name> ~/k.json --as "RoamRun (check)"`, the code entered on the
     device: the file is written (0600) and the device lists "RoamRun (check)" beside this
     Mac's own entry. On another Mac that reaches the device (or a macOS VM on the tailnet):

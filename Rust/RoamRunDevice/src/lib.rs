@@ -768,9 +768,9 @@ enum Step {
     Wait(u64),
 }
 
+/// Looked at where a call begins too: none begins on a device being let go of.
 const STOPPED: &str = "stopped: told to stop where it was (the device was switched off or let go of, or whoever asked left)";
 
-// Looked at where a call begins too: none begins on a device being let go of.
 /// How many keys are held once `step` is sent.
 fn down_after(down: i32, step: &Step) -> i32 {
     match step {
@@ -1292,8 +1292,8 @@ mod tests {
         assert_eq!(own_hardware("").0, "000000000000");   // nothing to go by: still twelve characters
     }
 
-    /// A text as it is really sent: stopped only where no key is held (never with Shift down),
-    /// and no faster than the device takes it — within the time its length is given.
+    /// A text as its steps are laid out: places to stop only where no key is held (never with
+    /// Shift down), and no faster than the device takes it — within the time its length is given.
     #[test]
     fn a_text_is_typed_stroke_by_stroke_at_the_devices_pace() {
         let steps = type_steps(&[(0x04, true), (0x05, false)]);   // "Ab"

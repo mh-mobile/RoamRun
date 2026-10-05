@@ -239,16 +239,16 @@ public final class DeviceSession: @unchecked Sendable {
         return opened
     }
 
-    /// How the library words a pairing the device doesn't know (rr_device_open's error).
+    /// How the library's message begins for a pairing the device doesn't know (rr_device_open's error).
     public static let refusal = "the device doesn't accept this pairing"
-    /// How it words a call stopped at this side's bidding.
-    public static let stopped = "stopped:"
-    /// And a pairing made before the device's key was kept with it, or one it can't read: only
+    /// …for a pairing made before the device's key was kept with it, or one it can't read: only
     /// pairing again helps there too.
     public static let unchecked = "this pairing doesn't hold the device's key"
     /// How it words an answer that isn't the device's own: not a refusal — pairing again isn't
     /// what to do when something else has taken the device's address.
     public static let notTheDevice = "not the device this pairing was made with"
+    /// …and for a call stopped at this side's bidding.
+    public static let stopped = "stopped:"
 
     private func perform<T>(repeatable: Bool, _ body: (OpaquePointer) throws -> T) throws -> T {
         try lock.withLock {
