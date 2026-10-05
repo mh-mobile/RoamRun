@@ -4193,11 +4193,28 @@ func publishStepsAsideWhenTurnedOff(_ c: PublishCase) async {
 private let scratchKey = SymmetricKey(size: .bits256)
 
 /// A pairing as the library reads one, for a device that doesn't exist.
-private func scratchPairing() throws -> Data {
+private func scratchPairing(withDeviceKey: Bool = true) throws -> Data {
     let key = Curve25519.Signing.PrivateKey()
-    let plist: [String: Any] = ["public_key": key.publicKey.rawRepresentation, "private_key": key.rawRepresentation,
+    var plist: [String: Any] = ["public_key": key.publicKey.rawRepresentation, "private_key": key.rawRepresentation,
                                 "identifier": UUID().uuidString]
+    if withDeviceKey {   // as a pairing made now holds it: the device's own key and identifier
+        plist["peer_public_key"] = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation
+        plist["peer_identifier"] = UUID().uuidString
+    }
     return try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+}
+
+/// A pairing that doesn't hold the device's key (made before it was kept) opens nothing, and
+/// reads as one only pairing again helps: nothing is sent to whatever answers.
+@Test func aPairingWithoutTheDeviceKeyIsNotUsed() throws {
+    let silent = try silentPort()
+    defer { close(silent.fd) }
+    let pairing = try scratchPairing(withDeviceKey: false)
+    let session = DeviceSession(ip: "127.0.0.1", port: silent.port, pairing: { pairing })
+    let asked = Date()
+    #expect(throws: (any Error).self) { try session.connect() }
+    #expect(Date().timeIntervalSince(asked) < 2)   // refused here, not after waiting on the port
+    #expect(session.isRefused && !session.isOpen)
 }
 
 /// One saved as the hub saves it.
@@ -5769,16 +5786,6 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     #expect(chmod(dir.path, 0o000) == 0)
     #expect(hub.unpair(target) == .left)
     #expect(device.calls.contains("letGo"))
-}
-
-/// Which addresses are Tailscale's own: elsewhere, who answers isn't vouched for.
-@Test func tailscaleAddressesAreToldFromOthers() {
-    for yes in ["100.64.0.1", "100.97.221.89", "100.127.255.254", "fd7a:115c:a1e0::1", "fd7a:115c:a1e0:ab12:4843:cd96:6261:dd59"] {
-        #expect(DeviceControlWire.isTailscale(address: yes), "\(yes)")
-    }
-    for no in ["100.63.255.255", "100.128.0.1", "192.168.1.20", "10.0.0.5", "fd7a:115c:a1e1::1", "fe80::1", "example.com", ""] {
-        #expect(!DeviceControlWire.isTailscale(address: no), "\(no)")
-    }
 }
 
 /// The devices switched on are whatever the Keychain gives, and nothing when it gives nothing:

@@ -538,9 +538,15 @@ async fn elements(link: &mut Link, limit: usize, until: Instant) -> Result<(Vec<
     Ok((captions, false, "limit"))
 }
 
+/// UNCHECKED in the header: only pairing again helps.
+const UNCHECKED: &str = "this pairing doesn't hold the device's key (it was made before RoamRun checked who answers): pair again";
+
 async fn connect(ip: &str, port: u16, file: &[u8]) -> Result<Link, String> {
     let started = Instant::now();
     let mut pairing = RpPairingFile::from_bytes(file).map_err(|e| format!("pairing: {e:?}"))?;
+    // The device proves itself at every connection, by the key it gave when the pairing was
+    // made: a pairing without that key would take whatever answers for the device.
+    if pairing.peer_public_key.is_none() { return Err(UNCHECKED.into()); }
     let control = TcpStream::connect((ip, port)).await.map_err(|e| format!("RemotePairing port: {e}"))?;
     let mut client = RemotePairingClient::new(RpPairingSocket::new(control), LABEL);
     // Verify only: a pairing the device doesn't know must fail here, not start a new one.
@@ -549,6 +555,8 @@ async fn connect(ip: &str, port: u16, file: &[u8]) -> Result<Link, String> {
     // answered and said no, not when the exchange itself broke off.
     client.validate_pairing(&mut pairing).await.map_err(|e| match e {
         idevice::IdeviceError::RemotePairing(idevice::remote_pairing::errors::RemotePairingError::PairVerifyFailed) => format!("the device doesn't accept this pairing: {e:?}"),
+        idevice::IdeviceError::RemotePairing(idevice::remote_pairing::errors::RemotePairingError::PeerNotVerified(what)) =>
+            format!("what answers at {ip}:{port} isn't the device this pairing was made with ({what}): nothing was sent to it"),
         _ => format!("the pairing couldn't be verified: {e:?}"),
     })?;
     let verified_ms = started.elapsed().as_millis();
@@ -1163,6 +1171,8 @@ async fn accept_pairing(pairing: &RRPairing, show: &(impl Fn(&str) + Sync)) -> R
         };
         match outcome {
             Some(Ok(peer)) => {
+                // Without the device's key the pairing couldn't be used: connections check it.
+                if file.peer_public_key.is_none() { return Err("the device paired without giving a key to know it by: nothing was kept".into()); }
                 let file = String::from_utf8(file.to_bytes()).map_err(|_| "the pairing isn't text".to_string())?;
                 return Ok((peer, file));
             }

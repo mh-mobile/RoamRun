@@ -17,7 +17,9 @@ typedef struct RRDevice RRDevice;
 /**
  * Verifies the pairing (`pairing_len` bytes of a property list, never a path) with the device at `ip`:`port` (its RemotePairing
  * port) and opens the tunnel. Never starts a new pairing; sends the device no input.
- * It is the device that checks the pairing: what answers there isn't proved to be the device by it.
+ * Both ways: the device checks the pairing, and what answers must sign as the device the pairing
+ * was made with. A pairing that doesn't hold that device's key fails with a message that holds
+ * "doesn't hold the device's key": like a refusal, only pairing again helps.
  * NULL on failure, with *error (if given) set to a message to free with rr_string_free. A
  * message that holds "doesn't accept this pairing" means the device answered and refused it
  * (removed there); any other failure is of the connection.

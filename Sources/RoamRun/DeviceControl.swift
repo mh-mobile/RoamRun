@@ -104,18 +104,6 @@ enum DeviceControlWire {
         return (size ?? 0) > 0
     }
 
-    /// Whether the address is one Tailscale gives its devices (100.64.0.0/10, fd7a:115c:a1e0::/48):
-    /// there, who answers is Tailscale's to vouch for. The pairing doesn't prove the device to the Mac.
-    static func isTailscale(address: String) -> Bool {
-        var v4 = in_addr(), v6 = in6_addr()
-        if inet_pton(AF_INET, address, &v4) == 1 { return UInt32(bigEndian: v4.s_addr) >> 22 == 0x6440_0000 >> 22 }
-        guard inet_pton(AF_INET6, address, &v6) == 1 else { return false }
-        return withUnsafeBytes(of: &v6) { Array($0.prefix(6)) } == [0xfd, 0x7a, 0x11, 0x5c, 0xa1, 0xe0]
-    }
-    static func unvouched(_ address: String) -> String {
-        "\(address) isn't a Tailscale address: whatever answers there is taken for the device, and is sent what is typed and pasted. Fine on a VPN that knows its devices; on an ordinary network, anyone who can take that address."
-    }
-
     /// What a UDID is made of. It names a file here and is handed to Xcode's tools.
     static func plausible(udid: String) -> Bool {
         !udid.isEmpty && udid.utf8.count <= 64 && udid.unicodeScalars.allSatisfy { $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "-") }

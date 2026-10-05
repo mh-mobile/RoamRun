@@ -409,10 +409,6 @@ private struct ControlPairingSheet: View {
                         .font(.callout).foregroundStyle(.secondary)
                     Text("Needs iOS 27 or later: earlier versions list no devices there, and refuse remote control.")
                         .font(.caption).foregroundStyle(.secondary)
-                    if !DeviceControlWire.isTailscale(address: profile.providerIP) {
-                        Label(DeviceControlWire.unvouched(profile.providerIP), systemImage: "exclamationmark.triangle")
-                            .font(.caption).foregroundStyle(.orange)
-                    }
                 }
                 ProgressView("Waiting for the device…")
             case .code(let digits):

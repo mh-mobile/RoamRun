@@ -205,7 +205,7 @@ public final class DeviceSession: @unchecked Sendable {
         guard let opened = pairing.withUnsafeBytes({ rr_device_open(ip, port, $0.bindMemory(to: UInt8.self).baseAddress, $0.count, &error) }) else {
             defer { rr_string_free(error) }
             let why = error.map { String(cString: $0) } ?? "can't open"
-            refused = why.contains(Self.refusal)
+            refused = why.contains(Self.refusal) || why.contains(Self.unchecked)
             throw Failure.message(why)
         }
         refused = false
@@ -215,6 +215,8 @@ public final class DeviceSession: @unchecked Sendable {
 
     /// How the library words a pairing the device doesn't know (rr_device_open's error).
     static let refusal = "doesn't accept this pairing"
+    /// And a pairing made before the device's key was kept with it: only pairing again helps there too.
+    static let unchecked = "doesn't hold the device's key"
 
     private func perform<T>(repeatable: Bool, _ body: (OpaquePointer) throws -> T) throws -> T {
         try lock.withLock {

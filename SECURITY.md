@@ -53,12 +53,10 @@ bounded.
   one that did would be given nothing, and its pairing is kept only if it names
   itself as the device you set up. The connection itself goes from the Mac to the
   device's VPN address and is encrypted by the tunnel it opens; screen images and
-  input travel in it. **The pairing proves the Mac to the device, not the device
-  to the Mac**: whatever answers at that address is taken for the device, and
-  would be sent what is typed and pasted. On a Tailscale address that is the
-  device, as Tailscale has it; for a device saved under an address of an ordinary
-  network, it is whoever holds that address there (Set Up and `pairing create`
-  say so for an address that isn't Tailscale's).
+  input travel in it. **Each side proves itself to the other at every
+  connection**: the Mac with the pairing's key, the device with the key it gave
+  when the pairing was made, which RoamRun keeps with the pairing. Something else
+  answering at the device's address is refused before anything is sent to it.
 - **Any program you run can use device control while it is switched on.** Any
   process of your user can ask the running app to look at or operate a paired
   device (the `roamrun` commands do): the key stays with RoamRun, but RoamRun

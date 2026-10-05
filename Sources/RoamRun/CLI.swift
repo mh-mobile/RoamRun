@@ -861,9 +861,6 @@ enum CLI {
             reserved = nil   // done: an interrupt from here on leaves the file
             close(fd)
             print("Wrote \(out.path)" + (unreached.map { " (it couldn't be tried from here: \($0))" } ?? ", and it connects."))
-            if !DeviceControlWire.isTailscale(address: profile.providerIP) {
-                FileHandle.standardError.write(Data("roamrun: \(DeviceControlWire.unvouched(profile.providerIP))\n".utf8))
-            }
             print("It is a key to \(profile.displayName): whoever has it and reaches \(profile.providerIP) can see and operate the device. On the other Mac: roamrun pairing import <that file>")
             print("To withdraw it: remove “\(listening.name)” on the device, in that list.")
             exit(0)
