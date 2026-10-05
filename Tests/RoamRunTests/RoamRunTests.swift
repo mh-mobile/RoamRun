@@ -4759,6 +4759,43 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
     #expect(CLI.sharedUDID(saved: nil, paired: "") == nil)
 }
 
+/// Where a pairing made elsewhere goes is worked out without saving anything: a pairing that
+/// then doesn't connect leaves the saved devices as they were, the UDID of one not yet known too.
+@Test func placingAPairingSavesNothing() throws {
+    func device(_ name: String, ip: String, instance: String, udid: String?) -> DeviceProfile {
+        var d = DeviceProfile(displayName: name, instanceName: instance, serviceType: "_remotepairing._tcp", domain: "local.",
+                              remotePairingPort: 49152, bonjourHost: "x.local.", txt: [:],
+                              providerID: "tailscale", providerHostName: name, providerIP: ip)
+        d.udid = udid
+        return d
+    }
+    let known = device("iPhone", ip: "100.64.0.1", instance: "a", udid: "0000-ABCD")
+    let unknown = device("iPad", ip: "100.64.0.2", instance: "b", udid: nil)
+    let saved = [known, unknown]
+    let came = device("Phone there", ip: "100.64.0.9", instance: "z", udid: nil)
+
+    // One saved under that UDID, however it is spelled: that one, as it is.
+    #expect(try saved.placement(of: came, udid: "0000-abcd", as: nil).get() == DevicePlacement(profile: known, isNew: false))
+    // One whose UDID isn't known yet, at that address or by that advert: that one — and still
+    // without a UDID: it is saved only once the pairing has connected.
+    var at = came; at.providerIP = "100.64.0.2"
+    #expect(try saved.placement(of: at, udid: "U2", as: nil).get() == DevicePlacement(profile: unknown, isNew: false))
+    var advert = came; advert.instanceName = "b"
+    #expect(try saved.placement(of: advert, udid: "U2", as: "Other").get().profile.udid == nil)
+    // A device known by another UDID isn't taken for it by its address.
+    var sameAddress = came; sameAddress.providerIP = "100.64.0.1"
+    #expect(try saved.placement(of: sameAddress, udid: "U3", as: nil).get().isNew)
+    // None: one to add, new here, under the name asked for.
+    let new = try saved.placement(of: came, udid: "U9", as: " Work phone ").get()
+    #expect(new.isNew && new.profile.id != came.id && new.profile.udid == "U9" && new.profile.displayName == "Work phone")
+    #expect(new.profile.providerIP == came.providerIP && new.profile.instanceName == came.instanceName)
+    // A name taken here: refused, with what to do.
+    var clash = came; clash.displayName = "iphone"
+    guard case .failure(let why) = saved.placement(of: clash, udid: "U9", as: nil) else { Issue.record("placed under a taken name"); return }
+    #expect("\(why)".contains("--as"))
+    #expect(try saved.placement(of: clash, udid: "U9", as: "Second").get().isNew)
+}
+
 /// `pairing` takes a word that says what to do, not a device's name first.
 @Test func pairingCommandsParse() throws {
     #expect(try CLI.parse(["pairing", "create", "iPhone", "/tmp/k.json", "--as", "RoamRun (cloud)"]).get().values["--as"] == "RoamRun (cloud)")

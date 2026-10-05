@@ -912,29 +912,6 @@ final class AppCoordinator: ObservableObject {
         learnDeviceTypes()
     }
 
-    /// The saved device a pairing made elsewhere is for, added if this Mac doesn't have it — as
-    /// that Mac saved it: here it was never seen on the network to be added from.
-    private func place(_ device: DeviceProfile, udid: String, as name: String?) -> Result<(target: DeviceControlHub.Target, isNew: Bool), DeviceControlWire.WireError> {
-        func same(_ p: DeviceProfile) -> Bool {
-            if let known = p.udid { return known.caseInsensitiveCompare(udid) == .orderedSame }
-            return p.providerIP == device.providerIP || p.instanceName == device.instanceName
-        }
-        if let i = profiles.firstIndex(where: same) {
-            if profiles[i].udid == nil { profiles[i].udid = udid; persist() }
-            let p = profiles[i]
-            return .success((.init(id: p.id, name: p.displayName, ip: p.providerIP, port: p.remotePairingPort, udid: p.udid ?? udid), false))
-        }
-        var profile = device
-        profile.id = UUID()
-        profile.udid = udid
-        profile.displayName = (name ?? device.displayName).trimmingCharacters(in: .whitespaces)
-        if let problem = profiles.nameProblem(profile.displayName) {
-            return .failure(.message("“\(profile.displayName)”: \(problem) Give another with --as."))
-        }
-        save(new: profile)
-        return .success((.init(id: profile.id, name: profile.displayName, ip: profile.providerIP, port: profile.remotePairingPort, udid: udid), true))
-    }
-
     /// Asked for by `roamrun pairing import`, on the thread that answers it: the device is found
     /// or added, the pairing kept only if it connects, and then the file is removed.
     nonisolated private func importPairing(path: String, as name: String?) -> DeviceControlWire.Response {
@@ -945,17 +922,26 @@ final class AppCoordinator: ObservableObject {
         guard let shared = SharedPairing.read(data), let udid = shared.device.udid else {
             return .failure("\(path) isn't a pairing made by `roamrun pairing create`")
         }
-        let placed = DispatchQueue.main.sync { MainActor.assumeIsolated { place(shared.device, udid: udid, as: name) } }
-        guard case .success(let (target, isNew)) = placed else {
-            if case .failure(let why) = placed { return .failure("\(why)") }
-            return .failure("failed")
+        // Where it goes is worked out first and saved last: a pairing that doesn't connect leaves
+        // the saved devices as they were.
+        let placed = DispatchQueue.main.sync { MainActor.assumeIsolated { profiles.placement(of: shared.device, udid: udid, as: name) } }
+        let place: DevicePlacement
+        switch placed {
+        case .success(let p): place = p
+        case .failure(let why): return .failure("\(why)")
         }
-        do {
-            try deviceControl.adoptPairing(Data(shared.pairing.utf8), for: target)
-        } catch {
-            // Added for this alone: not left behind without it.
-            if isNew { DispatchQueue.main.sync { MainActor.assumeIsolated { deleteProfile(target.id) } } }
-            return .failure("\(error)")
+        let p = place.profile
+        let target = DeviceControlHub.Target(id: p.id, name: p.displayName, ip: p.providerIP, port: p.remotePairingPort, udid: p.udid ?? udid)   // as it is spelled here, when known
+        do { try deviceControl.adoptPairing(Data(shared.pairing.utf8), for: target) } catch { return .failure("\(error)") }
+        DispatchQueue.main.sync {
+            MainActor.assumeIsolated {
+                if place.isNew {
+                    save(new: p)
+                } else if let i = profiles.firstIndex(where: { $0.id == p.id }), profiles[i].udid == nil {
+                    profiles[i].udid = udid
+                    persist()
+                }
+            }
         }
         DispatchQueue.main.async { MainActor.assumeIsolated { self.syncDeviceControl() } }
         // Taken in either way; a file that stays is said to (in `error`, with `ok`).

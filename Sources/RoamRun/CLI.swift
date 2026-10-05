@@ -812,8 +812,8 @@ enum CLI {
         }
         /// Nothing is left where the pairing was to go.
         func stop(_ why: String) -> Never {
-            CLI.reserved = nil
             out.path.withCString { CLI.removeReserved($0, fd) }
+            CLI.reserved = nil   // after: a signal in between still finds what to remove
             close(fd)
             CLI.stop(why)
         }

@@ -227,6 +227,32 @@ struct SharedPairing: Codable, Equatable {
     }
 }
 
+/// Where a pairing made elsewhere goes among the saved devices: nothing is saved by working it out.
+struct DevicePlacement: Equatable {
+    /// The saved device it is for, or the one to add (as the other Mac saved it: here it was
+    /// never seen on the network to be added from).
+    var profile: DeviceProfile
+    var isNew: Bool
+}
+
+extension Array where Element == DeviceProfile {
+    func placement(of device: DeviceProfile, udid: String, as name: String?) -> Result<DevicePlacement, DeviceControlWire.WireError> {
+        func same(_ p: DeviceProfile) -> Bool {
+            if let known = p.udid { return known.caseInsensitiveCompare(udid) == .orderedSame }
+            return p.providerIP == device.providerIP || p.instanceName == device.instanceName
+        }
+        if let saved = first(where: same) { return .success(.init(profile: saved, isNew: false)) }
+        var profile = device
+        profile.id = UUID()
+        profile.udid = udid
+        profile.displayName = (name ?? device.displayName).trimmingCharacters(in: .whitespaces)
+        if let problem = nameProblem(profile.displayName) {
+            return .failure(.message("“\(profile.displayName)”: \(problem) Give another with --as."))
+        }
+        return .success(.init(profile: profile, isNew: true))
+    }
+}
+
 /// What the hub does with a device: a `DeviceSession`, or a stand-in for one in tests.
 protocol ControlledDevice: AnyObject, Sendable {
     var isOpen: Bool { get }
