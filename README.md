@@ -207,7 +207,7 @@ RoamRun can also show the device's screen and operate it — tap, swipe, type, p
 roamrun look iPhone /tmp/now.png          # the screen now, as PNG; prints the path, then its size
 roamrun tap iPhone 590 1280               # a point in the pixels of that image
 roamrun swipe iPhone 590 1800 590 900     # drag from one point to another
-roamrun type iPhone "hello"               # US keys; right only while the device's keyboard is an English one
+roamrun type iPhone "hello"               # US keys, about 16 a second; right only while the device's keyboard is an English one
 roamrun paste iPhone "任意の文字列"         # any text, by the device's pasteboard (iOS asks "Allow Paste")
 roamrun press iPhone home                 # home, lock, volume-up, volume-down
 roamrun elements iPhone                   # what accessibility says is on the screen (no positions)

@@ -225,7 +225,10 @@ have the user add the MCP tools, which run outside it.
   text is Return (`$'search this\n'` in a shell — the two characters `\n` are typed as such).
   It comes out right only while the device's keyboard is an English one: look
   first, and switch with the globe key if it shows Japanese (there Space
-  converts and Return confirms). `roamrun paste iPhone "任意の文字列"` puts any
+  converts and Return confirms: the text comes out wrong, and a long one can
+  throw the app back to the home screen). It is typed at the device's own pace,
+  about 16 characters a second, and has all arrived when the command returns:
+  for anything long, `paste`. `roamrun paste iPhone "任意の文字列"` puts any
   text in by the device's pasteboard — it replaces the pasteboard, and iOS asks
   "Allow Paste" each time: look, and tap it only if the user wants that.
 - `roamrun press iPhone home|lock|volume-up|volume-down`. `lock` can't be

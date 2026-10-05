@@ -582,6 +582,12 @@ const LONGEST_TYPED: usize = 2000;
 
 /// How long an input may take to send, once everything is ready for it: its own length, and
 /// room for a slow link. (Typing took some 60 ms a key over Wi‑Fi.)
+/// Between two strokes of a text. The device takes keys at its own pace — about 45 ms a
+/// character was seen (iOS 27, a note) — and keeps what comes faster for later: sent at 15 ms
+/// a character, a long text was still being typed a minute after this had returned, where
+/// nothing here could stop it and the next look showed half of it. Slower than the device.
+const STROKE_PAUSE: u64 = 60;
+
 fn input_time(input: &Input) -> Duration {
     let own = match input {
         Input::Tap(..) => 100,
@@ -796,7 +802,7 @@ async fn send(link: &mut Link, input: &Input) -> Result<(), String> {
                 steps.push(Step::Key(usage, ButtonState::Down));
                 steps.push(Step::Key(usage, ButtonState::Up));
                 if shift { steps.push(Step::Key(LEFT_SHIFT, ButtonState::Up)); }
-                steps.push(Step::Wait(12));   // or strokes run together
+                steps.push(Step::Wait(if shift { STROKE_PAUSE * 3 / 2 } else { STROKE_PAUSE }));
             }
             press(link, &steps).await
         }

@@ -256,7 +256,7 @@ final class DeviceMCP: @unchecked Sendable {
              required: ["x1", "y1", "x2", "y2"]),
         tool("elements", "What accessibility says is on the screen, one caption a line (\"Home, tab, selected\"). No positions: find a caption in a look to tap it. The screen may scroll to what is visited. Nothing on the home screen.",
              ["limit": ["type": "integer", "description": "How many at most (default 40)"]]),
-        tool("type", "Type text on the device's keyboard, into whatever has its focus. US-keyboard characters only; a newline is Return. Right only while the device's keyboard is an English one — look first.",
+        tool("type", "Type text on the device's keyboard, into whatever has its focus. US-keyboard characters only; a newline is Return. Right only while the device's keyboard is an English one — look first: under a Japanese one the text comes out wrong, and a long one can throw the app out. Typed at the device's pace, about 16 characters a second: paste for anything long.",
              ["text": ["type": "string"]], required: ["text"]),
         tool("paste", "Put any text into whatever has the keyboard's focus, by the device's pasteboard (which it replaces). iOS then asks \"Allow Paste\" on the device each time: look, and tap it only if the user wants that.",
              ["text": ["type": "string"]], required: ["text"]),
