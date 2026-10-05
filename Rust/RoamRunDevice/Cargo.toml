@@ -21,3 +21,8 @@ uuid = { version = "1", features = ["v4"] }
 
 [profile.release]
 opt-level = "s"
+
+# idevice with the host's serial number and address settable (a pairing lists on the device by
+# them): its 0.1.68 and one commit. Gone when a release of idevice has it.
+[patch.crates-io]
+idevice = { git = "https://github.com/mh-mobile/idevice", rev = "575311afaa3cac1574bda0e5afcaed0d1273a6f8" }
