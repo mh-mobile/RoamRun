@@ -475,6 +475,8 @@ final class DeviceControlHub: @unchecked Sendable {
         try Self.save(Self.seal(pairing, with: sealing), as: DeviceControlWire.pairingFile(udid: target.udid, in: directory))
         lock.withLock { targets.removeAll { $0.id == target.id }; targets.append(target) }
         reopen(target.id)
+        // Connected when this returns, as it just was: asked how it stands, it says so.
+        try? session(of: target.id)?.connect()
         onLog?("device control: a pairing made on another Mac was taken in", target.id)
     }
 

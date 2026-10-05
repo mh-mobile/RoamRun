@@ -4598,8 +4598,7 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
     try hub.adoptPairing(pairing, for: target)
     #expect(given.withLock { $0.first } == pairing)
     #expect(try DeviceControlHub.unseal(Data(contentsOf: file), with: scratchKey) == pairing)
-    #expect(hub.session(of: target.id) != nil)
-    #expect(hub.state(of: target.id, udid: "UDID-9").paired)
+    #expect(hub.state(of: target.id, udid: "UDID-9") == (true, true, false))   // held, and said to be connected at once
 
     // A key the Keychain won't give: nothing is tried, nothing saved.
     let other = DeviceControlHub.Target(id: UUID(), name: "iPad", ip: "100.64.0.2", port: 49152, udid: "UDID-8")
