@@ -13,6 +13,8 @@ public final class DevicePairing: @unchecked Sendable {
         public var udid: String
         public var name: String
         public var model: String
+        /// The pairing itself, with this Mac's private key: the caller's to keep safe.
+        public var pairing: Data
     }
 
     private let pairing: OpaquePointer
@@ -69,12 +71,12 @@ public final class DevicePairing: @unchecked Sendable {
         rr_pairing_free(pairing)
     }
 
-    /// Waits for a device to pair and writes the pairing to `file` (its owner's only).
+    /// Waits for a device to pair and gives the pairing back; nothing is written anywhere.
     /// `code` gets the six digits to show, on another thread, while this waits.
-    public func accept(to file: String, code: @escaping @Sendable (String) -> Void) throws -> Paired {
+    public func accept(code: @escaping @Sendable (String) -> Void) throws -> Paired {
         let box = Unmanaged.passRetained(Code(show: code))
         defer { box.release() }
-        guard let json = rr_pairing_accept(pairing, file, { digits, context in
+        guard let json = rr_pairing_accept(pairing, { digits, context in
             guard let digits, let context else { return }
             Unmanaged<Code>.fromOpaque(context).takeUnretainedValue().show(String(cString: digits))
         }, box.toOpaque()) else { throw DeviceSession.Failure.message("no answer") }
@@ -82,10 +84,10 @@ public final class DevicePairing: @unchecked Sendable {
         guard let object = try? JSONSerialization.jsonObject(with: Data(String(cString: json).utf8)) as? [String: Any] else {
             throw DeviceSession.Failure.message("unreadable answer")
         }
-        guard object["ok"] as? Bool == true, let udid = object["udid"] as? String else {
+        guard object["ok"] as? Bool == true, let udid = object["udid"] as? String, let pairing = object["pairing"] as? String else {
             throw DeviceSession.Failure.message(object["error"] as? String ?? "failed")
         }
-        return Paired(udid: udid, name: object["name"] as? String ?? "", model: object["model"] as? String ?? "")
+        return Paired(udid: udid, name: object["name"] as? String ?? "", model: object["model"] as? String ?? "", pairing: Data(pairing.utf8))
     }
 
     public func cancel() { rr_pairing_cancel(pairing) }

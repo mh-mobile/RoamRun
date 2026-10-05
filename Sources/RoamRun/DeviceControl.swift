@@ -1,4 +1,5 @@
 #if DEVICE_CONTROL
+import CryptoKit
 import DeviceControl
 import Foundation
 import ImageIO
@@ -74,7 +75,7 @@ enum DeviceControlWire {
 
     /// The pairing of our own with a device, where there is one: what makes it controllable.
     static func pairingFile(udid: String, in directory: URL) -> URL {
-        directory.appendingPathComponent("device-pairing-\(udid).plist")
+        directory.appendingPathComponent("device-pairing-\(udid).sealed")
     }
 
     private static func address(_ path: String) -> sockaddr_un? {
@@ -250,7 +251,10 @@ final class DeviceControlHub: @unchecked Sendable {
         }
     }
 
-    typealias Opener = @Sendable (_ target: Target, _ pairingFile: String, _ said: @escaping @Sendable (String) -> Void) -> any ControlledDevice
+    typealias Opener = @Sendable (_ target: Target, _ pairing: @escaping @Sendable () throws -> Data, _ said: @escaping @Sendable (String) -> Void) -> any ControlledDevice
+    /// The key the saved pairings are sealed with. `make`: one is made if there is none yet
+    /// (when a pairing is saved; never to read one, which a new key couldn't open).
+    typealias Key = @Sendable (_ make: Bool) throws -> SymmetricKey
 
     private let directory: URL
     private let lock = NSLock()
@@ -271,14 +275,16 @@ final class DeviceControlHub: @unchecked Sendable {
     var onUnreached: (@Sendable (UUID, String) -> Void)?
 
     private let open: Opener
+    private let key: Key
 
-    /// `open` makes the session for a device; tests give stand-ins.
-    init(directory: URL, open: @escaping Opener = { target, file, said in
-        let session = DeviceSession(ip: target.ip, port: target.port, pairingFile: file, udid: target.udid)
+    /// `open` makes the session for a device; tests give stand-ins, and a key of their own.
+    init(directory: URL, key: @escaping Key, open: @escaping Opener = { target, pairing, said in
+        let session = DeviceSession(ip: target.ip, port: target.port, pairing: pairing, udid: target.udid)
         session.onEvent = said
         return session
     }) {
         self.directory = directory
+        self.key = key
         self.open = open
     }
 
@@ -377,8 +383,6 @@ final class DeviceControlHub: @unchecked Sendable {
     func pair(_ device: PairingRequest, as name: String, step: @escaping @Sendable (PairingStep) -> Void) {
         lock.withLock { if !pairingUnderWay { pairingCancelled = false } }   // here, not in the block: a cancel may come before it runs
         DispatchQueue.global(qos: .userInitiated).async { [self] in
-            // By the device's id, not its UDID: that may only be learned here. One pairing at a time.
-            let fresh = directory.appendingPathComponent("device-pairing-new-\(device.id.uuidString).plist")
             // Taken before anything is advertised: two of these would name themselves alike.
             let free = lock.withLock { () -> Bool in
                 guard !pairingUnderWay else { return false }
@@ -386,16 +390,13 @@ final class DeviceControlHub: @unchecked Sendable {
                 return true
             }
             guard free else { return step(.failed("Another pairing is under way.")) }
-            defer {
-                try? FileManager.default.removeItem(at: fresh)
-                lock.withLock { pairing = nil; pairingUnderWay = false }
-            }
+            defer { lock.withLock { pairing = nil; pairingUnderWay = false } }
             do {
                 let listening = try DevicePairing(name: name, host: Self.hostID(in: directory))
                 // A cancel that came before there was anything to cancel still counts.
                 if lock.withLock({ () -> Bool in pairing = listening; return pairingCancelled }) { listening.cancel() }
                 step(.waiting(listening.name))
-                let paired = try listening.accept(to: fresh.path) { step(.code($0)) }
+                let paired = try listening.accept { step(.code($0)) }
                 step(.checking)
                 onLog?("device control: \(paired.name) (\(paired.model), \(paired.udid)) paired", device.id)
                 // The device now knows this pairing and no older one of ours. When it is the one
@@ -411,7 +412,7 @@ final class DeviceControlHub: @unchecked Sendable {
                 case .nameless:
                     throw DeviceSession.Failure.message("\(paired.name) paired without saying which device it is. Nothing was saved.")
                 case .toProve:
-                    let check = DeviceSession(ip: device.ip, port: device.port, pairingFile: fresh.path)
+                    let check = DeviceSession(ip: device.ip, port: device.port, pairing: { paired.pairing })
                     defer { check.close() }
                     do { try check.connect() } catch {
                         let port = "\(error)".hasPrefix("RemotePairing port: Connection refused")
@@ -423,7 +424,7 @@ final class DeviceControlHub: @unchecked Sendable {
                 // Named by the UDID the device is saved under, as it is spelled there; or by its own.
                 let udid = device.udid ?? paired.udid
                 let target = Target(id: device.id, name: device.name, ip: device.ip, port: device.port, udid: udid)
-                try Self.adopt(fresh, as: DeviceControlWire.pairingFile(udid: udid, in: directory))
+                try Self.save(Self.seal(paired.pairing, with: key(true)), as: DeviceControlWire.pairingFile(udid: udid, in: directory))
                 // Held from now on, also when the list of saved devices doesn't have its UDID yet.
                 lock.withLock { if !targets.contains(where: { $0.id == target.id }) { targets.append(target) } }
                 reopen(target.id)
@@ -440,7 +441,7 @@ final class DeviceControlHub: @unchecked Sendable {
     /// Removes the pairing saved under `udid`, held or not: one made for a device that turned
     /// out not to be saved under it.
     func forgetPairing(udid: String, of id: UUID) {
-        try? FileManager.default.removeItem(at: DeviceControlWire.pairingFile(udid: udid, in: directory))
+        Self.remove(DeviceControlWire.pairingFile(udid: udid, in: directory))
         lock.withLock { targets.removeAll { $0.id == id && $0.udid.caseInsensitiveCompare(udid) == .orderedSame } }
         reopen(id)
     }
@@ -455,13 +456,42 @@ final class DeviceControlHub: @unchecked Sendable {
         return fresh
     }
 
-    /// Puts a new pairing in the saved one's place. The one it replaces is of no use any more
-    /// (the device knows this Mac by one identity, and now by the new key), so nothing of it is kept.
-    static func adopt(_ fresh: URL, as file: URL) throws {
-        guard rename(fresh.path, file.path) == 0 else {
-            throw DeviceSession.Failure.message("can't save the pairing: \(String(cString: strerror(errno)))")
+    /// A pairing holds this Mac's private key: it is kept sealed, with a key only RoamRun reads
+    /// from the Keychain, so a copy of the file opens nothing.
+    static func seal(_ pairing: Data, with key: SymmetricKey) throws -> Data {
+        guard let sealed = try AES.GCM.seal(pairing, using: key).combined else {
+            throw DeviceSession.Failure.message("can't seal the pairing")
         }
-        try? FileManager.default.removeItem(at: file.appendingPathExtension("previous"))   // an older RoamRun's
+        return sealed
+    }
+
+    static func unseal(_ sealed: Data, with key: SymmetricKey) throws -> Data {
+        do { return try AES.GCM.open(AES.GCM.SealedBox(combined: sealed), using: key) } catch {
+            throw DeviceSession.Failure.message("the saved pairing can't be read with this Mac's key: set device control up again")
+        }
+    }
+
+    /// Puts a new pairing in the saved one's place: written beside it (its owner's only), then
+    /// moved, so a write that fails leaves what was there. The one it replaces is of no use any
+    /// more (the device knows this Mac by one identity, and now by the new key).
+    static func save(_ sealed: Data, as file: URL) throws {
+        let beside = file.appendingPathExtension("writing")
+        try? FileManager.default.removeItem(at: beside)
+        guard FileManager.default.createFile(atPath: beside.path, contents: sealed, attributes: [.posixPermissions: 0o600]),
+              rename(beside.path, file.path) == 0 else {
+            let why = String(cString: strerror(errno))
+            try? FileManager.default.removeItem(at: beside)
+            throw DeviceSession.Failure.message("can't save the pairing: \(why)")
+        }
+        try? FileManager.default.removeItem(at: unsealed(of: file))
+    }
+
+    /// Where a build before the pairings were sealed kept this one, as it was.
+    static func unsealed(of file: URL) -> URL { file.deletingPathExtension().appendingPathExtension("plist") }
+
+    private static func remove(_ file: URL) {
+        try? FileManager.default.removeItem(at: file)
+        try? FileManager.default.removeItem(at: unsealed(of: file))
     }
 
     func cancelPairing() {
@@ -470,9 +500,7 @@ final class DeviceControlHub: @unchecked Sendable {
 
     /// Forgets this Mac's pairing with the device (the device's record of it stays, in its Settings).
     func unpair(_ target: Target) {
-        let file = DeviceControlWire.pairingFile(udid: target.udid, in: directory)
-        try? FileManager.default.removeItem(at: file)
-        try? FileManager.default.removeItem(at: file.appendingPathExtension("previous"))
+        Self.remove(DeviceControlWire.pairingFile(udid: target.udid, in: directory))
         reopen(target.id)
         onLog?("device control: pairing removed", target.id)
     }
@@ -492,7 +520,9 @@ final class DeviceControlHub: @unchecked Sendable {
     /// A session for the device, if a pairing of our own is saved for it.
     private func session(for t: Target) -> (any ControlledDevice)? {
         guard hasPairing(t) else { return nil }
-        return open(t, DeviceControlWire.pairingFile(udid: t.udid, in: directory).path) { [weak self] event in
+        let file = DeviceControlWire.pairingFile(udid: t.udid, in: directory)
+        // Read and unsealed when a connection is made, on that thread: the Keychain may ask the user.
+        return open(t, { [key] in try Self.unseal(Data(contentsOf: file), with: key(false)) }) { [weak self] event in
             self?.onLog?("device control: \(event)", t.id)
         }
     }

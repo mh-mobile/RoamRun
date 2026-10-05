@@ -23,7 +23,7 @@ use idevice::tcp::handle::{AdapterHandle, UdpSocketHandle};
 use idevice::{ReadWrite, RsdService};
 use tokio::net::{TcpListener, TcpStream};
 
-const VERSION: &CStr = c"0.5.0";
+const VERSION: &CStr = c"0.6.0";
 const LABEL: &str = "roamrun";
 /// Each call: a device that stops answering mid-way must not hang the caller.
 const DEADLINE: Duration = Duration::from_secs(20);
@@ -163,11 +163,13 @@ fn quoted(s: &str) -> String {
 }
 
 /// # Safety
-/// `ip` and `pairing_file` are null or NUL-terminated strings; `error` is null or writable.
+/// `ip` is null or a NUL-terminated string; `pairing` is null or `pairing_len` readable bytes
+/// (the pairing itself, never a path: it isn't kept on disk as it is); `error` is null or writable.
 #[no_mangle]
-pub unsafe extern "C" fn rr_device_open(ip: *const c_char, port: u16, pairing_file: *const c_char, error: *mut *mut c_char) -> *mut RRDevice {
-    let arg = |p: *const c_char| (!p.is_null()).then(|| unsafe { CStr::from_ptr(p) }.to_str().ok()).flatten();
-    let opened = match (arg(ip), arg(pairing_file)) {
+pub unsafe extern "C" fn rr_device_open(ip: *const c_char, port: u16, pairing: *const u8, pairing_len: usize, error: *mut *mut c_char) -> *mut RRDevice {
+    let ip = (!ip.is_null()).then(|| unsafe { CStr::from_ptr(ip) }.to_str().ok()).flatten();
+    let file = (!pairing.is_null()).then(|| unsafe { std::slice::from_raw_parts(pairing, pairing_len) });
+    let opened = match (ip, file) {
         (Some(ip), Some(file)) => tokio::runtime::Builder::new_multi_thread().worker_threads(1).thread_stack_size(STACK).enable_all().build()
             .map_err(|e| format!("no runtime: {e}"))
             .and_then(|runtime| {
@@ -496,9 +498,9 @@ async fn elements(link: &mut Link, limit: usize, until: Instant) -> Result<(Vec<
     Ok((captions, false, "limit"))
 }
 
-async fn connect(ip: &str, port: u16, file: &str) -> Result<Link, String> {
+async fn connect(ip: &str, port: u16, file: &[u8]) -> Result<Link, String> {
     let started = Instant::now();
-    let mut pairing = RpPairingFile::read_from_file(file).await.map_err(|e| format!("pairing file: {e:?}"))?;
+    let mut pairing = RpPairingFile::from_bytes(file).map_err(|e| format!("pairing: {e:?}"))?;
     let control = TcpStream::connect((ip, port)).await.map_err(|e| format!("RemotePairing port: {e}"))?;
     let mut client = RemotePairingClient::new(RpPairingSocket::new(control), LABEL);
     // Verify only: a pairing the device doesn't know must fail here, not start a new one.
@@ -968,24 +970,24 @@ pub unsafe extern "C" fn rr_pairing_listen(name: *const c_char, model: *const c_
 }
 
 /// # Safety
-/// `pairing` came from rr_pairing_listen and wasn't freed; `pairing_file` is null or a
-/// NUL-terminated string; `code` may be called, from another thread, until this returns.
+/// `pairing` came from rr_pairing_listen and wasn't freed; `code` may be called, from another
+/// thread, until this returns. The answer carries the pairing itself ("pairing", a property
+/// list's text, with this side's private key): nothing is written anywhere.
 #[no_mangle]
 pub unsafe extern "C" fn rr_pairing_accept(
-    pairing: *mut RRPairing, pairing_file: *const c_char,
+    pairing: *mut RRPairing,
     code: Option<unsafe extern "C" fn(*const c_char, *mut std::ffi::c_void)>, context: *mut std::ffi::c_void,
 ) -> *mut c_char {
     let Some(pairing) = (unsafe { pairing.as_ref() }) else { return std::ptr::null_mut() };
-    let path = (!pairing_file.is_null()).then(|| unsafe { CStr::from_ptr(pairing_file) }.to_str().ok()).flatten();
-    let (Some(path), Some(code)) = (path, code) else { return c_string(failure("bad arguments")) };
+    let Some(code) = code else { return c_string(failure("bad arguments")) };
     let context = context as usize;   // an address, carried to the thread that shows the code
     let show = move |pin: &str| {
         if let Ok(pin) = CString::new(pin) { unsafe { code(pin.as_ptr(), context as *mut std::ffi::c_void) } }
     };
-    let result = with_room(|| pairing.runtime.block_on(accept_pairing(pairing, path, &show)));
+    let result = with_room(|| pairing.runtime.block_on(accept_pairing(pairing, &show)));
     c_string(match result {
-        Ok(peer) => format!("{{\"ok\":true,\"udid\":{},\"name\":{},\"model\":{}}}",
-                            quoted(&peer.remotepairing_udid), quoted(&peer.name), quoted(&peer.model)),
+        Ok((peer, file)) => format!("{{\"ok\":true,\"udid\":{},\"name\":{},\"model\":{},\"pairing\":{}}}",
+                            quoted(&peer.remotepairing_udid), quoted(&peer.name), quoted(&peer.model), quoted(&file)),
         Err(why) => failure(&why),
     })
 }
@@ -1009,7 +1011,7 @@ pub unsafe extern "C" fn rr_pairing_free(pairing: *mut RRPairing) {
     }
 }
 
-async fn accept_pairing(pairing: &RRPairing, path: &str, show: &(impl Fn(&str) + Sync)) -> Result<idevice::remote_pairing::PeerDevice, String> {
+async fn accept_pairing(pairing: &RRPairing, show: &(impl Fn(&str) + Sync)) -> Result<(idevice::remote_pairing::PeerDevice, String), String> {
     let cancelled = || pairing.cancelled.load(Ordering::Relaxed);
     loop {
         let stream = loop {
@@ -1046,8 +1048,8 @@ async fn accept_pairing(pairing: &RRPairing, path: &str, show: &(impl Fn(&str) +
         };
         match outcome {
             Some(Ok(peer)) => {
-                write_private(path, &file.to_bytes())?;
-                return Ok(peer);
+                let file = String::from_utf8(file.to_bytes()).map_err(|_| "the pairing isn't text".to_string())?;
+                return Ok((peer, file));
             }
             // After the code was shown, a failure is the pairing's (a wrong code, a change of mind).
             Some(Err(e)) if when_shown().is_some() => return Err(format!("the pairing didn't complete: {e:?}")),
@@ -1055,19 +1057,6 @@ async fn accept_pairing(pairing: &RRPairing, path: &str, show: &(impl Fn(&str) +
             _ => continue,
         }
     }
-}
-
-/// The pairing holds this side's private key: a file only its owner can read, from the start.
-fn write_private(path: &str, bytes: &[u8]) -> Result<(), String> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    // Beside it first, then moved into place: a write that fails leaves what was there.
-    let beside = format!("{path}.writing");
-    let _ = std::fs::remove_file(&beside);
-    std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&beside)
-        .and_then(|mut f| f.write_all(bytes))
-        .and_then(|()| std::fs::rename(&beside, path))
-        .map_err(|e| { let _ = std::fs::remove_file(&beside); format!("can't write the pairing: {e}") })
 }
 
 #[cfg(test)]

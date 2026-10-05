@@ -1219,7 +1219,7 @@ final class AppCoordinator: ObservableObject {
     /// Terminate all helper children (zone dump, proxy registrations, log
     /// watchers, relays) so nothing is orphaned when the app quits.
     #if DEVICE_CONTROL
-    private let deviceControl = DeviceControlHub(directory: ProfileStore.directory)
+    private let deviceControl = DeviceControlHub(directory: ProfileStore.directory, key: DeviceControlKey.shared.key)
 
     /// The devices as saved now, to the hub that keeps their control connections: at launch, and
     /// whenever the list is saved. (A pairing made while the app runs is seen at the next of those.)

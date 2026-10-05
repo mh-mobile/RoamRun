@@ -4192,12 +4192,20 @@ func publishStepsAsideWhenTurnedOff(_ c: PublishCase) async {
     #expect(Date().timeIntervalSince(started) < 2)
 }
 
-/// A pairing file as the library reads one, for a device that doesn't exist.
-private func scratchPairing(at url: URL) throws {
+/// The tests' own key: never the Keychain's (a test binary is asked about it, and waits).
+private let scratchKey = SymmetricKey(size: .bits256)
+
+/// A pairing as the library reads one, for a device that doesn't exist.
+private func scratchPairing() throws -> Data {
     let key = Curve25519.Signing.PrivateKey()
     let plist: [String: Any] = ["public_key": key.publicKey.rawRepresentation, "private_key": key.rawRepresentation,
                                 "identifier": UUID().uuidString]
-    try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0).write(to: url)
+    return try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+}
+
+/// One saved as the hub saves it.
+private func scratchPairing(at url: URL) throws {
+    try DeviceControlHub.save(DeviceControlHub.seal(scratchPairing(), with: scratchKey), as: url)
 }
 
 /// A port on this Mac that takes a connection and never says a word: a device that stopped answering.
@@ -4219,11 +4227,10 @@ private func silentPort() throws -> (fd: Int32, port: UInt16) {
 @Test func askingHowAConnectionStandsDoesNotWaitForACall() throws {
     let dir = scratchDir()
     defer { try? FileManager.default.removeItem(at: dir) }
-    let file = dir.appendingPathComponent("pairing.plist")
-    try scratchPairing(at: file)
+    let pairing = try scratchPairing()
     let silent = try silentPort()
     defer { close(silent.fd) }
-    let session = DeviceSession(ip: "127.0.0.1", port: silent.port, pairingFile: file.path)
+    let session = DeviceSession(ip: "127.0.0.1", port: silent.port, pairing: { pairing })
     let entered = DispatchSemaphore(value: 0)
     Thread.detachNewThread {
         entered.signal()
@@ -4242,7 +4249,7 @@ private func silentPort() throws -> (fd: Int32, port: UInt16) {
     let dir = scratchDir()
     defer { try? FileManager.default.removeItem(at: dir) }
     try scratchPairing(at: DeviceControlWire.pairingFile(udid: "UDID-1", in: dir))
-    let hub = DeviceControlHub(directory: dir)
+    let hub = DeviceControlHub(directory: dir, key: { _ in scratchKey })
     defer { hub.stop() }
     let id = UUID()
     func target(_ name: String, port: UInt16) -> DeviceControlHub.Target {
@@ -4305,7 +4312,7 @@ private final class StandInDevice: ControlledDevice, @unchecked Sendable {
 private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: DeviceControlHub, made: () -> [StandInDevice]) {
     try scratchPairing(at: DeviceControlWire.pairingFile(udid: udid, in: dir))
     let made = OSAllocatedUnfairLock<[StandInDevice]>(initialState: [])
-    let hub = DeviceControlHub(directory: dir) { _, _, _ in
+    let hub = DeviceControlHub(directory: dir, key: { _ in scratchKey }) { _, _, _ in
         let device = StandInDevice()
         made.withLock { $0.append(device) }
         return device
@@ -4501,26 +4508,55 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
     #expect(UUID(uuidString: DeviceControlHub.hostID(in: here)) != nil)
 }
 
-/// A new pairing takes the saved one's place whole, and nothing of the old one is kept: the
-/// device no longer takes it, and it holds a private key.
+/// A new pairing takes the saved one's place whole, its owner's only, and nothing of the old
+/// one is kept — also not what a build before the sealing left as it was: it holds a private key.
 @Test func aNewPairingReplacesTheSavedOne() throws {
     let dir = scratchDir()
     defer { try? FileManager.default.removeItem(at: dir) }
-    let file = dir.appendingPathComponent("device-pairing-X.plist")
-    func fresh(_ text: String) throws -> URL {
-        let url = file.appendingPathExtension("new")
-        try Data(text.utf8).write(to: url)
-        return url
-    }
+    let file = DeviceControlWire.pairingFile(udid: "X", in: dir)
     func names() -> [String] { ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).sorted() }
-    try DeviceControlHub.adopt(fresh("first"), as: file)
-    #expect(names() == ["device-pairing-X.plist"])
-    try Data("older".utf8).write(to: file.appendingPathExtension("previous"))   // what an earlier RoamRun kept
-    try DeviceControlHub.adopt(fresh("second"), as: file)
-    #expect(names() == ["device-pairing-X.plist"])
-    #expect(try String(contentsOf: file, encoding: .utf8) == "second")
-    #expect(throws: (any Error).self) { try DeviceControlHub.adopt(file.appendingPathExtension("new"), as: file) }   // nothing to adopt
-    #expect(try String(contentsOf: file, encoding: .utf8) == "second")
+    try DeviceControlHub.save(Data("first".utf8), as: file)
+    try Data("as it was".utf8).write(to: dir.appendingPathComponent("device-pairing-X.plist"))
+    try DeviceControlHub.save(Data("second".utf8), as: file)
+    #expect(names() == ["device-pairing-X.sealed"])
+    #expect(try Data(contentsOf: file) == Data("second".utf8))
+    #expect(try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? Int == 0o600)
+    // Nowhere to write: what is saved stays.
+    #expect(throws: (any Error).self) { try DeviceControlHub.save(Data("third".utf8), as: dir.appendingPathComponent("gone/x.sealed")) }
+    #expect(try Data(contentsOf: file) == Data("second".utf8))
+}
+
+/// What is saved opens with this Mac's key and no other, and shows nothing of the pairing: a
+/// copy of the file is of no use to whoever takes it.
+@Test func aSavedPairingOpensOnlyWithItsKey() throws {
+    let pairing = try scratchPairing()
+    let sealed = try DeviceControlHub.seal(pairing, with: scratchKey)
+    #expect(try DeviceControlHub.unseal(sealed, with: scratchKey) == pairing)
+    #expect(sealed.range(of: Data("private_key".utf8)) == nil)
+    #expect(try DeviceControlHub.seal(pairing, with: scratchKey) != sealed)   // sealed anew each time
+    #expect(throws: (any Error).self) { try DeviceControlHub.unseal(sealed, with: SymmetricKey(size: .bits256)) }
+    #expect(throws: (any Error).self) { try DeviceControlHub.unseal(pairing, with: scratchKey) }   // one kept as it was
+}
+
+/// The key is made only when the Keychain says there is none, and only to save a pairing:
+/// after a refusal a new one would leave every saved pairing unreadable.
+@Test func theKeyIsMadeOnlyWhenThereIsNone() throws {
+    let saved = Data(repeating: 7, count: 32)
+    func key(make: Bool, read: [(OSStatus, Data?)], add: OSStatus = errSecSuccess) -> (key: Data?, added: Int) {
+        var reads = read[...], added = 0
+        let key = try? DeviceControlKey.key(make: make, read: { reads.popFirst() ?? (errSecItemNotFound, nil) }, add: { _ in added += 1; return add })
+        return (key?.withUnsafeBytes { Data($0) }, added)
+    }
+    #expect(key(make: true, read: [(errSecSuccess, saved)]) == (saved, 0))
+    for refusal in [errSecUserCanceled, errSecAuthFailed, errSecInteractionNotAllowed] {
+        #expect(key(make: true, read: [(refusal, nil)]) == (nil, 0))
+    }
+    #expect(key(make: false, read: [(errSecItemNotFound, nil)]) == (nil, 0))          // to read one: none is made
+    let made = key(make: true, read: [(errSecItemNotFound, nil)])
+    #expect(made.key?.count == 32 && made.added == 1)
+    // Made by another in between: that one is the key, not ours.
+    #expect(key(make: true, read: [(errSecItemNotFound, nil), (errSecSuccess, saved)], add: errSecDuplicateItem) == (saved, 1))
+    #expect(key(make: true, read: [(errSecItemNotFound, nil)], add: errSecAuthFailed) == (nil, 1))
 }
 
 /// A screen's size is asked until it is answered, a minute apart, and then kept: a look that

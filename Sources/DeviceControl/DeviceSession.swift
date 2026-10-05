@@ -43,7 +43,10 @@ public final class DeviceSession: @unchecked Sendable {
         return true
     }
 
-    private let ip: String, port: UInt16, pairingFile: String, udid: String?
+    private let ip: String, port: UInt16, udid: String?
+    /// The pairing itself, read each time a connection is made (never on the caller's thread:
+    /// it may have to be unsealed first).
+    private let pairing: @Sendable () throws -> Data
     private let lock = NSLock()
     private var device: OpaquePointer?
     /// A read failed even after trying again and reopening: the connection is taken for gone
@@ -58,8 +61,8 @@ public final class DeviceSession: @unchecked Sendable {
     /// Said as things happen (opened, tried again, reopened), for whoever shows or logs it.
     public var onEvent: (@Sendable (String) -> Void)?
 
-    public init(ip: String, port: UInt16, pairingFile: String, udid: String? = nil) {
-        self.ip = ip; self.port = port; self.pairingFile = pairingFile; self.udid = udid
+    public init(ip: String, port: UInt16, pairing: @escaping @Sendable () throws -> Data, udid: String? = nil) {
+        self.ip = ip; self.port = port; self.pairing = pairing; self.udid = udid
     }
 
     deinit { rr_device_close(device) }
@@ -173,7 +176,8 @@ public final class DeviceSession: @unchecked Sendable {
 
     private func open() throws -> OpaquePointer {
         var error: UnsafeMutablePointer<CChar>?
-        guard let opened = rr_device_open(ip, port, pairingFile, &error) else {
+        let pairing = try pairing()
+        guard let opened = pairing.withUnsafeBytes({ rr_device_open(ip, port, $0.bindMemory(to: UInt8.self).baseAddress, $0.count, &error) }) else {
             defer { rr_string_free(error) }
             let why = error.map { String(cString: $0) } ?? "can't open"
             refused = why.contains(Self.refusal)

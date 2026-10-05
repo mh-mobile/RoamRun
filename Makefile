@@ -16,7 +16,9 @@ all: app
 
 # xcrun pins Xcode's toolchain; a swiftly `swift` first in PATH breaks the build.
 # SNAPSHOT=1 compiles in the MB_SNAPSHOT screenshot mode (dev only; never in a dmg).
-# DEVICE=1 builds in the experimental device control (needs Rust: see device-lib).
+# DEVICE=1 builds in the experimental device control (needs Rust: see device-lib). It keeps a
+# key in the Keychain, which asks about an ad-hoc build anew after every rebuild: sign with a
+# certificate instead (SIGN_ID="Apple Development: Name (ID)", see `security find-identity -p codesigning`).
 build: $(if $(DEVICE),device-lib)
 	$(if $(DEVICE),ROAMRUN_DEVICE=1) xcrun swift build -c release $(if $(SNAPSHOT),-Xswiftc -DSNAPSHOT)
 
