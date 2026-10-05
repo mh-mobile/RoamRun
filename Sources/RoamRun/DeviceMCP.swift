@@ -77,8 +77,12 @@ final class DeviceMCP: @unchecked Sendable {
         if tool == "devices" {
             return text(profiles.isEmpty ? "No devices saved in RoamRun." : profiles.map(\.displayName).joined(separator: "\n"))
         }
-        guard let name = arguments["device"] as? String,
-              let device = profiles.first(where: { $0.displayName.caseInsensitiveCompare(name) == .orderedSame }) else {
+        let named = (arguments["device"] as? String).map { name in profiles.filter { $0.displayName.caseInsensitiveCompare(name) == .orderedSame } } ?? []
+        // Two under one name (a list that was mended gives them a default one): neither is guessed at.
+        guard named.count < 2 else {
+            throw Failure(description: "more than one saved device is named that: the user gives each its own name in the RoamRun app")
+        }
+        guard let device = named.first else {
             throw Failure(description: "no such device; saved: \(profiles.map(\.displayName).joined(separator: ", "))")
         }
         func number(_ key: String) throws -> Double {
@@ -163,7 +167,10 @@ final class DeviceMCP: @unchecked Sendable {
     action, and points are pixels of the image the last look returned. These press what is really \
     there — don't tap what spends money, posts, sends, deletes or signs in unless the user asked \
     for exactly that. A look shows whatever is on the screen (notifications, messages); don't pass \
-    the image on. The device lists this as screen sharing, where its user can see it.
+    the image on. The device lists this as screen sharing, where its user can see it, and its \
+    sound goes into that session: until about five seconds after the last look or action its \
+    speaker is silent and voice input on it doesn't hear. Asked to keep watching a screen, tell \
+    the user that first.
     """
 
     private static func tool(_ name: String, _ description: String, _ properties: [String: [String: Any]] = [:], required: [String] = []) -> [String: Any] {

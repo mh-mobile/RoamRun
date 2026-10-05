@@ -1450,9 +1450,16 @@ final class AppCoordinator: ObservableObject {
             case .known: break
             case .save where i != nil:
                 profiles[i!].udid = udid
-                memories[id]?.adopt(udid)   // the running bridge's, so that what it reports later is compared with it
-                persist()
-                learnDeviceTypes()
+                if persist() {
+                    memories[id]?.adopt(udid)   // the running bridge's, so that what it reports later is compared with it
+                    learnDeviceTypes()
+                } else {
+                    // Not written: after a restart the device would have no UDID again, and a
+                    // pairing nothing names. Neither is kept, and it isn't shown as done.
+                    if let j = profiles.firstIndex(where: { $0.id == id }) { profiles[j].udid = nil }
+                    deviceControl.forgetPairing(udid: udid, of: id)
+                    shown = .failed("The pairing was made, but the device list couldn't be saved (\(ProfileStore.directory.path)), so it wasn't kept. Set it up again once that is mended; the pairing just made can be removed on the device, in Settings.")
+                }
             default:
                 deviceControl.forgetPairing(udid: udid, of: id)
                 shown = .failed(i == nil ? "The device is no longer saved; its pairing wasn't kept."

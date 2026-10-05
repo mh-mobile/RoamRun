@@ -4425,7 +4425,9 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
     #expect(Hub.verdict(expected: "00008027-BBBB", paired: "00008027-BBBB", others: others) == .expected)
     #expect(Hub.verdict(expected: "00008027-bbbb", paired: "00008027-BBBB", others: others) == .expected)   // one UDID, however spelled
     #expect(Hub.verdict(expected: nil, paired: "00008027-BBBB", others: others) == .toProve)
-    #expect(Hub.verdict(expected: "00008027-CCCC", paired: "00008027-BBBB", others: others) == .toProve)
+    // Known by another UDID than the one that paired: not proved by connecting — the pairing
+    // would be saved under the known one's name, in its own pairing's place.
+    #expect(Hub.verdict(expected: "00008027-CCCC", paired: "00008027-BBBB", others: others) == .another)
     // Already saved under another name: not saved twice, whether or not this one's UDID was known.
     #expect(Hub.verdict(expected: nil, paired: "00008130-aaaa", others: others) == .savedAs("iPhone"))
     #expect(Hub.verdict(expected: "00008027-BBBB", paired: "00008130-AAAA", others: others) == .savedAs("iPhone"))
@@ -4919,15 +4921,116 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
     for _ in 0..<20 {
-        let made = OSAllocatedUnfairLock<[DeviceControlWire.Listener]>(initialState: [])
-        DispatchQueue.concurrentPerform(iterations: 8) { n in
-            if let l = DeviceControlWire.Listener(directory: dir, handler: { _ in .init(ok: true, name: "\(n)") }) { made.withLock { $0.append(l) } }
+        var listening: [DeviceControlWire.Listener] = []
+        // Asked again when none of the eight got it: a process another test starts at that moment
+        // holds a copy of the last round's lock until it execs. Never more than one, either way.
+        for _ in 0..<100 where listening.isEmpty {
+            let made = OSAllocatedUnfairLock<[DeviceControlWire.Listener]>(initialState: [])
+            DispatchQueue.concurrentPerform(iterations: 8) { n in
+                if let l = DeviceControlWire.Listener(directory: dir, handler: { _ in .init(ok: true, name: "\(n)") }) { made.withLock { $0.append(l) } }
+            }
+            listening = made.withLock { $0 }
+            if listening.isEmpty { usleep(10_000) }
         }
-        let listening = made.withLock { $0 }
         #expect(listening.count == 1)
         #expect((try? DeviceControlWire.ask(.init(op: "state", device: UUID()), in: dir))?.ok == true)
         listening.forEach { $0.stop() }
     }
+}
+
+/// A name two saved devices have names neither to the MCP tools, as it doesn't to the commands:
+/// a list that was mended gives devices a default name, and the first of them isn't the one meant.
+@Test func theMCPToolsDoNotGuessBetweenDevicesOfOneName() throws {
+    func device(_ name: String) -> DeviceProfile {
+        DeviceProfile(displayName: name, instanceName: UUID().uuidString, serviceType: "_remotepairing._tcp", domain: "local.",
+                      remotePairingPort: 49152, bonjourHost: "x.local.", txt: [:], providerID: "tailscale", providerHostName: name, providerIP: "100.64.0.1")
+    }
+    var asked: [DeviceControlWire.Request] = []
+    let server = DeviceMCP(profiles: { [device("Device"), device("device"), device("iPad")] }) { request in
+        asked.append(request)
+        return .init(ok: true)
+    }
+    func call(_ tool: String, _ arguments: String) throws -> [String: Any] {
+        let answer = try #require(server.handle(Data(#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"\#(tool)","arguments":\#(arguments)}}"#.utf8)))
+        let object = try #require(try JSONSerialization.jsonObject(with: answer) as? [String: Any])
+        return try #require(object["result"] as? [String: Any])
+    }
+    for tool in ["press", "type", "paste", "elements", "look"] {
+        #expect(try call(tool, #"{"device":"Device","button":"lock","text":"x"}"#)["isError"] as? Bool == true)
+    }
+    #expect(asked.isEmpty)                                                   // nothing reached a device
+    #expect(try call("press", #"{"device":"iPad","button":"home"}"#)["isError"] as? Bool != true)
+    #expect(asked.count == 1)
+}
+
+/// A request that waited its turn behind another isn't begun once its asker has left: a lock
+/// button asked for and given up on would otherwise be pressed minutes later, for nobody.
+@Test func aRequestWhoseAskerLeftIsNotBegun() throws {
+    let dir = URL(fileURLWithPath: "/tmp/rr-\(UUID().uuidString.prefix(8))")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try scratchPairing(at: DeviceControlWire.pairingFile(udid: "UDID-1", in: dir))
+    let made = OSAllocatedUnfairLock<[StandInDevice]>(initialState: [])
+    let hub = DeviceControlHub(directory: dir, key: { _ in scratchKey }) { _, _, _ in
+        let device = StandInDevice()
+        made.withLock { $0.append(device) }
+        return device
+    }
+    defer { hub.stop() }
+    let id = UUID()
+    hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
+    let device = try #require(made.withLock { $0.first })
+    hub.start()
+
+    // A look that is held up has the device; a press asked for meanwhile waits behind it.
+    device.hold = DispatchSemaphore(value: 0)
+    Thread.detachNewThread { _ = hub.answer(.init(op: "look", device: id, path: dir.appendingPathComponent("l.png").path)) }
+    device.lookBegan.wait()
+    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    var address = sockaddr_un()
+    address.sun_family = sa_family_t(AF_UNIX)
+    let path = DeviceControlWire.socketPath(in: dir)
+    withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: path.utf8.prefix($0.count - 1)) }
+    let connected = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) } }
+    #expect(connected == 0)
+    let line = try JSONEncoder().encode(DeviceControlWire.Request(op: "press", device: id, text: "lock")) + Data("\n".utf8)
+    #expect(line.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) } == line.count)
+    Thread.sleep(forTimeInterval: 0.3)   // read by the app, and waiting its turn
+    close(fd)                            // the asker leaves
+    Thread.sleep(forTimeInterval: 0.2)
+    device.hold?.signal()                // the look ends: the press's turn
+    Thread.sleep(forTimeInterval: 0.5)
+    #expect(!device.calls.contains("press"))
+    // One whose asker is still there is begun as ever.
+    #expect(hub.answer(.init(op: "press", device: id, text: "home")).ok)
+    #expect(device.calls.filter { $0 == "press" }.count == 1)
+}
+
+/// A pairing that was to be removed and whose file wouldn't go is out of use all the same: the
+/// device isn't operated again on what "removed" left behind.
+@Test func aPairingThatCouldNotBeRemovedIsNotUsed() throws {
+    let dir = scratchDir()
+    defer {
+        chmod(dir.path, 0o700)
+        try? FileManager.default.removeItem(at: dir)
+    }
+    let (hub, _) = try standInHub(dir)
+    defer { hub.stop() }
+    let id = UUID()
+    let target = DeviceControlHub.Target(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")
+    hub.update([target])
+    #expect(hub.answer(.init(op: "press", device: id, text: "home")).ok)
+    let said = OSAllocatedUnfairLock<[String]>(initialState: [])
+    hub.onLog = { message, _ in said.withLock { $0.append(message) } }
+    #expect(chmod(dir.path, 0o500) == 0)          // nothing in it can be removed
+    hub.unpair(target)
+    #expect(FileManager.default.fileExists(atPath: DeviceControlWire.pairingFile(udid: "UDID-1", in: dir).path))
+    #expect(!hub.answer(.init(op: "press", device: id, text: "home")).ok)
+    #expect(!hub.state(of: id, udid: "UDID-1").open)
+    #expect(said.withLock { $0 }.contains { $0.contains("couldn't be removed") })
+    #expect(!said.withLock { $0 }.contains("device control: pairing removed"))
+    hub.update([target])                           // the list saved again: still not taken up
+    #expect(!hub.answer(.init(op: "press", device: id, text: "home")).ok)
 }
 
 /// A saved device a pairing was brought for counts as kept only once the list is written, also

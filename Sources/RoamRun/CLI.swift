@@ -829,6 +829,7 @@ enum CLI {
             switch verdict {
             case .savedAs(let other): stop("\(paired.name) paired, which is saved here as “\(other)”, not “\(profile.displayName)”. Nothing was written. \(withdraw)")
             case .nameless: stop("\(paired.name) paired without saying which device it is. Nothing was written. \(withdraw)")
+            case .another: stop("\(paired.name) paired, and it isn't “\(profile.displayName)” as that is saved here (another UDID). Nothing was written. \(withdraw)")
             case .expected, .toProve: break
             }
             // Tried once from here: a pairing that connects nowhere isn't worth taking anywhere.

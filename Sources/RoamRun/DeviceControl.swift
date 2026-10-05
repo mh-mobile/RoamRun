@@ -172,7 +172,14 @@ enum DeviceControlWire {
         private let stopped = NSLock()
         private var isStopped = false
 
-        init?(directory: URL, handler: @escaping @Sendable (Request) -> Response) {
+        /// For a handler that doesn't mind whether its asker is still there.
+        convenience init?(directory: URL, handler: @escaping @Sendable (Request) -> Response) {
+            self.init(directory: directory, answering: { request, _ in handler(request) })
+        }
+
+        /// `answering` is given, with the request, a way to ask whether whoever sent it is
+        /// still waiting: one that waited its turn behind another isn't begun for nobody.
+        init?(directory: URL, answering handler: @escaping @Sendable (Request, _ wanted: @escaping @Sendable () -> Bool) -> Response) {
             let path = DeviceControlWire.socketPath(in: directory)
             let fd = socket(AF_UNIX, SOCK_STREAM, 0)
             guard fd >= 0 else { return nil }
@@ -216,7 +223,13 @@ enum DeviceControlWire {
                         let line = DeviceControlWire.readLine(client)
                         guard !line.isEmpty else { return }   // said nothing: nobody to answer
                         let request = try? JSONDecoder().decode(Request.self, from: line)
-                        DeviceControlWire.writeLine(request.map(handler) ?? .failure("unreadable request"), to: client)
+                        // Gone: the other end closed (it says nothing more once it has asked, so
+                        // nothing to read and not "nothing yet" is its leaving).
+                        let wanted: @Sendable () -> Bool = {
+                            var byte: UInt8 = 0
+                            return recv(client, &byte, 1, MSG_PEEK | MSG_DONTWAIT) != 0
+                        }
+                        DeviceControlWire.writeLine(request.map { handler($0, wanted) } ?? .failure("unreadable request"), to: client)
                     }
                 }
             }
@@ -348,6 +361,11 @@ final class DeviceControlHub: @unchecked Sendable {
     /// The last update's, for when a pairing is made or removed in between.
     private var targets: [Target] = []
     private var pairing: DevicePairing?
+    /// Pairings that were to be removed and whose file wouldn't go: not used again by this
+    /// process, whatever is on disk. Lowercased UDIDs, under a lock of their own: they are asked
+    /// about from under `lock`.
+    private var unremoved: Set<String> = []
+    private let unremovedLock = NSLock()
     /// Counts the looks, over all devices: each is told apart by its number.
     private var looks = 0
     private var pairingUnderWay = false
@@ -398,7 +416,8 @@ final class DeviceControlHub: @unchecked Sendable {
     }
 
     private func hasPairing(_ t: Target) -> Bool {
-        FileManager.default.fileExists(atPath: DeviceControlWire.pairingFile(udid: t.udid, in: directory).path)
+        !unremovedLock.withLock({ unremoved.contains(t.udid.lowercased()) })
+            && FileManager.default.fileExists(atPath: DeviceControlWire.pairingFile(udid: t.udid, in: directory).path)
     }
 
     /// The session held for a device, if any.
@@ -455,6 +474,9 @@ final class DeviceControlHub: @unchecked Sendable {
         case savedAs(String)
         /// It gave no UDID, and none is known to name the pairing by.
         case nameless
+        /// The device asked for is known by another UDID than the one that paired: its pairing
+        /// would be saved under that one's name, in the place of that one's own.
+        case another
     }
 
     static func verdict(expected: String?, paired: String, others: [(udid: String, name: String)]) -> PairingVerdict {
@@ -462,6 +484,7 @@ final class DeviceControlHub: @unchecked Sendable {
         if let expected, same(expected, paired) { return .expected }
         if let other = others.first(where: { same($0.udid, paired) }) { return .savedAs(other.name) }
         if expected == nil, paired.isEmpty { return .nameless }
+        if expected != nil, !paired.isEmpty { return .another }
         return .toProve
     }
 
@@ -501,6 +524,8 @@ final class DeviceControlHub: @unchecked Sendable {
                     throw DeviceSession.Failure.message("\(paired.name) paired, which is saved here as “\(other)”, not “\(device.name)”. Nothing was saved, and its earlier pairing with this Mac no longer works: set device control up again on “\(other)”.")
                 case .nameless:
                     throw DeviceSession.Failure.message("\(paired.name) paired without saying which device it is. Nothing was saved.")
+                case .another:
+                    throw DeviceSession.Failure.message("\(paired.name) paired, and it isn't “\(device.name)” as that is saved here (another UDID). Nothing was saved, and what was saved for “\(device.name)” is as it was; the pairing just made can be removed on \(paired.name), in Settings. If “\(device.name)” is that device now, remove it here and add it again.")
                 case .toProve:
                     let check = DeviceSession(ip: device.ip, port: device.port, pairing: { paired.pairing })
                     defer { check.close() }
@@ -547,6 +572,7 @@ final class DeviceControlHub: @unchecked Sendable {
     /// (a device removed after it was saved and before its pairing was would leave the pairing).
     func sealPairing(_ pairing: Data, with sealing: SymmetricKey, udid: String) throws {
         try Self.save(Self.seal(pairing, with: sealing), as: DeviceControlWire.pairingFile(udid: udid, in: directory))
+        unremovedLock.withLock { _ = unremoved.remove(udid.lowercased()) }
     }
 
     /// And held from now on, connected when this returns.
@@ -609,7 +635,7 @@ final class DeviceControlHub: @unchecked Sendable {
     /// Removes the pairing saved under `udid`, held or not: one made for a device that turned
     /// out not to be saved under it.
     func forgetPairing(udid: String, of id: UUID) {
-        Self.remove(DeviceControlWire.pairingFile(udid: udid, in: directory))
+        _ = drop(udid: udid, of: id)
         lock.withLock { targets.removeAll { $0.id == id && $0.udid.caseInsensitiveCompare(udid) == .orderedSame } }
         reopen(id)
     }
@@ -657,9 +683,22 @@ final class DeviceControlHub: @unchecked Sendable {
     /// Where a build before the pairings were sealed kept this one, as it was.
     static func unsealed(of file: URL) -> URL { file.deletingPathExtension().appendingPathExtension("plist") }
 
-    private static func remove(_ file: URL) {
+    /// Whether it is gone: a file that stays (a folder that can't be written to) is still a key.
+    @discardableResult
+    private static func remove(_ file: URL) -> Bool {
         try? FileManager.default.removeItem(at: file)
         try? FileManager.default.removeItem(at: unsealed(of: file))
+        return !FileManager.default.fileExists(atPath: file.path)
+    }
+
+    /// Forgets the pairing saved under `udid`. When its file won't go, the pairing is put out of
+    /// use all the same for as long as this runs, and that is said: removed must not go on working.
+    private func drop(udid: String, of id: UUID) -> Bool {
+        let file = DeviceControlWire.pairingFile(udid: udid, in: directory)
+        let gone = Self.remove(file)
+        unremovedLock.withLock { if gone { unremoved.remove(udid.lowercased()) } else { unremoved.insert(udid.lowercased()) } }
+        if !gone { onLog?("device control: the pairing's file couldn't be removed and is still on this Mac (\(file.path)); it is out of use until RoamRun is opened again", id) }
+        return gone
     }
 
     /// Pairings a build before the sealing kept as they were, and what it kept of older ones:
@@ -677,9 +716,9 @@ final class DeviceControlHub: @unchecked Sendable {
 
     /// Forgets this Mac's pairing with the device (the device's record of it stays, in its Settings).
     func unpair(_ target: Target) {
-        Self.remove(DeviceControlWire.pairingFile(udid: target.udid, in: directory))
+        let gone = drop(udid: target.udid, of: target.id)
         reopen(target.id)
-        onLog?("device control: pairing removed", target.id)
+        if gone { onLog?("device control: pairing removed", target.id) }
     }
 
     /// The device's session made anew from what is saved now. The new one is in place before
@@ -706,12 +745,15 @@ final class DeviceControlHub: @unchecked Sendable {
 
     func start() {
         Self.removeUnsealed(in: directory)
-        listener = DeviceControlWire.Listener(directory: directory) { [weak self] in self?.answer($0) ?? .failure("stopping") }
+        listen()
         // ponytail: a look every 30 s for a connection to open, none at one already open — a dead
         // one is found by the next call (and recovered as Recovery says). A heartbeat, if that is too late.
         let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
         timer.schedule(deadline: .now() + 30, repeating: 30)
-        timer.setEventHandler { [weak self] in self?.keepOpen() }
+        timer.setEventHandler { [weak self] in
+            self?.listen()   // not had at the start (another copy was ending): had now
+            self?.keepOpen()
+        }
         timer.resume()
         self.timer = timer
     }
@@ -796,7 +838,17 @@ final class DeviceControlHub: @unchecked Sendable {
     private static let lookFirst = "look first: a point is given in the pixels of a look, and each look serves one action"
     static let lookedSince = "the device was looked at again since the look this point is from (by another): look again"
 
-    func answer(_ request: DeviceControlWire.Request) -> DeviceControlWire.Response {
+    private func listen() {
+        guard lock.withLock({ listener == nil }) else { return }
+        let made = DeviceControlWire.Listener(directory: directory, answering: { [weak self] request, wanted in
+            self?.answer(request, wanted: wanted) ?? .failure("stopping")
+        })
+        lock.withLock { if listener == nil { listener = made } else { made?.stop() } }
+    }
+
+    /// `wanted`: whether whoever asked is still there. A request that waited its turn and whose
+    /// asker has left meanwhile (interrupted, or tired of waiting) isn't begun.
+    func answer(_ request: DeviceControlWire.Request, wanted: @Sendable () -> Bool = { true }) -> DeviceControlWire.Response {
         let notSetUp = DeviceControlWire.Response.failure("device control isn't set up for this device: the user sets it up in the RoamRun app, on the device's page")
         if request.op == "import" {
             return onImport?(request.path ?? "", request.text) ?? .failure("this RoamRun can't take a pairing in")
@@ -817,6 +869,7 @@ final class DeviceControlHub: @unchecked Sendable {
             return gate
         }
         return gate.withLock {
+            guard wanted() else { return .failure("nobody is waiting for this any more") }
             guard let (h, name) = lock.withLock({ held[request.device].map { ($0, $0.target.name) } }) else { return notSetUp }
             return perform(request, on: h, named: name)
         }
