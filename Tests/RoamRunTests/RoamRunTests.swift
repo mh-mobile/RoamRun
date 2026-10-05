@@ -5493,6 +5493,24 @@ func everyDocumentedCommandParses(_ doc: String) throws {
     #expect(hub.answer(.init(op: "look", device: id, path: lookFile(in: dir))).ok)
 }
 
+/// A look whose asker left while it was taken isn't left lying where looks are kept.
+@Test func aLookNobodyWaitsForIsNotKept() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (hub, _) = try standInHub(dir)
+    defer { hub.stop() }
+    let id = UUID()
+    hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
+    let png = lookFile(in: dir)
+    let asked = OSAllocatedUnfairLock(initialState: 0)
+    // There when its turn came, gone once the look was taken.
+    let answer = hub.answer(.init(op: "look", device: id, path: png), wanted: { asked.withLock { $0 += 1; return $0 == 1 } })
+    #expect(answer.error == DeviceControlHub.nobodyWaits)
+    #expect(!FileManager.default.fileExists(atPath: png))
+    #expect(hub.answer(.init(op: "look", device: id, path: png)).ok)
+    #expect(FileManager.default.fileExists(atPath: png))
+}
+
 /// A pairing brought in is told whether whoever brought it still waits.
 @Test func anImportIsToldWhetherItsAskerWaits() throws {
     let dir = scratchDir()
@@ -5532,7 +5550,7 @@ func everyDocumentedCommandParses(_ doc: String) throws {
     }
     /// What reached the app. The first call holds the queue until `freedAfter` lines were read
     /// (all of them: until the client has gone).
-    func asked(_ lines: [String], freedAfter: Int) -> [String] {
+    func asked(_ lines: [String], freedAfter: Int, reaching: Int = 1) -> [String] {
         let sent = OSAllocatedUnfairLock<[String]>(initialState: [])
         let first = DispatchSemaphore(value: 0), free = DispatchSemaphore(value: 0)
         let server = DeviceMCP(profiles: { [device] }, looks: FileManager.default.temporaryDirectory) { request in
@@ -5545,8 +5563,10 @@ func everyDocumentedCommandParses(_ doc: String) throws {
             if read == 1 { first.wait() }   // the first is under way before more is said
             if read == freedAfter, read < lines.count { free.signal() }
             if read == lines.count {
-                if freedAfter < lines.count { usleep(300_000) }   // the rest had its turn before the end
-                else { DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { free.signal() } }
+                if freedAfter < lines.count {
+                    // The rest has its turn before the end: until all that should reach the app did.
+                    for _ in 0..<500 where sent.withLock({ $0.count }) < reaching { usleep(20_000) }
+                } else { DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) { free.signal() } }
             }
             defer { read += 1 }
             return read < lines.count ? lines[read] : nil
@@ -5555,8 +5575,8 @@ func everyDocumentedCommandParses(_ doc: String) throws {
     }
     let cancel = #"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":2}}"#
     #expect(asked([call(1, "home"), call(2, "lock")], freedAfter: 2) == ["home"])                              // the client went
-    #expect(asked([call(1, "home"), call(2, "lock"), cancel, call(3, "home")], freedAfter: 3) == ["home", "home"])   // taken back
-    #expect(asked([call(1, "home"), call(2, "lock"), call(3, "home")], freedAfter: 2) == ["home", "lock", "home"])    // neither
+    #expect(asked([call(1, "home"), call(2, "lock"), cancel, call(3, "home")], freedAfter: 3, reaching: 2) == ["home", "home"])   // taken back
+    #expect(asked([call(1, "home"), call(2, "lock"), call(3, "home")], freedAfter: 2, reaching: 3) == ["home", "lock", "home"])    // neither
 }
 
 /// A request given up while it waits its turn: the app finds its asker gone. Given up before

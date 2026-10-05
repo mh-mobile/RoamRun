@@ -941,12 +941,12 @@ final class DeviceControlHub: @unchecked Sendable {
         return gate.withLock {
             guard wanted() else { return .failure(Self.nobodyWaits) }
             guard let (h, name) = lock.withLock({ held[request.device].map { ($0, $0.target.name) } }) else { return notSetUp }
-            return perform(request, on: h, named: name)
+            return perform(request, on: h, named: name, wanted: wanted)
         }
     }
 
     /// Under the device's gate.
-    private func perform(_ request: DeviceControlWire.Request, on h: Held, named name: String) -> DeviceControlWire.Response {
+    private func perform(_ request: DeviceControlWire.Request, on h: Held, named name: String, wanted: () -> Bool) -> DeviceControlWire.Response {
         // Failed or not: an input may have reached the device before the failure showed.
         defer { if request.op != "look" { h.acted = Date() } }
         /// The look's size, for a point to be read against; taken away by `spend` once the request is one that goes to the device.
@@ -995,6 +995,11 @@ final class DeviceControlHub: @unchecked Sendable {
                 }
                 CGImageDestinationAddImage(out, image, nil)
                 guard CGImageDestinationFinalize(out) else { return .failure("can't write \(path)") }
+                // Whoever asked left while it was taken: nobody is there to take the screen away.
+                guard wanted() else {
+                    try? FileManager.default.removeItem(atPath: path)
+                    return .failure(Self.nobodyWaits)
+                }
                 let id = lock.withLock { () -> Int in looks += 1; return looks }
                 h.looked = (image.width, image.height, id)
                 return .init(ok: true, width: image.width, height: image.height, look: id)

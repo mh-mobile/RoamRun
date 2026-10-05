@@ -52,10 +52,11 @@ final class DeviceMCP: @unchecked Sendable {
                 continue
             }
             let id = object?["id"].map { "\($0)" }
+            let acts = object?["method"] as? String == "tools/call"
             work.async {
                 // Taken back before its turn: not begun, and (as MCP has it) not answered.
                 let begin = self.calls.withLock { () -> Bool in
-                    if self.gone { return false }
+                    if self.gone, acts { return false }   // what only asks about the server is still answered
                     if let id, self.takenBack.remove(id) != nil { return false }
                     self.running = id
                     self.asking.again()
