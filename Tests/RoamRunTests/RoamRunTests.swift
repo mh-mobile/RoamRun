@@ -4305,6 +4305,8 @@ private final class StandInDevice: ControlledDevice, @unchecked Sendable {
     var isOpen: Bool { true }
     var isRefused: Bool { false }
     /// A connection waits here when set, and says it has begun.
+    /// What answers isn't the device the pairing was made with.
+    var isAnother = false
     var connectHold: DispatchSemaphore?
     let connectBegan = DispatchSemaphore(value: 0)
     func connect() throws {
@@ -5816,7 +5818,7 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     writes.withLock { $0 = errSecAuthFailed }
     let unkept = list()
     #expect(!unkept.set(b, true) && !unkept.contains(b))
-    #expect(unkept.set(a, false) && !unkept.contains(a))
+    #expect(!unkept.set(a, false) && !unkept.contains(a))   // off here, and said not to be kept
 }
 
 /// A device switched off is refused to every command, and says so when asked how it stands.
@@ -5837,4 +5839,37 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     on.withLock { $0 = true }
     #expect(hub.answer(.init(op: "press", device: id, text: "home")).ok)
     #expect(hub.answer(.init(op: "state", device: id)).allowed == true)
+}
+
+/// What answers for a device isn't that device: said when asked how it stands, apart from a
+/// pairing the device refuses (pairing again isn't the answer to an address taken by another).
+@Test func anotherAnsweringForADeviceIsSaid() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (hub, made) = try standInHub(dir)
+    defer { hub.stop() }
+    let id = UUID()
+    hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
+    #expect(hub.answer(.init(op: "state", device: id)).another == nil && !hub.isAnother(id))
+    try #require(made().last).isAnother = true
+    #expect(hub.answer(.init(op: "state", device: id)).another == true && hub.isAnother(id))
+    #expect(hub.answer(.init(op: "state", device: id)).refused == false)
+}
+
+/// The MCP tool types no more than a client would wait for: the rest is for paste.
+@Test func theMCPToolTypesOnlySoMuch() throws {
+    let device = profile("iPhone")
+    var asked = 0
+    let server = DeviceMCP(profiles: { [device] }, looks: FileManager.default.temporaryDirectory) { _ in
+        asked += 1
+        return .init(ok: true)
+    }
+    func call(_ text: String) throws -> Bool {
+        let json = #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"type","arguments":{"device":"iPhone","text":"\#(text)"}}}"#
+        let answer = try #require(server.handle(Data(json.utf8)))
+        let result = try #require((try JSONSerialization.jsonObject(with: answer) as? [String: Any])?["result"] as? [String: Any])
+        return result["isError"] as? Bool ?? true
+    }
+    #expect(try call(String(repeating: "a", count: DeviceMCP.longestTyped)) == false && asked == 1)
+    #expect(try call(String(repeating: "a", count: DeviceMCP.longestTyped + 1)) == true && asked == 1)
 }

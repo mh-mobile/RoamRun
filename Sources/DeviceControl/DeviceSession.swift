@@ -53,11 +53,13 @@ public final class DeviceSession: @unchecked Sendable {
     /// until a call works or a new one is made.
     private var broken = false
     private var refused = false
+    /// What answered when a connection was last tried wasn't the device the pairing was made with.
+    private var another = false
     private var closed = false
     /// What `isOpen` and `isRefused` answer with, under a lock of its own: `lock` is held for
     /// as long as a call to the device takes, and asking how things stand mustn't wait for that.
     private let standingLock = NSLock()
-    private var standing = (open: false, refused: false)
+    private var standing = (open: false, refused: false, another: false)
     /// Under `standingLock`: let go of, and to be closed.
     private var leaving = false
     /// Said as things happen (opened, tried again, reopened), for whoever shows or logs it.
@@ -108,9 +110,13 @@ public final class DeviceSession: @unchecked Sendable {
     /// was removed there), or it couldn't be read here: only pairing again helps.
     public var isRefused: Bool { standingLock.withLock { standing.refused } }
 
+    /// Something answers at the device's address that isn't the device this pairing was made
+    /// with: nothing is sent to it. The device erased or replaced — or something else there.
+    public var isAnother: Bool { standingLock.withLock { standing.another } }
+
     /// Under `lock`, whenever what it guards may have changed.
     private func noteStanding() {
-        let now = (device != nil && !broken, refused)
+        let now = (device != nil && !broken, refused, another)
         standingLock.withLock { standing = now }
     }
 
@@ -206,9 +212,11 @@ public final class DeviceSession: @unchecked Sendable {
             defer { rr_string_free(error) }
             let why = error.map { String(cString: $0) } ?? "can't open"
             refused = why.contains(Self.refusal) || why.contains(Self.unchecked)
+            another = why.contains(Self.notTheDevice)
             throw Failure.message(why)
         }
         refused = false
+        another = false
         rr_device_stop_at(opened, stopping)
         return opened
     }
@@ -217,6 +225,9 @@ public final class DeviceSession: @unchecked Sendable {
     static let refusal = "doesn't accept this pairing"
     /// And a pairing made before the device's key was kept with it: only pairing again helps there too.
     static let unchecked = "doesn't hold the device's key"
+    /// How it words an answer that isn't the device's own: not a refusal — pairing again isn't
+    /// what to do when something else has taken the device's address.
+    static let notTheDevice = "isn't the device this pairing was made with"
 
     private func perform<T>(repeatable: Bool, _ body: (OpaquePointer) throws -> T) throws -> T {
         try lock.withLock {

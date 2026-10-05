@@ -45,7 +45,9 @@ final class DeviceControlAllowed: @unchecked Sendable {
     /// As far as it has been read; nil before that. For the main thread, which doesn't wait on the Keychain.
     func known(_ id: UUID) -> Bool? { lock.withLock { held?.contains(id) } }
 
-    /// Whether it was written: switched on only in what is kept, or after a restart it would be off again unsaid.
+    /// Whether it was written. Not written, it isn't switched on (after a restart it would be off
+    /// again unsaid); it is switched off here all the same, and is on again after a restart —
+    /// which the caller says.
     @discardableResult
     func set(_ id: UUID, _ allowed: Bool) -> Bool {
         lock.withLock {
@@ -53,9 +55,8 @@ final class DeviceControlAllowed: @unchecked Sendable {
             if allowed { next.insert(id) } else { next.remove(id) }
             guard next != held else { return true }
             guard let data = try? JSONEncoder().encode(next), write(data) == errSecSuccess else {
-                // Not kept: off stays off here too; on is not taken.
                 if !allowed { held = next }
-                return !allowed
+                return false
             }
             held = next
             return true

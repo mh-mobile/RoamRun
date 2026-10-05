@@ -136,7 +136,8 @@ tunnel and Xcode has to run again.
     characters>"` runs into a note (the device's keyboard an English one), **Remove…** the
     pairing: the typing stops within a moment — where it had got to, no further — and the
     command says the connection was closed. Before that, `roamrun type <name> "<600 numbered
-    characters>"` and a `look` right after: the last of them is there (none still on their way).
+    characters>"` and a `look` right after: the last of them is there (none still on their way). Once more
+    in another app's field (a search field, a message draft not sent): the pace was measured in a note.
 25. `roamrun pairing create <name> ~/k.json --as "RoamRun (check)"`, the code entered on the
     device: the file is written (0600) and the device lists "RoamRun (check)" beside this
     Mac's own entry. On another Mac that reaches the device (or a macOS VM on the tailnet):

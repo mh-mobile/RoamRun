@@ -389,6 +389,9 @@ private struct DeviceControlRow: View {
     private func summary(_ state: (paired: Bool, open: Bool, refused: Bool), allowed: Bool) -> String {
         if !state.paired { return "Lets agents see and operate this device (roamrun look, tap, mcp). Needs iOS 27 and a pairing of RoamRun's own." }
         if state.refused { return "This pairing can no longer be used: it was removed on the device, or this Mac can't read what it saved. Pair again." }
+        if coordinator.controlAnother(profile) {
+            return "What answers at this device's address isn't the device this pairing was made with, so nothing is sent to it. If the device was erased or replaced, pair again; if not, something else has its address."
+        }
         if !allowed { return "Paired, switched off: commands and agents are refused. Any program you run on this Mac can use it while it is on." }
         return state.open ? "Paired and connected." : "Paired. Connects while the device is on Wi‑Fi, awake and reachable."
     }

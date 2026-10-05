@@ -1432,11 +1432,17 @@ final class AppCoordinator: ObservableObject {
         Task.detached {
             let kept = DeviceControlAllowed.shared.set(id, allowed)
             await MainActor.run {
-                if !kept { self.launchWarning = "Device control couldn't be switched on: the Keychain didn't keep it." }
+                if !kept {
+                    self.launchWarning = allowed ? "Device control couldn't be switched on: the Keychain didn't keep it."
+                        : "Device control is switched off for now, but the Keychain didn't keep that: it is on again when RoamRun is opened anew. Remove the pairing to be sure."
+                }
                 self.objectWillChange.send()
             }
         }
     }
+
+    /// What answers at the device's address isn't the device its pairing was made with.
+    func controlAnother(_ profile: DeviceProfile) -> Bool { deviceControl.isAnother(profile.id) }
 
     func controlState(_ profile: DeviceProfile) -> (paired: Bool, open: Bool, refused: Bool) {
         controlUDID(profile).map { deviceControl.state(of: profile.id, udid: $0) } ?? (false, false, false)

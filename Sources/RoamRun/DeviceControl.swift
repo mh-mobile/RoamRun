@@ -41,6 +41,8 @@ enum DeviceControlWire {
         var look: Int?
         /// For "state": whether commands and agents may operate the device (its switch in the app).
         var allowed: Bool?
+        /// For "state": what answers at the device's address isn't the device the pairing was made with.
+        var another: Bool?
         static func failure(_ why: String) -> Response { Response(ok: false, error: why) }
     }
 
@@ -330,6 +332,7 @@ extension Array where Element == DeviceProfile {
 protocol ControlledDevice: AnyObject, Sendable {
     var isOpen: Bool { get }
     var isRefused: Bool { get }
+    var isAnother: Bool { get }
     func connect() throws
     /// At once, from any thread: nothing more is begun on the device. `close` follows, and waits.
     func letGo()
@@ -344,6 +347,10 @@ protocol ControlledDevice: AnyObject, Sendable {
 }
 
 extension DeviceSession: ControlledDevice {}
+
+extension ControlledDevice {
+    var isAnother: Bool { false }
+}
 
 /// What a device pairs with: `DevicePairing`, or a stand-in for it in tests.
 protocol PairingListener: AnyObject, Sendable {
@@ -513,6 +520,9 @@ final class DeviceControlHub: @unchecked Sendable {
     }
 
     /// Whether a pairing of our own is saved for the device, and whether its connection stands.
+    /// Whether what answers for the device isn't the device its pairing was made with.
+    func isAnother(_ id: UUID) -> Bool { session(of: id)?.isAnother == true }
+
     func state(of id: UUID, udid: String) -> (paired: Bool, open: Bool, refused: Bool) {
         let paired = hasPairing(udid: udid)
         let session = session(of: id)
@@ -977,7 +987,8 @@ final class DeviceControlHub: @unchecked Sendable {
         // How it stands is said at once, whatever runs on the device.
         if request.op == "state" {
             guard let h = lock.withLock({ held[request.device] }) else { return notSetUp }
-            return .init(ok: true, open: h.session.isOpen, refused: h.session.isRefused, allowed: allowed(request.device))
+            return .init(ok: true, open: h.session.isOpen, refused: h.session.isRefused, allowed: allowed(request.device),
+                         another: h.session.isAnother ? true : nil)
         }
         // Everything else one at a time per device, and whole: a look is checked, spent and acted
         // on without another command coming in between. The session is the one held once the

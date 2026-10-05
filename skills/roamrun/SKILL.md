@@ -181,6 +181,11 @@ Wi‑Fi as the Mac. The app shows a code; the user picks RoamRun on the device
 (Settings › Privacy & Security › Developer Mode) and enters it there. Don't try
 to do that part through device control.
 
+If `roamrun status` says that what answers at the device's address isn't the
+device the pairing was made with, nothing is sent there: tell the user — the
+device was erased or replaced (they pair again), or something else has its
+address. Don't try other addresses yourself.
+
 The device's page has a switch for device control. While it is off, every
 command here fails with "device control is switched off for this device", and
 `roamrun status` says "switched off": only the user can switch it on (it is
@@ -228,7 +233,7 @@ have the user add the MCP tools, which run outside it.
   converts and Return confirms: the text comes out wrong, and a long one can
   throw the app back to the home screen). It is typed at the device's own pace,
   about 16 characters a second, and has all arrived when the command returns:
-  for anything long, `paste`. `roamrun paste iPhone "任意の文字列"` puts any
+  for anything long, `paste` (the MCP tool takes 500 characters at most). `roamrun paste iPhone "任意の文字列"` puts any
   text in by the device's pasteboard — it replaces the pasteboard, and iOS asks
   "Allow Paste" each time: look, and tap it only if the user wants that.
 - `roamrun press iPhone home|lock|volume-up|volume-down`. `lock` can't be

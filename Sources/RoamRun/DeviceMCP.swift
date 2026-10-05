@@ -18,6 +18,8 @@ final class DeviceMCP: @unchecked Sendable {
     private let ask: Ask
     /// The longer side of the image a look returns.
     static let longSide = 1280
+    /// The most `type` takes in one call here.
+    static let longestTyped = 500
     /// Per device: the size of the last image given out, of the look behind it, and which look
     /// that was — a point is sent with it, so it isn't read against a look another made since.
     private var shown: [UUID: (shown: CGSize, real: CGSize, look: Int?)] = [:]
@@ -198,6 +200,10 @@ final class DeviceMCP: @unchecked Sendable {
             return text(captions.joined(separator: "\n") + (r.complete == true ? "" : "\n(\(captions.count) elements; the walk was cut short, there may be more)"))
         case "type", "paste", "press":
             guard let value = arguments[tool == "press" ? "button" : "text"] as? String else { throw Failure(description: "nothing to send") }
+            // Typed at the device's pace: more would outlast a client's patience, and go on being typed after it gave up.
+            guard tool != "type" || value.count <= Self.longestTyped else {
+                throw Failure(description: "too long to type here: \(Self.longestTyped) characters at most (about half a minute). paste takes any length")
+            }
             shown[device.id] = nil
             _ = try send(.init(op: tool, device: device.id, text: value))
             return text("sent; look to see what it did")
@@ -256,7 +262,7 @@ final class DeviceMCP: @unchecked Sendable {
              required: ["x1", "y1", "x2", "y2"]),
         tool("elements", "What accessibility says is on the screen, one caption a line (\"Home, tab, selected\"). No positions: find a caption in a look to tap it. The screen may scroll to what is visited. Nothing on the home screen.",
              ["limit": ["type": "integer", "description": "How many at most (default 40)"]]),
-        tool("type", "Type text on the device's keyboard, into whatever has its focus. US-keyboard characters only; a newline is Return. Right only while the device's keyboard is an English one — look first: under a Japanese one the text comes out wrong, and a long one can throw the app out. Typed at the device's pace, about 16 characters a second: paste for anything long.",
+        tool("type", "Type text on the device's keyboard, into whatever has its focus. US-keyboard characters only; a newline is Return. Right only while the device's keyboard is an English one — look first: under a Japanese one the text comes out wrong, and a long one can throw the app out. Typed at the device's pace, about 16 characters a second and 500 at most: paste for anything longer.",
              ["text": ["type": "string"]], required: ["text"]),
         tool("paste", "Put any text into whatever has the keyboard's focus, by the device's pasteboard (which it replaces). iOS then asks \"Allow Paste\" on the device each time: look, and tap it only if the user wants that.",
              ["text": ["type": "string"]], required: ["text"]),
