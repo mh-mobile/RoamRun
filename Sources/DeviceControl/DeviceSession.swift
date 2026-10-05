@@ -227,8 +227,9 @@ public final class DeviceSession: @unchecked Sendable {
         guard let opened = pairing.withUnsafeBytes({ rr_device_open(ip, port, $0.bindMemory(to: UInt8.self).baseAddress, $0.count, &error) }) else {
             defer { rr_string_free(error) }
             let why = error.map { String(cString: $0) } ?? "can't open"
-            refused = why.contains(Self.refusal) || why.contains(Self.unchecked)
-            another = why.contains(Self.notTheDevice)
+            // By how the library's own words begin: nothing the other side wrote comes first.
+            refused = why.hasPrefix(Self.refusal) || why.hasPrefix(Self.unchecked)
+            another = why.hasPrefix(Self.notTheDevice)
             throw Failure.message(why)
         }
         refused = false
@@ -238,15 +239,15 @@ public final class DeviceSession: @unchecked Sendable {
     }
 
     /// How the library words a pairing the device doesn't know (rr_device_open's error).
-    public static let refusal = "doesn't accept this pairing"
+    public static let refusal = "the device doesn't accept this pairing"
     /// How it words a call stopped at this side's bidding.
     public static let stopped = "stopped:"
     /// And a pairing made before the device's key was kept with it, or one it can't read: only
     /// pairing again helps there too.
-    public static let unchecked = "doesn't hold the device's key"
+    public static let unchecked = "this pairing doesn't hold the device's key"
     /// How it words an answer that isn't the device's own: not a refusal — pairing again isn't
     /// what to do when something else has taken the device's address.
-    public static let notTheDevice = "isn't the device this pairing was made with"
+    public static let notTheDevice = "not the device this pairing was made with"
 
     private func perform<T>(repeatable: Bool, _ body: (OpaquePointer) throws -> T) throws -> T {
         try lock.withLock {

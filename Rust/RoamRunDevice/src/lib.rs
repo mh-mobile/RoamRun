@@ -549,13 +549,27 @@ async fn elements(link: &mut Link, limit: usize, until: Instant) -> Result<(Vec<
     Ok((captions, false, "limit"))
 }
 
+/// What a failed verification is said as. The caller knows three of them by how they begin (the
+/// header has the words): a refusal only when the device proved itself and said no, not when the
+/// exchange broke off; and never by anything the other side wrote — its text isn't passed on.
+fn verify_words(e: &idevice::IdeviceError, ip: &str, port: u16) -> String {
+    use idevice::remote_pairing::errors::RemotePairingError as E;
+    match e {
+        idevice::IdeviceError::RemotePairing(E::PairVerifyFailed) => "the device doesn't accept this pairing: it proved itself and refused it".into(),
+        idevice::IdeviceError::RemotePairing(E::PeerNotVerified(what)) =>
+            format!("not the device this pairing was made with: what answers at {ip}:{port} didn't prove itself ({what}); it was told nothing of this Mac's and sent no input"),
+        idevice::IdeviceError::RemotePairing(E::PairingRejected(_)) => "the pairing couldn't be verified: rejected by what answered".into(),
+        _ => format!("the pairing couldn't be verified: {e}"),
+    }
+}
+
 /// The words the header gives for a pairing without the device's key: only pairing again helps.
 const UNCHECKED: &str = "this pairing doesn't hold the device's key (it was made before RoamRun checked who answers): pair again";
 
 async fn connect(ip: &str, port: u16, file: &[u8]) -> Result<Link, String> {
     let started = Instant::now();
     // Unreadable is for good, like one without the device's key: said in the same words.
-    let mut pairing = RpPairingFile::from_bytes(file).map_err(|e| format!("this pairing can't be read ({e:?}): it doesn't hold the device's key as RoamRun reads it — pair again"))?;
+    let mut pairing = RpPairingFile::from_bytes(file).map_err(|e| format!("this pairing doesn't hold the device's key in a form RoamRun reads ({e:?}): pair again"))?;
     // The device proves itself at every connection, by the key it gave when the pairing was
     // made: a pairing without that key would take whatever answers for the device.
     if pairing.peer_public_key.is_none() { return Err(UNCHECKED.into()); }
@@ -563,14 +577,7 @@ async fn connect(ip: &str, port: u16, file: &[u8]) -> Result<Link, String> {
     let mut client = RemotePairingClient::new(RpPairingSocket::new(control), LABEL);
     // Verify only: a pairing the device doesn't know must fail here, not start a new one.
     client.attempt_pair_verify().await.map_err(|e| format!("handshake: {e:?}"))?;
-    // Said in words the caller knows a refusal by (the header's "doesn't accept this pairing"): only when the device
-    // answered and said no, not when the exchange itself broke off.
-    client.validate_pairing(&mut pairing).await.map_err(|e| match e {
-        idevice::IdeviceError::RemotePairing(idevice::remote_pairing::errors::RemotePairingError::PairVerifyFailed) => format!("the device doesn't accept this pairing: {e:?}"),
-        idevice::IdeviceError::RemotePairing(idevice::remote_pairing::errors::RemotePairingError::PeerNotVerified(what)) =>
-            format!("what answers at {ip}:{port} isn't the device this pairing was made with ({what}): it was told nothing of this Mac's and sent no input"),
-        _ => format!("the pairing couldn't be verified: {e:?}"),
-    })?;
+    client.validate_pairing(&mut pairing).await.map_err(|e| verify_words(&e, ip, port))?;
     let verified_ms = started.elapsed().as_millis();
 
     let tunnel_port = client.create_tcp_listener().await.map_err(|e| format!("tunnel listener: {e:?}"))?;
@@ -630,6 +637,8 @@ fn input_time(input: &Input) -> Duration {
 /// deadline doesn't fall in the middle of it.
 async fn perform(link: &mut Link, input: Input) -> Result<(), String> {
     tokio::time::timeout(DEADLINE, stream_for_input(link)).await.unwrap_or_else(|_| Err("timed out".into()))?;
+    // Told to stop while the stream was got ready (that can take seconds): nothing is sent.
+    if link.stop.raised() { return Err(STOPPED.into()); }
     let done = match tokio::time::timeout(input_time(&input), send(link, &input)).await {
         Ok(done) => done,
         Err(_) => {
@@ -784,10 +793,17 @@ async fn press(link: &mut Link, steps: &[Step]) -> Result<(), String> {
         let mut sent_any = false;
         let mut failed = None;
         let mut down = 0;
-        for step in steps {
-            // Between two keys, none held: what is left isn't sent to a device being let go of.
-            if down == 0 && link.stop.raised() { return Err(STOPPED.into()); }
+        for (i, step) in steps.iter().enumerate() {
+            // Between two keys, none held: what is left isn't sent to a device being let go of
+            // (with only waiting left, all of it was sent: that isn't said to have been stopped).
+            if down == 0 && link.stop.raised() && steps[i..].iter().any(|s| !matches!(s, Step::Wait(_))) { return Err(STOPPED.into()); }
             down = down_after(down, step);
+            // Before it is sent: cut off while it is on its way, it may be down on the device.
+            match *step {
+                Step::Key(usage, ButtonState::Down) if usage != LEFT_SHIFT && usage != LEFT_COMMAND => link.held = Some((false, 0, usage)),
+                Step::Button(page, code, ButtonState::Down) => link.held = Some((true, page, code)),
+                _ => {}
+            }
             let sent = match *step {
                 Step::Key(usage, state) => keys.send_keyboard(usage, state).await,
                 Step::Button(page, code, state) => keys.send_button(page, code, state).await,
@@ -797,10 +813,8 @@ async fn press(link: &mut Link, steps: &[Step]) -> Result<(), String> {
                 Ok(()) => sent_any = true,
                 Err(e) => { failed = Some(e); break }
             }
-            // Once it is sent: down is what `let_go` has to let go of, and up is no longer that.
+            // Once its up is sent it is no longer what `let_go` has to let go of.
             match *step {
-                Step::Key(usage, ButtonState::Down) if usage != LEFT_SHIFT && usage != LEFT_COMMAND => link.held = Some((false, 0, usage)),
-                Step::Button(page, code, ButtonState::Down) => link.held = Some((true, page, code)),
                 Step::Key(usage, ButtonState::Up) if link.held == Some((false, 0, usage)) => link.held = None,
                 Step::Button(page, code, ButtonState::Up) if link.held == Some((true, page, code)) => link.held = None,
                 _ => {}
@@ -1292,6 +1306,22 @@ mod tests {
         assert!(waits.iter().all(|&ms| ms > 45), "slower than the device was seen to take keys");
         let longest: u64 = type_steps(&vec![(0x04, true); LONGEST_TYPED]).iter().filter_map(|s| if let Step::Wait(ms) = s { Some(*ms) } else { None }).sum();
         assert!(Duration::from_millis(longest) < input_time(&Input::Type(vec![(0x04, true); LONGEST_TYPED])));
+    }
+
+    /// What the other side writes in a rejection can't make a failure read as one of the three
+    /// the app knows by their first words.
+    #[test]
+    fn what_answers_cannot_word_its_own_refusal() {
+        use idevice::remote_pairing::errors::RemotePairingError as E;
+        let markers = ["the device doesn't accept this pairing", "this pairing doesn't hold the device's key", "not the device this pairing was made with", "stopped:"];
+        for text in markers {
+            let said = verify_words(&E::PairingRejected(text.into()).into(), "10.0.0.1", 1);
+            assert!(!said.contains(text), "{said}");
+        }
+        assert!(verify_words(&E::PairVerifyFailed.into(), "10.0.0.1", 1).starts_with(markers[0]));
+        assert!(verify_words(&E::PeerNotVerified("x").into(), "10.0.0.1", 1).starts_with(markers[2]));
+        assert!(UNCHECKED.starts_with(markers[1]));
+        assert!(STOPPED.starts_with(markers[3]));
     }
 
     /// An input's deadline grows with what it has to send: a long text isn't cut in the middle.

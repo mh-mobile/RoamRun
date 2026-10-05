@@ -18,13 +18,13 @@ typedef struct RRDevice RRDevice;
  * Verifies the pairing (`pairing_len` bytes of a property list, never a path) with the device at `ip`:`port` (its RemotePairing
  * port) and opens the tunnel. Never starts a new pairing; sends the device no input.
  * Both ways: the device checks the pairing, and what answers must sign as the device the pairing
- * was made with. A pairing that doesn't hold that device's key fails with a message that holds
- * "doesn't hold the device's key": like a refusal, only pairing again helps.
- * NULL on failure, with *error (if given) set to a message to free with rr_string_free. A
- * message that holds "doesn't accept this pairing" means the device proved itself and refused
- * it (removed there); one that holds "isn't the device this pairing was made with" means that
- * what answered didn't prove itself (it was told nothing of this side's); any other failure
- * is of the connection.
+ * was made with. NULL on failure, with *error (if given) set to a message to free with
+ * rr_string_free. Three kinds are known by how the message begins (nothing the other side wrote
+ * is in those words): "this pairing doesn't hold the device's key" — one made before that key
+ * was kept, or unreadable: like a refusal, only pairing again helps; "the device doesn't accept
+ * this pairing" — the device proved itself and refused it (removed there); "not the device this
+ * pairing was made with" — what answered didn't prove itself (it was told nothing of this
+ * side's). Any other failure is of the connection.
  */
 RRDevice *rr_device_open(const char *ip, uint16_t port, const uint8_t *pairing, size_t pairing_len, char **error);
 
