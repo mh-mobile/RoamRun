@@ -365,12 +365,20 @@ private struct DeviceControlRow: View {
 
     private var row: some View {
         let state = coordinator.controlState(profile)
+        let allowed = coordinator.controlAllowed(profile)
         return HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Device control").font(.headline)
-                Text(summary(state)).font(.callout).foregroundStyle(.secondary)
+                Text(summary(state, allowed: allowed)).font(.callout).foregroundStyle(.secondary)
             }
             Spacer()
+            if state.paired {
+                // Off: every command and agent is refused, whichever asks. Kept in the Keychain,
+                // where another program can't switch it back on.
+                Toggle("On", isOn: Binding(get: { allowed }, set: { coordinator.setControlAllowed(profile.id, $0) }))
+                    .toggleStyle(.switch).controlSize(.small).labelsHidden()
+                    .help("While off, no command or agent can see or operate this device")
+            }
             if state.paired {
                 Button("Remove…") { confirmRemove = true }
             }
@@ -378,9 +386,10 @@ private struct DeviceControlRow: View {
         }
     }
 
-    private func summary(_ state: (paired: Bool, open: Bool, refused: Bool)) -> String {
+    private func summary(_ state: (paired: Bool, open: Bool, refused: Bool), allowed: Bool) -> String {
         if !state.paired { return "Lets agents see and operate this device (roamrun look, tap, mcp). Needs iOS 27 and a pairing of RoamRun's own." }
         if state.refused { return "This pairing can no longer be used: it was removed on the device, or this Mac can't read what it saved. Pair again." }
+        if !allowed { return "Paired, switched off: commands and agents are refused. Any program you run on this Mac can use it while it is on." }
         return state.open ? "Paired and connected." : "Paired. Connects while the device is on Wi‑Fi, awake and reachable."
     }
 }
@@ -400,6 +409,10 @@ private struct ControlPairingSheet: View {
                         .font(.callout).foregroundStyle(.secondary)
                     Text("Needs iOS 27 or later: earlier versions list no devices there, and refuse remote control.")
                         .font(.caption).foregroundStyle(.secondary)
+                    if !DeviceControlWire.isTailscale(address: profile.providerIP) {
+                        Label(DeviceControlWire.unvouched(profile.providerIP), systemImage: "exclamationmark.triangle")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
                 }
                 ProgressView("Waiting for the device…")
             case .code(let digits):

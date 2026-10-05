@@ -5770,3 +5770,64 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     #expect(hub.unpair(target) == .left)
     #expect(device.calls.contains("letGo"))
 }
+
+/// Which addresses are Tailscale's own: elsewhere, who answers isn't vouched for.
+@Test func tailscaleAddressesAreToldFromOthers() {
+    for yes in ["100.64.0.1", "100.97.221.89", "100.127.255.254", "fd7a:115c:a1e0::1", "fd7a:115c:a1e0:ab12:4843:cd96:6261:dd59"] {
+        #expect(DeviceControlWire.isTailscale(address: yes), "\(yes)")
+    }
+    for no in ["100.63.255.255", "100.128.0.1", "192.168.1.20", "10.0.0.5", "fd7a:115c:a1e1::1", "fe80::1", "example.com", ""] {
+        #expect(!DeviceControlWire.isTailscale(address: no), "\(no)")
+    }
+}
+
+/// The devices switched on are whatever the Keychain gives, and nothing when it gives nothing:
+/// another program's item (macOS asks, and is refused) switches none on.
+@Test func onlyWhatTheKeychainGivesIsSwitchedOn() throws {
+    let a = UUID(), b = UUID()
+    let stored = OSAllocatedUnfairLock<Data?>(initialState: try JSONEncoder().encode([a]))
+    let writes = OSAllocatedUnfairLock<OSStatus>(initialState: errSecSuccess)
+    func list(reading status: OSStatus = errSecSuccess) -> DeviceControlAllowed {
+        DeviceControlAllowed(read: { (status, status == errSecSuccess ? stored.withLock { $0 } : nil) },
+                             write: { data in
+                                 let status = writes.withLock { $0 }
+                                 if status == errSecSuccess { stored.withLock { $0 = data } }
+                                 return status
+                             })
+    }
+    let first = list()
+    #expect(first.known(a) == nil)                        // not read yet: nothing said
+    #expect(first.contains(a) && !first.contains(b))
+    #expect(first.set(b, true) && first.contains(b))
+    #expect(list().contains(b))                           // kept
+    #expect(!list(reading: errSecAuthFailed).contains(a))  // refused: nobody
+    #expect(!list(reading: errSecItemNotFound).contains(a))
+    stored.withLock { $0 = Data("not a list".utf8) }
+    #expect(!list().contains(a))
+    // What can't be kept isn't switched on; switched off, it is off here all the same.
+    stored.withLock { $0 = try? JSONEncoder().encode([a]) }
+    writes.withLock { $0 = errSecAuthFailed }
+    let unkept = list()
+    #expect(!unkept.set(b, true) && !unkept.contains(b))
+    #expect(unkept.set(a, false) && !unkept.contains(a))
+}
+
+/// A device switched off is refused to every command, and says so when asked how it stands.
+@Test func aDeviceSwitchedOffIsNotOperated() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (hub, made) = try standInHub(dir)
+    defer { hub.stop() }
+    let id = UUID()
+    hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
+    let on = OSAllocatedUnfairLock(initialState: false)
+    hub.allowed = { _ in on.withLock { $0 } }
+    for op in ["look", "elements", "press", "type", "paste", "tap", "swipe"] {
+        #expect(hub.answer(.init(op: op, device: id, path: lookFile(in: dir), text: "home")).error == DeviceControlHub.switchedOff, "\(op)")
+    }
+    #expect(made().last?.calls.isEmpty == true)
+    #expect(hub.answer(.init(op: "state", device: id)).allowed == false)
+    on.withLock { $0 = true }
+    #expect(hub.answer(.init(op: "press", device: id, text: "home")).ok)
+    #expect(hub.answer(.init(op: "state", device: id)).allowed == true)
+}

@@ -226,7 +226,7 @@ roamrun pairing import ~/iphone-for-cloud.json                         # there, 
 
 **While the device is looked at or operated, its sound is taken.** Each look and each action runs a screen-sharing session on the device, kept for about five seconds after the last one, and the device sends its sound into it: its speaker goes silent (music stops, and starts again by itself afterwards) and voice input on it — dictation, an app that listens — doesn't hear. So a screen that is being watched, look after look, has no sound and no voice input for as long as the watching goes on. Stop looking for a few seconds and both are back.
 
-These press what is really on the screen, and a `look` shows whatever is there — notifications and messages too. A `look` written to a file is yours only (0600) and stays until you delete it. The device shows each look or action as a screen-sharing session, and lists RoamRun's pairing under Developer Mode, where you can remove it. The pairing holds a private key; how it is kept, and who can use it, is in [SECURITY.md](SECURITY.md).
+These press what is really on the screen, and a `look` shows whatever is there — notifications and messages too. A `look` written to a file is yours only (0600) and stays until you delete it. **Device control is not given to one agent or one command: while a device is switched on, any program you run on this Mac can see and operate it** through the app — a build script, a package's install step, another agent. The switch beside **Device control** on the device's page turns it off for all of them (and back on); it is on after Set Up, so turn it off when nothing of yours is using the device. The device shows each look or action as a screen-sharing session, and lists RoamRun's pairing under Developer Mode, where you can remove it. The pairing holds a private key; how it is kept, and who can use it, is in [SECURITY.md](SECURITY.md).
 
 ## Installing without the bridge: over the air
 
@@ -381,7 +381,7 @@ RoamRun writes only to these places (it never touches system settings or other a
 | `io.github.mh-mobile.roamrun` (defaults; `com.roamrun.app` before 0.1.12) | Settings and which bridges were running |
 | `/usr/local/bin/roamrun` | Only if you installed the CLI from the app or `make install-cli` (never overwrites an existing file or another tool's link); Homebrew links `/opt/homebrew/bin/roamrun` instead |
 | `~/.claude/skills/roamrun/` etc. | Only if you ran `roamrun init` (never touches other skills or links) |
-| Login Keychain: “RoamRun device control” | Only if you set up device control: the key its saved pairings (`device-pairing-<UDID>.sealed`, in the first folder) are sealed with |
+| Login Keychain: “RoamRun device control”, “RoamRun device control (devices switched on)” | Only if you set up device control: the key its saved pairings (`device-pairing-<UDID>.sealed`, in the first folder) are sealed with, and which devices are switched on |
 
 If you used `roamrun ota`, one more thing lives outside that table: RoamRun asks
 `tailscale serve` to carry one port — whichever `otaPort` names, 41443 by
@@ -405,7 +405,8 @@ First stop bridges started with `roamrun up -d` (`roamrun down <name>`): they ke
 roamrun init --uninstall                  # if you installed the skill (with another tool: remove it there)
 rm /usr/local/bin/roamrun                 # if you installed the CLI
 rm -rf ~/Library/Application\ Support/RoamRun ~/Library/Logs/RoamRun
-security delete-generic-password -s io.github.mh-mobile.roamrun.device-control   # if you set up device control (also after brew --zap)
+security delete-generic-password -s io.github.mh-mobile.roamrun.device-control   # if you set up device control (also after brew --zap);
+security delete-generic-password -s io.github.mh-mobile.roamrun.device-control   # twice: it keeps two items
 tailscale serve --https=41443 --set-path=/ off   # if you used roamrun ota (the port otaPort names)
 defaults delete io.github.mh-mobile.roamrun      # after the line above: it holds otaPort
 defaults delete com.roamrun.app 2>/dev/null      # left by versions before 0.1.12

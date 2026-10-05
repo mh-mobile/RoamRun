@@ -116,6 +116,13 @@ tunnel and Xcode has to run again.
     says connected; the Keychain asked nothing; `~/Library/Application Support/RoamRun/`
     holds `device-pairing-<UDID>.sealed` (0600) with no `private_key` in it
     (`grep -c -a private_key` → 0).
+    The switch beside **Device control** is on. Switched off: `roamrun look <name>` fails with
+    "switched off" and `roamrun status <name>` says so; quit and reopen RoamRun: still off. On
+    again: `look` works. On a spare Mac or VM only (it costs the pairing): with RoamRun quit,
+    delete the Keychain item for account `pairings` and add one of your own
+    (`security add-generic-password -s io.github.mh-mobile.roamrun.device-control -a pairings -w
+    $(printf 'x%.0s' {1..32})`), open this release and **Pair Again…** → macOS asks about the
+    item (a key another program put there isn't read unasked); deny it.
 20. `roamrun look <name> /tmp/a.png`, then `tap`, `swipe`, `type`, `paste`, `press home` and
     `elements`, a `look` after each: each did what it says. The same through `roamrun mcp`
     from an agent.

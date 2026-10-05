@@ -767,6 +767,8 @@ enum CLI {
     /// (no pairing of our own: it was never set up).
     enum ControlState: Equatable {
         case notSetUp, connected, notConnected, refused, noApp
+        /// Paired, and its switch in the app is off: commands and agents are refused.
+        case switchedOff
         /// The app can't be asked from here (a sandbox around this process).
         case keptOut
 
@@ -776,6 +778,7 @@ enum CLI {
             case .connected: "connected"
             case .notConnected: "paired, not connected — the app keeps trying; it can connect only while the device is on a Wi‑Fi"
             case .refused: "the pairing can no longer be used (removed on the device, or this Mac can't read what it saved) — the user pairs again in the RoamRun app, on the device's page"
+            case .switchedOff: "paired, switched off — the user switches it on in the RoamRun app, on the device's page"
             case .noApp: "paired; the RoamRun app, which holds the connection, isn't running (or is a build without device control)"
             case .keptOut: "paired; this process isn't allowed to reach the RoamRun app (a sandbox around it?) — run it outside, or use the MCP tools"
             }
@@ -791,6 +794,7 @@ enum CLI {
             if case DeviceControlWire.WireError.keptOut = error { return .keptOut }
             return .noApp
         }
+        if r.ok, r.allowed == false { return .switchedOff }
         // A pairing the app hasn't picked up yet answers as not set up there.
         guard r.ok, r.open != true else { return r.ok ? .connected : .notConnected }
         return r.refused == true ? .refused : .notConnected
@@ -857,6 +861,9 @@ enum CLI {
             reserved = nil   // done: an interrupt from here on leaves the file
             close(fd)
             print("Wrote \(out.path)" + (unreached.map { " (it couldn't be tried from here: \($0))" } ?? ", and it connects."))
+            if !DeviceControlWire.isTailscale(address: profile.providerIP) {
+                FileHandle.standardError.write(Data("roamrun: \(DeviceControlWire.unvouched(profile.providerIP))\n".utf8))
+            }
             print("It is a key to \(profile.displayName): whoever has it and reaches \(profile.providerIP) can see and operate the device. On the other Mac: roamrun pairing import <that file>")
             print("To withdraw it: remove “\(listening.name)” on the device, in that list.")
             exit(0)
@@ -1583,6 +1590,9 @@ enum CLI {
             case .refused:
                 check(false, "Device control: RoamRun's pairing can no longer be used",
                       fix: "It was removed on the device, or this Mac can't read what it saved (its key is gone from the Keychain, or was refused). Ask the user to pair again: the RoamRun app, the device's page, Device control › Pair Again… (same Wi‑Fi, iOS 27 or later).", warnOnly: true)
+            case .switchedOff:
+                check(false, "Device control: switched off for this device",
+                      fix: "Commands and agents are refused while its switch is off. Ask the user to switch it on: the RoamRun app, the device's page, Device control.", warnOnly: true)
             case .noApp:
                 check(false, "Device control: the RoamRun app isn't running (or is a build without it)",
                       fix: "Open RoamRun: it holds the connection that look, tap and the rest use.", warnOnly: true)

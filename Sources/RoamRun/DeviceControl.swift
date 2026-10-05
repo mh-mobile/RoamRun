@@ -39,6 +39,8 @@ enum DeviceControlWire {
         var name: String?
         /// For "look": which look this is, to be named by the tap or swipe that reads off it.
         var look: Int?
+        /// For "state": whether commands and agents may operate the device (its switch in the app).
+        var allowed: Bool?
         static func failure(_ why: String) -> Response { Response(ok: false, error: why) }
     }
 
@@ -100,6 +102,18 @@ enum DeviceControlWire {
     static func hasPairing(udid: String, in directory: URL) -> Bool {
         let size = (try? FileManager.default.attributesOfItem(atPath: pairingFile(udid: udid, in: directory).path))?[.size] as? Int
         return (size ?? 0) > 0
+    }
+
+    /// Whether the address is one Tailscale gives its devices (100.64.0.0/10, fd7a:115c:a1e0::/48):
+    /// there, who answers is Tailscale's to vouch for. The pairing doesn't prove the device to the Mac.
+    static func isTailscale(address: String) -> Bool {
+        var v4 = in_addr(), v6 = in6_addr()
+        if inet_pton(AF_INET, address, &v4) == 1 { return UInt32(bigEndian: v4.s_addr) >> 22 == 0x6440_0000 >> 22 }
+        guard inet_pton(AF_INET6, address, &v6) == 1 else { return false }
+        return withUnsafeBytes(of: &v6) { Array($0.prefix(6)) } == [0xfd, 0x7a, 0x11, 0x5c, 0xa1, 0xe0]
+    }
+    static func unvouched(_ address: String) -> String {
+        "\(address) isn't a Tailscale address: whatever answers there is taken for the device, and is sent what is typed and pasted. Fine on a VPN that knows its devices; on an ordinary network, anyone who can take that address."
     }
 
     /// What a UDID is made of. It names a file here and is handed to Xcode's tools.
@@ -433,6 +447,11 @@ final class DeviceControlHub: @unchecked Sendable {
     /// A pairing made on another Mac is brought in (the file's path): the app's to do, which
     /// knows the saved devices.
     var onImport: (@Sendable (String, String?, _ wanted: @Sendable () -> Bool) -> DeviceControlWire.Response)?
+    /// Whether commands and agents may operate a device: its switch in the app. Asked at every
+    /// request, off the main thread.
+    var allowed: @Sendable (UUID) -> Bool = { _ in true }
+    static let switchedOff = "device control is switched off for this device: the user switches it on in the RoamRun app, on the device's page"
+
 
     private let open: Opener
     private let key: Key
@@ -970,7 +989,7 @@ final class DeviceControlHub: @unchecked Sendable {
         // How it stands is said at once, whatever runs on the device.
         if request.op == "state" {
             guard let h = lock.withLock({ held[request.device] }) else { return notSetUp }
-            return .init(ok: true, open: h.session.isOpen, refused: h.session.isRefused)
+            return .init(ok: true, open: h.session.isOpen, refused: h.session.isRefused, allowed: allowed(request.device))
         }
         // Everything else one at a time per device, and whole: a look is checked, spent and acted
         // on without another command coming in between. The session is the one held once the
@@ -986,6 +1005,7 @@ final class DeviceControlHub: @unchecked Sendable {
         guard let gate else { return notSetUp }
         return gate.withLock {
             guard wanted() else { return .failure(Self.nobodyWaits) }
+            guard allowed(request.device) else { return .failure(Self.switchedOff) }
             guard let (h, name) = lock.withLock({ held[request.device].map { ($0, $0.target.name) } }) else { return notSetUp }
             return perform(request, on: h, named: name, wanted: wanted)
         }

@@ -57,9 +57,22 @@ bounded.
   to the Mac**: whatever answers at that address is taken for the device, and
   would be sent what is typed and pasted. On a Tailscale address that is the
   device, as Tailscale has it; for a device saved under an address of an ordinary
-  network, it is whoever holds that address there. Any process of your
-  user can ask the running app to look at or operate a paired device (the
-  `roamrun` commands do), as it could ask it to stop a bridge.
+  network, it is whoever holds that address there (Set Up and `pairing create`
+  say so for an address that isn't Tailscale's).
+- **Any program you run can use device control while it is switched on.** Any
+  process of your user can ask the running app to look at or operate a paired
+  device (the `roamrun` commands do): the key stays with RoamRun, but RoamRun
+  uses it for whoever asks. It is not a permission given to one agent — a build
+  script or a package's install step is let in as well. Each device has a switch
+  on its page: off, every request is refused. Which devices are on is kept in
+  the login Keychain, where another program can't add one without macOS asking
+  you, so a device you switched off stays off; it is on after Set Up and after
+  `pairing import`. Turn it off when nothing of yours is using the device.
+- **Someone on the network can keep a pairing from being made, not make one.**
+  While Set Up or `pairing create` waits, a device on that network can connect,
+  ask for a code and then say nothing, which holds the wait (three minutes at
+  most each time). It gets nothing by it: without the code shown on this Mac
+  there is no pairing. Pair on a network you trust.
 - **A pairing made for another Mac is a key in a file.** `roamrun pairing create`
   pairs once more, under an identity of its own, and writes that pairing to a
   file (yours only, not sealed: the Mac it is for has another key). Nothing of it
@@ -128,7 +141,8 @@ bounded.
   only), this Mac's identity for pairing (`device-control-host`), sealed pairings
   (`device-pairing-<UDID>.sealed`, 0600), and one
   item in the login Keychain, which removing the app leaves:
-  `security delete-generic-password -s io.github.mh-mobile.roamrun.device-control`.
+  `security delete-generic-password -s io.github.mh-mobile.roamrun.device-control`
+  (twice: the key, and the list of devices switched on).
   The CLI link and agent skills are installed only on request and
   never overwrite other files (they do replace an existing RoamRun link or
   RoamRun skill).

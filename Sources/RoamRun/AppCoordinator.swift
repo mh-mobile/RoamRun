@@ -97,11 +97,22 @@ final class AppCoordinator: ObservableObject {
         for p in profiles { install(newBridge(p)) }
         deviceControl.onLog = { [weak self] message, id in Task { @MainActor in self?.logStore.log(message, device: id) } }
         deviceControl.onUnreached = { [weak self] id, why in Task { @MainActor in self?.controlUnreached(id, why) } }
+        deviceControl.allowed = DeviceControlAllowed.shared.contains
         deviceControl.onImport = { [weak self] path, name, wanted in self?.importPairing(path: path, as: name, wanted: wanted) ?? .failure("stopping") }
         syncDeviceControl()
         // A screenshot run stands beside the app that is running: it takes neither its socket nor
         // its devices (a connection is a screen-sharing session on the device).
-        if Snapshot.path == nil { deviceControl.start() }
+        if Snapshot.path == nil {
+            deviceControl.start()
+            // Which devices are switched on, read where the Keychain may take its time; only when
+            // a device is paired (its key is read then anyway).
+            if profiles.contains(where: { controlState($0).paired }) {
+                Task.detached {
+                    _ = DeviceControlAllowed.shared.contains(UUID())
+                    await MainActor.run { self.objectWillChange.send() }
+                }
+            }
+        }
 
         capture.onLog = { [weak self] m in self?.logStore.log(m) }
         capture.ownedHosts = Set(profiles.map { ProxyBridge(profile: $0).spoofHost })
@@ -1040,6 +1051,8 @@ final class AppCoordinator: ObservableObject {
         deviceControl.hold(.init(id: saved.id, name: saved.displayName, ip: saved.providerIP, port: saved.remotePairingPort, udid: saved.udid ?? udid))
         DispatchQueue.main.async { MainActor.assumeIsolated { self.syncDeviceControl() } }
         // Taken in either way; a file that stays is said to (in `error`, with `ok`).
+        // Brought in to be used: switched on, as one set up here is.
+        DeviceControlAllowed.shared.set(saved.id, true)
         return .init(ok: true, error: DeviceControlHub.removeTaken(file, readThrough: fd), name: saved.displayName)
     }
 
@@ -1411,6 +1424,20 @@ final class AppCoordinator: ObservableObject {
 
     /// A device whose UDID isn't known yet (it names the pairing) has none: it can be set up,
     /// and the pairing tells the UDID.
+    /// Whether commands and agents may operate the device. Off until the Keychain was read.
+    func controlAllowed(_ profile: DeviceProfile) -> Bool { DeviceControlAllowed.shared.known(profile.id) ?? false }
+
+    /// Kept in the Keychain, which may ask and waits: off the main thread.
+    func setControlAllowed(_ id: UUID, _ allowed: Bool) {
+        Task.detached {
+            let kept = DeviceControlAllowed.shared.set(id, allowed)
+            await MainActor.run {
+                if !kept { self.launchWarning = "Device control couldn't be switched on: the Keychain didn't keep it." }
+                self.objectWillChange.send()
+            }
+        }
+    }
+
     func controlState(_ profile: DeviceProfile) -> (paired: Bool, open: Bool, refused: Bool) {
         controlUDID(profile).map { deviceControl.state(of: profile.id, udid: $0) } ?? (false, false, false)
     }
@@ -1458,6 +1485,7 @@ final class AppCoordinator: ObservableObject {
                 let had = profiles[i!].udid
                 profiles[i!].udid = had ?? udid
                 if persist() {
+                    setControlAllowed(id, true)   // set up to be used: on until the user switches it off
                     memories[id]?.adopt(udid)   // the running bridge's, so that what it reports later is compared with it
                     learnDeviceTypes()
                 } else {
@@ -1486,6 +1514,7 @@ final class AppCoordinator: ObservableObject {
     /// A pairing that stays on this Mac (its file can be neither removed nor emptied) is said to:
     /// it would be found again by the device added anew, after a restart.
     private func forgetControlPairing(_ profile: DeviceProfile) {
+        setControlAllowed(profile.id, false)
         guard let target = controlTarget(profile), deviceControl.unpair(target) == .left else { return }
         launchWarning = "The pairing for “\(profile.displayName)” couldn't be removed from this Mac: \(DeviceControlWire.pairingFile(udid: target.udid, in: ProfileStore.directory).path) still holds it, and RoamRun would use it again after it is opened anew. Delete that file, or unpair on the device (Settings › Privacy & Security › Developer Mode)."
     }
