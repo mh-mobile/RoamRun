@@ -4559,6 +4559,29 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
     #expect(key(make: true, read: [(errSecItemNotFound, nil)], add: errSecAuthFailed) == (nil, 1))
 }
 
+/// A refusal is asked for once: every try to connect asking again would have the Keychain ask
+/// the user again. Setting a device up asks anew, and what it then gets is kept.
+@Test func aRefusedKeyIsNotAskedForAgainUntilADeviceIsSetUp() throws {
+    let saved = Data(repeating: 7, count: 32)
+    let asked = OSAllocatedUnfairLock(initialState: 0)
+    let allowed = OSAllocatedUnfairLock(initialState: false)
+    let key = DeviceControlKey(read: {
+        asked.withLock { $0 += 1 }
+        return allowed.withLock { $0 } ? (errSecSuccess, saved) : (errSecUserCanceled, nil)
+    }, add: { _ in errSecAuthFailed })
+    #expect(throws: (any Error).self) { try key.key(make: false) }
+    #expect(throws: (any Error).self) { try key.key(make: false) }
+    #expect(asked.withLock { $0 } == 1)
+    #expect(throws: (any Error).self) { try key.key(make: true) }   // set up: asked again, refused again
+    #expect(asked.withLock { $0 } == 2)
+    allowed.withLock { $0 = true }
+    #expect(throws: (any Error).self) { try key.key(make: false) }   // still not asked
+    #expect(asked.withLock { $0 } == 2)
+    #expect(try key.key(make: true).withUnsafeBytes { Data($0) } == saved)
+    #expect(try key.key(make: false).withUnsafeBytes { Data($0) } == saved)   // kept: the Keychain is read once
+    #expect(asked.withLock { $0 } == 3)
+}
+
 /// A screen's size is asked until it is answered, a minute apart, and then kept: a look that
 /// came while devicectl couldn't reach the device no longer leaves every later one uncut.
 @Test func aScreensSizeIsAskedAgainUntilItIsKnown() {

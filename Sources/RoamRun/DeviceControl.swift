@@ -392,6 +392,9 @@ final class DeviceControlHub: @unchecked Sendable {
             guard free else { return step(.failed("Another pairing is under way.")) }
             defer { lock.withLock { pairing = nil; pairingUnderWay = false } }
             do {
+                // Before the device is asked anything: once it pairs it knows no older pairing of
+                // ours, and a Keychain that then refuses would leave it with none this Mac holds.
+                _ = try key(true)
                 let listening = try DevicePairing(name: name, host: Self.hostID(in: directory))
                 // A cancel that came before there was anything to cancel still counts.
                 if lock.withLock({ () -> Bool in pairing = listening; return pairingCancelled }) { listening.cancel() }

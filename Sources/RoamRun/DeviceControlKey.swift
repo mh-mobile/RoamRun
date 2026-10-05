@@ -12,6 +12,23 @@ final class DeviceControlKey: @unchecked Sendable {
     static let shared = DeviceControlKey()
     private let lock = NSLock()
     private var held: SymmetricKey?
+    /// Why the key couldn't be had, kept: every try to connect asking again would have the
+    /// Keychain ask the user again. Setting a device up asks anew.
+    private var refused: Error?
+    private let read: () -> (OSStatus, Data?)
+    private let add: (Data) -> OSStatus
+
+    /// The Keychain's own by default; tests give stand-ins.
+    init(read: @escaping () -> (OSStatus, Data?) = {
+        var found: CFTypeRef?
+        let status = SecItemCopyMatching(item.merging([kSecReturnData as String: true]) { $1 } as CFDictionary, &found)
+        return (status, found as? Data)
+    }, add: @escaping (Data) -> OSStatus = { fresh in
+        SecItemAdd(item.merging([kSecValueData as String: fresh, kSecAttrLabel as String: "RoamRun device control"]) { $1 } as CFDictionary, nil)
+    }) {
+        self.read = read
+        self.add = add
+    }
 
     private static var item: [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
@@ -21,15 +38,16 @@ final class DeviceControlKey: @unchecked Sendable {
     @Sendable func key(make: Bool) throws -> SymmetricKey {
         try lock.withLock {
             if let held { return held }
-            let key = try Self.key(make: make, read: {
-                var found: CFTypeRef?
-                let status = SecItemCopyMatching(Self.item.merging([kSecReturnData as String: true]) { $1 } as CFDictionary, &found)
-                return (status, found as? Data)
-            }, add: { fresh in
-                SecItemAdd(Self.item.merging([kSecValueData as String: fresh, kSecAttrLabel as String: "RoamRun device control"]) { $1 } as CFDictionary, nil)
-            })
-            held = key
-            return key
+            if !make, let refused { throw refused }
+            do {
+                let key = try Self.key(make: make, read: read, add: add)
+                held = key
+                refused = nil
+                return key
+            } catch {
+                refused = error
+                throw error
+            }
         }
     }
 
