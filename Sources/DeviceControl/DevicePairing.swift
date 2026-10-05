@@ -14,6 +14,10 @@ public final class DevicePairing: @unchecked Sendable {
         public var model: String
         /// The pairing itself, with this Mac's private key: the caller's to keep safe.
         public var pairing: Data
+
+        public init(udid: String, name: String, model: String, pairing: Data) {
+            self.udid = udid; self.name = name; self.model = model; self.pairing = pairing
+        }
     }
 
     private let pairing: OpaquePointer

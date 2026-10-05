@@ -261,6 +261,7 @@ pub unsafe extern "C" fn rr_device_keyframe(device: *mut RRDevice, length: *mut 
     };
     let result = with_room(|| {
         let mut link = device.link.lock().unwrap_or_else(|e| e.into_inner());
+        if link.stop.raised() { return Err(STOPPED.into()); }
         device.runtime.block_on(async {
             tokio::time::timeout(DEADLINE, keyframe(&mut link)).await.unwrap_or_else(|_| Err("timed out".into()))
         })
@@ -300,6 +301,7 @@ unsafe fn run(device: *mut RRDevice, input: Result<Input, String>) -> *mut c_cha
     let started = Instant::now();
     let result = with_room(|| {
         let mut link = device.link.lock().unwrap_or_else(|e| e.into_inner());
+        if link.stop.raised() { return Err(STOPPED.into()); }
         let before = link.resent;
         device.runtime.block_on(perform(&mut link, input)).map(|()| link.resent != before)
     });
@@ -407,6 +409,7 @@ pub unsafe extern "C" fn rr_device_elements(device: *mut RRDevice, limit: u32) -
     // Its own deadline inside: a walk cut short still returns what it found.
     let result = with_room(|| {
         let mut link = device.link.lock().unwrap_or_else(|e| e.into_inner());
+        if link.stop.raised() { return Err(STOPPED.into()); }
         device.runtime.block_on(elements(&mut link, limit.max(1) as usize, started + WALK))
     });
     c_string(match result {
@@ -712,6 +715,7 @@ enum Step {
 
 const STOPPED: &str = "stopped: this connection is being closed";
 
+// Looked at where a call begins too: none begins on a device being let go of.
 /// How many keys are held once `step` is sent.
 fn down_after(down: i32, step: &Step) -> i32 {
     match step {

@@ -1044,6 +1044,7 @@ final class AppCoordinator: ObservableObject {
     }
 
     func deleteProfile(_ id: UUID) {
+        if controlPairing?.device == id { endControlPairing() }   // a pairing being made for it isn't finished for nothing
         stopExternalBridge(id)   // a `roamrun up` for it would otherwise live on, unstoppable by name
         if let spoof = bridges[id]?.spoofHost { capture.ownedHosts.remove(spoof) }
         if selectedID == id { selectedID = nil }
@@ -1430,7 +1431,7 @@ final class AppCoordinator: ObservableObject {
                 return
             }
             guard controlPairing?.attempt == pairing.attempt else { return }   // dismissed meanwhile
-            deviceControl.pair(request, as: Self.controlHostName) { step in
+            deviceControl.pair(request, as: Self.controlHostName, attempt: pairing.attempt) { step in
                 Task { @MainActor in self.controlPairingStep(step, of: id, attempt: pairing.attempt) }
             }
         }
@@ -1451,17 +1452,18 @@ final class AppCoordinator: ObservableObject {
         if case .done(let udid, _) = step {
             let i = profiles.firstIndex { $0.id == id }
             switch Self.pairedUDID(saved: i.flatMap { controlUDID(profiles[$0]) }, paired: udid) {
-            // Known from the bridge alone, the list not having it (a save that failed then): saved now.
-            case .known where profiles[i!].udid != nil: break
+            // Known here is not yet written: the list is saved (again, when a save failed before)
+            // before the pairing is said to be done.
             case .save where i != nil, .known:
-                profiles[i!].udid = udid
+                let had = profiles[i!].udid
+                profiles[i!].udid = had ?? udid
                 if persist() {
                     memories[id]?.adopt(udid)   // the running bridge's, so that what it reports later is compared with it
                     learnDeviceTypes()
                 } else {
                     // Not written: after a restart the device would have no UDID again, and a
                     // pairing nothing names. Neither is kept, and it isn't shown as done.
-                    if let j = profiles.firstIndex(where: { $0.id == id }) { profiles[j].udid = nil }
+                    if let j = profiles.firstIndex(where: { $0.id == id }) { profiles[j].udid = had }
                     deviceControl.forgetPairing(udid: udid, of: id)
                     shown = .failed("The pairing was made, but the device list couldn't be saved (\(ProfileStore.directory.path)), so it wasn't kept. Set it up again once that is mended; the pairing just made can be removed on the device, in Settings.")
                 }
@@ -1477,7 +1479,7 @@ final class AppCoordinator: ObservableObject {
 
     /// Stops a pairing under way and puts its sheet away.
     func endControlPairing() {
-        deviceControl.cancelPairing()
+        if let attempt = controlPairing?.attempt { deviceControl.cancelPairing(attempt) }
         controlPairing = nil
     }
 

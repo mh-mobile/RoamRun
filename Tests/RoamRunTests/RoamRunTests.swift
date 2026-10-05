@@ -4287,7 +4287,14 @@ private final class StandInDevice: ControlledDevice, @unchecked Sendable {
     let lookBegan = DispatchSemaphore(value: 0)
     var isOpen: Bool { true }
     var isRefused: Bool { false }
-    func connect() throws {}
+    /// A connection waits here when set, and says it has begun.
+    var connectHold: DispatchSemaphore?
+    let connectBegan = DispatchSemaphore(value: 0)
+    func connect() throws {
+        connectBegan.signal()
+        connectHold?.wait()
+    }
+    func letGo() { count("letGo") }
     func close() {}
     private func count(_ call: String) { lock.withLock { counted.append(call) } }
     func look() throws -> CGImage {
@@ -4306,11 +4313,13 @@ private final class StandInDevice: ControlledDevice, @unchecked Sendable {
 }
 
 /// A hub over stand-ins, one made for each session the hub opens.
-private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: DeviceControlHub, made: () -> [StandInDevice]) {
-    try scratchPairing(at: DeviceControlWire.pairingFile(udid: udid, in: dir))
+private func standInHub(_ dir: URL, udid: String = "UDID-1", paired: Bool = true,
+                        prepare: @escaping @Sendable (StandInDevice) -> Void = { _ in }) throws -> (hub: DeviceControlHub, made: () -> [StandInDevice]) {
+    if paired { try scratchPairing(at: DeviceControlWire.pairingFile(udid: udid, in: dir)) }
     let made = OSAllocatedUnfairLock<[StandInDevice]>(initialState: [])
     let hub = DeviceControlHub(directory: dir, key: { _ in scratchKey }) { _, _, _ in
         let device = StandInDevice()
+        prepare(device)
         made.withLock { $0.append(device) }
         return device
     }
@@ -4407,13 +4416,13 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
         second.signal()
     }
     #expect(second.wait(timeout: .now() + 0.5) == .timedOut)   // it waits
-    #expect(fresh.calls.isEmpty && old.calls == ["look"])
+    #expect(fresh.calls.isEmpty && old.calls == ["look", "letGo"])
     #expect(hub.answer(.init(op: "state", device: id)).ok)     // how it stands is still said at once
     old.hold?.signal()
     first.wait()
     #expect(second.wait(timeout: .now() + 5) == .success)
     #expect(answer.withLock { $0?.ok } == true)
-    #expect(fresh.calls == ["press"] && old.calls == ["look"])   // through the session held by then
+    #expect(fresh.calls == ["press"] && old.calls == ["look", "letGo"])   // through the session held by then
 }
 
 /// A device can be set up before its UDID is known (one added at home has never been bridged):
@@ -4569,6 +4578,7 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
         var isOpen: Bool { false }
         var isRefused: Bool { false }
         func connect() throws { throw DeviceSession.Failure.message("no route") }
+        func letGo() {}
         func close() {}
         func look() throws -> CGImage { throw DeviceSession.Failure.message("no") }
         func elements(limit: Int) throws -> (captions: [String], complete: Bool) { ([], true) }
@@ -5577,6 +5587,9 @@ func everyDocumentedCommandParses(_ doc: String) throws {
     #expect(asked([call(1, "home"), call(2, "lock")], freedAfter: 2) == ["home"])                              // the client went
     #expect(asked([call(1, "home"), call(2, "lock"), cancel, call(3, "home")], freedAfter: 3, reaching: 2) == ["home", "home"])   // taken back
     #expect(asked([call(1, "home"), call(2, "lock"), call(3, "home")], freedAfter: 2, reaching: 3) == ["home", "lock", "home"])    // neither
+    // "2" is another request than 2: taking it back takes nothing of 2's.
+    let other = #"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"2"}}"#
+    #expect(asked([call(1, "home"), call(2, "lock"), other, call(3, "home")], freedAfter: 3, reaching: 3) == ["home", "lock", "home"])
 }
 
 /// A request given up while it waits its turn: the app finds its asker gone. Given up before
@@ -5614,4 +5627,146 @@ func everyDocumentedCommandParses(_ doc: String) throws {
     #expect(reached.wait(timeout: .now()) == .timedOut)   // nothing was sent meanwhile
     given.signal()
     #expect(try DeviceControlWire.ask(.init(op: "press", device: UUID(), text: "lock"), in: dir, asking: asking).ok)
+}
+
+/// A device pairs with this in tests: it pairs when told to, or is cancelled.
+private final class StandInPairing: PairingListener, @unchecked Sendable {
+    let name = "RoamRun (test)"
+    private let turn = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var cancelled = false
+    /// Run when the device has paired, before that is handed back.
+    var paired: (@Sendable () -> Void)?
+    let waiting = DispatchSemaphore(value: 0)
+    func pairNow() { turn.signal() }
+    func accept(code: @escaping @Sendable (String) -> Void) throws -> DevicePairing.Paired {
+        waiting.signal()
+        turn.wait()
+        if lock.withLock({ cancelled }) { throw DeviceSession.Failure.message("cancelled") }
+        paired?()
+        return .init(udid: "UDID-1", name: "iPhone", model: "iPhone16,1", pairing: Data("<plist/>".utf8))
+    }
+    func cancel() {
+        lock.withLock { cancelled = true }
+        turn.signal()
+    }
+}
+
+/// A pairing cancelled once the device has paired, while it is still checked, isn't saved; one
+/// cancelled after it was saved and before it is said to be done is removed at once.
+@Test func aPairingCancelledWhileItIsCheckedIsNotKept() throws {
+    let request = DeviceControlHub.PairingRequest(id: UUID(), name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1", others: [])
+    func steps() -> (said: @Sendable (DeviceControlHub.PairingStep) -> Void, all: () -> [DeviceControlHub.PairingStep], ended: DispatchSemaphore) {
+        let all = OSAllocatedUnfairLock<[DeviceControlHub.PairingStep]>(initialState: [])
+        let ended = DispatchSemaphore(value: 0)
+        return ({ step in
+            all.withLock { $0.append(step) }
+            switch step { case .done, .failed: ended.signal(); default: break }
+        }, { all.withLock { $0 } }, ended)
+    }
+    // Cancelled between the device's pairing and the saving.
+    do {
+        let dir = scratchDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let (hub, _) = try standInHub(dir, paired: false)
+        defer { hub.stop() }
+        let listener = StandInPairing(), attempt = UUID()
+        listener.paired = { hub.cancelPairing(attempt) }
+        hub.listening = { _, _ in listener }
+        let (said, all, ended) = steps()
+        hub.pair(request, as: "x", attempt: attempt, step: said)
+        listener.waiting.wait()
+        listener.pairNow()
+        ended.wait()
+        #expect(all().last == .failed(DeviceControlHub.pairingCancelled))
+        #expect(!DeviceControlWire.hasPairing(udid: "UDID-1", in: dir))
+    }
+    // Cancelled while the connection is tried, after the saving.
+    do {
+        let dir = scratchDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let hold = DispatchSemaphore(value: 0), began = DispatchSemaphore(value: 0)
+        let (hub, _) = try standInHub(dir, paired: false) { device in
+            device.connectHold = hold
+            Thread.detachNewThread { device.connectBegan.wait(); began.signal() }
+        }
+        defer { hub.stop() }
+        let listener = StandInPairing(), attempt = UUID()
+        hub.listening = { _, _ in listener }
+        let (said, all, ended) = steps()
+        hub.pair(request, as: "x", attempt: attempt, step: said)
+        listener.waiting.wait()
+        listener.pairNow()
+        began.wait()
+        #expect(DeviceControlWire.hasPairing(udid: "UDID-1", in: dir))
+        hub.cancelPairing(attempt)
+        #expect(!DeviceControlWire.hasPairing(udid: "UDID-1", in: dir))   // at once, not when the try returns
+        for _ in 0..<8 { hold.signal() }
+        ended.wait()
+        #expect(all().last == .failed(DeviceControlHub.pairingCancelled))
+        #expect(!DeviceControlWire.hasPairing(udid: "UDID-1", in: dir))
+    }
+    // Not cancelled: kept and said to be done.
+    do {
+        let dir = scratchDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let (hub, _) = try standInHub(dir, paired: false)
+        defer { hub.stop() }
+        let listener = StandInPairing()
+        hub.listening = { _, _ in listener }
+        let (said, all, ended) = steps()
+        hub.pair(request, as: "x", step: said)
+        listener.waiting.wait()
+        listener.pairNow()
+        ended.wait()
+        #expect(all().last == .done(udid: "UDID-1", unreached: nil))
+        #expect(DeviceControlWire.hasPairing(udid: "UDID-1", in: dir))
+    }
+}
+
+/// A cancel is its attempt's own: another pairing begun right after doesn't undo it.
+@Test func aCancelledPairingStaysCancelledWhenAnotherBegins() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (hub, _) = try standInHub(dir, paired: false)
+    defer { hub.stop() }
+    let request = DeviceControlHub.PairingRequest(id: UUID(), name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1", others: [])
+    let made = OSAllocatedUnfairLock<[StandInPairing]>(initialState: [])
+    hub.listening = { _, _ in
+        let listener = StandInPairing()
+        made.withLock { $0.append(listener) }
+        return listener
+    }
+    let first = UUID(), second = UUID()
+    let firstEnd = OSAllocatedUnfairLock<DeviceControlHub.PairingStep?>(initialState: nil)
+    let ended = DispatchSemaphore(value: 0)
+    hub.pair(request, as: "x", attempt: first) { step in
+        switch step { case .done, .failed: firstEnd.withLock { $0 = step }; ended.signal(); default: break }
+    }
+    hub.cancelPairing(first)
+    hub.pair(request, as: "x", attempt: second) { _ in }
+    // Whichever the device pairs with, the first is not the one that keeps it.
+    for _ in 0..<50 { made.withLock { $0 }.forEach { $0.pairNow() }; usleep(10_000) }
+    ended.wait()
+    if case .done = firstEnd.withLock({ $0 }) { Issue.record("the cancelled pairing was kept") }
+    hub.cancelPairing(second)
+}
+
+/// A device let go of is told at once, on the caller's thread: a call waiting on its session
+/// doesn't begin after the removal. And a folder that can't be looked into isn't a file gone.
+@Test func removingLetsGoAtOnceAndAFileUnseenIsNotGone() throws {
+    let dir = scratchDir()
+    defer {
+        chmod(dir.path, 0o700)
+        try? FileManager.default.removeItem(at: dir)
+    }
+    let (hub, made) = try standInHub(dir)
+    defer { hub.stop() }
+    let id = UUID()
+    let target = DeviceControlHub.Target(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")
+    hub.update([target])
+    let device = try #require(made().last)
+    #expect(chmod(dir.path, 0o000) == 0)
+    #expect(hub.unpair(target) == .left)
+    #expect(device.calls.contains("letGo"))
 }

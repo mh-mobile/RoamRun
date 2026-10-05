@@ -329,6 +329,8 @@ protocol ControlledDevice: AnyObject, Sendable {
     var isOpen: Bool { get }
     var isRefused: Bool { get }
     func connect() throws
+    /// At once, from any thread: nothing more is begun on the device. `close` follows, and waits.
+    func letGo()
     func close()
     func look() throws -> CGImage
     func elements(limit: Int) throws -> (captions: [String], complete: Bool)
@@ -340,6 +342,15 @@ protocol ControlledDevice: AnyObject, Sendable {
 }
 
 extension DeviceSession: ControlledDevice {}
+
+/// What a device pairs with: `DevicePairing`, or a stand-in for it in tests.
+protocol PairingListener: AnyObject, Sendable {
+    var name: String { get }
+    func accept(code: @escaping @Sendable (String) -> Void) throws -> DevicePairing.Paired
+    func cancel()
+}
+
+extension DevicePairing: PairingListener {}
 
 /// The devices the app controls: a connection kept open to each that has a pairing of our own,
 /// so it is there when the device leaves Wi‑Fi (away from it none can be opened).
@@ -397,7 +408,9 @@ final class DeviceControlHub: @unchecked Sendable {
     private var timer: DispatchSourceTimer?
     /// The last update's, for when a pairing is made or removed in between.
     private var targets: [Target] = []
-    private var pairing: DevicePairing?
+    private var pairing: (any PairingListener)?
+    /// Makes the listener a device pairs with; tests give a stand-in.
+    var listening: @Sendable (_ name: String, _ host: String) throws -> any PairingListener = { try DevicePairing(name: $0, host: $1) }
     /// Pairings that were to be removed and whose file wouldn't go: not used again by this
     /// process, whatever is on disk. Lowercased UDIDs, under a lock of their own: they are asked
     /// about from under `lock`.
@@ -406,8 +419,14 @@ final class DeviceControlHub: @unchecked Sendable {
     /// Counts the looks, over all devices: each is told apart by its number. Not from the same
     /// place at every start: a look kept from before a restart isn't taken for one made since.
     private var looks = Int.random(in: 0..<1_000_000_000)
-    private var pairingUnderWay = false
-    private var pairingCancelled = false
+    /// The attempt at pairing under way, and what it has saved while `.done` isn't said yet:
+    /// cancelled till then, that goes with it.
+    private var pairingUnderWay: UUID?
+    private var pairingKept: (udid: String, id: UUID)?
+    /// Attempts cancelled, each by its own name: one begun right after doesn't undo it.
+    private var pairingsCancelled: Set<UUID> = []
+    static let pairingCancelled = "The pairing was cancelled; nothing of it is kept on this Mac. If the device paired, it knows no earlier pairing of this Mac's any more: set it up again."
+
     var onLog: (@Sendable (String, UUID) -> Void)?
     /// A background attempt to open a device's connection failed, and why.
     var onUnreached: (@Sendable (UUID, String) -> Void)?
@@ -468,6 +487,8 @@ final class DeviceControlHub: @unchecked Sendable {
     /// caller's thread (the main one, when the list is saved).
     private static func closing(_ sessions: [any ControlledDevice]) {
         guard !sessions.isEmpty else { return }
+        // Told at once that nothing more is to begin; the closing itself waits for what runs.
+        sessions.forEach { $0.letGo() }
         DispatchQueue.global(qos: .utility).async { sessions.forEach { $0.close() } }
     }
 
@@ -529,26 +550,30 @@ final class DeviceControlHub: @unchecked Sendable {
         return .toProve
     }
 
-    func pair(_ device: PairingRequest, as name: String, step: @escaping @Sendable (PairingStep) -> Void) {
-        lock.withLock { if !pairingUnderWay { pairingCancelled = false } }   // here, not in the block: a cancel may come before it runs
+    /// `attempt` names this pairing for `cancelPairing`. Cancelled before its pairing is saved,
+    /// nothing is saved; cancelled after and before `.done` is said, what was saved is removed.
+    func pair(_ device: PairingRequest, as name: String, attempt: UUID = UUID(), step: @escaping @Sendable (PairingStep) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async { [self] in
             // Taken before anything is advertised: two of these would name themselves alike.
             let free = lock.withLock { () -> Bool in
-                guard !pairingUnderWay else { return false }
-                pairingUnderWay = true
+                guard pairingUnderWay == nil else { return false }
+                pairingUnderWay = attempt
                 return true
             }
-            guard free else { return step(.failed("Another pairing is under way.")) }
-            defer { lock.withLock { pairing = nil; pairingUnderWay = false } }
+            guard free else {
+                lock.withLock { _ = pairingsCancelled.remove(attempt) }
+                return step(.failed("Another pairing is under way."))
+            }
+            defer { lock.withLock { pairing = nil; pairingUnderWay = nil; pairingKept = nil; pairingsCancelled.remove(attempt) } }
             do {
                 // Before the device is asked anything: once it pairs it knows no older pairing of
                 // ours, and a Keychain that then refuses would leave it with none this Mac holds.
                 // And that key is the one it is sealed with: asked for again after the pairing,
                 // the Keychain could refuse then.
                 let sealing = try key(true)
-                let listening = try DevicePairing(name: name, host: Self.hostID(in: directory))
+                let listening = try self.listening(name, Self.hostID(in: directory))
                 // A cancel that came before there was anything to cancel still counts.
-                if lock.withLock({ () -> Bool in pairing = listening; return pairingCancelled }) { listening.cancel() }
+                if lock.withLock({ () -> Bool in pairing = listening; return pairingsCancelled.contains(attempt) }) { listening.cancel() }
                 step(.waiting(listening.name))
                 let paired = try listening.accept { step(.code($0)) }
                 step(.checking)
@@ -584,13 +609,24 @@ final class DeviceControlHub: @unchecked Sendable {
                 // Named by the UDID the device is saved under, as it is spelled there; or by its own.
                 let udid = device.udid ?? paired.udid
                 let target = Target(id: device.id, name: device.name, ip: device.ip, port: device.port, udid: udid)
-                try sealPairing(paired.pairing, with: sealing, udid: udid)
-                // Held from now on, also when the list of saved devices doesn't have its UDID yet.
-                lock.withLock { if !targets.contains(where: { $0.id == target.id }) { targets.append(target) } }
+                // Saved, or cancelled: whichever came first, under the one lock. Held from now on,
+                // also when the list of saved devices doesn't have its UDID yet.
+                try lock.withLock {
+                    guard !pairingsCancelled.contains(attempt) else { throw DeviceSession.Failure.message(Self.pairingCancelled) }
+                    try sealPairing(paired.pairing, with: sealing, udid: udid)
+                    pairingKept = (udid, device.id)
+                    if !targets.contains(where: { $0.id == target.id }) { targets.append(target) }
+                }
                 reopen(target.id)
                 // Said as it is: saved, and whether it also connects right now.
                 var unreached: String?
                 do { try session(of: target.id)?.connect() } catch { unreached = "\(error)" }
+                // Cancelled while that was tried, what was saved went with the cancel: not said as done.
+                let kept = lock.withLock { () -> Bool in
+                    pairingKept = nil
+                    return !pairingsCancelled.contains(attempt)
+                }
+                guard kept else { throw DeviceSession.Failure.message(Self.pairingCancelled) }
                 step(.done(udid: udid, unreached: unreached))
             } catch {
                 step(.failed("\(error)"))
@@ -731,9 +767,9 @@ final class DeviceControlHub: @unchecked Sendable {
     /// Whether it is gone: a file that stays (a folder that can't be written to) is still a key.
     @discardableResult
     private static func remove(_ file: URL) -> Bool {
-        try? FileManager.default.removeItem(at: file)
         try? FileManager.default.removeItem(at: unsealed(of: file))
-        return !FileManager.default.fileExists(atPath: file.path)
+        // By what the removal says: a file that can't be seen (its folder closed) isn't one that is gone.
+        return unlink(file.path) == 0 || errno == ENOENT
     }
 
     /// What became of a pairing that was to be forgotten.
@@ -769,8 +805,16 @@ final class DeviceControlHub: @unchecked Sendable {
         }
     }
 
-    func cancelPairing() {
-        lock.withLock { () -> DevicePairing? in pairingCancelled = true; return pairing }?.cancel()
+    func cancelPairing(_ attempt: UUID) {
+        let (listening, kept) = lock.withLock { () -> ((any PairingListener)?, (udid: String, id: UUID)?) in
+            pairingsCancelled.insert(attempt)
+            guard pairingUnderWay == attempt else { return (nil, nil) }
+            defer { pairingKept = nil }
+            return (pairing, pairingKept)
+        }
+        listening?.cancel()
+        // Saved already, and not yet said to be: it goes now, not when the attempt comes round to it.
+        if let kept { forgetPairing(udid: kept.udid, of: kept.id) }
     }
 
     /// Forgets this Mac's pairing with the device (the device's record of it stays, in its Settings).
@@ -820,6 +864,8 @@ final class DeviceControlHub: @unchecked Sendable {
     }
 
     func stop() {
+        // A pairing saved and not yet said to be done is nobody's once this ends.
+        if let attempt = lock.withLock({ pairingUnderWay }) { cancelPairing(attempt) }
         timer?.cancel()
         listener?.stop()
         let sessions = lock.withLock { () -> [any ControlledDevice] in

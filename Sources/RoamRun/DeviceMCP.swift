@@ -33,6 +33,10 @@ final class DeviceMCP: @unchecked Sendable {
     private var running: String?
     private var takenBack: Set<String> = []
     private var gone = false
+    private var runningTakenBack = false
+
+    /// A request's id as one name: 1 and "1" are two requests.
+    static func name(_ id: Any) -> String { id is String ? "s:\(id)" : "n:\(id)" }
 
     init(profiles: @escaping () -> [DeviceProfile], looks: URL, asking: DeviceControlWire.Asking = .init(), ask: @escaping Ask) {
         self.saved = profiles
@@ -48,10 +52,10 @@ final class DeviceMCP: @unchecked Sendable {
             let message = Data(line.utf8)
             let object = try? JSONSerialization.jsonObject(with: message) as? [String: Any]
             if object?["method"] as? String == "notifications/cancelled" {
-                if let id = (object?["params"] as? [String: Any])?["requestId"] { takeBack("\(id)") }
+                if let id = (object?["params"] as? [String: Any])?["requestId"] { takeBack(Self.name(id)) }
                 continue
             }
-            let id = object?["id"].map { "\($0)" }
+            let id = object?["id"].map(Self.name)
             let acts = object?["method"] as? String == "tools/call"
             work.async {
                 // Taken back before its turn: not begun, and (as MCP has it) not answered.
@@ -64,8 +68,12 @@ final class DeviceMCP: @unchecked Sendable {
                 }
                 guard begin else { return }
                 let answer = self.handle(message)
-                self.calls.withLock { self.running = nil }
-                if let answer { write(answer) }
+                // Taken back while it ran: it is not answered either.
+                let wanted = self.calls.withLock { () -> Bool in
+                    defer { self.running = nil; self.runningTakenBack = false }
+                    return !self.runningTakenBack
+                }
+                if wanted, let answer { write(answer) }
             }
         }
         // The client has gone: what waits its turn — here, or at the app — isn't begun for
@@ -81,7 +89,10 @@ final class DeviceMCP: @unchecked Sendable {
     /// the device is already doing runs out.
     func takeBack(_ id: String) {
         calls.withLock {
-            if running == id { asking.giveUp() } else { takenBack.insert(id) }
+            if running == id {
+                runningTakenBack = true
+                asking.giveUp()
+            } else { takenBack.insert(id) }
         }
     }
 

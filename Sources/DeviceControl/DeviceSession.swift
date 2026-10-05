@@ -58,6 +58,8 @@ public final class DeviceSession: @unchecked Sendable {
     /// as long as a call to the device takes, and asking how things stand mustn't wait for that.
     private let standingLock = NSLock()
     private var standing = (open: false, refused: false)
+    /// Under `standingLock`: let go of, and to be closed.
+    private var leaving = false
     /// Said as things happen (opened, tried again, reopened), for whoever shows or logs it.
     public var onEvent: (@Sendable (String) -> Void)?
 
@@ -81,13 +83,20 @@ public final class DeviceSession: @unchecked Sendable {
     /// For good: a session closed is one replaced, and nothing opens it again (a call that
     /// still holds it fails, instead of making a connection beside its successor's).
     public func close() {
-        rr_flag_raise(stopping)
+        letGo()
         lock.withLock {
             closed = true
             rr_device_close(device)
             device = nil
             noteStanding()
         }
+    }
+
+    /// At once, whatever runs: a long text stops between two keys, and a call that waits here
+    /// (for the connection to open, or its turn) doesn't begin on the device. `close` follows.
+    public func letGo() {
+        rr_flag_raise(stopping)
+        standingLock.withLock { leaving = true }
     }
 
     private static let replaced = Failure.message("this connection was closed (the device has a new one): look again")
@@ -228,7 +237,11 @@ public final class DeviceSession: @unchecked Sendable {
 
     private func recovering<T>(repeatable: Bool, _ body: (OpaquePointer) throws -> T) throws -> T {
         try Recovery.run(repeatable: repeatable, attempt: {
-            do { return try body(device!) } catch {
+            do {
+                // Let go of while this waited (for the connection, or to try again): not begun.
+                guard !standingLock.withLock({ leaving }) else { throw Self.replaced }
+                return try body(device!)
+            } catch {
                 onEvent?("failed: \(error)")
                 throw error
             }
