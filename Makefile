@@ -19,6 +19,7 @@ all: app
 # DEVICE=1 builds in the experimental device control (needs Rust: see device-lib). It keeps a
 # key in the Keychain, which asks about an ad-hoc build anew after every rebuild: sign with a
 # certificate instead (SIGN_ID="Apple Development: Name (ID)", see `security find-identity -p codesigning`).
+# A key made by a build signed with one certificate is asked about for a build signed with another.
 build: $(if $(DEVICE),device-lib)
 	$(if $(DEVICE),ROAMRUN_DEVICE=1) xcrun swift build -c release $(if $(SNAPSHOT),-Xswiftc -DSNAPSHOT)
 

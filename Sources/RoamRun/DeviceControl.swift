@@ -253,7 +253,7 @@ final class DeviceControlHub: @unchecked Sendable {
 
     typealias Opener = @Sendable (_ target: Target, _ pairing: @escaping @Sendable () throws -> Data, _ said: @escaping @Sendable (String) -> Void) -> any ControlledDevice
     /// The key the saved pairings are sealed with. `make`: one is made if there is none yet
-    /// (when a pairing is saved; never to read one, which a new key couldn't open).
+    /// (when a device is set up; never to read a pairing, which a new key couldn't open).
     typealias Key = @Sendable (_ make: Bool) throws -> SymmetricKey
 
     private let directory: URL
@@ -561,7 +561,7 @@ final class DeviceControlHub: @unchecked Sendable {
     }
 
     /// Tries to open what isn't: one attempt per device at a time; none for a pairing the device
-    /// refused (only pairing again helps, and that makes a new session).
+    /// refused or this Mac can't read (only pairing again helps, and that makes a new session).
     private func keepOpen() {
         let now = Date()
         let due = lock.withLock { () -> [(UUID, any ControlledDevice)] in

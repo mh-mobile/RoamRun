@@ -83,8 +83,8 @@ public final class DeviceSession: @unchecked Sendable {
     /// As of the last call that finished; never waits for one that runs.
     public var isOpen: Bool { standingLock.withLock { standing.open } }
 
-    /// The device refused the pairing when a connection was last tried: it was removed there,
-    /// and only pairing again helps.
+    /// The pairing was of no use when a connection was last tried — the device refused it (it
+    /// was removed there), or it couldn't be read here: only pairing again helps.
     public var isRefused: Bool { standingLock.withLock { standing.refused } }
 
     /// Under `lock`, whenever what it guards may have changed.
@@ -176,7 +176,11 @@ public final class DeviceSession: @unchecked Sendable {
 
     private func open() throws -> OpaquePointer {
         var error: UnsafeMutablePointer<CChar>?
-        let pairing = try pairing()
+        let pairing: Data
+        do { pairing = try self.pairing() } catch {
+            refused = true   // trying again reads the same
+            throw error
+        }
         guard let opened = pairing.withUnsafeBytes({ rr_device_open(ip, port, $0.bindMemory(to: UInt8.self).baseAddress, $0.count, &error) }) else {
             defer { rr_string_free(error) }
             let why = error.map { String(cString: $0) } ?? "can't open"

@@ -4538,6 +4538,30 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
     #expect(throws: (any Error).self) { try DeviceControlHub.unseal(pairing, with: scratchKey) }   // one kept as it was
 }
 
+/// A saved pairing that can't be read is of no use however often it is tried: it stands as one
+/// to make again, not as a connection being waited for.
+@Test func aPairingThatCannotBeReadIsNotTriedAgain() throws {
+    let reads = OSAllocatedUnfairLock(initialState: 0)
+    let session = DeviceSession(ip: "127.0.0.1", port: 1, pairing: {
+        reads.withLock { $0 += 1 }
+        throw DeviceSession.Failure.message("unreadable")
+    })
+    #expect(!session.isRefused)
+    #expect(throws: (any Error).self) { try session.connect() }
+    #expect(session.isRefused && !session.isOpen)
+    // The hub leaves such a session alone.
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try Data("not sealed with this key".utf8).write(to: DeviceControlWire.pairingFile(udid: "UDID-1", in: dir))
+    let hub = DeviceControlHub(directory: dir, key: { _ in scratchKey })
+    defer { hub.stop() }
+    let id = UUID()
+    hub.update([.init(id: id, name: "x", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
+    let deadline = Date().addingTimeInterval(5)
+    while hub.session(of: id)?.isRefused != true, Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
+    #expect(hub.state(of: id, udid: "UDID-1") == (true, false, true))
+}
+
 /// The key is made only when the Keychain says there is none, and only to save a pairing:
 /// after a refusal a new one would leave every saved pairing unreadable.
 @Test func theKeyIsMadeOnlyWhenThereIsNone() throws {

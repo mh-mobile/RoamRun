@@ -771,7 +771,7 @@ enum CLI {
             case .notSetUp: nil
             case .connected: "connected"
             case .notConnected: "paired, not connected — the app keeps trying; it can connect only while the device is on a Wi‑Fi"
-            case .refused: "the device no longer has this pairing (it was removed there) — the user pairs again in the RoamRun app, on the device's page"
+            case .refused: "the pairing can no longer be used (removed on the device, or this Mac can't read what it saved) — the user pairs again in the RoamRun app, on the device's page"
             case .noApp: "paired; the RoamRun app, which holds the connection, isn't running (or is a build without device control)"
             }
         }
@@ -1441,8 +1441,8 @@ enum CLI {
                 check(false, "Device control: paired, but not connected",
                       fix: "It connects while the device is on a Wi‑Fi, awake and reachable over the VPN — and then stays connected on cellular. Ask the user to unlock it on Wi‑Fi.", warnOnly: true)
             case .refused:
-                check(false, "Device control: the device no longer has RoamRun's pairing",
-                      fix: "It was removed on the device. Ask the user to pair again: the RoamRun app, the device's page, Device control › Pair Again… (same Wi‑Fi, iOS 27 or later).", warnOnly: true)
+                check(false, "Device control: RoamRun's pairing can no longer be used",
+                      fix: "It was removed on the device, or this Mac can't read what it saved (its key is gone from the Keychain, or was refused). Ask the user to pair again: the RoamRun app, the device's page, Device control › Pair Again… (same Wi‑Fi, iOS 27 or later).", warnOnly: true)
             case .noApp:
                 check(false, "Device control: the RoamRun app isn't running (or is a build without it)",
                       fix: "Open RoamRun: it holds the connection that look, tap and the rest use.", warnOnly: true)

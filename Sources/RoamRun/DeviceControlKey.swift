@@ -5,7 +5,7 @@ import Foundation
 import Security
 
 /// The one key the saved pairings are sealed with, in the login Keychain: read by RoamRun
-/// alone (another program is asked about by macOS), made when the first pairing is saved.
+/// alone (another program is asked about by macOS), made when the first device is set up.
 /// Read once a process — the Keychain may ask the user, and waits for the answer: never on
 /// the main thread. A build signed ad hoc is asked about anew after every rebuild.
 final class DeviceControlKey: @unchecked Sendable {
