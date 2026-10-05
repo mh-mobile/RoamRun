@@ -515,7 +515,7 @@ final class DeviceControlHub: @unchecked Sendable {
 
     /// Whether the pairing saved for `udid` is another than `mark` by now (or gone). nil: it
     /// couldn't be read just now, and isn't taken for changed.
-    private func changed(from mark: String, udid: String) -> Bool? {
+    private func pairingChanged(from mark: String, udid: String) -> Bool? {
         let read = DeviceControlWire.sealedRead(DeviceControlWire.pairingFile(udid: udid, in: directory))
         guard read.known else { return nil }
         return read.bytes.flatMap { $0.isEmpty ? nil : DeviceControlWire.mark(of: $0, udid: udid) } != mark
@@ -568,7 +568,7 @@ final class DeviceControlHub: @unchecked Sendable {
                 // one moved to another address, removed or unpaired doesn't.
                 // …nor one whose saved pairing is another than its session's by now.
                 if let t = saved[id], t.reaches(h.target), !unremovedLock.withLock({ unremoved.contains(t.udid.lowercased()) }),
-                   changed(from: h.mark, udid: t.udid) != true {
+                   pairingChanged(from: h.mark, udid: t.udid) != true {
                     held[id]?.target = t
                 } else {
                     gone.append(h.session)
@@ -1042,7 +1042,7 @@ final class DeviceControlHub: @unchecked Sendable {
         // …and a device whose pairing appeared since (put back, or brought in by hand) gets one:
         // without it there is nothing its switch could be about.
         let changed = lock.withLock { () -> [UUID] in
-            held.filter { changed(from: $0.value.mark, udid: $0.value.target.udid) == true }.map(\.key)
+            held.filter { pairingChanged(from: $0.value.mark, udid: $0.value.target.udid) == true }.map(\.key)
                 + targets.filter { held[$0.id] == nil && hasPairing($0) }.map(\.id)
         }
         changed.forEach(reopen)
