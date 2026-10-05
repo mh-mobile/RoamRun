@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Writes the licenses of the Rust crates device control is built from (stdout).
 Reads `cargo metadata` on stdin; the crates' sources must be fetched (a build does that)."""
-import collections, json, os, sys
+import json, os, sys
 
 m = json.load(sys.stdin)
 packages = {p["id"]: p for p in m["packages"]}
@@ -18,7 +18,7 @@ while queue:
 used.discard(root)
 
 NAMES = ("LICENSE", "LICENCE", "COPYING", "NOTICE", "UNLICENSE")
-texts, bare = collections.defaultdict(list), []
+texts, bare = {}, []
 for p in sorted((packages[i] for i in used), key=lambda p: (p["name"], p["version"])):
     name = f'{p["name"]} {p["version"]}'
     folder = os.path.dirname(p["manifest_path"])
@@ -31,7 +31,10 @@ for p in sorted((packages[i] for i in used), key=lambda p: (p["name"], p["versio
         bare.append(f'{name} — {p["license"]} — {", ".join(p["authors"]) or "its authors"} — {p["repository"] or "crates.io"}')
     for f in files:
         with open(f, encoding="utf-8", errors="replace") as text:
-            texts["\n".join(line.rstrip() for line in text.read().strip().splitlines())].append(f'{name} ({p["license"]})')
+            body = "\n".join(line.rstrip() for line in text.read().strip().splitlines())
+            # The same words laid out differently (indentation, http or https in its links) are one text.
+            same = " ".join(body.replace("http://", "https://").split())
+            texts.setdefault(same, [body, []])[1].append(f'{name} ({p["license"]})')
 
 print("RoamRun's device control is built from these Rust crates, each under the license it names")
 print("(one of them, where it offers a choice). Their texts follow.")
@@ -39,8 +42,9 @@ print(f"\n{len(used)} crates. Made by scripts/third-party-licenses.py (make lice
 if bare:
     print("Published without a license text, in the crate or its repository; under the license named:\n")
     print("\n".join(f"  {b}" for b in bare))
-for text, names in sorted(texts.items(), key=lambda t: (t[1][0], t[0])):
-    print("\n" + "=" * 80)
+# Lines no license text has, so where one ends can't be mistaken.
+for text, names in sorted(texts.values(), key=lambda t: (t[1][0], t[0])):
+    print("\n" + "#" * 80)
     print("\n".join(names))
-    print("-" * 80)
+    print("#" + "-" * 79)
     print(text)
