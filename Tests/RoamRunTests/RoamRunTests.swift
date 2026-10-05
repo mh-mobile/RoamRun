@@ -4751,7 +4751,13 @@ import ImageIO
     let other = try #require(CLI.upTurn(for: UUID(), in: dir, wait: false))   // another device's is its own
     close(other)
     close(first)
-    var second = CLI.upTurn(for: id, in: dir, wait: false)
+    // Free once the first is closed — but a process another test starts at that moment holds a
+    // copy of it until it execs, so it is asked for a little while, not once.
+    var second: Int32?
+    for _ in 0..<200 where second == nil {
+        second = CLI.upTurn(for: id, in: dir, wait: false)
+        if second == nil { usleep(10_000) }
+    }
     #expect(second != nil)
     // Ended once, however often it is asked (each round of the wait asks): nothing is left to
     // close a second time — by then the number may be another file's.
