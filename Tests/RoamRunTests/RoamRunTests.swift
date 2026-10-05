@@ -4934,6 +4934,17 @@ private func lookFile(in dir: URL) -> String {
     #expect(taps() == 2)
 }
 
+/// A listener for a folder whose last one has just stopped. Asked again for a moment: a process
+/// another test starts at that instant holds a copy of the stopped one's lock until it runs its
+/// own program (the app asks again too, every half minute).
+private func listenerSoon(in dir: URL, _ handler: @escaping @Sendable (DeviceControlWire.Request) -> DeviceControlWire.Response) -> DeviceControlWire.Listener? {
+    for _ in 0..<300 {
+        if let listener = DeviceControlWire.Listener(directory: dir, handler: handler) { return listener }
+        usleep(10_000)
+    }
+    return nil
+}
+
 /// A second copy started beside the app (a screenshot run) doesn't take the socket the app
 /// answers on: commands went to nobody once it had quit.
 @Test func aSocketSomethingAnswersOnIsNotTaken() throws {
@@ -4948,7 +4959,7 @@ private func lookFile(in dir: URL) -> String {
     // Once it has ended, the next takes over — and the one that ended, asked to stop again,
     // doesn't remove the socket that is the next one's by then.
     first.stop()
-    let next = try #require(DeviceControlWire.Listener(directory: dir) { _ in .init(ok: true, name: "next") })
+    let next = try #require(listenerSoon(in: dir) { _ in .init(ok: true, name: "next") })
     defer { next.stop() }
     first.stop()
     #expect(try DeviceControlWire.ask(.init(op: "state", device: UUID()), in: dir).name == "next")
@@ -4956,7 +4967,7 @@ private func lookFile(in dir: URL) -> String {
     next.stop()
     let sock = DeviceControlWire.socketPath(in: dir)
     FileManager.default.createFile(atPath: sock, contents: nil)
-    let after = try #require(DeviceControlWire.Listener(directory: dir) { _ in .init(ok: true, name: "after") })
+    let after = try #require(listenerSoon(in: dir) { _ in .init(ok: true, name: "after") })
     defer { after.stop() }
     #expect(try DeviceControlWire.ask(.init(op: "state", device: UUID()), in: dir).name == "after")
 }
