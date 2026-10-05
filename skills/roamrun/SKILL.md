@@ -170,8 +170,8 @@ handling in the project, or ask.
 ## 6. Operate the device
 
 For a device that has a pairing of RoamRun's own (`roamrun status iPhone` then
-has a `Device control:` line; an "unknown command" means an older RoamRun
-— use section 5). The RoamRun app
+has a `Device control:` line; an "unknown command" means a RoamRun before
+0.3.0 — use section 5). The RoamRun app
 holds the connection, so it has to be running; it connects while the device is
 on a Wi‑Fi and keeps the connection when it moves to cellular.
 
