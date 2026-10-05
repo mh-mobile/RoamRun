@@ -32,17 +32,30 @@ enum DeviceControlWire {
         var open: Bool?
         /// For "state": the device no longer knows the pairing (it was removed there).
         var refused: Bool?
+        /// For "import": what the device is saved as here.
+        var name: String?
         static func failure(_ why: String) -> Response { Response(ok: false, error: why) }
     }
 
     enum WireError: Error, CustomStringConvertible {
         case noApp, message(String)
+        /// The app may well be running: this process isn't let through to it.
+        case keptOut(String)
         var description: String {
             switch self {
             case .noApp: "the RoamRun app isn't running"
             case .message(let m): m
+            case .keptOut(let why):
+                "this process isn't allowed to reach the RoamRun app (\(why)): it runs in a sandbox that keeps it from the app's socket. Run the command outside the sandbox, or use the MCP tools (`roamrun mcp`, started by the agent itself)"
             }
         }
+    }
+
+    /// Whether `path` still names the file `fd` is open on: a name can come to be another file's,
+    /// or a link's, while the one it was is held open.
+    static func names(_ path: String, theFileOf fd: Int32) -> Bool {
+        var held = stat(), named = stat()
+        return fstat(fd, &held) == 0 && lstat(path, &named) == 0 && held.st_dev == named.st_dev && held.st_ino == named.st_ino
     }
 
     /// The longest a line may be: a long paste, or many elements.
@@ -130,7 +143,11 @@ enum DeviceControlWire {
         defer { close(fd) }
         noSIGPIPE(fd)
         readWait(fd, answerWait)
-        guard withAddress(socketPath(in: directory), { connect(fd, $0, $1) }) == 0 else { throw WireError.noApp }
+        guard withAddress(socketPath(in: directory), { connect(fd, $0, $1) }) == 0 else {
+            // Not there or nobody listening: no app. Refused by the system: a sandbox around this process.
+            let why = errno
+            throw why == EPERM || why == EACCES ? WireError.keptOut(String(cString: strerror(why))) : WireError.noApp
+        }
         guard writeLine(request, to: fd) else { throw WireError.message("couldn't send the request (a number that isn't one?)") }
         let line = readLine(fd)
         guard let response = try? JSONDecoder().decode(Response.self, from: line) else {
@@ -191,6 +208,48 @@ enum DeviceControlWire {
             close(fd)
             unlink(path)
         }
+    }
+}
+
+/// A pairing made for another Mac, with the device it is for: what `roamrun pairing create`
+/// writes and `pairing import` takes. The file is the key: whoever has it and reaches the device
+/// can see and operate it.
+struct SharedPairing: Codable, Equatable {
+    var roamrunPairing = 1
+    var device: DeviceProfile
+    /// The pairing itself, a property list's text.
+    var pairing: String
+
+    static func read(_ data: Data) -> SharedPairing? {
+        guard let read = try? JSONDecoder().decode(SharedPairing.self, from: data), read.roamrunPairing == 1,
+              !read.pairing.isEmpty, read.device.udid?.isEmpty == false else { return nil }
+        return read
+    }
+}
+
+/// Where a pairing made elsewhere goes among the saved devices: nothing is saved by working it out.
+struct DevicePlacement: Equatable {
+    /// The saved device it is for, or the one to add (as the other Mac saved it: here it was
+    /// never seen on the network to be added from).
+    var profile: DeviceProfile
+    var isNew: Bool
+}
+
+extension Array where Element == DeviceProfile {
+    func placement(of device: DeviceProfile, udid: String, as name: String?) -> Result<DevicePlacement, DeviceControlWire.WireError> {
+        func same(_ p: DeviceProfile) -> Bool {
+            if let known = p.udid { return known.caseInsensitiveCompare(udid) == .orderedSame }
+            return p.providerIP == device.providerIP || p.instanceName == device.instanceName
+        }
+        if let saved = first(where: same) { return .success(.init(profile: saved, isNew: false)) }
+        var profile = device
+        profile.id = UUID()
+        profile.udid = udid
+        profile.displayName = (name ?? device.displayName).trimmingCharacters(in: .whitespaces)
+        if let problem = nameProblem(profile.displayName) {
+            return .failure(.message("“\(profile.displayName)”: \(problem) Give another with --as."))
+        }
+        return .success(.init(profile: profile, isNew: true))
     }
 }
 
@@ -272,6 +331,9 @@ final class DeviceControlHub: @unchecked Sendable {
     var onLog: (@Sendable (String, UUID) -> Void)?
     /// A background attempt to open a device's connection failed, and why.
     var onUnreached: (@Sendable (UUID, String) -> Void)?
+    /// A pairing made on another Mac is brought in (the file's path): the app's to do, which
+    /// knows the saved devices.
+    var onImport: (@Sendable (String, String?) -> DeviceControlWire.Response)?
 
     private let open: Opener
     private let key: Key
@@ -440,6 +502,61 @@ final class DeviceControlHub: @unchecked Sendable {
                 step(.failed("\(error)"))
             }
         }
+    }
+
+    /// Takes a pairing made elsewhere for this device: kept only if it opens a connection, and
+    /// sealed with this Mac's key, which is had first.
+    func adoptPairing(_ pairing: Data, for target: Target) throws {
+        let sealing = try key(true)
+        let check = open(target, { pairing }) { _ in }
+        defer { check.close() }
+        do { try check.connect() } catch {
+            throw DeviceSession.Failure.message("this pairing opens no connection to “\(target.name)” at \(target.ip) (\(error)). Nothing was saved.")
+        }
+        try Self.save(Self.seal(pairing, with: sealing), as: DeviceControlWire.pairingFile(udid: target.udid, in: directory))
+        lock.withLock { targets.removeAll { $0.id == target.id }; targets.append(target) }
+        reopen(target.id)
+        // Connected when this returns, as it just was: asked how it stands, it says so.
+        try? session(of: target.id)?.connect()
+        onLog?("device control: a pairing made on another Mac was taken in", target.id)
+    }
+
+    /// A pairing file is read as the one file it is: not through a link (the link would be removed
+    /// and the file left), not one that has another name (it would stay under that), and no more
+    /// than a pairing can be. The descriptor is the caller's to close, after `removeTaken`.
+    static func readTaken(_ path: String) throws -> (fd: Int32, data: Data) {
+        let fd = Darwin.open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
+        guard fd >= 0 else {
+            throw DeviceSession.Failure.message(errno == ELOOP ? "\(path) is a link: give the file itself" : "can't read \(path): \(String(cString: strerror(errno)))")
+        }
+        var s = stat()
+        let why: String? = fstat(fd, &s) != 0 || s.st_mode & S_IFMT != S_IFREG ? "\(path) isn't a file"
+            : s.st_nlink != 1 ? "\(path) has another name too (a hard link): the pairing would stay under it"
+            : s.st_size >= 1 << 20 ? "\(path) isn't a pairing made by `roamrun pairing create`" : nil
+        if let why {
+            close(fd)
+            throw DeviceSession.Failure.message(why)
+        }
+        var data = Data(count: Int(s.st_size))
+        let got = data.withUnsafeMutableBytes { pread(fd, $0.baseAddress, $0.count, 0) }
+        guard got == data.count else {
+            close(fd)
+            throw DeviceSession.Failure.message("can't read \(path)")
+        }
+        return (fd, data)
+    }
+
+    /// The file a pairing was read from is removed once it is taken in. nil when it is gone; else
+    /// what to tell whoever brought it: it is still a key to the device.
+    static func removeTaken(_ file: URL, readThrough fd: Int32, remove: (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) }) -> String? {
+        let still = "it still lets whoever has it see and operate the device"
+        guard DeviceControlWire.names(file.path, theFileOf: fd) else {
+            return "\(file.path) came to name another file while it was read: what the pairing was read from wasn't removed, and may be there under another name — \(still)"
+        }
+        do { try remove(file) } catch {
+            return "\(file.path) couldn't be removed (\(error.localizedDescription)): delete it yourself — \(still)"
+        }
+        return nil
     }
 
     /// Removes the pairing saved under `udid`, held or not: one made for a device that turned
@@ -633,6 +750,9 @@ final class DeviceControlHub: @unchecked Sendable {
 
     func answer(_ request: DeviceControlWire.Request) -> DeviceControlWire.Response {
         let notSetUp = DeviceControlWire.Response.failure("device control isn't set up for this device: the user sets it up in the RoamRun app, on the device's page")
+        if request.op == "import" {
+            return onImport?(request.path ?? "", request.text) ?? .failure("this RoamRun can't take a pairing in")
+        }
         // How it stands is said at once, whatever runs on the device.
         if request.op == "state" {
             guard let h = lock.withLock({ held[request.device] }) else { return notSetUp }

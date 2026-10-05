@@ -5,9 +5,8 @@ import RoamRunDevice
 /// A pairing the device comes to make (iOS 27 and later): this Mac listens and names itself
 /// on the local network, the device's user picks it in Settings and enters the code shown
 /// here. One at a time; `accept` waits, `cancel` (any thread) makes it return.
-/// Known limit: idevice tells the device a fixed serial number and addresses for this side, so
-/// the device lists every tool built on it as one host; removing that entry there removes them
-/// all. Ours alone shows under its own name.
+/// The device lists the hosts it is paired with by the serial number and address each names:
+/// every `host` has its own here, so it is an entry of its own there, removed alone.
 public final class DevicePairing: @unchecked Sendable {
     public struct Paired: Equatable, Sendable {
         public var udid: String

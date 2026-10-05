@@ -1,5 +1,6 @@
 import AppKit
 import CoreImage
+import DeviceControl
 import Foundation
 
 /// `roamrun devices | up <name> | status [name]` — the same bridge as the menu
@@ -16,7 +17,7 @@ enum CLI {
     }
 
     /// What only a build with device control has (to the others they are unknown commands).
-    nonisolated static let deviceCommands: Set<String> = ["look", "tap", "swipe", "type", "paste", "press", "elements", "mcp"]
+    nonisolated static let deviceCommands: Set<String> = ["look", "tap", "swipe", "type", "paste", "press", "elements", "mcp", "pairing"]
     /// Posted by `roamrun down`; the app stops the bridge whose id is `object`.
     static let stopNotification = Notification.Name(AppID.bundle + ".stopBridge")
     /// What a RoamRun before 0.1.12 listens for, should it still run next to this CLI.
@@ -40,6 +41,13 @@ enum CLI {
       press <name> <button>          home, lock, volume-up or volume-down
       mcp                            The same as MCP tools, over stdin/stdout (for an agent's MCP config)
     Each look serves one action: look, act, look again.
+    For a Mac that can't pair itself (not on the device's network):
+      pairing create <name> <file> [--as <label>]
+                                     Here, with the device on this Wi‑Fi: pairs once more, as
+                                     <label> in the device's list, and writes that pairing and the
+                                     device to <file>. The file is the key: keep it as one.
+      pairing import <file> [--as <name>]
+                                     There: saves the device and its pairing, then removes <file>
     """
 
     private static let baseUsage = """
@@ -135,7 +143,7 @@ enum CLI {
             // `ota` is the one command whose first word may be the path: it does
             // nothing to a device, so naming one is optional there. By the count,
             // not the extension — a device may well be called "iPhone.ipa".
-            let name = args[0] == "ota" && words.count < 2 ? nil : words.first
+            let name = (args[0] == "ota" && words.count < 2) || args[0] == "pairing" ? nil : words.first
             var targets = profiles
             if let name {
                 guard let p = find(name, in: profiles) else { fail("no device named \(shellName(name)). " + names(profiles)) }
@@ -192,6 +200,17 @@ enum CLI {
                     fail("usage: roamrun ota [<name>] <path to .ipa>")
                 }
                 ota(targets, path: path, replacing: parsed.flags.contains("--replace"))
+            case "pairing":
+                let label = parsed.values["--as"]
+                switch (words.first, words.count) {
+                case ("create", 3):
+                    guard let p = find(words[1], in: profiles) else { fail("no device named \(shellName(words[1])). " + names(profiles)) }
+                    createPairing(p, others: profiles.filter { $0.id != p.id }, file: words[2], label: label)
+                case ("import", 2):
+                    importPairing(file: words[1], name: label)
+                default:
+                    fail("usage: roamrun pairing create <name> <file> [--as <label>] | roamrun pairing import <file> [--as <name>]")
+                }
             case "mcp":
                 // Off the main thread: it reads stdin until the client closes it.
                 let server = DeviceMCP(profiles: { store.load() }) { try DeviceControlWire.ask($0, in: ProfileStore.directory) }
@@ -239,6 +258,7 @@ enum CLI {
         all["press"] = ([], 0...2)
         all["elements"] = ([], 0...2)
         all["mcp"] = ([], 0...0)
+        all["pairing"] = (["--as="], 0...3)
         return all
     }()
 
@@ -744,6 +764,8 @@ enum CLI {
     /// (no pairing of our own: it was never set up).
     enum ControlState: Equatable {
         case notSetUp, connected, notConnected, refused, noApp
+        /// The app can't be asked from here (a sandbox around this process).
+        case keptOut
 
         var line: String? {
             switch self {
@@ -752,6 +774,7 @@ enum CLI {
             case .notConnected: "paired, not connected — the app keeps trying; it can connect only while the device is on a Wi‑Fi"
             case .refused: "the pairing can no longer be used (removed on the device, or this Mac can't read what it saved) — the user pairs again in the RoamRun app, on the device's page"
             case .noApp: "paired; the RoamRun app, which holds the connection, isn't running (or is a build without device control)"
+            case .keptOut: "paired; this process isn't allowed to reach the RoamRun app (a sandbox around it?) — run it outside, or use the MCP tools"
             }
         }
     }
@@ -760,10 +783,137 @@ enum CLI {
         guard let udid, FileManager.default.fileExists(atPath: DeviceControlWire.pairingFile(udid: udid, in: ProfileStore.directory).path) else {
             return .notSetUp
         }
-        guard let r = try? DeviceControlWire.ask(.init(op: "state", device: id), in: ProfileStore.directory) else { return .noApp }
+        let r: DeviceControlWire.Response
+        do { r = try DeviceControlWire.ask(.init(op: "state", device: id), in: ProfileStore.directory) } catch {
+            if case DeviceControlWire.WireError.keptOut = error { return .keptOut }
+            return .noApp
+        }
         // A pairing the app hasn't picked up yet answers as not set up there.
         guard r.ok, r.open != true else { return r.ok ? .connected : .notConnected }
         return r.refused == true ? .refused : .notConnected
+    }
+
+    /// A pairing for another Mac: made in this process, written to `file` and kept nowhere here.
+    /// Under an identity of its own, so the device lists it on its own and it can be removed
+    /// there alone; this Mac's own pairing stays as it is.
+    private static func createPairing(_ profile: DeviceProfile, others: [DeviceProfile], file: String, label: String?) -> Never {
+        let out = URL(fileURLWithPath: file).standardizedFileURL
+        // The file is had before the pairing, and written through what was had: checked now and
+        // written after the code was entered, another could be put there in between.
+        let fd: Int32
+        do { fd = try reserve(out.path) } catch { fail((error as? ArgumentError)?.message ?? "\(error)") }
+        // Interrupted, hung up on (an SSH session that ends) or told to end: nothing is left.
+        reserved = (strdup(out.path), fd)
+        for sign in [SIGINT, SIGHUP, SIGTERM] {
+            signal(sign) { sign in
+                if let made = CLI.reserved { CLI.removeReserved(made.path, made.fd) }
+                _exit(128 + sign)
+            }
+        }
+        /// Nothing is left where the pairing was to go.
+        func stop(_ why: String) -> Never {
+            out.path.withCString { CLI.removeReserved($0, fd) }
+            CLI.reserved = nil   // after: a signal in between still finds what to remove
+            close(fd)
+            CLI.stop(why)
+        }
+        let label = label ?? "RoamRun (\(out.deletingPathExtension().lastPathComponent))"
+        setvbuf(stdout, nil, _IOLBF, 0)
+        do {
+            let listening = try DevicePairing(name: label, host: UUID().uuidString)
+            print("On \(profile.displayName) (iOS 27 or later, on this Mac's Wi‑Fi): Settings › Privacy & Security › Developer Mode › “\(listening.name)”.")
+            let paired = try listening.accept { print("Enter this code there: \($0)") }
+            let known = others.compactMap { o in o.udid.map { (udid: $0, name: o.displayName) } }
+            let verdict = DeviceControlHub.verdict(expected: profile.udid, paired: paired.udid, others: known)
+            let withdraw = "Remove “\(listening.name)” on it, in that list."
+            switch verdict {
+            case .savedAs(let other): stop("\(paired.name) paired, which is saved here as “\(other)”, not “\(profile.displayName)”. Nothing was written. \(withdraw)")
+            case .nameless: stop("\(paired.name) paired without saying which device it is. Nothing was written. \(withdraw)")
+            case .expected, .toProve: break
+            }
+            // Tried once from here: a pairing that connects nowhere isn't worth taking anywhere.
+            let check = DeviceSession(ip: profile.providerIP, port: profile.remotePairingPort, pairing: { paired.pairing })
+            defer { check.close() }
+            var unreached: String?
+            do { try check.connect() } catch { unreached = "\(error)" }
+            if verdict == .toProve, let unreached {
+                stop("\(paired.name) paired, but that pairing opens no connection to “\(profile.displayName)” at \(profile.providerIP) (\(unreached)). Nothing was written. \(withdraw)")
+            }
+            var device = profile
+            device.udid = Self.sharedUDID(saved: profile.udid, paired: paired.udid)
+            let shared = SharedPairing(device: device, pairing: String(decoding: paired.pairing, as: UTF8.self))
+            guard let data = try? JSONEncoder().encode(shared), Self.write(data, to: fd) else {
+                stop("can't write \(out.path). \(withdraw)")
+            }
+            // Written to what was made at the start: if that name is another file's by now, the
+            // pairing isn't where it is said to be.
+            guard DeviceControlWire.names(out.path, theFileOf: fd) else {
+                stop("\(out.path) was replaced while the pairing was made: the pairing isn't in it. \(withdraw)")
+            }
+            reserved = nil   // done: an interrupt from here on leaves the file
+            close(fd)
+            print("Wrote \(out.path)" + (unreached.map { " (it couldn't be tried from here: \($0))" } ?? ", and it connects."))
+            print("It is a key to \(profile.displayName): whoever has it and reaches \(profile.providerIP) can see and operate the device. On the other Mac: roamrun pairing import <that file>")
+            print("To withdraw it: remove “\(listening.name)” on the device, in that list.")
+            exit(0)
+        } catch {
+            stop("\(error)")
+        }
+    }
+
+    /// The file a pairing is being written to, for the handler that removes it when interrupted.
+    nonisolated(unsafe) private static var reserved: (path: UnsafeMutablePointer<CChar>, fd: Int32)?
+
+    /// Removes what was made for a pairing — that file, not whatever its name has come to be.
+    /// Only what a signal handler may call.
+    nonisolated static func removeReserved(_ path: UnsafePointer<CChar>, _ fd: Int32) {
+        var held = stat(), named = stat()
+        if fstat(fd, &held) == 0, lstat(path, &named) == 0, held.st_dev == named.st_dev, held.st_ino == named.st_ino { unlink(path) }
+    }
+
+    /// A new file of the owner's alone, or nothing: never one that is there, never through a link.
+    nonisolated static func reserve(_ path: String) throws -> Int32 {
+        let fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard fd >= 0 else {
+            throw ArgumentError(message: errno == EEXIST ? "\(path) exists: name a file that doesn't" : "can't make \(path): \(String(cString: strerror(errno)))")
+        }
+        return fd
+    }
+
+    nonisolated static func write(_ data: Data, to fd: Int32) -> Bool {
+        data.withUnsafeBytes { bytes in
+            var done = 0
+            while done < bytes.count {
+                let n = Darwin.write(fd, bytes.baseAddress! + done, bytes.count - done)
+                if n <= 0 { return false }
+                done += n
+            }
+            return true
+        }
+    }
+
+    /// The UDID a pairing travels under: the paired device's own, which is what it was proved
+    /// with — in the saved one's spelling when that is the same device, and the saved one only
+    /// when the device named none.
+    nonisolated static func sharedUDID(saved: String?, paired: String) -> String? {
+        guard !paired.isEmpty else { return saved }
+        if let saved, saved.caseInsensitiveCompare(paired) == .orderedSame { return saved }
+        return paired
+    }
+
+    private static func importPairing(file: String, name: String?) -> Never {
+        let path = URL(fileURLWithPath: file).standardizedFileURL.path
+        guard FileManager.default.fileExists(atPath: path) else { fail("\(path) doesn't exist") }
+        let r = askApp(.init(op: "import", device: UUID(), path: path, text: name))
+        guard r.ok else { stop("import failed: \(r.error ?? "no answer")") }
+        print("\(r.name ?? "The device") is saved with its pairing. Try: roamrun look \(r.name.map(shellName) ?? "<name>")")
+        // Said as it is: a key left where it was is not one that is gone.
+        if let left = r.error {
+            FileHandle.standardError.write(Data("roamrun: \(left)\n".utf8))
+            exit(1)
+        }
+        print("\(path) is removed.")
+        exit(0)
     }
 
     private static func askApp(_ request: DeviceControlWire.Request) -> DeviceControlWire.Response {
@@ -1423,6 +1573,9 @@ enum CLI {
             case .noApp:
                 check(false, "Device control: the RoamRun app isn't running (or is a build without it)",
                       fix: "Open RoamRun: it holds the connection that look, tap and the rest use.", warnOnly: true)
+            case .keptOut:
+                check(false, "Device control: this process isn't allowed to reach the RoamRun app",
+                      fix: "A sandbox around it keeps it from the app's socket (the app may well be running). Run roamrun outside the sandbox, or use the MCP tools (`roamrun mcp`).", warnOnly: true)
             }
             if !checkAll, live[p.id] == nil {
                 note("Bridge is off — not checked (roamrun doctor \(commandName(p)) checks it anyway)")

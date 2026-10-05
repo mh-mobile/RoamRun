@@ -96,6 +96,7 @@ final class AppCoordinator: ObservableObject {
         for p in profiles { install(newBridge(p)) }
         deviceControl.onLog = { [weak self] message, id in Task { @MainActor in self?.logStore.log(message, device: id) } }
         deviceControl.onUnreached = { [weak self] id, why in Task { @MainActor in self?.controlUnreached(id, why) } }
+        deviceControl.onImport = { [weak self] path, name in self?.importPairing(path: path, as: name) ?? .failure("stopping") }
         syncDeviceControl()
         deviceControl.start()
 
@@ -898,13 +899,53 @@ final class AppCoordinator: ObservableObject {
         )
         // Known already if remotepairingd matched this advert; else learned on first connect.
         profile.udid = udid
+        save(new: profile)
+        return .added(profile.id)
+    }
+
+    private func save(new profile: DeviceProfile) {
         profiles.append(profile)
         let bridge = install(newBridge(profile))
         capture.ownedHosts.insert(bridge.spoofHost)
         persist()
-        logStore.log("added \"\(profile.displayName)\" -> \(ip)", device: profile.id)
+        logStore.log("added \"\(profile.displayName)\" -> \(profile.providerIP)", device: profile.id)
         learnDeviceTypes()
-        return .added(profile.id)
+    }
+
+    /// Asked for by `roamrun pairing import`, on the thread that answers it: the device is found
+    /// or added, the pairing kept only if it connects, and then the file is removed.
+    nonisolated private func importPairing(path: String, as name: String?) -> DeviceControlWire.Response {
+        let file = URL(fileURLWithPath: path)
+        let fd: Int32, data: Data
+        do { (fd, data) = try DeviceControlHub.readTaken(path) } catch { return .failure("\(error)") }
+        defer { close(fd) }
+        guard let shared = SharedPairing.read(data), let udid = shared.device.udid else {
+            return .failure("\(path) isn't a pairing made by `roamrun pairing create`")
+        }
+        // Where it goes is worked out first and saved last: a pairing that doesn't connect leaves
+        // the saved devices as they were.
+        let placed = DispatchQueue.main.sync { MainActor.assumeIsolated { profiles.placement(of: shared.device, udid: udid, as: name) } }
+        let place: DevicePlacement
+        switch placed {
+        case .success(let p): place = p
+        case .failure(let why): return .failure("\(why)")
+        }
+        let p = place.profile
+        let target = DeviceControlHub.Target(id: p.id, name: p.displayName, ip: p.providerIP, port: p.remotePairingPort, udid: p.udid ?? udid)   // as it is spelled here, when known
+        do { try deviceControl.adoptPairing(Data(shared.pairing.utf8), for: target) } catch { return .failure("\(error)") }
+        DispatchQueue.main.sync {
+            MainActor.assumeIsolated {
+                if place.isNew {
+                    save(new: p)
+                } else if let i = profiles.firstIndex(where: { $0.id == p.id }), profiles[i].udid == nil {
+                    profiles[i].udid = udid
+                    persist()
+                }
+            }
+        }
+        DispatchQueue.main.async { MainActor.assumeIsolated { self.syncDeviceControl() } }
+        // Taken in either way; a file that stays is said to (in `error`, with `ok`).
+        return .init(ok: true, error: DeviceControlHub.removeTaken(file, readThrough: fd), name: target.name)
     }
 
     func deleteProfile(_ id: UUID) {

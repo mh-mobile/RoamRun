@@ -181,6 +181,12 @@ Wi‑Fi as the Mac. The app shows a code; the user picks RoamRun on the device
 (Settings › Privacy & Security › Developer Mode) and enters it there. Don't try
 to do that part through device control.
 
+On a Mac that is never on the device's Wi‑Fi (a remote one), there is no Set
+Up… to do: the user makes a pairing on a Mac that is (`roamrun pairing create
+<name> <file>`, entering a code on the device) and brings the file over, and
+`roamrun pairing import <file>` saves the device and the pairing. That file is a
+key to the device — don't print it, copy it or leave it behind.
+
 ```sh
 roamrun look iPhone /tmp/now.png     # the screen now: prints the path, then "1179 x 2556"
 roamrun tap iPhone 590 1280          # a point in the pixels of that image
@@ -191,6 +197,10 @@ The same is there as MCP tools (`look` returns the image itself, scaled to what
 you are shown, and points are that image's pixels): the user adds it once with
 `claude mcp add roamrun -- roamrun mcp`, or the like for another agent. Use the
 tools when you have them; the rules below hold for both.
+If a command says this process isn't allowed to reach the RoamRun app, your
+shell runs in a sandbox that keeps it from the app (the app may well be
+running — don't try to start it): ask to run `roamrun` outside the sandbox, or
+have the user add the MCP tools, which run outside it.
 
 - **Each look serves one action.** `tap` and `swipe` are refused until there has
   been a `look`, and any action (or `elements`) uses it up: look, act, look again.

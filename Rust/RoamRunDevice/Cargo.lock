@@ -550,8 +550,7 @@ dependencies = [
 [[package]]
 name = "idevice"
 version = "0.1.68"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5d7799c8497cef60ddfd38f7d92e267b9fa5d0b18e7691d31041453007400ca"
+source = "git+https://github.com/mh-mobile/idevice?rev=575311afaa3cac1574bda0e5afcaed0d1273a6f8#575311afaa3cac1574bda0e5afcaed0d1273a6f8"
 dependencies = [
  "aes",
  "async-stream",

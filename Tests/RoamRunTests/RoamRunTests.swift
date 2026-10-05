@@ -4560,6 +4560,249 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
     #expect(hub.state(of: id, udid: "UDID-1") == (true, false, true))
 }
 
+/// A pairing made on another Mac is kept only if it opens a connection, and then as this Mac
+/// keeps its own: sealed with its key, and held from then on.
+@Test func aPairingMadeElsewhereIsTakenInOnlyIfItConnects() throws {
+    final class Unreachable: ControlledDevice, @unchecked Sendable {
+        var isOpen: Bool { false }
+        var isRefused: Bool { false }
+        func connect() throws { throw DeviceSession.Failure.message("no route") }
+        func close() {}
+        func look() throws -> CGImage { throw DeviceSession.Failure.message("no") }
+        func elements(limit: Int) throws -> (captions: [String], complete: Bool) { ([], true) }
+        func tap(x: Double, y: Double) throws {}
+        func swipe(from: (x: Double, y: Double), to: (x: Double, y: Double), milliseconds: Int) throws {}
+        func type(_ text: String) throws {}
+        func paste(_ text: String) throws {}
+        func press(_ button: String) throws {}
+    }
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let pairing = try scratchPairing()
+    let target = DeviceControlHub.Target(id: UUID(), name: "iPhone", ip: "100.64.0.1", port: 49152, udid: "UDID-9")
+    let file = DeviceControlWire.pairingFile(udid: "UDID-9", in: dir)
+
+    let away = DeviceControlHub(directory: dir, key: { _ in scratchKey }) { _, _, _ in Unreachable() }
+    defer { away.stop() }
+    #expect(throws: (any Error).self) { try away.adoptPairing(pairing, for: target) }
+    #expect(!FileManager.default.fileExists(atPath: file.path))
+    #expect(away.session(of: target.id) == nil)
+
+    // Checked with the pairing that came, not with one read back.
+    let given = OSAllocatedUnfairLock<[Data]>(initialState: [])
+    let hub = DeviceControlHub(directory: dir, key: { _ in scratchKey }) { _, read, _ in
+        if let data = try? read() { given.withLock { $0.append(data) } }
+        return StandInDevice()
+    }
+    defer { hub.stop() }
+    try hub.adoptPairing(pairing, for: target)
+    #expect(given.withLock { $0.first } == pairing)
+    #expect(try DeviceControlHub.unseal(Data(contentsOf: file), with: scratchKey) == pairing)
+    #expect(hub.state(of: target.id, udid: "UDID-9") == (true, true, false))   // held, and said to be connected at once
+
+    // A key the Keychain won't give: nothing is tried, nothing saved.
+    let other = DeviceControlHub.Target(id: UUID(), name: "iPad", ip: "100.64.0.2", port: 49152, udid: "UDID-8")
+    let keyless = DeviceControlHub(directory: dir, key: { _ in throw DeviceSession.Failure.message("refused") }) { _, _, _ in StandInDevice() }
+    defer { keyless.stop() }
+    #expect(throws: (any Error).self) { try keyless.adoptPairing(pairing, for: other) }
+    #expect(!FileManager.default.fileExists(atPath: DeviceControlWire.pairingFile(udid: "UDID-8", in: dir).path))
+}
+
+/// The file a pairing travels in holds the device with it, and is read only as that.
+@Test func aSharedPairingIsReadOnlyAsOne() throws {
+    var device = DeviceProfile(displayName: "iPhone", instanceName: "abc", serviceType: "_remotepairing._tcp", domain: "local.",
+                               remotePairingPort: 49152, bonjourHost: "x.local.", txt: ["a": "b"],
+                               providerID: "tailscale", providerHostName: "iphone", providerIP: "100.64.0.1")
+    device.udid = "UDID-9"
+    let shared = SharedPairing(device: device, pairing: "<plist/>")
+    let data = try JSONEncoder().encode(shared)
+    #expect(SharedPairing.read(data) == shared)
+    #expect(SharedPairing.read(Data("<plist/>".utf8)) == nil)                                    // a bare pairing
+    #expect(SharedPairing.read(try JSONEncoder().encode(device)) == nil)                         // a device alone
+    var nameless = shared; nameless.device.udid = nil
+    #expect(SharedPairing.read(try JSONEncoder().encode(nameless)) == nil)                       // nothing to name the pairing by
+    var empty = shared; empty.pairing = ""
+    #expect(SharedPairing.read(try JSONEncoder().encode(empty)) == nil)
+    var later = shared; later.roamrunPairing = 2
+    #expect(SharedPairing.read(try JSONEncoder().encode(later)) == nil)                          // a form this RoamRun doesn't know
+}
+
+/// Where a pairing is written is had before the pairing is made, new and the owner's alone: a
+/// file that is there — put there while the code was being entered, say — is never written over,
+/// nor one a link leads to.
+@Test func aPairingIsWrittenOnlyToAFileMadeForIt() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let fresh = dir.appendingPathComponent("k.json").path
+    let fd = try CLI.reserve(fresh)
+    #expect(try FileManager.default.attributesOfItem(atPath: fresh)[.posixPermissions] as? Int == 0o600)
+    #expect(CLI.write(Data("the pairing".utf8), to: fd))
+    close(fd)
+    #expect(try String(contentsOfFile: fresh, encoding: .utf8) == "the pairing")
+
+    #expect(throws: (any Error).self) { try CLI.reserve(fresh) }                      // there already
+    #expect(try String(contentsOfFile: fresh, encoding: .utf8) == "the pairing")
+
+    let other = dir.appendingPathComponent("someone's.txt").path
+    try "theirs".write(toFile: other, atomically: true, encoding: .utf8)
+    let link = dir.appendingPathComponent("link.json").path
+    try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: other)
+    #expect(throws: (any Error).self) { try CLI.reserve(link) }                       // a link to a file
+    #expect(try String(contentsOfFile: other, encoding: .utf8) == "theirs")
+    let dangling = dir.appendingPathComponent("dangling.json").path
+    try FileManager.default.createSymbolicLink(atPath: dangling, withDestinationPath: dir.appendingPathComponent("not yet").path)
+    #expect(throws: (any Error).self) { try CLI.reserve(dangling) }                   // a link to nothing: nothing made behind it
+    #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("not yet").path))
+    #expect(throws: (any Error).self) { try CLI.reserve(dir.appendingPathComponent("no such folder/k.json").path) }
+}
+
+/// The file a pairing came in is a key for as long as it is there: one that couldn't be removed
+/// is said to be, not passed over — and it is the file that was read that is removed, not
+/// whatever its name has come to be.
+@Test func aPairingFileLeftBehindIsSaidToBe() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let file = dir.appendingPathComponent("k.json")
+    try Data("x".utf8).write(to: file)
+    var (fd, data) = try DeviceControlHub.readTaken(file.path)
+    #expect(data == Data("x".utf8))
+    let left = try #require(DeviceControlHub.removeTaken(file, readThrough: fd) { _ in throw CocoaError(.fileWriteVolumeReadOnly) })
+    #expect(left.contains(file.path) && left.contains("delete it yourself"))
+    #expect(FileManager.default.fileExists(atPath: file.path))
+    #expect(DeviceControlHub.removeTaken(file, readThrough: fd) == nil)
+    #expect(!FileManager.default.fileExists(atPath: file.path))
+    close(fd)
+
+    // Moved aside and another put in its place while it was read: that one is not removed, and
+    // the one read is said to be still about.
+    try Data("the pairing".utf8).write(to: file)
+    (fd, data) = try DeviceControlHub.readTaken(file.path)
+    defer { close(fd) }
+    try FileManager.default.moveItem(at: file, to: dir.appendingPathComponent("kept.json"))
+    try Data("another's".utf8).write(to: file)
+    let moved = try #require(DeviceControlHub.removeTaken(file, readThrough: fd))
+    #expect(moved.contains("another name"))
+    #expect(try String(contentsOf: file, encoding: .utf8) == "another's")
+}
+
+/// A pairing is taken in from the one file it is in. Through a link, the link would be removed
+/// and the pairing left where it is; with a second name, it would stay under that.
+@Test func aPairingIsReadOnlyFromTheFileItself() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let real = dir.appendingPathComponent("real.json")
+    try Data("the pairing".utf8).write(to: real)
+    func refused(_ path: String, saying part: String) {
+        do {
+            let (fd, _) = try DeviceControlHub.readTaken(path)
+            close(fd)
+            Issue.record("\(path) was read")
+        } catch { #expect("\(error)".contains(part), "\(error)") }
+    }
+    let link = dir.appendingPathComponent("link.json").path
+    try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: real.path)
+    refused(link, saying: "is a link")
+    let second = dir.appendingPathComponent("second.json")
+    try FileManager.default.linkItem(at: real, to: second)
+    refused(real.path, saying: "another name")
+    try FileManager.default.removeItem(at: second)
+    refused(dir.path, saying: "isn't a file")
+    let pipe = dir.appendingPathComponent("pipe").path
+    #expect(mkfifo(pipe, 0o600) == 0)
+    refused(pipe, saying: "isn't a file")                      // and without waiting for a writer
+    let big = dir.appendingPathComponent("big.json")
+    try Data(count: 1 << 20).write(to: big)
+    refused(big.path, saying: "isn't a pairing")
+    refused(dir.appendingPathComponent("none.json").path, saying: "can't read")
+    // With its one name again, it is read.
+    let (fd, data) = try DeviceControlHub.readTaken(real.path)
+    close(fd)
+    #expect(data == Data("the pairing".utf8))
+    #expect(try String(contentsOf: real, encoding: .utf8) == "the pairing")
+}
+
+/// What was made for a pairing is what is removed when it fails or is interrupted: not a file
+/// another put under that name meanwhile.
+@Test func onlyTheFileMadeForAPairingIsRemoved() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let path = dir.appendingPathComponent("k.json").path
+    var fd = try CLI.reserve(path)
+    #expect(DeviceControlWire.names(path, theFileOf: fd))
+    try FileManager.default.removeItem(atPath: path)
+    try "another's".write(toFile: path, atomically: true, encoding: .utf8)
+    #expect(!DeviceControlWire.names(path, theFileOf: fd))
+    CLI.removeReserved(path, fd)
+    #expect(try String(contentsOfFile: path, encoding: .utf8) == "another's")
+    close(fd)
+    try FileManager.default.removeItem(atPath: path)
+
+    fd = try CLI.reserve(path)
+    defer { close(fd) }
+    CLI.removeReserved(path, fd)
+    #expect(!FileManager.default.fileExists(atPath: path))
+    // A link put where it was is not followed either.
+    let other = dir.appendingPathComponent("theirs.txt").path
+    try "theirs".write(toFile: other, atomically: true, encoding: .utf8)
+    try FileManager.default.createSymbolicLink(atPath: path, withDestinationPath: other)
+    CLI.removeReserved(path, fd)
+    #expect(FileManager.default.fileExists(atPath: other) && (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) != nil)
+}
+
+/// A pairing travels under the UDID of the device it was made with, not one saved earlier for
+/// whatever answered at that address then.
+@Test func aSharedPairingNamesTheDeviceItWasMadeWith() {
+    #expect(CLI.sharedUDID(saved: nil, paired: "U2") == "U2")
+    #expect(CLI.sharedUDID(saved: "U1", paired: "U2") == "U2")              // proved by connecting: it is U2
+    #expect(CLI.sharedUDID(saved: "0000-ABCD", paired: "0000-abcd") == "0000-ABCD")   // the same one, as it is spelled here
+    #expect(CLI.sharedUDID(saved: "U1", paired: "") == "U1")                // it named none
+    #expect(CLI.sharedUDID(saved: nil, paired: "") == nil)
+}
+
+/// Where a pairing made elsewhere goes is worked out without saving anything: a pairing that
+/// then doesn't connect leaves the saved devices as they were, the UDID of one not yet known too.
+@Test func placingAPairingSavesNothing() throws {
+    func device(_ name: String, ip: String, instance: String, udid: String?) -> DeviceProfile {
+        var d = DeviceProfile(displayName: name, instanceName: instance, serviceType: "_remotepairing._tcp", domain: "local.",
+                              remotePairingPort: 49152, bonjourHost: "x.local.", txt: [:],
+                              providerID: "tailscale", providerHostName: name, providerIP: ip)
+        d.udid = udid
+        return d
+    }
+    let known = device("iPhone", ip: "100.64.0.1", instance: "a", udid: "0000-ABCD")
+    let unknown = device("iPad", ip: "100.64.0.2", instance: "b", udid: nil)
+    let saved = [known, unknown]
+    let came = device("Phone there", ip: "100.64.0.9", instance: "z", udid: nil)
+
+    // One saved under that UDID, however it is spelled: that one, as it is.
+    #expect(try saved.placement(of: came, udid: "0000-abcd", as: nil).get() == DevicePlacement(profile: known, isNew: false))
+    // One whose UDID isn't known yet, at that address or by that advert: that one — and still
+    // without a UDID: it is saved only once the pairing has connected.
+    var at = came; at.providerIP = "100.64.0.2"
+    #expect(try saved.placement(of: at, udid: "U2", as: nil).get() == DevicePlacement(profile: unknown, isNew: false))
+    var advert = came; advert.instanceName = "b"
+    #expect(try saved.placement(of: advert, udid: "U2", as: "Other").get().profile.udid == nil)
+    // A device known by another UDID isn't taken for it by its address.
+    var sameAddress = came; sameAddress.providerIP = "100.64.0.1"
+    #expect(try saved.placement(of: sameAddress, udid: "U3", as: nil).get().isNew)
+    // None: one to add, new here, under the name asked for.
+    let new = try saved.placement(of: came, udid: "U9", as: " Work phone ").get()
+    #expect(new.isNew && new.profile.id != came.id && new.profile.udid == "U9" && new.profile.displayName == "Work phone")
+    #expect(new.profile.providerIP == came.providerIP && new.profile.instanceName == came.instanceName)
+    // A name taken here: refused, with what to do.
+    var clash = came; clash.displayName = "iphone"
+    guard case .failure(let why) = saved.placement(of: clash, udid: "U9", as: nil) else { Issue.record("placed under a taken name"); return }
+    #expect("\(why)".contains("--as"))
+    #expect(try saved.placement(of: clash, udid: "U9", as: "Second").get().isNew)
+}
+
+/// `pairing` takes a word that says what to do, not a device's name first.
+@Test func pairingCommandsParse() throws {
+    #expect(try CLI.parse(["pairing", "create", "iPhone", "/tmp/k.json", "--as", "RoamRun (cloud)"]).get().values["--as"] == "RoamRun (cloud)")
+    #expect(try CLI.parse(["pairing", "import", "/tmp/k.json", "--as=Phone"]).get().words == ["import", "/tmp/k.json"])
+    #expect(throws: (any Error).self) { try CLI.parse(["pairing", "create", "a", "b", "c", "d"]).get() }
+}
+
 /// What a build before the sealing left as it was is removed when the app starts: each holds a
 /// private key the device may still take. Nothing else in the folder is touched.
 @Test func pairingsLeftUnsealedAreRemoved() throws {

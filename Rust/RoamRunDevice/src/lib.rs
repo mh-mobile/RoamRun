@@ -949,7 +949,8 @@ pub unsafe extern "C" fn rr_pairing_listen(name: *const c_char, model: *const c_
                 // One identity per `host`, whatever it is named: pairing again replaces the
                 // device's record of it, and another Mac of the same name doesn't.
                 let file = RpPairingFile::generate(&format!("{LABEL} {host}"));
-                let info = PairableHostInfo::generate(name, model);
+                let mut info = PairableHostInfo::generate(name, model);
+                (info.serial_number, info.mac) = own_hardware(file.identifier());
                 let txt = info.mdns_txt_records(file.identifier()).iter()
                     .map(|(k, v)| format!("{}:{}", quoted(k), quoted(v))).collect::<Vec<_>>().join(",");
                 let said = format!("{{\"port\":{port},\"identifier\":{},\"txt\":{{{txt}}}}}", quoted(file.identifier()));
@@ -1011,6 +1012,19 @@ pub unsafe extern "C" fn rr_pairing_free(pairing: *mut RRPairing) {
     }
 }
 
+/// A serial number and an address for one identity, the same each time: the device lists the
+/// hosts it is paired with by them, so each identity is an entry of its own there, removed
+/// alone — and pairing again as the same one stays the same entry.
+fn own_hardware(identifier: &str) -> (String, [u8; 6]) {
+    let hex: Vec<u8> = identifier.bytes().filter(u8::is_ascii_hexdigit).map(|b| b.to_ascii_uppercase()).collect();
+    let digit = |i: usize| (hex.get(i).copied().unwrap_or(b'0') as char).to_digit(16).unwrap_or(0) as u8;
+    let serial = (0..12).map(|i| hex.get(i).copied().unwrap_or(b'0') as char).collect();
+    let mut mac = [0u8; 6];
+    for (i, byte) in mac.iter_mut().enumerate() { *byte = digit(12 + i * 2) << 4 | digit(13 + i * 2); }
+    mac[0] = (mac[0] | 0x02) & 0xFE;   // an address made up here, of one station
+    (serial, mac)
+}
+
 async fn accept_pairing(pairing: &RRPairing, show: &(impl Fn(&str) + Sync)) -> Result<(idevice::remote_pairing::PeerDevice, String), String> {
     let cancelled = || pairing.cancelled.load(Ordering::Relaxed);
     loop {
@@ -1062,6 +1076,24 @@ async fn accept_pairing(pairing: &RRPairing, show: &(impl Fn(&str) + Sync)) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_identity_has_hardware_of_its_own() {
+        let one = RpPairingFile::generate("roamrun A");
+        let (serial, mac) = own_hardware(one.identifier());
+        assert_eq!(serial.len(), 12);
+        assert!(serial.bytes().all(|b| b.is_ascii_digit() || b.is_ascii_uppercase()));
+        assert_eq!(mac[0] & 0x03, 0x02);
+        // The same identity again: the same entry on the device.
+        assert_eq!(own_hardware(RpPairingFile::generate("roamrun A").identifier()), (serial.clone(), mac));
+        // Another: an entry of its own.
+        let (other_serial, other_mac) = own_hardware(RpPairingFile::generate("roamrun B").identifier());
+        assert_ne!(other_serial, serial);
+        assert_ne!(other_mac, mac);
+        // Not the ones every host had.
+        assert_ne!(serial, "AAAAAAAAAAAA");
+        assert_eq!(own_hardware("").0, "000000000000");   // nothing to go by: still twelve characters
+    }
 
     /// An input's deadline grows with what it has to send: a long text isn't cut in the middle.
     #[test]

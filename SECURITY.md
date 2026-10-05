@@ -53,6 +53,14 @@ bounded.
   encrypted by the tunnel it opens; screen images and input travel in it. Any process of your
   user can ask the running app to look at or operate a paired device (the
   `roamrun` commands do), as it could ask it to stop a bridge.
+- **A pairing made for another Mac is a key in a file.** `roamrun pairing create`
+  pairs once more, under an identity of its own, and writes that pairing to a
+  file (yours only, not sealed: the Mac it is for has another key). Nothing of it
+  is kept on the Mac that made it, and this Mac's own pairing is never written
+  out. Whoever has the file and reaches the device can see and operate it;
+  `pairing import` on the other Mac seals it there and removes the file. The
+  device lists each such pairing as an entry of its own, which is how to withdraw
+  one: remove it there.
 - **The device's RemotePairing and tunnel ports are reachable from your
   tailnet.** Other tailnet members can connect, but pair verification and the
   pair-derived tunnel keys reject them. On a shared tailnet, restrict access to
