@@ -197,6 +197,26 @@ roamrun init --client claude                  # or only to the ones you name (re
 
 The skill covers getting the device connected (`roamrun up -d` → `status --wait 60 --json` for the UDID), what only a human can do, such as unlocking the iPhone, and screenshots; building and launching are left to the agent's usual tools, with `roamrun run` as a one-command fallback. The CLI supports `--json` and exit codes (0 ready / 1 not ready or failed / 2 usage error); `status` without a device name lists every saved device and exits 0 if any one of them is ready, so name the device when a script needs the answer to be about that one.
 
+## Seeing and operating the device
+
+RoamRun can also show the device's screen and operate it — tap, swipe, type, press its buttons — from the command line or as tools for an AI agent. It needs **iOS / iPadOS 27 or later** (earlier versions refuse remote control), and it doesn't go through the bridge or Xcode: RoamRun makes a pairing and a connection of its own.
+
+**Set up, once per device**, with the device on the same Wi‑Fi as the Mac: open the device's page in RoamRun → **Device control › Set Up…**. On the device, under Settings › Privacy & Security › Developer Mode, pick RoamRun and enter the code the Mac shows. After that it connects whenever the device is on a Wi‑Fi and reachable over the VPN, and stays connected when the device moves to cellular. The RoamRun app holds the connection, so it has to be running.
+
+```sh
+roamrun look iPhone /tmp/now.png          # the screen now, as PNG; prints the path, then its size
+roamrun tap iPhone 590 1280               # a point in the pixels of that image
+roamrun swipe iPhone 590 1800 590 900     # drag from one point to another
+roamrun type iPhone "hello"               # US keys; right only while the device's keyboard is an English one
+roamrun paste iPhone "任意の文字列"         # any text, by the device's pasteboard (iOS asks "Allow Paste")
+roamrun press iPhone home                 # home, lock, volume-up, volume-down
+roamrun elements iPhone                   # what accessibility says is on the screen (no positions)
+```
+
+Each `look` serves one action: look, act, look again. For an agent, the same are MCP tools: `claude mcp add roamrun -- roamrun mcp`, or the like for another agent; the skill (`roamrun init`) tells it how to use them.
+
+These press what is really on the screen, and a `look` shows whatever is there — notifications and messages too. The device lists each connection as a screen-sharing session, and RoamRun's pairing under Developer Mode, where you can remove it. The pairing holds a private key; how it is kept, and who can use it, is in [SECURITY.md](SECURITY.md).
+
 ## Installing without the bridge: over the air
 
 The bridge needs the device on Wi-Fi — `remotepairingd` only listens there — and
@@ -345,6 +365,7 @@ RoamRun writes only to these places (it never touches system settings or other a
 | `io.github.mh-mobile.roamrun` (defaults; `com.roamrun.app` before 0.1.12) | Settings and which bridges were running |
 | `/usr/local/bin/roamrun` | Only if you installed the CLI from the app or `make install-cli` (never overwrites an existing file or another tool's link); Homebrew links `/opt/homebrew/bin/roamrun` instead |
 | `~/.claude/skills/roamrun/` etc. | Only if you ran `roamrun init` (never touches other skills or links) |
+| Login Keychain: “RoamRun device control” | Only if you set up device control: the key its saved pairings (`device-pairing-<UDID>.sealed`, in the first folder) are sealed with |
 
 If you used `roamrun ota`, one more thing lives outside that table: RoamRun asks
 `tailscale serve` to carry one port — whichever `otaPort` names, 41443 by
@@ -368,6 +389,7 @@ First stop bridges started with `roamrun up -d` (`roamrun down <name>`): they ke
 roamrun init --uninstall                  # if you installed the skill (with another tool: remove it there)
 rm /usr/local/bin/roamrun                 # if you installed the CLI
 rm -rf ~/Library/Application\ Support/RoamRun ~/Library/Logs/RoamRun
+security delete-generic-password -s io.github.mh-mobile.roamrun.device-control   # if you set up device control (also after brew --zap)
 tailscale serve --https=41443 --set-path=/ off   # if you used roamrun ota (the port otaPort names)
 defaults delete io.github.mh-mobile.roamrun      # after the line above: it holds otaPort
 defaults delete com.roamrun.app 2>/dev/null      # left by versions before 0.1.12
@@ -408,6 +430,8 @@ What RoamRun exposes and how, and how to report a vulnerability: [SECURITY.md](S
 This implementation builds on the following public write-up:
 
 - Kevin Paterson, ["How to remotely iterate & deploy your sideloaded iOS-apps over tailnet"](https://dev.to/kvnpt/how-to-remotely-iterate-deploy-your-sideloaded-ios-apps-over-tailnet-jak) (DEV Community) — demonstrates an equivalent setup with `dns-sd -P` + `socat`
+
+Device control is built on [idevice](https://github.com/jkcoxson/idevice) (Jackson Coxson), a Rust implementation of the protocols a Mac speaks to a device. The licenses of it and of the other crates RoamRun is built from are in [THIRD-PARTY-LICENSES.txt](THIRD-PARTY-LICENSES.txt), which the app carries too.
 
 ## Related projects
 

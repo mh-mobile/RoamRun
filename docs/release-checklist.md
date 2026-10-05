@@ -19,6 +19,7 @@ On top, by what the release changed:
 | Home detection, Local Network | 11 |
 | `roamrun ota`, the OTA server or `tailscale serve` | 15 |
 | Pausing on cellular, sleep and wake | 16, 17, 18 |
+| Device control, its library (`Rust/RoamRunDevice`), `idevice`'s version, the Keychain | 19-24 |
 | Windows, menus, accessibility | UI at scale and for everyone |
 
 `scripts/release-check.sh <name> <bundle id>` runs items 1-3, 5, the CLI half of 6, and 8
@@ -104,6 +105,25 @@ tunnel and Xcode has to run again.
     around 20 a second: far more means it now spins on the closed connections. (Without
     the hold it was ~12 a second — remotepairingd waits ~50 ms before it redials, and each
     dial took a round trip to the device as well; held, only the wait is left.)
+
+## Device control (a device on iOS 27 or later)
+
+19. No pairing of RoamRun's own yet (remove it on the device's page, and RoamRun's entry on
+    the device under Settings › Privacy & Security › Developer Mode), device on this Mac's
+    Wi‑Fi: **Device control › Set Up…**, pick RoamRun on the device, enter the code → the page
+    says connected; the Keychain asked nothing; `~/Library/Application Support/RoamRun/`
+    holds `device-pairing-<UDID>.sealed` (0600) with no `private_key` in it
+    (`grep -c -a private_key` → 0).
+20. `roamrun look <name> /tmp/a.png`, then `tap`, `swipe`, `type`, `paste`, `press home` and
+    `elements`, a `look` after each: each did what it says. The same through `roamrun mcp`
+    from an agent.
+21. Connected on a Wi‑Fi, then that Wi‑Fi off (cellular only): `look` still answers, and a
+    minute later too.
+22. Quit and reopen RoamRun: connected again without a prompt. Install this release over
+    the previous one: the same.
+23. Remove RoamRun's entry on the device: `roamrun status <name>` and the page say the
+    pairing can no longer be used and offer **Pair Again…**, which works.
+24. **Remove Device**: its `.sealed` file is gone.
 
 ## Install paths
 

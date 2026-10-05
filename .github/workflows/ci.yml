@@ -28,6 +28,10 @@ jobs:
           rustup default 1.95.0
           cargo --version
       - run: make test
+      - name: The licenses the app carries are those of the crates it is built from
+        run: |
+          make licenses
+          git diff --exit-code THIRD-PARTY-LICENSES.txt
       - name: Build the app bundle
         run: |
           make app

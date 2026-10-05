@@ -1,4 +1,4 @@
-//! RoamRun's C ABI over idevice. Experimental. rr_device_tap, _swipe, _type, _paste and
+//! RoamRun's C ABI over idevice. rr_device_tap, _swipe, _type, _paste and
 //! _button operate the device; rr_device_elements can scroll it.
 
 use std::ffi::{c_char, CStr, CString};

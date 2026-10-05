@@ -18,7 +18,7 @@ SIGN_ID ?= -
 NOTARY_PROFILE ?=
 SIGN_FLAGS = --force --options runtime $(if $(filter -,$(SIGN_ID))$(findstring Apple Development,$(SIGN_ID)),,--timestamp)
 
-.PHONY: all build app run dmg release-dmg icon install-cli test clean device-lib device-probe
+.PHONY: all build app run dmg release-dmg icon install-cli test clean device-lib device-probe licenses
 
 all: app
 
@@ -39,6 +39,7 @@ app: build
 	mkdir -p $(BUNDLE)/Contents/Resources
 	cp Resources/AppIcon.icns $(BUNDLE)/Contents/Resources/
 	cp skills/roamrun/SKILL.md $(BUNDLE)/Contents/Resources/roamrun-skill.md
+	cp THIRD-PARTY-LICENSES.txt $(BUNDLE)/Contents/Resources/
 	codesign -s "$(SIGN_ID)" $(SIGN_FLAGS) $(BUNDLE)
 	@echo "Built $(BUNDLE)"
 
@@ -56,6 +57,12 @@ device-lib:
 	# MACOSX_DEPLOYMENT_TARGET instead also reaches the proc-macro dylibs, which then don't load.
 	cd Rust/RoamRunDevice && CFLAGS_aarch64_apple_darwin="-mmacosx-version-min=13.0" \
 		$(CARGO) build --release --locked --target-dir $(CURDIR)/.build/device
+
+# The licenses of the crates that library is built from, which the app carries: made anew
+# whenever Cargo.lock changes (CI checks it is current).
+licenses: device-lib
+	cd Rust/RoamRunDevice && $(CARGO) metadata --format-version 1 --locked --filter-platform aarch64-apple-darwin \
+		| $(CURDIR)/scripts/third-party-licenses.py > $(CURDIR)/THIRD-PARTY-LICENSES.txt
 
 # Links it into a Swift executable. With no arguments it only says what it is; with
 # <device ip> <RemotePairing port> <pairing file> it verifies the pairing, opens a tunnel

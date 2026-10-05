@@ -338,7 +338,7 @@ private struct DeviceLog: View {
     }
 }
 
-/// Device control (experimental): whether this Mac has a pairing of its own with the device,
+/// Device control: whether this Mac has a pairing of its own with the device,
 /// and the way to make one.
 private struct DeviceControlRow: View {
     @EnvironmentObject private var coordinator: AppCoordinator
@@ -367,7 +367,7 @@ private struct DeviceControlRow: View {
         let state = coordinator.controlState(profile)
         return HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Device control (experimental)").font(.headline)
+                Text("Device control").font(.headline)
                 Text(summary(state)).font(.callout).foregroundStyle(.secondary)
             }
             Spacer()

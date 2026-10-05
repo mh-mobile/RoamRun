@@ -8,11 +8,7 @@ import Foundation
 enum CLI {
     /// This process was started as the CLI (vs. the menu bar app).
     nonisolated static var isRunning: Bool { commands.contains(CommandLine.arguments.dropFirst().first ?? "") }
-    nonisolated static let commands: Set<String> = {
-        var all: Set<String> = ["devices", "up", "down", "status", "doctor", "run", "install", "ota", "logs", "screenshot", "init", "version", "--version", "help", "--help", "-h"]
-        all.formUnion(deviceCommands)
-        return all
-    }()
+    nonisolated static let commands: Set<String> = deviceCommands.union(["devices", "up", "down", "status", "doctor", "run", "install", "ota", "logs", "screenshot", "init", "version", "--version", "help", "--help", "-h"])
     /// The words as numbers a point or a duration can be: nil when one isn't a number, or is NaN or infinite.
     nonisolated static func finite(_ words: some Sequence<String>) -> [Double]? {
         let numbers = words.compactMap { Double($0) }.filter(\.isFinite)
@@ -30,7 +26,7 @@ enum CLI {
     private static let usage = baseUsage + "\n\n" + deviceUsage
 
     private static let deviceUsage = """
-    Operating a device (experimental; the RoamRun app holds the connection, and the device needs
+    Operating a device (iOS 27 or later; the RoamRun app holds the connection, and the device needs
     a pairing of RoamRun's own):
       look <name> [file.png]         Save the device's screen now as PNG; prints the path, then its size
       tap <name> <x> <y>             Tap a point given in the pixels of the last look
@@ -742,7 +738,7 @@ enum CLI {
     }
 
     /// Through the tunnel like everything else: works over the bridge.
-    // Experimental (device control): the app holds the connection; these ask it.
+    // Device control: the app holds the connection; these ask it.
 
     /// Where a device stands with being operated. `line` is nil when there is nothing to say
     /// (no pairing of our own: it was never set up).

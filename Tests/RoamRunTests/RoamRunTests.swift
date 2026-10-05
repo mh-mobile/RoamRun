@@ -4795,8 +4795,6 @@ func everyDocumentedCommandParses(_ doc: String) throws {
                 }
             }
             guard let command = words.first else { continue }
-            // Device control's commands are checked by a build that has them (`make test DEVICE=1`).
-            if !CLI.commands.contains(command), CLI.deviceCommands.contains(command) { continue }
             #expect(CLI.commands.contains(command), "\(doc): roamrun \(m.1)")
             checked += 1
             if command == "init" {

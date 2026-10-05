@@ -32,8 +32,8 @@ bounded.
   encrypted CoreDevice tunnel run end to end between the Mac and the device.
   The bridge holds no keys and can't bypass pairing: a device that isn't paired
   with this Mac can't be reached through it.
-- **Device control (experimental, not in releases; builds made with `DEVICE=1`)
-  holds a key of its own.** To show and operate a device, RoamRun pairs with it
+- **Device control holds a key of its own**, once you set it up for a device.
+  To show and operate a device, RoamRun pairs with it
   itself (you confirm with a code on the device) and keeps that pairing, which
   holds a private key: whoever has it and can reach the device over the network
   can see its screen and operate it, with no further consent on the device. It is
@@ -102,7 +102,7 @@ bounded.
 - Files: `~/Library/Application Support/RoamRun/` (device profiles, mode 0600,
   bridge status, and `ota/` — the .ipa files you stored, 5 per app), `~/Library/Logs/RoamRun/`, and the
   `io.github.mh-mobile.roamrun` defaults (`com.roamrun.app` before 0.1.12).
-  With device control: sealed pairings (`device-pairing-<UDID>.sealed`, 0600) there too, and one
+  With device control set up: sealed pairings (`device-pairing-<UDID>.sealed`, 0600) there too, and one
   item in the login Keychain, which removing the app leaves:
   `security delete-generic-password -s io.github.mh-mobile.roamrun.device-control`.
   The CLI link and agent skills are installed only on request and
