@@ -43,7 +43,14 @@ bounded.
   macOS ask you. It is not protection against something that runs as RoamRun or
   that you allow in that prompt. The device lists the pairing in Settings ›
   Privacy & Security › Developer Mode, where it can be removed; while a
-  connection is open, the device shows it as screen sharing. Any process of your
+  connection is open, the device shows it as screen sharing. While **Set Up…**
+  waits (and only then), the Mac announces itself on the local network
+  (`_remotepairing-pairable-host._tcp`, with the Mac's name) and listens on a port
+  for the device to pair; the six-digit code is what keeps another device on that
+  network from pairing instead — one that did would be given nothing, and its
+  pairing is kept only if it is the device you set up. The connection itself goes
+  from the Mac to the device's VPN address, verified with that pairing and
+  encrypted by the tunnel it opens; screen images and input travel in it. Any process of your
   user can ask the running app to look at or operate a paired device (the
   `roamrun` commands do), as it could ask it to stop a bridge.
 - **The device's RemotePairing and tunnel ports are reachable from your
@@ -116,7 +123,8 @@ bounded.
   check; there is no code in RoamRun that talks to a server of ours or anyone
   else's. It does open connections of its own — to your device: a TCP probe to see
   whether it answers, the RemotePairing handshake to confirm the answer really
-  comes from it, and a scan for its RemotePairing port when that has changed. It
+  comes from it, and a scan for its RemotePairing port when that has changed; with
+  device control set up, also its own tunnel to the device, kept open. It
   also connects to its own loopback port to check the install page still answers. The bridge itself forwards
   bytes without reading them.
 - Helper processes (`dns-sd`, `log stream`) are tied to RoamRun and typically

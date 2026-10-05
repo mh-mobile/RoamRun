@@ -22,18 +22,22 @@ texts, bare = collections.defaultdict(list), []
 for p in sorted((packages[i] for i in used), key=lambda p: (p["name"], p["version"])):
     name = f'{p["name"]} {p["version"]}'
     folder = os.path.dirname(p["manifest_path"])
-    files = sorted(f for f in os.listdir(folder) if f.upper().startswith(NAMES) and os.path.isfile(os.path.join(folder, f)))
+    files = sorted(os.path.join(folder, f) for f in os.listdir(folder) if f.upper().startswith(NAMES) and os.path.isfile(os.path.join(folder, f)))
+    # A crate packaged without its license: the text from its repository, kept in licenses/.
+    kept = os.path.join(os.path.dirname(packages[root]["manifest_path"]), "licenses", p["name"] + ".txt")
+    if not files and os.path.isfile(kept):
+        files = [kept]
     if not files:
-        bare.append(f'{name} — {p["license"]} — {p["repository"] or "crates.io"}')
+        bare.append(f'{name} — {p["license"]} — {", ".join(p["authors"]) or "its authors"} — {p["repository"] or "crates.io"}')
     for f in files:
-        with open(os.path.join(folder, f), encoding="utf-8", errors="replace") as text:
+        with open(f, encoding="utf-8", errors="replace") as text:
             texts["\n".join(line.rstrip() for line in text.read().strip().splitlines())].append(f'{name} ({p["license"]})')
 
 print("RoamRun's device control is built from these Rust crates, each under the license it names")
 print("(one of them, where it offers a choice). Their texts follow.")
 print(f"\n{len(used)} crates. Made by scripts/third-party-licenses.py (make licenses); don't edit.\n")
 if bare:
-    print("Without a license file in the crate; under the license named:\n")
+    print("Published without a license text, in the crate or its repository; under the license named:\n")
     print("\n".join(f"  {b}" for b in bare))
 for text, names in sorted(texts.items(), key=lambda t: (t[1][0], t[0])):
     print("\n" + "=" * 80)

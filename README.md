@@ -101,7 +101,7 @@ git clone https://github.com/mh-mobile/RoamRun && cd RoamRun
 - **Everyday use:** `make app`, move `RoamRun.app` to `/Applications`, open it, and install the CLI from the app (see [CLI](#cli)).
 - **Developing RoamRun:** `make install-cli` links `roamrun` to the build in the repo folder, so each `make app` takes effect right away. If you later move the app, reinstall the CLI from the app.
 
-Needs Xcode and Rust 1.88 or later (for device control's library; `make` builds it). No Xcode project needed: SwiftPM and a Makefile assemble the `.app`. An app you build yourself isn't treated as a download, so Gatekeeper won't warn.
+Needs Xcode and Rust by [rustup](https://rustup.rs) (for device control's library; `make` builds it, with the Rust version it names). No Xcode project needed: SwiftPM and a Makefile assemble the `.app`. An app you build yourself isn't treated as a download, so Gatekeeper won't warn.
 
 ### Prebuilt dmg (GitHub Releases)
 

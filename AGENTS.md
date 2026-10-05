@@ -9,8 +9,9 @@ see `skills/roamrun/SKILL.md` — installed with `roamrun init` or
 - `make app` builds `RoamRun.app` (menu bar app and `roamrun` CLI in one binary);
   `make run` also launches it. Don't call `swift build` directly — `make` pins
   Xcode's toolchain and stamps the real SDK version (needed for Liquid Glass).
-  It builds device control's Rust library first (`Rust/RoamRunDevice`): Rust 1.88
-  or later, `CARGO=` to pick the cargo.
+  It builds device control's Rust library first (`Rust/RoamRunDevice`), with the
+  Rust its `rust-toolchain.toml` names (rustup fetches it); `CARGO=` picks another.
+  After changing `Cargo.lock`: `make licenses`, and commit the file it writes.
 - Device control keeps a key in the Keychain, which asks about a build signed ad
   hoc after every rebuild. `make app` signs with an Apple Development certificate
   when the keychain holds one (else ad hoc); `SIGN_ID=` picks another.
@@ -73,8 +74,8 @@ AND category == "input"'`. Text that arrives short with a line here was dropped 
 2. Build the dmg from a fresh clone of that commit (a working copy can hold
    uncommitted changes): `make release-dmg` → `RoamRun-<version>.dmg`, Developer ID
    signed, notarized and stapled — it fails otherwise (it checks `stapler validate`
-   and `spctl`). It needs the Developer ID Application identity in the keychain and
-   the notary profile from `xcrun notarytool store-credentials roamrun-notary`.
+   and `spctl`). It needs the Developer ID Application identity in the keychain,
+   the notary profile from `xcrun notarytool store-credentials roamrun-notary`, and rustup.
    Plain `make dmg` is the ad-hoc developer build, never a release.
 3. `gh release create v<version> RoamRun-<version>.dmg --target <that commit's full sha> --title "RoamRun <version>" --notes …`
    — the tag must point at the commit the dmg was built from. Keep the notes'

@@ -49,8 +49,8 @@ test: device-lib
 	xcrun swift test
 
 # Device control: RoamRun's own Rust library over idevice (pinned in its Cargo.toml and
-# Cargo.lock), for macOS. Needs Rust 1.88+.
-# CARGO= picks the cargo to use (e.g. "$$HOME/.cargo/bin/cargo +1.95.0").
+# Cargo.lock), for macOS. Needs Rust 1.88+: with rustup, the one rust-toolchain.toml there
+# names is fetched and used. CARGO= picks another cargo.
 CARGO ?= cargo
 device-lib:
 	# The C objects idevice's crypto brings get the app's deployment target; setting

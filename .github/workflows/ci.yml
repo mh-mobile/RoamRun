@@ -22,11 +22,8 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5
       - run: xcrun swift --version
-      - name: Rust (device control's library needs 1.88 or later)
-        run: |
-          rustup toolchain install 1.95.0 --profile minimal
-          rustup default 1.95.0
-          cargo --version
+      - name: Rust (the version Rust/RoamRunDevice/rust-toolchain.toml names; rustup fetches it)
+        run: cd Rust/RoamRunDevice && cargo --version
       - run: make test
       - name: The licenses the app carries are those of the crates it is built from
         run: |
