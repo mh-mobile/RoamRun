@@ -374,16 +374,14 @@ private struct DeviceControlRow: View {
                 Text(summary(state)).font(.callout).foregroundStyle(.secondary)
             }
             Spacer()
-            if state?.paired == true {
+            if state.paired {
                 Button("Remove…") { confirmRemove = true }
             }
-            Button(state?.paired == true ? "Pair Again…" : "Set Up…") { coordinator.startControlPairing(profile) }
-                .disabled(state == nil)
+            Button(state.paired ? "Pair Again…" : "Set Up…") { coordinator.startControlPairing(profile) }
         }
     }
 
-    private func summary(_ state: (paired: Bool, open: Bool, refused: Bool)?) -> String {
-        guard let state else { return "Available once the bridge has connected to this device." }
+    private func summary(_ state: (paired: Bool, open: Bool, refused: Bool)) -> String {
         if !state.paired { return "Lets agents see and operate this device (roamrun look, tap, mcp). Needs iOS 27 and a pairing of RoamRun's own." }
         if state.refused { return "The device no longer has this pairing (it was removed there). Pair again." }
         return state.open ? "Paired and connected." : "Paired. Connects while the device is on Wi‑Fi, awake and reachable."
@@ -403,6 +401,8 @@ private struct ControlPairingSheet: View {
                     Text("On “\(profile.displayName)”, with it on the same Wi‑Fi as this Mac:")
                     Text("Settings › Privacy & Security › Developer Mode, then choose “\(name)” to pair.")
                         .font(.callout).foregroundStyle(.secondary)
+                    Text("Needs iOS 27 or later: earlier versions list no devices there, and refuse remote control.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 ProgressView("Waiting for the device…")
             case .code(let digits):
@@ -411,9 +411,9 @@ private struct ControlPairingSheet: View {
                     .frame(maxWidth: .infinity)
             case .checking:
                 ProgressView("Checking the connection…")
-            case .done:
+            case .done(_, nil):
                 Label("Device control is set up.", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-            case .doneUnreached(let why):
+            case .done(_, let why?):
                 Label("Paired. The device can't be reached over the VPN right now, so device control connects when it can.",
                       systemImage: "checkmark.circle").foregroundStyle(.green)
                 Text(why).font(.caption).foregroundStyle(.secondary)
@@ -425,7 +425,7 @@ private struct ControlPairingSheet: View {
             HStack {
                 Spacer()
                 switch coordinator.controlPairing?.step {
-                case .done, .doneUnreached:
+                case .done:
                     Button("Done") { coordinator.endControlPairing() }.keyboardShortcut(.defaultAction)
                 case .failed:
                     Button("Close") { coordinator.endControlPairing() }.keyboardShortcut(.cancelAction)

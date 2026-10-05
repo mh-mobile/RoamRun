@@ -4412,6 +4412,41 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
     #expect(fresh.calls == ["press"] && old.calls == ["look"])   // through the session held by then
 }
 
+/// A device can be set up before its UDID is known (one added at home has never been bridged):
+/// the pairing says which device it is. What came in is the device asked for, another saved
+/// one, or one that has to prove itself by connecting at the address asked for.
+@Test func aPairingSaysWhichDeviceItIs() {
+    typealias Hub = DeviceControlHub
+    let others = [(udid: "00008130-AAAA", name: "iPhone")]
+    #expect(Hub.verdict(expected: "00008027-BBBB", paired: "00008027-BBBB", others: others) == .expected)
+    #expect(Hub.verdict(expected: "00008027-bbbb", paired: "00008027-BBBB", others: others) == .expected)   // one UDID, however spelled
+    #expect(Hub.verdict(expected: nil, paired: "00008027-BBBB", others: others) == .toProve)
+    #expect(Hub.verdict(expected: "00008027-CCCC", paired: "00008027-BBBB", others: others) == .toProve)
+    // Already saved under another name: not saved twice, whether or not this one's UDID was known.
+    #expect(Hub.verdict(expected: nil, paired: "00008130-aaaa", others: others) == .savedAs("iPhone"))
+    #expect(Hub.verdict(expected: "00008027-BBBB", paired: "00008130-AAAA", others: others) == .savedAs("iPhone"))
+    #expect(Hub.verdict(expected: nil, paired: "", others: others) == .nameless)
+    #expect(Hub.verdict(expected: "00008027-BBBB", paired: "", others: others) == .toProve)   // named by the one known
+
+    // What the app does with the UDID the pairing was saved under.
+    #expect(AppCoordinator.pairedUDID(saved: nil, paired: "X") == .save)
+    #expect(AppCoordinator.pairedUDID(saved: "abc", paired: "ABC") == .known)
+    #expect(AppCoordinator.pairedUDID(saved: "ABC", paired: "DEF") == .conflicts)   // learned as another meanwhile
+}
+
+/// A UDID spelled another way is the same device: its connection is kept, not made anew.
+@Test func aUDIDSpelledAnotherWayKeepsTheConnection() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (hub, made) = try standInHub(dir, udid: "00008027-00ab")
+    defer { hub.stop() }
+    let id = UUID()
+    hub.update([.init(id: id, name: "iPad", ip: "127.0.0.1", port: 1, udid: "00008027-00ab")])
+    let first = try #require(hub.session(of: id))
+    hub.update([.init(id: id, name: "iPad", ip: "127.0.0.1", port: 1, udid: "00008027-00AB")])
+    #expect(hub.session(of: id) === first && made().count == 1)
+}
+
 /// A failed input is never sent again, but its connection is no longer taken for sound — unless
 /// it was refused for what it asked, before anything was sent.
 @Test func aFailedInputLeavesItsConnectionInDoubt() {
