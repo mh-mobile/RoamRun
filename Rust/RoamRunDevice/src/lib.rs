@@ -58,6 +58,9 @@ struct Link {
     /// Raised by the caller from another thread when the device is to be let go of: a long
     /// input stops between two keys. The caller's, and outlives this.
     stop: Stop,
+    /// The key or button down now (not Shift or Command), as (is a button, page or 0, usage):
+    /// let go of when an input is cut off between its down and its up.
+    held: Option<(bool, u64, u64)>,
     verified_ms: u128,
     tunnel_ms: u128,
     rsd_ms: u128,
@@ -218,6 +221,13 @@ pub unsafe extern "C" fn rr_device_stop_at(device: *mut RRDevice, flag: *const u
 #[no_mangle]
 pub unsafe extern "C" fn rr_flag_raise(flag: *mut u8) {
     unsafe { &*flag.cast::<AtomicBool>() }.store(true, Ordering::Relaxed);
+}
+
+/// # Safety
+/// `flag` is the byte given to rr_device_stop_at. Any thread: for a stop that was for one call.
+#[no_mangle]
+pub unsafe extern "C" fn rr_flag_lower(flag: *mut u8) {
+    unsafe { &*flag.cast::<AtomicBool>() }.store(false, Ordering::Relaxed);
 }
 
 /// # Safety
@@ -481,6 +491,7 @@ async fn elements(link: &mut Link, limit: usize, until: Instant) -> Result<(Vec<
     let mut step = 0;
     while step < limit {
         if Instant::now() >= until { return Ok((captions, false, "deadline")); }
+        if link.stop.raised() { return Err(STOPPED.into()); }   // a walk moves the focus, and can scroll
         // From the first element each time a walk starts: the focus is wherever the last one left it.
         let options: plist::Dictionary = [
             ("allowNonAX".to_string(), wrapped(plist::Value::Boolean(false))),
@@ -556,7 +567,7 @@ async fn connect(ip: &str, port: u16, file: &[u8]) -> Result<Link, String> {
     client.validate_pairing(&mut pairing).await.map_err(|e| match e {
         idevice::IdeviceError::RemotePairing(idevice::remote_pairing::errors::RemotePairingError::PairVerifyFailed) => format!("the device doesn't accept this pairing: {e:?}"),
         idevice::IdeviceError::RemotePairing(idevice::remote_pairing::errors::RemotePairingError::PeerNotVerified(what)) =>
-            format!("what answers at {ip}:{port} isn't the device this pairing was made with ({what}): nothing was sent to it"),
+            format!("what answers at {ip}:{port} isn't the device this pairing was made with ({what}): it was told nothing of this Mac's and sent no input"),
         _ => format!("the pairing couldn't be verified: {e:?}"),
     })?;
     let verified_ms = started.elapsed().as_millis();
@@ -574,7 +585,7 @@ async fn connect(ip: &str, port: u16, file: &[u8]) -> Result<Link, String> {
 
     let rsd = handle.connect(info.server_rsd_port).await.map_err(|e| format!("RSD: {e:?}"))?;
     let handshake = RsdHandshake::new(rsd).await.map_err(|e| format!("RSD handshake: {e:?}"))?;
-    Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_stopped: None, stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, resent: 0, stop: Stop(std::ptr::null()), verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
+    Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_stopped: None, stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, resent: 0, stop: Stop(std::ptr::null()), held: None, verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
 }
 
 /// The most that is typed in one call: beyond it, a slip in the middle is too costly, and paste does it in one.
@@ -640,11 +651,18 @@ async fn stream_for_input(link: &mut Link) -> Result<(), String> {
 /// the connections it used aren't kept (what the device makes of a finger left down is its own).
 async fn let_go(link: &mut Link) {
     if let Some(keys) = link.keys.as_mut() {
+        let held = link.held.take();
         let _ = tokio::time::timeout(Duration::from_secs(1), async {
+            match held {
+                Some((true, page, code)) => { let _ = keys.send_button(page, code, ButtonState::Up).await; }
+                Some((false, _, usage)) => { let _ = keys.send_keyboard(usage, ButtonState::Up).await; }
+                None => {}
+            }
             let _ = keys.send_keyboard(LEFT_SHIFT, ButtonState::Up).await;
             let _ = keys.send_keyboard(LEFT_COMMAND, ButtonState::Up).await;
         }).await;
     }
+    link.held = None;
     link.keys = None;
     link.hid = None;
 }
@@ -756,6 +774,13 @@ async fn press(link: &mut Link, steps: &[Step]) -> Result<(), String> {
             // Between two keys, none held: what is left isn't sent to a device being let go of.
             if down == 0 && link.stop.raised() { return Err(STOPPED.into()); }
             down = down_after(down, step);
+            match *step {
+                Step::Key(usage, ButtonState::Down) if usage != LEFT_SHIFT && usage != LEFT_COMMAND => link.held = Some((false, 0, usage)),
+                Step::Button(page, code, ButtonState::Down) => link.held = Some((true, page, code)),
+                Step::Key(usage, ButtonState::Up) if link.held == Some((false, 0, usage)) => link.held = None,
+                Step::Button(page, code, ButtonState::Up) if link.held == Some((true, page, code)) => link.held = None,
+                _ => {}
+            }
             let sent = match *step {
                 Step::Key(usage, state) => keys.send_keyboard(usage, state).await,
                 Step::Button(page, code, state) => keys.send_button(page, code, state).await,

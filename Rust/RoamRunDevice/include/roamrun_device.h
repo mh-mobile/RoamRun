@@ -36,6 +36,8 @@ void rr_device_close(RRDevice *device);
  */
 void rr_device_stop_at(RRDevice *device, const uint8_t *flag);
 void rr_flag_raise(uint8_t *flag);
+/** Lowered again, where the stop was for the call under way and the device is kept. */
+void rr_flag_lower(uint8_t *flag);
 
 /**
  * JSON: how long opening took and which of the services device control needs are there.

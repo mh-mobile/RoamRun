@@ -375,7 +375,7 @@ private struct DeviceControlRow: View {
             if state.paired {
                 // Off: every command and agent is refused, whichever asks. Kept in the Keychain,
                 // where another program can't switch it back on.
-                Toggle("On", isOn: Binding(get: { allowed }, set: { coordinator.setControlAllowed(profile.id, $0) }))
+                Toggle("On", isOn: Binding(get: { allowed }, set: { coordinator.switchControl(profile, $0) }))
                     .toggleStyle(.switch).controlSize(.small).labelsHidden()
                     .help("While off, no command or agent can see or operate this device")
             }
@@ -391,6 +391,9 @@ private struct DeviceControlRow: View {
         if state.refused { return "This pairing can no longer be used: it was removed on the device, or this Mac can't read what it saved. Pair again." }
         if coordinator.controlAnother(profile) {
             return "What answers at this device's address isn't the device this pairing was made with, so nothing is sent to it. If the device was erased or replaced, pair again; if not, something else has its address."
+        }
+        if !allowed, coordinator.controlListUnreadable {
+            return "Paired, off: the Keychain didn't give RoamRun its list of devices switched on. Switch it on to be asked again."
         }
         if !allowed { return "Paired, switched off: commands and agents are refused. Any program you run on this Mac can use it while it is on." }
         return state.open ? "Paired and connected." : "Paired. Connects while the device is on Wi‑Fi, awake and reachable."

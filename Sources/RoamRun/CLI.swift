@@ -414,9 +414,12 @@ enum CLI {
         let detail: String?
         /// nil when unknown (not queried, or the iPhone is unreachable).
         let locked: Bool?
+        /// Device control, in `status`: connected, notConnected, refused (pair again), switchedOff,
+        /// another (not the paired device answers), noApp, keptOut; null where it isn't set up.
+        var deviceControl: String?
 
         private enum CodingKeys: String, CodingKey {
-            case name, state, id, vpnAddress, udid, status, ready, owner, pid, tunnelPorts, network, coreDevice, detail, locked
+            case name, state, id, vpnAddress, udid, status, ready, owner, pid, tunnelPorts, network, coreDevice, detail, locked, deviceControl
         }
 
         /// `encode`, not the synthesized `encodeIfPresent`: nil becomes `null`.
@@ -436,6 +439,7 @@ enum CLI {
             try c.encode(coreDevice, forKey: .coreDevice)
             try c.encode(detail, forKey: .detail)
             try c.encode(locked, forKey: .locked)
+            try c.encode(deviceControl, forKey: .deviceControl)
         }
     }
 
@@ -554,6 +558,10 @@ enum CLI {
             if rows.contains(where: \.ready) || Date.now >= deadline { break }
             usleep(useconds_t(min(3, max(0.1, deadline.timeIntervalSinceNow)) * 1_000_000))   // each round spawns devicectl
         } while true
+        // Asked of the app once a device, for both ways of saying it.
+        let controls = rows.map { r in UUID(uuidString: r.id).map { controlState($0, udid: r.udid) } }
+        rows = zip(rows, controls).map { r, c in var r = r; r.deviceControl = c?.key; return r }
+        let lines = Dictionary(zip(rows.map(\.id), controls.map { $0?.line }), uniquingKeysWith: { a, _ in a })
         if json {
             printJSON(rows)
         } else {
@@ -566,7 +574,7 @@ enum CLI {
                 if let udid = r.udid { print("  UDID: \(udid)") }
                 if let detail = r.detail { print("  \(detail)") }
                 if r.locked == true { print("  ⚠ The device is locked — ask the user to unlock it and keep the screen on before installing or launching.") }
-                if let id = UUID(uuidString: r.id), let line = controlState(id, udid: r.udid).line { print("  Device control: \(line)") }
+                if let line = lines[r.id] ?? nil { print("  Device control: \(line)") }
             }
         }
         exit(rows.contains { $0.ready } ? 0 : 1)
@@ -774,6 +782,20 @@ enum CLI {
         /// The app can't be asked from here (a sandbox around this process).
         case keptOut
 
+        /// For `status --json`: nil where device control isn't set up.
+        var key: String? {
+            switch self {
+            case .notSetUp: nil
+            case .connected: "connected"
+            case .notConnected: "notConnected"
+            case .refused: "refused"
+            case .switchedOff: "switchedOff"
+            case .another: "another"
+            case .noApp: "noApp"
+            case .keptOut: "keptOut"
+            }
+        }
+
         var line: String? {
             switch self {
             case .notSetUp: nil
@@ -797,6 +819,8 @@ enum CLI {
             if case DeviceControlWire.WireError.keptOut = error { return .keptOut }
             return .noApp
         }
+        // In the order the app's page says them: what must be mended first comes first.
+        if r.ok, r.refused == true { return .refused }
         if r.ok, r.another == true { return .another }
         if r.ok, r.allowed == false { return .switchedOff }
         // A pairing the app hasn't picked up yet answers as not set up there.
@@ -920,12 +944,12 @@ enum CLI {
         // Not taken in, the file is where it was — and what it was.
         guard r.ok else { stop("import failed: \(r.error ?? "no answer")\n\(path) was left as it is: a pairing in it is still a key to the device.") }
         print("\(r.name ?? "The device") is saved with its pairing. Try: roamrun look \(r.name.map(shellName) ?? "<name>")")
-        // Said as it is: a key left where it was is not one that is gone.
-        if let left = r.error {
-            FileHandle.standardError.write(Data("roamrun: \(left)\n".utf8))
+        if r.removed != false { print("\(path) is removed.") }
+        // Said as it is: a key left where it was is not one that is gone, and a device not switched on isn't usable yet.
+        if let more = r.error {
+            FileHandle.standardError.write(Data("roamrun: \(more)\n".utf8))
             exit(1)
         }
-        print("\(path) is removed.")
         exit(0)
     }
 

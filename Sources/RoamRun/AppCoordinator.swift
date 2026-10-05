@@ -98,19 +98,18 @@ final class AppCoordinator: ObservableObject {
         deviceControl.onLog = { [weak self] message, id in Task { @MainActor in self?.logStore.log(message, device: id) } }
         deviceControl.onUnreached = { [weak self] id, why in Task { @MainActor in self?.controlUnreached(id, why) } }
         deviceControl.allowed = DeviceControlAllowed.shared.contains
+        deviceControl.allowedKnown = DeviceControlAllowed.shared.known
         deviceControl.onImport = { [weak self] path, name, wanted in self?.importPairing(path: path, as: name, wanted: wanted) ?? .failure("stopping") }
         syncDeviceControl()
         // A screenshot run stands beside the app that is running: it takes neither its socket nor
         // its devices (a connection is a screen-sharing session on the device).
         if Snapshot.path == nil {
             deviceControl.start()
-            // Which devices are switched on, read where the Keychain may take its time; only when
-            // a device is paired (its key is read then anyway).
-            if profiles.contains(where: { controlState($0).paired }) {
-                Task.detached {
-                    _ = DeviceControlAllowed.shared.contains(UUID())
-                    await MainActor.run { self.objectWillChange.send() }
-                }
+            // Which pairings are switched on, read where the Keychain may take its time: a page
+            // shown before that says off for one that is on.
+            Task.detached {
+                _ = DeviceControlAllowed.shared.contains("")
+                await MainActor.run { self.objectWillChange.send() }
             }
         }
 
@@ -1051,9 +1050,12 @@ final class AppCoordinator: ObservableObject {
         deviceControl.hold(.init(id: saved.id, name: saved.displayName, ip: saved.providerIP, port: saved.remotePairingPort, udid: saved.udid ?? udid))
         DispatchQueue.main.async { MainActor.assumeIsolated { self.syncDeviceControl() } }
         // Taken in either way; a file that stays is said to (in `error`, with `ok`).
-        // Brought in to be used: switched on, as one set up here is.
-        DeviceControlAllowed.shared.set(saved.id, true)
-        return .init(ok: true, error: DeviceControlHub.removeTaken(file, readThrough: fd), name: saved.displayName)
+        // Brought in to be used: switched on, as one set up here is — and said when it couldn't be.
+        let on = DeviceControlHub.pairingMark(udid: saved.udid ?? udid, in: ProfileStore.directory).map { DeviceControlAllowed.shared.set($0, true) } ?? false
+        let left = DeviceControlHub.removeTaken(file, readThrough: fd)
+        let off = on ? nil : "device control is switched off for it (the Keychain didn't keep it switched on): the user switches it on in the RoamRun app, on the device's page"
+        let said = [left, off].compactMap { $0 }
+        return .init(ok: true, error: said.isEmpty ? nil : said.joined(separator: "; "), name: saved.displayName, removed: left == nil)
     }
 
     func deleteProfile(_ id: UUID) {
@@ -1425,18 +1427,35 @@ final class AppCoordinator: ObservableObject {
     /// A device whose UDID isn't known yet (it names the pairing) has none: it can be set up,
     /// and the pairing tells the UDID.
     /// Whether commands and agents may operate the device. Off until the Keychain was read.
-    func controlAllowed(_ profile: DeviceProfile) -> Bool { DeviceControlAllowed.shared.known(profile.id) ?? false }
+    func controlAllowed(_ profile: DeviceProfile) -> Bool {
+        controlUDID(profile).flatMap { DeviceControlHub.pairingMark(udid: $0, in: ProfileStore.directory) }.flatMap(DeviceControlAllowed.shared.known) ?? false
+    }
 
-    /// Kept in the Keychain, which may ask and waits: off the main thread.
-    func setControlAllowed(_ id: UUID, _ allowed: Bool) {
-        Task.detached {
-            let kept = DeviceControlAllowed.shared.set(id, allowed)
-            await MainActor.run {
-                if !kept {
-                    self.launchWarning = allowed ? "Device control couldn't be switched on: the Keychain didn't keep it."
-                        : "Device control is switched off for now, but the Keychain didn't keep that: it is on again when RoamRun is opened anew. Remove the pairing to be sure."
+    /// The Keychain didn't give its list of what is switched on: nothing is, until it does.
+    var controlListUnreadable: Bool { DeviceControlAllowed.shared.isUnreadable }
+
+    func switchControl(_ profile: DeviceProfile, _ allowed: Bool) { setControlAllowed(profile.id, udid: controlUDID(profile), allowed) }
+
+    /// One at a time, in the order asked: a device set up and removed right after ends removed.
+    private nonisolated let switching = DispatchQueue(label: "roamrun.device-control.switch")
+
+    /// Kept in the Keychain, which may ask and waits: off the main thread. The pairing is named
+    /// now, by what is saved now: removed right after, it is still the one meant.
+    func setControlAllowed(_ id: UUID, udid: String?, _ allowed: Bool) {
+        guard let mark = udid.flatMap({ DeviceControlHub.pairingMark(udid: $0, in: ProfileStore.directory) }) else { return }
+        let hub = deviceControl
+        switching.async {
+            let kept = DeviceControlAllowed.shared.set(mark, allowed)
+            // Off: what the device is doing for someone now stops where it can.
+            if !allowed { hub.interrupt(id) }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    if !kept {
+                        self.launchWarning = allowed ? "Device control couldn't be switched on: the Keychain didn't keep it (or didn't give its list of what is on)."
+                            : "Device control is switched off for now, but the Keychain didn't keep that: it is on again when RoamRun is opened anew. Remove the pairing to be sure."
+                    }
+                    self.objectWillChange.send()
                 }
-                self.objectWillChange.send()
             }
         }
     }
@@ -1491,7 +1510,7 @@ final class AppCoordinator: ObservableObject {
                 let had = profiles[i!].udid
                 profiles[i!].udid = had ?? udid
                 if persist() {
-                    setControlAllowed(id, true)   // set up to be used: on until the user switches it off
+                    setControlAllowed(id, udid: udid, true)   // set up to be used: on until the user switches it off
                     memories[id]?.adopt(udid)   // the running bridge's, so that what it reports later is compared with it
                     learnDeviceTypes()
                 } else {
@@ -1520,7 +1539,7 @@ final class AppCoordinator: ObservableObject {
     /// A pairing that stays on this Mac (its file can be neither removed nor emptied) is said to:
     /// it would be found again by the device added anew, after a restart.
     private func forgetControlPairing(_ profile: DeviceProfile) {
-        setControlAllowed(profile.id, false)
+        setControlAllowed(profile.id, udid: controlUDID(profile), false)   // named before its file goes
         guard let target = controlTarget(profile), deviceControl.unpair(target) == .left else { return }
         launchWarning = "The pairing for “\(profile.displayName)” couldn't be removed from this Mac: \(DeviceControlWire.pairingFile(udid: target.udid, in: ProfileStore.directory).path) still holds it, and RoamRun would use it again after it is opened anew. Delete that file, or unpair on the device (Settings › Privacy & Security › Developer Mode)."
     }

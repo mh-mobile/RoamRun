@@ -188,7 +188,10 @@ address. Don't try other addresses yourself.
 
 The device's page has a switch for device control. While it is off, every
 command here fails with "device control is switched off for this device", and
-`roamrun status` says "switched off": only the user can switch it on (it is
+`roamrun status` says "switched off" (`"deviceControl": "switchedOff"` in
+`status --json`; the other values there are `connected`, `notConnected`,
+`refused` — the user pairs again —, `another`, `noApp`, `keptOut`, and `null`
+where it isn't set up): only the user can switch it on (it is
 theirs to decide, like the pairing) — tell them, and don't look for a way round.
 
 On a Mac that is never on the device's Wi‑Fi (a remote one), there is no Set

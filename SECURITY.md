@@ -56,15 +56,19 @@ bounded.
   input travel in it. **Each side proves itself to the other at every
   connection**: the Mac with the pairing's key, the device with the key it gave
   when the pairing was made, which RoamRun keeps with the pairing. Something else
-  answering at the device's address is refused before anything is sent to it.
+  answering at the device's address is refused before this Mac says who it is or
+  sends anything of yours, and that is said as what it is — not as the device
+  having dropped the pairing (a refusal is believed only from the device).
 - **Any program you run can use device control while it is switched on.** Any
   process of your user can ask the running app to look at or operate a paired
   device (the `roamrun` commands do): the key stays with RoamRun, but RoamRun
   uses it for whoever asks. It is not a permission given to one agent — a build
   script or a package's install step is let in as well. Each device has a switch
-  on its page: off, every request is refused. Which devices are on is kept in
-  the login Keychain, where another program can't add one without macOS asking
-  you, so a device you switched off stays off; it is on after Set Up and after
+  on its page: off, every request is refused, and a text being typed stops where
+  it is. What is on is kept in the login Keychain, where another program can't
+  add to it without macOS asking you, and it names the pairing itself — not the
+  device's entry in the list of saved devices, which any program can rewrite —
+  so a device you switched off stays off; it is on after Set Up and after
   `pairing import`. Turn it off when nothing of yours is using the device.
 - **Someone on the network can keep a pairing from being made, not make one.**
   While Set Up or `pairing create` waits, a device on that network can connect,

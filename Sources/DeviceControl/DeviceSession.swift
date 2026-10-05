@@ -40,6 +40,7 @@ public final class DeviceSession: @unchecked Sendable {
     /// taken for gone (a new one is made in the background) instead of standing as connected.
     public static func leavesConnectionInDoubt(_ error: Error) -> Bool {
         if case Failure.invalid = error { return false }
+        if case Failure.message(let m) = error, m.hasPrefix(stopped) { return false }   // told to stop, by us
         return true
     }
 
@@ -100,6 +101,10 @@ public final class DeviceSession: @unchecked Sendable {
         rr_flag_raise(stopping)
         standingLock.withLock { leaving = true }
     }
+
+    /// The call under way is to stop where it can (a text, between two keys; a walk, at its next
+    /// step); the device is kept. For a switch turned off, or an asker who left.
+    public func interrupt() { rr_flag_raise(stopping) }
 
     private static let replaced = Failure.message("this connection was closed (the device has a new one): look again")
 
@@ -202,6 +207,8 @@ public final class DeviceSession: @unchecked Sendable {
     }
 
     private func open() throws -> OpaquePointer {
+        // Let go of: no new connection is made for a session that is to be closed.
+        guard !standingLock.withLock({ leaving }) else { throw Self.replaced }
         var error: UnsafeMutablePointer<CChar>?
         let pairing: Data
         do { pairing = try self.pairing() } catch {
@@ -222,17 +229,21 @@ public final class DeviceSession: @unchecked Sendable {
     }
 
     /// How the library words a pairing the device doesn't know (rr_device_open's error).
-    static let refusal = "doesn't accept this pairing"
+    public static let refusal = "doesn't accept this pairing"
     /// And a pairing made before the device's key was kept with it: only pairing again helps there too.
-    static let unchecked = "doesn't hold the device's key"
+    /// How it words a call stopped at this side's bidding.
+    public static let stopped = "stopped:"
+    public static let unchecked = "doesn't hold the device's key"
     /// How it words an answer that isn't the device's own: not a refusal — pairing again isn't
     /// what to do when something else has taken the device's address.
-    static let notTheDevice = "isn't the device this pairing was made with"
+    public static let notTheDevice = "isn't the device this pairing was made with"
 
     private func perform<T>(repeatable: Bool, _ body: (OpaquePointer) throws -> T) throws -> T {
         try lock.withLock {
             defer { noteStanding() }
             guard !closed else { throw Self.replaced }
+            // A stop asked of the call before this one was for that call.
+            if !standingLock.withLock({ leaving }) { rr_flag_lower(stopping) }
             if device == nil {
                 device = try open()
                 onEvent?("opened")

@@ -4314,6 +4314,13 @@ private final class StandInDevice: ControlledDevice, @unchecked Sendable {
         connectHold?.wait()
     }
     func letGo() { count("letGo") }
+    /// A text waits here when set, until it is interrupted.
+    var typeHold: DispatchSemaphore?
+    let typeBegan = DispatchSemaphore(value: 0)
+    func interrupt() {
+        count("interrupt")
+        typeHold?.signal()
+    }
     func close() {}
     private func count(_ call: String) { lock.withLock { counted.append(call) } }
     func look() throws -> CGImage {
@@ -4326,7 +4333,11 @@ private final class StandInDevice: ControlledDevice, @unchecked Sendable {
     func elements(limit: Int) throws -> (captions: [String], complete: Bool) { count("elements"); return ([], true) }
     func tap(x: Double, y: Double) throws { count("tap"); Thread.sleep(forTimeInterval: 0.01) }
     func swipe(from: (x: Double, y: Double), to: (x: Double, y: Double), milliseconds: Int) throws { count("swipe") }
-    func type(_ text: String) throws { count("type") }
+    func type(_ text: String) throws {
+        count("type")
+        typeBegan.signal()
+        typeHold?.wait()
+    }
     func paste(_ text: String) throws { count("paste") }
     func press(_ button: String) throws { count("press") }
 }
@@ -5790,35 +5801,51 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     #expect(device.calls.contains("letGo"))
 }
 
-/// The devices switched on are whatever the Keychain gives, and nothing when it gives nothing:
-/// another program's item (macOS asks, and is refused) switches none on.
+/// The pairings switched on are whatever the Keychain gives. What it doesn't give is nobody —
+/// and not an empty list to write over: another program's item (macOS asks, and is refused)
+/// switches none on, and loses none of what was on.
 @Test func onlyWhatTheKeychainGivesIsSwitchedOn() throws {
-    let a = UUID(), b = UUID()
+    let a = "mark-a", b = "mark-b"
     let stored = OSAllocatedUnfairLock<Data?>(initialState: try JSONEncoder().encode([a]))
+    let reads = OSAllocatedUnfairLock<OSStatus>(initialState: errSecSuccess)
     let writes = OSAllocatedUnfairLock<OSStatus>(initialState: errSecSuccess)
-    func list(reading status: OSStatus = errSecSuccess) -> DeviceControlAllowed {
-        DeviceControlAllowed(read: { (status, status == errSecSuccess ? stored.withLock { $0 } : nil) },
-                             write: { data in
-                                 let status = writes.withLock { $0 }
-                                 if status == errSecSuccess { stored.withLock { $0 = data } }
-                                 return status
-                             })
+    func list() -> DeviceControlAllowed {
+        DeviceControlAllowed(read: {
+            let status = reads.withLock { $0 }
+            return (status, status == errSecSuccess ? stored.withLock { $0 } : nil)
+        }, write: { data in
+            let status = writes.withLock { $0 }
+            if status == errSecSuccess { stored.withLock { $0 = data } }
+            return status
+        })
     }
     let first = list()
     #expect(first.known(a) == nil)                        // not read yet: nothing said
     #expect(first.contains(a) && !first.contains(b))
     #expect(first.set(b, true) && first.contains(b))
     #expect(list().contains(b))                           // kept
-    #expect(!list(reading: errSecAuthFailed).contains(a))  // refused: nobody
-    #expect(!list(reading: errSecItemNotFound).contains(a))
+    // Refused: nobody is on, it is said, and switching writes nothing over what is there.
+    reads.withLock { $0 = errSecAuthFailed }
+    let refused = list()
+    #expect(!refused.contains(a) && refused.isUnreadable && refused.known(a) == nil)
+    #expect(!refused.set(b, false) && !refused.set("mark-c", true))
+    #expect(try JSONDecoder().decode(Set<String>.self, from: try #require(stored.withLock { $0 })) == [a, b])
+    // Given again (the user was asked, and allowed it): read at the next switch.
+    reads.withLock { $0 = errSecSuccess }
+    #expect(refused.set(b, false) && refused.contains(a) && !refused.contains(b) && !refused.isUnreadable)
+    // Nothing there yet is an empty list, not an unreadable one.
+    reads.withLock { $0 = errSecItemNotFound }
+    let fresh = list()
+    #expect(!fresh.contains(a) && !fresh.isUnreadable)
+    reads.withLock { $0 = errSecSuccess }
     stored.withLock { $0 = Data("not a list".utf8) }
     #expect(!list().contains(a))
-    // What can't be kept isn't switched on; switched off, it is off here all the same.
+    // What can't be kept isn't switched on; switched off, it is off here all the same — and said not to be kept.
     stored.withLock { $0 = try? JSONEncoder().encode([a]) }
     writes.withLock { $0 = errSecAuthFailed }
     let unkept = list()
     #expect(!unkept.set(b, true) && !unkept.contains(b))
-    #expect(!unkept.set(a, false) && !unkept.contains(a))   // off here, and said not to be kept
+    #expect(!unkept.set(a, false) && !unkept.contains(a))
 }
 
 /// A device switched off is refused to every command, and says so when asked how it stands.
@@ -5831,6 +5858,7 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
     let on = OSAllocatedUnfairLock(initialState: false)
     hub.allowed = { _ in on.withLock { $0 } }
+    hub.allowedKnown = { _ in on.withLock { $0 } }
     for op in ["look", "elements", "press", "type", "paste", "tap", "swipe"] {
         #expect(hub.answer(.init(op: op, device: id, path: lookFile(in: dir), text: "home")).error == DeviceControlHub.switchedOff, "\(op)")
     }
@@ -5872,4 +5900,62 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     }
     #expect(try call(String(repeating: "a", count: DeviceMCP.longestTyped)) == false && asked == 1)
     #expect(try call(String(repeating: "a", count: DeviceMCP.longestTyped + 1)) == true && asked == 1)
+}
+
+/// The switch is the pairing's, not the place its device has in the list: a device given
+/// another's address or UDID there is operated only if the pairing it would use is on.
+@Test func theSwitchFollowsThePairingNotTheDevicesEntry() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (hub, _) = try standInHub(dir, udid: "UDID-A")
+    defer { hub.stop() }
+    try scratchPairing(at: DeviceControlWire.pairingFile(udid: "UDID-B", in: dir))
+    let a = try #require(DeviceControlHub.pairingMark(udid: "UDID-A", in: dir))
+    let b = try #require(DeviceControlHub.pairingMark(udid: "UDID-B", in: dir))
+    #expect(a != b && DeviceControlHub.pairingMark(udid: "UDID-C", in: dir) == nil)
+    hub.allowed = { $0 == a }   // A is on, B is off
+    let id = UUID()             // one entry of the list, whatever it is made to name
+    hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-A")])
+    #expect(hub.answer(.init(op: "press", device: id, text: "home")).ok)
+    // The same entry rewritten to name B's pairing: off, though "its" device was on.
+    hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-B")])
+    #expect(hub.answer(.init(op: "press", device: id, text: "home")).error == DeviceControlHub.switchedOff)
+}
+
+/// A text stops where it is when whoever asked for it leaves, and when its device is switched
+/// off: neither waits for it to be typed out.
+@Test func aTextIsInterruptedWhenItsAskerLeavesOrItsDeviceIsSwitchedOff() throws {
+    for leaving in [true, false] {
+        let dir = scratchDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let hold = DispatchSemaphore(value: 0)
+        let (hub, made) = try standInHub(dir) { $0.typeHold = hold }
+        defer { hub.stop() }
+        let id = UUID()
+        hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
+        let device = try #require(made().last)
+        let there = OSAllocatedUnfairLock(initialState: true)
+        let answered = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            _ = hub.answer(.init(op: "type", device: id, text: "a long text"), wanted: { there.withLock { $0 } })
+            answered.signal()
+        }
+        device.typeBegan.wait()
+        #expect(!device.calls.contains("interrupt"))
+        if leaving { there.withLock { $0 = false } } else { hub.interrupt(id) }
+        #expect(answered.wait(timeout: .now() + 5) == .success)
+        #expect(device.calls.contains("interrupt"))
+    }
+}
+
+/// The words the app knows the library's failures by are the library's own: reworded there,
+/// a refusal or another device answering would read as a plain failure here.
+@Test func theLibrarySaysItsFailuresInTheWordsTheAppKnows() throws {
+    let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        .appendingPathComponent("Rust/RoamRunDevice/src/lib.rs"), encoding: .utf8)
+    for words in [DeviceSession.refusal, DeviceSession.unchecked, DeviceSession.notTheDevice, "\"\(DeviceSession.stopped)"] {
+        #expect(source.contains(words), "\(words)")
+    }
+    #expect(!DeviceSession.leavesConnectionInDoubt(DeviceSession.Failure.message("stopped: this connection is being closed")))
+    #expect(DeviceSession.leavesConnectionInDoubt(DeviceSession.Failure.message("keys: BrokenPipe")))
 }

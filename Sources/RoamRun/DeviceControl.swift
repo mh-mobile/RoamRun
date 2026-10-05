@@ -43,6 +43,8 @@ enum DeviceControlWire {
         var allowed: Bool?
         /// For "state": what answers at the device's address isn't the device the pairing was made with.
         var another: Bool?
+        /// For "import": whether the file the pairing came in is gone (`error` may say more than that).
+        var removed: Bool?
         static func failure(_ why: String) -> Response { Response(ok: false, error: why) }
     }
 
@@ -336,6 +338,8 @@ protocol ControlledDevice: AnyObject, Sendable {
     func connect() throws
     /// At once, from any thread: nothing more is begun on the device. `close` follows, and waits.
     func letGo()
+    /// The call under way stops where it can; the device is kept.
+    func interrupt()
     func close()
     func look() throws -> CGImage
     func elements(limit: Int) throws -> (captions: [String], complete: Bool)
@@ -350,6 +354,7 @@ extension DeviceSession: ControlledDevice {}
 
 extension ControlledDevice {
     var isAnother: Bool { false }
+    func interrupt() {}
 }
 
 /// What a device pairs with: `DevicePairing`, or a stand-in for it in tests.
@@ -442,9 +447,34 @@ final class DeviceControlHub: @unchecked Sendable {
     /// A pairing made on another Mac is brought in (the file's path): the app's to do, which
     /// knows the saved devices.
     var onImport: (@Sendable (String, String?, _ wanted: @Sendable () -> Bool) -> DeviceControlWire.Response)?
-    /// Whether commands and agents may operate a device: its switch in the app. Asked at every
-    /// request, off the main thread.
-    var allowed: @Sendable (UUID) -> Bool = { _ in true }
+    /// Whether commands and agents may use a pairing, named by its mark (`pairingMark`): the
+    /// device's switch in the app. Asked at every request, off the main thread.
+    var allowed: @Sendable (String) -> Bool = { _ in true }
+    /// The same as far as it is known without waiting, for saying how a device stands.
+    var allowedKnown: @Sendable (String) -> Bool? = { _ in true }
+
+    /// What a saved pairing is known by to the switch: its sealed file's own digest. Not the
+    /// device's id or UDID, which are whatever the list of saved devices says.
+    static func pairingMark(udid: String, in directory: URL) -> String? {
+        guard let sealed = try? Data(contentsOf: DeviceControlWire.pairingFile(udid: udid, in: directory)), !sealed.isEmpty else { return nil }
+        return SHA256.hash(data: sealed).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The call a device is busy with stops where it can: its switch was turned off.
+    func interrupt(_ id: UUID) { session(of: id)?.interrupt() }
+
+    /// Runs `body`, and calls `stop` once if whoever asked leaves meanwhile.
+    static func whileWanted<T>(_ wanted: @escaping @Sendable () -> Bool, else stop: @escaping @Sendable () -> Void, _ body: () throws -> T) rethrows -> T {
+        let done = DispatchSemaphore(value: 0), ended = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .utility).async {
+            while done.wait(timeout: .now() + 0.3) == .timedOut {
+                if !wanted() { stop(); break }
+            }
+            ended.signal()
+        }
+        defer { done.signal(); ended.wait() }   // not left asking about an asker whose connection is closed
+        return try body()
+    }
     static let switchedOff = "device control is switched off for this device: the user switches it on in the RoamRun app, on the device's page"
 
 
@@ -987,7 +1017,8 @@ final class DeviceControlHub: @unchecked Sendable {
         // How it stands is said at once, whatever runs on the device.
         if request.op == "state" {
             guard let h = lock.withLock({ held[request.device] }) else { return notSetUp }
-            return .init(ok: true, open: h.session.isOpen, refused: h.session.isRefused, allowed: allowed(request.device),
+            return .init(ok: true, open: h.session.isOpen, refused: h.session.isRefused,
+                         allowed: Self.pairingMark(udid: h.target.udid, in: directory).flatMap(allowedKnown),
                          another: h.session.isAnother ? true : nil)
         }
         // Everything else one at a time per device, and whole: a look is checked, spent and acted
@@ -1004,14 +1035,15 @@ final class DeviceControlHub: @unchecked Sendable {
         guard let gate else { return notSetUp }
         return gate.withLock {
             guard wanted() else { return .failure(Self.nobodyWaits) }
-            guard allowed(request.device) else { return .failure(Self.switchedOff) }
             guard let (h, name) = lock.withLock({ held[request.device].map { ($0, $0.target.name) } }) else { return notSetUp }
+            // By the pairing that would be used, whatever device it is saved under by now.
+            guard let mark = Self.pairingMark(udid: h.target.udid, in: directory), allowed(mark) else { return .failure(Self.switchedOff) }
             return perform(request, on: h, named: name, wanted: wanted)
         }
     }
 
     /// Under the device's gate.
-    private func perform(_ request: DeviceControlWire.Request, on h: Held, named name: String, wanted: () -> Bool) -> DeviceControlWire.Response {
+    private func perform(_ request: DeviceControlWire.Request, on h: Held, named name: String, wanted: @escaping @Sendable () -> Bool) -> DeviceControlWire.Response {
         // Failed or not: an input may have reached the device before the failure showed.
         defer { if request.op != "look" { h.acted = Date() } }
         /// The look's size, for a point to be read against; taken away by `spend` once the request is one that goes to the device.
@@ -1042,7 +1074,9 @@ final class DeviceControlHub: @unchecked Sendable {
                 switch request.op {
                 case "type":
                     let started = Date()
-                    try h.session.type(text)
+                    // A text takes its time: an asker who leaves meanwhile has it stopped where it is.
+                    let session = h.session
+                    try Self.whileWanted(wanted, else: { session.interrupt() }) { try session.type(text) }
                     Self.inputLog.debug("\(name, privacy: .public): typed \(text.count) keys, \(text.filter { $0 == " " }.count) spaces, in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
                 case "paste": try h.session.paste(text)
                 default: try h.session.press(text)
