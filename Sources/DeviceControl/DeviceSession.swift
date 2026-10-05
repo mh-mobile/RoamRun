@@ -269,14 +269,20 @@ public final class DeviceSession: @unchecked Sendable {
         }
     }
 
+    /// Under `lock`, when a call has its turn and before it begins on the device.
+    private func mayStart() throws {
+        // Let go of while this waited (for the connection, or to try again): not begun.
+        let leaving: Bool = standingLock.withLock { self.leaving }
+        guard !leaving else { throw Self.replaced }
+        // Switched off while this waited its turn: a stop asked then was for this call too.
+        let asked: (@Sendable () -> Bool)? = standingLock.withLock { self.mayBegin }
+        guard asked?() ?? true else { throw Failure.message("\(Self.stopped) its device was switched off before it began") }
+    }
+
     private func recovering<T>(repeatable: Bool, _ body: (OpaquePointer) throws -> T) throws -> T {
         try Recovery.run(repeatable: repeatable, attempt: {
             do {
-                // Let go of while this waited (for the connection, or to try again): not begun.
-                let (leaving, mayBegin) = standingLock.withLock { (leaving, mayBegin) }
-                guard !leaving else { throw Self.replaced }
-                // Switched off while this waited its turn: a stop asked then was for this call too.
-                guard mayBegin?() ?? true else { throw Failure.message("\(Self.stopped) its device was switched off before it began") }
+                try mayStart()
                 return try body(device!)
             } catch {
                 onEvent?("failed: \(error)")

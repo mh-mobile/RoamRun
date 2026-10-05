@@ -478,7 +478,9 @@ final class DeviceControlHub: @unchecked Sendable {
     /// begins by taking back a stop that was asked before it.
     static func whileWanted<T>(_ wanted: @escaping @Sendable () -> Bool, else stop: @escaping @Sendable () -> Void, _ body: () throws -> T) rethrows -> T {
         let done = DispatchSemaphore(value: 0), ended = DispatchSemaphore(value: 0)
-        DispatchQueue.global(qos: .utility).async {
+        // A thread of its own: on a queue shared with everything else it may not get to run
+        // while they are all busy, and the call waits for it at its end.
+        Thread.detachNewThread {
             while done.wait(timeout: .now() + 0.3) == .timedOut {
                 if !wanted() { stop() }
             }
