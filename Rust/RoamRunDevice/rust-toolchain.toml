@@ -1,0 +1,4 @@
+# Device control needs Rust 1.88 or later; rustup takes this one (CI and releases build with it).
+[toolchain]
+channel = "1.95.0"
+profile = "minimal"

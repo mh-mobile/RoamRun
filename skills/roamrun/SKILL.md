@@ -167,11 +167,11 @@ replaces every `DEVICECTL_CHILD_*` variable — use one or the other. Only the
 app's own code decides what a URL, argument or variable does: look for its
 handling in the project, or ask.
 
-## 6. Operate the device (experimental)
+## 6. Operate the device
 
-Only in a RoamRun built with device control, for a device that has a pairing of
-RoamRun's own (`roamrun status iPhone` then has a `Device control:` line; an
-"unknown command" means this build has none — use section 5). The RoamRun app
+For a device that has a pairing of RoamRun's own (`roamrun status iPhone` then
+has a `Device control:` line; an "unknown command" means a RoamRun before
+0.3.0 — use section 5). The RoamRun app
 holds the connection, so it has to be running; it connects while the device is
 on a Wi‑Fi and keeps the connection when it moves to cellular.
 

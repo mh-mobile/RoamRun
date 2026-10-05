@@ -8,13 +8,7 @@ import Foundation
 enum CLI {
     /// This process was started as the CLI (vs. the menu bar app).
     nonisolated static var isRunning: Bool { commands.contains(CommandLine.arguments.dropFirst().first ?? "") }
-    nonisolated static let commands: Set<String> = {
-        var all: Set<String> = ["devices", "up", "down", "status", "doctor", "run", "install", "ota", "logs", "screenshot", "init", "version", "--version", "help", "--help", "-h"]
-        #if DEVICE_CONTROL
-        all.formUnion(deviceCommands)
-        #endif
-        return all
-    }()
+    nonisolated static let commands: Set<String> = deviceCommands.union(["devices", "up", "down", "status", "doctor", "run", "install", "ota", "logs", "screenshot", "init", "version", "--version", "help", "--help", "-h"])
     /// The words as numbers a point or a duration can be: nil when one isn't a number, or is NaN or infinite.
     nonisolated static func finite(_ words: some Sequence<String>) -> [Double]? {
         let numbers = words.compactMap { Double($0) }.filter(\.isFinite)
@@ -29,17 +23,10 @@ enum CLI {
     // ponytail: bundle-id migration only; drop after a few releases.
     static let legacyStopNotification = Notification.Name(AppID.legacy + ".stopBridge")
 
-    private static let usage: String = {
-        #if DEVICE_CONTROL
-        baseUsage + "\n\n" + deviceUsage
-        #else
-        baseUsage
-        #endif
-    }()
+    private static let usage = baseUsage + "\n\n" + deviceUsage
 
-    #if DEVICE_CONTROL
     private static let deviceUsage = """
-    Operating a device (experimental; the RoamRun app holds the connection, and the device needs
+    Operating a device (iOS 27 or later; the RoamRun app holds the connection, and the device needs
     a pairing of RoamRun's own):
       look <name> [file.png]         Save the device's screen now as PNG; prints the path, then its size
       tap <name> <x> <y>             Tap a point given in the pixels of the last look
@@ -54,7 +41,6 @@ enum CLI {
       mcp                            The same as MCP tools, over stdin/stdout (for an agent's MCP config)
     Each look serves one action: look, act, look again.
     """
-    #endif
 
     private static let baseUsage = """
     Usage: roamrun <command>
@@ -206,7 +192,6 @@ enum CLI {
                     fail("usage: roamrun ota [<name>] <path to .ipa>")
                 }
                 ota(targets, path: path, replacing: parsed.flags.contains("--replace"))
-            #if DEVICE_CONTROL
             case "mcp":
                 // Off the main thread: it reads stdin until the client closes it.
                 let server = DeviceMCP(profiles: { store.load() }) { try DeviceControlWire.ask($0, in: ProfileStore.directory) }
@@ -233,7 +218,6 @@ enum CLI {
             case "elements":
                 guard name != nil, let p = targets.first else { fail("usage: roamrun elements <name> [limit]. " + names(profiles)) }
                 elements(p, limit: words.count >= 2 ? Int(words[words.startIndex + 1]) : nil)
-            #endif
             default: print(usage); exit(0)
             }
         }
@@ -247,7 +231,6 @@ enum CLI {
     /// What each command accepts: options (value-taking ones marked) and how many words.
     nonisolated private static let specs: [String: (options: Set<String>, words: ClosedRange<Int>)] = {
         var all = baseSpecs
-        #if DEVICE_CONTROL
         all["look"] = ([], 0...2)
         all["tap"] = ([], 0...3)
         all["swipe"] = ([], 0...6)
@@ -256,7 +239,6 @@ enum CLI {
         all["press"] = ([], 0...2)
         all["elements"] = ([], 0...2)
         all["mcp"] = ([], 0...0)
-        #endif
         return all
     }()
 
@@ -561,9 +543,7 @@ enum CLI {
                 if let udid = r.udid { print("  UDID: \(udid)") }
                 if let detail = r.detail { print("  \(detail)") }
                 if r.locked == true { print("  ⚠ The device is locked — ask the user to unlock it and keep the screen on before installing or launching.") }
-                #if DEVICE_CONTROL
                 if let id = UUID(uuidString: r.id), let line = controlState(id, udid: r.udid).line { print("  Device control: \(line)") }
-                #endif
             }
         }
         exit(rows.contains { $0.ready } ? 0 : 1)
@@ -758,8 +738,7 @@ enum CLI {
     }
 
     /// Through the tunnel like everything else: works over the bridge.
-    #if DEVICE_CONTROL
-    // Experimental (device control): the app holds the connection; these ask it.
+    // Device control: the app holds the connection; these ask it.
 
     /// Where a device stands with being operated. `line` is nil when there is nothing to say
     /// (no pairing of our own: it was never set up).
@@ -771,7 +750,7 @@ enum CLI {
             case .notSetUp: nil
             case .connected: "connected"
             case .notConnected: "paired, not connected — the app keeps trying; it can connect only while the device is on a Wi‑Fi"
-            case .refused: "the device no longer has this pairing (it was removed there) — the user pairs again in the RoamRun app, on the device's page"
+            case .refused: "the pairing can no longer be used (removed on the device, or this Mac can't read what it saved) — the user pairs again in the RoamRun app, on the device's page"
             case .noApp: "paired; the RoamRun app, which holds the connection, isn't running (or is a build without device control)"
             }
         }
@@ -842,7 +821,6 @@ enum CLI {
         }
         exit(0)
     }
-    #endif
 
     private static func screenshot(_ profile: DeviceProfile, path: String?) -> Never {
         let f = DateFormatter()
@@ -1433,7 +1411,6 @@ enum CLI {
         if profiles.isEmpty { check(false, "No devices saved", fix: "Add one in the RoamRun app.") }
         for p in profiles {
             section("\n\(p.displayName) (\(p.providerIP))", p.displayName)
-            #if DEVICE_CONTROL
             switch controlState(p.id, udid: p.udid ?? live[p.id]?.udid) {
             case .notSetUp: break
             case .connected: check(true, "Device control: connected")
@@ -1441,13 +1418,12 @@ enum CLI {
                 check(false, "Device control: paired, but not connected",
                       fix: "It connects while the device is on a Wi‑Fi, awake and reachable over the VPN — and then stays connected on cellular. Ask the user to unlock it on Wi‑Fi.", warnOnly: true)
             case .refused:
-                check(false, "Device control: the device no longer has RoamRun's pairing",
-                      fix: "It was removed on the device. Ask the user to pair again: the RoamRun app, the device's page, Device control › Pair Again… (same Wi‑Fi, iOS 27 or later).", warnOnly: true)
+                check(false, "Device control: RoamRun's pairing can no longer be used",
+                      fix: "It was removed on the device, or this Mac can't read what it saved (its key is gone from the Keychain, or was refused). Ask the user to pair again: the RoamRun app, the device's page, Device control › Pair Again… (same Wi‑Fi, iOS 27 or later).", warnOnly: true)
             case .noApp:
                 check(false, "Device control: the RoamRun app isn't running (or is a build without it)",
                       fix: "Open RoamRun: it holds the connection that look, tap and the rest use.", warnOnly: true)
             }
-            #endif
             if !checkAll, live[p.id] == nil {
                 note("Bridge is off — not checked (roamrun doctor \(commandName(p)) checks it anyway)")
                 continue

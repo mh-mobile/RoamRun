@@ -15,13 +15,13 @@ const char *rr_device_version(void);
 typedef struct RRDevice RRDevice;
 
 /**
- * Verifies the pairing in `pairing_file` with the device at `ip`:`port` (its RemotePairing
+ * Verifies the pairing (`pairing_len` bytes of a property list, never a path) with the device at `ip`:`port` (its RemotePairing
  * port) and opens the tunnel. Never starts a new pairing; sends the device no input.
  * NULL on failure, with *error (if given) set to a message to free with rr_string_free. A
  * message that holds "doesn't accept this pairing" means the device answered and refused it
  * (removed there); any other failure is of the connection.
  */
-RRDevice *rr_device_open(const char *ip, uint16_t port, const char *pairing_file, char **error);
+RRDevice *rr_device_open(const char *ip, uint16_t port, const uint8_t *pairing, size_t pairing_len, char **error);
 
 /** Ends the tunnel. NULL is fine. */
 void rr_device_close(RRDevice *device);
@@ -113,10 +113,11 @@ RRPairing *rr_pairing_listen(const char *name, const char *model, const char *ho
  * Waits for a device to pair, however long one takes to come; once the code is shown it has
  * three minutes to be entered. After rr_pairing_cancel this returns at once. `code` is called
  * with the six digits to show the user (on another thread, before this returns). On success the pairing is
- * written to `pairing_file`, readable by its owner only, and the JSON is {"ok":true,
- * "udid":…,"name":…,"model":…}; otherwise {"ok":false,"error":…}. Free with rr_string_free.
+ * in the answer, never on disk: the JSON is {"ok":true,"udid":…,"name":…,"model":…,
+ * "pairing":…} (a property list's text, holding this side's private key); otherwise
+ * {"ok":false,"error":…}. Free with rr_string_free.
  */
-char *rr_pairing_accept(RRPairing *pairing, const char *pairing_file,
+char *rr_pairing_accept(RRPairing *pairing,
                         void (*code)(const char *code, void *context), void *context);
 
 /** Makes a running rr_pairing_accept return. Any thread. */

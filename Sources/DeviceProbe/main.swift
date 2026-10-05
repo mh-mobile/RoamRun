@@ -41,7 +41,11 @@ if verb == "pair" {
         let name = args.count > 1 ? args[1] : "RoamRun (\(Host.current().localizedName ?? "Mac"))"
         let pairing = try DevicePairing(name: name, host: name)
         print("waiting: pick \"\(pairing.name)\" on the device")
-        let paired = try pairing.accept(to: file) { print("code: \($0)") }
+        let paired = try pairing.accept { print("code: \($0)") }
+        // As it is, its owner's only: a developer's tool, the file is theirs to look after.
+        guard FileManager.default.createFile(atPath: file, contents: paired.pairing, attributes: [.posixPermissions: 0o600]) else {
+            throw FrameError.message("can't write \(file)")
+        }
         print("paired: \(paired.name) (\(paired.model)) \(paired.udid) -> \(file)")
         exit(0)
     } catch {
@@ -54,7 +58,8 @@ let rest = Array(args.dropFirst(3))
 let clock = DateFormatter()
 clock.dateFormat = "HH:mm:ss"
 setvbuf(stdout, nil, _IOLBF, 0)
-let session = DeviceSession(ip: args[0], port: port, pairingFile: args[2], udid: udid)
+let pairingFile = URL(fileURLWithPath: args[2])
+let session = DeviceSession(ip: args[0], port: port, pairing: { try Data(contentsOf: pairingFile) }, udid: udid)
 session.onEvent = { print("  [\(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium))] \($0)") }
 
 func ms(_ since: Date) -> Int { Int(Date().timeIntervalSince(since) * 1000) }

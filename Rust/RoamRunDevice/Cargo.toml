@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 publish = false
-description = "RoamRun's C ABI over the idevice protocol stack (experimental)"
+description = "RoamRun's C ABI over the idevice protocol stack"
 
 [lib]
 crate-type = ["staticlib"]

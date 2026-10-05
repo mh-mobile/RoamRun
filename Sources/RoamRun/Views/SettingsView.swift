@@ -101,6 +101,11 @@ struct SettingsView: View {
             }
 
             HStack {
+                // Of the crates device control is built from, carried in the app.
+                if let licenses = Bundle.main.url(forResource: "THIRD-PARTY-LICENSES", withExtension: "txt") {
+                    Button("Open-Source Licenses…") { NSWorkspace.shared.open(licenses) }
+                        .buttonStyle(.link)
+                }
                 Spacer()
                 Button("Done") {
                     coordinator.tailscaleCLIPath = cliPath

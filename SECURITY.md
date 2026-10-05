@@ -30,8 +30,29 @@ bounded.
   manually entered) address and never reads, stores or alters them.
 - **Authentication and encryption are Apple's.** Pairing verification and the
   encrypted CoreDevice tunnel run end to end between the Mac and the device.
-  RoamRun holds no keys and can't bypass pairing: a device that isn't paired
+  The bridge holds no keys and can't bypass pairing: a device that isn't paired
   with this Mac can't be reached through it.
+- **Device control holds a key of its own**, once you set it up for a device.
+  To show and operate a device, RoamRun pairs with it
+  itself (you confirm with a code on the device) and keeps that pairing, which
+  holds a private key: whoever has it and can reach the device over the network
+  can see its screen and operate it, with no further consent on the device. It is
+  saved sealed (AES-GCM) under `~/Library/Application Support/RoamRun/`, with a
+  key kept in your login Keychain that macOS gives to RoamRun only — a copy of
+  the file alone opens nothing, and another program asking for the key makes
+  macOS ask you. It is not protection against something that runs as RoamRun or
+  that you allow in that prompt. The device lists the pairing in Settings ›
+  Privacy & Security › Developer Mode, where it can be removed; while a
+  connection is open, the device shows it as screen sharing. While **Set Up…**
+  waits (and only then), the Mac announces itself on the local network
+  (`_remotepairing-pairable-host._tcp`, with the Mac's name) and listens on a port
+  for the device to pair; the six-digit code is what keeps another device on that
+  network from pairing instead — one that did would be given nothing, and its
+  pairing is kept only if it is the device you set up. The connection itself goes
+  from the Mac to the device's VPN address, verified with that pairing and
+  encrypted by the tunnel it opens; screen images and input travel in it. Any process of your
+  user can ask the running app to look at or operate a paired device (the
+  `roamrun` commands do), as it could ask it to stop a bridge.
 - **The device's RemotePairing and tunnel ports are reachable from your
   tailnet.** Other tailnet members can connect, but pair verification and the
   pair-derived tunnel keys reject them. On a shared tailnet, restrict access to
@@ -88,6 +109,9 @@ bounded.
 - Files: `~/Library/Application Support/RoamRun/` (device profiles, mode 0600,
   bridge status, and `ota/` — the .ipa files you stored, 5 per app), `~/Library/Logs/RoamRun/`, and the
   `io.github.mh-mobile.roamrun` defaults (`com.roamrun.app` before 0.1.12).
+  With device control set up: sealed pairings (`device-pairing-<UDID>.sealed`, 0600) there too, and one
+  item in the login Keychain, which removing the app leaves:
+  `security delete-generic-password -s io.github.mh-mobile.roamrun.device-control`.
   The CLI link and agent skills are installed only on request and
   never overwrite other files (they do replace an existing RoamRun link or
   RoamRun skill).
@@ -99,7 +123,8 @@ bounded.
   check; there is no code in RoamRun that talks to a server of ours or anyone
   else's. It does open connections of its own — to your device: a TCP probe to see
   whether it answers, the RemotePairing handshake to confirm the answer really
-  comes from it, and a scan for its RemotePairing port when that has changed. It
+  comes from it, and a scan for its RemotePairing port when that has changed; with
+  device control set up, also its own tunnel to the device, kept open. It
   also connects to its own loopback port to check the install page still answers. The bridge itself forwards
   bytes without reading them.
 - Helper processes (`dns-sd`, `log stream`) are tied to RoamRun and typically

@@ -20,9 +20,7 @@ struct DeviceDetailView: View {
                 header
                 StatusCard(profile: profile, bridge: bridge, external: external)
                 ConnectionPath(profile: profile, status: status)
-                #if DEVICE_CONTROL
                 DeviceControlRow(profile: profile)
-                #endif
 
                 VStack(alignment: .leading, spacing: 0) {
                     DisclosureGroup("Technical details", isExpanded: $showDetails) {
@@ -340,8 +338,7 @@ private struct DeviceLog: View {
     }
 }
 
-#if DEVICE_CONTROL
-/// Device control (experimental): whether this Mac has a pairing of its own with the device,
+/// Device control: whether this Mac has a pairing of its own with the device,
 /// and the way to make one.
 private struct DeviceControlRow: View {
     @EnvironmentObject private var coordinator: AppCoordinator
@@ -370,7 +367,7 @@ private struct DeviceControlRow: View {
         let state = coordinator.controlState(profile)
         return HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Device control (experimental)").font(.headline)
+                Text("Device control").font(.headline)
                 Text(summary(state)).font(.callout).foregroundStyle(.secondary)
             }
             Spacer()
@@ -383,7 +380,7 @@ private struct DeviceControlRow: View {
 
     private func summary(_ state: (paired: Bool, open: Bool, refused: Bool)) -> String {
         if !state.paired { return "Lets agents see and operate this device (roamrun look, tap, mcp). Needs iOS 27 and a pairing of RoamRun's own." }
-        if state.refused { return "The device no longer has this pairing (it was removed there). Pair again." }
+        if state.refused { return "This pairing can no longer be used: it was removed on the device, or this Mac can't read what it saved. Pair again." }
         return state.open ? "Paired and connected." : "Paired. Connects while the device is on Wi‑Fi, awake and reachable."
     }
 }
@@ -439,4 +436,3 @@ private struct ControlPairingSheet: View {
         .frame(width: 440)
     }
 }
-#endif
