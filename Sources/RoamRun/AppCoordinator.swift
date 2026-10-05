@@ -94,12 +94,10 @@ final class AppCoordinator: ObservableObject {
             launchWarning = Self.unreadableListWarning
         }
         for p in profiles { install(newBridge(p)) }
-        #if DEVICE_CONTROL
         deviceControl.onLog = { [weak self] message, id in Task { @MainActor in self?.logStore.log(message, device: id) } }
         deviceControl.onUnreached = { [weak self] id, why in Task { @MainActor in self?.controlUnreached(id, why) } }
         syncDeviceControl()
         deviceControl.start()
-        #endif
 
         capture.onLog = { [weak self] m in self?.logStore.log(m) }
         capture.ownedHosts = Set(profiles.map { ProxyBridge(profile: $0).spoofHost })
@@ -920,10 +918,8 @@ final class AppCoordinator: ObservableObject {
         bridges[id] = nil
         bridgeObservers[id] = nil
         memories[id] = nil
-        #if DEVICE_CONTROL
         // Its pairing for device control goes with it, as the dialog says: added again, it is set up again.
         if let target = profiles.first(where: { $0.id == id }).flatMap(controlTarget) { deviceControl.unpair(target) }
-        #endif
         profiles.removeAll { $0.id == id }
         wasActiveIDs.remove(id)
         persist()
@@ -1218,7 +1214,6 @@ final class AppCoordinator: ObservableObject {
 
     /// Terminate all helper children (zone dump, proxy registrations, log
     /// watchers, relays) so nothing is orphaned when the app quits.
-    #if DEVICE_CONTROL
     private let deviceControl = DeviceControlHub(directory: ProfileStore.directory, key: DeviceControlKey.shared.key)
 
     /// The devices as saved now, to the hub that keeps their control connections: at launch, and
@@ -1346,15 +1341,12 @@ final class AppCoordinator: ObservableObject {
         deviceControl.unpair(target)
         objectWillChange.send()
     }
-    #endif
 
     func shutdown() {
         capture.stop()
         stopOTA()   // the serve entry would otherwise point at a dead port
         for bridge in bridges.values { bridge.stop() }
-        #if DEVICE_CONTROL
         deviceControl.stop()   // last: it may wait a moment for a device, and the bridges' helpers mustn't be left meanwhile
-        #endif
     }
 
     private func onInterfaceLost() {
@@ -1419,9 +1411,7 @@ final class AppCoordinator: ObservableObject {
     /// Saves the device list; a failed write would lose changes at the next launch, so say so.
     private func persist() {
         guard Snapshot.fakeProfiles == nil else { return }   // screenshot mode's fake devices never reach disk
-        #if DEVICE_CONTROL
         defer { syncDeviceControl() }
-        #endif
         if let saved = store.save(base: savedProfiles, wanted: profiles) {
             savedProfiles = saved
             if saved != profiles {   // `roamrun up` had saved a newer endpoint, or devices we never read came back

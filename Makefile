@@ -6,9 +6,17 @@ DMG = $(APP_NAME)-$(VERSION).dmg
 
 # Distribution: make dmg SIGN_ID="Developer ID Application: Name (TEAMID)" NOTARY_PROFILE=<profile>
 # (profile from: xcrun notarytool store-credentials <profile>). Defaults to ad-hoc, no notarization.
+# A build to run here (not a dmg) is signed with an Apple Development certificate when the
+# keychain holds one: device control keeps a key in the Keychain, which asks about an ad-hoc
+# build anew after every rebuild — and about a build signed with another certificate.
+ifeq ($(origin SIGN_ID),undefined)
+ifeq ($(filter dmg release-dmg,$(MAKECMDGOALS)),)
+SIGN_ID := $(or $(shell security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' | head -1),-)
+endif
+endif
 SIGN_ID ?= -
 NOTARY_PROFILE ?=
-SIGN_FLAGS = --force --options runtime $(if $(filter -,$(SIGN_ID)),,--timestamp)
+SIGN_FLAGS = --force --options runtime $(if $(filter -,$(SIGN_ID))$(findstring Apple Development,$(SIGN_ID)),,--timestamp)
 
 .PHONY: all build app run dmg release-dmg icon install-cli test clean device-lib device-probe
 
@@ -16,12 +24,8 @@ all: app
 
 # xcrun pins Xcode's toolchain; a swiftly `swift` first in PATH breaks the build.
 # SNAPSHOT=1 compiles in the MB_SNAPSHOT screenshot mode (dev only; never in a dmg).
-# DEVICE=1 builds in the experimental device control (needs Rust: see device-lib). It keeps a
-# key in the Keychain, which asks about an ad-hoc build anew after every rebuild: sign with a
-# certificate instead (SIGN_ID="Apple Development: Name (ID)", see `security find-identity -p codesigning`).
-# A key made by a build signed with one certificate is asked about for a build signed with another.
-build: $(if $(DEVICE),device-lib)
-	$(if $(DEVICE),ROAMRUN_DEVICE=1) xcrun swift build -c release $(if $(SNAPSHOT),-Xswiftc -DSNAPSHOT)
+build: device-lib
+	xcrun swift build -c release $(if $(SNAPSHOT),-Xswiftc -DSNAPSHOT)
 
 app: build
 	rm -rf $(BUNDLE)
@@ -39,13 +43,12 @@ app: build
 	@echo "Built $(BUNDLE)"
 
 # Pure logic only (parsers, ownership rules); the bridge itself needs a real iPhone.
-# DEVICE=1 also compiles and runs device control's.
-test: $(if $(DEVICE),device-lib)
-	$(if $(DEVICE),cd Rust/RoamRunDevice && $(CARGO) test --locked --target-dir $(CURDIR)/.build/device)
-	$(if $(DEVICE),ROAMRUN_DEVICE=1) xcrun swift test
+test: device-lib
+	cd Rust/RoamRunDevice && $(CARGO) test --locked --target-dir $(CURDIR)/.build/device
+	xcrun swift test
 
-# Experimental (device control): RoamRun's own Rust library over idevice (pinned in its
-# Cargo.toml and Cargo.lock), for macOS. Needs Rust 1.88+; nothing else here depends on it.
+# Device control: RoamRun's own Rust library over idevice (pinned in its Cargo.toml and
+# Cargo.lock), for macOS. Needs Rust 1.88+.
 # CARGO= picks the cargo to use (e.g. "$$HOME/.cargo/bin/cargo +1.95.0").
 CARGO ?= cargo
 device-lib:
@@ -58,7 +61,7 @@ device-lib:
 # <device ip> <RemotePairing port> <pairing file> it verifies the pairing, opens a tunnel
 # and lists the services device control needs. No input is sent to the device.
 device-probe: device-lib
-	ROAMRUN_DEVICE=1 xcrun swift run -c release DeviceProbe $(ARGS)
+	xcrun swift run -c release DeviceProbe $(ARGS)
 
 run: app
 	open $(BUNDLE)

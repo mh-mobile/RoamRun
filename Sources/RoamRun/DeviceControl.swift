@@ -1,4 +1,3 @@
-#if DEVICE_CONTROL
 import CryptoKit
 import DeviceControl
 import Foundation
@@ -710,4 +709,3 @@ final class DeviceControlHub: @unchecked Sendable {
         }
     }
 }
-#endif

@@ -1,10 +1,8 @@
 import Foundation
 import Testing
 @testable import RoamRun
-#if DEVICE_CONTROL
 import CryptoKit
 import DeviceControl
-#endif
 
 // MARK: - Tunnel port attribution
 
@@ -4119,7 +4117,6 @@ func publishStepsAsideWhenTurnedOff(_ c: PublishCase) async {
     }
 }
 
-#if DEVICE_CONTROL
 /// `roamrun look` / `tap` reach the app over a socket only this user can open; with no app
 /// listening, they are told so.
 @Test func theControlSocketAnswersAndIsThisUsersAlone() throws {
@@ -4741,7 +4738,6 @@ import ImageIO
     let answer = DeviceControlWire.Response(ok: true, captions: ["ホーム, ヘッダ", "a\nb"], complete: false)
     #expect(try JSONDecoder().decode(DeviceControlWire.Response.self, from: JSONEncoder().encode(answer)) == answer)
 }
-#endif
 
 
 /// Two `roamrun up -d` for one device take turns from the check to the child's claim: the second

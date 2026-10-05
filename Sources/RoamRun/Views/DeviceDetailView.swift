@@ -20,9 +20,7 @@ struct DeviceDetailView: View {
                 header
                 StatusCard(profile: profile, bridge: bridge, external: external)
                 ConnectionPath(profile: profile, status: status)
-                #if DEVICE_CONTROL
                 DeviceControlRow(profile: profile)
-                #endif
 
                 VStack(alignment: .leading, spacing: 0) {
                     DisclosureGroup("Technical details", isExpanded: $showDetails) {
@@ -340,7 +338,6 @@ private struct DeviceLog: View {
     }
 }
 
-#if DEVICE_CONTROL
 /// Device control (experimental): whether this Mac has a pairing of its own with the device,
 /// and the way to make one.
 private struct DeviceControlRow: View {
@@ -439,4 +436,3 @@ private struct ControlPairingSheet: View {
         .frame(width: 440)
     }
 }
-#endif

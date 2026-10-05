@@ -18,10 +18,15 @@ jobs:
         runner: [macos-26, xcode-27]
     runs-on: ${{ matrix.runner }}
     continue-on-error: ${{ matrix.runner == 'xcode-27' }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5
       - run: xcrun swift --version
+      - name: Rust (device control's library needs 1.88 or later)
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal
+          rustup default 1.95.0
+          cargo --version
       - run: make test
       - name: Build the app bundle
         run: |
@@ -29,29 +34,9 @@ jobs:
           plutil -lint RoamRun.app/Contents/Info.plist
           codesign --verify --strict RoamRun.app
           plutil -extract CFBundleVersion raw Info.plist | grep -Eq '^[0-9]+$'
-          RoamRun.app/Contents/MacOS/RoamRun --help > /dev/null
+          RoamRun.app/Contents/MacOS/RoamRun --help | grep -q 'look <name>'
           RoamRun.app/Contents/MacOS/RoamRun init --print | head -2 | grep -qx 'name: roamrun'   # init/--uninstall rely on this header
       - name: No warnings in the app, the tests or the SNAPSHOT variant (Swift 6 mode, data races are errors)
         run: |
           xcrun swift build --build-tests -Xswiftc -warnings-as-errors
           xcrun swift build -Xswiftc -DSNAPSHOT -Xswiftc -warnings-as-errors
-
-  # Device control (experimental) is compiled only with DEVICE=1, and links a Rust library: built
-  # and tested here, or nothing on this page would see it break.
-  device-control:
-    runs-on: macos-26
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5
-      - run: xcrun swift --version
-      - name: Rust (the library needs 1.88 or later)
-        run: |
-          rustup toolchain install 1.95.0 --profile minimal
-          rustup default 1.95.0
-          cargo --version
-      - run: make test DEVICE=1
-      - name: Build the app bundle with device control
-        run: |
-          make app DEVICE=1
-          codesign --verify --strict RoamRun.app
-          RoamRun.app/Contents/MacOS/RoamRun --help | grep -q 'look <name>'

@@ -9,6 +9,11 @@ see `skills/roamrun/SKILL.md` — installed with `roamrun init` or
 - `make app` builds `RoamRun.app` (menu bar app and `roamrun` CLI in one binary);
   `make run` also launches it. Don't call `swift build` directly — `make` pins
   Xcode's toolchain and stamps the real SDK version (needed for Liquid Glass).
+  It builds device control's Rust library first (`Rust/RoamRunDevice`): Rust 1.88
+  or later, `CARGO=` to pick the cargo.
+- Device control keeps a key in the Keychain, which asks about a build signed ad
+  hoc after every rebuild. `make app` signs with an Apple Development certificate
+  when the keychain holds one (else ad hoc); `SIGN_ID=` picks another.
 - `make install-cli` links `/usr/local/bin/roamrun` to the build in the repo
   folder (for development; the app's first screen / Settings link the copy that
   is running, e.g. `/Applications`). `make dmg` packages.

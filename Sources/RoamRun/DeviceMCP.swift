@@ -1,4 +1,3 @@
-#if DEVICE_CONTROL
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -193,4 +192,3 @@ final class DeviceMCP: @unchecked Sendable {
              ["button": ["type": "string", "enum": ["home", "lock", "volume-up", "volume-down"]]], required: ["button"]),
     ] }
 }
-#endif
