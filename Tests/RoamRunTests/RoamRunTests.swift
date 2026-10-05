@@ -5862,9 +5862,14 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     #expect(!refused.contains(a) && refused.isUnreadable && refused.known(a) == nil)
     #expect(!refused.set(b, false) && !refused.set("mark-c", true))
     #expect(try JSONDecoder().decode(Set<String>.self, from: try #require(stored.withLock { $0 })) == [a, b])
-    // Given again (the user was asked, and allowed it): read at the next switch.
+    // Given again (the user was asked, and allowed it): read when something is next switched on —
+    // switching off doesn't ask.
     reads.withLock { $0 = errSecSuccess }
-    #expect(refused.set(b, false) && refused.contains(a) && !refused.contains(b) && !refused.isUnreadable)
+    #expect(!refused.set(b, false) && refused.isUnreadable)
+    #expect(refused.set("mark-d", true) && refused.contains(a) && !refused.contains(b) && !refused.isUnreadable)
+    // What was switched off while it couldn't be read went out with that write: not on again after a restart.
+    #expect(try JSONDecoder().decode(Set<String>.self, from: try #require(stored.withLock { $0 })) == [a, "mark-d"])
+    #expect(refused.set("mark-d", false) && refused.set(b, true))
     // Nothing there yet is an empty list, not an unreadable one.
     reads.withLock { $0 = errSecItemNotFound }
     let fresh = list()

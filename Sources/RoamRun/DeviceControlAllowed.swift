@@ -47,7 +47,7 @@ final class DeviceControlAllowed: @unchecked Sendable {
 
     /// Under `io`. Read once a process: nothing else writes it that is to be believed. A read
     /// that failed (refused) isn't taken for an empty list: asked again only when
-    /// the user switches something (`again`), not at every request — it may ask them each time.
+    /// the user switches something on (`again`), not at every request — it may ask them each time.
     private func list(again: Bool) -> Set<String>? {
         let (known, failed) = lock.withLock { (held, unreadable) }
         if let known { return known }
@@ -91,7 +91,7 @@ final class DeviceControlAllowed: @unchecked Sendable {
     func prune(keeping inUse: Set<String>) {
         io.withLock {
             guard let now = list(again: false) else { return }
-            let next = now.intersection(inUse)
+            let next = now.intersection(inUse).subtracting(lock.withLock { off })
             // Also the chance to write what an earlier write failed to.
             guard next != now || lock.withLock({ unwritten }) else { return }
             let kept = (try? JSONEncoder().encode(next)).map { write($0) == errSecSuccess } ?? false
@@ -110,19 +110,25 @@ final class DeviceControlAllowed: @unchecked Sendable {
         /// Switched off since this switch-on was asked: the off stands.
         func overtaken() -> Bool { allowed && (offAt[mark] ?? 0) > when }
         return io.withLock {
-            guard var next = list(again: true) else { return false }
+            // The Keychain is asked again (it may ask the user) only to switch on: off is off here
+            // without it, and Remove doesn't put a question about a list that may not be ours.
+            guard var next = list(again: allowed) else { return false }
             // Switched off since it was asked: nothing of it is taken, kept or written.
-            if lock.withLock({ overtaken() }) { return true }
-            let was = next
-            if allowed { next.insert(mark) } else { next.remove(mark) }
-            guard next != was || lock.withLock({ unwritten }) else {
-                if allowed { lock.withLock { if !overtaken() { off.remove(mark) } } }
-                return true
+            let (lost, pending) = lock.withLock { () -> (Bool, Set<String>) in
+                if overtaken() { return (true, off) }
+                if allowed { off.remove(mark) }
+                return (false, off)
             }
+            if lost { return true }
+            let was = next
+            // With it goes whatever was switched off here and the Keychain hasn't been told
+            // (it couldn't be read then): off isn't left to end with this run.
+            next.subtract(pending)
+            if allowed { next.insert(mark) } else { next.remove(mark) }
+            guard next != was || lock.withLock({ unwritten }) else { return true }
             let kept = (try? JSONEncoder().encode(next)).map { write($0) == errSecSuccess } ?? false
             lock.withLock {
                 if kept || !allowed { held = next }
-                if kept, allowed, !overtaken() { off.remove(mark) }
                 unwritten = !kept
             }
             return kept
