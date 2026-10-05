@@ -4796,6 +4796,94 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: Dev
     #expect(try saved.placement(of: clash, udid: "U9", as: "Second").get().isNew)
 }
 
+/// A look takes the place of a file, never of a folder: one of that name was removed with all
+/// it held. And where it can't be written, what was there stays.
+@Test func aLookTakesAFilesPlaceNotAFolders() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    func made(_ text: String) throws -> URL {
+        let url = dir.appendingPathComponent("made-\(UUID().uuidString).png")
+        try Data(text.utf8).write(to: url)
+        return url
+    }
+    let folder = dir.appendingPathComponent("screens.png")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    try Data("kept".utf8).write(to: folder.appendingPathComponent("earlier.png"))
+    var look = try made("new")
+    #expect(throws: (any Error).self) { try CLI.put(look: look, at: folder) }
+    #expect(try String(contentsOf: folder.appendingPathComponent("earlier.png"), encoding: .utf8) == "kept")
+    #expect(!FileManager.default.fileExists(atPath: look.path))            // not left lying either way
+
+    let file = dir.appendingPathComponent("now.png")
+    try Data("old".utf8).write(to: file)
+    look = try made("new")
+    try CLI.put(look: look, at: file)
+    #expect(try String(contentsOf: file, encoding: .utf8) == "new")
+    #expect(!FileManager.default.fileExists(atPath: look.path))
+
+    look = try made("newer")
+    #expect(throws: (any Error).self) { try CLI.put(look: look, at: dir.appendingPathComponent("no such folder/now.png")) }
+    #expect(try String(contentsOf: file, encoding: .utf8) == "new")
+    try CLI.put(look: try made("first"), at: dir.appendingPathComponent("fresh.png"))
+    #expect(try String(contentsOf: dir.appendingPathComponent("fresh.png"), encoding: .utf8) == "first")
+}
+
+/// A point is read off the look it came from: when another has looked since, the screen it was
+/// read off is not the one that would be pressed.
+@Test func aPointIsOfTheLookItNames() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (hub, made) = try standInHub(dir)
+    defer { hub.stop() }
+    let id = UUID()
+    hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
+    let device = try #require(made().first)
+    let png = dir.appendingPathComponent("look.png").path
+    func taps() -> Int { device.calls.filter { $0 == "tap" || $0 == "swipe" }.count }
+
+    let mine = try #require(hub.answer(.init(op: "look", device: id, path: png)).look)
+    let theirs = try #require(hub.answer(.init(op: "look", device: id, path: png)).look)   // another, meanwhile
+    #expect(mine != theirs)
+    let refused = hub.answer(.init(op: "tap", device: id, x: 10, y: 10, look: mine))
+    #expect(!refused.ok && refused.error == DeviceControlHub.lookedSince)
+    #expect(!hub.answer(.init(op: "swipe", device: id, x: 10, y: 10, x2: 20, y2: 20, look: mine)).ok)
+    #expect(taps() == 0)
+    // The other's look is still theirs to use: a refusal for what was asked doesn't spend it.
+    #expect(hub.answer(.init(op: "tap", device: id, x: 10, y: 10, look: theirs)).ok)
+    #expect(taps() == 1)
+    // A command run by hand names none: it is of the last look, as before.
+    #expect(hub.answer(.init(op: "look", device: id, path: png)).ok)
+    #expect(hub.answer(.init(op: "tap", device: id, x: 10, y: 10)).ok)
+    #expect(taps() == 2)
+}
+
+/// A second copy started beside the app (a screenshot run) doesn't take the socket the app
+/// answers on: commands went to nobody once it had quit.
+@Test func aSocketSomethingAnswersOnIsNotTaken() throws {
+    // Not scratchDir(): a socket's path has to fit in 104 bytes.
+    let dir = URL(fileURLWithPath: "/tmp/rr-\(UUID().uuidString.prefix(8))")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let first = try #require(DeviceControlWire.Listener(directory: dir) { _ in .init(ok: true, name: "first") })
+    defer { first.stop() }
+    #expect(DeviceControlWire.Listener(directory: dir) { _ in .init(ok: true, name: "second") } == nil)
+    #expect(try DeviceControlWire.ask(.init(op: "state", device: UUID()), in: dir).name == "first")
+    // One left by a run that ended is replaced.
+    first.stop()
+    let next = try #require(DeviceControlWire.Listener(directory: dir) { _ in .init(ok: true, name: "next") })
+    defer { next.stop() }
+    #expect(try DeviceControlWire.ask(.init(op: "state", device: UUID()), in: dir).name == "next")
+}
+
+/// The port a pairing's file carries is the device's when it was made. Refused there, the device
+/// is looked for on its other ports; any other failure (no route, a pairing it doesn't take)
+/// isn't one a search would mend.
+@Test func aRefusedPortIsWhatASearchMends() {
+    #expect(AppCoordinator.portMoved("this pairing opens no connection to “iPhone” at 100.64.0.1 (RemotePairing port: Connection refused (os error 61)). Nothing was saved."))
+    #expect(!AppCoordinator.portMoved("this pairing opens no connection to “iPhone” at 100.64.0.1 (timed out). Nothing was saved."))
+    #expect(!AppCoordinator.portMoved("the device doesn't accept this pairing: RemotePairing(PairVerifyFailed)"))
+}
+
 /// `pairing` takes a word that says what to do, not a device's name first.
 @Test func pairingCommandsParse() throws {
     #expect(try CLI.parse(["pairing", "create", "iPhone", "/tmp/k.json", "--as", "RoamRun (cloud)"]).get().values["--as"] == "RoamRun (cloud)")

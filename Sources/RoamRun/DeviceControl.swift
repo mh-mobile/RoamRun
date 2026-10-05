@@ -19,6 +19,9 @@ enum DeviceControlWire {
         var milliseconds: Int?
         var text: String?
         var limit: Int?
+        /// For "tap" and "swipe": the look the points are of, when the caller keeps it (the MCP
+        /// tools do; a command run by hand is of whatever was looked at last).
+        var look: Int?
     }
 
     struct Response: Codable, Equatable {
@@ -34,6 +37,8 @@ enum DeviceControlWire {
         var refused: Bool?
         /// For "import": what the device is saved as here.
         var name: String?
+        /// For "look": which look this is, to be named by the tap or swipe that reads off it.
+        var look: Int?
         static func failure(_ why: String) -> Response { Response(ok: false, error: why) }
     }
 
@@ -173,7 +178,13 @@ enum DeviceControlWire {
             let folder = DeviceControlWire.socketFolder(in: directory)
             try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             guard chmod(folder.path, 0o700) == 0 else { close(fd); return nil }
-            unlink(path)   // a previous run's; only one app runs
+            // A previous run's is replaced; one something answers on is another app's (a second
+            // copy started beside it), and stays its.
+            let probe = socket(AF_UNIX, SOCK_STREAM, 0)
+            let answered = probe >= 0 && DeviceControlWire.withAddress(path, { connect(probe, $0, $1) }) == 0
+            if probe >= 0 { close(probe) }
+            guard !answered else { close(fd); return nil }
+            unlink(path)
             // Looks a CLI was to move to their place and didn't (it was interrupted): screens aren't left lying.
             for left in (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
             where left.lastPathComponent.hasPrefix("look-") { try? FileManager.default.removeItem(at: left) }
@@ -293,8 +304,9 @@ final class DeviceControlHub: @unchecked Sendable {
         /// Under the hub's lock (a rename changes it while the session stays).
         var target: Target
         let session: any ControlledDevice
-        /// The last look's size: what a tap's pixels are of. (This and `acted` under the device's gate.)
-        var looked: (width: Int, height: Int)?
+        /// The last look: its size, which a tap's pixels are of, and which look it was. (This and
+        /// `acted` under the device's gate.)
+        var looked: (width: Int, height: Int, id: Int)?
         /// When the last input ended: a look right after it waits for the screen to settle.
         var acted: Date?
         /// Opening it in the background: one attempt at a time, and further apart while they fail.
@@ -326,6 +338,8 @@ final class DeviceControlHub: @unchecked Sendable {
     /// The last update's, for when a pairing is made or removed in between.
     private var targets: [Target] = []
     private var pairing: DevicePairing?
+    /// Counts the looks, over all devices: each is told apart by its number.
+    private var looks = 0
     private var pairingUnderWay = false
     private var pairingCancelled = false
     var onLog: (@Sendable (String, UUID) -> Void)?
@@ -743,10 +757,11 @@ final class DeviceControlHub: @unchecked Sendable {
     }
 
     private func look(of device: UUID) -> (width: Int, height: Int)? {
-        lock.withLock { held[device]?.looked }
+        lock.withLock { held[device]?.looked.map { ($0.width, $0.height) } }
     }
 
     private static let lookFirst = "look first: a point is given in the pixels of a look, and each look serves one action"
+    static let lookedSince = "the device was looked at again since the look this point is from (by another): look again"
 
     func answer(_ request: DeviceControlWire.Request) -> DeviceControlWire.Response {
         let notSetUp = DeviceControlWire.Response.failure("device control isn't set up for this device: the user sets it up in the RoamRun app, on the device's page")
@@ -789,8 +804,9 @@ final class DeviceControlHub: @unchecked Sendable {
             case "swipe":
                 // A request refused for what it says leaves the look to be used: it is spent by what reaches the device.
                 guard let size = h.looked else { return .failure(Self.lookFirst) }
-                guard let from = Self.fraction(x: request.x, y: request.y, of: size),
-                      let to = Self.fraction(x: request.x2, y: request.y2, of: size) else {
+                guard request.look ?? size.id == size.id else { return .failure(Self.lookedSince) }
+                guard let from = Self.fraction(x: request.x, y: request.y, of: (size.width, size.height)),
+                      let to = Self.fraction(x: request.x2, y: request.y2, of: (size.width, size.height)) else {
                     return .failure("both points must be inside the last look (\(size.width) x \(size.height))")
                 }
                 guard let duration = Self.swipeDuration(request.milliseconds) else {
@@ -822,12 +838,15 @@ final class DeviceControlHub: @unchecked Sendable {
                 }
                 CGImageDestinationAddImage(out, image, nil)
                 guard CGImageDestinationFinalize(out) else { return .failure("can't write \(path)") }
-                h.looked = (image.width, image.height)
-                return .init(ok: true, width: image.width, height: image.height)
+                let id = lock.withLock { () -> Int in looks += 1; return looks }
+                h.looked = (image.width, image.height, id)
+                return .init(ok: true, width: image.width, height: image.height, look: id)
             case "tap":
                 // In the pixels of what was last looked at: there is no tapping a screen not seen.
                 guard let size = h.looked else { return .failure(Self.lookFirst) }
-                guard let point = Self.fraction(x: request.x, y: request.y, of: size) else {
+                // Of this look, when the caller says which: another's look since shows a screen this one never saw.
+                guard request.look ?? size.id == size.id else { return .failure(Self.lookedSince) }
+                guard let point = Self.fraction(x: request.x, y: request.y, of: (size.width, size.height)) else {
                     return .failure("the point must be inside the last look (\(size.width) x \(size.height))")
                 }
                 spend()

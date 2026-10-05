@@ -98,7 +98,9 @@ final class AppCoordinator: ObservableObject {
         deviceControl.onUnreached = { [weak self] id, why in Task { @MainActor in self?.controlUnreached(id, why) } }
         deviceControl.onImport = { [weak self] path, name in self?.importPairing(path: path, as: name) ?? .failure("stopping") }
         syncDeviceControl()
-        deviceControl.start()
+        // A screenshot run stands beside the app that is running: it takes neither its socket nor
+        // its devices (a connection is a screen-sharing session on the device).
+        if Snapshot.path == nil { deviceControl.start() }
 
         capture.onLog = { [weak self] m in self?.logStore.log(m) }
         capture.ownedHosts = Set(profiles.map { ProxyBridge(profile: $0).spoofHost })
@@ -903,18 +905,68 @@ final class AppCoordinator: ObservableObject {
         return .added(profile.id)
     }
 
-    private func save(new profile: DeviceProfile) {
+    @discardableResult
+    private func save(new profile: DeviceProfile) -> Bool {
         profiles.append(profile)
         let bridge = install(newBridge(profile))
         capture.ownedHosts.insert(bridge.spoofHost)
-        persist()
+        let saved = persist()
         logStore.log("added \"\(profile.displayName)\" -> \(profile.providerIP)", device: profile.id)
         learnDeviceTypes()
+        return saved
+    }
+
+    /// The device answered at its address and not on that port: it has another by now.
+    nonisolated static func portMoved(_ why: String) -> Bool { why.contains("RemotePairing port: Connection refused") }
+
+    /// The device's RemotePairing port now, searched for and waited on by the thread that asked.
+    nonisolated private static func portNow(at host: String) -> UInt16? {
+        final class Found: @unchecked Sendable { var port: UInt16? }
+        let found = Found()
+        let done = DispatchSemaphore(value: 0)
+        Task.detached {
+            if case .found(let port) = await ReachabilityProbe.findRemotePairingPort(host: host) { found.port = port }
+            done.signal()
+        }
+        done.wait()
+        return found.port
+    }
+
+    /// One import at a time: two for one device would each find it not saved, and save it twice.
+    nonisolated private let importing = NSLock()
+
+    /// The device a pairing that connected is for is saved now — worked out again, the saved
+    /// devices being what they are by now (one removed, or added, while the pairing was tried).
+    /// nil: the list couldn't be saved, and nothing of this import is kept.
+    private func keep(_ device: DeviceProfile, udid: String, as name: String?) -> Result<String, DeviceControlWire.WireError> {
+        let unsaved = DeviceControlWire.WireError.message("the device couldn't be saved here (\(ProfileStore.directory.path)/profiles.json): nothing was kept")
+        switch profiles.placement(of: device, udid: udid, as: name) {
+        case .failure(let why): return .failure(why)
+        case .success(let place) where place.isNew:
+            guard save(new: place.profile) else {
+                deleteProfile(place.profile.id)   // with the pairing just sealed under its UDID
+                return .failure(unsaved)
+            }
+            return .success(place.profile.displayName)
+        case .success(let place):
+            guard let i = profiles.firstIndex(where: { $0.id == place.profile.id }) else { return .failure(unsaved) }
+            if profiles[i].udid == nil {
+                profiles[i].udid = udid
+                guard persist() else {
+                    profiles[i].udid = nil
+                    deviceControl.forgetPairing(udid: udid, of: place.profile.id)
+                    return .failure(unsaved)
+                }
+            }
+            return .success(profiles[i].displayName)
+        }
     }
 
     /// Asked for by `roamrun pairing import`, on the thread that answers it: the device is found
     /// or added, the pairing kept only if it connects, and then the file is removed.
     nonisolated private func importPairing(path: String, as name: String?) -> DeviceControlWire.Response {
+        importing.lock()
+        defer { importing.unlock() }
         let file = URL(fileURLWithPath: path)
         let fd: Int32, data: Data
         do { (fd, data) = try DeviceControlHub.readTaken(path) } catch { return .failure("\(error)") }
@@ -931,21 +983,31 @@ final class AppCoordinator: ObservableObject {
         case .failure(let why): return .failure("\(why)")
         }
         let p = place.profile
-        let target = DeviceControlHub.Target(id: p.id, name: p.displayName, ip: p.providerIP, port: p.remotePairingPort, udid: p.udid ?? udid)   // as it is spelled here, when known
-        do { try deviceControl.adoptPairing(Data(shared.pairing.utf8), for: target) } catch { return .failure("\(error)") }
-        DispatchQueue.main.sync {
-            MainActor.assumeIsolated {
-                if place.isNew {
-                    save(new: p)
-                } else if let i = profiles.firstIndex(where: { $0.id == p.id }), profiles[i].udid == nil {
-                    profiles[i].udid = udid
-                    persist()
-                }
-            }
+        var target = DeviceControlHub.Target(id: p.id, name: p.displayName, ip: p.providerIP, port: p.remotePairingPort, udid: p.udid ?? udid)   // as it is spelled here, when known
+        var device = shared.device
+        let pairing = Data(shared.pairing.utf8)
+        do { try deviceControl.adoptPairing(pairing, for: target) } catch {
+            // The file carries the port the device had when it was made, and that changes when the
+            // device restarts. A device not saved here has no page to find it from: it is looked
+            // for now, at the address the file names, and the pairing tried there.
+            guard place.isNew, Self.portMoved("\(error)"), let port = Self.portNow(at: target.ip),
+                  port != target.port else { return .failure("\(error)") }
+            target.port = port
+            device.remotePairingPort = port
+            do { try deviceControl.adoptPairing(pairing, for: target) } catch { return .failure("\(error)") }
         }
+        // The file is removed only once the device is saved with it: until then it is the one
+        // place the pairing is sure to be.
+        let kept = DispatchQueue.main.sync { MainActor.assumeIsolated { keep(device, udid: udid, as: name) } }
         DispatchQueue.main.async { MainActor.assumeIsolated { self.syncDeviceControl() } }
+        switch kept {
+        case .failure(let why):
+            // Sealed a moment ago for a device that then couldn't be saved: not left without one.
+            deviceControl.forgetPairing(udid: target.udid, of: target.id)
+            return .failure("\(why)")
         // Taken in either way; a file that stays is said to (in `error`, with `ok`).
-        return .init(ok: true, error: DeviceControlHub.removeTaken(file, readThrough: fd), name: target.name)
+        case .success(let saved): return .init(ok: true, error: DeviceControlHub.removeTaken(file, readThrough: fd), name: saved)
+        }
     }
 
     func deleteProfile(_ id: UUID) {
@@ -1260,6 +1322,7 @@ final class AppCoordinator: ObservableObject {
     /// The devices as saved now, to the hub that keeps their control connections: at launch, and
     /// whenever the list is saved. (A pairing made while the app runs is seen at the next of those.)
     private func syncDeviceControl() {
+        guard Snapshot.path == nil else { return }
         deviceControl.update(profiles.compactMap(controlTarget))
     }
 
@@ -1450,8 +1513,10 @@ final class AppCoordinator: ObservableObject {
     }
 
     /// Saves the device list; a failed write would lose changes at the next launch, so say so.
-    private func persist() {
-        guard Snapshot.fakeProfiles == nil else { return }   // screenshot mode's fake devices never reach disk
+    /// false: the list couldn't be saved (it is said in the window too).
+    @discardableResult
+    private func persist() -> Bool {
+        guard Snapshot.fakeProfiles == nil else { return true }   // screenshot mode's fake devices never reach disk
         defer { syncDeviceControl() }
         if let saved = store.save(base: savedProfiles, wanted: profiles) {
             savedProfiles = saved
@@ -1469,10 +1534,11 @@ final class AppCoordinator: ObservableObject {
             }
             // Saved, so the file is readable and written again: those two warnings no longer hold.
             if launchWarning == Self.unreadableListWarning || launchWarning == Self.saveFailedWarning { launchWarning = nil }
-            return
+            return true
         }
         logStore.log("couldn't save the device list to \(ProfileStore.directory.path)")
         launchWarning = Self.saveFailedWarning
+        return false
     }
 
     /// Stops helpers a crashed run left behind, off the main thread; says what it did.

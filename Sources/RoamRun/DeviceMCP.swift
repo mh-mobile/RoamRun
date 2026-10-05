@@ -17,8 +17,9 @@ final class DeviceMCP: @unchecked Sendable {
     private let ask: Ask
     /// The longer side of the image a look returns.
     static let longSide = 1280
-    /// Per device: the size of the last image given out, and of the look behind it.
-    private var shown: [UUID: (shown: CGSize, real: CGSize)] = [:]
+    /// Per device: the size of the last image given out, of the look behind it, and which look
+    /// that was — a point is sent with it, so it isn't read against a look another made since.
+    private var shown: [UUID: (shown: CGSize, real: CGSize, look: Int?)] = [:]
 
     init(profiles: @escaping () -> [DeviceProfile], ask: @escaping Ask) {
         self.saved = profiles
@@ -106,21 +107,23 @@ final class DeviceMCP: @unchecked Sendable {
         case "look":
             let file = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-look-\(UUID().uuidString).png")
             defer { try? FileManager.default.removeItem(at: file) }
-            _ = try send(.init(op: "look", device: device.id, path: file.path))
+            let looked = try send(.init(op: "look", device: device.id, path: file.path))
             guard let (jpeg, size, original) = Self.scaled(file) else { throw Failure(description: "couldn't read the look") }
-            shown[device.id] = (size, original)
+            shown[device.id] = (size, original, looked.look)
             return [["type": "image", "data": jpeg.base64EncodedString(), "mimeType": "image/jpeg"]]
                 + text("\(Int(size.width)) x \(Int(size.height)). Points for tap and swipe are pixels of this image. It serves one action: look again after it.")
         case "tap":
             let p = try real(try number("x"), try number("y"))
+            let look = shown[device.id]?.look
             shown[device.id] = nil
-            _ = try send(.init(op: "tap", device: device.id, x: p.x, y: p.y))
+            _ = try send(.init(op: "tap", device: device.id, x: p.x, y: p.y, look: look))
             return text("tapped; look to see what it did")
         case "swipe":
             let from = try real(try number("x1"), try number("y1")), to = try real(try number("x2"), try number("y2"))
+            let look = shown[device.id]?.look
             shown[device.id] = nil
             _ = try send(.init(op: "swipe", device: device.id, x: from.x, y: from.y, x2: to.x, y2: to.y,
-                               milliseconds: (arguments["milliseconds"] as? NSNumber)?.intValue))
+                               milliseconds: (arguments["milliseconds"] as? NSNumber)?.intValue, look: look))
             return text("swiped; look to see what it did")
         case "elements":
             shown[device.id] = nil   // the walk can scroll the screen
