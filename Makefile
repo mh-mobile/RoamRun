@@ -10,14 +10,15 @@ SIGN_ID ?= -
 NOTARY_PROFILE ?=
 SIGN_FLAGS = --force --options runtime $(if $(filter -,$(SIGN_ID)),,--timestamp)
 
-.PHONY: all build app run dmg release-dmg icon install-cli test clean
+.PHONY: all build app run dmg release-dmg icon install-cli test clean device-lib device-probe
 
 all: app
 
 # xcrun pins Xcode's toolchain; a swiftly `swift` first in PATH breaks the build.
 # SNAPSHOT=1 compiles in the MB_SNAPSHOT screenshot mode (dev only; never in a dmg).
-build:
-	xcrun swift build -c release $(if $(SNAPSHOT),-Xswiftc -DSNAPSHOT)
+# DEVICE=1 builds in the experimental device control (needs Rust: see device-lib).
+build: $(if $(DEVICE),device-lib)
+	$(if $(DEVICE),ROAMRUN_DEVICE=1) xcrun swift build -c release $(if $(SNAPSHOT),-Xswiftc -DSNAPSHOT)
 
 app: build
 	rm -rf $(BUNDLE)
@@ -35,8 +36,26 @@ app: build
 	@echo "Built $(BUNDLE)"
 
 # Pure logic only (parsers, ownership rules); the bridge itself needs a real iPhone.
-test:
-	xcrun swift test
+# DEVICE=1 also compiles and runs device control's.
+test: $(if $(DEVICE),device-lib)
+	$(if $(DEVICE),cd Rust/RoamRunDevice && $(CARGO) test --locked --target-dir $(CURDIR)/.build/device)
+	$(if $(DEVICE),ROAMRUN_DEVICE=1) xcrun swift test
+
+# Experimental (device control): RoamRun's own Rust library over idevice (pinned in its
+# Cargo.toml and Cargo.lock), for macOS. Needs Rust 1.88+; nothing else here depends on it.
+# CARGO= picks the cargo to use (e.g. "$$HOME/.cargo/bin/cargo +1.95.0").
+CARGO ?= cargo
+device-lib:
+	# The C objects idevice's crypto brings get the app's deployment target; setting
+	# MACOSX_DEPLOYMENT_TARGET instead also reaches the proc-macro dylibs, which then don't load.
+	cd Rust/RoamRunDevice && CFLAGS_aarch64_apple_darwin="-mmacosx-version-min=13.0" \
+		$(CARGO) build --release --locked --target-dir $(CURDIR)/.build/device
+
+# Links it into a Swift executable. With no arguments it only says what it is; with
+# <device ip> <RemotePairing port> <pairing file> it verifies the pairing, opens a tunnel
+# and lists the services device control needs. No input is sent to the device.
+device-probe: device-lib
+	ROAMRUN_DEVICE=1 xcrun swift run -c release DeviceProbe $(ARGS)
 
 run: app
 	open $(BUNDLE)

@@ -1,6 +1,10 @@
 import Foundation
 import Testing
 @testable import RoamRun
+#if DEVICE_CONTROL
+import CryptoKit
+import DeviceControl
+#endif
 
 // MARK: - Tunnel port attribution
 
@@ -4115,6 +4119,513 @@ func publishStepsAsideWhenTurnedOff(_ c: PublishCase) async {
     }
 }
 
+#if DEVICE_CONTROL
+/// `roamrun look` / `tap` reach the app over a socket only this user can open; with no app
+/// listening, they are told so.
+@Test func theControlSocketAnswersAndIsThisUsersAlone() throws {
+    // Not scratchDir(): a socket's path has to fit in 104 bytes, and the temporary folder's is long.
+    let dir = URL(fileURLWithPath: "/tmp/rr-\(UUID().uuidString.prefix(8))")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let id = UUID()
+    let request = DeviceControlWire.Request(op: "tap", device: id, x: 10, y: 20)
+    #expect(throws: DeviceControlWire.WireError.self) { try DeviceControlWire.ask(request, in: dir) }   // nobody listening
+
+    let listener = try #require(DeviceControlWire.Listener(directory: dir) { r in
+        r == request ? .init(ok: true, width: 3, height: 4) : .failure("not what was sent")
+    })
+    let mode = { (path: String) in try FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] as? Int }
+    #expect(try mode(DeviceControlWire.socketFolder(in: dir).path) == 0o700)   // nobody else gets as far as the socket
+    #expect(try mode(DeviceControlWire.socketPath(in: dir)) == 0o600)
+    #expect(try DeviceControlWire.ask(request, in: dir) == .init(ok: true, width: 3, height: 4))
+    #expect(try DeviceControlWire.ask(.init(op: "look", device: id), in: dir) == .failure("not what was sent"))
+    listener.stop()
+    #expect(throws: DeviceControlWire.WireError.self) { try DeviceControlWire.ask(request, in: dir) }   // stopped: gone
+}
+
+/// A client that goes away before its answer (Ctrl-C during a look) costs the app nothing: the
+/// write to it fails instead of ending the process, and the next client is served.
+@Test func aClientThatLeavesBeforeItsAnswerDoesNotEndTheApp() throws {
+    let dir = URL(fileURLWithPath: "/tmp/rr-\(UUID().uuidString.prefix(8))")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let answered = DispatchSemaphore(value: 0)
+    let listener = try #require(DeviceControlWire.Listener(directory: dir) { _ in
+        Thread.sleep(forTimeInterval: 0.2)   // the client has gone by the time this is written
+        defer { answered.signal() }
+        return .init(ok: true)
+    })
+    defer { listener.stop() }
+    func connected() throws -> Int32 {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let path = Array(DeviceControlWire.socketPath(in: dir).utf8)
+        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: path) }
+        let result = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+        }
+        try #require(result == 0)
+        return fd
+    }
+    let request = try JSONEncoder().encode(DeviceControlWire.Request(op: "look", device: UUID())) + Data([0x0A])
+    let leaving = try connected()
+    request.withUnsafeBytes { _ = write(leaving, $0.baseAddress, $0.count) }
+    close(leaving)
+    #expect(answered.wait(timeout: .now() + 5) == .success)
+    Thread.sleep(forTimeInterval: 0.1)   // the write to the closed socket has happened
+    close(try connected())   // one that says nothing at all
+    #expect(try DeviceControlWire.ask(.init(op: "state", device: UUID()), in: dir) == .init(ok: true))
+}
+
+/// A number JSON can't carry (NaN, from `roamrun tap x nan 1`) is refused at once, not waited on forever.
+@Test func aRequestThatCannotBeSentIsRefusedNotWaitedOn() throws {
+    let dir = URL(fileURLWithPath: "/tmp/rr-\(UUID().uuidString.prefix(8))")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let listener = try #require(DeviceControlWire.Listener(directory: dir) { _ in .init(ok: true) })
+    defer { listener.stop() }
+    let started = Date()
+    #expect(throws: DeviceControlWire.WireError.self) {
+        try DeviceControlWire.ask(.init(op: "tap", device: UUID(), x: .nan, y: 1), in: dir)
+    }
+    #expect(Date().timeIntervalSince(started) < 2)
+}
+
+/// A pairing file as the library reads one, for a device that doesn't exist.
+private func scratchPairing(at url: URL) throws {
+    let key = Curve25519.Signing.PrivateKey()
+    let plist: [String: Any] = ["public_key": key.publicKey.rawRepresentation, "private_key": key.rawRepresentation,
+                                "identifier": UUID().uuidString]
+    try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0).write(to: url)
+}
+
+/// A port on this Mac that takes a connection and never says a word: a device that stopped answering.
+private func silentPort() throws -> (fd: Int32, port: UInt16) {
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    var address = sockaddr_in()
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_addr.s_addr = inet_addr("127.0.0.1")
+    var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+    let bound = withUnsafeMutablePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, length) == 0 && listen(fd, 4) == 0 && getsockname(fd, $0, &length) == 0 }
+    }
+    try #require(bound)
+    return (fd, UInt16(bigEndian: address.sin_port))
+}
+
+/// Asking how a device's connection stands never waits for a call that runs on it: the app's
+/// window asks while it draws, and `status` asks while an agent's `elements` is under way.
+@Test func askingHowAConnectionStandsDoesNotWaitForACall() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let file = dir.appendingPathComponent("pairing.plist")
+    try scratchPairing(at: file)
+    let silent = try silentPort()
+    defer { close(silent.fd) }
+    let session = DeviceSession(ip: "127.0.0.1", port: silent.port, pairingFile: file.path)
+    let entered = DispatchSemaphore(value: 0)
+    Thread.detachNewThread {
+        entered.signal()
+        try? session.connect()   // waits on the silent port, up to the library's 20 s
+    }
+    entered.wait()
+    Thread.sleep(forTimeInterval: 0.3)   // it holds the session's lock by now
+    let asked = Date()
+    #expect(!session.isOpen && !session.isRefused)
+    #expect(Date().timeIntervalSince(asked) < 1)
+}
+
+/// A device renamed keeps the connection it has (away from Wi‑Fi no new one could be made);
+/// one found at another port gets a new one.
+@Test func aRenamedDeviceKeepsItsConnection() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try scratchPairing(at: DeviceControlWire.pairingFile(udid: "UDID-1", in: dir))
+    let hub = DeviceControlHub(directory: dir)
+    defer { hub.stop() }
+    let id = UUID()
+    func target(_ name: String, port: UInt16) -> DeviceControlHub.Target {
+        .init(id: id, name: name, ip: "127.0.0.1", port: port, udid: "UDID-1")   // nothing listens there: opening fails at once
+    }
+    hub.update([target("iPhone", port: 1)])
+    let first = try #require(hub.session(of: id))
+    hub.update([target("My iPhone", port: 1)])
+    #expect(hub.session(of: id) === first)
+    hub.update([target("My iPhone", port: 2)])
+    #expect(hub.session(of: id) != nil && hub.session(of: id) !== first)
+    hub.update([])
+    #expect(hub.session(of: id) == nil)
+}
+
+/// The text to type or paste is text, whatever it starts with: `-1`, `--json`, `-h`.
+@Test func textForTheDeviceMayStartWithADash() throws {
+    for command in ["type", "paste"] {
+        for text in ["-1", "--json", "-h", "--help", "- milk", ""] {
+            #expect(try CLI.parse([command, "iPhone", text]).get().words == ["iPhone", text], "\(command) \(text)")
+            #expect(!CLI.wantsHelp([command, "iPhone", text]))
+        }
+        #expect(CLI.wantsHelp([command, "--help"]) && CLI.wantsHelp([command, "iPhone", "x", "-h"]))
+        #expect(throws: CLI.ArgumentError.self) { try CLI.parse([command, "iPhone", "a", "b"]).get() }   // one text
+    }
+    // Elsewhere a dash still starts an option, and one a command doesn't take is refused.
+    #expect(throws: CLI.ArgumentError.self) { try CLI.parse(["tap", "iPhone", "-5", "10"]).get() }
+    #expect(throws: CLI.ArgumentError.self) { try CLI.parse(["press", "iPhone", "-h2"]).get() }
+}
+
+/// A device that isn't one: what the hub asks of it is counted, and a look can be held up.
+private final class StandInDevice: ControlledDevice, @unchecked Sendable {
+    private let lock = NSLock()
+    private var counted: [String] = []
+    var calls: [String] { lock.withLock { counted } }
+    /// A look waits here when set, and says it has begun.
+    var hold: DispatchSemaphore?
+    let lookBegan = DispatchSemaphore(value: 0)
+    var isOpen: Bool { true }
+    var isRefused: Bool { false }
+    func connect() throws {}
+    func close() {}
+    private func count(_ call: String) { lock.withLock { counted.append(call) } }
+    func look() throws -> CGImage {
+        count("look")
+        lookBegan.signal()
+        hold?.wait()
+        return CGContext(data: nil, width: 100, height: 200, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                         bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!.makeImage()!
+    }
+    func elements(limit: Int) throws -> (captions: [String], complete: Bool) { count("elements"); return ([], true) }
+    func tap(x: Double, y: Double) throws { count("tap"); Thread.sleep(forTimeInterval: 0.01) }
+    func swipe(from: (x: Double, y: Double), to: (x: Double, y: Double), milliseconds: Int) throws { count("swipe") }
+    func type(_ text: String) throws { count("type") }
+    func paste(_ text: String) throws { count("paste") }
+    func press(_ button: String) throws { count("press") }
+}
+
+/// A hub over stand-ins, one made for each session the hub opens.
+private func standInHub(_ dir: URL, udid: String = "UDID-1") throws -> (hub: DeviceControlHub, made: () -> [StandInDevice]) {
+    try scratchPairing(at: DeviceControlWire.pairingFile(udid: udid, in: dir))
+    let made = OSAllocatedUnfairLock<[StandInDevice]>(initialState: [])
+    let hub = DeviceControlHub(directory: dir) { _, _, _ in
+        let device = StandInDevice()
+        made.withLock { $0.append(device) }
+        return device
+    }
+    return (hub, { made.withLock { $0 } })
+}
+
+/// One look serves one action, however many arrive at once: of taps sent together after a
+/// look, one reaches the device and the others are told to look first.
+@Test func oneLookServesOneActionHoweverManyArriveAtOnce() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (hub, made) = try standInHub(dir)
+    defer { hub.stop() }
+    let id = UUID()
+    hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
+    let device = try #require(made().first)
+    let png = dir.appendingPathComponent("look.png").path
+    for round in 1...40 {
+        #expect(hub.answer(.init(op: "look", device: id, path: png)).ok)
+        let answers = OSAllocatedUnfairLock<[DeviceControlWire.Response]>(initialState: [])
+        DispatchQueue.concurrentPerform(iterations: 6) { n in
+            // Taps, and what else spends a look: none may slip in between another's check and its act.
+            let request: DeviceControlWire.Request = n == 5 ? .init(op: "press", device: id, text: "home") : .init(op: "tap", device: id, x: 10, y: 10)
+            let answer = hub.answer(request)
+            if request.op == "tap" { answers.withLock { $0.append(answer) } }
+        }
+        let taps = device.calls.filter { $0 == "tap" }.count
+        #expect(taps <= round)   // never more than one a look
+        #expect(answers.withLock { $0.filter(\.ok).count } <= 1)
+        guard taps <= round else { break }
+    }
+    #expect(device.calls.filter { $0 == "look" }.count == 40)
+}
+
+/// What was seen through a session counts for that session only: a look still under way when
+/// the device gets a new session (another port, a new pairing) doesn't let a tap go to the new one.
+@Test func aLookThroughAReplacedSessionServesNoAction() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (hub, made) = try standInHub(dir)
+    defer { hub.stop() }
+    let id = UUID()
+    func target(port: UInt16) -> DeviceControlHub.Target { .init(id: id, name: "iPhone", ip: "127.0.0.1", port: port, udid: "UDID-1") }
+    hub.update([target(port: 1)])
+    let old = try #require(made().first)
+    old.hold = DispatchSemaphore(value: 0)
+    let png = dir.appendingPathComponent("look.png").path
+    let looked = DispatchSemaphore(value: 0)
+    Thread.detachNewThread {
+        _ = hub.answer(.init(op: "look", device: id, path: png))
+        looked.signal()
+    }
+    old.lookBegan.wait()
+    hub.update([target(port: 2)])   // found at another port while the look runs
+    old.hold?.signal()
+    looked.wait()
+    let fresh = try #require(made().last)
+    #expect(fresh !== old)
+    let tap = hub.answer(.init(op: "tap", device: id, x: 10, y: 10))
+    #expect(!tap.ok && tap.error?.hasPrefix("look first") == true)
+    #expect(!fresh.calls.contains("tap") && !old.calls.contains("tap"))
+    // And through the new one, as ever: look, then act.
+    #expect(hub.answer(.init(op: "look", device: id, path: png)).ok)
+    #expect(hub.answer(.init(op: "tap", device: id, x: 10, y: 10)).ok)
+    #expect(fresh.calls == ["look", "tap"])
+}
+
+/// One command at a time reaches a device, also when its session is replaced while one runs:
+/// a command for the new session waits for the one still running through the old.
+@Test func aCommandWaitsForTheOneRunningThroughAReplacedSession() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (hub, made) = try standInHub(dir)
+    defer { hub.stop() }
+    let id = UUID()
+    func target(port: UInt16) -> DeviceControlHub.Target { .init(id: id, name: "iPhone", ip: "127.0.0.1", port: port, udid: "UDID-1") }
+    hub.update([target(port: 1)])
+    let old = try #require(made().first)
+    old.hold = DispatchSemaphore(value: 0)
+    let png = dir.appendingPathComponent("look.png").path
+    let first = DispatchSemaphore(value: 0), second = DispatchSemaphore(value: 0)
+    Thread.detachNewThread {
+        _ = hub.answer(.init(op: "look", device: id, path: png))
+        first.signal()
+    }
+    old.lookBegan.wait()
+    hub.update([target(port: 2)])   // a new session while the look runs through the old
+    let fresh = try #require(made().last)
+    #expect(fresh !== old)
+    let answer = OSAllocatedUnfairLock<DeviceControlWire.Response?>(initialState: nil)
+    Thread.detachNewThread {
+        let r = hub.answer(.init(op: "press", device: id, text: "home"))
+        answer.withLock { $0 = r }
+        second.signal()
+    }
+    #expect(second.wait(timeout: .now() + 0.5) == .timedOut)   // it waits
+    #expect(fresh.calls.isEmpty && old.calls == ["look"])
+    #expect(hub.answer(.init(op: "state", device: id)).ok)     // how it stands is still said at once
+    old.hold?.signal()
+    first.wait()
+    #expect(second.wait(timeout: .now() + 5) == .success)
+    #expect(answer.withLock { $0?.ok } == true)
+    #expect(fresh.calls == ["press"] && old.calls == ["look"])   // through the session held by then
+}
+
+/// A failed input is never sent again, but its connection is no longer taken for sound — unless
+/// it was refused for what it asked, before anything was sent.
+@Test func aFailedInputLeavesItsConnectionInDoubt() {
+    #expect(DeviceSession.leavesConnectionInDoubt(DeviceSession.Failure.message("touch: not connected")))
+    #expect(DeviceSession.leavesConnectionInDoubt(DeviceSession.Failure.message("timed out")))
+    #expect(!DeviceSession.leavesConnectionInDoubt(DeviceSession.Failure.invalid("can't type 'あ'")))
+}
+
+/// Whatever number a caller sends for a walk's length or a swipe's duration, the app survives it:
+/// the one is brought into what a walk can do, the other refused outside what the library takes.
+@Test func anyNumberACallerSendsIsBoundedOrRefused() {
+    #expect(DeviceControlHub.elementLimit(nil) == 40)
+    #expect(DeviceControlHub.elementLimit(0) == 1 && DeviceControlHub.elementLimit(-7) == 1)
+    #expect(DeviceControlHub.elementLimit(4_294_967_296) == 1000 && DeviceControlHub.elementLimit(.max) == 1000)
+    #expect(DeviceControlHub.swipeDuration(nil) == 300 && DeviceControlHub.swipeDuration(50) == 50)
+    #expect(DeviceControlHub.swipeDuration(5_000_000_000) == nil && DeviceControlHub.swipeDuration(49) == nil)
+    #expect(DeviceControlHub.swipeDuration(-1) == nil && DeviceControlHub.swipeDuration(.max) == nil)
+    // The CLI's own: a point or a duration is a finite number, or the command is refused.
+    #expect(CLI.finite(["1", "2.5", "1e3"]) == [1, 2.5, 1000])
+    #expect(CLI.finite(["1", "inf"]) == nil && CLI.finite(["nan", "1"]) == nil && CLI.finite(["1", "x"]) == nil)
+    #expect(CLI.finite(["1e999", "1"]) == nil)
+}
+
+/// A point comes in the pixels of a look and goes to the device as a fraction of its screen;
+/// one outside the look is no point at all.
+@Test func aLooksPixelsBecomeFractionsOfTheScreen() {
+    let size = (width: 1000, height: 2000)
+    let p = DeviceControlHub.fraction(x: 250, y: 500, of: size)
+    #expect(p?.x == 0.25 && p?.y == 0.25)
+    #expect(DeviceControlHub.fraction(x: 0, y: 0, of: size) != nil)
+    #expect(DeviceControlHub.fraction(x: 999.5, y: 1999.5, of: size) != nil)
+    #expect(DeviceControlHub.fraction(x: 1000, y: 10, of: size) == nil)   // the width itself is past the last pixel
+    #expect(DeviceControlHub.fraction(x: 10, y: 2000, of: size) == nil)
+    #expect(DeviceControlHub.fraction(x: -1, y: 10, of: size) == nil)
+    #expect(DeviceControlHub.fraction(x: nil, y: 10, of: size) == nil)
+}
+
+/// A device knows this Mac by one identity, made once: the same at every pairing, another's elsewhere.
+@Test func aMacKeepsOneIdentityForItsPairings() throws {
+    func scratch() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("rr-host-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+    let (here, there) = (try scratch(), try scratch())
+    defer { [here, there].forEach { try? FileManager.default.removeItem(at: $0) } }
+    let first = DeviceControlHub.hostID(in: here)
+    #expect(UUID(uuidString: first) != nil)
+    #expect(DeviceControlHub.hostID(in: here) == first)
+    #expect(DeviceControlHub.hostID(in: there) != first)
+    try Data("not an id".utf8).write(to: here.appendingPathComponent("device-control-host"))   // damaged: made anew
+    #expect(UUID(uuidString: DeviceControlHub.hostID(in: here)) != nil)
+}
+
+/// A new pairing takes the saved one's place whole, and nothing of the old one is kept: the
+/// device no longer takes it, and it holds a private key.
+@Test func aNewPairingReplacesTheSavedOne() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let file = dir.appendingPathComponent("device-pairing-X.plist")
+    func fresh(_ text: String) throws -> URL {
+        let url = file.appendingPathExtension("new")
+        try Data(text.utf8).write(to: url)
+        return url
+    }
+    func names() -> [String] { ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).sorted() }
+    try DeviceControlHub.adopt(fresh("first"), as: file)
+    #expect(names() == ["device-pairing-X.plist"])
+    try Data("older".utf8).write(to: file.appendingPathExtension("previous"))   // what an earlier RoamRun kept
+    try DeviceControlHub.adopt(fresh("second"), as: file)
+    #expect(names() == ["device-pairing-X.plist"])
+    #expect(try String(contentsOf: file, encoding: .utf8) == "second")
+    #expect(throws: (any Error).self) { try DeviceControlHub.adopt(file.appendingPathExtension("new"), as: file) }   // nothing to adopt
+    #expect(try String(contentsOf: file, encoding: .utf8) == "second")
+}
+
+/// A screen's size is asked until it is answered, a minute apart, and then kept: a look that
+/// came while devicectl couldn't reach the device no longer leaves every later one uncut.
+@Test func aScreensSizeIsAskedAgainUntilItIsKnown() {
+    var answers: [(width: Int, height: Int)?] = [nil, nil, (1179, 2556)]
+    var asked = 0
+    let sizes = ScreenSizes(ask: { _ in asked += 1; return answers.removeFirst() }, retry: 60)
+    let t0 = Date()
+    #expect(sizes.size(of: "A", now: t0) == nil && asked == 1)
+    #expect(sizes.size(of: "A", now: t0.addingTimeInterval(59)) == nil && asked == 1)   // not yet again
+    #expect(sizes.size(of: "A", now: t0.addingTimeInterval(60)) == nil && asked == 2)
+    #expect(sizes.size(of: "A", now: t0.addingTimeInterval(120))?.width == 1179 && asked == 3)
+    #expect(sizes.size(of: "A", now: t0.addingTimeInterval(121))?.height == 2556 && asked == 3)   // kept
+}
+
+/// Device control looks for a device's port itself only when no bridge does, only when the
+/// device answered and refused the port, and not more than every ten minutes.
+@Test func deviceControlLooksForAMovedPortWhenNoBridgeDoes() {
+    let refused = "RemotePairing port: Connection refused (os error 61)"
+    let now = Date()
+    #expect(AppCoordinator.controlWantsPortScan(why: refused, bridgeAtWork: false, lastScan: nil, now: now))
+    #expect(!AppCoordinator.controlWantsPortScan(why: refused, bridgeAtWork: true, lastScan: nil, now: now))   // it finds the port itself
+    // A device that doesn't answer (away, asleep) isn't searched: thousands of probes for nothing.
+    #expect(!AppCoordinator.controlWantsPortScan(why: "RemotePairing port: Operation timed out (os error 60)", bridgeAtWork: false, lastScan: nil, now: now))
+    #expect(!AppCoordinator.controlWantsPortScan(why: "the device doesn't accept this pairing: x", bridgeAtWork: false, lastScan: nil, now: now))
+    #expect(!AppCoordinator.controlWantsPortScan(why: refused, bridgeAtWork: false, lastScan: now.addingTimeInterval(-599), now: now))
+    #expect(AppCoordinator.controlWantsPortScan(why: refused, bridgeAtWork: false, lastScan: now.addingTimeInterval(-600), now: now))
+}
+
+/// What is advertised for a pairing is "key=value" behind its length, 255 bytes at most, and a
+/// name too long for that is cut between characters.
+@Test func aPairingsAdvertIsCutBetweenCharacters() throws {
+    let short = DevicePairing.txtRecord(["ver": "26", "name": "Mac"])
+    #expect(Array(short) == [8] + Array("name=Mac".utf8) + [6] + Array("ver=26".utf8))
+    let long = DevicePairing.txtRecord(["name": String(repeating: "あ", count: 100)])   // 5 + 300 bytes
+    #expect(long.count == 1 + Int(long[0]) && long[0] <= 255)
+    let text = try #require(String(data: long.dropFirst(), encoding: .utf8))   // still whole characters
+    #expect(text == "name=" + String(repeating: "あ", count: 83))
+}
+
+/// A device that can't be reached is tried less and less often, up to every five minutes.
+@Test func aDeviceOutOfReachIsTriedLessOften() {
+    #expect((1...6).map { DeviceControlHub.retryDelay(afterFailures: $0) } == [30, 60, 120, 240, 300, 300])
+    #expect(DeviceControlHub.retryDelay(afterFailures: 0) == 30 && DeviceControlHub.retryDelay(afterFailures: 1000) == 300)
+}
+
+/// A look right after an input waits out the rest of the settling time; a later one doesn't wait.
+@Test func aLookWaitsForTheScreenToSettleAfterAnInput() {
+    let now = Date()
+    #expect(DeviceControlHub.settleWait(acted: nil, now: now) == 0)
+    #expect(DeviceControlHub.settleWait(acted: now, now: now) == DeviceControlHub.settle)
+    #expect(abs(DeviceControlHub.settleWait(acted: now.addingTimeInterval(-0.4), now: now) - (DeviceControlHub.settle - 0.4)) < 0.001)
+    #expect(DeviceControlHub.settleWait(acted: now.addingTimeInterval(-5), now: now) == 0)
+    #expect(DeviceControlHub.settleWait(acted: now.addingTimeInterval(60), now: now) == DeviceControlHub.settle)   // a clock set back
+}
+
+import ImageIO
+
+/// `roamrun mcp`: the handshake, the tool list, and a tap whose point — given in the image the
+/// look returned — reaches the app in the pixels of the look itself.
+@Test func theMCPServerScalesPointsBackToTheLook() throws {
+    let device = profile("iPhone")
+    var asked: [DeviceControlWire.Request] = []
+    var saved = [device]
+    let server = DeviceMCP(profiles: { saved }) { request in
+        asked.append(request)
+        if request.op == "look", let path = request.path {
+            // A screen twice the size a look returns: 2000 x 4000 comes back as 640 x 1280.
+            let context = CGContext(data: nil, width: 2000, height: 4000, bitsPerComponent: 8, bytesPerRow: 0,
+                                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+            let out = CGImageDestinationCreateWithURL(URL(fileURLWithPath: path) as CFURL, "public.png" as CFString, 1, nil)!
+            CGImageDestinationAddImage(out, context.makeImage()!, nil)
+            CGImageDestinationFinalize(out)
+            return .init(ok: true, width: 2000, height: 4000)
+        }
+        return .init(ok: true)
+    }
+    func send(_ json: String) throws -> [String: Any] {
+        let answer = try #require(server.handle(Data(json.utf8)))
+        return try #require(try JSONSerialization.jsonObject(with: answer) as? [String: Any])
+    }
+    func result(_ json: String) throws -> [String: Any] { try #require(try send(json)["result"] as? [String: Any]) }
+    func call(_ tool: String, _ arguments: String) throws -> [String: Any] {
+        try result(#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"\#(tool)","arguments":\#(arguments)}}"#)
+    }
+
+    let hello = try result(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#)
+    #expect(hello["protocolVersion"] as? String == "2025-06-18")
+    #expect(server.handle(Data(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#.utf8)) == nil)   // a notification gets no answer
+    let tools = try #require(try result(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)["tools"] as? [[String: Any]])
+    #expect(Set(tools.compactMap { $0["name"] as? String }) == ["devices", "look", "tap", "swipe", "elements", "type", "paste", "press"])
+
+    // No look yet: refused here, and the app isn't even asked.
+    #expect(try call("tap", #"{"device":"iPhone","x":10,"y":10}"#)["isError"] as? Bool == true)
+    #expect(asked.isEmpty)
+
+    let look = try call("look", #"{"device":"iphone"}"#)   // names match as the CLI's do
+    let content = try #require(look["content"] as? [[String: Any]])
+    #expect(content.first?["type"] as? String == "image" && content.first?["mimeType"] as? String == "image/jpeg")
+    #expect((content.last?["text"] as? String)?.hasPrefix("640 x 1280") == true)
+
+    // A point outside the image is refused in the image's terms, the app not asked, the look kept.
+    let outside = try call("tap", #"{"device":"iPhone","x":640,"y":10}"#)
+    #expect(outside["isError"] as? Bool == true && ((outside["content"] as? [[String: Any]])?.first?["text"] as? String)?.contains("640 x 1280") == true)
+    #expect(asked.count == 1)
+    #expect(try call("tap", #"{"device":"iPhone","x":320,"y":640}"#)["isError"] as? Bool == false)
+    #expect(asked.last == .init(op: "tap", device: device.id, x: 1000, y: 2000))
+    // That look is spent: the next point needs a new one.
+    #expect(try call("tap", #"{"device":"iPhone","x":320,"y":640}"#)["isError"] as? Bool == true)
+    #expect(asked.count == 2)
+
+    #expect(try call("look", #"{"device":"nobody"}"#)["isError"] as? Bool == true)
+    #expect(try send(#"{"jsonrpc":"2.0","id":9,"method":"resources/list"}"#)["error"] != nil)
+
+    // A device saved after the server started is there at the next call.
+    saved.append(profile("iPad"))
+    let listed = try #require((try call("devices", "{}")["content"] as? [[String: Any]])?.first?["text"] as? String)
+    #expect(listed == "iPhone\niPad")
+    #expect(try call("look", #"{"device":"iPad"}"#)["isError"] as? Bool == false)
+}
+
+/// What the CLI sends for each command reaches the app as it was written.
+@Test func everyRequestSurvivesTheWire() throws {
+    let id = UUID()
+    let requests: [DeviceControlWire.Request] = [
+        .init(op: "look", device: id, path: "/tmp/a.png"),
+        .init(op: "swipe", device: id, x: 1, y: 2, x2: 3, y2: 4, milliseconds: 400),
+        .init(op: "paste", device: id, text: "東京 \"quoted\"\nsecond line"),
+        .init(op: "elements", device: id, limit: 15),
+    ]
+    for r in requests {
+        #expect(try JSONDecoder().decode(DeviceControlWire.Request.self, from: JSONEncoder().encode(r)) == r)
+    }
+    let answer = DeviceControlWire.Response(ok: true, captions: ["ホーム, ヘッダ", "a\nb"], complete: false)
+    #expect(try JSONDecoder().decode(DeviceControlWire.Response.self, from: JSONEncoder().encode(answer)) == answer)
+}
+#endif
+
+
 /// Two `roamrun up -d` for one device take turns from the check to the child's claim: the second
 /// waits, and then finds the first (it used to rotate the first's log away from under it).
 @Test func detachedUpsForOneDeviceTakeTurns() throws {
@@ -4170,6 +4681,8 @@ func everyDocumentedCommandParses(_ doc: String) throws {
                 }
             }
             guard let command = words.first else { continue }
+            // Device control's commands are checked by a build that has them (`make test DEVICE=1`).
+            if !CLI.commands.contains(command), CLI.deviceCommands.contains(command) { continue }
             #expect(CLI.commands.contains(command), "\(doc): roamrun \(m.1)")
             checked += 1
             if command == "init" {

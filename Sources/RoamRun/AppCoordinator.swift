@@ -94,6 +94,12 @@ final class AppCoordinator: ObservableObject {
             launchWarning = Self.unreadableListWarning
         }
         for p in profiles { install(newBridge(p)) }
+        #if DEVICE_CONTROL
+        deviceControl.onLog = { [weak self] message, id in Task { @MainActor in self?.logStore.log(message, device: id) } }
+        deviceControl.onUnreached = { [weak self] id, why in Task { @MainActor in self?.controlUnreached(id, why) } }
+        syncDeviceControl()
+        deviceControl.start()
+        #endif
 
         capture.onLog = { [weak self] m in self?.logStore.log(m) }
         capture.ownedHosts = Set(profiles.map { ProxyBridge(profile: $0).spoofHost })
@@ -914,6 +920,10 @@ final class AppCoordinator: ObservableObject {
         bridges[id] = nil
         bridgeObservers[id] = nil
         memories[id] = nil
+        #if DEVICE_CONTROL
+        // Its pairing for device control goes with it, as the dialog says: added again, it is set up again.
+        if let target = profiles.first(where: { $0.id == id }).flatMap(controlTarget) { deviceControl.unpair(target) }
+        #endif
         profiles.removeAll { $0.id == id }
         wasActiveIDs.remove(id)
         persist()
@@ -1206,10 +1216,101 @@ final class AppCoordinator: ObservableObject {
 
     /// Terminate all helper children (zone dump, proxy registrations, log
     /// watchers, relays) so nothing is orphaned when the app quits.
+    #if DEVICE_CONTROL
+    private let deviceControl = DeviceControlHub(directory: ProfileStore.directory)
+
+    /// The devices as saved now, to the hub that keeps their control connections: at launch, and
+    /// whenever the list is saved. (A pairing made while the app runs is seen at the next of those.)
+    private func syncDeviceControl() {
+        deviceControl.update(profiles.compactMap(controlTarget))
+    }
+
+    private func controlTarget(_ p: DeviceProfile) -> DeviceControlHub.Target? {
+        controlUDID(p).map { .init(id: p.id, name: p.displayName, ip: p.providerIP, port: p.remotePairingPort, udid: $0) }
+    }
+
+    /// The device's UDID, which names its pairing: saved with it, or as whoever bridges it now has learned it
+    /// (a `roamrun up` saves it to the file only).
+    private func controlUDID(_ p: DeviceProfile) -> String? {
+        p.udid ?? bridges[p.id]?.udid ?? externalBridges[p.id]?.udid
+    }
+
+    /// What the device's Settings list this Mac as, for device control.
+    nonisolated static var controlHostName: String { "RoamRun (\(Host.current().localizedName ?? "Mac"))" }
+
+    /// When each device's port was last looked for on device control's behalf.
+    private var controlScans: [UUID: Date] = [:]
+
+    /// Whether a failed attempt to open device control's connection is a reason to look for the
+    /// device's RemotePairing port (it can move when the device restarts): the device answered
+    /// and refused the port — it is reachable, so the search finds it in its first ports, and a
+    /// device away or asleep, which doesn't answer, isn't searched —, no bridge is at work on it
+    /// (one that is finds the port itself), and it wasn't looked for in the last ten minutes.
+    nonisolated static func controlWantsPortScan(why: String, bridgeAtWork: Bool, lastScan: Date?, now: Date = Date()) -> Bool {
+        !bridgeAtWork && why.hasPrefix("RemotePairing port: Connection refused")
+            && (lastScan.map { now.timeIntervalSince($0) >= 600 } ?? true)
+    }
+
+    private func controlUnreached(_ id: UUID, _ why: String) {
+        guard let profile = profiles.first(where: { $0.id == id }) else { return }
+        // A `roamrun up` that holds the device saves what it finds to the file only: read here.
+        if externalBridges[id] != nil { persist() }
+        var bridgeAtWork = externalBridges[id] != nil
+        switch bridges[id]?.state {
+        case .off, .local, nil: break
+        default: bridgeAtWork = true
+        }
+        guard Self.controlWantsPortScan(why: why, bridgeAtWork: bridgeAtWork, lastScan: controlScans[id]) else { return }
+        controlScans[id] = Date()
+        Task { _ = await scanRemotePairingPort(profile) }   // logs what it finds; a port that moved is saved, and the hub told
+    }
+
+    struct ControlPairing: Equatable {
+        var device: UUID
+        var step: DeviceControlHub.PairingStep
+        /// Which attempt: one cancelled and begun again mustn't show the first one's end.
+        var attempt = UUID()
+    }
+    /// The pairing for device control being made now, if any.
+    @Published private(set) var controlPairing: ControlPairing?
+
+    /// nil until the device's UDID is known (it names the pairing).
+    func controlState(_ profile: DeviceProfile) -> (paired: Bool, open: Bool, refused: Bool)? {
+        controlUDID(profile).map { deviceControl.state(of: profile.id, udid: $0) }
+    }
+
+    func startControlPairing(_ profile: DeviceProfile) {
+        guard let target = controlTarget(profile) else { return }
+        let pairing = ControlPairing(device: profile.id, step: .waiting(""))
+        controlPairing = pairing
+        deviceControl.pair(target, as: Self.controlHostName) { [weak self] step in
+            Task { @MainActor in
+                guard self?.controlPairing?.attempt == pairing.attempt else { return }   // dismissed, or begun again, meanwhile
+                self?.controlPairing?.step = step
+            }
+        }
+    }
+
+    /// Stops a pairing under way and puts its sheet away.
+    func endControlPairing() {
+        deviceControl.cancelPairing()
+        controlPairing = nil
+    }
+
+    func removeControlPairing(_ profile: DeviceProfile) {
+        guard let target = controlTarget(profile) else { return }
+        deviceControl.unpair(target)
+        objectWillChange.send()
+    }
+    #endif
+
     func shutdown() {
         capture.stop()
         stopOTA()   // the serve entry would otherwise point at a dead port
         for bridge in bridges.values { bridge.stop() }
+        #if DEVICE_CONTROL
+        deviceControl.stop()   // last: it may wait a moment for a device, and the bridges' helpers mustn't be left meanwhile
+        #endif
     }
 
     private func onInterfaceLost() {
@@ -1274,6 +1375,9 @@ final class AppCoordinator: ObservableObject {
     /// Saves the device list; a failed write would lose changes at the next launch, so say so.
     private func persist() {
         guard Snapshot.fakeProfiles == nil else { return }   // screenshot mode's fake devices never reach disk
+        #if DEVICE_CONTROL
+        defer { syncDeviceControl() }
+        #endif
         if let saved = store.save(base: savedProfiles, wanted: profiles) {
             savedProfiles = saved
             if saved != profiles {   // `roamrun up` had saved a newer endpoint, or devices we never read came back

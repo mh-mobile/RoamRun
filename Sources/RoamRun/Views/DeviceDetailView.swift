@@ -20,6 +20,9 @@ struct DeviceDetailView: View {
                 header
                 StatusCard(profile: profile, bridge: bridge, external: external)
                 ConnectionPath(profile: profile, status: status)
+                #if DEVICE_CONTROL
+                DeviceControlRow(profile: profile)
+                #endif
 
                 VStack(alignment: .leading, spacing: 0) {
                     DisclosureGroup("Technical details", isExpanded: $showDetails) {
@@ -336,3 +339,104 @@ private struct DeviceLog: View {
         }
     }
 }
+
+#if DEVICE_CONTROL
+/// Device control (experimental): whether this Mac has a pairing of its own with the device,
+/// and the way to make one.
+private struct DeviceControlRow: View {
+    @EnvironmentObject private var coordinator: AppCoordinator
+    let profile: DeviceProfile
+    @State private var confirmRemove = false
+
+    var body: some View {
+        // The connection comes and goes with the device; what is said is read anew every few seconds.
+        // The sheet and the dialog hang on what stays, not on what is drawn anew.
+        TimelineView(.periodic(from: .now, by: 3)) { _ in row }
+            .sheet(isPresented: Binding(get: { coordinator.controlPairing?.device == profile.id },
+                                        set: { if !$0 { coordinator.endControlPairing() } })) {
+                ControlPairingSheet(profile: profile)
+            }
+            .confirmationDialog("Remove device control for “\(profile.displayName)”?", isPresented: $confirmRemove) {
+                Button("Remove", role: .destructive) { coordinator.removeControlPairing(profile) }
+            } message: {
+                Text("RoamRun forgets its pairing, and nothing can use the device's side of it any more. To take it off the device's list too: on the device, Settings › Privacy & Security › Developer Mode, choose “\(AppCoordinator.controlHostName)”, then unpair.")
+            }
+            .onDisappear {   // the sheet goes with this view; so does what it was showing
+                if coordinator.controlPairing?.device == profile.id { coordinator.endControlPairing() }
+            }
+    }
+
+    private var row: some View {
+        let state = coordinator.controlState(profile)
+        return HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Device control (experimental)").font(.headline)
+                Text(summary(state)).font(.callout).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if state?.paired == true {
+                Button("Remove…") { confirmRemove = true }
+            }
+            Button(state?.paired == true ? "Pair Again…" : "Set Up…") { coordinator.startControlPairing(profile) }
+                .disabled(state == nil)
+        }
+    }
+
+    private func summary(_ state: (paired: Bool, open: Bool, refused: Bool)?) -> String {
+        guard let state else { return "Available once the bridge has connected to this device." }
+        if !state.paired { return "Lets agents see and operate this device (roamrun look, tap, mcp). Needs iOS 27 and a pairing of RoamRun's own." }
+        if state.refused { return "The device no longer has this pairing (it was removed there). Pair again." }
+        return state.open ? "Paired and connected." : "Paired. Connects while the device is on Wi‑Fi, awake and reachable."
+    }
+}
+
+private struct ControlPairingSheet: View {
+    @EnvironmentObject private var coordinator: AppCoordinator
+    let profile: DeviceProfile
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Set Up Device Control").font(.title2.bold())
+            switch coordinator.controlPairing?.step {
+            case .waiting(let name):
+                if !name.isEmpty {   // empty until it listens
+                    Text("On “\(profile.displayName)”, with it on the same Wi‑Fi as this Mac:")
+                    Text("Settings › Privacy & Security › Developer Mode, then choose “\(name)” to pair.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                ProgressView("Waiting for the device…")
+            case .code(let digits):
+                Text("Enter this code on the device:")
+                Text(digits).font(.system(size: 40, weight: .semibold, design: .monospaced)).textSelection(.enabled)
+                    .frame(maxWidth: .infinity)
+            case .checking:
+                ProgressView("Checking the connection…")
+            case .done:
+                Label("Device control is set up.", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+            case .doneUnreached(let why):
+                Label("Paired. The device can't be reached over the VPN right now, so device control connects when it can.",
+                      systemImage: "checkmark.circle").foregroundStyle(.green)
+                Text(why).font(.caption).foregroundStyle(.secondary)
+            case .failed(let why):
+                Label(why, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            case nil:
+                EmptyView()
+            }
+            HStack {
+                Spacer()
+                switch coordinator.controlPairing?.step {
+                case .done, .doneUnreached:
+                    Button("Done") { coordinator.endControlPairing() }.keyboardShortcut(.defaultAction)
+                case .failed:
+                    Button("Close") { coordinator.endControlPairing() }.keyboardShortcut(.cancelAction)
+                    Button("Try Again") { coordinator.startControlPairing(profile) }.keyboardShortcut(.defaultAction)
+                default:
+                    Button("Cancel") { coordinator.endControlPairing() }.keyboardShortcut(.cancelAction)
+                }
+            }
+        }
+        .padding(24)
+        .frame(width: 440)
+    }
+}
+#endif

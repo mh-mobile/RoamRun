@@ -134,7 +134,7 @@ first; App Store / TestFlight builds can't be installed directly.
 
 `roamrun screenshot iPhone /tmp/shot.png` saves the device's screen as PNG and
 prints the path — look at it after launching (or after a change) instead of
-asking the user to describe the screen. It can't tap. To reach a screen
+asking the user to describe the screen. It can't tap (section 6 can, where it is built in). To reach a screen
 without the user, launch the app straight into it — with `roamrun run`
 (builds first), then for each further screen relaunch without rebuilding:
 
@@ -167,14 +167,71 @@ replaces every `DEVICECTL_CHILD_*` variable — use one or the other. Only the
 app's own code decides what a URL, argument or variable does: look for its
 handling in the project, or ask.
 
-## 6. App output
+## 6. Operate the device (experimental)
+
+Only in a RoamRun built with device control, for a device that has a pairing of
+RoamRun's own (`roamrun status iPhone` then has a `Device control:` line; an
+"unknown command" means this build has none — use section 5). The RoamRun app
+holds the connection, so it has to be running; it connects while the device is
+on a Wi‑Fi and keeps the connection when it moves to cellular.
+
+The pairing is the user's to make, once, in the RoamRun app: the device's page,
+**Device control › Set Up…**, with the device (iOS 27 or later) on the same
+Wi‑Fi as the Mac. The app shows a code; the user picks RoamRun on the device
+(Settings › Privacy & Security › Developer Mode) and enters it there. Don't try
+to do that part through device control.
+
+```sh
+roamrun look iPhone /tmp/now.png     # the screen now: prints the path, then "1179 x 2556"
+roamrun tap iPhone 590 1280          # a point in the pixels of that image
+roamrun look iPhone /tmp/now.png     # what it became
+```
+
+The same is there as MCP tools (`look` returns the image itself, scaled to what
+you are shown, and points are that image's pixels): the user adds it once with
+`claude mcp add roamrun -- roamrun mcp`, or the like for another agent. Use the
+tools when you have them; the rules below hold for both.
+
+- **Each look serves one action.** `tap` and `swipe` are refused until there has
+  been a `look`, and any action (or `elements`) uses it up: look, act, look again.
+  Read the point off the image you just looked at, in its own pixels (the size
+  printed after the path); never reuse a point from an older one.
+  A point refused for being outside the image leaves the look to be used.
+  The image is the screen as the device holds it, upright: an app in landscape
+  shows turned on its side in it, and its points are still the image's.
+- `roamrun swipe iPhone 590 1800 590 900 [ms]` drags; start on something that
+  does nothing when pressed if you can.
+- `roamrun elements iPhone [limit]` prints what accessibility says is on the
+  screen, one caption a line ("Home, tab, selected"). It gives **no positions** —
+  a caption can't be tapped by name; find it in a `look`. The screen may scroll
+  to what it visits. Nothing on the home screen; under a system alert, only the alert.
+- `roamrun type iPhone "text"` types US-keyboard characters (the text may
+  start with `-`; 2000 characters at most, `paste` for more); a newline in the
+  text is Return (`$'search this\n'` in a shell — the two characters `\n` are typed as such).
+  It comes out right only while the device's keyboard is an English one: look
+  first, and switch with the globe key if it shows Japanese (there Space
+  converts and Return confirms). `roamrun paste iPhone "任意の文字列"` puts any
+  text in by the device's pasteboard — it replaces the pasteboard, and iOS asks
+  "Allow Paste" each time: look, and tap it only if the user wants that.
+- `roamrun press iPhone home|lock|volume-up|volume-down`. `lock` can't be
+  undone from here: the user has to unlock.
+- These press what is really there. Don't tap what spends money, posts, sends,
+  deletes or signs in unless the user asked for exactly that; when the screen
+  isn't what you expected, look again rather than guess.
+- A `look` shows whatever is on the screen — notifications, messages, the lock
+  screen. Don't send the image anywhere the user didn't ask.
+- An action that fails says why and was not repeated; look before trying again
+  (it may have gone through). The device lists each spell of this as a
+  screen-sharing session under Settings, where the user can see it.
+
+## 7. App output
 
 `roamrun logs iPhone com.example.App` relaunches the app with its console
 attached (print and os_log) and streams until Ctrl-C. It can't join an
 already-running app, and never exits on its own — run it in the background:
 `roamrun logs iPhone com.example.App > /tmp/app.log 2>&1 & sleep 20; kill $!`.
 
-## 7. When something fails
+## 8. When something fails
 
 - Run `roamrun doctor iPhone --json`; act on the first `"result": "fail"`. Its
   `fix` says what to do — if it involves the iPhone, ask the user.

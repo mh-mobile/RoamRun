@@ -56,6 +56,10 @@ jump from the previous one: `log stream --level debug --predicate
 'subsystem == "io.github.mh-mobile.roamrun" AND category == "tunnel"'`. Misses or large
 jumps after an iOS update mean the window needs retuning.
 
+What `type` sent (keys, spaces among them, how long it took — never the text) is logged at
+debug level: `log stream --level debug --predicate 'subsystem == "io.github.mh-mobile.roamrun"
+AND category == "input"'`. Text that arrives short with a line here was dropped by the device.
+
 ## Releasing
 
 0. Run docs/release-checklist.md on real devices.

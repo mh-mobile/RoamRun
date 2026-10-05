@@ -8,14 +8,55 @@ import Foundation
 enum CLI {
     /// This process was started as the CLI (vs. the menu bar app).
     nonisolated static var isRunning: Bool { commands.contains(CommandLine.arguments.dropFirst().first ?? "") }
-    nonisolated static let commands: Set<String> = ["devices", "up", "down", "status", "doctor", "run", "install", "ota", "logs", "screenshot", "init", "version", "--version", "help", "--help", "-h"]
+    nonisolated static let commands: Set<String> = {
+        var all: Set<String> = ["devices", "up", "down", "status", "doctor", "run", "install", "ota", "logs", "screenshot", "init", "version", "--version", "help", "--help", "-h"]
+        #if DEVICE_CONTROL
+        all.formUnion(deviceCommands)
+        #endif
+        return all
+    }()
+    /// The words as numbers a point or a duration can be: nil when one isn't a number, or is NaN or infinite.
+    nonisolated static func finite(_ words: some Sequence<String>) -> [Double]? {
+        let numbers = words.compactMap { Double($0) }.filter(\.isFinite)
+        return numbers.count == Array(words).count ? numbers : nil
+    }
+
+    /// What only a build with device control has (to the others they are unknown commands).
+    nonisolated static let deviceCommands: Set<String> = ["look", "tap", "swipe", "type", "paste", "press", "elements", "mcp"]
     /// Posted by `roamrun down`; the app stops the bridge whose id is `object`.
     static let stopNotification = Notification.Name(AppID.bundle + ".stopBridge")
     /// What a RoamRun before 0.1.12 listens for, should it still run next to this CLI.
     // ponytail: bundle-id migration only; drop after a few releases.
     static let legacyStopNotification = Notification.Name(AppID.legacy + ".stopBridge")
 
-    private static let usage = """
+    private static let usage: String = {
+        #if DEVICE_CONTROL
+        baseUsage + "\n\n" + deviceUsage
+        #else
+        baseUsage
+        #endif
+    }()
+
+    #if DEVICE_CONTROL
+    private static let deviceUsage = """
+    Operating a device (experimental; the RoamRun app holds the connection, and the device needs
+    a pairing of RoamRun's own):
+      look <name> [file.png]         Save the device's screen now as PNG; prints the path, then its size
+      tap <name> <x> <y>             Tap a point given in the pixels of the last look
+      swipe <name> <x1> <y1> <x2> <y2> [ms]
+                                     Drag from one point of the last look to another
+      elements <name> [limit]        What accessibility says is on the screen, one caption a line
+                                     (no positions; the screen may scroll)
+      type <name> <text>             Type on the device's keyboard (US keys; right only while that
+                                     keyboard is an English one)
+      paste <name> <text>            Any text, by the device's pasteboard (it asks the user each time)
+      press <name> <button>          home, lock, volume-up or volume-down
+      mcp                            The same as MCP tools, over stdin/stdout (for an agent's MCP config)
+    Each look serves one action: look, act, look again.
+    """
+    #endif
+
+    private static let baseUsage = """
     Usage: roamrun <command>
 
     AI agents: `roamrun init` installs the RoamRun skill for Claude Code, Codex,
@@ -165,6 +206,34 @@ enum CLI {
                     fail("usage: roamrun ota [<name>] <path to .ipa>")
                 }
                 ota(targets, path: path, replacing: parsed.flags.contains("--replace"))
+            #if DEVICE_CONTROL
+            case "mcp":
+                // Off the main thread: it reads stdin until the client closes it.
+                let server = DeviceMCP(profiles: { store.load() }) { try DeviceControlWire.ask($0, in: ProfileStore.directory) }
+                Thread.detachNewThread { server.serve(); exit(0) }
+            case "look":
+                guard name != nil, let p = targets.first else { fail("usage: roamrun look <name> [file.png]. " + names(profiles)) }
+                look(p, path: words.count >= 2 ? words[words.startIndex + 1] : nil)
+            case "tap":
+                guard name != nil, let p = targets.first, words.count == 3, let point = finite(words.dropFirst()) else {
+                    fail("usage: roamrun tap <name> <x> <y> — pixels of the last `roamrun look`. " + names(profiles))
+                }
+                tap(p, x: point[0], y: point[1])
+            case "swipe":
+                guard name != nil, let p = targets.first, let numbers = finite(words.dropFirst()), (4...5).contains(numbers.count),
+                      let ms = numbers.count == 5 ? Int(exactly: numbers[4].rounded()) : 300 else {
+                    fail("usage: roamrun swipe <name> <x1> <y1> <x2> <y2> [milliseconds] — pixels of the last `roamrun look`. " + names(profiles))
+                }
+                operate(p, .init(op: "swipe", device: p.id, x: numbers[0], y: numbers[1], x2: numbers[2], y2: numbers[3], milliseconds: ms))
+            case "type", "paste", "press":
+                guard name != nil, let p = targets.first, words.count == 2 else {
+                    fail("usage: roamrun \(args[0]) <name> \(args[0] == "press" ? "<home|lock|volume-up|volume-down>" : "<text>"). " + names(profiles))
+                }
+                operate(p, .init(op: args[0], device: p.id, text: words[words.startIndex + 1]))
+            case "elements":
+                guard name != nil, let p = targets.first else { fail("usage: roamrun elements <name> [limit]. " + names(profiles)) }
+                elements(p, limit: words.count >= 2 ? Int(words[words.startIndex + 1]) : nil)
+            #endif
             default: print(usage); exit(0)
             }
         }
@@ -176,7 +245,22 @@ enum CLI {
     // MARK: - Arguments
 
     /// What each command accepts: options (value-taking ones marked) and how many words.
-    nonisolated private static let specs: [String: (options: Set<String>, words: ClosedRange<Int>)] = [
+    nonisolated private static let specs: [String: (options: Set<String>, words: ClosedRange<Int>)] = {
+        var all = baseSpecs
+        #if DEVICE_CONTROL
+        all["look"] = ([], 0...2)
+        all["tap"] = ([], 0...3)
+        all["swipe"] = ([], 0...6)
+        all["type"] = ([], 0...2)
+        all["paste"] = ([], 0...2)
+        all["press"] = ([], 0...2)
+        all["elements"] = ([], 0...2)
+        all["mcp"] = ([], 0...0)
+        #endif
+        return all
+    }()
+
+    nonisolated private static let baseSpecs: [String: (options: Set<String>, words: ClosedRange<Int>)] = [
         "devices": (["--json"], 0...0),
         "status": (["--json", "--wait="], 0...1),
         "doctor": (["--json"], 0...1),
@@ -227,11 +311,18 @@ enum CLI {
 
     struct ArgumentError: Error, Equatable { let message: String }
 
-    /// `--help` anywhere, except as the value of `--arg` (`--arg -h` is for the app).
+    /// `--help` anywhere, except as the value of `--arg` (`--arg -h` is for the app) and as the
+    /// text to type or paste.
     nonisolated static func wantsHelp(_ args: [String]) -> Bool {
         ["help", "--help", "-h"].contains(args[0])
-            || args.indices.dropFirst().contains { ["--help", "-h"].contains(args[$0]) && args[$0 - 1] != "--arg" }
+            || args.indices.dropFirst().contains {
+                ["--help", "-h"].contains(args[$0]) && args[$0 - 1] != "--arg" && !(textCommands.contains(args[0]) && $0 == 2)
+            }
     }
+
+    /// Commands whose word after the device's name is text for the device, whatever it starts
+    /// with: `roamrun type iPhone -1`, `roamrun paste iPhone --help`.
+    nonisolated static let textCommands: Set<String> = ["type", "paste"]
 
     /// Too few words is left to each command (its message lists the saved devices).
     nonisolated static func parse(_ args: [String]) -> Result<Parsed, ArgumentError> {
@@ -240,6 +331,11 @@ enum CLI {
         var i = 1
         while i < args.count {
             let a = args[i]
+            if textCommands.contains(args[0]), i == 2, p.words.count == 1 {
+                p.words.append(a)
+                i += 1
+                continue
+            }
             // `--name=value`, split at the first "=": `--env=A=b` is --env with A=b.
             if a.hasPrefix("--"), let eq = a.firstIndex(of: "="), spec.options.contains(a[...eq] + "") {
                 let name = String(a[..<eq]), value = String(a[a.index(after: eq)...])
@@ -465,6 +561,9 @@ enum CLI {
                 if let udid = r.udid { print("  UDID: \(udid)") }
                 if let detail = r.detail { print("  \(detail)") }
                 if r.locked == true { print("  ⚠ The device is locked — ask the user to unlock it and keep the screen on before installing or launching.") }
+                #if DEVICE_CONTROL
+                if let id = UUID(uuidString: r.id), let line = controlState(id, udid: r.udid).line { print("  Device control: \(line)") }
+                #endif
             }
         }
         exit(rows.contains { $0.ready } ? 0 : 1)
@@ -659,6 +758,92 @@ enum CLI {
     }
 
     /// Through the tunnel like everything else: works over the bridge.
+    #if DEVICE_CONTROL
+    // Experimental (device control): the app holds the connection; these ask it.
+
+    /// Where a device stands with being operated. `line` is nil when there is nothing to say
+    /// (no pairing of our own: it was never set up).
+    enum ControlState: Equatable {
+        case notSetUp, connected, notConnected, refused, noApp
+
+        var line: String? {
+            switch self {
+            case .notSetUp: nil
+            case .connected: "connected"
+            case .notConnected: "paired, not connected — the app keeps trying; it can connect only while the device is on a Wi‑Fi"
+            case .refused: "the device no longer has this pairing (it was removed there) — the user pairs again in the RoamRun app, on the device's page"
+            case .noApp: "paired; the RoamRun app, which holds the connection, isn't running (or is a build without device control)"
+            }
+        }
+    }
+
+    private static func controlState(_ id: UUID, udid: String?) -> ControlState {
+        guard let udid, FileManager.default.fileExists(atPath: DeviceControlWire.pairingFile(udid: udid, in: ProfileStore.directory).path) else {
+            return .notSetUp
+        }
+        guard let r = try? DeviceControlWire.ask(.init(op: "state", device: id), in: ProfileStore.directory) else { return .noApp }
+        // A pairing the app hasn't picked up yet answers as not set up there.
+        guard r.ok, r.open != true else { return r.ok ? .connected : .notConnected }
+        return r.refused == true ? .refused : .notConnected
+    }
+
+    private static func askApp(_ request: DeviceControlWire.Request) -> DeviceControlWire.Response {
+        do {
+            return try DeviceControlWire.ask(request, in: ProfileStore.directory)
+        } catch DeviceControlWire.WireError.noApp {
+            stop("the RoamRun app isn't running (or is a build without device control): it holds the connection to the device")
+        } catch {
+            stop("couldn't ask the RoamRun app: \(error)")
+        }
+    }
+
+    /// The device's screen now, as PNG. Prints the path, then the size a tap's point is in.
+    private static func look(_ profile: DeviceProfile, path: String?) -> Never {
+        let f = DateFormatter()
+        f.dateFormat = "yyyyMMdd-HHmmss"
+        let file = URL(fileURLWithPath: path ?? "\(fileSafe(profile.displayName))-look-\(f.string(from: .now)).png").standardizedFileURL
+        guard file.pathExtension.lowercased() == "png" else { fail("the file must end in .png") }
+        // The app writes it where only RoamRun keeps things; it is this command, run by the user in
+        // their own folder, that puts it there (the app would be asked for access to it instead).
+        let made = DeviceControlWire.socketFolder(in: ProfileStore.directory).appendingPathComponent("look-\(UUID().uuidString).png")
+        let r = askApp(.init(op: "look", device: profile.id, path: made.path))
+        guard r.ok, let w = r.width, let h = r.height else { stop("look failed: \(r.error ?? "no answer")") }
+        do {
+            try? FileManager.default.removeItem(at: file)
+            try FileManager.default.moveItem(at: made, to: file)
+        } catch {
+            try? FileManager.default.removeItem(at: made)
+            stop("look failed: can't write \(file.path)")
+        }
+        print(file.path)
+        print("\(w) x \(h)")
+        exit(0)
+    }
+
+    /// One tap, at a point in the pixels of the last look. Operates the device.
+    private static func tap(_ profile: DeviceProfile, x: Double, y: Double) -> Never {
+        operate(profile, .init(op: "tap", device: profile.id, x: x, y: y))
+    }
+
+    /// Something done to the device: silent when it went, the reason when it didn't.
+    private static func operate(_ profile: DeviceProfile, _ request: DeviceControlWire.Request) -> Never {
+        let r = askApp(request)
+        guard r.ok else { stop("\(request.op) failed: \(r.error ?? "no answer")") }
+        exit(0)
+    }
+
+    /// Accessibility's captions, one a line. Can scroll the screen.
+    private static func elements(_ profile: DeviceProfile, limit: Int?) -> Never {
+        let r = askApp(.init(op: "elements", device: profile.id, limit: limit))
+        guard r.ok, let captions = r.captions else { stop("elements failed: \(r.error ?? "no answer")") }
+        captions.forEach { print($0) }
+        if r.complete != true {
+            FileHandle.standardError.write(Data("roamrun: \(captions.count) elements; the walk was cut short, there may be more\n".utf8))
+        }
+        exit(0)
+    }
+    #endif
+
     private static func screenshot(_ profile: DeviceProfile, path: String?) -> Never {
         let f = DateFormatter()
         f.dateFormat = "yyyyMMdd-HHmmss"
@@ -1248,6 +1433,21 @@ enum CLI {
         if profiles.isEmpty { check(false, "No devices saved", fix: "Add one in the RoamRun app.") }
         for p in profiles {
             section("\n\(p.displayName) (\(p.providerIP))", p.displayName)
+            #if DEVICE_CONTROL
+            switch controlState(p.id, udid: p.udid ?? live[p.id]?.udid) {
+            case .notSetUp: break
+            case .connected: check(true, "Device control: connected")
+            case .notConnected:
+                check(false, "Device control: paired, but not connected",
+                      fix: "It connects while the device is on a Wi‑Fi, awake and reachable over the VPN — and then stays connected on cellular. Ask the user to unlock it on Wi‑Fi.", warnOnly: true)
+            case .refused:
+                check(false, "Device control: the device no longer has RoamRun's pairing",
+                      fix: "It was removed on the device. Ask the user to pair again: the RoamRun app, the device's page, Device control › Pair Again… (same Wi‑Fi, iOS 27 or later).", warnOnly: true)
+            case .noApp:
+                check(false, "Device control: the RoamRun app isn't running (or is a build without it)",
+                      fix: "Open RoamRun: it holds the connection that look, tap and the rest use.", warnOnly: true)
+            }
+            #endif
             if !checkAll, live[p.id] == nil {
                 note("Bridge is off — not checked (roamrun doctor \(commandName(p)) checks it anyway)")
                 continue
