@@ -4425,6 +4425,17 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1", paired: Bool = true
     #expect(device.calls.filter { $0 == "look" }.count == 40)
 }
 
+/// Not connected because this Mac itself is off Tailscale is said as that, not as the device being away.
+@Test func notConnectedSaysWhenThisMacIsOffTailscale() {
+    #expect(CLI.ControlState.notConnectedLine(mesh: nil) == CLI.ControlState.notConnected.line)
+    let down = CLI.meshProblem { throw TailscaleClientError.commandFailed(TailscaleClient.stateProblem("NeedsLogin")!) }
+    #expect(down?.contains("isn't signed in") == true)
+    let line = CLI.ControlState.notConnectedLine(mesh: down)
+    #expect(line.contains("isn't signed in") && !line.contains("on a Wi‑Fi"))
+    #expect(CLI.meshProblem { [] } == nil)
+    #expect(CLI.meshProblem { throw TailscaleClientError.cliNotFound }?.contains("not found") == true)
+}
+
 /// A connection that stands is asked now and then whether it still does: a device that
 /// restarted, or dropped the pairing, doesn't read as connected until the next call.
 @Test func aConnectionFoundGoneIsOpenedAnew() throws {

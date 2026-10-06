@@ -570,7 +570,17 @@ enum CLI {
         // Asked of the app once a device, for both ways of saying it.
         let controls = rows.map { r in UUID(uuidString: r.id).map { controlState($0, udid: r.udid) } }
         rows = zip(rows, controls).map { r, c in var r = r; r.deviceControl = c?.key; return r }
-        let lines = Dictionary(zip(rows.map(\.id), controls.map { $0?.line }), uniquingKeysWith: { a, _ in a })
+        // Not connected for this Mac's own Tailscale being down reads, from the app's side, like
+        // the device being away: asked once, and said, where a device not connected goes over it.
+        var mesh: String??
+        let lines = Dictionary(zip(rows.map(\.id), controls.map { c -> String? in
+            guard c == .notConnected else { return c?.line }
+            if mesh == nil {
+                let overTailscale = targets.contains { $0.providerID == MeshProvider.tailscale.rawValue }
+                mesh = .some(overTailscale ? Self.meshProblem { try TailscaleClient.fromSettings().listDevices() } : nil)
+            }
+            return ControlState.notConnectedLine(mesh: mesh ?? nil)
+        }), uniquingKeysWith: { a, _ in a })
         if json {
             printJSON(rows)
         } else {
@@ -778,6 +788,11 @@ enum CLI {
     }
 
     /// Through the tunnel like everything else: works over the bridge.
+    /// What keeps this Mac off Tailscale, as its own word; nil when it is on it.
+    nonisolated static func meshProblem(_ list: () throws -> [MeshDevice]) -> String? {
+        do { _ = try list(); return nil } catch { return error.localizedDescription }
+    }
+
     // Device control: the app holds the connection; these ask it.
 
     /// Where a device stands with being operated. `line` is nil when there is nothing to say
@@ -806,6 +821,12 @@ enum CLI {
             case .noApp: "noApp"
             case .keptOut: "keptOut"
             }
+        }
+
+        /// `mesh`: what keeps this Mac itself off Tailscale, when something does.
+        static func notConnectedLine(mesh: String?) -> String {
+            guard let mesh else { return ControlState.notConnected.line! }
+            return "paired, not connected — \(mesh): until then nothing on this Mac reaches the device"
         }
 
         var line: String? {

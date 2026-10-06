@@ -196,6 +196,9 @@ couldn't read which devices are on: the user looks at the device's page),
 `noApp`, `keptOut`, and `null`
 where it isn't set up): only the user can switch it on (it is
 theirs to decide, like the pairing) — tell them, and don't look for a way round.
+"Not connected" is said the same whether the device is away or this Mac itself
+is off Tailscale; `roamrun status` adds the latter when it is so, and `roamrun
+doctor <name>` checks each step — look there before asking the user to wake the device.
 A command already under way or waiting when it is switched off fails with a
 message that begins "stopped:" (or "not given:" for a look): the same thing —
 don't try it again.
