@@ -77,7 +77,7 @@ enum DeviceControlWire {
     /// it was warned of before, and typed all the same — said here, where it is read.
     static func typed(_ text: String) -> String? {
         guard text.contains(where: { $0 == " " || $0 == "\n" }) else { return nil }
-        return "typed. If the device's keyboard wasn't an English one, its spaces and Returns converted or confirmed instead of being typed: look, and if the text isn't what you sent, clear it and use paste."
+        return "typed. If the device's keyboard wasn't an English one, its spaces and Returns converted or confirmed instead of being typed, and under an English one auto-correction may have changed a word it didn't know: look, and if the text isn't what you sent, clear it and use paste."
     }
 
     /// How long the app waits for a request once a client has connected.

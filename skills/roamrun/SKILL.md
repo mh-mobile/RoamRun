@@ -254,7 +254,12 @@ have the user add the MCP tools, which run outside it.
   typed, and Return confirms: `Clair Obscur` arrives as `ClairObscur`, and a
   long text can throw the app back to the home screen). Look after typing and
   check that what arrived is what you sent; if it isn't, clear it and `paste`,
-  and where the keyboard may be Japanese, `paste` from the start. It is typed at the device's own pace,
+  and where the keyboard may be Japanese, `paste` from the start. Under an
+  English keyboard too, the device's auto-correction can put another word in
+  place of one it doesn't know — a name, a product, an identifier — when the
+  space or punctuation after it is typed (`worldxqpa ok` arrived as `wow ok`):
+  `paste` such words, or check them. It doesn't happen where the device's user
+  has switched Auto-Correction off (Settings › General › Keyboard). It is typed at the device's own pace,
   at most about 16 characters a second (500 take half a minute or more), and
   has all arrived when the command returns:
   for anything long, `paste` (the MCP tool takes 500 characters at most). `roamrun paste iPhone "任意の文字列"` puts any
