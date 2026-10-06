@@ -816,16 +816,6 @@ final class DeviceControlHub: @unchecked Sendable {
         onLog?("device control: a pairing made on another Mac was taken in", target.id)
     }
 
-    func keepPairing(_ pairing: Data, sealedWith sealing: SymmetricKey, for target: Target) throws {
-        try sealPairing(pairing, with: sealing, udid: target.udid)
-        hold(target)
-    }
-
-    /// Both steps at once, where no device is to be saved in between.
-    func adoptPairing(_ pairing: Data, for target: Target) throws {
-        try keepPairing(pairing, sealedWith: tryPairing(pairing, for: target), for: target)
-    }
-
     /// A pairing file is read as the one file it is: not through a link (the link would be removed
     /// and the file left), not one that has another name (it would stay under that), and no more
     /// than a pairing can be. The descriptor is the caller's to close, after `removeTaken`.
@@ -1121,10 +1111,6 @@ final class DeviceControlHub: @unchecked Sendable {
     static func swipeDuration(_ asked: Int?) -> Int? {
         guard let asked else { return 300 }
         return (50...5000).contains(asked) ? asked : nil
-    }
-
-    private func look(of device: UUID) -> (width: Int, height: Int)? {
-        lock.withLock { held[device]?.looked.map { ($0.width, $0.height) } }
     }
 
     static func isLookFile(_ path: String, in directory: URL) -> Bool {

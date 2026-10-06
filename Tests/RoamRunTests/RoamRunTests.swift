@@ -4704,9 +4704,15 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1", paired: Bool = true
     let target = DeviceControlHub.Target(id: UUID(), name: "iPhone", ip: "100.64.0.1", port: 49152, udid: "UDID-9")
     let file = DeviceControlWire.pairingFile(udid: "UDID-9", in: dir)
 
+    // What an import does, in its order: tried, sealed, held (the app saves the device in between).
+    func takeIn(_ hub: DeviceControlHub, _ pairing: Data, for target: DeviceControlHub.Target) throws {
+        let sealing = try hub.tryPairing(pairing, for: target)
+        try hub.sealPairing(pairing, with: sealing, udid: target.udid)
+        hub.hold(target)
+    }
     let away = DeviceControlHub(directory: dir, key: { _ in scratchKey }) { _, _, _ in Unreachable() }
     defer { away.stop() }
-    #expect(throws: (any Error).self) { try away.adoptPairing(pairing, for: target) }
+    #expect(throws: (any Error).self) { try takeIn(away, pairing, for: target) }
     #expect(!FileManager.default.fileExists(atPath: file.path))
     #expect(away.session(of: target.id) == nil)
 
@@ -4717,7 +4723,7 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1", paired: Bool = true
         return StandInDevice()
     }
     defer { hub.stop() }
-    try hub.adoptPairing(pairing, for: target)
+    try takeIn(hub, pairing, for: target)
     #expect(given.withLock { $0.first } == pairing)
     #expect(try DeviceControlHub.unseal(Data(contentsOf: file), with: scratchKey) == pairing)
     #expect(hub.state(of: target.id, udid: "UDID-9") == (true, true, false))   // held, and said to be connected at once
@@ -4726,7 +4732,7 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1", paired: Bool = true
     let other = DeviceControlHub.Target(id: UUID(), name: "iPad", ip: "100.64.0.2", port: 49152, udid: "UDID-8")
     let keyless = DeviceControlHub(directory: dir, key: { _ in throw DeviceSession.Failure.message("refused") }) { _, _, _ in StandInDevice() }
     defer { keyless.stop() }
-    #expect(throws: (any Error).self) { try keyless.adoptPairing(pairing, for: other) }
+    #expect(throws: (any Error).self) { try takeIn(keyless, pairing, for: other) }
     #expect(!FileManager.default.fileExists(atPath: DeviceControlWire.pairingFile(udid: "UDID-8", in: dir).path))
 }
 
