@@ -377,6 +377,8 @@ protocol ControlledDevice: AnyObject, Sendable {
     var isRefused: Bool { get }
     var isAnother: Bool { get }
     func connect() throws
+    /// Finds out whether the connection still stands, without waiting for a call under way: `isOpen` says.
+    func check()
     /// At once, from any thread: nothing more is begun on the device. `close` follows, and waits.
     func letGo()
     /// The call under way stops where it can; the device is kept.
@@ -443,6 +445,8 @@ final class DeviceControlHub: @unchecked Sendable {
         var connecting = false
         var failures = 0
         var nextTry = Date.distantPast
+        /// When the connection was last asked whether it stands (from when it was made).
+        var checked = Date()
 
         /// The pairing this session is for, and the only one it connects with (`session(for:)`):
         /// what the switch is asked about. The saved file changed, this session isn't it any more.
@@ -1011,13 +1015,12 @@ final class DeviceControlHub: @unchecked Sendable {
     func start() {
         Self.removeUnsealed(in: directory)
         listen()
-        // ponytail: a look every 30 s for a connection to open, none at one already open — a dead
-        // one is found by the next call (and recovered as Recovery says). A heartbeat, if that is too late.
         let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
         timer.schedule(deadline: .now() + 30, repeating: 30)
         timer.setEventHandler { [weak self] in
             self?.listen()   // not had at the start (another copy was ending): had now
             self?.renewChanged()
+            self?.checkOpen()
             self?.keepOpen()
         }
         timer.resume()
@@ -1057,6 +1060,26 @@ final class DeviceControlHub: @unchecked Sendable {
         }
         changed.forEach(reopen)
         onHeldChanged?()   // also when nothing changed: the chance to write what a write failed to
+    }
+
+    /// How often a connection that stands is asked whether it still does: a device restarted, or
+    /// its pairing removed on it, otherwise reads as connected until the next call finds out.
+    var checkEvery: TimeInterval = 60
+
+    /// Asks each connection that stands and is due; one found gone is opened anew at once.
+    func checkOpen() {
+        let now = Date()
+        let due = lock.withLock { () -> [any ControlledDevice] in
+            let due = held.filter { $0.value.session.isOpen && now.timeIntervalSince($0.value.checked) >= checkEvery }
+            for id in due.keys { held[id]?.checked = now }
+            return due.map(\.value.session)
+        }
+        for session in due {
+            DispatchQueue.global(qos: .utility).async { [self] in
+                session.check()
+                if !session.isOpen { keepOpen() }
+            }
+        }
     }
 
     /// Tries to open what isn't: one attempt per device at a time; none for a pairing the device

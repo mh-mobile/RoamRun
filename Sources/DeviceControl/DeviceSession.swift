@@ -149,6 +149,23 @@ public final class DeviceSession: @unchecked Sendable {
         }
     }
 
+    /// Finds out whether the connection still stands (the device restarted, or dropped the
+    /// pairing, says nothing until it is asked): what it finds is in `isOpen`. A connection is
+    /// opened in the tunnel and closed — nothing shows on the device, and its sound stays.
+    /// A call under way knows for itself: not waited for.
+    public func check() {
+        guard lock.try() else { return }
+        defer { lock.unlock() }
+        guard !closed, !broken, let device else { return }
+        guard let answer = rr_device_alive(device) else { return }
+        defer { rr_string_free(answer) }
+        let said = String(cString: answer)
+        guard !said.contains("\"ok\":true") else { return }
+        broken = true
+        noteStanding()
+        onEvent?("found gone: \(said)")
+    }
+
     /// The services the device has, as the library reports them (JSON).
     public func info() throws -> String {
         try perform(repeatable: true) { d in

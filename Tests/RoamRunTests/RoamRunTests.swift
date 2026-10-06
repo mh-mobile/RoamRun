@@ -4325,7 +4325,14 @@ private final class StandInDevice: ControlledDevice, @unchecked Sendable {
     /// A look waits here when set, and says it has begun.
     var hold: DispatchSemaphore?
     let lookBegan = DispatchSemaphore(value: 0)
-    var isOpen: Bool { true }
+    var isOpen: Bool { lock.withLock { open } }
+    private var open = true
+    /// What a check finds: the connection gone, when set.
+    var goneWhenChecked = false
+    func check() {
+        count("check")
+        lock.withLock { if goneWhenChecked { open = false } }
+    }
     var isRefused: Bool { false }
     /// What answers isn't the device the pairing was made with.
     var isAnother = false
@@ -4333,8 +4340,10 @@ private final class StandInDevice: ControlledDevice, @unchecked Sendable {
     var connectHold: DispatchSemaphore?
     let connectBegan = DispatchSemaphore(value: 0)
     func connect() throws {
+        count("connect")
         connectBegan.signal()
         connectHold?.wait()
+        lock.withLock { open = true; goneWhenChecked = false }
     }
     func letGo() { count("letGo") }
     /// What the hub gave it: the pairing it would connect with, and what is asked before a call begins.
@@ -4414,6 +4423,34 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1", paired: Bool = true
         guard taps <= round else { break }
     }
     #expect(device.calls.filter { $0 == "look" }.count == 40)
+}
+
+/// A connection that stands is asked now and then whether it still does: a device that
+/// restarted, or dropped the pairing, doesn't read as connected until the next call.
+@Test func aConnectionFoundGoneIsOpenedAnew() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (hub, made) = try standInHub(dir)
+    defer { hub.stop() }
+    let id = UUID()
+    hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
+    let device = try #require(made().first)
+    func soon(_ what: () -> Bool) -> Bool {
+        for _ in 0..<300 { if what() { return true }; usleep(10_000) }
+        return false
+    }
+    hub.checkOpen()   // not due yet: just made
+    usleep(50_000)
+    #expect(!device.calls.contains("check"))
+    hub.checkEvery = 0
+    hub.checkOpen()
+    #expect(soon { device.calls.contains("check") })
+    #expect(hub.state(of: id, udid: "UDID-1").open)   // it stands: nothing is opened
+    let connects = device.calls.filter { $0 == "connect" }.count
+    device.goneWhenChecked = true
+    hub.checkOpen()
+    #expect(soon { device.calls.filter { $0 == "connect" }.count == connects + 1 })   // found gone, opened anew at once
+    #expect(soon { hub.state(of: id, udid: "UDID-1").open })
 }
 
 /// A look is as large as a model is shown it: the file, the size said and the points taken are
@@ -4694,6 +4731,7 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1", paired: Bool = true
         var isOpen: Bool { false }
         var isRefused: Bool { false }
         func connect() throws { throw DeviceSession.Failure.message("no route") }
+        func check() {}
         func letGo() {}
         func close() {}
         func look() throws -> CGImage { throw DeviceSession.Failure.message("no") }

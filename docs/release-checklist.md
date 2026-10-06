@@ -155,7 +155,8 @@ tunnel and Xcode has to run again.
     is unlocked look at `roamrun status <name>` — never that something else answers at the
     device's address; note it if it does. Locked, it stays connected (a `look` shows the
     lock screen, and a swipe is taken: SECURITY.md says so); restarted and not yet unlocked,
-    it says not connected (the app keeps trying).
+    it says not connected (the app keeps trying) within two minutes, with nothing asked of it
+    meanwhile — as it does, within two minutes, after its entry is removed on the device.
 24. Into a note, the device's keyboard an English one: `roamrun type <name> "<600 numbered
     characters>"` and a `look` right after — the last of them is there (none still on their
     way); once more in another app's field (a search field, a message draft not sent): the pace

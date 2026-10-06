@@ -49,6 +49,13 @@ void rr_flag_lower(uint8_t *flag);
 char *rr_device_info(RRDevice *device);
 
 /**
+ * JSON: {"ok":true} when the tunnel still carries a connection to the device (one is opened
+ * to a port it listens on, and closed: a few hundred bytes, nothing shown on the device, its
+ * sound left alone). Doesn't wait for more than a few seconds. Free with rr_string_free.
+ */
+char *rr_device_alive(RRDevice *device);
+
+/**
  * JSON: {"ok":true,"width":…,"height":…}, the primary display's size in pixels as the device
  * holds it (portrait for a phone), by the device's own word. A frame of the stream can be a
  * little larger: padded on the right and at the bottom. Free with rr_string_free.

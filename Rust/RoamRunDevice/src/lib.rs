@@ -22,6 +22,7 @@ use idevice::remote_pairing::{
 use idevice::rsd::RsdHandshake;
 use idevice::tcp::adapter::Adapter;
 use idevice::tcp::handle::{AdapterHandle, UdpSocketHandle};
+use idevice::provider::RsdProvider;
 use idevice::{ReadWrite, RsdService};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -273,6 +274,32 @@ impl RsdService for DeviceInfo {
     async fn from_stream(stream: Box<dyn ReadWrite>) -> Result<Self, idevice::IdeviceError> {
         Ok(Self(idevice::core_device::CoreDeviceServiceClient::new(stream).await?))
     }
+}
+
+/// Whether the tunnel still carries a connection to the device: one is opened to a port the
+/// device said it listens on, and closed. A few hundred bytes; no service is spoken to, so
+/// nothing shows on the device and its sound stays.
+/// # Safety
+/// `device` came from rr_device_open and wasn't closed.
+#[no_mangle]
+pub unsafe extern "C" fn rr_device_alive(device: *mut RRDevice) -> *mut c_char {
+    let Some(device) = (unsafe { device.as_ref() }) else { return std::ptr::null_mut() };
+    let result = with_room(|| {
+        let mut link = device.link.lock().unwrap_or_else(|e| e.into_inner());
+        let link = &mut *link;
+        let Some(port) = link.handshake.services.values().map(|s| s.port).min() else { return Err("no service to ask".to_string()) };
+        device.runtime.block_on(async {
+            match tokio::time::timeout(SCREEN_WAIT, link.handle.connect_to_service_port(port)).await {
+                Ok(Ok(_)) => Ok(()),
+                Ok(Err(e)) => Err(format!("tunnel: {e:?}")),
+                Err(_) => Err("timed out".into()),
+            }
+        })
+    });
+    c_string(match result {
+        Ok(()) => "{\"ok\":true}".to_string(),
+        Err(why) => failure(&why),
+    })
 }
 
 /// The primary display's size in pixels (the first one's when none is marked), from what the device says of its displays.
