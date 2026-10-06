@@ -102,9 +102,12 @@ tunnel and Xcode has to run again.
     one per dial), one `answers again` line at its end, and a `status` line for each
     change, the one on leaving Wi‑Fi with the tunnel relays still open. The `answers again`
     line's count of connections closed without dialing, over the spell's seconds, stays
-    around 20 a second: far more means it now spins on the closed connections. (Without
-    the hold it was ~12 a second — remotepairingd waits ~50 ms before it redials, and each
-    dial took a round trip to the device as well; held, only the wait is left.)
+    around 30 a second (31 measured: 7942 in 254 s, beside 79 refused dials): far more
+    means it now spins on the closed connections. (Without the hold it was ~12 a second —
+    each redial took a round trip to the device as well; held, only remotepairingd's own
+    wait before it redials is left.) This needs a debug session held over the spell (an app
+    launched and lldb left attached): without one the bridge gives up after three minutes
+    and starts anew, and no `answers again` line is written.
 
 ## Device control (a device on iOS 27 or later)
 
