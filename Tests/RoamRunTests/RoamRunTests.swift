@@ -5559,7 +5559,7 @@ func everyDocumentedCommandParses(_ doc: String) throws {
             #expect(CLI.commands.contains(command), "\(doc): roamrun \(m.1)")
             checked += 1
             if command == "init" {
-                let known: Set = ["--client", "--print", "--uninstall", "claude", "codex", "cursor", "gemini", "copilot", "x"]
+                let known: Set = ["--client", "--print", "--uninstall", "claude", "codex", "cursor", "gemini", "copilot", "devin", "x"]
                 let given = words.dropFirst().map { $0.hasPrefix("--client=") ? "--client" : $0 }
                 #expect(Set(given).isSubset(of: known), "\(doc): roamrun \(m.1)")
             } else if case .failure(let e) = CLI.parse(words) {

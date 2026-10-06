@@ -189,7 +189,7 @@ xcrun devicectl device info files --device <udid> --domain-type systemCrashLogs 
 Claude Code, Codex, Cursor and other agents can take over building, installing on the device and debugging. Install the skill that teaches them how:
 
 ```sh
-roamrun init                                  # add the skill to every agent found in ~ (.claude, .codex, .cursor, .gemini, .copilot)
+roamrun init                                  # add the skill to every agent found in ~ (.claude, .codex, .cursor, .gemini, .copilot, .devin)
 roamrun init --client claude                  # or only to the ones you name (repeat --client)
 ```
 

@@ -98,7 +98,7 @@ enum CLI {
                                      already listed under the same version and build)
       version                        Print the version (also --version)
       init [--client <name>] [--print] [--uninstall]
-                                     Install the agent skill (clients: claude, codex, cursor, gemini, copilot)
+                                     Install the agent skill (clients: claude, codex, cursor, gemini, copilot, devin)
 
     Exit codes: 0 ok/ready, 1 not ready or a check failed, 2 usage error.
     Name a device when a script needs the answer to be about that one.
@@ -1833,7 +1833,7 @@ enum CLI {
     /// Global skill directories of agents that follow the Agent Skills layout.
     nonisolated private static let skillClients: [(name: String, home: String)] = [
         ("claude", ".claude"), ("codex", ".codex"), ("cursor", ".cursor"),
-        ("gemini", ".gemini"), ("copilot", ".copilot"),
+        ("gemini", ".gemini"), ("copilot", ".copilot"), ("devin", ".devin"),
     ]
 
     /// The skill shipped in this app, which matches this CLI.
@@ -1898,7 +1898,7 @@ enum CLI {
             named.isEmpty ? FileManager.default.fileExists(atPath: home.appendingPathComponent(c.home).path) : named.contains(c.name)
         }
         guard !targets.isEmpty else {
-            stop("no supported agent found in ~ (.claude, .codex, .cursor, .gemini, .copilot). Use --client, or --print and paste it yourself.")
+            stop("no supported agent found in ~ (\(skillClients.map(\.home).joined(separator: ", "))). Use --client, or --print and paste it yourself.")
         }
         let fm = FileManager.default
         for c in targets {

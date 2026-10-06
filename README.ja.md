@@ -189,7 +189,7 @@ UDID は `roamrun status <name>` で表示されます。UI テストが動く�
 Claude Code・Codex・Cursor などのエージェントに、ビルド〜実機インストール〜デバッグを任せられます。エージェントに使い方を教えるスキルを入れてください:
 
 ```sh
-roamrun init                                  # ~ にあるエージェントすべて（.claude .codex .cursor .gemini .copilot）にスキルを配置
+roamrun init                                  # ~ にあるエージェントすべて（.claude .codex .cursor .gemini .copilot .devin）にスキルを配置
 roamrun init --client claude                  # 指定したものだけに配置（--client は複数指定可）
 ```
 
