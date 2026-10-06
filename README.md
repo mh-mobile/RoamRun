@@ -448,6 +448,8 @@ What RoamRun exposes and how, and how to report a vulnerability: [SECURITY.md](S
 
 ## Credits
 
+RoamRun was built by Claude Code, powered by Claude Opus 5.5, under mh-mobile's direction.
+
 This implementation builds on the following public write-up:
 
 - Kevin Paterson, ["How to remotely iterate & deploy your sideloaded iOS-apps over tailnet"](https://dev.to/kvnpt/how-to-remotely-iterate-deploy-your-sideloaded-ios-apps-over-tailnet-jak) (DEV Community) — demonstrates an equivalent setup with `dns-sd -P` + `socat`

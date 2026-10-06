@@ -406,6 +406,8 @@ RoamRun が何をどこに公開するか、脆弱性の報告方法は [SECURIT
 
 ## 参考
 
+RoamRun は、mh-mobile の指揮のもと、Claude Code（Claude Opus 5.5）が作りました。
+
 この実装は以下の公開情報をベースにしています:
 
 - Kevin Paterson, ["How to remotely iterate & deploy your sideloaded iOS-apps over tailnet"](https://dev.to/kvnpt/how-to-remotely-iterate-deploy-your-sideloaded-ios-apps-over-tailnet-jak) (DEV Community) — `dns-sd -P` + `socat` による同等構成の実証
