@@ -100,6 +100,7 @@ final class AppCoordinator: ObservableObject {
         deviceControl.allowed = DeviceControlAllowed.shared.contains
         // Unreadable is off, as every request finds it; not read yet is not yet known.
         deviceControl.allowedKnown = { DeviceControlAllowed.shared.known($0) ?? (DeviceControlAllowed.shared.isUnreadable ? false : nil) }
+        deviceControl.allowedUnreadable = { DeviceControlAllowed.shared.isUnreadable || DeviceControlAllowed.shared.isLocked }
         deviceControl.onReplaced = { [switching] mark in
             DeviceControlAllowed.shared.offNow(mark)   // from this moment, whatever the queue is waiting on
             switching.async { DeviceControlAllowed.shared.set(mark, false) }

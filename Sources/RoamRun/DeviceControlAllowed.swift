@@ -16,6 +16,8 @@ final class DeviceControlAllowed: @unchecked Sendable {
     private let lock = NSLock()
     private var held: Set<String>?
     private var unreadable = false
+    /// The Keychain was locked when it was last asked: nobody is on until it answers.
+    private var locked = false
     /// Switched off here and now, whatever the Keychain has been told yet (it may be busy, or asking).
     private var off: Set<String> = []
     /// Counts what is asked, so that a switch-on that was waiting doesn't undo an off asked after it.
@@ -58,7 +60,13 @@ final class DeviceControlAllowed: @unchecked Sendable {
         // Given, and not a list (an earlier build's, or garbled): nothing is on, and the next switch writes a list in its place.
         let found: Set<String>? = status == errSecItemNotFound ? []
             : status == errSecSuccess ? (data.flatMap { try? JSONDecoder().decode(Set<String>.self, from: $0) } ?? []) : nil
-        lock.withLock { held = found; unreadable = found == nil }
+        // A Keychain that is locked (a login not finished, a session without the screen) can't ask
+        // anyone and will answer later: read again at the next occasion, not held against it.
+        lock.withLock {
+            held = found
+            unreadable = found == nil && status != errSecInteractionNotAllowed
+            locked = found == nil && status == errSecInteractionNotAllowed
+        }
         return found
     }
 
@@ -88,6 +96,9 @@ final class DeviceControlAllowed: @unchecked Sendable {
 
     /// The Keychain's list couldn't be read: nothing is on, and nothing can be switched until it can.
     var isUnreadable: Bool { lock.withLock { unreadable } }
+
+    /// The Keychain was locked when last asked (it is asked again by itself).
+    var isLocked: Bool { lock.withLock { locked } }
 
     /// Writes what an earlier write failed to, if anything: before the app ends.
     func flush() {

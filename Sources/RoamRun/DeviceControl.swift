@@ -43,6 +43,8 @@ enum DeviceControlWire {
         var allowed: Bool?
         /// For "state": what answers at the device's address isn't the device the pairing was made with.
         var another: Bool?
+        /// For "state": the list of what is switched on couldn't be read from the Keychain (so nothing is).
+        var listUnreadable: Bool?
         /// For "import": whether the file the pairing came in is gone (`error` may say more than that).
         var removed: Bool?
         static func failure(_ why: String) -> Response { Response(ok: false, error: why) }
@@ -497,6 +499,8 @@ final class DeviceControlHub: @unchecked Sendable {
     var onHeldChanged: (@Sendable () -> Void)?
     /// A saved pairing was written over: its mark, for the switch to drop. Not to wait in.
     var onReplaced: (@Sendable (String) -> Void)?
+    /// The Keychain didn't give the list of what is on: said with how a device stands, apart from a switch that is off.
+    var allowedUnreadable: @Sendable () -> Bool = { false }
     /// The same as far as it is known without waiting, for saying how a device stands.
     var allowedKnown: @Sendable (String) -> Bool? = { _ in true }
 
@@ -1143,7 +1147,7 @@ final class DeviceControlHub: @unchecked Sendable {
             guard let h = lock.withLock({ held[request.device] }) else { return notSetUp }
             // As far as it is known: how a device stands is said at once, and the Keychain may take its time.
             return .init(ok: true, open: h.session.isOpen, refused: h.session.isRefused, allowed: allowedKnown(h.mark),
-                         another: h.session.isAnother ? true : nil)
+                         another: h.session.isAnother ? true : nil, listUnreadable: allowedUnreadable() ? true : nil)
         }
         // Everything else one at a time per device, and whole: a look is checked, spent and acted
         // on without another command coming in between. The session is the one held once the

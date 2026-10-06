@@ -191,7 +191,9 @@ The device's page has a switch for device control. While it is off, every
 command here fails with "device control is switched off for this device", and
 `roamrun status` says "switched off" (`"deviceControl": "switchedOff"` in
 `status --json` and `devices --json`; the other values there are `connected`, `notConnected`,
-`refused` — the user pairs again —, `another`, `noApp`, `keptOut`, and `null`
+`refused` — the user pairs again —, `another`, `listUnreadable` (the app
+couldn't read which devices are on: the user looks at the device's page),
+`noApp`, `keptOut`, and `null`
 where it isn't set up): only the user can switch it on (it is
 theirs to decide, like the pairing) — tell them, and don't look for a way round.
 A command already under way or waiting when it is switched off fails with a

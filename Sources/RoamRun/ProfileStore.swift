@@ -118,7 +118,9 @@ final class ProfileStore {
             if mine.providerIP == old.providerIP { out.providerIP = theirs.providerIP }
             if mine.remotePairingPort == old.remotePairingPort { out.remotePairingPort = theirs.remotePairingPort }
             if mine.providerHostName == old.providerHostName { out.providerHostName = theirs.providerHostName }
-            if mine.udid == old.udid { out.udid = theirs.udid }
+            // A UDID learned meanwhile is taken; one that is known isn't given up for none
+            // (nothing of ours writes that, and the device's own pairing is named by it).
+            if mine.udid == old.udid, let learned = theirs.udid { out.udid = learned }
             return out
         }
     }

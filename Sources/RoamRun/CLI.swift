@@ -787,6 +787,8 @@ enum CLI {
         case switchedOff
         /// What answers at its address isn't the device the pairing was made with.
         case another
+        /// The Keychain didn't give the app its list of devices switched on: none is.
+        case listUnreadable
         /// The app can't be asked from here (a sandbox around this process).
         case keptOut
 
@@ -798,6 +800,7 @@ enum CLI {
             case .notConnected: "notConnected"
             case .refused: "refused"
             case .switchedOff: "switchedOff"
+            case .listUnreadable: "listUnreadable"
             case .another: "another"
             case .noApp: "noApp"
             case .keptOut: "keptOut"
@@ -811,6 +814,7 @@ enum CLI {
             case .notConnected: "paired, not connected — the app keeps trying; it can connect only while the device is on a Wi‑Fi"
             case .refused: "the pairing can no longer be used (removed on the device, made by a build that didn't keep the device's key with it, or this Mac can't read what it saved) — the user pairs again in the RoamRun app, on the device's page"
             case .another: "paired, but what answers at its address isn't the device the pairing was made with — it is told nothing of this Mac's and sent no input. Erased or replaced: the user pairs again in the RoamRun app; otherwise something else has its address"
+            case .listUnreadable: "paired, off — the Keychain didn't give the RoamRun app its list of devices switched on (the Keychain is locked, it was refused, or the item there isn't RoamRun's); the device's page in the app says what to do"
             case .switchedOff: "paired, switched off — the user switches it on in the RoamRun app, on the device's page"
             case .noApp: "paired; the RoamRun app, which holds the connection, isn't running (or is a build without device control)"
             case .keptOut: "paired; this process isn't allowed to reach the RoamRun app (a sandbox around it?) — run it outside, or use the MCP tools"
@@ -830,6 +834,7 @@ enum CLI {
         // In the order the app's page says them: what must be mended first comes first.
         if r.ok, r.refused == true { return .refused }
         if r.ok, r.another == true { return .another }
+        if r.ok, r.listUnreadable == true { return .listUnreadable }
         if r.ok, r.allowed == false { return .switchedOff }
         // A pairing the app hasn't picked up yet answers as not set up there.
         guard r.ok, r.open != true else { return r.ok ? .connected : .notConnected }
@@ -1627,6 +1632,9 @@ enum CLI {
             case .another:
                 check(false, "Device control: what answers at the device's address isn't the device RoamRun paired with",
                       fix: "It is told nothing of this Mac's and sent no input. If the device was erased or replaced, ask the user to pair again (the RoamRun app, the device's page); if not, something else on the network has the device's address — check the address saved for it.")
+            case .listUnreadable:
+                check(false, "Device control: the Keychain didn't give RoamRun its list of devices switched on",
+                      fix: "Nothing is switched on until it does. Ask the user to open the device's page in the RoamRun app: it says what to do (a question from macOS about that item is not to be allowed).", warnOnly: true)
             case .switchedOff:
                 check(false, "Device control: switched off for this device",
                       fix: "Commands and agents are refused while its switch is off. Ask the user to switch it on: the RoamRun app, the device's page, Device control.", warnOnly: true)

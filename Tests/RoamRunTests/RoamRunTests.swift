@@ -1974,6 +1974,11 @@ extension TimingSensitive {
     var cleared = renamed
     cleared.udid = "OTHER"
     #expect(ProfileStore.merge(base: [loaded], wanted: [cleared], disk: [onDisk]).first?.udid == "OTHER")
+    // A UDID that is known isn't given up for none on disk: its pairing is named by it, and
+    // without it the device's control would go — and its switch with it.
+    var forgotten = onDisk
+    forgotten.udid = nil
+    #expect(ProfileStore.merge(base: [onDisk], wanted: [onDisk], disk: [forgotten]).first?.udid == onDisk.udid)
 }
 
 @Test func aStoredBuildSurvivesThisStructGainingAField() throws {
@@ -5882,6 +5887,12 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     // What was switched off while it couldn't be read went out with that write: not on again after a restart.
     #expect(try JSONDecoder().decode(Set<String>.self, from: try #require(stored.withLock { $0 })) == [a, "mark-d"])
     #expect(refused.set("mark-d", false) && refused.set(b, true))
+    // A locked Keychain will answer later: nobody is on meanwhile, and it is read again by itself.
+    reads.withLock { $0 = errSecInteractionNotAllowed }
+    let locked = list()
+    #expect(!locked.contains(a) && !locked.isUnreadable && locked.isLocked && locked.known(a) == nil)
+    reads.withLock { $0 = errSecSuccess }
+    #expect(locked.contains(a) && !locked.isLocked)
     // Nothing there yet is an empty list, not an unreadable one.
     reads.withLock { $0 = errSecItemNotFound }
     let fresh = list()
@@ -5918,6 +5929,10 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     }
     #expect(made().last?.calls.isEmpty == true)
     #expect(hub.answer(.init(op: "state", device: id)).allowed == false)
+    #expect(hub.answer(.init(op: "state", device: id)).listUnreadable == nil)
+    hub.allowedUnreadable = { true }   // not the same as a switch that is off: said apart
+    #expect(hub.answer(.init(op: "state", device: id)).listUnreadable == true)
+    hub.allowedUnreadable = { false }
     on.withLock { $0 = true }
     #expect(hub.answer(.init(op: "press", device: id, text: "home")).ok)
     #expect(hub.answer(.init(op: "state", device: id)).allowed == true)
