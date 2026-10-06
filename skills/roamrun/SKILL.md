@@ -230,6 +230,8 @@ have the user add the MCP tools, which run outside it.
   Read the point off the image you just looked at, in its own pixels (the size
   printed after the path); never reuse a point from an older one.
   A point refused for being outside the image leaves the look to be used.
+  A look serves for a minute: after that a point is refused ("look again"), since
+  the screen may have changed while you thought — look, and read the point anew.
   The image is the screen as the device holds it, upright: an app in landscape
   shows turned on its side in it, and its points are still the image's.
 - `roamrun swipe iPhone 590 1800 590 900 [ms]` drags; start on something that

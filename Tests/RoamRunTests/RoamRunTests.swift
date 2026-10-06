@@ -4394,6 +4394,29 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1", paired: Bool = true
     #expect(device.calls.filter { $0 == "look" }.count == 40)
 }
 
+/// A look serves for a while only: a point read off one that is old goes to a screen nobody saw.
+@Test func anOldLookServesNoAction() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (hub, made) = try standInHub(dir)
+    defer { hub.stop() }
+    let id = UUID()
+    hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
+    let device = try #require(made().first)
+    let png = lookFile(in: dir)
+    hub.lookStands = 0.3
+    #expect(hub.answer(.init(op: "look", device: id, path: png)).ok)
+    Thread.sleep(forTimeInterval: 0.5)
+    let tap = hub.answer(.init(op: "tap", device: id, x: 10, y: 10))
+    #expect(!tap.ok && tap.error?.hasPrefix("look again") == true)
+    let swipe = hub.answer(.init(op: "swipe", device: id, x: 10, y: 10, x2: 20, y2: 20))
+    #expect(!swipe.ok && swipe.error?.hasPrefix("look again") == true)
+    #expect(!device.calls.contains("tap") && !device.calls.contains("swipe"))
+    hub.lookStands = 60
+    #expect(hub.answer(.init(op: "look", device: id, path: png)).ok)
+    #expect(hub.answer(.init(op: "tap", device: id, x: 10, y: 10)).ok)
+}
+
 /// What was seen through a session counts for that session only: a look still under way when
 /// the device gets a new session (another port, a new pairing) doesn't let a tap go to the new one.
 @Test func aLookThroughAReplacedSessionServesNoAction() throws {

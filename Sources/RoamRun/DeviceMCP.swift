@@ -179,7 +179,7 @@ final class DeviceMCP: @unchecked Sendable {
             guard let (jpeg, size, original) = Self.scaled(file) else { throw Failure(description: "couldn't read the look") }
             shown[device.id] = (size, original, looked.look)
             return [["type": "image", "data": jpeg.base64EncodedString(), "mimeType": "image/jpeg"]]
-                + text("\(Int(size.width)) x \(Int(size.height)). Points for tap and swipe are pixels of this image. It serves one action: look again after it.")
+                + text("\(Int(size.width)) x \(Int(size.height)). Points for tap and swipe are pixels of this image. It serves one action, within a minute: look again after it.")
         case "tap":
             let p = try real(try number("x"), try number("y"))
             let look = shown[device.id]?.look

@@ -426,9 +426,9 @@ final class DeviceControlHub: @unchecked Sendable {
         /// Under the hub's lock (a rename changes it while the session stays).
         var target: Target
         let session: any ControlledDevice
-        /// The last look: its size, which a tap's pixels are of, and which look it was. (This and
-        /// `acted` under the device's gate.)
-        var looked: (width: Int, height: Int, id: Int)?
+        /// The last look: its size, which a tap's pixels are of, which look it was, and when.
+        /// (This and `acted` under the device's gate.)
+        var looked: (width: Int, height: Int, id: Int, at: Date)?
         /// When the last input ended: a look right after it waits for the screen to settle.
         var acted: Date?
         /// Opening it in the background: one attempt at a time, and further apart while they fail.
@@ -1129,6 +1129,9 @@ final class DeviceControlHub: @unchecked Sendable {
     private static let lookFirst = "look first: a point is given in the pixels of a look, and each look serves one action"
     static let nobodyWaits = "nobody is waiting for this any more"
     static let notGiven = "not given: whoever asked has left, or the device was switched off meanwhile"
+    static let lookOld = "look again: the look this point is from is over a minute old, and the screen may be another by now"
+    /// How long a look serves: whoever read a point off it took their time, and the screen its own course.
+    var lookStands: TimeInterval = 60
     static let lookedSince = "the device was looked at again since the look this point is from (by another): look again"
 
     private func listen() {
@@ -1196,6 +1199,7 @@ final class DeviceControlHub: @unchecked Sendable {
                 // A request refused for what it says leaves the look to be used: it is spent by what reaches the device.
                 guard let size = h.looked else { return .failure(Self.lookFirst) }
                 guard request.look ?? size.id == size.id else { return .failure(Self.lookedSince) }
+                guard Date().timeIntervalSince(size.at) <= lookStands else { return .failure(Self.lookOld) }
                 guard let from = Self.fraction(x: request.x, y: request.y, of: (size.width, size.height)),
                       let to = Self.fraction(x: request.x2, y: request.y2, of: (size.width, size.height)) else {
                     return .failure("both points must be inside the last look (\(size.width) x \(size.height))")
@@ -1238,13 +1242,14 @@ final class DeviceControlHub: @unchecked Sendable {
                     return .failure(Self.notGiven)
                 }
                 let id = lock.withLock { () -> Int in looks += 1; return looks }
-                h.looked = (image.width, image.height, id)
+                h.looked = (image.width, image.height, id, Date())
                 return .init(ok: true, width: image.width, height: image.height, look: id)
             case "tap":
                 // In the pixels of what was last looked at: there is no tapping a screen not seen.
                 guard let size = h.looked else { return .failure(Self.lookFirst) }
                 // Of this look, when the caller says which: another's look since shows a screen this one never saw.
                 guard request.look ?? size.id == size.id else { return .failure(Self.lookedSince) }
+                guard Date().timeIntervalSince(size.at) <= lookStands else { return .failure(Self.lookOld) }
                 guard let point = Self.fraction(x: request.x, y: request.y, of: (size.width, size.height)) else {
                     return .failure("the point must be inside the last look (\(size.width) x \(size.height))")
                 }
