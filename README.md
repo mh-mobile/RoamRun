@@ -103,6 +103,8 @@ git clone https://github.com/mh-mobile/RoamRun && cd RoamRun
 
 Needs Xcode and Rust by [rustup](https://rustup.rs) (for device control's library; `make` builds it, with the Rust version it names). No Xcode project needed: SwiftPM and a Makefile assemble the `.app`. An app you build yourself isn't treated as a download, so Gatekeeper won't warn.
 
+If you set up device control with a build of your own: without a signing certificate (`make` then signs ad hoc), macOS takes each rebuild for another app, and the Keychain asks about the key RoamRun keeps there each time one is first opened. Answer "Always Allow" and the saved pairings go on working. Where there is no screen to answer on (a Mac reached over SSH only), the new build can't read them: delete the two Keychain items (see [What it creates on your Mac](#what-it-creates-on-your-mac-and-uninstalling)) and set up or import the pairing again. A build signed with a certificate of yours, like a released RoamRun, isn't asked about.
+
 ### Prebuilt dmg (GitHub Releases)
 
 The dmg on Releases is **signed with a Developer ID and notarized by Apple** (from 0.1.12): drag RoamRun to Applications and open it. (Up to 0.1.11 it was only ad-hoc signed and needed System Settings → Privacy & Security → "Open Anyway" on first launch.)
