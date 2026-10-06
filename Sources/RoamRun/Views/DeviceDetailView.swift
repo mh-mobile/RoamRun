@@ -399,7 +399,9 @@ private struct DeviceControlRow: View {
             return "Paired, off: the Keychain didn't give RoamRun its list of devices switched on. A released RoamRun isn't asked about it: if macOS asked and you refused, something else had replaced that item — delete it (README, uninstalling) rather than allow it, then switch on here. (`security delete-generic-password -s io.github.mh-mobile.roamrun.device-control -a allowed` — with `-a allowed`: the other item there is the key.)"
         }
         if !allowed { return "Paired, switched off: commands and agents are refused. Any program you run on this Mac can use it while it is on." }
-        return state.open ? "Paired and connected." : "Paired. Connects while the device is on Wi‑Fi, awake and reachable."
+        // On is said for what it is: not a permission for one agent.
+        let on = " While it is on, programs and agents on this Mac can see and operate the device."
+        return (state.open ? "Paired and connected." : "Paired. Connects while the device is on Wi‑Fi, awake and reachable.") + on
     }
 }
 
