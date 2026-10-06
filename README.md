@@ -199,7 +199,7 @@ The skill covers getting the device connected (`roamrun up -d` → `status --wai
 
 ## Seeing and operating the device
 
-RoamRun can also show the device's screen and operate it — tap, swipe, type, press its buttons — from the command line or as tools for an AI agent. It needs **iOS / iPadOS 27 or later** (earlier versions refuse remote control), and it doesn't go through the bridge or Xcode: RoamRun makes a pairing and a connection of its own. (Only the screen's exact size is asked of Xcode's `devicectl`; on a Mac where that doesn't know the device, a look can be slightly larger at its right and bottom edges.)
+RoamRun can also show the device's screen and operate it — tap, swipe, type, press its buttons — from the command line or as tools for an AI agent. It needs **iOS / iPadOS 27 or later** (earlier versions refuse remote control), and it doesn't go through the bridge or Xcode: RoamRun makes a pairing and a connection of its own.
 
 **Set up, once per device**, with the device on the same Wi‑Fi as the Mac: open the device's page in RoamRun → **Device control › Set Up…**. On the device, under Settings › Privacy & Security › Developer Mode, pick RoamRun and enter the code the Mac shows. After that it connects whenever the device is on a Wi‑Fi and reachable over the VPN, and stays connected when the device moves to cellular. The RoamRun app holds the connection, so it has to be running.
 
@@ -214,7 +214,7 @@ roamrun press iPhone home                 # home, lock, volume-up, volume-down
 roamrun elements iPhone                   # what accessibility says is on the screen (no positions)
 ```
 
-Each `look` serves one action: look, act, look again. For an agent, the same are MCP tools: `claude mcp add roamrun -- roamrun mcp`, or the like for another agent; the skill (`roamrun init`) tells it how to use them.
+Each `look` serves one action: look, act, look again. The image is the screen as the device holds it: an app in landscape shows turned on its side, and its points are still the image's. For an agent, the same are MCP tools: `claude mcp add roamrun -- roamrun mcp`, or the like for another agent; the skill (`roamrun init`) tells it how to use them.
 
 **From a Mac that can't pair itself.** Setting up needs the Mac and the device on one Wi‑Fi, which a Mac elsewhere (in a data centre, say) never is. Make its pairing on a Mac that is, and take it there:
 

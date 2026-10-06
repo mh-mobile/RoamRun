@@ -29,6 +29,8 @@ const VERSION: &CStr = c"0.6.0";
 const LABEL: &str = "roamrun";
 /// Each call: a device that stops answering mid-way must not hang the caller.
 const DEADLINE: Duration = Duration::from_secs(20);
+/// The device's word on its screen's size: a look waits for it, and does without it.
+const SCREEN_WAIT: Duration = Duration::from_secs(5);
 /// Services device control needs, by the word that names them.
 const WANTED: [(&str, &str); 4] = [
     ("hid", "com.apple.coredevice.hid.universalhidservice"),
@@ -261,6 +263,51 @@ pub unsafe extern "C" fn rr_device_info(device: *mut RRDevice) -> *mut c_char {
         link.stream.is_some(), link.stream_starts, link.keyframes_asked, link.keyframes_answered,
         link.stream.as_ref().and_then(|s| s.feedback_port).map_or("null".to_string(), |p| p.to_string())
     ))
+}
+
+/// The device's own word on its displays.
+struct DeviceInfo(idevice::core_device::CoreDeviceServiceClient<Box<dyn ReadWrite>>);
+
+impl RsdService for DeviceInfo {
+    fn rsd_service_name() -> std::borrow::Cow<'static, str> { "com.apple.coredevice.deviceinfo".into() }
+    async fn from_stream(stream: Box<dyn ReadWrite>) -> Result<Self, idevice::IdeviceError> {
+        Ok(Self(idevice::core_device::CoreDeviceServiceClient::new(stream).await?))
+    }
+}
+
+/// The primary display's size in pixels (the first one's when none is marked), from what the device says of its displays.
+fn screen_size(displays: &plist::Value) -> Option<(u32, u32)> {
+    let all = displays.as_dictionary()?.get("displays")?.as_array()?;
+    let primary = |d: &&plist::Value| d.as_dictionary().and_then(|d| d.get("primary")).and_then(|p| p.as_boolean()) == Some(true);
+    let size = all.iter().find(primary).or(all.first())?.as_dictionary()?.get("nativeSize")?.as_array()?;
+    let side = |v: &plist::Value| v.as_real().or(v.as_unsigned_integer().map(|n| n as f64)).filter(|n| (1.0..=65535.0).contains(n)).map(|n| n as u32);
+    match size.as_slice() {
+        [w, h] => Some((side(w)?, side(h)?)),
+        _ => None,
+    }
+}
+
+/// # Safety
+/// `device` came from rr_device_open and wasn't closed.
+#[no_mangle]
+pub unsafe extern "C" fn rr_device_screen(device: *mut RRDevice) -> *mut c_char {
+    let Some(device) = (unsafe { device.as_ref() }) else { return std::ptr::null_mut() };
+    let result = with_room(|| {
+        let mut link = device.link.lock().unwrap_or_else(|e| e.into_inner());
+        let link = &mut *link;
+        if link.stop.raised() { return Err(STOPPED.into()); }
+        device.runtime.block_on(async {
+            tokio::time::timeout(SCREEN_WAIT, async {
+                let mut info = DeviceInfo::connect_rsd(&mut link.handle, &mut link.handshake).await.map_err(|e| format!("device info service: {e:?}"))?;
+                let displays = info.0.invoke("com.apple.coredevice.feature.getdisplayinfo", None).await.map_err(|e| format!("displays: {e:?}"))?;
+                screen_size(&displays).ok_or_else(|| "displays: no size in the answer".to_string())
+            }).await.unwrap_or_else(|_| Err("timed out".into()))
+        })
+    });
+    c_string(match result {
+        Ok((width, height)) => format!("{{\"ok\":true,\"width\":{width},\"height\":{height}}}"),
+        Err(why) => failure(&why),
+    })
 }
 
 /// # Safety
@@ -1390,5 +1437,25 @@ mod tests {
     #[test]
     fn json_strings_are_quoted_whole() {
         assert_eq!(quoted("a\"b\\c\n\u{0}"), "\"a\\\"b\\\\c\\u000a\\u0000\"");
+    }
+
+    #[test]
+    fn the_screens_size_is_the_primary_displays() {
+        let display = |primary: bool, w: f64, h: f64| {
+            let mut d = plist::Dictionary::new();
+            d.insert("primary".into(), primary.into());
+            d.insert("nativeSize".into(), plist::Value::Array(vec![w.into(), h.into()]));
+            plist::Value::Dictionary(d)
+        };
+        let said = |displays: Vec<plist::Value>| {
+            let mut d = plist::Dictionary::new();
+            d.insert("displays".into(), plist::Value::Array(displays));
+            plist::Value::Dictionary(d)
+        };
+        assert_eq!(screen_size(&said(vec![display(false, 1920.0, 1080.0), display(true, 1179.0, 2556.0)])), Some((1179, 2556)));
+        assert_eq!(screen_size(&said(vec![display(false, 1920.0, 1080.0)])), Some((1920, 1080)));   // none marked: the first
+        assert_eq!(screen_size(&said(vec![display(true, 0.0, 2556.0)])), None);
+        assert_eq!(screen_size(&said(vec![])), None);
+        assert_eq!(screen_size(&plist::Value::String("no".into())), None);
     }
 }

@@ -49,6 +49,13 @@ void rr_flag_lower(uint8_t *flag);
 char *rr_device_info(RRDevice *device);
 
 /**
+ * JSON: {"ok":true,"width":…,"height":…}, the primary display's size in pixels as the device
+ * holds it (portrait for a phone), by the device's own word. A frame of the stream can be a
+ * little larger: padded on the right and at the bottom. Free with rr_string_free.
+ */
+char *rr_device_screen(RRDevice *device);
+
+/**
  * One key frame of the device's screen, as Annex-B HEVC with its parameter sets first. The
  * screen stream is started for it and kept for a few seconds after (a later call asks the
  * running one for a key frame); the device shows a screen-sharing session meanwhile. No input.

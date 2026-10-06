@@ -556,7 +556,7 @@ final class DeviceControlHub: @unchecked Sendable {
 
     /// `open` makes the session for a device; tests give stand-ins, and a key of their own.
     init(directory: URL, key: @escaping Key, open: @escaping Opener = { target, pairing, said in
-        let session = DeviceSession(ip: target.ip, port: target.port, pairing: pairing, udid: target.udid)
+        let session = DeviceSession(ip: target.ip, port: target.port, pairing: pairing)
         session.onEvent = said
         return session
     }) {

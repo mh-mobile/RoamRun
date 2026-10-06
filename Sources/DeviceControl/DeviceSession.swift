@@ -45,7 +45,7 @@ public final class DeviceSession: @unchecked Sendable {
         return true
     }
 
-    private let ip: String, port: UInt16, udid: String?
+    private let ip: String, port: UInt16
     /// The pairing itself, read each time a connection is made (never on the caller's thread:
     /// it may have to be unsealed first).
     private let pairing: @Sendable () throws -> Data
@@ -67,8 +67,8 @@ public final class DeviceSession: @unchecked Sendable {
     /// Said as things happen (opened, tried again, reopened), for whoever shows or logs it.
     public var onEvent: (@Sendable (String) -> Void)?
 
-    public init(ip: String, port: UInt16, pairing: @escaping @Sendable () throws -> Data, udid: String? = nil) {
-        self.ip = ip; self.port = port; self.pairing = pairing; self.udid = udid
+    public init(ip: String, port: UInt16, pairing: @escaping @Sendable () throws -> Data) {
+        self.ip = ip; self.port = port; self.pairing = pairing
     }
 
     /// Raised when this is closed, and for the call under way by `interrupt`: a long text stops between two keys, instead of
@@ -158,8 +158,18 @@ public final class DeviceSession: @unchecked Sendable {
         }
     }
 
-    /// The screen now, cut to its own size when devicectl knows it.
+    /// The screen's size by the device's own word, asked over this session's connection: once,
+    /// with nothing tried again for it (a look does without). First made by a look, which has its turn alone.
+    private lazy var sizes = ScreenSizes(ask: { [weak self] _ in
+        guard let object = try? self?.answer(repeatable: false, { rr_device_screen($0) }),
+              let width = object["width"] as? Int, let height = object["height"] as? Int else { return nil }
+        return (width, height)
+    })
+
+    /// The screen now, cut to its own size when the device said it.
     public func look() throws -> CGImage {
+        // Before the frame: a size that couldn't be had leaves the connection in doubt, and the frame settles it.
+        let screen = sizes.size(of: "")
         let frame = try perform(repeatable: true) { d -> Data in
             var length = 0
             var error: UnsafeMutablePointer<CChar>?
@@ -170,8 +180,7 @@ public final class DeviceSession: @unchecked Sendable {
             defer { rr_bytes_free(bytes, length) }
             return Data(bytes: bytes, count: length)
         }
-        // Outside the session's lock: devicectl can take seconds, and another call needn't wait for it.
-        return cut(try decodeKeyFrame(frame), to: udid.flatMap { ScreenSizes.shared.size(of: $0) })
+        return cut(try decodeKeyFrame(frame), to: screen)
     }
 
     /// Accessibility's captions; `complete` is false when the walk was cut short. Can scroll the screen.

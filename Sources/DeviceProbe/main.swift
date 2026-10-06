@@ -20,13 +20,7 @@ import UniformTypeIdentifiers
 // DeviceProbe pair   <pairing file> [name]                 waits for a device to pair with this Mac
 //     (iOS 27+, same network): on the device, Settings > Privacy & Security > Developer Mode
 //     lists [name]; the code printed here is entered there. Sends the device no input.
-// --udid <udid> anywhere: frames are cut to the screen's own size, asked of devicectl.
 var args = Array(CommandLine.arguments.dropFirst())
-var udid: String?
-if let flag = args.firstIndex(of: "--udid"), flag + 1 < args.count {
-    udid = args[flag + 1]
-    args.removeSubrange(flag...flag + 1)
-}
 guard let verb = args.first else { print("see the top of Sources/DeviceProbe/main.swift"); exit(0) }
 args.removeFirst()
 
@@ -59,7 +53,7 @@ let clock = DateFormatter()
 clock.dateFormat = "HH:mm:ss"
 setvbuf(stdout, nil, _IOLBF, 0)
 let pairingFile = URL(fileURLWithPath: args[2])
-let session = DeviceSession(ip: args[0], port: port, pairing: { try Data(contentsOf: pairingFile) }, udid: udid)
+let session = DeviceSession(ip: args[0], port: port, pairing: { try Data(contentsOf: pairingFile) })
 session.onEvent = { print("  [\(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium))] \($0)") }
 
 func ms(_ since: Date) -> Int { Int(Date().timeIntervalSince(since) * 1000) }

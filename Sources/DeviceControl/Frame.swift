@@ -4,41 +4,9 @@ import VideoToolbox
 
 public enum FrameError: Error { case message(String) }
 
-/// The primary display's size in pixels, as the device holds it (portrait for a phone).
-public func screenSize(udid: String) -> (width: Int, height: Int)? {
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-    p.arguments = ["devicectl", "--quiet", "device", "info", "displays", "--device", udid, "--json-output", "-"]
-    let out = Pipe()
-    p.standardOutput = out
-    p.standardError = FileHandle.nullDevice
-    let done = DispatchSemaphore(value: 0)
-    let read = Output()
-    guard (try? p.run()) != nil else { return nil }
-    DispatchQueue.global(qos: .utility).async {
-        read.data = out.fileHandleForReading.readDataToEndOfFile()
-        done.signal()
-    }
-    // A look waits for this: devicectl that can't reach the device gets 15 s, is then told to
-    // end, and a second later is ended. Whatever it does, this returns.
-    guard done.wait(timeout: .now() + 15) == .success else {
-        p.terminate()
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1) { if p.isRunning { kill(p.processIdentifier, SIGKILL) } }
-        return nil
-    }
-    let data = read.data
-    guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let displays = (root["result"] as? [String: Any])?["displays"] as? [[String: Any]],
-          let size = (displays.first { $0["primary"] as? Bool == true } ?? displays.first)?["nativeSize"] as? [Int],
-          size.count == 2, size[0] > 0, size[1] > 0 else { return nil }
-    return (size[0], size[1])
-}
-
 /// Each device's screen size: asked once it has been answered, and while it hasn't, asked again
-/// only after `retry` (a look mustn't wait for devicectl every time). Kept for as long as the app runs.
+/// only after `retry` (a look mustn't wait for the answer every time).
 public final class ScreenSizes: @unchecked Sendable {
-    public static let shared = ScreenSizes(ask: screenSize(udid:))
-
     private let ask: (String) -> (width: Int, height: Int)?
     private let retry: TimeInterval
     private let lock = NSLock()

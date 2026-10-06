@@ -5259,7 +5259,7 @@ private func listenerSoon(in dir: URL, _ handler: @escaping @Sendable (DeviceCon
 }
 
 /// A screen's size is asked until it is answered, a minute apart, and then kept: a look that
-/// came while devicectl couldn't reach the device no longer leaves every later one uncut.
+/// came while the device didn't say it no longer leaves every later one uncut.
 @Test func aScreensSizeIsAskedAgainUntilItIsKnown() {
     var answers: [(width: Int, height: Int)?] = [nil, nil, (1179, 2556)]
     var asked = 0
