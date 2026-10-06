@@ -152,8 +152,10 @@ tunnel and Xcode has to run again.
     itself: note it — the build then takes a removed pairing for a stranger, and isn't released so.
     Nor if it stays "not connected" and Pair Again is never offered.)
     Also with the pairing in place: lock the device, then restart it, and each time before it
-    is unlocked look at `roamrun status <name>` — it says not connected (the app keeps trying),
-    not that something else answers at the device's address; note it if it does.
+    is unlocked look at `roamrun status <name>` — never that something else answers at the
+    device's address; note it if it does. Locked, it stays connected (a `look` shows the
+    lock screen, and a swipe is taken: SECURITY.md says so); restarted and not yet unlocked,
+    it says not connected (the app keeps trying).
 24. Into a note, the device's keyboard an English one: `roamrun type <name> "<600 numbered
     characters>"` and a `look` right after — the last of them is there (none still on their
     way); once more in another app's field (a search field, a message draft not sent): the pace

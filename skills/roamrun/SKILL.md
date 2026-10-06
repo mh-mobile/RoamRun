@@ -272,6 +272,9 @@ have the user add the MCP tools, which run outside it.
   isn't what you expected, look again rather than guess.
 - A `look` shows whatever is on the screen — notifications, messages, the lock
   screen. Don't send the image anywhere the user didn't ask.
+- A locked device is looked at and operated all the same: its lock screen is what
+  you see. Don't unlock it — no swipe up to unlock, no passcode even if you were
+  told one: ask the user to unlock it, and wait.
 - An action that fails says why and was not repeated; look before trying again
   (it may have gone through). The device lists each spell of this as a
   screen-sharing session under Settings, where the user can see it.

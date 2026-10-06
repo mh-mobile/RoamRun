@@ -46,7 +46,13 @@ bounded.
   the list of devices switched on — is a sign that something else replaced it:
   don't allow it; a build you made yourself, signed otherwise, does get asked. The device lists the pairing in Settings ›
   Privacy & Security › Developer Mode, where it can be removed; during each look
-  or action, and for about five seconds after, the device shows screen sharing. While **Set Up…** or
+  or action, and for about five seconds after, the device shows screen sharing.
+  **Locking the device doesn't stop device control**: its lock screen is seen and
+  operated like any other — what it shows (notifications as the device is set to show
+  them) and what it lets be done without unlocking. Unlocking takes the device's
+  passcode or Face ID, as ever: whoever knows the passcode can enter it from here,
+  and a swipe to unlock sent while the device's user looks at it is answered by Face ID.
+  What stops device control is its switch on the device's page. While **Set Up…** or
   `roamrun pairing create` waits (and only then), the Mac announces itself on the
   local network (`_remotepairing-pairable-host._tcp`, as "RoamRun (the Mac's name)", or for
   `pairing create` the name given to `--as`, else "RoamRun (the file's name)") and listens on a port, on every interface, for the device
