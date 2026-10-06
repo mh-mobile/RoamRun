@@ -20,7 +20,7 @@ SIGN_ID ?= -
 NOTARY_PROFILE ?=
 SIGN_FLAGS = --force --options runtime $(if $(filter -,$(SIGN_ID))$(findstring Apple Development,$(SIGN_ID)),,--timestamp)
 
-.PHONY: all build app run dmg release-dmg icon install-cli test clean device-lib device-probe licenses
+.PHONY: all build app run dmg release-dmg icon install-cli test clean device-lib device-probe licenses audit
 
 all: app
 
@@ -65,6 +65,10 @@ device-lib:
 licenses: device-lib
 	cd Rust/RoamRunDevice && $(CARGO) metadata --format-version 1 --locked --filter-platform aarch64-apple-darwin \
 		| $(CURDIR)/scripts/third-party-licenses.py > $(CURDIR)/THIRD-PARTY-LICENSES.txt
+
+# The crates Cargo.lock pins, against the published advisories (asks api.osv.dev).
+audit:
+	scripts/audit-crates.py Rust/RoamRunDevice/Cargo.lock
 
 # Links it into a Swift executable. With no arguments it only says what it is; with
 # <device ip> <RemotePairing port> <pairing file> it verifies the pairing, opens a tunnel

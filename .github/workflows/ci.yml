@@ -4,12 +4,23 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "17 3 * * 1"   # Mondays: an advisory published since is seen without a push
 
 permissions:
   contents: read
 
 jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5
+      - name: No advisory against a crate Cargo.lock pins that hasn't been looked into
+        run: python3 scripts/audit-crates.py
+
   test:
+    if: github.event_name != 'schedule'
     strategy:
       fail-fast: false
       matrix:

@@ -11,7 +11,9 @@ see `skills/roamrun/SKILL.md` — installed with `roamrun init` or
   Xcode's toolchain and stamps the real SDK version (needed for Liquid Glass).
   It builds device control's Rust library first (`Rust/RoamRunDevice`), with the
   Rust its `rust-toolchain.toml` names (rustup fetches it); `CARGO=` picks another.
-  After changing `Cargo.lock`: `make licenses`, and commit the file it writes.
+  After changing `Cargo.lock`: `make licenses`, and commit the file it writes; and `make audit`
+  (CI runs it too, and every Monday): an advisory against a crate it pins is either a reason
+  to change the crate or, looked into, a line in `scripts/audit-crates.py` saying why not.
 - Device control keeps a key and a list (which devices are switched on) in the
   Keychain, which asks about a build signed ad hoc after every rebuild. `make app` signs with an Apple Development certificate
   when the keychain holds one (else ad hoc); `SIGN_ID=` picks another.
