@@ -310,6 +310,16 @@ final class Relay: @unchecked Sendable {
             inbound.cancel(); outbound.cancel()
             self?.untrack(inbound, outbound)
         }
+        // However the end of a dial shows — the connection's state, or a read or a send on it that
+        // fails first, as they do with bytes already queued for a device that then refuses —
+        // a refusal is one: noted for the hold, and said once for a run of them.
+        let failed: @Sendable (NWError, String) -> Void = { [weak self] e, how in
+            guard Self.isRefusal(e) else { finish("\(how)\(e.localizedDescription)"); return }
+            guard stats.refusedOnce() else { return }
+            let first = self?.upstreamRefused() ?? true
+            let held = self?.spare == false ? " — dialing it at most every \(Int(Self.upstreamHold))s until it answers" : ""
+            finish(first ? "upstream \(e.localizedDescription)\(held)" : nil)
+        }
         // Upstream refused/unreachable: drop the local side too, otherwise
         // remotepairingd sits on an accepted socket that leads nowhere.
         outbound.stateUpdateHandler = { [weak self] state in
@@ -317,11 +327,7 @@ final class Relay: @unchecked Sendable {
             case .ready:
                 self?.upstreamAnswered()
                 self?.markEstablished(inbound)
-            case .waiting(let e), .failed(let e):
-                guard case .posix(.ECONNREFUSED) = e else { finish("upstream \(e.localizedDescription)"); return }
-                let first = self?.upstreamRefused() ?? true
-                let held = self?.spare == false ? " — dialing it at most every \(Int(Self.upstreamHold))s until it answers" : ""
-                finish(first ? "upstream \(e.localizedDescription)\(held)" : nil)
+            case .waiting(let e), .failed(let e): failed(e, "upstream ")
             default: break
             }
         }
@@ -335,8 +341,12 @@ final class Relay: @unchecked Sendable {
         inbound.start(queue: .global(qos: .utility))
         outbound.start(queue: .global(qos: .utility))
         if !quiet { relayLog.log("tcp relay open :\(self.localPort) -> \(self.remoteIP):\(self.remotePort)") }
-        pump(from: inbound, to: outbound, stats: stats, isUp: true, finish: finish)
-        pump(from: outbound, to: inbound, stats: stats, isUp: false, finish: finish)
+        pump(from: inbound, to: outbound, stats: stats, isUp: true, finish: finish, failed: failed)
+        pump(from: outbound, to: inbound, stats: stats, isUp: false, finish: finish, failed: failed)
+    }
+
+    static func isRefusal(_ error: NWError) -> Bool {
+        if case .posix(.ECONNREFUSED) = error { true } else { false }
     }
 
     /// True for the first refusal of a run: the one that is logged.
@@ -357,11 +367,11 @@ final class Relay: @unchecked Sendable {
         relayLog.log("tcp :\(self.remotePort) answers again after \(dials) refused dial(s); \(held) connection(s) closed without dialing meanwhile")
     }
 
-    private func pump(from: NWConnection, to: NWConnection, stats: ConnStats,
-                      isUp: Bool, finish: @escaping @Sendable (String?) -> Void) {
+    private func pump(from: NWConnection, to: NWConnection, stats: ConnStats, isUp: Bool,
+                      finish: @escaping @Sendable (String?) -> Void, failed: @escaping @Sendable (NWError, String) -> Void) {
         let handle: @Sendable (Data?, NWConnection.ContentContext?, Bool, NWError?) -> Void = { [weak self] data, _, isComplete, error in
             if let error {
-                finish("err=\(error.localizedDescription)")
+                failed(error, "err=")
                 return
             }
             // isComplete is EOF — pass the FIN on after the queued data and
@@ -375,15 +385,15 @@ final class Relay: @unchecked Sendable {
                 return
             }
             guard let data, !data.isEmpty else {
-                self?.pump(from: from, to: to, stats: stats, isUp: isUp, finish: finish)
+                self?.pump(from: from, to: to, stats: stats, isUp: isUp, finish: finish, failed: failed)
                 return
             }
             stats.add(data.count, up: isUp)
             // Backpressure: read the next chunk only once this one is handed
             // off, so a fast side can't buffer a whole install in memory.
             to.send(content: data, completion: .contentProcessed { [weak self] sendError in
-                if let sendError { finish("send err=\(sendError.localizedDescription)"); return }
-                self?.pump(from: from, to: to, stats: stats, isUp: isUp, finish: finish)
+                if let sendError { failed(sendError, "send err="); return }
+                self?.pump(from: from, to: to, stats: stats, isUp: isUp, finish: finish, failed: failed)
             })
         }
         // Stream read: receiveMessage on TCP only returns at EOF, which
@@ -489,6 +499,14 @@ private final class ConnStats: @unchecked Sendable {
         _lastActive = clock()
         if !isUp { _lastHeard = _lastActive }
     }
+
+    /// True the first time: a refusal that shows two ways is one dial refused.
+    func refusedOnce() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        defer { refused = true }
+        return !refused
+    }
+    private var refused = false
 
     /// True once both directions have seen EOF.
     func directionDone() -> Bool {

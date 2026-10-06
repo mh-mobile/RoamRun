@@ -4078,6 +4078,12 @@ func claimByReason(_ r: StartReason, fromCLI: Bool) {
     #expect(Relay.upstreamHold + 1 < Link.waitAfter)   // a held redial lands before the link reads as waiting
 }
 
+/// A refusal is one however it shows — the connection's state, a read or a send that fails first.
+@Test func aRefusalIsARefusalHoweverItShows() {
+    #expect(Relay.isRefusal(.posix(.ECONNREFUSED)))
+    #expect(!Relay.isRefusal(.posix(.ETIMEDOUT)) && !Relay.isRefusal(.posix(.ENETDOWN)) && !Relay.isRefusal(.posix(.ECONNRESET)))
+}
+
 @Test func aRefusalIsLoggedOnlyEveryTenMinutesPerRelay() {
     let now = Date()
     #expect(Relay.shouldLogRefusal(last: nil, now: now))
