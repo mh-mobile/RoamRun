@@ -73,6 +73,13 @@ enum DeviceControlWire {
 
     /// The longest a line may be: a long paste, or many elements.
     static let longestLine = 1 << 20
+    /// What is said after a text was typed that a keyboard other than an English one takes otherwise:
+    /// it was warned of before, and typed all the same — said here, where it is read.
+    static func typed(_ text: String) -> String? {
+        guard text.contains(where: { $0 == " " || $0 == "\n" }) else { return nil }
+        return "typed. If the device's keyboard wasn't an English one, its spaces and Returns converted or confirmed instead of being typed: look, and if the text isn't what you sent, clear it and use paste."
+    }
+
     /// How long the app waits for a request once a client has connected.
     static let requestWait: TimeInterval = 10
     /// How long the CLI waits for the answer: longer than any call may take (the longest text
@@ -1129,6 +1136,20 @@ final class DeviceControlHub: @unchecked Sendable {
     private static let lookFirst = "look first: a point is given in the pixels of a look, and each look serves one action"
     static let nobodyWaits = "nobody is waiting for this any more"
     static let notGiven = "not given: whoever asked has left, or the device was switched off meanwhile"
+    /// The longer side of a look, at most: what a model is shown without its being scaled once more.
+    static let lookSide = 1280
+    /// `image` with its longer side at most `lookSide`; itself when it is.
+    static func fitted(_ image: CGImage) -> CGImage {
+        let longer = max(image.width, image.height)
+        guard longer > lookSide else { return image }
+        let scale = CGFloat(lookSide) / CGFloat(longer)
+        let width = Int((CGFloat(image.width) * scale).rounded()), height = Int((CGFloat(image.height) * scale).rounded())
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return image }
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage() ?? image
+    }
     static let lookOld = "look again: the look this point is from is over a minute old, and the screen may be another by now"
     /// How long a look serves: whoever read a point off it took their time, and the screen its own course.
     var lookStands: TimeInterval = 60
@@ -1230,7 +1251,9 @@ final class DeviceControlHub: @unchecked Sendable {
                 // What an earlier look showed is no longer what a point may be read off, whether or not this one succeeds.
                 spend()
                 Thread.sleep(forTimeInterval: Self.settleWait(acted: h.acted))
-                let image = try h.session.look()
+                // As large as a model is shown it, no larger: an image scaled again by whatever shows
+                // it has points that aren't the look's any more, and a tap goes beside what was meant.
+                let image = Self.fitted(try h.session.look())
                 guard let out = CGImageDestinationCreateWithURL(URL(fileURLWithPath: path) as CFURL, UTType.png.identifier as CFString, 1, nil) else {
                     return .failure("can't write \(path)")
                 }

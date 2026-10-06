@@ -4348,11 +4348,15 @@ private final class StandInDevice: ControlledDevice, @unchecked Sendable {
         count("look")
         lookBegan.signal()
         hold?.wait()
-        return CGContext(data: nil, width: 100, height: 200, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+        return CGContext(data: nil, width: screen.width, height: screen.height, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
                          bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!.makeImage()!
     }
+    /// The size of the screen a look shows.
+    var screen = (width: 100, height: 200)
+    /// Where the last tap went, as fractions of the screen.
+    var tapped: (x: Double, y: Double)?
     func elements(limit: Int) throws -> (captions: [String], complete: Bool) { count("elements"); return ([], true) }
-    func tap(x: Double, y: Double) throws { count("tap"); Thread.sleep(forTimeInterval: 0.01) }
+    func tap(x: Double, y: Double) throws { count("tap"); lock.withLock { tapped = (x, y) }; Thread.sleep(forTimeInterval: 0.01) }
     func swipe(from: (x: Double, y: Double), to: (x: Double, y: Double), milliseconds: Int) throws { count("swipe") }
     func type(_ text: String) throws {
         count("type")
@@ -4404,6 +4408,37 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1", paired: Bool = true
         guard taps <= round else { break }
     }
     #expect(device.calls.filter { $0 == "look" }.count == 40)
+}
+
+/// A look is as large as a model is shown it: the file, the size said and the points taken are
+/// all of that image, so a viewer that scales large images down doesn't move what is tapped.
+@Test func aLookIsNoLargerThanAModelIsShown() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (hub, made) = try standInHub(dir)
+    defer { hub.stop() }
+    let id = UUID()
+    hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
+    let device = try #require(made().first)
+    device.screen = (1179, 2556)
+    let png = lookFile(in: dir)
+    let look = hub.answer(.init(op: "look", device: id, path: png))
+    #expect(look.ok && look.width == 590 && look.height == 1280)
+    let source = try #require(CGImageSourceCreateWithURL(URL(fileURLWithPath: png) as CFURL, nil))
+    let image = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
+    #expect(image.width == 590 && image.height == 1280)
+    #expect(hub.answer(.init(op: "tap", device: id, x: 295, y: 640)).ok)   // the middle of that image is the middle of the screen
+    let tapped = try #require(device.tapped)
+    #expect(abs(tapped.x - 0.5) < 0.001 && abs(tapped.y - 0.5) < 0.001)
+    #expect(hub.answer(.init(op: "look", device: id, path: png)).ok)
+    #expect(!hub.answer(.init(op: "tap", device: id, x: 600, y: 640)).ok)   // outside it, though inside the screen's own pixels
+    // A screen that is small enough is as it is.
+    device.screen = (100, 200)
+    let small = hub.answer(.init(op: "look", device: id, path: png))
+    #expect(small.width == 100 && small.height == 200)
+    // What a typed text says back: only where another keyboard would have taken it otherwise.
+    #expect(DeviceControlWire.typed("hello") == nil)
+    #expect(DeviceControlWire.typed("Clair Obscur")?.contains("paste") == true && DeviceControlWire.typed("search\n") != nil)
 }
 
 /// A look serves for a while only: a point read off one that is old goes to a screen nobody saw.

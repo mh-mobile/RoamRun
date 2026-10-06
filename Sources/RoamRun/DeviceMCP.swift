@@ -16,8 +16,8 @@ final class DeviceMCP: @unchecked Sendable {
     private let saved: () -> [DeviceProfile]
     private var profiles: [DeviceProfile] { saved() }
     private let ask: Ask
-    /// The longer side of the image a look returns.
-    static let longSide = 1280
+    /// The longer side of the image a look returns: the app's own look is that size already.
+    static let longSide = DeviceControlHub.lookSide
     /// The most `type` takes in one call here.
     static let longestTyped = 500
     /// Per device: the size of the last image given out, of the look behind it, and which look
@@ -206,7 +206,7 @@ final class DeviceMCP: @unchecked Sendable {
             }
             shown[device.id] = nil
             _ = try send(.init(op: tool, device: device.id, text: value))
-            return text("sent; look to see what it did")
+            return text(tool == "type" ? DeviceControlWire.typed(value) ?? "sent; look to see what it did" : "sent; look to see what it did")
         default:
             throw Failure(description: "no such tool: \(tool)")
         }
@@ -262,7 +262,7 @@ final class DeviceMCP: @unchecked Sendable {
              required: ["x1", "y1", "x2", "y2"]),
         tool("elements", "What accessibility says is on the screen, one caption a line (\"Home, tab, selected\"). No positions: find a caption in a look to tap it. The screen may scroll to what is visited. Nothing on the home screen.",
              ["limit": ["type": "integer", "description": "How many at most (default 40)"]]),
-        tool("type", "Type text on the device's keyboard, into whatever has its focus. US-keyboard characters only; a newline is Return. Right only while the device's keyboard is an English one — look first: under a Japanese one the text comes out wrong, and a long one can throw the app out. Typed at the device's pace, at most about 16 characters a second, 500 a call: paste for anything longer.",
+        tool("type", "Type text on the device's keyboard, into whatever has its focus. US-keyboard characters only; a newline is Return. Right only while the device's keyboard is an English one — look first: under a Japanese one keys go to its conversion (even a space converts or confirms instead of being typed), the text comes out wrong, and a long one can throw the app out. Look after typing and check what arrived; where the keyboard may be Japanese, paste instead. Typed at the device's pace, at most about 16 characters a second, 500 a call: paste for anything longer.",
              ["text": ["type": "string"]], required: ["text"]),
         tool("paste", "Put any text into whatever has the keyboard's focus, by the device's pasteboard (which it replaces). iOS then asks \"Allow Paste\" on the device each time: look, and tap it only if the user wants that.",
              ["text": ["type": "string"]], required: ["text"]),

@@ -199,16 +199,16 @@ The skill covers getting the device connected (`roamrun up -d` → `status --wai
 
 ## Seeing and operating the device
 
-RoamRun can also show the device's screen and operate it — tap, swipe, type, press its buttons — from the command line or as tools for an AI agent. It needs **iOS / iPadOS 27 or later** (earlier versions refuse remote control), and it doesn't go through the bridge or Xcode: RoamRun makes a pairing and a connection of its own.
+RoamRun can also show the device's screen and operate it — tap, swipe, type, press its buttons — from the command line or as tools for an AI agent. It needs **iOS / iPadOS 27 or later** (earlier versions refuse remote control; tried on an iPhone — an iPad should work the same and hasn't been tried), and it doesn't go through the bridge or Xcode: RoamRun makes a pairing and a connection of its own.
 
 **Set up, once per device**, with the device on the same Wi‑Fi as the Mac: open the device's page in RoamRun → **Device control › Set Up…**. On the device, under Settings › Privacy & Security › Developer Mode, pick RoamRun and enter the code the Mac shows. After that it connects whenever the device is on a Wi‑Fi and reachable over the VPN, and stays connected when the device moves to cellular. The RoamRun app holds the connection, so it has to be running.
 
 ```sh
-roamrun look iPhone /tmp/now.png          # the screen now, as PNG; prints the path, then its size
-roamrun tap iPhone 590 1280               # a point in the pixels of that image
+roamrun look iPhone /tmp/now.png          # the screen now, as PNG (1280 at most on its longer side); prints the path, then its size
+roamrun tap iPhone 295 640                # a point in the pixels of that image
 roamrun look iPhone /tmp/now.png          # again before the next action: each look serves one
-roamrun swipe iPhone 590 1800 590 900     # drag from one point to another
-roamrun type iPhone "hello"               # US keys, at most about 16 a second; right only while the device's keyboard is an English one
+roamrun swipe iPhone 295 900 295 450      # drag from one point to another
+roamrun type iPhone "hello"               # US keys, at most about 16 a second; right only while the device's keyboard is an English one (under a Japanese one even a space converts)
 roamrun paste iPhone "任意の文字列"         # any text, by the device's pasteboard (iOS asks "Allow Paste")
 roamrun press iPhone home                 # home, lock, volume-up, volume-down
 roamrun elements iPhone                   # what accessibility says is on the screen (no positions)
@@ -225,7 +225,7 @@ roamrun pairing import ~/iphone-for-cloud.json                         # there, 
 
 `import` keeps the pairing only if it connects, so the device has to be reachable then; if it restarted since the file was made, its port has changed and `import` looks for it (for a device not yet saved on that Mac; for one that is, find its port there first: its page › Technical details › Find RemotePairing Port). The other Mac needs RoamRun running in a session at its screen (a Mac nobody is logged in at can't start the app) and a way to reach the device's VPN address. The file is a key: whoever has it and reaches the device can see and operate it, so move it as you would a password, and don't keep copies. Each pairing made this way is listed on the device under its own name (Settings › Privacy & Security › Developer Mode) and can be removed there alone; this Mac's own pairing is another entry and stays.
 
-**While the device is looked at or operated, its sound is taken.** Each look and each action runs a screen-sharing session on the device, kept for about five seconds after the last one, and the device sends its sound into it: its speaker goes silent (music stops, and starts again by itself afterwards) and voice input on it — dictation, an app that listens — doesn't hear. So a screen that is being watched, look after look, has no sound and no voice input for as long as the watching goes on. Stop looking for a few seconds and both are back.
+**While the device is looked at or operated, its sound is taken.** Each look and each action runs a screen-sharing session on the device, kept for about five seconds after the last one, and the device sends its sound into it: its speaker goes silent (what was playing goes on playing, unheard, and is heard again by itself afterwards) and voice input on it — dictation, an app that listens — doesn't hear. So a screen that is being watched, look after look, has no sound and no voice input for as long as the watching goes on. Stop looking for some ten seconds and both are back.
 
 These press what is really on the screen, and a `look` shows whatever is there — notifications and messages too. A `look` written to a file is yours only (0600) and stays until you delete it. **Device control is not given to one agent or one command: while a device is switched on, any program you run on this Mac can see and operate it** through the app — a build script, a package's install step, another agent. The switch beside **Device control** on the device's page turns it off for all of them (and back on); it is on after Set Up, after Pair Again (also for a device you had switched off) and after `pairing import`, so turn it off when nothing of yours is using the device. The device shows each look or action as a screen-sharing session, and lists RoamRun's pairing under Developer Mode, where you can remove it. The pairing holds a private key; how it is kept, and who can use it, is in [SECURITY.md](SECURITY.md).
 

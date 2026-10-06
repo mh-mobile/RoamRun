@@ -211,8 +211,8 @@ file may be gone) — tell the user. That file is a key to the device — don't
 print it, copy it or leave it behind.
 
 ```sh
-roamrun look iPhone /tmp/now.png     # the screen now: prints the path, then "1179 x 2556"
-roamrun tap iPhone 590 1280          # a point in the pixels of that image
+roamrun look iPhone /tmp/now.png     # the screen now: prints the path, then "590 x 1280"
+roamrun tap iPhone 295 640           # a point in the pixels of that image
 roamrun look iPhone /tmp/now.png     # what it became
 ```
 
@@ -220,6 +220,8 @@ The same is there as MCP tools (`look` returns the image itself, scaled to what
 you are shown, and points are that image's pixels): the user adds it once with
 `claude mcp add roamrun -- roamrun mcp`, or the like for another agent. Use the
 tools when you have them; the rules below hold for both.
+If your client shows the tool's image as a placeholder you can't see, use
+`roamrun look` and read the file instead, and then act with the commands too.
 If a command says this process isn't allowed to reach the RoamRun app, your
 shell runs in a sandbox that keeps it from the app (the app may well be
 running — don't try to start it): ask to run `roamrun` outside the sandbox, or
@@ -229,12 +231,15 @@ have the user add the MCP tools, which run outside it.
   been a `look`, and any action (or `elements`) uses it up: look, act, look again.
   Read the point off the image you just looked at, in its own pixels (the size
   printed after the path); never reuse a point from an older one.
+  The image is at most 1280 on its longer side, so that you are shown it as it
+  is. If what shows it to you gives another size than the one printed, it was
+  scaled again: multiply your point by printed ÷ shown before you tap.
   A point refused for being outside the image leaves the look to be used.
   A look serves for a minute: after that a point is refused ("look again"), since
   the screen may have changed while you thought — look, and read the point anew.
   The image is the screen as the device holds it, upright: an app in landscape
   shows turned on its side in it, and its points are still the image's.
-- `roamrun swipe iPhone 590 1800 590 900 [ms]` drags; start on something that
+- `roamrun swipe iPhone 295 900 295 450 [ms]` drags; start on something that
   does nothing when pressed if you can.
 - `roamrun elements iPhone [limit]` prints what accessibility says is on the
   screen, one caption a line ("Home, tab, selected"). It gives **no positions** —
@@ -244,9 +249,12 @@ have the user add the MCP tools, which run outside it.
   start with `-`; 2000 characters at most, `paste` for more); a newline in the
   text is Return (`$'search this\n'` in a shell — the two characters `\n` are typed as such).
   It comes out right only while the device's keyboard is an English one: look
-  first, and switch with the globe key if it shows Japanese (there Space
-  converts and Return confirms: the text comes out wrong, and a long one can
-  throw the app back to the home screen). It is typed at the device's own pace,
+  first, and switch with the globe key if it shows Japanese (there keys go to
+  its conversion — even a single space converts or confirms instead of being
+  typed, and Return confirms: `Clair Obscur` arrives as `ClairObscur`, and a
+  long text can throw the app back to the home screen). Look after typing and
+  check that what arrived is what you sent; if it isn't, clear it and `paste`,
+  and where the keyboard may be Japanese, `paste` from the start. It is typed at the device's own pace,
   at most about 16 characters a second (500 take half a minute or more), and
   has all arrived when the command returns:
   for anything long, `paste` (the MCP tool takes 500 characters at most). `roamrun paste iPhone "任意の文字列"` puts any
@@ -264,13 +272,19 @@ have the user add the MCP tools, which run outside it.
   screen-sharing session under Settings, where the user can see it.
 - **Looking and acting take the device's sound.** While that session runs — and
   it is kept about five seconds after the last look or action — the device's
-  speaker is silent (music stops, and resumes by itself after) and voice input
+  speaker is silent (what was playing goes on playing, unheard, and is heard
+  again by itself after) and voice input
   on it doesn't hear: dictation, a language app's speaking exercise, a voice
   assistant. Looking again and again keeps it that way throughout. So when asked
   to watch a screen or keep looking, **say this to the user first**, and ask
   whether they need the device's sound or its microphone meanwhile; if they do,
   look only when they ask, or leave pauses of ten seconds or more between looks
   so both come back in between.
+  When the task is to make the device play something, the action that starts
+  it is your last but one: look once to see that it plays (a pause button
+  where play was), then do nothing more — the sound is back some ten seconds
+  later, and you can't hear it: tell the user so. Silence while you still look
+  doesn't mean it failed; don't press play again.
 
 ## 7. App output
 

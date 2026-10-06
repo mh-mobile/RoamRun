@@ -29,14 +29,15 @@ enum CLI {
     private static let deviceUsage = """
     Operating a device (iOS 27 or later; the RoamRun app holds the connection, and the device needs
     a pairing of RoamRun's own):
-      look <name> [file.png]         Save the device's screen now as PNG; prints the path, then its size
+      look <name> [file.png]         Save the device's screen now as PNG, its longer side 1280 at most;
+                                     prints the path, then its size
       tap <name> <x> <y>             Tap a point given in the pixels of the last look
       swipe <name> <x1> <y1> <x2> <y2> [ms]
                                      Drag from one point of the last look to another
       elements <name> [limit]        What accessibility says is on the screen, one caption a line
                                      (no positions; the screen may scroll)
       type <name> <text>             Type on the device's keyboard (US keys; right only while that
-                                     keyboard is an English one)
+                                     keyboard is an English one: under a Japanese one even a space converts)
       paste <name> <text>            Any text, by the device's pasteboard (it asks the user each time)
       press <name> <button>          home, lock, volume-up or volume-down
       mcp                            The same as MCP tools, over stdin/stdout (for an agent's MCP config)
@@ -1013,10 +1014,11 @@ enum CLI {
         operate(profile, .init(op: "tap", device: profile.id, x: x, y: y))
     }
 
-    /// Something done to the device: silent when it went, the reason when it didn't.
+    /// Something done to the device: silent when it went (but see `typed`), the reason when it didn't.
     private static func operate(_ profile: DeviceProfile, _ request: DeviceControlWire.Request) -> Never {
         let r = askApp(request)
         guard r.ok else { stop("\(request.op) failed: \(r.error ?? "no answer")") }
+        if request.op == "type", let note = request.text.flatMap(DeviceControlWire.typed) { print(note) }
         exit(0)
     }
 
