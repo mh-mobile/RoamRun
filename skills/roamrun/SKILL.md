@@ -59,8 +59,10 @@ not match the installed CLI until then (`roamrun --help` is authoritative).
   prints it again. Its "Over the air" check is a `warning`, not a `fail`, when the
   page isn't published (the app isn't open, or it needs up to half a minute), so
   read that section rather than only doctor's first fail. `--replace` keeps one row
-  per version and build number instead of stacking one per rebuild. Tell them what
-  they'll get and let them decide. The name is optional: without one the build is
+  per version and build number instead of stacking one per rebuild. If `ota` exits 1
+  with a message saying the build is stored, don't run it again: the build is kept,
+  and what's left is the Tailscale or port problem the message names — say that to the user.
+  Before any `ota`, tell them what they'll get and let them decide. The name is optional: without one the build is
   checked against every device RoamRun knows and it says which are covered, which
   is what you want when you don't know which device the user has to hand. A build
   covering none of the devices it knows is stored with a warning rather than
@@ -71,7 +73,7 @@ not match the installed CLI until then (`roamrun --help` is authoritative).
 
 ```sh
 roamrun devices                       # saved devices + UDID + id (use the id for a name starting with "-")
-roamrun up iPhone -d                  # bridge in the background; returns when ready (exit 1 after 60 s if not — it keeps trying)
+roamrun up iPhone -d                  # bridge in the background; exit 0 when ready or On this Wi‑Fi. Exit 1 after 60 s if not (it keeps trying), or at once if "the background bridge exited" — then nothing is running: act on that message
 # Stop here unless all three pass — don't build or install on a device that isn't ready.
 roamrun status iPhone --wait 60 --json > /tmp/rr.json || { roamrun doctor iPhone; exit 1; }   # act on doctor's first fail
 UDID=$(jq -er '.[0].udid // empty' /tmp/rr.json) || exit 1         # for xcodebuild AND devicectl
@@ -84,7 +86,9 @@ read — treat that like locked.
 
 If the bridge already runs in the menu bar app, just use it — `status` shows
 the owner, and `up` exits 0 when another process already has it ready (exit 1
-if that one is still coming up). Status "On this Wi‑Fi" means the iPhone is on
+if that one is still coming up, or is another `roamrun up` retrying after an
+error: don't start another, wait, or `roamrun down` it first; from the app's
+bridge in an error, `up` takes the device over). Status "On this Wi‑Fi" means the iPhone is on
 the Mac's own network: no bridge is needed, Xcode sees it directly, and it
 counts as ready while CoreDevice can reach it (`ready` true; when CoreDevice
 reports it unavailable or can't be asked, it stays `state` local with `ready`
@@ -130,7 +134,7 @@ first; App Store / TestFlight builds can't be installed directly.
 
 `roamrun screenshot iPhone /tmp/shot.png` saves the device's screen as PNG and
 prints the path — look at it after launching (or after a change) instead of
-asking the user to describe the screen. It can't tap. To reach a screen
+asking the user to describe the screen. It can't tap (section 6 can, where it is built in). To reach a screen
 without the user, launch the app straight into it — with `roamrun run`
 (builds first), then for each further screen relaunch without rebuilding:
 
@@ -163,14 +167,144 @@ replaces every `DEVICECTL_CHILD_*` variable — use one or the other. Only the
 app's own code decides what a URL, argument or variable does: look for its
 handling in the project, or ask.
 
-## 6. App output
+## 6. Operate the device
+
+For a device that has a pairing of RoamRun's own (`roamrun status iPhone` then
+has a `Device control:` line; an "unknown command" means a RoamRun before
+0.3.0 — use section 5). The RoamRun app
+holds the connection, so it has to be running; it connects while the device is
+on a Wi‑Fi and keeps the connection when it moves to cellular.
+
+The pairing is the user's to make, once, in the RoamRun app: the device's page,
+**Device control › Set Up…**, with the device (iOS 27 or later) on the same
+Wi‑Fi as the Mac. The app shows a code; the user picks RoamRun on the device
+(Settings › Privacy & Security › Developer Mode) and enters it there. Don't try
+to do that part through device control.
+
+If `roamrun status` says that what answers at the device's address isn't the
+device the pairing was made with, it is told nothing of this Mac's and sent no
+input: tell the user — the
+device was erased or replaced (they pair again), or something else has its
+address. Don't try other addresses yourself.
+
+The device's page has a switch for device control. While it is off, every
+command here fails with "device control is switched off for this device", and
+`roamrun status` says "switched off" (`"deviceControl": "switchedOff"` in
+`status --json` and `devices --json`; the other values there are `connected`, `notConnected`,
+`refused` — the user pairs again —, `another`, `listUnreadable` (the app
+couldn't read which devices are on: the user looks at the device's page),
+`noApp`, `keptOut`, and `null`
+where it isn't set up): only the user can switch it on (it is
+theirs to decide, like the pairing) — tell them, and don't look for a way round.
+"Not connected" is said the same whether the device is away or this Mac itself
+is off Tailscale; `roamrun status` adds the latter when it is so, and `roamrun
+doctor <name>` checks each step — look there before asking the user to wake the device.
+A command already under way or waiting when it is switched off fails with a
+message that begins "stopped:" (or "not given:" for a look): the same thing —
+don't try it again.
+
+On a Mac that is never on the device's Wi‑Fi (a remote one), there is no Set
+Up… to do: the user makes a pairing on a Mac that is (`roamrun pairing create
+<name> <file>`, entering a code on the device) and brings the file over, and
+`roamrun pairing import <file>` saves the device and the pairing, switched on,
+and removes the file. It exits 1 after saving when the file couldn't be removed,
+the device couldn't be switched on, or a pairing made on that Mac meanwhile took
+its place, and says which: don't run it again (the
+file may be gone) — tell the user. That file is a key to the device — don't
+print it, copy it or leave it behind.
+
+```sh
+roamrun look iPhone /tmp/now.png     # the screen now: prints the path, then "590 x 1280"
+roamrun tap iPhone 295 640           # a point in the pixels of that image
+roamrun look iPhone /tmp/now.png     # what it became
+```
+
+The same is there as MCP tools (`look` returns the image itself, scaled to what
+you are shown, and points are that image's pixels): the user adds it once with
+`claude mcp add roamrun -- roamrun mcp`, or the like for another agent. Use the
+tools when you have them; the rules below hold for both.
+If your client shows the tool's image as a placeholder you can't see, use
+`roamrun look` and read the file instead, and then act with the commands too.
+If a command says this process isn't allowed to reach the RoamRun app, your
+shell runs in a sandbox that keeps it from the app (the app may well be
+running — don't try to start it): ask to run `roamrun` outside the sandbox, or
+have the user add the MCP tools, which run outside it.
+
+- **Each look serves one action.** `tap` and `swipe` are refused until there has
+  been a `look`, and any action (or `elements`) uses it up: look, act, look again.
+  Read the point off the image you just looked at, in its own pixels (the size
+  printed after the path); never reuse a point from an older one.
+  The image is at most 1280 on its longer side, so that you are shown it as it
+  is. If what shows it to you gives another size than the one printed, it was
+  scaled again: multiply your point by printed ÷ shown before you tap.
+  A point refused for being outside the image leaves the look to be used.
+  A look serves for a minute: after that a point is refused ("look again"), since
+  the screen may have changed while you thought — look, and read the point anew.
+  The image is the screen as the device holds it, upright: an app in landscape
+  shows turned on its side in it, and its points are still the image's.
+- `roamrun swipe iPhone 295 900 295 450 [ms]` drags; start on something that
+  does nothing when pressed if you can.
+- `roamrun elements iPhone [limit]` prints what accessibility says is on the
+  screen, one caption a line ("Home, tab, selected"). It gives **no positions** —
+  a caption can't be tapped by name; find it in a `look`. The screen may scroll
+  to what it visits. Nothing on the home screen; under a system alert, only the alert.
+- `roamrun type iPhone "text"` types US-keyboard characters (the text may
+  start with `-`; 2000 characters at most, `paste` for more); a newline in the
+  text is Return (`$'search this\n'` in a shell — the two characters `\n` are typed as such).
+  It comes out right only while the device's keyboard is an English one: look
+  first, and switch with the globe key if it shows Japanese (there keys go to
+  its conversion — even a single space converts or confirms instead of being
+  typed, and Return confirms: `Clair Obscur` arrives as `ClairObscur`, and a
+  long text can throw the app back to the home screen). Look after typing and
+  check that what arrived is what you sent; if it isn't, clear it and `paste`,
+  and where the keyboard may be Japanese, `paste` from the start. Under an
+  English keyboard too, the device's auto-correction can put another word in
+  place of one it doesn't know — a name, a product, an identifier — when the
+  space or punctuation after it is typed (`worldxqpa ok` arrived as `wow ok`):
+  `paste` such words, or check them. It doesn't happen where the device's user
+  has switched Auto-Correction off (Settings › General › Keyboard). It is typed at the device's own pace,
+  at most about 16 characters a second (500 take half a minute or more), and
+  has all arrived when the command returns:
+  for anything long, `paste` (the MCP tool takes 500 characters at most). `roamrun paste iPhone "任意の文字列"` puts any
+  text in by the device's pasteboard — it replaces the pasteboard, and iOS asks
+  "Allow Paste" each time: look, and tap it only if the user wants that.
+- `roamrun press iPhone home|lock|volume-up|volume-down`. `lock` can't be
+  undone from here: the user has to unlock.
+- These press what is really there. Don't tap what spends money, posts, sends,
+  deletes or signs in unless the user asked for exactly that; when the screen
+  isn't what you expected, look again rather than guess.
+- A `look` shows whatever is on the screen — notifications, messages, the lock
+  screen. Don't send the image anywhere the user didn't ask.
+- A locked device is looked at and operated all the same: its lock screen is what
+  you see. Don't unlock it — no swipe up to unlock, no passcode even if you were
+  told one: ask the user to unlock it, and wait.
+- An action that fails says why and was not repeated; look before trying again
+  (it may have gone through). The device lists each spell of this as a
+  screen-sharing session under Settings, where the user can see it.
+- **Looking and acting take the device's sound.** While that session runs — and
+  it is kept about five seconds after the last look or action — the device's
+  speaker is silent (what was playing goes on playing, unheard, and is heard
+  again by itself after) and voice input
+  on it doesn't hear: dictation, a language app's speaking exercise, a voice
+  assistant. Looking again and again keeps it that way throughout. So when asked
+  to watch a screen or keep looking, **say this to the user first**, and ask
+  whether they need the device's sound or its microphone meanwhile; if they do,
+  look only when they ask, or leave pauses of ten seconds or more between looks
+  so both come back in between.
+  When the task is to make the device play something, the action that starts
+  it is your last but one: look once to see that it plays (a pause button
+  where play was), then do nothing more — the sound is back some ten seconds
+  later, and you can't hear it: tell the user so. Silence while you still look
+  doesn't mean it failed; don't press play again.
+
+## 7. App output
 
 `roamrun logs iPhone com.example.App` relaunches the app with its console
 attached (print and os_log) and streams until Ctrl-C. It can't join an
 already-running app, and never exits on its own — run it in the background:
 `roamrun logs iPhone com.example.App > /tmp/app.log 2>&1 & sleep 20; kill $!`.
 
-## 7. When something fails
+## 8. When something fails
 
 - Run `roamrun doctor iPhone --json`; act on the first `"result": "fail"`. Its
   `fix` says what to do — if it involves the iPhone, ask the user.
@@ -183,6 +317,9 @@ already-running app, and never exits on its own — run it in the background:
   updated, and to check it's on Wi-Fi.
 - `The peer is no longer reachable` → macOS rebuilds the control channel about
   every 42 s; retry the command once, then run `doctor`.
+- To see when a session was lost and what came before (`status` only says now):
+  `/usr/bin/log show --last 6h --predicate 'subsystem == "io.github.mh-mobile.roamrun" AND category == "status"'`
+  — one line per change, e.g. `iPhone: ready/wifi -> ready/cellular (control gone 62s, …)`.
 
 Exit codes: `0` ok/ready, `1` not ready or a check failed, `2` usage error.
 In `status --json`, `ready` says whether Xcode can use the device now: it also asks CoreDevice, once the device's UDID is known (before the first connection there is none, and the bridge's word stands). `devices --json` doesn't ask CoreDevice: its `ready` only says the bridge is Ready or the device is on this Wi‑Fi, so check `status <name> --json` before building. In both, `state` (off, starting, waiting, preparing, ready, error, local) says how RoamRun is handling it; `status` is display text. `network` is `wifi` or `cellular` while ready over the bridge. `cellular` means a session set up while Ready for Xcode on another Wi‑Fi is still running on cellular (a device that goes from "On this Wi‑Fi" straight to cellular loses its session). Every build you install then uses the user's cellular data, and a new session needs Wi‑Fi again. While waiting, `cellular` means RoamRun closed the session because the device is on cellular and the user left **Keep debugging on cellular** off. Ask the user to join Wi‑Fi; turning the setting on only helps the next time the device leaves Wi‑Fi. Don't retry.

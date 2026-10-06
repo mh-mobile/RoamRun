@@ -1,0 +1,29 @@
+[package]
+name = "roamrun-device"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "RoamRun's C ABI over the idevice protocol stack"
+
+[lib]
+crate-type = ["staticlib"]
+name = "roamrun_device"
+
+[dependencies]
+# Pinned: a newer idevice comes in only when this line and Cargo.lock are changed here.
+idevice = { version = "=0.1.68", features = ["rsd", "remote_pairing", "tunnel_tcp_stack", "core_device", "display_stream", "dvt"] }
+# What idevice itself uses, for the accessibility service's archives.
+ns-keyed-archive = "=0.1.5"
+plist = "1"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "time"] }
+uuid = { version = "1", features = ["v4"] }
+
+[profile.release]
+opt-level = "s"
+
+# idevice with the host's serial number and address settable (a pairing lists on the device by
+# them), and with the device verified at every connection by the key it gave when it paired:
+# its 0.1.68 and five commits. Gone when a release of idevice has both.
+[patch.crates-io]
+idevice = { git = "https://github.com/mh-mobile/idevice", rev = "b747c25ce7c6a920ba4438369c17375f0ac95e72" }

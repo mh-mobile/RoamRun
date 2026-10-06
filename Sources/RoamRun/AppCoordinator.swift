@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import AppKit
 import ServiceManagement
@@ -88,12 +89,51 @@ final class AppCoordinator: ObservableObject {
             logStore.log("couldn't read saved devices; kept the file as \(copy.path)")
             launchWarning = profiles.isEmpty
                 ? "RoamRun couldn't read its saved devices, so the list starts empty. The file was kept as \(copy.path)."
-                : "RoamRun couldn't read some of its saved devices; the others are here. The file was kept as \(copy.path)."
+                : "RoamRun couldn't read some of its saved devices; the others are here. The file was kept as \(copy.path). (A device brought back from it has device control switched off.)"
         } else if store.unreadable {
             logStore.log("couldn't read \(ProfileStore.directory.path)/profiles.json; not writing over it")
             launchWarning = Self.unreadableListWarning
         }
         for p in profiles { install(newBridge(p)) }
+        deviceControl.onLog = { [weak self] message, id in Task { @MainActor in self?.logStore.log(message, device: id) } }
+        deviceControl.onUnreached = { [weak self] id, why in Task { @MainActor in self?.controlUnreached(id, why) } }
+        // Its port answers where it is saved: a port that moves later is searched for as the first time.
+        deviceControl.onReached = { [weak self] id in Task { @MainActor in self?.controlScanMisses[id] = nil } }
+        deviceControl.allowed = DeviceControlAllowed.shared.contains
+        // Unreadable is off, as every request finds it; not read yet is not yet known.
+        deviceControl.allowedKnown = { DeviceControlAllowed.shared.known($0) ?? (DeviceControlAllowed.shared.isUnreadable ? false : nil) }
+        deviceControl.allowedUnreadable = { DeviceControlAllowed.shared.isUnreadable || DeviceControlAllowed.shared.isLocked }
+        deviceControl.onReplaced = { [switching] mark in
+            DeviceControlAllowed.shared.offNow(mark)   // from this moment, whatever the queue is waiting on
+            switching.async { DeviceControlAllowed.shared.set(mark, false) }
+        }
+        // What the switch may keep is what the sessions connect with — asked when the turn comes,
+        // so that a pairing switched on just before is among them.
+        // Not while the list of devices isn't whole (unread, read in part, or a screenshot run's
+        // made-up one): the devices missing from it would lose their switches for that.
+        pruning.isOn = Snapshot.fakeProfiles == nil && store.keptUnreadable == nil && !store.unreadable
+        deviceControl.onHeldChanged = { [switching, deviceControl, pruning] in
+            switching.async {
+                guard pruning.isOn, let marks = deviceControl.heldMarks() else {
+                    DeviceControlAllowed.shared.flush()   // still the chance to write what a write failed to
+                    return
+                }
+                DeviceControlAllowed.shared.prune(keeping: marks)
+            }
+        }
+        deviceControl.onImport = { [weak self] path, name, wanted in self?.importPairing(path: path, as: name, wanted: wanted) ?? .failure("stopping") }
+        syncDeviceControl()
+        // A screenshot run stands beside the app that is running: it takes neither its socket nor
+        // its devices (a connection is a screen-sharing session on the device).
+        if Snapshot.path == nil {
+            deviceControl.start()
+            // Which pairings are switched on, read where the Keychain may take its time: a page
+            // shown before that says it is looking it up.
+            Task.detached {
+                _ = DeviceControlAllowed.shared.contains("")
+                await MainActor.run { self.objectWillChange.send() }
+            }
+        }
 
         capture.onLog = { [weak self] m in self?.logStore.log(m) }
         capture.ownedHosts = Set(profiles.map { ProxyBridge(profile: $0).spoofHost })
@@ -894,16 +934,165 @@ final class AppCoordinator: ObservableObject {
         )
         // Known already if remotepairingd matched this advert; else learned on first connect.
         profile.udid = udid
-        profiles.append(profile)
-        let bridge = install(newBridge(profile))
-        capture.ownedHosts.insert(bridge.spoofHost)
-        persist()
-        logStore.log("added \"\(profile.displayName)\" -> \(ip)", device: profile.id)
-        learnDeviceTypes()
+        save(new: profile)
         return .added(profile.id)
     }
 
+    @discardableResult
+    private func save(new profile: DeviceProfile) -> Bool {
+        profiles.append(profile)
+        let bridge = install(newBridge(profile))
+        capture.ownedHosts.insert(bridge.spoofHost)
+        let saved = persist()
+        logStore.log("added \"\(profile.displayName)\" -> \(profile.providerIP)", device: profile.id)
+        learnDeviceTypes()
+        return saved
+    }
+
+    /// The device answered at its address and not on that port: it has another by now.
+    nonisolated static func portMoved(_ why: String) -> Bool { why.contains("RemotePairing port: Connection refused") }
+
+    /// The device's RemotePairing port now, searched for and waited on by the thread that asked.
+    nonisolated private static func portNow(at host: String) -> UInt16? {
+        final class Found: @unchecked Sendable { var port: UInt16? }
+        let found = Found()
+        let done = DispatchSemaphore(value: 0)
+        Task.detached {
+            if case .found(let port) = await ReachabilityProbe.findRemotePairingPort(host: host) { found.port = port }
+            done.signal()
+        }
+        done.wait()
+        return found.port
+    }
+
+    /// A saved device a pairing was brought for is kept — with the UDID, if it had none — only
+    /// once the list is written, and that is asked whatever changed: a device can be here and
+    /// not in the file (a save that failed when it was added, or when its UDID was learned).
+    /// nil: not written, or no such device.
+    nonisolated static func keepSaved(_ id: UUID, udid: String, in profiles: [DeviceProfile], save: ([DeviceProfile]) -> Bool) -> DeviceProfile? {
+        var changed = profiles
+        guard let i = changed.firstIndex(where: { $0.id == id }) else { return nil }
+        if changed[i].udid == nil { changed[i].udid = udid }
+        return save(changed) ? changed[i] : nil
+    }
+
+    /// One import at a time: two for one device would each find it not saved, and save it twice.
+    nonisolated private let importing = NSLock()
+
+    /// The device a pairing that connected is for is saved now — worked out again, the saved
+    /// devices being what they are by now (one removed, or added, while the pairing was tried).
+    /// A failure leaves them as they were; no pairing has been written yet.
+    private func keep(_ device: DeviceProfile, udid: String, as name: String?) -> Result<(saved: DeviceProfile, isNew: Bool), DeviceControlWire.WireError> {
+        let unsaved = DeviceControlWire.WireError.message("the device couldn't be saved here (\(ProfileStore.directory.path)/profiles.json): nothing was kept")
+        switch profiles.placement(of: device, udid: udid, as: name) {
+        case .failure(let why): return .failure(why)
+        case .success(let place) where place.isNew:
+            guard save(new: place.profile) else {
+                deleteProfile(place.profile.id)
+                return .failure(unsaved)
+            }
+            return .success((place.profile, true))
+        case .success(let place):
+            let id = place.profile.id, before = profiles
+            guard let kept = Self.keepSaved(id, udid: udid, in: profiles, save: { changed in
+                profiles = changed
+                return persist()
+            }) else {
+                profiles = before
+                return .failure(unsaved)
+            }
+            return .success((kept, false))
+        }
+    }
+
+    /// Asked for by `roamrun pairing import`, on the thread that answers it: the device is found
+    /// or added, the pairing kept only if it connects, and then the file is removed.
+    nonisolated private func importPairing(path: String, as name: String?, wanted: @Sendable () -> Bool) -> DeviceControlWire.Response {
+        importing.lock()
+        defer { importing.unlock() }
+        // Whoever asked may have left while it waited its turn, or while the pairing was tried:
+        // nothing is saved for them then, and their file stays. Once saving begins it is seen through.
+        guard wanted() else { return .failure(DeviceControlHub.nobodyWaits) }
+        let file = URL(fileURLWithPath: path)
+        let fd: Int32, data: Data
+        do { (fd, data) = try DeviceControlHub.readTaken(path) } catch { return .failure("\(error)") }
+        defer { close(fd) }
+        guard let shared = SharedPairing.read(data), let udid = shared.device.udid else {
+            return .failure("\(path) isn't a pairing made by `roamrun pairing create`")
+        }
+        // Where it goes is worked out first and saved last: a pairing that doesn't connect leaves
+        // the saved devices as they were.
+        let placed = DispatchQueue.main.sync { MainActor.assumeIsolated { profiles.placement(of: shared.device, udid: udid, as: name) } }
+        let place: DevicePlacement
+        switch placed {
+        case .success(let p): place = p
+        case .failure(let why): return .failure("\(why)")
+        }
+        let p = place.profile
+        var target = DeviceControlHub.Target(id: p.id, name: p.displayName, ip: p.providerIP, port: p.remotePairingPort, udid: p.udid ?? udid)   // as it is spelled here, when known
+        var device = shared.device
+        let pairing = Data(shared.pairing.utf8)
+        // Tried, the device saved, the pairing sealed, the file removed — in that order, each only
+        // after the one before: a step that fails leaves the file where it is and a pairing the
+        // device had before as it was (a saved device may have learned its UDID by then).
+        let sealing: SymmetricKey
+        do { sealing = try deviceControl.tryPairing(pairing, for: target) } catch {
+            // The file carries the port the device had when it was made, and that changes when the
+            // device restarts. A device not saved here has no page to find it from: it is looked
+            // for now, at the address the file names, and the pairing tried there.
+            guard place.isNew, Self.portMoved("\(error)"), let port = Self.portNow(at: target.ip),
+                  port != target.port else { return .failure("\(error)") }
+            target.port = port
+            device.remotePairingPort = port
+            do { sealing = try deviceControl.tryPairing(pairing, for: target) } catch { return .failure("\(error)") }
+        }
+        guard wanted() else { return .failure(DeviceControlHub.nobodyWaits) }
+        // The device saved and its pairing sealed in one turn of the main thread, where a device
+        // is removed too: removed before, it is placed again here; removed after, its pairing is
+        // there to go with it. Nothing gets in between.
+        // The mark of what was sealed, as it was written: that is switched on, not whatever is
+        // in the file once the connection has been tried.
+        nonisolated(unsafe) var sealedMark: String?
+        let kept = DispatchQueue.main.sync {
+            MainActor.assumeIsolated { () -> Result<DeviceProfile, DeviceControlWire.WireError> in
+                switch keep(device, udid: udid, as: name) {
+                case .failure(let why): return .failure(why)
+                case .success(let (saved, isNew)):
+                    do { sealedMark = try deviceControl.sealPairing(pairing, with: sealing, udid: saved.udid ?? udid) } catch {
+                        if isNew { deleteProfile(saved.id) }   // added for this alone: not left behind without it
+                        return .failure(.message("\(error)"))
+                    }
+                    return .success(saved)
+                }
+            }
+        }
+        let saved: DeviceProfile
+        switch kept {
+        case .failure(let why): return .failure("\(why)")
+        case .success(let s): saved = s
+        }
+        // The connection takes its time, and is made off that thread.
+        deviceControl.hold(.init(id: saved.id, name: saved.displayName, ip: saved.providerIP, port: saved.remotePairingPort, udid: saved.udid ?? udid))
+        DispatchQueue.main.async { MainActor.assumeIsolated { self.syncDeviceControl() } }
+        // Taken in either way; a file that stays is said to (in `error`, with `ok`).
+        // Brought in to be used: switched on, as one set up here is — and said when it couldn't be.
+        // In its turn among the switch's writes: after the one that drops the pairing it replaced.
+        // …and only while it is still what this run last sealed for the device: a pairing made
+        // here meanwhile (Set Up) took its place, and its own switch.
+        let mark = sealedMark.flatMap { deviceControl.sealedMark(udid: saved.udid ?? udid) == $0 ? $0 : nil }
+        let asked = DeviceControlAllowed.shared.now()
+        // On is what it is known as afterwards: a switch-off that came meanwhile (Remove, the page) stands.
+        let on = switching.sync { mark.map { DeviceControlAllowed.shared.set($0, true, asked: asked) && DeviceControlAllowed.shared.known($0) == true } ?? false }
+        let left = DeviceControlHub.removeTaken(file, readThrough: fd)
+        let off = on ? nil : mark == nil
+            ? "a pairing made on this Mac meanwhile took this one's place: the device uses that one"
+            : "device control is switched off for it (the Keychain didn't keep it switched on): the user switches it on in the RoamRun app, on the device's page"
+        let said = [left, off].compactMap { $0 }
+        return .init(ok: true, error: said.isEmpty ? nil : said.joined(separator: "; "), name: saved.displayName, removed: left == nil)
+    }
+
     func deleteProfile(_ id: UUID) {
+        if controlPairing?.device == id { endControlPairing() }   // a pairing being made for it isn't finished for nothing
         stopExternalBridge(id)   // a `roamrun up` for it would otherwise live on, unstoppable by name
         if let spoof = bridges[id]?.spoofHost { capture.ownedHosts.remove(spoof) }
         if selectedID == id { selectedID = nil }
@@ -914,6 +1103,10 @@ final class AppCoordinator: ObservableObject {
         bridges[id] = nil
         bridgeObservers[id] = nil
         memories[id] = nil
+        controlScans[id] = nil
+        controlScanMisses[id] = nil
+        // Its pairing for device control goes with it, as the dialog says: added again, it is set up again.
+        if let p = profiles.first(where: { $0.id == id }) { forgetControlPairing(p) }
         profiles.removeAll { $0.id == id }
         wasActiveIDs.remove(id)
         persist()
@@ -1055,6 +1248,8 @@ final class AppCoordinator: ObservableObject {
         bridge.onLog = { [weak self] m in self?.logStore.log(m, device: id) }
         bridge.onUDID = { [weak self] udid in
             guard let self, let i = self.profiles.firstIndex(where: { $0.id == id }) else { return }
+            // The same one spelled another way stays as it is saved: its pairing's file is named by it.
+            if self.profiles[i].udid?.caseInsensitiveCompare(udid) == .orderedSame { return }
             self.profiles[i].udid = udid
             self.persist()
             self.learnDeviceTypes()
@@ -1102,15 +1297,23 @@ final class AppCoordinator: ObservableObject {
         let found: UInt16
         // Asked for and watched: time enough for every port even on a host that drops probes.
         switch await ReachabilityProbe.findRemotePairingPort(host: host, limit: .seconds(120)) {
-        case .found(let port): found = port
+        case .found(let port):
+            found = port
+            controlScanMisses[profile.id] = nil
         case .notFound:
+            controlScanMisses[profile.id, default: 0] += 1
             logStore.log("\"\(profile.displayName)\": no RemotePairing port responded — is the device on Wi-Fi?", device: profile.id)
             return "No port answered. Is the device on Wi‑Fi and unlocked?"
         case .timedOut:
             logStore.log("\"\(profile.displayName)\": the scan timed out before every port was checked", device: profile.id)
             return "The scan timed out before every port was checked."
         }
-        if found == profile.remotePairingPort {
+        // Against the port saved now, not at the click: a retry may have found and saved it
+        // meanwhile, and "moving" to it would tear down the session it just brought up.
+        let saved = profiles.first { $0.id == profile.id }
+        // The device moved to another address meanwhile: a port found at the old one isn't its.
+        if let saved, saved.providerIP != host { return "The device moved to \(saved.providerIP) during the scan; nothing changed." }
+        if found == (saved?.remotePairingPort ?? profile.remotePairingPort) {
             logStore.log("\"\(profile.displayName)\": RemotePairing port is still \(found)", device: profile.id)
             return "Still on port \(found)."
         } else {
@@ -1201,10 +1404,256 @@ final class AppCoordinator: ObservableObject {
 
     /// Terminate all helper children (zone dump, proxy registrations, log
     /// watchers, relays) so nothing is orphaned when the app quits.
+    private let deviceControl = DeviceControlHub(directory: ProfileStore.directory, key: DeviceControlKey.shared.key)
+
+    /// The devices as saved now, to the hub that keeps their control connections: at launch, and
+    /// whenever the list is saved. (A pairing file that appears in between is seen by the hub within half a minute.)
+    private func syncDeviceControl() {
+        guard Snapshot.path == nil else { return }
+        deviceControl.update(profiles.compactMap(controlTarget))
+    }
+
+    private func controlTarget(_ p: DeviceProfile) -> DeviceControlHub.Target? {
+        controlUDID(p).map { .init(id: p.id, name: p.displayName, ip: p.providerIP, port: p.remotePairingPort, udid: $0) }
+    }
+
+    /// The device's UDID, which names its pairing: saved with it, or as whoever bridges it now has learned it
+    /// (a `roamrun up` saves it to the file only).
+    private func controlUDID(_ p: DeviceProfile) -> String? {
+        p.udid ?? bridges[p.id]?.udid ?? externalBridges[p.id]?.udid
+    }
+
+    /// What the device's Settings list this Mac as, for device control.
+    nonisolated static var controlHostName: String { "RoamRun (\(Host.current().localizedName ?? "Mac"))" }
+
+    /// When each device's port was last looked for on device control's behalf.
+    private var controlScans: [UUID: Date] = [:]
+    /// Searches in a row that found no port, by device: each doubles the wait for the next.
+    private var controlScanMisses: [UUID: Int] = [:]
+
+    /// Whether a failed attempt to open device control's connection is a reason to look for the
+    /// device's RemotePairing port (it can move when the device restarts): the device answered
+    /// and refused the port — a device away or asleep, which doesn't answer, isn't searched —,
+    /// no bridge is at work on it (one that is finds the port itself), and it wasn't looked for
+    /// in the last ten minutes: four times as long after each search that found nothing, up to
+    /// a day (on cellular the device refuses every port, and each search spends its data).
+    nonisolated static func controlWantsPortScan(why: String, bridgeAtWork: Bool, lastScan: Date?, misses: Int = 0, now: Date = Date()) -> Bool {
+        let wait = min(600 * pow(4, Double(min(max(misses, 0), 4))), 86400)
+        return !bridgeAtWork && why.hasPrefix("RemotePairing port: Connection refused")
+            && (lastScan.map { now.timeIntervalSince($0) >= wait } ?? true)
+    }
+
+    private func controlUnreached(_ id: UUID, _ why: String) {
+        guard let profile = profiles.first(where: { $0.id == id }) else { return }
+        // A `roamrun up` that holds the device saves what it finds to the file only: read here.
+        if externalBridges[id] != nil { persist() }
+        var bridgeAtWork = externalBridges[id] != nil
+        switch bridges[id]?.state {
+        case .off, .local, nil: break
+        default: bridgeAtWork = true
+        }
+        guard Self.controlWantsPortScan(why: why, bridgeAtWork: bridgeAtWork, lastScan: controlScans[id],
+                                        misses: controlScanMisses[id] ?? 0) else { return }
+        controlScans[id] = Date()
+        Task { _ = await scanRemotePairingPort(profile) }   // logs what it finds; a port that moved is saved, and the hub told
+    }
+
+    struct ControlPairing: Equatable {
+        var device: UUID
+        var step: DeviceControlHub.PairingStep
+        /// Which attempt: one cancelled and begun again mustn't show the first one's end.
+        var attempt = UUID()
+    }
+    /// The pairing for device control being made now, if any.
+    @Published private(set) var controlPairing: ControlPairing?
+
+    /// Whether commands and agents may operate the device.
+    /// nil: not known yet (the Keychain's list isn't read, or the device has no session: `controlSwitchPending`).
+    /// About the pairing its session connects with — not about whatever file is under its name.
+    func controlAllowed(_ profile: DeviceProfile) -> Bool? {
+        deviceControl.mark(of: profile.id).flatMap(DeviceControlAllowed.shared.known)
+    }
+
+    /// The list is being read: the page says so, and its switch waits. Not for a device without a
+    /// session (there is nothing to switch), nor for a list that couldn't be read (said as that).
+    func controlSwitchPending(_ profile: DeviceProfile) -> Bool {
+        guard let mark = deviceControl.mark(of: profile.id) else { return false }
+        return DeviceControlAllowed.shared.known(mark) == nil && !DeviceControlAllowed.shared.isUnreadable
+    }
+
+    /// The Keychain didn't give its list of what is switched on: nothing is, until it does.
+    var controlListUnreadable: Bool { DeviceControlAllowed.shared.isUnreadable }
+
+    /// The switch on the page: of the pairing the device's session connects with. Off, also of
+    /// whatever else goes by the device's name here.
+    func switchControl(_ profile: DeviceProfile, _ allowed: Bool) {
+        setControlAllowed(profile.id, marks: allowed ? [deviceControl.mark(of: profile.id)].compactMap { $0 } : controlMarks(profile), allowed)
+    }
+
+    /// Every mark that could be this device's pairing: its session's, what this run sealed for it, what is saved now.
+    private func controlMarks(_ profile: DeviceProfile) -> [String] {
+        let udid = controlUDID(profile)
+        return Array(Set([deviceControl.mark(of: profile.id),
+                          udid.flatMap(deviceControl.sealedMark(udid:)),
+                          udid.flatMap { DeviceControlHub.pairingMark(udid: $0, in: ProfileStore.directory) }].compactMap { $0 }))
+    }
+
+    /// Whether the switch's list may be cut down to what the sessions hold: only while the list
+    /// of devices those sessions come from is whole.
+    private final class Flag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var on = false
+        var isOn: Bool {
+            get { lock.withLock { on } }
+            set { lock.withLock { on = newValue } }
+        }
+    }
+    private nonisolated let pruning = Flag()
+
+    /// One at a time, in the order asked: a device set up and removed right after ends removed.
+    private nonisolated let switching = DispatchQueue(label: "roamrun.device-control.switch")
+
+    /// Kept in the Keychain, which may ask and waits: off the main thread. The pairings are named
+    /// by the caller, by marks it knows — not read from the file now.
+    func setControlAllowed(_ id: UUID, marks: [String], _ allowed: Bool) {
+        guard !marks.isEmpty else { return }
+        let hub = deviceControl
+        // Off: from this moment, whatever the Keychain is busy with (it may be asking about
+        // another device's switch): nothing more begins, and what runs stops where it can.
+        if !allowed {
+            marks.forEach(DeviceControlAllowed.shared.offNow)
+            hub.interrupt(id)
+        }
+        let asked = DeviceControlAllowed.shared.now()   // on: not to undo an off asked while this waits
+        switching.async {
+            let kept = marks.map { DeviceControlAllowed.shared.set($0, allowed, asked: asked) }.allSatisfy { $0 }
+            if !allowed { hub.interrupt(id) }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    if !kept {
+                        let unreadable = DeviceControlAllowed.shared.isUnreadable
+                        self.launchWarning = allowed
+                            ? (unreadable ? "Device control couldn't be switched on: the Keychain didn't give RoamRun its list of what is on." : "Device control couldn't be switched on: the Keychain didn't keep it.")
+                            : (unreadable ? "Device control is off for as long as RoamRun runs, but the Keychain's list of what is on couldn't be read to take it out: it may be on again when RoamRun is opened anew."
+                                          : "Device control is switched off, but the Keychain hasn't kept that yet: RoamRun writes it again by itself (within half a minute, and when it quits); should that fail too, the device is on again when RoamRun is next opened.")
+                    }
+                    self.objectWillChange.send()
+                }
+            }
+        }
+    }
+
+    /// What answers at the device's address isn't the device its pairing was made with.
+    func controlAnother(_ profile: DeviceProfile) -> Bool { deviceControl.isAnother(profile.id) }
+
+    /// A device whose UDID isn't known yet (it names the pairing) has none: it can be set up,
+    /// and the pairing tells the UDID.
+    func controlState(_ profile: DeviceProfile) -> (paired: Bool, open: Bool, refused: Bool) {
+        controlUDID(profile).map { deviceControl.state(of: profile.id, udid: $0) } ?? (false, false, false)
+    }
+
+    func startControlPairing(_ profile: DeviceProfile) {
+        let pairing = ControlPairing(device: profile.id, step: .waiting(""))
+        controlPairing = pairing
+        let id = profile.id
+        let request = DeviceControlHub.PairingRequest(
+            id: id, name: profile.displayName, ip: profile.providerIP, port: profile.remotePairingPort, udid: controlUDID(profile),
+            others: profiles.filter { $0.id != id }.compactMap { p in controlUDID(p).map { ($0, p.displayName) } })
+        Task {
+            // Without a UDID the pairing has to open a connection at the device's address to be
+            // kept: found out before the user is asked to enter a code, not after.
+            if request.udid == nil, !(await ReachabilityProbe.checkTCP(host: request.ip, port: request.port, timeout: 4)) {
+                guard controlPairing?.attempt == pairing.attempt else { return }
+                controlPairing?.step = .failed("“\(request.name)” doesn't answer at \(request.ip):\(request.port), where the pairing would be checked. Is its VPN on and its screen unlocked? If it restarted, Technical details › Find RemotePairing Port.")
+                return
+            }
+            guard controlPairing?.attempt == pairing.attempt else { return }   // dismissed meanwhile
+            deviceControl.pair(request, as: Self.controlHostName, attempt: pairing.attempt) { step in
+                Task { @MainActor in self.controlPairingStep(step, of: id, attempt: pairing.attempt) }
+            }
+        }
+    }
+
+    /// What to do with the UDID a pairing was saved under.
+    enum PairedUDID: Equatable { case save, known, conflicts }
+
+    nonisolated static func pairedUDID(saved: String?, paired: String) -> PairedUDID {
+        guard let saved else { return .save }
+        return saved.caseInsensitiveCompare(paired) == .orderedSame ? .known : .conflicts
+    }
+
+    /// Whether a pairing just made is kept: the list was saved with its UDID now, or the file
+    /// named it already (paired again: the pairing before it is gone, and this is the only one).
+    nonisolated static func keepsPairing(savedNow: Bool, onDisk: String?, paired: String) -> Bool {
+        savedNow || onDisk?.caseInsensitiveCompare(paired) == .orderedSame
+    }
+
+    private func controlPairingStep(_ step: DeviceControlHub.PairingStep, of id: UUID, attempt: UUID) {
+        var shown = step
+        // A pairing that got as far as being saved is dealt with whether or not its sheet is
+        // still up: its UDID goes to the device it was made for, or its file goes.
+        if case .done(let udid, _) = step {
+            let i = profiles.firstIndex { $0.id == id }
+            switch Self.pairedUDID(saved: i.flatMap { controlUDID(profiles[$0]) }, paired: udid) {
+            // Known here is not yet written: the list is saved (again, when a save failed before)
+            // before the pairing is said to be done.
+            case .save where i != nil, .known:
+                let had = profiles[i!].udid
+                profiles[i!].udid = had ?? udid
+                if Self.keepsPairing(savedNow: persist(), onDisk: savedProfiles.first { $0.id == id }?.udid, paired: udid) {
+                    // Set up to be used: on until the user switches it off. The pairing this run sealed, as it wrote it.
+                    setControlAllowed(id, marks: [deviceControl.sealedMark(udid: udid)].compactMap { $0 }, true)
+                    memories[id]?.adopt(udid)   // the running bridge's, so that what it reports later is compared with it
+                    learnDeviceTypes()
+                } else {
+                    // Not written: after a restart the device would have no UDID again, and a
+                    // pairing nothing names. Neither is kept, and it isn't shown as done.
+                    if let j = profiles.firstIndex(where: { $0.id == id }) { profiles[j].udid = had }
+                    deviceControl.forgetPairing(udid: udid, of: id)
+                    shown = .failed("The pairing was made, but the device list couldn't be saved (\(ProfileStore.directory.path)), so it wasn't kept. Set it up again once that is mended; the pairing just made can be removed on the device, in Settings.")
+                }
+            default:
+                deviceControl.forgetPairing(udid: udid, of: id)
+                shown = .failed(i == nil ? "The device is no longer saved; its pairing wasn't kept."
+                                         : "“\(profiles[i!].displayName)” was found to be another device meanwhile; the pairing wasn't kept. Set it up again.")
+            }
+        }
+        guard controlPairing?.attempt == attempt else { return }   // dismissed, or begun again, meanwhile
+        controlPairing?.step = shown
+    }
+
+    /// Stops a pairing under way and puts its sheet away.
+    func endControlPairing() {
+        if let attempt = controlPairing?.attempt { deviceControl.cancelPairing(attempt) }
+        controlPairing = nil
+    }
+
+    /// A pairing that stays on this Mac (its file can be neither removed nor emptied) is said to:
+    /// it would be found again by the device added anew, after a restart.
+    private func forgetControlPairing(_ profile: DeviceProfile) {
+        setControlAllowed(profile.id, marks: controlMarks(profile), false)   // named before its file goes
+        guard let target = controlTarget(profile), deviceControl.unpair(target) == .left else { return }
+        launchWarning = "The pairing for “\(profile.displayName)” couldn't be removed from this Mac: \(DeviceControlWire.pairingFile(udid: target.udid, in: ProfileStore.directory).path) still holds it, and RoamRun would use it again after it is opened anew. Delete that file, or unpair on the device (Settings › Privacy & Security › Developer Mode)."
+    }
+
+    func removeControlPairing(_ profile: DeviceProfile) {
+        forgetControlPairing(profile)
+        objectWillChange.send()
+    }
+
     func shutdown() {
         capture.stop()
         stopOTA()   // the serve entry would otherwise point at a dead port
         for bridge in bridges.values { bridge.stop() }
+        // A switch turned off a moment ago is in the Keychain before this ends (as far as a
+        // moment allows: it may be asking the user), or it would be on again at the next start.
+        let written = DispatchSemaphore(value: 0)
+        switching.async {
+            DeviceControlAllowed.shared.flush()
+            written.signal()
+        }
+        _ = written.wait(timeout: .now() + 2)
+        deviceControl.stop()   // last: it may wait a moment for a device, and the bridges' helpers mustn't be left meanwhile
     }
 
     private func onInterfaceLost() {
@@ -1267,10 +1716,14 @@ final class AppCoordinator: ObservableObject {
     }
 
     /// Saves the device list; a failed write would lose changes at the next launch, so say so.
-    private func persist() {
-        guard Snapshot.fakeProfiles == nil else { return }   // screenshot mode's fake devices never reach disk
+    /// false: the list couldn't be saved (it is said in the window too).
+    @discardableResult
+    private func persist() -> Bool {
+        guard Snapshot.fakeProfiles == nil else { return true }   // screenshot mode's fake devices never reach disk
+        defer { syncDeviceControl() }
         if let saved = store.save(base: savedProfiles, wanted: profiles) {
             savedProfiles = saved
+            pruning.isOn = true   // written and read back: the list is whole
             if saved != profiles {   // `roamrun up` had saved a newer endpoint, or devices we never read came back
                 let mine = Dictionary(profiles.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
                 let wanted = wasActiveIDs
@@ -1285,10 +1738,11 @@ final class AppCoordinator: ObservableObject {
             }
             // Saved, so the file is readable and written again: those two warnings no longer hold.
             if launchWarning == Self.unreadableListWarning || launchWarning == Self.saveFailedWarning { launchWarning = nil }
-            return
+            return true
         }
         logStore.log("couldn't save the device list to \(ProfileStore.directory.path)")
         launchWarning = Self.saveFailedWarning
+        return false
     }
 
     /// Stops helpers a crashed run left behind, off the main thread; says what it did.

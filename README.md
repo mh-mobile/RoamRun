@@ -101,7 +101,9 @@ git clone https://github.com/mh-mobile/RoamRun && cd RoamRun
 - **Everyday use:** `make app`, move `RoamRun.app` to `/Applications`, open it, and install the CLI from the app (see [CLI](#cli)).
 - **Developing RoamRun:** `make install-cli` links `roamrun` to the build in the repo folder, so each `make app` takes effect right away. If you later move the app, reinstall the CLI from the app.
 
-No Xcode project needed: SwiftPM and a Makefile assemble the `.app`. An app you build yourself isn't treated as a download, so Gatekeeper won't warn.
+Needs Xcode and Rust by [rustup](https://rustup.rs) (for device control's library; `make` builds it, with the Rust version it names). No Xcode project needed: SwiftPM and a Makefile assemble the `.app`. An app you build yourself isn't treated as a download, so Gatekeeper won't warn.
+
+If you set up device control with a build of your own: without a signing certificate (`make` then signs ad hoc), macOS takes each rebuild for another app, and the Keychain asks about the key RoamRun keeps there each time one is first opened. Answer "Always Allow" and the saved pairings go on working. Where there is no screen to answer on (a Mac reached over SSH only), the new build can't read them: delete the two Keychain items (see [What it creates on your Mac](#what-it-creates-on-your-mac-and-uninstalling)) and set up or import the pairing again. A build signed with a certificate of yours, like a released RoamRun, isn't asked about.
 
 ### Prebuilt dmg (GitHub Releases)
 
@@ -142,8 +144,8 @@ The app binary doubles as a CLI (handy over SSH or in scripts). To put `roamrun`
 roamrun devices               # saved devices (name, UDID, id) and their status
 roamrun up <name>             # start a bridge and show progress until Ready; Ctrl-C stops and cleans up
 roamrun up <name> -d          # start in the background (survives closing the terminal; log in ~/Library/Logs/RoamRun/)
-                              #   waits up to 60s for Ready and exits 1 if it isn't — the bridge keeps trying either way
-roamrun status <name>         # exits 0 when Ready (for waiting in scripts; without a name: when any device is)
+                              #   waits up to 60s for Ready (or On this Wi‑Fi) and exits 1 if not — the bridge keeps trying unless it exits with an error retrying can't fix (see the log)
+roamrun status <name>         # exits 0 when Xcode can use the device (Ready, or On this Wi‑Fi and reachable; without a name: when any device is)
 roamrun down <name>           # stop a bridge, whether the app or another terminal's `up` runs it
 roamrun doctor                # check Mac → Tailscale → iPhone step by step and say how to fix
 roamrun run <name> [--scheme S] [--logs]   # in the project folder: build → install → launch (--scheme: only if it has several; --logs: stream output; like Xcode, it may create provisioning profiles)
@@ -156,7 +158,7 @@ roamrun ota [<name>] <App.ipa> [--replace] # publish the build so a device can i
                                            #   bridge — install only, needs Ad Hoc or Enterprise signing (see below)
 ```
 
-Options: `--json` (`devices`, `status`, `doctor`; `devices` doesn't ask CoreDevice, so its `ready` only means the bridge is Ready or the device is on this Wi‑Fi — `status` also asks CoreDevice once the device's UDID is known), `--wait N` (`status`: wait up to N seconds for Ready; each round runs one `devicectl list devices`, plus a lock check per ready device, before the deadline is looked at again, so it can return several seconds after N; an N below 10 also shortens each of those calls, to a floor of 5 seconds), `-v` (`up`: show the activity log), `--workspace W` / `--project P` / `--configuration C` (`run`), `--replace` (`ota`: drop builds already listed under the same version and build number). `roamrun --help` lists everything; a command rejects options it doesn't take (exit 2).
+Options: `--json` (`devices`, `status`, `doctor`; `devices` doesn't ask CoreDevice, so its `ready` only means the bridge is Ready or the device is on this Wi‑Fi — `status` also asks CoreDevice once the device's UDID is known), `--wait N` (`status`: wait up to N seconds for Ready; each round runs one `devicectl list devices`, plus a lock check per ready device, before the deadline is looked at again, so it can return several seconds after N; each of those calls is also cut to the time left, between 5 and 10 seconds), `-v` (`up`: show the activity log), `--workspace W` / `--project P` / `--configuration C` (`run`), `--replace` (`ota`: drop builds already listed under the same version and build number). `roamrun --help` lists everything; a command rejects options it doesn't take (exit 2).
 
 The CLI uses the app's settings, so a bridge started with `roamrun up` follows **Keep debugging on cellular** too. Without access to the app's Settings (over SSH, for example), turn it on or off with `defaults`:
 
@@ -164,7 +166,7 @@ The CLI uses the app's settings, so a bridge started with `roamrun up` follows *
 defaults write io.github.mh-mobile.roamrun keepDebuggingOnCellular -bool true    # false to turn it off again
 ```
 
-`<name>` is **the name you gave the device in RoamRun**, not the iPhone's own name (case-insensitive; see `roamrun devices`, rename with ✏️ in the app's detail view; names must be unique). Add each device once in the app (Add Device). The app and the CLI never bridge the same iPhone at once: whichever starts second refuses (`up` exits 0 if the other one already has it ready), except that a bridge that is standing aside ("On this Wi‑Fi") or has an error can be taken over — by Start, not by the app's automatic retries: while a `roamrun up` runs, the app leaves its device to it. `logs` relaunches the app, since `devicectl` can't attach a console to one already running; it works over a bridge and on the same Wi-Fi alike.
+`<name>` is **the name you gave the device in RoamRun**, not the iPhone's own name (case-insensitive; see `roamrun devices`, rename with ✏️ in the app's detail view; names must be unique). Add each device once in the app (Add Device). The app and the CLI never bridge the same iPhone at once: whichever starts second refuses (`up` exits 0 if the other one already has it ready), except that a bridge that is standing aside ("On this Wi‑Fi") or has an error can be taken over — by Start, not by the app's automatic retries: while a `roamrun up` runs, the app leaves its device to it, and a second `roamrun up` for that device doesn't start (exit 0 if the first is standing aside, 1 otherwise). `logs` relaunches the app, since `devicectl` can't attach a console to one already running; it works over a bridge and on the same Wi-Fi alike.
 
 `install` takes an `.ipa` (e.g. from CI) or an `.app` exported for **Debugging, Release Testing (Ad Hoc) or Enterprise** — the device's UDID must be in its provisioning profile (Enterprise: any device that trusts the certificate). Builds for App Store Connect (App Store / TestFlight) can't be installed directly; `install` says so before trying. RoamRun only reaches devices paired with this Mac; to hand a build to devices that aren't, use TestFlight or over-the-air distribution (Ad Hoc / Enterprise).
 
@@ -189,13 +191,45 @@ xcrun devicectl device info files --device <udid> --domain-type systemCrashLogs 
 Claude Code, Codex, Cursor and other agents can take over building, installing on the device and debugging. Install the skill that teaches them how:
 
 ```sh
-roamrun init                                  # add the skill to every agent found in ~ (.claude, .codex, .cursor, .gemini, .copilot)
+roamrun init                                  # add the skill to every agent found in ~ (.claude, .codex, .cursor, .gemini, .copilot, .devin)
 roamrun init --client claude                  # or only to the ones you name (repeat --client)
 ```
 
 `init` installs the skill shipped with your RoamRun, so it always matches the CLI. After updating RoamRun, run `roamrun init` again — `roamrun status` and `doctor` remind you when an installed skill is from another version. If you manage skills with another tool instead, pin it to your RoamRun's release so skill and CLI agree, e.g. `gh skill install mh-mobile/RoamRun roamrun --pin "v$(roamrun --version | cut -d" " -f2)"` (the repo's main branch may describe options your installed version doesn't have yet).
 
 The skill covers getting the device connected (`roamrun up -d` → `status --wait 60 --json` for the UDID), what only a human can do, such as unlocking the iPhone, and screenshots; building and launching are left to the agent's usual tools, with `roamrun run` as a one-command fallback. The CLI supports `--json` and exit codes (0 ready / 1 not ready or failed / 2 usage error); `status` without a device name lists every saved device and exits 0 if any one of them is ready, so name the device when a script needs the answer to be about that one.
+
+## Seeing and operating the device
+
+RoamRun can also show the device's screen and operate it — tap, swipe, type, press its buttons — from the command line or as tools for an AI agent. It needs **iOS / iPadOS 27 or later** (earlier versions refuse remote control; tried on an iPhone — an iPad should work the same and hasn't been tried), and it doesn't go through the bridge or Xcode: RoamRun makes a pairing and a connection of its own.
+
+**Set up, once per device**, with the device on the same Wi‑Fi as the Mac: open the device's page in RoamRun → **Device control › Set Up…**. On the device, under Settings › Privacy & Security › Developer Mode, pick RoamRun and enter the code the Mac shows. After that it connects whenever the device is on a Wi‑Fi and reachable over the VPN, and stays connected when the device moves to cellular. The RoamRun app holds the connection, so it has to be running.
+
+```sh
+roamrun look iPhone /tmp/now.png          # the screen now, as PNG (1280 at most on its longer side); prints the path, then its size
+roamrun tap iPhone 295 640                # a point in the pixels of that image
+roamrun look iPhone /tmp/now.png          # again before the next action: each look serves one
+roamrun swipe iPhone 295 900 295 450      # drag from one point to another
+roamrun type iPhone "hello"               # US keys, at most about 16 a second; right only while the device's keyboard is an English one (under a Japanese one even a space converts)
+roamrun paste iPhone "任意の文字列"         # any text, by the device's pasteboard (iOS asks "Allow Paste")
+roamrun press iPhone home                 # home, lock, volume-up, volume-down
+roamrun elements iPhone                   # what accessibility says is on the screen (no positions)
+```
+
+Each `look` serves one action: look, act, look again. The image is the screen as the device holds it: an app in landscape shows turned on its side, and its points are still the image's. For an agent, the same are MCP tools: `claude mcp add roamrun -- roamrun mcp`, or the like for another agent; the skill (`roamrun init`) tells it how to use them.
+
+**From a Mac that can't pair itself.** Setting up needs the Mac and the device on one Wi‑Fi, which a Mac elsewhere (in a data centre, say) never is. Make its pairing on a Mac that is, and take it there:
+
+```sh
+roamrun pairing create iPhone ~/iphone-for-cloud.json --as cloud-mac   # here: pick "cloud-mac" on the device, enter the code
+roamrun pairing import ~/iphone-for-cloud.json                         # there, once the file is on it: saves the device and its pairing (switched on), removes the file
+```
+
+`import` keeps the pairing only if it connects, so the device has to be reachable then; if it restarted since the file was made, its port has changed and `import` looks for it (for a device not yet saved on that Mac; for one that is, find its port there first: its page › Technical details › Find RemotePairing Port). The other Mac needs RoamRun running in a session at its screen (a Mac nobody is logged in at can't start the app) and a way to reach the device's VPN address. The file is a key: whoever has it and reaches the device can see and operate it, so move it as you would a password, and don't keep copies. Each pairing made this way is listed on the device under its own name (Settings › Privacy & Security › Developer Mode) and can be removed there alone; this Mac's own pairing is another entry and stays.
+
+**While the device is looked at or operated, its sound is taken.** Each look and each action runs a screen-sharing session on the device, kept for about five seconds after the last one, and the device sends its sound into it: its speaker goes silent (what was playing goes on playing, unheard, and is heard again by itself afterwards) and voice input on it — dictation, an app that listens — doesn't hear. So a screen that is being watched, look after look, has no sound and no voice input for as long as the watching goes on. Stop looking for some ten seconds and both are back.
+
+These press what is really on the screen, and a `look` shows whatever is there — notifications and messages too. A `look` written to a file is yours only (0600) and stays until you delete it. **Device control is not given to one agent or one command: while a device is switched on, any program you run on this Mac can see and operate it** through the app — a build script, a package's install step, another agent. The switch beside **Device control** on the device's page turns it off for all of them (and back on); it is on after Set Up, after Pair Again (also for a device you had switched off) and after `pairing import`, so turn it off when nothing of yours is using the device. Locking the device doesn't stop it: its lock screen is seen and operated too (unlocking still takes the passcode or Face ID). The device shows each look or action as a screen-sharing session, and lists RoamRun's pairing under Developer Mode, where you can remove it. The pairing holds a private key; how it is kept, and who can use it, is in [SECURITY.md](SECURITY.md).
 
 ## Installing without the bridge: over the air
 
@@ -323,7 +357,7 @@ Main files in `Sources/RoamRun/`:
 | `DNSServiceProxy.swift` | Stand-in advertisement through a `dns-sd -P` child process, plus orphan cleanup |
 | `Relays.swift` | TCP byte relay on NWListener/NWConnection (accepts connections from this Mac only) |
 | `TunnelPortWatcher.swift` | Detects tunnel ports from `log stream` and attributes them to their device |
-| `InterfaceMonitor.swift` | Picks the LAN interface (en0 unless set in Settings) and notices its IP changes (getifaddrs + NWPathMonitor) |
+| `InterfaceMonitor.swift` | Picks the LAN interface (the one set in Settings; else en0, or the first other en* with an address when en0 has none) and notices its IP changes (getifaddrs + NWPathMonitor) |
 | `ReachabilityProbe.swift` | TCP reachability and the RemotePairing handshake check |
 | `ProxyBridge.swift` | Orchestrates the above (one instance per device) |
 | `OTA.swift` | Builds kept for over-the-air installs: storage, signing checks, icons |
@@ -333,6 +367,11 @@ Main files in `Sources/RoamRun/`:
 | `AppCoordinator.swift` | Profiles, bridge control, presence checks |
 | `StatusFile.swift` | Bridge status shared by the app and the CLI (who owns which device) |
 | `CLI.swift` | The `roamrun` command (same binary as the app) |
+| `DeviceControl.swift` | Device control: the connections the app holds, the pairing, and the socket the CLI and MCP tools ask through |
+| `DeviceControlKey.swift` | The Keychain key the saved pairings are sealed with |
+| `DeviceMCP.swift` | `roamrun mcp`: the same commands as MCP tools |
+
+Device control's connection itself is in `Sources/DeviceControl/` (Swift) over `Rust/RoamRunDevice/` (RoamRun's C interface to the idevice crate).
 
 ## What it creates on your Mac, and uninstalling
 
@@ -340,11 +379,12 @@ RoamRun writes only to these places (it never touches system settings or other a
 
 | Location | Contents |
 |---|---|
-| `~/Library/Application Support/RoamRun/` | Saved devices (`profiles.json`), bridge status, and `ota/` — the last 5 builds per app kept for over-the-air installs (excluded from Time Machine; delete the folder to reclaim the space) |
+| `~/Library/Application Support/RoamRun/` | Saved devices (`profiles.json`), bridge status, lock files, device control's socket and looks on their way to a command (`control/`) and this Mac's identity for pairing (`device-control-host`), and `ota/` — the last 5 builds per app kept for over-the-air installs (excluded from Time Machine; delete the folder to reclaim the space) |
 | `~/Library/Logs/RoamRun/` | Logs of `roamrun up -d` |
 | `io.github.mh-mobile.roamrun` (defaults; `com.roamrun.app` before 0.1.12) | Settings and which bridges were running |
 | `/usr/local/bin/roamrun` | Only if you installed the CLI from the app or `make install-cli` (never overwrites an existing file or another tool's link); Homebrew links `/opt/homebrew/bin/roamrun` instead |
 | `~/.claude/skills/roamrun/` etc. | Only if you ran `roamrun init` (never touches other skills or links) |
+| Login Keychain: “RoamRun device control”, “RoamRun device control (devices switched on)” | Only if you set up device control: the key its saved pairings (`device-pairing-<UDID>.sealed`, in the first folder) are sealed with, and which devices are switched on |
 
 If you used `roamrun ota`, one more thing lives outside that table: RoamRun asks
 `tailscale serve` to carry one port — whichever `otaPort` names, 41443 by
@@ -368,6 +408,8 @@ First stop bridges started with `roamrun up -d` (`roamrun down <name>`): they ke
 roamrun init --uninstall                  # if you installed the skill (with another tool: remove it there)
 rm /usr/local/bin/roamrun                 # if you installed the CLI
 rm -rf ~/Library/Application\ Support/RoamRun ~/Library/Logs/RoamRun
+security delete-generic-password -s io.github.mh-mobile.roamrun.device-control -a pairings   # if you set up device control (also after brew --zap): its key,
+security delete-generic-password -s io.github.mh-mobile.roamrun.device-control -a allowed    # and which devices are switched on
 tailscale serve --https=41443 --set-path=/ off   # if you used roamrun ota (the port otaPort names)
 defaults delete io.github.mh-mobile.roamrun      # after the line above: it holds otaPort
 defaults delete com.roamrun.app 2>/dev/null      # left by versions before 0.1.12
@@ -378,7 +420,7 @@ defaults delete com.roamrun.app 2>/dev/null      # left by versions before 0.1.1
 
 - **It depends on Apple's private protocols.** It assumes how CoreDevice / RemotePairing behave since iOS 17 (Bonjour `_remotepairing._tcp` → control channel → tunnel), and future iOS / macOS / Xcode versions may break it. When in trouble, run `roamrun doctor` first.
 - **If macOS blocks RoamRun's local-network access, the device always looks "away".** Every probe to this Wi-Fi fails at once, so RoamRun goes on bridging (and advertising) a device sitting right next to it; over the mesh VPN everything else keeps working, so nothing else gives it away. From 0.1.14 RoamRun says so in the window, the activity log, `roamrun status` and `roamrun doctor`. Allow RoamRun in System Settings › Privacy & Security › Local Network. If the switch is already on, the permission is stuck and the app has to be reinstalled; the only way confirmed to clear it is `brew uninstall --zap --cask roamrun` then `brew install --cask mh-mobile/tap/roamrun`. **`--zap` also deletes your saved devices**, so copy `~/Library/Application Support/RoamRun/profiles.json` aside and put it back **before opening RoamRun again** — once open, it writes its own list over the file. (This came from changing the bundle id in 0.1.12; with the id and signature now fixed it shouldn't recur.) ([#23](https://github.com/mh-mobile/RoamRun/issues/23))
-- The bridge listens on **en0** (Wi-Fi on most Macs). If this Mac reaches its LAN through another interface (e.g. Ethernet on a Mac mini), pick it in Open RoamRun › ⚙ Settings › Network
+- The bridge listens on **en0** (Wi-Fi on most Macs), or another en* port when en0 has no address. If this Mac reaches its LAN through another interface (e.g. Ethernet on a Mac mini), pick it in Open RoamRun › ⚙ Settings › Network
 - The iPhone must be **connected to some Wi-Fi network** to connect (another device's tethering is fine, cellular alone or the iPhone's own hotspot is not: remotepairingd only listens while on Wi-Fi). After that it can stay on cellular only from Ready for Xcode (not from On this Wi‑Fi), with Keep debugging on cellular turned on
 - After sleep or a network change, Tailscale on iOS sometimes shows "MagicSock function ReceiveIPv4 is not running" and stops passing traffic while still looking connected. Turn the VPN off and on, and keep the Tailscale app up to date
 - When the iPhone sleeps, Tailscale (a VPN extension) pauses too and the iPhone becomes unreachable. While debugging, keep the iPhone unlocked with its screen on (set a longer Auto-Lock)
@@ -388,6 +430,7 @@ defaults delete com.roamrun.app 2>/dev/null      # left by versions before 0.1.1
 - After the iPhone restarts, re-staging the DDI may need one USB connection
 - If the TXT record's authTag/identifier changes, add the iPhone again on the same Wi-Fi
 - While bridging, RoamRun keeps advertising the iPhone's Bonjour identifiers (identifier / authTag) on **every local network this Mac is on** (Wi-Fi, Ethernet — every interface with mDNS). Unlike the iPhone's own advertisement these values are fixed, so someone on the same network could track the device's presence — also on networks a laptop Mac joins while bridging (a café's, a hotel's). Someone there can also replay the record to make the bridge stand aside for a while; it can't use the device. The relay immediately drops any connection that doesn't come from this Mac. The iPhone's side is encrypted by Tailscale, so whichever Wi-Fi it's on doesn't matter
+- **Seeing or operating the device takes its sound for the moment**: silent speaker, no voice input, until about five seconds after the last look or action (see [Seeing and operating the device](#seeing-and-operating-the-device)). Looking at it continuously keeps that up.
 - **Tested with Xcode and `devicectl`.** Flutter and React Native build and install through the same tools, so they should work while the bridge is Ready, but this hasn't been verified yet ([#5](https://github.com/mh-mobile/RoamRun/issues/5)). `roamrun run` builds the Xcode project in the current folder (for those, `cd ios` first)
 - When you're not developing, turning off the iPhone's Developer Mode or removing pairings you don't need is safer (Apple's recommendation)
 - Other members of your tailnet can reach the iPhone's RemotePairing port too (they can connect, but pair verification rejects them). On a shared tailnet, use Tailscale Grants / ACLs so only your Mac can reach the iPhone
@@ -405,9 +448,13 @@ What RoamRun exposes and how, and how to report a vulnerability: [SECURITY.md](S
 
 ## Credits
 
+RoamRun was built by Claude Code, powered by Claude Opus 5.5, under mh-mobile's direction.
+
 This implementation builds on the following public write-up:
 
 - Kevin Paterson, ["How to remotely iterate & deploy your sideloaded iOS-apps over tailnet"](https://dev.to/kvnpt/how-to-remotely-iterate-deploy-your-sideloaded-ios-apps-over-tailnet-jak) (DEV Community) — demonstrates an equivalent setup with `dns-sd -P` + `socat`
+
+Device control is built on [idevice](https://github.com/jkcoxson/idevice) (Jackson Coxson), a Rust implementation of the protocols a Mac speaks to a device. The licenses of it and of the other crates RoamRun is built from are in [THIRD-PARTY-LICENSES.txt](THIRD-PARTY-LICENSES.txt), which the app carries too.
 
 ## Related projects
 

@@ -5,7 +5,10 @@ import Foundation
 /// as it runs, mDNSResponder announces the service on the LAN, pointing the
 /// SRV target at *this Mac's* IP so remotepairingd connects to our local relay.
 ///
-///   dns-sd -P <name> <type> <domain> <port> <host> <ip> [k=v ...]
+///   dns-sd -i <interface> -P <name> <type> <domain> <port> <host> <ip> [k=v ...]
+/// On the interface that holds `ip` only: announced on every interface, remotepairingd also
+/// tries the address by way of the others (a VM's bridge), where nothing answers, and the
+/// control channel it rebuilds every ~42 s stays down until the record is announced again.
 /// Used from the main actor; its termination handlers and renew wait hop back there.
 final class DNSServiceProxy: @unchecked Sendable {
     private var process: Process?
@@ -36,10 +39,17 @@ final class DNSServiceProxy: @unchecked Sendable {
     func register(instanceName: String, serviceType: String, domain: String,
                   port: UInt16, host: String, ip: String,
                   txt: [String: String]) throws {
-        var args = ["-P", instanceName, serviceType, domain, String(port), host, ip]
-        args += txt.map { "\($0.key)=\($0.value)" }
+        let args = Self.arguments(instanceName: instanceName, serviceType: serviceType, domain: domain, port: port,
+                                  host: host, ip: ip, txt: txt, interfaces: InterfaceMonitor.ipv4Addresses())
         lastArgs = args
         guard spawn(args) else { throw CocoaError(.executableLoad, userInfo: [NSLocalizedDescriptionKey: "dns-sd -P failed to launch"]) }
+    }
+
+    /// `interfaces`: each interface's IPv4 address. With none holding `ip`, every interface, as dns-sd does by itself.
+    static func arguments(instanceName: String, serviceType: String, domain: String, port: UInt16, host: String, ip: String,
+                          txt: [String: String], interfaces: [String: String]) -> [String] {
+        let on = interfaces.filter { $0.value == ip }.keys.sorted().first.map { ["-i", $0] } ?? []
+        return on + ["-P", instanceName, serviceType, domain, String(port), host, ip] + txt.map { "\($0.key)=\($0.value)" }
     }
 
     @discardableResult
