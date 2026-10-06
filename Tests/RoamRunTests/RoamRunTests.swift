@@ -4435,8 +4435,9 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1", paired: Bool = true
     let id = UUID()
     hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
     let device = try #require(made().first)
+    // Long enough for a runner whose threads are all busy with the tests beside this one.
     func soon(_ what: () -> Bool) -> Bool {
-        for _ in 0..<300 { if what() { return true }; usleep(10_000) }
+        for _ in 0..<3000 { if what() { return true }; usleep(10_000) }
         return false
     }
     hub.checkOpen()   // not due yet: just made

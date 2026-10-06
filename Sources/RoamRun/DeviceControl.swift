@@ -1075,7 +1075,8 @@ final class DeviceControlHub: @unchecked Sendable {
             return due.map(\.value.session)
         }
         for session in due {
-            DispatchQueue.global(qos: .utility).async { [self] in
+            // A thread of its own: the shared queue's can all be taken by calls that wait on a device.
+            Thread.detachNewThread { [self] in
                 session.check()
                 if !session.isOpen { keepOpen() }
             }
