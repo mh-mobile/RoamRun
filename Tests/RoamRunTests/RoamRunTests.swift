@@ -604,12 +604,24 @@ import ServiceManagement
 @Test func orphansAreOnlyOurHelpersWithADeadParent() {
     let ps = """
       101     1 /usr/bin/dns-sd -P 6E44 _remotepairing._tcp local 49152 rr-1.roamrun.local 192.168.1.2
+      106     1 /usr/bin/dns-sd -i en0 -P 6E44 _remotepairing._tcp local 49152 rr-3.roamrun.local 192.168.1.2
       102   500 /usr/bin/dns-sd -P 6E44 _remotepairing._tcp local 49152 rr-2.roamrun.local 192.168.1.2
       103     1 /usr/bin/dns-sd -P Mine _http._tcp local 80 myhost.local 192.168.1.2
       104     1 /usr/bin/log stream --predicate process == "remotepairingd" AND (eventMessage CONTAINS "Got tunnel endpoint" OR eventMessage CONTAINS "Resolved bonjour advert")
       105     1 /usr/bin/log stream --predicate subsystem == "x"
     """
-    #expect(DNSServiceProxy.orphans(fromPS: ps) == [101, 104])
+    #expect(DNSServiceProxy.orphans(fromPS: ps) == [101, 106, 104])
+}
+
+/// The record is announced on the interface whose address it names, not on a VM's bridge beside it.
+@Test func theRecordIsAnnouncedOnTheInterfaceItsAddressIsOn() {
+    func args(_ interfaces: [String: String]) -> [String] {
+        DNSServiceProxy.arguments(instanceName: "6E44", serviceType: "_remotepairing._tcp", domain: "local", port: 49152,
+                                  host: "rr-1.roamrun.local", ip: "192.168.1.2", txt: ["ver": "26"], interfaces: interfaces)
+    }
+    let record = ["-P", "6E44", "_remotepairing._tcp", "local", "49152", "rr-1.roamrun.local", "192.168.1.2", "ver=26"]
+    #expect(args(["en1": "192.168.1.2", "bridge100": "198.19.249.3"]) == ["-i", "en1"] + record)
+    #expect(args(["bridge100": "198.19.249.3"]) == record)   // no interface holds it: as before
 }
 
 @Test func tailscalePeersFromStatusJSON() {
@@ -5458,18 +5470,21 @@ import ImageIO
     close(first)
     // Free once the first is closed — but a process another test starts at that moment holds a
     // copy of it until it execs, so it is asked for a little while, not once.
-    var second: Int32?
-    for _ in 0..<200 where second == nil {
-        second = CLI.upTurn(for: id, in: dir, wait: false)
-        if second == nil { usleep(10_000) }
+    func soon() -> Int32? {
+        for _ in 0..<200 {
+            if let turn = CLI.upTurn(for: id, in: dir, wait: false) { return turn }
+            usleep(10_000)
+        }
+        return nil
     }
+    var second = soon()
     #expect(second != nil)
     // Ended once, however often it is asked (each round of the wait asks): nothing is left to
     // close a second time — by then the number may be another file's.
     CLI.endTurn(&second)
     #expect(second == nil)
     CLI.endTurn(&second)
-    let third = try #require(CLI.upTurn(for: id, in: dir, wait: false))   // and the turn is free
+    let third = try #require(soon())   // and the turn is free (asked as above: the same copy may be held)
     close(third)
 }
 

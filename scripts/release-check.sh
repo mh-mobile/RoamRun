@@ -43,7 +43,7 @@ shot=$(cd "${TMPDIR:-/tmp}" && "$rr" screenshot "$name" 2>/dev/null | grep '\.pn
 [ -s "$shot" ] && pass "3 screenshot: $shot" || fail "3 screenshot"
 
 # 5: each helper killed, Ready again within ~30 s (60 allowed for the tick), then a launch
-for h in "log stream:predicate process == \"remotepairingd\":/usr/bin/log" "dns-sd:dns-sd -P .*roamrun.local:/usr/bin/dns-sd"; do
+for h in "log stream:predicate process == \"remotepairingd\":/usr/bin/log" "dns-sd:dns-sd .*-P .*roamrun.local:/usr/bin/dns-sd"; do
     label=${h%%:*}; rest=${h#*:}; pattern=${rest%:*}; comm=${rest##*:}
     pid=$(helper "$pattern" "$comm")
     [ -n "$pid" ] || { fail "5 no $label to kill"; continue; }
@@ -60,7 +60,7 @@ for _ in $(seq 15); do [ -f "$status_file" ] && break; sleep 1; done
 
 # 8
 "$rr" down "$name" >/dev/null 2>&1; sleep 3
-left=$(ps -ax -o args | grep -E 'dns-sd -P .*roamrun.local|predicate process == "remotepairingd"' | grep -cv grep)
+left=$(ps -ax -o args | grep -E 'dns-sd .*-P .*roamrun.local|predicate process == "remotepairingd"' | grep -cv grep)
 [ "$left" -eq 0 ] && pass "8 down leaves nothing behind" || fail "8 $left helper(s) left after down"
 
 exit $failed
