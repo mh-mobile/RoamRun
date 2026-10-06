@@ -97,6 +97,8 @@ final class AppCoordinator: ObservableObject {
         for p in profiles { install(newBridge(p)) }
         deviceControl.onLog = { [weak self] message, id in Task { @MainActor in self?.logStore.log(message, device: id) } }
         deviceControl.onUnreached = { [weak self] id, why in Task { @MainActor in self?.controlUnreached(id, why) } }
+        // Its port answers where it is saved: a port that moves later is searched for as the first time.
+        deviceControl.onReached = { [weak self] id in Task { @MainActor in self?.controlScanMisses[id] = nil } }
         deviceControl.allowed = DeviceControlAllowed.shared.contains
         // Unreadable is off, as every request finds it; not read yet is not yet known.
         deviceControl.allowedKnown = { DeviceControlAllowed.shared.known($0) ?? (DeviceControlAllowed.shared.isUnreadable ? false : nil) }
@@ -1101,6 +1103,8 @@ final class AppCoordinator: ObservableObject {
         bridges[id] = nil
         bridgeObservers[id] = nil
         memories[id] = nil
+        controlScans[id] = nil
+        controlScanMisses[id] = nil
         // Its pairing for device control goes with it, as the dialog says: added again, it is set up again.
         if let p = profiles.first(where: { $0.id == id }) { forgetControlPairing(p) }
         profiles.removeAll { $0.id == id }
@@ -1293,8 +1297,11 @@ final class AppCoordinator: ObservableObject {
         let found: UInt16
         // Asked for and watched: time enough for every port even on a host that drops probes.
         switch await ReachabilityProbe.findRemotePairingPort(host: host, limit: .seconds(120)) {
-        case .found(let port): found = port
+        case .found(let port):
+            found = port
+            controlScanMisses[profile.id] = nil
         case .notFound:
+            controlScanMisses[profile.id, default: 0] += 1
             logStore.log("\"\(profile.displayName)\": no RemotePairing port responded — is the device on Wi-Fi?", device: profile.id)
             return "No port answered. Is the device on Wi‑Fi and unlocked?"
         case .timedOut:
@@ -1421,15 +1428,19 @@ final class AppCoordinator: ObservableObject {
 
     /// When each device's port was last looked for on device control's behalf.
     private var controlScans: [UUID: Date] = [:]
+    /// Searches in a row that found no port, by device: each doubles the wait for the next.
+    private var controlScanMisses: [UUID: Int] = [:]
 
     /// Whether a failed attempt to open device control's connection is a reason to look for the
     /// device's RemotePairing port (it can move when the device restarts): the device answered
-    /// and refused the port — it is reachable, so the search finds it in its first ports, and a
-    /// device away or asleep, which doesn't answer, isn't searched —, no bridge is at work on it
-    /// (one that is finds the port itself), and it wasn't looked for in the last ten minutes.
-    nonisolated static func controlWantsPortScan(why: String, bridgeAtWork: Bool, lastScan: Date?, now: Date = Date()) -> Bool {
-        !bridgeAtWork && why.hasPrefix("RemotePairing port: Connection refused")
-            && (lastScan.map { now.timeIntervalSince($0) >= 600 } ?? true)
+    /// and refused the port — a device away or asleep, which doesn't answer, isn't searched —,
+    /// no bridge is at work on it (one that is finds the port itself), and it wasn't looked for
+    /// in the last ten minutes: four times as long after each search that found nothing, up to
+    /// a day (on cellular the device refuses every port, and each search spends its data).
+    nonisolated static func controlWantsPortScan(why: String, bridgeAtWork: Bool, lastScan: Date?, misses: Int = 0, now: Date = Date()) -> Bool {
+        let wait = min(600 * pow(4, Double(min(max(misses, 0), 4))), 86400)
+        return !bridgeAtWork && why.hasPrefix("RemotePairing port: Connection refused")
+            && (lastScan.map { now.timeIntervalSince($0) >= wait } ?? true)
     }
 
     private func controlUnreached(_ id: UUID, _ why: String) {
@@ -1441,7 +1452,8 @@ final class AppCoordinator: ObservableObject {
         case .off, .local, nil: break
         default: bridgeAtWork = true
         }
-        guard Self.controlWantsPortScan(why: why, bridgeAtWork: bridgeAtWork, lastScan: controlScans[id]) else { return }
+        guard Self.controlWantsPortScan(why: why, bridgeAtWork: bridgeAtWork, lastScan: controlScans[id],
+                                        misses: controlScanMisses[id] ?? 0) else { return }
         controlScans[id] = Date()
         Task { _ = await scanRemotePairingPort(profile) }   // logs what it finds; a port that moved is saved, and the hub told
     }
@@ -1570,6 +1582,12 @@ final class AppCoordinator: ObservableObject {
         return saved.caseInsensitiveCompare(paired) == .orderedSame ? .known : .conflicts
     }
 
+    /// Whether a pairing just made is kept: the list was saved with its UDID now, or the file
+    /// named it already (paired again: the pairing before it is gone, and this is the only one).
+    nonisolated static func keepsPairing(savedNow: Bool, onDisk: String?, paired: String) -> Bool {
+        savedNow || onDisk?.caseInsensitiveCompare(paired) == .orderedSame
+    }
+
     private func controlPairingStep(_ step: DeviceControlHub.PairingStep, of id: UUID, attempt: UUID) {
         var shown = step
         // A pairing that got as far as being saved is dealt with whether or not its sheet is
@@ -1582,7 +1600,7 @@ final class AppCoordinator: ObservableObject {
             case .save where i != nil, .known:
                 let had = profiles[i!].udid
                 profiles[i!].udid = had ?? udid
-                if persist() {
+                if Self.keepsPairing(savedNow: persist(), onDisk: savedProfiles.first { $0.id == id }?.udid, paired: udid) {
                     // Set up to be used: on until the user switches it off. The pairing this run sealed, as it wrote it.
                     setControlAllowed(id, marks: [deviceControl.sealedMark(udid: udid)].compactMap { $0 }, true)
                     memories[id]?.adopt(udid)   // the running bridge's, so that what it reports later is compared with it

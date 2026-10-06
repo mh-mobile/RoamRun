@@ -78,6 +78,8 @@ enum DeviceControlWire {
     /// How long the CLI waits for the answer: longer than any call may take (the longest text
     /// typed is given some seven minutes by the library).
     static let answerWait: TimeInterval = 480
+    /// …and for what the app answers from what it has at hand, without asking the device.
+    static let stateWait: TimeInterval = 5
 
     /// A write to a socket whose other end has gone must fail, not end the process with SIGPIPE.
     /// Set before the socket has a peer (on the listening one, whose accepted ones inherit it):
@@ -206,12 +208,12 @@ enum DeviceControlWire {
         fileprivate func ended() { lock.withLock { fd = -1 } }
     }
 
-    static func ask(_ request: Request, in directory: URL, asking: Asking? = nil) throws -> Response {
+    static func ask(_ request: Request, in directory: URL, asking: Asking? = nil, wait: TimeInterval = answerWait) throws -> Response {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw WireError.message("no socket") }
         defer { close(fd) }
         noSIGPIPE(fd)
-        readWait(fd, answerWait)
+        readWait(fd, wait)
         guard withAddress(socketPath(in: directory), { connect(fd, $0, $1) }) == 0 else {
             // Not there or nobody listening: no app. Refused by the system: a sandbox around this process.
             let why = errno
@@ -488,6 +490,8 @@ final class DeviceControlHub: @unchecked Sendable {
     var onLog: (@Sendable (String, UUID) -> Void)?
     /// A background attempt to open a device's connection failed, and why.
     var onUnreached: (@Sendable (UUID, String) -> Void)?
+    /// …or opened it.
+    var onReached: (@Sendable (UUID) -> Void)?
     /// A pairing made on another Mac is brought in (the file's path): the app's to do, which
     /// knows the saved devices.
     var onImport: (@Sendable (String, String?, _ wanted: @Sendable () -> Bool) -> DeviceControlWire.Response)?
@@ -1078,7 +1082,7 @@ final class DeviceControlHub: @unchecked Sendable {
                     held[id]?.failures = failures
                     held[id]?.nextTry = failure == nil ? .distantPast : Date().addingTimeInterval(Self.retryDelay(afterFailures: failures))
                 }
-                if let failure { onUnreached?(id, failure) }
+                if let failure { onUnreached?(id, failure) } else { onReached?(id) }
             }
         }
     }

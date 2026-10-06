@@ -48,8 +48,8 @@ bounded.
   Privacy & Security › Developer Mode, where it can be removed; during each look
   or action, and for about five seconds after, the device shows screen sharing. While **Set Up…** or
   `roamrun pairing create` waits (and only then), the Mac announces itself on the
-  local network (`_remotepairing-pairable-host._tcp`, with the Mac's name or the
-  name given to `--as`) and listens on a port, on every interface, for the device
+  local network (`_remotepairing-pairable-host._tcp`, as "RoamRun (the Mac's name)", or for
+  `pairing create` the name given to `--as`, else "RoamRun (the file's name)") and listens on a port, on every interface, for the device
   to pair; the six-digit code is what keeps another device from pairing instead —
   one that did would be given nothing, and its pairing is kept only if it names
   itself as the device you set up. The connection itself goes from the Mac to the

@@ -5203,6 +5203,21 @@ private func listenerSoon(in dir: URL, _ handler: @escaping @Sendable (DeviceCon
     #expect(asked.withLock { $0 } == 3)
 }
 
+/// A Keychain that couldn't ask just now (locked) isn't a refusal: the next try reads again.
+@Test func aLockedKeychainIsReadAgain() throws {
+    let saved = Data(repeating: 7, count: 32)
+    let locked = OSAllocatedUnfairLock(initialState: true)
+    let asked = OSAllocatedUnfairLock(initialState: 0)
+    let key = DeviceControlKey(read: {
+        asked.withLock { $0 += 1 }
+        return locked.withLock { $0 } ? (errSecInteractionNotAllowed, nil) : (errSecSuccess, saved)
+    }, add: { _ in errSecAuthFailed })
+    #expect(throws: (any Error).self) { try key.key(make: false) }
+    locked.withLock { $0 = false }
+    #expect(try key.key(make: false).withUnsafeBytes { Data($0) } == saved)
+    #expect(asked.withLock { $0 } == 2)
+}
+
 /// The key removed from the Keychain while the app runs is put back when a device is set up —
 /// the same one: a new one would lose what is saved, and none would lose it at the next start.
 @Test func aKeyRemovedFromTheKeychainIsPutBackWhenADeviceIsSetUp() throws {
@@ -5269,6 +5284,33 @@ private func listenerSoon(in dir: URL, _ handler: @escaping @Sendable (DeviceCon
     #expect(!AppCoordinator.controlWantsPortScan(why: "the device doesn't accept this pairing: it proved itself and refused it", bridgeAtWork: false, lastScan: nil, now: now))
     #expect(!AppCoordinator.controlWantsPortScan(why: refused, bridgeAtWork: false, lastScan: now.addingTimeInterval(-599), now: now))
     #expect(AppCoordinator.controlWantsPortScan(why: refused, bridgeAtWork: false, lastScan: now.addingTimeInterval(-600), now: now))
+    // A search that found nothing (the device on cellular refuses every port): the next waits four times as long, up to a day.
+    #expect(!AppCoordinator.controlWantsPortScan(why: refused, bridgeAtWork: false, lastScan: now.addingTimeInterval(-2399), misses: 1, now: now))
+    #expect(AppCoordinator.controlWantsPortScan(why: refused, bridgeAtWork: false, lastScan: now.addingTimeInterval(-2400), misses: 1, now: now))
+    #expect(!AppCoordinator.controlWantsPortScan(why: refused, bridgeAtWork: false, lastScan: now.addingTimeInterval(-86399), misses: 9, now: now))
+    #expect(AppCoordinator.controlWantsPortScan(why: refused, bridgeAtWork: false, lastScan: now.addingTimeInterval(-86400), misses: 9, now: now))
+}
+
+/// A pairing made again is kept though the list couldn't be saved, when the file names its
+/// device already: the one before it is gone. A first pairing nothing on disk names isn't.
+@Test func aPairingMadeAgainIsKeptThoughTheListWasNotSaved() {
+    #expect(AppCoordinator.keepsPairing(savedNow: true, onDisk: nil, paired: "UDID-1"))
+    #expect(AppCoordinator.keepsPairing(savedNow: false, onDisk: "udid-1", paired: "UDID-1"))
+    #expect(!AppCoordinator.keepsPairing(savedNow: false, onDisk: nil, paired: "UDID-1"))
+    #expect(!AppCoordinator.keepsPairing(savedNow: false, onDisk: "UDID-2", paired: "UDID-1"))
+}
+
+/// What the app answers from what it has at hand is waited for a moment, not as long as a text takes.
+@Test func aQuestionWaitsOnlyAsLongAsItIsGiven() throws {
+    // Not scratchDir(): a socket's path has to fit in 104 bytes.
+    let dir = URL(fileURLWithPath: "/tmp/rr-\(UUID().uuidString.prefix(8))")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let listener = try #require(listenerSoon(in: dir) { _ in Thread.sleep(forTimeInterval: 3); return .init(ok: true) })
+    defer { listener.stop() }
+    let began = Date()
+    #expect(throws: (any Error).self) { try DeviceControlWire.ask(.init(op: "state", device: UUID()), in: dir, wait: 1) }
+    #expect(Date().timeIntervalSince(began) < 2.5)
 }
 
 /// What is advertised for a pairing is "key=value" behind its length, 255 bytes at most, and a
@@ -6071,6 +6113,15 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
         }, pause: {}, reopen: { reopened += 1; return true })
     }
     #expect(attempts == 3 && reopened == 1)
+    // An input may have arrived: it is sent once, whatever its failure.
+    attempts = 0; reopened = 0
+    #expect(throws: (any Error).self) {
+        try Recovery.run(repeatable: false, attempt: { () -> Int in
+            attempts += 1
+            throw DeviceSession.Failure.message("frames: timed out")
+        }, pause: {}, reopen: { reopened += 1; return true })
+    }
+    #expect(attempts == 1 && reopened == 0)
 }
 
 /// The switch is asked about the pairing a session connects with: a file put in its place — the

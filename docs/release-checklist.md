@@ -111,7 +111,8 @@ tunnel and Xcode has to run again.
 19. No pairing of RoamRun's own yet (remove it on the device's page, and RoamRun's entry on
     the device under Settings › Privacy & Security › Developer Mode), and no key from a build
     signed otherwise (a developer's: the Keychain asks about it for this one —
-    `security delete-generic-password -s io.github.mh-mobile.roamrun.device-control`), device on this Mac's
+    `security delete-generic-password -s io.github.mh-mobile.roamrun.device-control -a pairings`, and
+    the same with `-a allowed`), device on this Mac's
     Wi‑Fi: **Device control › Set Up…**, pick RoamRun on the device, enter the code → the page
     says connected; the Keychain asked nothing; `~/Library/Application Support/RoamRun/`
     holds `device-pairing-<UDID>.sealed` (0600) with no `private_key` in it

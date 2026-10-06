@@ -76,6 +76,8 @@ AND category == "input"'`. Text that arrives short with a line here was dropped 
    signed, notarized and stapled — it fails otherwise (it checks `stapler validate`
    and `spctl`). It needs the Developer ID Application identity in the keychain,
    the notary profile from `xcrun notarytool store-credentials roamrun-notary`, and rustup.
+   It fetches idevice from the fork at the commit `Cargo.toml` pins: that commit carries a tag
+   there (`roamrun-<version>`) — tag a new pin before releasing, or the build stops when its branch goes.
    Plain `make dmg` is the ad-hoc developer build, never a release.
 3. `gh release create v<version> RoamRun-<version>.dmg --target <that commit's full sha> --title "RoamRun <version>" --notes …`
    — the tag must point at the commit the dmg was built from. Keep the notes'

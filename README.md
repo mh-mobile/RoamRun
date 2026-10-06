@@ -199,13 +199,14 @@ The skill covers getting the device connected (`roamrun up -d` → `status --wai
 
 ## Seeing and operating the device
 
-RoamRun can also show the device's screen and operate it — tap, swipe, type, press its buttons — from the command line or as tools for an AI agent. It needs **iOS / iPadOS 27 or later** (earlier versions refuse remote control), and it doesn't go through the bridge or Xcode: RoamRun makes a pairing and a connection of its own.
+RoamRun can also show the device's screen and operate it — tap, swipe, type, press its buttons — from the command line or as tools for an AI agent. It needs **iOS / iPadOS 27 or later** (earlier versions refuse remote control), and it doesn't go through the bridge or Xcode: RoamRun makes a pairing and a connection of its own. (Only the screen's exact size is asked of Xcode's `devicectl`; on a Mac where that doesn't know the device, a look can be slightly larger at its right and bottom edges.)
 
 **Set up, once per device**, with the device on the same Wi‑Fi as the Mac: open the device's page in RoamRun → **Device control › Set Up…**. On the device, under Settings › Privacy & Security › Developer Mode, pick RoamRun and enter the code the Mac shows. After that it connects whenever the device is on a Wi‑Fi and reachable over the VPN, and stays connected when the device moves to cellular. The RoamRun app holds the connection, so it has to be running.
 
 ```sh
 roamrun look iPhone /tmp/now.png          # the screen now, as PNG; prints the path, then its size
 roamrun tap iPhone 590 1280               # a point in the pixels of that image
+roamrun look iPhone /tmp/now.png          # again before the next action: each look serves one
 roamrun swipe iPhone 590 1800 590 900     # drag from one point to another
 roamrun type iPhone "hello"               # US keys, at most about 16 a second; right only while the device's keyboard is an English one
 roamrun paste iPhone "任意の文字列"         # any text, by the device's pasteboard (iOS asks "Allow Paste")

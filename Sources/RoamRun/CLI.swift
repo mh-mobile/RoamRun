@@ -827,7 +827,7 @@ enum CLI {
             return .notSetUp
         }
         let r: DeviceControlWire.Response
-        do { r = try DeviceControlWire.ask(.init(op: "state", device: id), in: ProfileStore.directory) } catch {
+        do { r = try DeviceControlWire.ask(.init(op: "state", device: id), in: ProfileStore.directory, wait: DeviceControlWire.stateWait) } catch {
             if case DeviceControlWire.WireError.keptOut = error { return .keptOut }
             return .noApp
         }

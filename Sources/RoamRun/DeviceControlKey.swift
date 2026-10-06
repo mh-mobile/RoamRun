@@ -13,7 +13,8 @@ final class DeviceControlKey: @unchecked Sendable {
     private let lock = NSLock()
     private var held: SymmetricKey?
     /// Why the key couldn't be had, kept: every try to connect asking again would have the
-    /// Keychain ask the user again. Setting a device up asks anew.
+    /// Keychain ask the user again. Setting a device up asks anew. A Keychain that couldn't
+    /// ask just now (locked, no session yet) isn't a refusal: the next try reads again.
     private var refused: Error?
     private let read: () -> (OSStatus, Data?)
     private let add: (Data) -> OSStatus
@@ -41,13 +42,14 @@ final class DeviceControlKey: @unchecked Sendable {
             // from it meanwhile is put back, or what is saved now couldn't be read after a restart.
             if let held, !make { return held }
             if !make, let refused { throw refused }
+            var last = errSecSuccess
             do {
-                let key = try Self.key(make: make, read: read, add: add, atHand: held)
+                let key = try Self.key(make: make, read: { let r = read(); last = r.0; return r }, add: add, atHand: held)
                 held = key
                 refused = nil
                 return key
             } catch {
-                refused = error
+                refused = last == errSecInteractionNotAllowed ? nil : error
                 throw error
             }
         }

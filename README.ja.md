@@ -101,7 +101,7 @@ git clone https://github.com/mh-mobile/RoamRun && cd RoamRun
 - **普段使い:** `make app` → `RoamRun.app` を `/Applications` に移して起動し、アプリから CLI を入れる（[CLI](#cli) 参照）
 - **RoamRun の開発:** `make install-cli` で `roamrun` をフォルダ内のビルドにリンク。`make app` のたびにすぐ反映されます。あとでアプリを移したら、アプリから CLI を入れ直してください
 
-Xcode プロジェクト不要。SwiftPM + Makefile で `.app` を組み立てます。手元でビルドしたアプリはダウンロード扱いにならないため、Gatekeeper の警告は出ません。
+Xcode と、[rustup](https://rustup.rs) で入れた Rust が必要です（デバイス操作のライブラリ用。`make` が指定のバージョンでビルドします）。Xcode プロジェクトは不要。SwiftPM + Makefile で `.app` を組み立てます。手元でビルドしたアプリはダウンロード扱いにならないため、Gatekeeper の警告は出ません。
 
 ### ビルド済み dmg（GitHub Releases）
 
@@ -325,6 +325,8 @@ iPhone から Mac を操作する方法は 3 つあります。どの方法で�
 
 look・tap・swipe・type・paste・press・elements の各コマンドと `roamrun mcp` で、実機の画面を見て操作できます。コマンドと使い方は [README.md](README.md#seeing-and-operating-the-device) を参照してください。使う前に知っておくこと:
 
+- **iOS / iPadOS 27 以降が必要です**（それより前は遠隔操作を断ります）。**Set Up… は、デバイスが Mac と同じ Wi‑Fi にいるときに行います。** 接続は RoamRun アプリが持つので、アプリが起動している必要があります。
+- **look は、そのとき画面に出ているものをそのまま写します**（通知やメッセージも）。
 - **RoamRun が自分のペアリング（秘密鍵）を持ちます。** デバイスのページの **Set Up…** で作り、ログインキーチェーンの鍵で封印して保存します。この鍵を持ち、デバイスに届く者は、デバイス側の確認なしに画面を見て操作できます。
 - **`roamrun pairing create` が書き出すファイルは鍵そのものです**（封印されていません）。パスワードと同じように運び、コピーを残さないでください。取り込んだ Mac では `pairing import` が封印して元のファイルを消し、そのデバイスはオンの状態になります。取り消すときは、デバイスの 設定 › プライバシーとセキュリティ › デベロッパモード でその項目を削除します。
 - **見ている間・操作している間は、デバイスの音が取られます。** 最後の look / 操作から約 5 秒間、スピーカーは無音になり（音楽は止まり、あとで自動的に再開）、音声入力（音声入力キーボード、聞き取るアプリ）は聞こえません。画面を見続けさせると、その間ずっと続きます。
@@ -355,7 +357,7 @@ rm -rf ~/Library/Application\ Support/RoamRun ~/Library/Logs/RoamRun
 tailscale serve --https=41443 --set-path=/ off   # roamrun ota を使った場合（otaPort のポート）
 defaults delete io.github.mh-mobile.roamrun      # 上の行の後で（otaPort がここにあります）
 defaults delete com.roamrun.app 2>/dev/null      # 0.1.12 より前の版が残したもの
-security delete-generic-password -s io.github.mh-mobile.roamrun.device-control -a pairings   # デバイス操作を設定した場合: 封印の鍵
+security delete-generic-password -s io.github.mh-mobile.roamrun.device-control -a pairings   # デバイス操作を設定した場合（brew --zap のあとも）: 封印の鍵
 security delete-generic-password -s io.github.mh-mobile.roamrun.device-control -a allowed    # と、オンにしているデバイスの一覧
 # 最後に /Applications/RoamRun.app を削除（「ログイン時に開く」を有効にしていた場合は先に無効化）
 ```
