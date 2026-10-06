@@ -6026,7 +6026,7 @@ import ImageIO
 
 /// Agents run SKILL.md's commands as written, and people copy the READMEs': each `roamrun …`
 /// in their code (fenced blocks and inline code) must be a command the CLI knows, with options it takes.
-@Test(arguments: ["skills/roamrun/SKILL.md", "README.md", "README.ja.md"])
+@Test(arguments: ["skills/roamrun/SKILL.md", "README.md", "README.ja.md", "docs/another-mac.md"])
 func everyDocumentedCommandParses(_ doc: String) throws {
     let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     let text = try String(contentsOf: root.appendingPathComponent(doc), encoding: .utf8)
@@ -6068,7 +6068,7 @@ func everyDocumentedCommandParses(_ doc: String) throws {
             }
         }
     }
-    #expect(checked > 15)   // the extraction itself still finds them
+    #expect(checked > (doc.hasPrefix("docs/") ? 5 : 15))   // the extraction itself still finds them
 }
 
 /// A second `roamrun up` for a device another one handles is refused in every state, an
