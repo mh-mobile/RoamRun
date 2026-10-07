@@ -5273,9 +5273,9 @@ private func listenerSoon(in dir: URL, _ handler: @escaping @Sendable (DeviceCon
 
 /// `pairing` takes a word that says what to do, not a device's name first.
 @Test func pairingCommandsParse() throws {
-    #expect(try CLI.parse(["pairing", "create", "iPhone", "/tmp/k.json", "--as", "RoamRun (cloud)"]).get().values["--as"] == "RoamRun (cloud)")
-    #expect(try CLI.parse(["pairing", "import", "/tmp/k.json", "--as=Phone"]).get().words == ["import", "/tmp/k.json"])
-    #expect(throws: (any Error).self) { try CLI.parse(["pairing", "create", "a", "b", "c", "d"]).get() }
+    #expect(try CLI.parse(["key", "create", "iPhone", "/tmp/k.json", "--as", "RoamRun (cloud)"]).get().values["--as"] == "RoamRun (cloud)")
+    #expect(try CLI.parse(["key", "import", "/tmp/k.json", "--as=Phone"]).get().words == ["import", "/tmp/k.json"])
+    #expect(throws: (any Error).self) { try CLI.parse(["key", "create", "a", "b", "c", "d"]).get() }
 }
 
 /// What a build before the sealing left as it was is removed when the app starts: each holds a

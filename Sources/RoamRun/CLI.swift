@@ -17,7 +17,7 @@ enum CLI {
     }
 
     /// What only a build with device control has (to the others they are unknown commands).
-    nonisolated static let deviceCommands: Set<String> = ["look", "tap", "swipe", "type", "paste", "press", "elements", "mcp", "pairing"]
+    nonisolated static let deviceCommands: Set<String> = ["look", "tap", "swipe", "type", "paste", "press", "elements", "mcp", "key"]
     /// Posted by `roamrun down`; the app stops the bridge whose id is `object`.
     static let stopNotification = Notification.Name(AppID.bundle + ".stopBridge")
     /// What a RoamRun before 0.1.12 listens for, should it still run next to this CLI.
@@ -43,11 +43,11 @@ enum CLI {
       mcp                            The same as MCP tools, over stdin/stdout (for an agent's MCP config)
     Each look serves one action: look, act, look again.
     For a Mac that can't pair itself (not on the device's network):
-      pairing create <name> <file> [--as <label>]
+      key create <name> <file> [--as <label>]
                                      Here, with the device on this Wi‑Fi: pairs once more, as
                                      <label> in the device's list, and writes that pairing and the
                                      device to <file>. The file is the key: keep it as one.
-      pairing import <file> [--as <name>]
+      key import <file> [--as <name>]
                                      There: saves the device and its pairing (switched on), then removes <file>
     """
 
@@ -115,6 +115,8 @@ enum CLI {
         setvbuf(stdout, nil, _IOLBF, 0)
         MainActor.assumeIsolated {
             if !commands.contains(args[0]) {
+                // Renamed after 0.3.0: say where it went rather than print the whole usage.
+                if args[0] == "pairing" { fail("`roamrun pairing …` is now `roamrun key …` (key create, key import)") }
                 FileHandle.standardError.write(Data("roamrun: unknown command “\(args[0])”\n\n\(usage)\n".utf8))
                 exit(2)
             }
@@ -144,7 +146,7 @@ enum CLI {
             // `ota` is the one command whose first word may be the path: it does
             // nothing to a device, so naming one is optional there. By the count,
             // not the extension — a device may well be called "iPhone.ipa".
-            let name = (args[0] == "ota" && words.count < 2) || args[0] == "pairing" ? nil : words.first
+            let name = (args[0] == "ota" && words.count < 2) || args[0] == "key" ? nil : words.first
             var targets = profiles
             if let name {
                 guard let p = find(name, in: profiles) else { fail("no device named \(shellName(name)). " + names(profiles)) }
@@ -201,7 +203,7 @@ enum CLI {
                     fail("usage: roamrun ota [<name>] <path to .ipa>")
                 }
                 ota(targets, path: path, replacing: parsed.flags.contains("--replace"))
-            case "pairing":
+            case "key":
                 let label = parsed.values["--as"]
                 switch (words.first, words.count) {
                 case ("create", 3):
@@ -210,7 +212,7 @@ enum CLI {
                 case ("import", 2):
                     importPairing(file: words[1], name: label)
                 default:
-                    fail("usage: roamrun pairing create <name> <file> [--as <label>] | roamrun pairing import <file> [--as <name>]")
+                    fail("usage: roamrun key create <name> <file> [--as <label>] | roamrun key import <file> [--as <name>]")
                 }
             case "mcp":
                 // Off the main thread: it reads stdin until the client closes it.
@@ -262,7 +264,7 @@ enum CLI {
         all["press"] = ([], 0...2)
         all["elements"] = ([], 0...2)
         all["mcp"] = ([], 0...0)
-        all["pairing"] = (["--as="], 0...3)
+        all["key"] = (["--as="], 0...3)
         return all
     }()
 
@@ -924,7 +926,7 @@ enum CLI {
             reserved = nil   // done: an interrupt from here on leaves the file
             close(fd)
             print("Wrote \(out.path)" + (unreached.map { " (it couldn't be tried from here: \($0))" } ?? ", and it connects."))
-            print("It is a key to \(profile.displayName): whoever has it and reaches \(profile.providerIP) can see and operate the device. On the other Mac: roamrun pairing import <that file>")
+            print("It is a key to \(profile.displayName): whoever has it and reaches \(profile.providerIP) can see and operate the device. On the other Mac: roamrun key import <that file>")
             print("To withdraw it: remove “\(listening.name)” on the device, in that list.")
             exit(0)
         } catch {

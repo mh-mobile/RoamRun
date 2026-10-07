@@ -204,9 +204,9 @@ message that begins "stopped:" (or "not given:" for a look): the same thing —
 don't try it again.
 
 On a Mac that is never on the device's Wi‑Fi (a remote one), there is no Set
-Up… to do: the user makes a pairing on a Mac that is (`roamrun pairing create
+Up… to do: the user makes a pairing on a Mac that is (`roamrun key create
 <name> <file>`, entering a code on the device) and brings the file over, and
-`roamrun pairing import <file>` saves the device and the pairing, switched on,
+`roamrun key import <file>` saves the device and the pairing, switched on,
 and removes the file. It exits 1 after saving when the file couldn't be removed,
 the device couldn't be switched on, or a pairing made on that Mac meanwhile took
 its place, and says which: don't run it again (the
