@@ -3277,6 +3277,37 @@ func claimOutcomes(_ c: ClaimCase) async {
     #expect(rig.bridge.status == .error && !rig.bridge.autoRetry)
 }
 
+/// A record answered by another device than the one saved: its UDID is never taken, and the
+/// second sighting stops the bridge with the reason, instead of leaving it at Connecting.
+@MainActor @Test func aRecordAnsweredByAnotherDeviceIsSaidNotFollowed() async {
+    let saved = "00008130-000C1C5C307A8D3A", other = "00008027-001831103687002E"
+    var profile = inertProfile("iPhone")
+    profile.udid = saved
+    let rig = Rig(profile)
+    defer { rig.done() }
+    await rig.bridge.start(.manual)
+    let mine = rig.bridge.profile.instanceName
+    rig.watcher.subscribers[rig.id]?.onDevice(mine, other)
+    #expect(rig.bridge.state.isActive && rig.bridge.udid == saved)   // once can be a forged line
+    rig.world.now += 10
+    rig.watcher.subscribers[rig.id]?.onDevice(mine, other)
+    #expect(rig.bridge.state.isActive)                               // the same announcement again
+    rig.world.now += 5
+    rig.watcher.subscribers[rig.id]?.onDevice(mine, saved)
+    rig.world.now += 20
+    rig.watcher.subscribers[rig.id]?.onDevice(mine, other)
+    #expect(rig.bridge.state.isActive)                               // the saved one in between: counted anew
+    rig.world.now += 301
+    rig.watcher.subscribers[rig.id]?.onDevice(mine, other)
+    #expect(rig.bridge.state.isActive)                               // too long after: a first sighting again
+    rig.world.now += 20
+    rig.watcher.subscribers[rig.id]?.onDevice(mine, other)
+    #expect(rig.bridge.status == .error && !rig.bridge.autoRetry && rig.bridge.udid == saved)
+    // The point of stopping is the reason: which device, what is wrong, what to do.
+    guard case .error(let said) = rig.bridge.state else { Issue.record("no reason given"); return }
+    #expect(said.contains("another device") && said.contains("Remove iPhone") && said.contains("add it again"))
+}
+
 /// Waiting with the record up: re-announce each minute; on the third, a device the mesh
 /// reaches but whose port is shut has moved, so the bridge fails and the retry finds it.
 @MainActor @Test(arguments: [TailscaleClient.Ping.noPong, .couldNotRun("no tailscale CLI"), .pong])

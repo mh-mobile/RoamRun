@@ -77,6 +77,8 @@ final class ProxyBridge: ObservableObject {
     private var stuckRenewals = 0
     /// First "identity nil" for our record; a second one within minutes is believed.
     private var unrecognizedSince: Date?
+    /// First time our record was answered by another device than the one saved; the same rule.
+    private var otherDeviceSince: Date?
     private static let homeLog = Logger(subsystem: AppID.bundle, category: "home")
     /// Lookahead hit/miss and port jumps (debug level): the data to retune +16 / -32
     /// if a future iOS allocates tunnel ports differently.
@@ -181,6 +183,7 @@ final class ProxyBridge: ObservableObject {
         awayTicks = 0
         stuckRenewals = 0
         unrecognizedSince = nil
+        otherDeviceSince = nil
         lastTunnelPort = nil
         activatedAt = .distantFuture
         if policy.clearsScanPause { memory.clearScanPause() }
@@ -638,12 +641,14 @@ final class ProxyBridge: ObservableObject {
             return
         }
         unrecognizedSince = nil   // recognized after all
+        // Learned once; a different one later is suspicious (spoofed log line) — don't save it.
+        if let known = self.udid, known.caseInsensitiveCompare(udid) != .orderedSame {
+            log("ignoring UDID \(udid) reported for our record (saved: \(known))")
+            onOtherDevice()
+            return
+        }
+        otherDeviceSince = nil
         if udid != self.udid {
-            // Learned once; a different one later is suspicious (spoofed log line) — don't save it.
-            if let known = self.udid, known.caseInsensitiveCompare(udid) != .orderedSame {
-                log("ignoring UDID \(udid) reported for our record (saved: \(known))")
-                return
-            }
             memory.adopt(udid)
             onUDID?(udid)
             publishStatus()
@@ -1184,6 +1189,20 @@ final class ProxyBridge: ObservableObject {
         stop()
         memory.block = .pairingLost
         setState(.error("This Mac doesn't recognize \(profile.displayName)'s pairing — its Bonjour identity changed or the pairing was reset. Put the device on this Mac's Wi‑Fi, remove it here and add it again. If Xcode also lost it, pair it in Xcode first."))
+    }
+
+    /// Our record resolved to another device than the one saved. Its UDID is never taken; a
+    /// second sighting is believed, as for "identity nil", and said — or this sits at Connecting.
+    private func onOtherDevice() {
+        guard state.isActive else { return }
+        if let first = otherDeviceSince, env.now().timeIntervalSince(first) < 20 { return }
+        guard let first = otherDeviceSince, env.now().timeIntervalSince(first) < 300 else {
+            otherDeviceSince = env.now()
+            return
+        }
+        stop()
+        memory.block = .pairingLost
+        setState(.error("What this Mac has saved for \(profile.displayName) is answered by another device paired with it. Remove \(profile.displayName) here and add it again."))
     }
 
     static var noAddressMessage: String {

@@ -112,7 +112,9 @@ bounded.
   profile then saves that device's UDID — so `run`, `install` and `screenshot`
   would address the wrong one. It only works between devices already paired with
   this Mac, and only until the UDID is saved (after that a different one is
-  refused). Profiles whose UDID was already known when they were added, which is
+  refused, and a bridge that sees one twice stops and says so — which also means
+  such a record can stop a bridge, as one that isn't recognised already could).
+  Profiles whose UDID was already known when they were added, which is
   the usual case, aren't affected. Check the UDID in `roamrun devices` if it
   matters.
 - **Builds kept for over-the-air installs are readable by your whole tailnet.**
