@@ -53,9 +53,9 @@ bounded.
   passcode or Face ID, as ever: whoever knows the passcode can enter it from here,
   and a swipe to unlock sent while the device's user looks at it is answered by Face ID.
   What stops device control is its switch on the device's page. While **Set Up…** or
-  `roamrun pairing create` waits (and only then), the Mac announces itself on the
+  `roamrun key create` waits (and only then), the Mac announces itself on the
   local network (`_remotepairing-pairable-host._tcp`, as "RoamRun (the Mac's name)", or for
-  `pairing create` the name given to `--as`, else "RoamRun (the file's name)") and listens on a port, on every interface, for the device
+  `key create` the name given to `--as`, else "RoamRun (the file's name)") and listens on a port, on every interface, for the device
   to pair; the six-digit code is what keeps another device from pairing instead —
   one that did would be given nothing, and its pairing is kept only if it names
   itself as the device you set up. The connection itself goes from the Mac to the
@@ -83,18 +83,18 @@ bounded.
   brought back after that, it is off. While the list of devices couldn't be read
   whole, nothing is dropped; a device missing from it then loses its switch when
   the list is next saved; it is on after Set Up, after Pair
-  Again (also for a device you had switched off) and after `pairing import`. Turn it off when nothing of yours is using the device.
+  Again (also for a device you had switched off) and after `key import`. Turn it off when nothing of yours is using the device.
 - **Someone on the network can keep a pairing from being made, not make one.**
-  While Set Up or `pairing create` waits, a device on that network can connect,
+  While Set Up or `key create` waits, a device on that network can connect,
   ask for a code and then say nothing, which holds the wait (three minutes at
   most each time). It gets nothing by it: without the code shown on this Mac
   there is no pairing. Pair on a network you trust.
-- **A pairing made for another Mac is a key in a file.** `roamrun pairing create`
+- **A pairing made for another Mac is a key in a file.** `roamrun key create`
   pairs once more, under an identity of its own, and writes that pairing to a
   file (yours only, not sealed: the Mac it is for has another key). Nothing of it
   is kept on the Mac that made it, and this Mac's own pairing is never written
   out. Whoever has the file and reaches the device can see and operate it;
-  `pairing import` on the other Mac seals it there and removes the file. The
+  `key import` on the other Mac seals it there and removes the file. The
   device lists each such pairing as an entry of its own, which is how to withdraw
   one: remove it there.
 - **The device's RemotePairing and tunnel ports are reachable from your

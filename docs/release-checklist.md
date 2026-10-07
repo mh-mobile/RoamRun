@@ -165,10 +165,10 @@ tunnel and Xcode has to run again.
     the typing stops within a moment, where it had got to and no further, and the command (where
     it still runs) says it was told to stop. Set it up again, then **Remove Device**: its
     `.sealed` file is gone.
-25. `roamrun pairing create <name> ~/k.json --as "RoamRun (check)"`, the code entered on the
+25. `roamrun key create <name> ~/k.json --as "RoamRun (check)"`, the code entered on the
     device: the file is written (0600) and the device lists "RoamRun (check)" beside this
     Mac's own entry. On another Mac that reaches the device (or a macOS VM on the tailnet):
-    `roamrun pairing import k.json` → the device is in `roamrun devices`, `look` works, the
+    `roamrun key import k.json` → the device is in `roamrun devices`, `look` works, the
     file is gone. Remove "RoamRun (check)" on the device: that Mac's `status` says the pairing
     can no longer be used, and this Mac's still connects.
 26. On a Mac whose pairing was made by a build before 0.3.0's release (developers' only: no

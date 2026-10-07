@@ -1005,7 +1005,7 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
-    /// Asked for by `roamrun pairing import`, on the thread that answers it: the device is found
+    /// Asked for by `roamrun key import`, on the thread that answers it: the device is found
     /// or added, the pairing kept only if it connects, and then the file is removed.
     nonisolated private func importPairing(path: String, as name: String?, wanted: @Sendable () -> Bool) -> DeviceControlWire.Response {
         importing.lock()
@@ -1018,7 +1018,7 @@ final class AppCoordinator: ObservableObject {
         do { (fd, data) = try DeviceControlHub.readTaken(path) } catch { return .failure("\(error)") }
         defer { close(fd) }
         guard let shared = SharedPairing.read(data), let udid = shared.device.udid else {
-            return .failure("\(path) isn't a pairing made by `roamrun pairing create`")
+            return .failure("\(path) isn't a pairing made by `roamrun key create`")
         }
         // Where it goes is worked out first and saved last: a pairing that doesn't connect leaves
         // the saved devices as they were.

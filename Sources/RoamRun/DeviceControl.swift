@@ -320,8 +320,8 @@ enum DeviceControlWire {
     }
 }
 
-/// A pairing made for another Mac, with the device it is for: what `roamrun pairing create`
-/// writes and `pairing import` takes. The file is the key: whoever has it and reaches the device
+/// A pairing made for another Mac, with the device it is for: what `roamrun key create`
+/// writes and `key import` takes. The file is the key: whoever has it and reaches the device
 /// can see and operate it.
 struct SharedPairing: Codable, Equatable {
     var roamrunPairing = 1
@@ -831,7 +831,7 @@ final class DeviceControlHub: @unchecked Sendable {
         var s = stat()
         let why: String? = fstat(fd, &s) != 0 || s.st_mode & S_IFMT != S_IFREG ? "\(path) isn't a file"
             : s.st_nlink != 1 ? "\(path) has another name too (a hard link): the pairing would stay under it"
-            : s.st_size >= 1 << 20 ? "\(path) isn't a pairing made by `roamrun pairing create`" : nil
+            : s.st_size >= 1 << 20 ? "\(path) isn't a pairing made by `roamrun key create`" : nil
         if let why {
             close(fd)
             throw DeviceSession.Failure.message(why)
