@@ -672,6 +672,133 @@ import ServiceManagement
     #expect(!deviceProblem { $0.peer = "iPhone-15-Pro.tail1.ts.net" })
 }
 
+/// What the browse prints of a TXT record, read back as it was announced: a name with spaces,
+/// a quote, a backslash and bytes above ASCII.
+@Test func quotedTXTStringsAreReadAsTheyWereAnnounced() {
+    let line = #"rrtest._rrtest._tcp   TXT   "identifier=70876C3E-BC8A-4FE9-BA12-FA8D0D6448A4" "authTag=Rb+z3/eI" "name=Managed’s Virtual \"Mac\" 開発" "flags=1""#
+    #expect(BonjourCapture.quoted(in: line) == ["identifier=70876C3E-BC8A-4FE9-BA12-FA8D0D6448A4", "authTag=Rb+z3/eI", "name=Managed’s Virtual \"Mac\" 開発", "flags=1"])
+    #expect(BonjourCapture.quoted(in: #"x TXT "a=b\\c" "d=\065\032e" "open"#) == ["a=b\\c", "d=A e"])
+    #expect(BonjourCapture.quoted(in: "no strings here").isEmpty)
+}
+
+/// Which announcements are this Mac's own offer, whose connections a stand-in takes, and a
+/// saved device there and back without its UDID or where it is.
+@Test func introductionChoicesAreMadeFromWhatThisMacKnows() {
+    func service(_ instance: String, type: String = Introduction.hostService, ips: [String]) -> CapturedService {
+        CapturedService(instanceName: instance, serviceType: type, domain: "local", port: 53050, host: "h.local", hostIPs: ips, txt: [:], lastSeen: .now)
+    }
+    // One whose host is elsewhere isn't this Mac's; one whose host has no address in the browse
+    // (as Xcode's has none) may be, and is left for the port to decide.
+    let seen = [service("B", ips: ["192.168.0.15", "fe80::1"]), service("A", ips: ["192.168.0.77"]),
+                service("C", type: "_remotepairing._tcp", ips: ["192.168.0.15"]), service("D", ips: [])]
+    #expect(Introduction.ownOffers(among: seen, ownIPs: ["192.168.0.15", "100.64.0.1"]).map(\.instanceName) == ["B", "D"])
+    #expect(Introduction.ownOffers(among: seen, ownIPs: []).map(\.instanceName) == ["D"])
+
+    let lan = Relay.Accept.subnet(mask: "255.255.255.0")
+    func accept(_ endpoint: String) -> Relay.Accept { Introduction.accept(deviceEndpoint: endpoint, local: "192.168.0.15", mask: "255.255.255.0") }
+    #expect(accept("192.168.0.19:41641") == .only("192.168.0.19"))
+    // Relayed, on another network, this Mac's own address, IPv6 or unreadable: the LAN, not one host.
+    for unknown in ["", "203.0.113.5:41641", "192.168.0.15:41641", "[fd7a::1]:41641", "192.168.0.19", "nonsense:1"] {
+        #expect(accept(unknown) == lan, "\(unknown)")
+    }
+
+    // What the device shows is the name Tailscale has for the Mac, not the one in its offer;
+    // a name that couldn't be shown as it is leaves the offer's.
+    let offered = Introduction.Offer(port: 53050, txt: ["name": "macbook", "identifier": "x"])
+    #expect(Introduction.announced(offered, as: "cloud-mac").txt == ["name": "cloud-mac", "identifier": "x"])
+    #expect(Introduction.announced(offered, as: "").txt["name"] == "macbook" && Introduction.announced(offered, as: "a\u{202E}b").txt["name"] == "macbook")
+    #expect(Introduction.announced(offered, as: String(repeating: "n", count: 80)).txt["name"]?.count == 63)
+
+    var saved = inertProfile("iPhone")
+    saved.txt = ["identifier": "6BF40D22-D414-41D0-BE80-7567AE75B2BC", "authTag": "66cI3FaC", "flags": "0", "ver": "26", "minVer": "8"]
+    saved.providerHostName = "iphone-15-pro"; saved.udid = "00008130-000C1C5C307A8D3A"
+    guard let device = Introduction.device(of: saved) else { Issue.record("a whole device not handed over"); return }
+    #expect(device.name == "iPhone" && device.peer == "iphone-15-pro" && device.port == saved.remotePairingPort)
+    #expect(!Introduction.line(device).contains("00008130") && Introduction.line(device).hasPrefix("rr-device-v1:"))
+    var half = saved; half.txt["authTag"] = nil
+    var unnamed = saved; unnamed.providerHostName = ""
+    #expect(Introduction.device(of: half) == nil && Introduction.device(of: unnamed) == nil)
+
+    let peer = MeshDevice(id: "n1", name: "phone-here", os: "iOS", ips: ["fd7a::9", "100.64.0.9"], online: true)
+    let made = Introduction.profile(from: device, peer: peer, name: "Test iPhone")
+    #expect(made?.providerIP == "100.64.0.9" && made?.providerHostName == "phone-here" && made?.udid == nil)
+    #expect(made?.instanceName == saved.txt["identifier"] && made?.serviceType == "_remotepairing._tcp" && made?.displayName == "Test iPhone")
+    #expect(Introduction.profile(from: device, peer: MeshDevice(id: "n2", name: "v6", os: "iOS", ips: ["fd7a::9"], online: true), name: "x") == nil)
+}
+
+// With the other relays on the loopback, one at a time: they count the pairs open in the process.
+extension TimingSensitive.RelayOnLocalhost {
+/// The stand-in from start to end on the loopback: what it announces, what it says, and that
+/// every way out leaves nothing announced or listening.
+@MainActor @Test func aStandInSaysWhatHappensAndLeavesNothingBehind() async throws {
+    final class Said { var events: [Introducer.Event] = [] }
+    let txt = ["identifier": "6BF40D22-D414-41D0-BE80-7567AE75B2BC", "authTag": "BsVby0td", "model": "VirtualMac2,1",
+               "name": "far-mac", "flags": "1", "ver": "26", "minVer": "17"]
+    func plan(_ far: UInt16, deadline: TimeInterval = 300) -> Introducer.Plan {
+        .init(offer: .init(port: far, txt: txt), farIP: "127.0.0.1", localIP: "127.0.0.1", interface: "lo0", accept: .ownAddress, deadline: deadline)
+    }
+    func ended(_ said: Said) -> Introducer.Event? { said.events.last { if case .ended = $0 { return true }; return false } }
+
+    // A pairing tried: a pair that carried bytes both ways closes, and that ends it.
+    let server = try EchoServer(); let far = await server.start(); defer { server.stop() }
+    var said = Said(), record = FakeRecord()
+    var standIn = Introducer(plan(far), record: record, addressNow: { "127.0.0.1" }) { [said] in said.events.append($0) }
+    try await standIn.start()
+    let announced = try #require(record.standIn)
+    #expect(announced.type == "_remotepairing-pairable-host._tcp" && announced.instance == txt["identifier"] && announced.txt == txt)
+    #expect(announced.host.hasSuffix(".roamrun.local") && announced.ip == "127.0.0.1" && announced.port != far)   // far's port is taken here: the next
+    #expect(said.events == [.announced(interface: "lo0", name: "far-mac", port: announced.port)])
+    // One that carries nothing says a device connected, and ends nothing.
+    let idle = try #require(await openEcho(port: announced.port)); idle.cancel()
+    #expect(await eventuallyOnMain { said.events.contains(.connected(from: "127.0.0.1")) })
+    try await Task.sleep(for: .milliseconds(300))
+    #expect(ended(said) == nil && !standIn.ended)
+    #expect(await roundTrip(port: announced.port, payload: Data("pair".utf8)) == Data("pair".utf8))
+    #expect(await eventuallyOnMain { ended(said) == .ended(.carried, clean: true) })
+    #expect(record.stopped == 1 && !TailscaleClient.listening(on: announced.port))
+    await standIn.end(.stopped)
+    #expect(said.events.filter { if case .ended = $0 { return true }; return false }.count == 1)   // an end is said once
+
+    // Nobody at the far port: said, and it waits on (the offer may be stale; the deadline ends it).
+    said = Said(); record = FakeRecord()
+    standIn = Introducer(plan(far == 9 ? 10 : 9, deadline: 1.5), record: record, addressNow: { "127.0.0.1" }) { [said] in said.events.append($0) }
+    try await standIn.start()
+    let port = try #require(record.standIn).port
+    _ = await roundTrip(port: port, payload: Data("x".utf8), timeout: 1)
+    #expect(await eventuallyOnMain { said.events.contains { if case .farDidNotAnswer = $0 { return true }; return false } })
+    #expect(await eventuallyOnMain { ended(said) == .ended(.deadline, clean: true) })
+    #expect(record.stopped == 1 && !TailscaleClient.listening(on: port))
+
+    // The interface's address gone: it stops rather than be announced elsewhere.
+    said = Said(); record = FakeRecord()
+    var address: String? = "127.0.0.1"
+    standIn = Introducer(plan(far), record: record, addressNow: { address }) { [said] in said.events.append($0) }
+    try await standIn.start()
+    address = "10.0.0.5"
+    #expect(await eventuallyOnMain { ended(said) == .ended(.addressLost, clean: true) })
+
+    // No interface has the address: nothing is announced, and nothing is left listening.
+    said = Said(); record = FakeRecord(); record.refuses = true
+    standIn = Introducer(plan(far), record: record, addressNow: { "127.0.0.1" }) { [said] in said.events.append($0) }
+    await #expect(throws: (any Error).self) { try await standIn.start() }
+    let asked = try #require(record.standIn).port
+    #expect(said.events.isEmpty && Relay.openPairs == 0)
+    #expect(await eventuallyOnMain { !TailscaleClient.listening(on: asked) })
+}
+}
+
+/// `pair` and `devices` take a word that says what to do, not a device's name first.
+@Test func pairAndDevicesCommandsParse() throws {
+    let line = "rr-xcode-offer-v1:eyJ4IjoxfQ"
+    let introduce = try CLI.parse(["pair", "introduce", line, "--mac", "cloud-mac", "--to=iPhone"]).get()
+    #expect(introduce.words == ["introduce", line] && introduce.values["--mac"] == "cloud-mac" && introduce.values["--to"] == "iPhone")
+    #expect(try CLI.parse(["pair", "xcode"]).get().words == ["xcode"])
+    let add = try CLI.parse(["devices", "add", "rr-device-v1:eyJ4IjoxfQ", "--replace", "iPhone", "--peer=iphone-15-pro"]).get()
+    #expect(add.words.count == 2 && add.values["--replace"] == "iPhone" && add.values["--peer"] == "iphone-15-pro")
+    #expect(try CLI.parse(["devices", "--json"]).get().flags.contains("--json"))
+    #expect(throws: (any Error).self) { try CLI.parse(["pair", "introduce", "a", "b", "c"]).get() }
+}
+
 /// A record that stands in for another Mac goes out on the one interface that has the address, or not at all.
 @Test func aStandInRecordIsNeverAnnouncedEverywhere() {
     func args(_ interfaces: [String: String]) -> [String]? {
@@ -1122,12 +1249,13 @@ private final class OnceBox: @unchecked Sendable {
 }
 
 /// A started relay on a free local port (random, retried if taken).
-private func startedRelay(upstream: UInt16, spare: Bool = false,
-                          clock: @escaping @Sendable () -> UInt64 = { Relay.continuousNow() }) async throws -> Relay {
+private func startedRelay(upstream: UInt16, spare: Bool = false, cap: Int = Relay.maxConnections,
+                          clock: @escaping @Sendable () -> UInt64 = { Relay.continuousNow() },
+                          onPair: (@Sendable (Relay.PairEvent) -> Void)? = nil) async throws -> Relay {
     var lastError: Error?
     for _ in 0..<10 {
         let r = Relay(localIP: "127.0.0.1", localPort: UInt16.random(in: 40000...49000), remoteIP: "127.0.0.1",
-                      remotePort: upstream, spare: spare, clock: clock)
+                      remotePort: upstream, spare: spare, cap: cap, clock: clock, onPair: onPair)
         do { try await r.start(); return r } catch { lastError = error }
     }
     throw lastError!
@@ -1280,6 +1408,37 @@ extension TimingSensitive {
             // A control relay still gets through.
             let control = try await startedRelay(upstream: upstream); relays.append(control)
             #expect(await roundTrip(port: control.localPort, payload: Data("x".utf8)) == Data("x".utf8))
+        }
+
+        /// A pair is told of twice: when it reaches the far side, and once when it ends, with
+        /// what it carried each way. One that the far side refuses ends with the reason and nothing carried.
+        @Test func aPairsOpeningAndEndAreEachToldOnce() async throws {
+            final class Told: @unchecked Sendable {
+                private let lock = NSLock(); private var all: [Relay.PairEvent] = []
+                func add(_ e: Relay.PairEvent) { lock.withLock { all.append(e) } }
+                var events: [Relay.PairEvent] { lock.withLock { all } }
+            }
+            let server = try EchoServer(); let upstream = await server.start(); defer { server.stop() }
+            let told = Told()
+            let relay = try await startedRelay(upstream: upstream, cap: 1, onPair: told.add); defer { relay.stop() }
+            #expect(await roundTrip(port: relay.localPort, payload: Data("hello".utf8)) == Data("hello".utf8))
+            #expect(try await eventually { told.events.count == 2 })
+            #expect(told.events == [.opened(from: "127.0.0.1"), .closed(from: "127.0.0.1", up: 5, down: 5, why: nil)])
+            relay.stop()
+
+            let nobody = Told()
+            let dead = try await startedRelay(upstream: 1, onPair: nobody.add); defer { dead.stop() }
+            _ = await roundTrip(port: dead.localPort, payload: Data("x".utf8), timeout: 2)
+            #expect(try await eventually { !nobody.events.isEmpty })
+            guard case .closed(_, _, let down, let why) = nobody.events.first else { Issue.record("no end told: \(nobody.events)"); return }
+            #expect(down == 0 && why != nil && nobody.events.count == 1)
+        }
+
+        /// A relay may be given fewer pairs than any relay may have, never more.
+        @Test func aRelaysOwnCapOnlyLowersIt() {
+            #expect(Relay.refusal(relayPairs: 1, total: 1, spare: false, cap: 1) == .relayFull)
+            #expect(Relay.refusal(relayPairs: 1, total: 1, spare: false, cap: 2) == nil)
+            #expect(Relay.refusal(relayPairs: Relay.maxConnections, total: 70, spare: false, cap: 1000) == .relayFull)
         }
 
         /// A tunnel relay keeps spareCap pairs: a new one pushes out a standby — never the
@@ -3103,6 +3262,14 @@ extension TimingSensitive.RelayOnLocalhost {
     var registered = 0, stopped = 0, renewed = 0
     func register(instanceName: String, serviceType: String, domain: String,
                   port: UInt16, host: String, ip: String, txt: [String: String]) throws { registered += 1 }
+    /// What a stand-in was announced as; `refuses`: no interface has the address.
+    var standIn: (instance: String, type: String, port: UInt16, host: String, ip: String, txt: [String: String])?
+    var refuses = false
+    func registerOnItsInterface(instanceName: String, serviceType: String, domain: String,
+                                port: UInt16, host: String, ip: String, txt: [String: String]) throws {
+        standIn = (instanceName, serviceType, port, host, ip, txt)
+        if refuses { throw CocoaError(.featureUnsupported) }
+    }
     func stop() { stopped += 1 }
     func renew() { renewed += 1 }
     func previousExited() async -> Bool { true }

@@ -105,6 +105,31 @@ final class BonjourCapture: ObservableObject {
         start(serviceType: serviceType, domain: domain)
     }
 
+    /// The quoted strings of a zone-file line, as they were before quoting: `\"` and `\\` are
+    /// the character, `\065` the byte. A value may hold a space or a quote (a Mac's name does).
+    nonisolated static func quoted(in line: String) -> [String] {
+        var found: [String] = [], bytes: [UInt8]?
+        var rest = Array(line.utf8)[...]
+        while let byte = rest.popFirst() {
+            guard var open = bytes else { if byte == UInt8(ascii: "\"") { bytes = [] }; continue }
+            if byte == UInt8(ascii: "\"") {
+                found.append(String(decoding: open, as: UTF8.self)); bytes = nil
+            } else if byte == UInt8(ascii: "\\"), let next = rest.first {
+                let digits = rest.prefix(3)
+                if digits.count == 3, digits.allSatisfy({ (48...57).contains($0) }),
+                   let value = UInt8(String(decoding: digits, as: UTF8.self)) {
+                    open.append(value); rest = rest.dropFirst(3)
+                } else {
+                    open.append(next); rest = rest.dropFirst()
+                }
+                bytes = open
+            } else {
+                open.append(byte); bytes = open
+            }
+        }
+        return found
+    }
+
     func parse(line: String) {   // internal for tests
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty, !trimmed.hasPrefix(";") else { return }
@@ -132,8 +157,7 @@ final class BonjourCapture: ObservableObject {
             emit(recordName: recordName)
         case "TXT":
             var dict: [String: String] = [:]
-            for match in trimmed.matches(of: #/"([^"]*)"/#) {
-                let pair = String(match.1)
+            for pair in Self.quoted(in: trimmed) {
                 if let eq = pair.firstIndex(of: "=") {
                     dict[String(pair[..<eq])] = String(pair[pair.index(after: eq)...])
                 } else {

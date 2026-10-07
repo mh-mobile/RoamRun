@@ -76,6 +76,26 @@ final class InterfaceMonitor: @unchecked Sendable {
 
     static func currentIPv4(on interfaceName: String = lanInterface) -> String? { ipv4Addresses()[interfaceName] }
 
+    /// The netmask that goes with `ip` on the interface that has it ("255.255.255.0").
+    static func netmask(of ip: String) -> String? {
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
+        defer { freeifaddrs(ifaddr) }
+        func text(_ sa: UnsafeMutablePointer<sockaddr>) -> String {
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            // A netmask's sa_len can be shorter than a sockaddr_in: give the family's size.
+            getnameinfo(sa, socklen_t(MemoryLayout<sockaddr_in>.size), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
+            return host.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
+        }
+        for ptr in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            guard let sa = ptr.pointee.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET), text(sa) == ip,
+                  let mask = ptr.pointee.ifa_netmask else { continue }
+            mask.pointee.sa_family = UInt8(AF_INET)
+            return text(mask)
+        }
+        return nil
+    }
+
     /// Interface name → its (last) non-loopback IPv4 address, via getifaddrs.
     static func ipv4Addresses() -> [String: String] {
         var ifaddr: UnsafeMutablePointer<ifaddrs>?

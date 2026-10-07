@@ -46,6 +46,15 @@ final class Relay: @unchecked Sendable {
         case subnet(mask: String)
     }
     let accept: Accept
+    /// Pairs this relay takes at once, where that is fewer than any relay may.
+    let cap: Int
+    /// A pair reached the far side, or ended: who it was, and at the end what it carried
+    /// each way and, when it didn't end by itself, why. Off-main.
+    enum PairEvent: Equatable, Sendable {
+        case opened(from: String)
+        case closed(from: String, up: Int, down: Int, why: String?)
+    }
+    let onPair: (@Sendable (PairEvent) -> Void)?
     private var lastRefusalLog: Date?
     /// When the device last refused a dial (`clock`), until it answers one.
     private var upstreamRefusedAt: UInt64?
@@ -70,7 +79,7 @@ final class Relay: @unchecked Sendable {
     private let lock = NSLock()
     /// Only local remotepairingd uses a relay; a few connections at most.
     // ponytail: flat cap; a flood from a local process just gets refused.
-    private static let maxConnections = 64
+    static let maxConnections = 64
     /// Across all relays in this process: each pair is two file descriptors.
     private static let maxTotal = 256
     private static let totalLock = NSLock()
@@ -90,8 +99,8 @@ final class Relay: @unchecked Sendable {
     }
 
     /// Why a new pair can't be taken, or nil when it can. `spare`: a tunnel relay's.
-    static func refusal(relayPairs: Int, total: Int, spare: Bool) -> Refusal? {
-        if relayPairs >= maxConnections { return .relayFull }
+    static func refusal(relayPairs: Int, total: Int, spare: Bool, cap: Int = maxConnections) -> Refusal? {
+        if relayPairs >= min(cap, maxConnections) { return .relayFull }
         if total >= maxTotal { return .processFull }
         if spare && total >= maxTotal - controlReserve { return .reservedForControl }
         return nil
@@ -136,11 +145,14 @@ final class Relay: @unchecked Sendable {
 
     /// `clock`: what the last-byte times are kept in.
     init(localIP: String, localPort: UInt16, remoteIP: String, remotePort: UInt16, spare: Bool = false,
-         accept: Accept = .ownAddress,
+         accept: Accept = .ownAddress, cap: Int = Relay.maxConnections,
          clock: @escaping @Sendable () -> UInt64 = { Relay.continuousNow() },
-         onOpenCountChange: ((Int) -> Void)? = nil, onFailure: ((Relay) -> Void)? = nil) {
+         onOpenCountChange: ((Int) -> Void)? = nil, onFailure: ((Relay) -> Void)? = nil,
+         onPair: (@Sendable (PairEvent) -> Void)? = nil) {
         self.spare = spare
         self.accept = accept
+        self.cap = cap
+        self.onPair = onPair
         self.clock = clock
         self.onOpenCountChange = onOpenCountChange
         self.onFailure = onFailure
@@ -328,7 +340,9 @@ final class Relay: @unchecked Sendable {
         let stats = ConnStats(clock: clock)
         let port = remotePort
         // nil: closed without a line (a refusal after the first of a run).
+        let source = "\(from)"
         let finish: @Sendable (String?) -> Void = { [weak self] reason in
+            if stats.closedOnce() { self?.onPair?(.closed(from: source, up: stats.up, down: stats.down, why: reason == "eof" ? nil : reason)) }
             stats.logOnce(reason.map { "tcp :\(port) sent=\(stats.up)B recv=\(stats.down)B \($0)" })
             outbound.stateUpdateHandler = nil   // it holds this closure, which holds outbound
             inbound.cancel(); outbound.cancel()
@@ -350,7 +364,7 @@ final class Relay: @unchecked Sendable {
             switch state {
             case .ready:
                 self?.upstreamAnswered()
-                self?.markEstablished(inbound)
+                if self?.markEstablished(inbound) == true { self?.onPair?(.opened(from: source)) }
             case .waiting(let e), .failed(let e): failed(e, "upstream ")
             default: break
             }
@@ -442,7 +456,7 @@ final class Relay: @unchecked Sendable {
             return true
         }
         let (refused, total) = Self.totalLock.withLock { () -> (Refusal?, Int) in
-            let why = Self.refusal(relayPairs: pairs, total: Self.total, spare: spare)
+            let why = Self.refusal(relayPairs: pairs, total: Self.total, spare: spare, cap: cap)
             if why == nil { Self.total += 1 }
             return (why, Self.total)
         }
@@ -475,14 +489,17 @@ final class Relay: @unchecked Sendable {
         return (victim, established.remove(ObjectIdentifier(victim[0])) != nil)
     }
 
-    private func markEstablished(_ inbound: NWConnection) {
+    /// True when this is what established it.
+    @discardableResult
+    private func markEstablished(_ inbound: NWConnection) -> Bool {
         lock.lock()
         // .ready can arrive after finish() untracked the pair; don't count a ghost.
-        guard !stopped, connections.contains(where: { $0 === inbound }) else { lock.unlock(); return }
+        guard !stopped, connections.contains(where: { $0 === inbound }) else { lock.unlock(); return false }
         let inserted = established.insert(ObjectIdentifier(inbound)).inserted
         let n = established.count
         lock.unlock()
         if inserted { onOpenCountChange?(n) }
+        return inserted
     }
 
     private func untrack(_ conns: NWConnection...) {
@@ -531,6 +548,14 @@ private final class ConnStats: @unchecked Sendable {
         return !refused
     }
     private var refused = false
+
+    /// True the first time: a pair ends once, however many ways its end shows.
+    func closedOnce() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        defer { closed = true }
+        return !closed
+    }
+    private var closed = false
 
     /// True once both directions have seen EOF.
     func directionDone() -> Bool {

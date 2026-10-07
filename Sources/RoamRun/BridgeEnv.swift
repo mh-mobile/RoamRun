@@ -117,6 +117,9 @@ protocol BonjourRecord: AnyObject {
     var onExit: ((Int32) -> Void)? { get set }
     func register(instanceName: String, serviceType: String, domain: String,
                   port: UInt16, host: String, ip: String, txt: [String: String]) throws
+    /// On the one interface that has `ip`, or not at all (throws): for a record that isn't a bridge's.
+    func registerOnItsInterface(instanceName: String, serviceType: String, domain: String,
+                                port: UInt16, host: String, ip: String, txt: [String: String]) throws
     func stop()
     func renew()
     /// The record stop() ended is gone; false when that couldn't be confirmed.
