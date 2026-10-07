@@ -3297,9 +3297,15 @@ func claimOutcomes(_ c: ClaimCase) async {
     rig.world.now += 20
     rig.watcher.subscribers[rig.id]?.onDevice(mine, other)
     #expect(rig.bridge.state.isActive)                               // the saved one in between: counted anew
+    rig.world.now += 301
+    rig.watcher.subscribers[rig.id]?.onDevice(mine, other)
+    #expect(rig.bridge.state.isActive)                               // too long after: a first sighting again
     rig.world.now += 20
     rig.watcher.subscribers[rig.id]?.onDevice(mine, other)
     #expect(rig.bridge.status == .error && !rig.bridge.autoRetry && rig.bridge.udid == saved)
+    // The point of stopping is the reason: which device, what is wrong, what to do.
+    guard case .error(let said) = rig.bridge.state else { Issue.record("no reason given"); return }
+    #expect(said.contains("another device") && said.contains("Remove iPhone") && said.contains("add it again"))
 }
 
 /// Waiting with the record up: re-announce each minute; on the third, a device the mesh
