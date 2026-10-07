@@ -111,12 +111,17 @@ enum CLI {
     private static var bridge: ProxyBridge?
     private static var keepAlive: [AnyObject] = []
 
+    /// What a command's earlier name is answered with; nil for any other word.
+    nonisolated static func moved(_ command: String) -> String? {
+        command == "pairing" ? "`roamrun pairing …` is now `roamrun key …` (key create, key import)" : nil
+    }
+
     nonisolated static func run(_ args: [String]) -> Never {
         setvbuf(stdout, nil, _IOLBF, 0)
         MainActor.assumeIsolated {
             if !commands.contains(args[0]) {
                 // Renamed after 0.3.0: say where it went rather than print the whole usage.
-                if args[0] == "pairing" { fail("`roamrun pairing …` is now `roamrun key …` (key create, key import)") }
+                if let note = moved(args[0]) { fail(note) }
                 FileHandle.standardError.write(Data("roamrun: unknown command “\(args[0])”\n\n\(usage)\n".utf8))
                 exit(2)
             }

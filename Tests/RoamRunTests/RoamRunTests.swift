@@ -5271,11 +5271,17 @@ private func listenerSoon(in dir: URL, _ handler: @escaping @Sendable (DeviceCon
     #expect(!AppCoordinator.portMoved("the device doesn't accept this pairing: it proved itself and refused it"))
 }
 
-/// `pairing` takes a word that says what to do, not a device's name first.
-@Test func pairingCommandsParse() throws {
+/// `key` takes a word that says what to do, not a device's name first.
+@Test func keyCommandsParse() throws {
     #expect(try CLI.parse(["key", "create", "iPhone", "/tmp/k.json", "--as", "RoamRun (cloud)"]).get().values["--as"] == "RoamRun (cloud)")
     #expect(try CLI.parse(["key", "import", "/tmp/k.json", "--as=Phone"]).get().words == ["import", "/tmp/k.json"])
     #expect(throws: (any Error).self) { try CLI.parse(["key", "create", "a", "b", "c", "d"]).get() }
+}
+
+/// The name these had in 0.3.0 says where they went; nothing else is taken for a renamed command.
+@Test func theOldNameSaysWhereItWent() {
+    #expect(CLI.moved("pairing")?.contains("roamrun key") == true)
+    #expect(CLI.moved("key") == nil && CLI.moved("up") == nil && CLI.moved("pair") == nil)
 }
 
 /// What a build before the sealing left as it was is removed when the app starts: each holds a
