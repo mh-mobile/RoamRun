@@ -624,6 +624,118 @@ import ServiceManagement
     #expect(args(["bridge100": "198.19.249.3"]) == record)   // no interface holds it: as before
 }
 
+/// The two lines one Mac hands another: each read back as written, neither taken for the
+/// other, and nothing in them that isn't plainly a value of its kind.
+@Test func introductionLinesAreReadOnlyAsWhatTheyAre() {
+    let txt = ["identifier": "6BF40D22-D414-41D0-BE80-7567AE75B2BC", "authTag": "BsVby0td", "model": "VirtualMac2,1",
+               "name": "Managed’s Virtual Machine", "flags": "1", "ver": "26", "minVer": "17"]
+    let offer = Introduction.Offer(port: 53050, txt: txt)
+    let line = Introduction.line(offer)
+    #expect(line.hasPrefix("rr-xcode-offer-v1:") && !line.contains(" ") && !line.contains("=") && !line.dropFirst(3).contains("+"))
+    #expect(try! Introduction.offer(from: "  \(line)\n").get() == offer)
+
+    var mine = txt
+    mine["model"] = nil; mine["name"] = nil
+    let device = Introduction.Device(name: "iPhone", peer: "iphone-15-pro", port: 49152, txt: mine)
+    #expect(try! Introduction.device(from: Introduction.line(device)).get() == device)
+
+    // Each says so when handed the other, and neither reads a path or half a line.
+    func refused<T>(_ r: Result<T, Introduction.Unreadable>) -> Introduction.Unreadable? { if case .failure(let e) = r { return e }; return nil }
+    if case .another = refused(Introduction.offer(from: Introduction.line(device))) {} else { Issue.record("a device read as an offer") }
+    if case .another = refused(Introduction.device(from: line)) {} else { Issue.record("an offer read as a device") }
+    #expect(refused(Introduction.offer(from: "/tmp/k.json")) == .notOne && refused(Introduction.offer(from: String(line.dropLast(9)))) == .notOne)
+    #expect(refused(Introduction.offer(from: "rr-xcode-offer-v1:" + String(repeating: "A", count: 5000))) == .notOne)
+
+    func offerProblem(_ change: (inout Introduction.Offer) -> Void) -> Bool {
+        var o = offer; change(&o)
+        if case .refused = refused(Introduction.offer(from: Introduction.line(o))) { return true }
+        return false
+    }
+    #expect(offerProblem { $0.port = 22 } && offerProblem { $0.port = 1023 } && !offerProblem { $0.port = 1024 })
+    #expect(offerProblem { $0.txt["model"] = nil } && offerProblem { $0.txt["extra"] = "1" })
+    #expect(offerProblem { $0.txt["identifier"] = "not-a-uuid" } && offerProblem { $0.txt["authTag"] = "a b" } && offerProblem { $0.txt["authTag"] = "" })
+    #expect(offerProblem { $0.txt["ver"] = "26; rm" } && offerProblem { $0.txt["flags"] = "" } && offerProblem { $0.txt["model"] = "Mac 1" })
+    // The name is shown on the device: nothing that hides, reorders or breaks what is read.
+    for bad in ["a\u{202E}b", "a\u{200B}b", "a\nb", "a\u{1B}[31mb", "a=b", "a\\b", "", String(repeating: "x", count: 64)] {
+        #expect(offerProblem { $0.txt["name"] = bad }, "\(bad.unicodeScalars.map { String($0.value, radix: 16) })")
+    }
+    #expect(!offerProblem { $0.txt["name"] = "開発サーバー 2" })
+
+    func deviceProblem(_ change: (inout Introduction.Device) -> Void) -> Bool {
+        var d = device; change(&d)
+        if case .refused = refused(Introduction.device(from: Introduction.line(d))) { return true }
+        return false
+    }
+    #expect(deviceProblem { $0.txt["model"] = "iPhone16,1" } && deviceProblem { $0.port = 80 })
+    #expect(deviceProblem { $0.name = "-rf" } && deviceProblem { $0.name = "a\u{202E}b" } && deviceProblem { $0.name = " " })
+    #expect(deviceProblem { $0.peer = "a b" } && deviceProblem { $0.peer = "" } && deviceProblem { $0.peer = "-x" } && deviceProblem { $0.peer = "100.64.0.2/../x" })
+    #expect(!deviceProblem { $0.peer = "iPhone-15-Pro.tail1.ts.net" })
+}
+
+/// A record that stands in for another Mac goes out on the one interface that has the address, or not at all.
+@Test func aStandInRecordIsNeverAnnouncedEverywhere() {
+    func args(_ interfaces: [String: String]) -> [String]? {
+        DNSServiceProxy.argumentsOnItsInterface(instanceName: "6E44", serviceType: "_remotepairing-pairable-host._tcp", domain: "local",
+                                                port: 53050, host: "rr-1.roamrun.local", ip: "192.168.1.2", txt: ["ver": "26"], interfaces: interfaces)
+    }
+    #expect(args(["en1": "192.168.1.2", "bridge100": "198.19.249.3"])?.prefix(2) == ["-i", "en1"])
+    #expect(args(["bridge100": "198.19.249.3"]) == nil && args([:]) == nil)
+}
+
+/// Whose connections a relay takes: this Mac's alone unless told otherwise, and nobody's on
+/// anything it can't read.
+@Test func aRelayTakesOnlyWhomItsPolicyNames() {
+    func takes(_ from: String, _ policy: Relay.Accept, local: String = "192.168.0.15") -> Bool {
+        Relay.accepts(from: IPv4Address(from)!, local: local, policy: policy)
+    }
+    #expect(takes("192.168.0.15", .ownAddress) && !takes("192.168.0.19", .ownAddress) && !takes("127.0.0.1", .ownAddress))
+    #expect(takes("192.168.0.19", .only("192.168.0.19")) && !takes("192.168.0.20", .only("192.168.0.19")))
+    #expect(!takes("192.168.0.15", .only("192.168.0.19")))            // not this Mac either: one host means one
+    let lan = Relay.Accept.subnet(mask: "255.255.255.0")
+    #expect(takes("192.168.0.19", lan) && takes("192.168.0.15", lan) && !takes("192.168.1.19", lan) && !takes("100.64.0.2", lan))
+    #expect(takes("192.168.1.19", .subnet(mask: "255.255.0.0")) && !takes("192.169.0.19", .subnet(mask: "255.255.0.0")))
+    // Unreadable: nobody, rather than everybody.
+    #expect(!takes("192.168.0.19", .subnet(mask: "0.0.0.0")) && !takes("192.168.0.19", .subnet(mask: "nonsense")))
+    #expect(!takes("192.168.0.19", .only("nonsense")) && !takes("192.168.0.15", .ownAddress, local: "nonsense"))
+    // Unless given one, a relay is made with the first.
+    #expect(Relay(localIP: "127.0.0.1", localPort: 1, remoteIP: "127.0.0.1", remotePort: 2).accept == .ownAddress)
+}
+
+/// Naming a peer and saying whose it is, from what `tailscale status --json` carries.
+@Test func aPeerIsNamedByTailscalesNameAndItsHolderIsTold() {
+    let json = #"""
+    {"Self":{"UserID":7,"TailscaleIPs":["100.64.0.1","fd7a::1"],"DNSName":"home.tail1.ts.net."},
+     "CurrentTailnet":{"MagicDNSSuffix":"tail1.ts.net"},
+     "User":{"7":{"LoginName":"me@example.com"},"9":{"LoginName":"alice@example.com"}},
+     "Peer":{
+      "a":{"ID":"n1","DNSName":"cloud-mac.tail1.ts.net.","HostName":"anything","OS":"macOS","UserID":7,"TailscaleIPs":["100.64.0.2"]},
+      "b":{"ID":"n2","DNSName":"alice-mbp.tail1.ts.net.","OS":"macOS","UserID":9,"TailscaleIPs":["100.64.0.3"]},
+      "c":{"ID":"n3","DNSName":"devserver.tail1.ts.net.","OS":"macOS","UserID":7,"Tags":["tag:dev"],"TailscaleIPs":["100.64.0.4"]},
+      "d":{"ID":"n4","DNSName":"cloud-mac.tail2.ts.net.","OS":"macOS","UserID":11,"TailscaleIPs":["100.64.0.5"]},
+      "e":{"ID":"n5","HostName":"cloud-mac","OS":"macOS","UserID":7,"TailscaleIPs":["100.64.0.6"]}}}
+    """#
+    guard let mesh = TailscaleClient.mesh(fromStatusJSON: json) else { Issue.record("no mesh"); return }
+    #expect(mesh.ownIPs == ["100.64.0.1", "fd7a::1"] && mesh.userID == 7 && mesh.suffix == "tail1.ts.net")
+    func named(_ name: String) -> TailscaleClient.NamedPeer { TailscaleClient.peer(named: name, in: mesh) }
+    func id(_ name: String) -> String? { if case .one(let p) = named(name) { return p.id }; return nil }
+    // The short name means this tailnet's; another tailnet's needs its whole name. A name a
+    // device only gives itself (no DNSName) names nothing.
+    #expect(id("cloud-mac") == "n1" && id("Cloud-Mac.tail1.ts.net.") == "n1" && id("cloud-mac.tail2.ts.net") == "n4")
+    #expect(named("anything") == .none && named("") == .none && named("nobody") == .none)
+    var twice = mesh
+    twice.peers.append(MeshDevice(id: "n6", name: "cloud-mac", os: "macOS", ips: [], online: true, dnsName: "cloud-mac.tail1.ts.net"))
+    #expect(TailscaleClient.peer(named: "cloud-mac", in: twice) == .several(["cloud-mac.tail1.ts.net", "cloud-mac.tail1.ts.net"]))
+
+    func holder(_ name: String) -> TailscaleClient.Holder? {
+        if case .one(let p) = named(name) { return TailscaleClient.holder(of: p, in: mesh) }
+        return nil
+    }
+    #expect(holder("cloud-mac") == .yours && holder("alice-mbp") == .user("alice@example.com"))
+    #expect(holder("devserver") == .shared(["tag:dev"]))            // tagged: no one user's, even with a UserID
+    #expect(holder("cloud-mac.tail2.ts.net") == .unknown)           // a user this status doesn't name
+    #expect(TailscaleClient.mesh(fromStatusJSON: "not json") == nil)
+}
+
 @Test func tailscalePeersFromStatusJSON() {
     let json = #"{"Peer":{"k1":{"DNSName":"mac.tail.ts.net.","OS":"macOS","TailscaleIPs":["100.64.0.2"],"Online":true},"k2":{"DNSName":"my-iphone.tail.ts.net.","OS":"iOS","TailscaleIPs":["100.64.0.10"],"Online":false,"CurAddr":"203.0.113.50:41641"}}}"#
     let d = TailscaleClient.devices(fromStatusJSON: json)

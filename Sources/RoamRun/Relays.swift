@@ -37,6 +37,15 @@ final class Relay: @unchecked Sendable {
     let onFailure: ((Relay) -> Void)?
     /// A tunnel relay: its pairs may not take the control channels' reserve.
     let spare: Bool
+    /// Whose connections are taken. A bridge's relays are this Mac's alone.
+    enum Accept: Equatable, Sendable {
+        case ownAddress
+        /// One other host on the LAN, by its IPv4 address.
+        case only(String)
+        /// Any host of the local address's subnet, by that interface's netmask.
+        case subnet(mask: String)
+    }
+    let accept: Accept
     private var lastRefusalLog: Date?
     /// When the device last refused a dial (`clock`), until it answers one.
     private var upstreamRefusedAt: UInt64?
@@ -127,9 +136,11 @@ final class Relay: @unchecked Sendable {
 
     /// `clock`: what the last-byte times are kept in.
     init(localIP: String, localPort: UInt16, remoteIP: String, remotePort: UInt16, spare: Bool = false,
+         accept: Accept = .ownAddress,
          clock: @escaping @Sendable () -> UInt64 = { Relay.continuousNow() },
          onOpenCountChange: ((Int) -> Void)? = nil, onFailure: ((Relay) -> Void)? = nil) {
         self.spare = spare
+        self.accept = accept
         self.clock = clock
         self.onOpenCountChange = onOpenCountChange
         self.onFailure = onFailure
@@ -281,10 +292,23 @@ final class Relay: @unchecked Sendable {
         return established.count
     }
 
-    private func accept(_ inbound: NWConnection) {
+    /// Whether a connection from `from` to a relay listening on `local` is taken. Anything
+    /// that can't be read as an IPv4 address or a netmask takes nobody.
+    static func accepts(from: IPv4Address, local: String, policy: Accept) -> Bool {
         // Compare raw bytes: IPv4Address == also compares an interface scope.
+        guard let own = IPv4Address(local)?.rawValue else { return false }
+        switch policy {
+        case .ownAddress: return from.rawValue == own
+        case .only(let other): return from.rawValue == IPv4Address(other)?.rawValue
+        case .subnet(let mask):
+            guard let mask = IPv4Address(mask)?.rawValue, mask.contains(where: { $0 != 0 }) else { return false }
+            return zip(zip(from.rawValue, own), mask).allSatisfy { $0.0.0 & $0.1 == $0.0.1 & $0.1 }
+        }
+    }
+
+    private func accept(_ inbound: NWConnection) {
         guard case .hostPort(let host, _) = inbound.endpoint, case .ipv4(let from) = host,
-              from.rawValue == IPv4Address(localIP)?.rawValue else {
+              Self.accepts(from: from, local: localIP, policy: accept) else {
             relayLog.log("refused :\(self.localPort) connection from \(String(describing: inbound.endpoint), privacy: .private)")
             inbound.cancel()
             return

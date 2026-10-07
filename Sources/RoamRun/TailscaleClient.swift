@@ -316,10 +316,82 @@ struct TailscaleClient {
                 let id = (p["ID"] as? String) ?? (p["StableID"] as? String) ?? ips.first ?? UUID().uuidString
                 devices.append(MeshDevice(id: id, name: name, os: os, ips: ips, online: online,
                                           curAddr: (p["CurAddr"] as? String) ?? "",
-                                          relay: (p["Relay"] as? String) ?? ""))
+                                          relay: (p["Relay"] as? String) ?? "",
+                                          dnsName: Self.undotted((p["DNSName"] as? String) ?? ""),
+                                          userID: p["UserID"] as? Int,
+                                          tags: (p["Tags"] as? [String]) ?? []))
             }
         }
         return devices.sorted { ($0.os == "iOS") != ($1.os == "iOS") ? $0.os == "iOS" : $0.name < $1.name }
+    }
+
+    private static func undotted(_ name: String) -> String { name.hasSuffix(".") ? String(name.dropLast()) : name }
+
+    /// This Mac's place among its peers: what naming one of them, and saying whose it is, takes.
+    struct Mesh: Equatable {
+        var ownIPs: [String] = []
+        var userID: Int?
+        /// This tailnet's MagicDNS suffix ("tail1234.ts.net"); a device shared in from another has its own.
+        var suffix = ""
+        var logins: [Int: String] = [:]
+        var peers: [MeshDevice] = []
+    }
+
+    static func mesh(fromStatusJSON out: String) -> Mesh? {
+        guard let peers = devices(fromStatusJSON: out), let data = out.data(using: .utf8),
+              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        let own = root["Self"] as? [String: Any]
+        var logins: [Int: String] = [:]
+        for (id, user) in (root["User"] as? [String: Any]) ?? [:] {
+            if let id = Int(id), let login = (user as? [String: Any])?["LoginName"] as? String { logins[id] = login }
+        }
+        return Mesh(ownIPs: (own?["TailscaleIPs"] as? [String]) ?? [], userID: own?["UserID"] as? Int,
+                    suffix: ((root["CurrentTailnet"] as? [String: Any])?["MagicDNSSuffix"] as? String) ?? "",
+                    logins: logins, peers: peers)
+    }
+
+    func mesh() throws -> Mesh {
+        guard let path = resolvedPath() else { throw TailscaleClientError.cliNotFound }
+        let out = try run(path, ["status", "--json"])
+        if let problem = Self.stateProblem(inStatusJSON: out) { throw TailscaleClientError.commandFailed(problem) }
+        guard let mesh = Self.mesh(fromStatusJSON: out) else { throw TailscaleClientError.commandFailed("tailscale status: bad JSON") }
+        return mesh
+    }
+
+    enum NamedPeer: Equatable {
+        case one(MeshDevice)
+        case none
+        case several([String])
+    }
+
+    /// The peer a person means by `name`: its whole Tailscale name, or the first label of one in
+    /// this tailnet. Never the name a device gives itself, and never a guess between two.
+    static func peer(named name: String, in mesh: Mesh) -> NamedPeer {
+        let wanted = undotted(name.lowercased())
+        guard !wanted.isEmpty else { return .none }
+        let found = mesh.peers.filter { peer in
+            let whole = peer.dnsName.lowercased()
+            guard !whole.isEmpty else { return false }
+            if whole == wanted { return true }
+            return !mesh.suffix.isEmpty && whole == wanted + "." + mesh.suffix.lowercased()
+        }
+        return found.count == 1 ? .one(found[0]) : found.isEmpty ? .none : .several(found.map(\.dnsName).sorted())
+    }
+
+    /// Who gets what a peer is given, as far as Tailscale tells.
+    enum Holder: Equatable {
+        case yours
+        case user(String)
+        /// A tagged device belongs to no one user: whoever can use it.
+        case shared([String])
+        case unknown
+    }
+
+    static func holder(of peer: MeshDevice, in mesh: Mesh) -> Holder {
+        if !peer.tags.isEmpty { return .shared(peer.tags) }
+        guard let id = peer.userID else { return .unknown }
+        if id == mesh.userID { return .yours }
+        return mesh.logins[id].map(Holder.user) ?? .unknown
     }
 
     /// Tailscale-level reachability (disco ping), independent of iPhone services.

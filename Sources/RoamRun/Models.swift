@@ -30,6 +30,11 @@ struct MeshDevice: Identifiable, Hashable {
     var curAddr = ""
     /// Home DERP region, e.g. "tok".
     var relay = ""
+    /// The name Tailscale gave it, whole and without the last dot; empty without MagicDNS.
+    var dnsName = ""
+    /// Whose it is, as Tailscale numbers its users; a tagged device has tags instead.
+    var userID: Int?
+    var tags: [String] = []
 
     var ipv4: String? { ips.first(where: { $0.contains(".") }) }
     var pathDescription: String {

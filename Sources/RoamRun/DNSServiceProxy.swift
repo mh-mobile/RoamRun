@@ -45,6 +45,25 @@ final class DNSServiceProxy: @unchecked Sendable {
         guard spawn(args) else { throw CocoaError(.executableLoad, userInfo: [NSLocalizedDescriptionKey: "dns-sd -P failed to launch"]) }
     }
 
+    /// For a record that stands in for another Mac: on the one interface that holds `ip`, or not at all.
+    func registerOnItsInterface(instanceName: String, serviceType: String, domain: String,
+                                port: UInt16, host: String, ip: String, txt: [String: String]) throws {
+        guard let args = Self.argumentsOnItsInterface(instanceName: instanceName, serviceType: serviceType, domain: domain, port: port,
+                                                      host: host, ip: ip, txt: txt, interfaces: InterfaceMonitor.ipv4Addresses()) else {
+            throw CocoaError(.featureUnsupported, userInfo: [NSLocalizedDescriptionKey: "no interface of this Mac has the address \(ip)"])
+        }
+        lastArgs = args
+        guard spawn(args) else { throw CocoaError(.executableLoad, userInfo: [NSLocalizedDescriptionKey: "dns-sd -P failed to launch"]) }
+    }
+
+    /// nil where `arguments` would announce on every interface.
+    static func argumentsOnItsInterface(instanceName: String, serviceType: String, domain: String, port: UInt16, host: String, ip: String,
+                                        txt: [String: String], interfaces: [String: String]) -> [String]? {
+        let args = arguments(instanceName: instanceName, serviceType: serviceType, domain: domain, port: port, host: host, ip: ip,
+                             txt: txt, interfaces: interfaces)
+        return args.first == "-i" ? args : nil
+    }
+
     /// `interfaces`: each interface's IPv4 address. With none holding `ip`, every interface, as dns-sd does by itself.
     static func arguments(instanceName: String, serviceType: String, domain: String, port: UInt16, host: String, ip: String,
                           txt: [String: String], interfaces: [String: String]) -> [String] {
