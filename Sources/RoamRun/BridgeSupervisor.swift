@@ -30,7 +30,7 @@ enum StartReason: String, CaseIterable, Sendable {
 enum RetryBlock: String, CaseIterable, Sendable {
     case none
     case needsAdmin          // `log stream` needs an administrator account
-    case pairingLost         // remotepairingd doesn't recognize the device
+    case pairingLost         // remotepairingd doesn't recognize the device, or answers for another one
     case cliYieldedToOther   // a `roamrun up` refused: another process has the device
 }
 
