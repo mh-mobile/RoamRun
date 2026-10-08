@@ -30,6 +30,8 @@ enum PairWire {
         case anotherDevice = "another-device"
         /// Paired, and nothing of it could be kept here: the device's own record of it stays.
         case notKept = "not-kept"
+        /// The device came and the pairing wasn't made: a wrong code, dismissed, or not in time.
+        case notPaired = "not-paired"
         case noApp = "no-app"
         case failed
     }
@@ -512,7 +514,7 @@ enum PairByName {
                     say(.offerSent)
                 }
                 let end = Date().addingTimeInterval(resultWindow)
-                var passed = false
+                var passed = false, silent = 0
                 while Date() < end {
                     if stopped() {
                         link.send(.ended(.stopped))
@@ -525,12 +527,16 @@ enum PairByName {
                     case .failed(let why):
                         link.send(.result(.failed(why)))
                         return .failed(why)
+                    // The app gone: not waited out. What it kept, if it had begun to, isn't known here.
+                    case .unknown:
+                        silent += 1
+                        if silent >= 3 { return .lost(.unknown) }
                     case .code(let digits) where !passed:
                         // A code that didn't get to where it is shown isn't one to wait on.
                         guard PairWire.isCode(digits), link.send(.code(digits)) else { return await given(up: ()) }
                         passed = true
                         say(.codeSent)
-                    default: break
+                    default: silent = 0
                     }
                     switch link.read(within: pause, stop: stopped) {
                     case .timeout: continue
@@ -544,11 +550,14 @@ enum PairByName {
             }
         }
 
-        /// The app is told to stop, and asked once more: what it had kept by then stays kept.
+        /// The app is told to stop, and asked once more. What it had kept by then stays kept, and
+        /// what it is keeping it goes on keeping: neither is said as nothing.
         private func given(up: Void, as end: End? = nil) async -> End {
             await cancel()
             switch await status() {
             case .done(let on): return .done(on: on)
+            case .checking: return .lost(.checking)
+            case .unknown: return .lost(.unknown)
             case let after: return end ?? .lost(after)
             }
         }

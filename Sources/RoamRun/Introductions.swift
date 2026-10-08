@@ -96,6 +96,17 @@ enum Introduction {
         return nil
     }
 
+    /// A name this Mac may offer to pair under, made of the one wanted: what an offer's name may
+    /// not hold is left out, and it is cut — between characters — to the length one may have.
+    static func hostName(_ wanted: String) -> String {
+        var name = ""
+        for character in wanted where shows(String(character)) && character != "=" && character != "\\" {
+            guard name.utf8.count + String(character).utf8.count <= 63 else { break }
+            name.append(character)
+        }
+        return name.isEmpty ? "RoamRun" : name
+    }
+
     /// Whether text reads on a screen as what it is: no control characters, none that format
     /// or reorder what is around them, and no line breaks.
     static func shows(_ text: String) -> Bool {

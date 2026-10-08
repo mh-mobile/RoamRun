@@ -123,11 +123,13 @@ final class AppCoordinator: ObservableObject {
             }
         }
         deviceControl.onIntroduction = { [introductions] request in introductions.answer(request) }
-        introductions.busy = { [deviceControl] in deviceControl.isPairing }
+        introductions.claim = { [deviceControl] in deviceControl.claimPairing($0) }
+        introductions.release = { [deviceControl] in deviceControl.releasePairing($0) }
         introductions.ready = { [deviceControl] in try deviceControl.keyReady() }
         introductions.listen = { ip, interface, only in
             let socket = try PairLink.listening(ip: ip, port: 0, interface: interface)
-            let pairing = try DevicePairing(name: Self.controlHostName, host: DeviceControlHub.hostID(in: ProfileStore.directory), socket: socket.fd, only: only)
+            // As an offer may be named: a long or oddly spelled computer name would otherwise fail this Mac's own check of it.
+            let pairing = try DevicePairing(name: Introduction.hostName(Self.controlHostName), host: DeviceControlHub.hostID(in: ProfileStore.directory), socket: socket.fd, only: only)
             return .init(listener: pairing, port: pairing.port, txt: pairing.txt)
         }
         introductions.held = { [weak self] device in
@@ -1030,16 +1032,12 @@ final class AppCoordinator: ObservableObject {
     }
     struct NotTaken: Error {
         var why: String
-        /// This Mac holds a pairing for the device, and wasn't to put another in its place.
-        var exists = false
-        /// The device may know the pairing all the same: it was tried, and went no further here.
-        var made = false
-        init(_ why: String, exists: Bool = false, made: Bool = false) { self.why = why; self.exists = exists; self.made = made }
+        init(_ why: String) { self.why = why }
     }
 
     /// The device found or added, the pairing kept only if it connects, and switched on — in
     /// that order, each only after the one before. Under `importing`, off the main thread.
-    nonisolated private func takeIn(_ given: DeviceProfile, udid: String, pairing: Data, as name: String?, replacing: Bool,
+    nonisolated private func takeIn(_ given: DeviceProfile, udid: String, pairing: Data, as name: String?,
                                     wanted: @Sendable () -> Bool) -> Result<TakenIn, NotTaken> {
         // Where it goes is worked out first and saved last: a pairing that doesn't connect leaves
         // the saved devices as they were.
@@ -1050,10 +1048,6 @@ final class AppCoordinator: ObservableObject {
         case .failure(let why): return .failure(.init("\(why)"))
         }
         let p = place.profile
-        // Not in the place of one this Mac holds, when that wasn't asked: the one held would be gone, and with it the way back.
-        if !replacing, deviceControl.state(of: p.id, udid: p.udid ?? udid).paired {
-            return .failure(.init("this Mac already holds a pairing for “\(p.displayName)”: remove it first (the RoamRun app, on the device's page), then pair again", exists: true))
-        }
         var target = DeviceControlHub.Target(id: p.id, name: p.displayName, ip: p.providerIP, port: p.remotePairingPort, udid: p.udid ?? udid)   // as it is spelled here, when known
         var device = given
         // Tried, the device saved, the pairing sealed, the file removed — in that order, each only
@@ -1092,7 +1086,7 @@ final class AppCoordinator: ObservableObject {
         }
         let saved: DeviceProfile
         switch kept {
-        case .failure(let why): return .failure(.init("\(why)", made: true))
+        case .failure(let why): return .failure(.init("\(why)"))
         case .success(let s): saved = s
         }
         // The connection takes its time, and is made off that thread.
@@ -1113,25 +1107,41 @@ final class AppCoordinator: ObservableObject {
     /// Pairings another Mac introduces (`roamrun pair control --with`): made here, kept as one brought in is.
     nonisolated let introductions = ControlIntroductions()
 
-    /// Whether this Mac holds a pairing for the saved device a candidate is.
+    /// Whether a saved device is the one a candidate is, as far as can be told before it pairs:
+    /// by where it is, what it announces, or its Tailscale name. (Its UDID is told by the pairing.)
+    private func like(_ p: DeviceProfile, _ device: DeviceProfile) -> Bool {
+        p.providerIP == device.providerIP || p.instanceName == device.instanceName
+            || (!device.providerHostName.isEmpty && p.providerID == device.providerID && p.providerHostName == device.providerHostName)
+    }
+
+    /// Whether this Mac holds a pairing for the saved device a candidate is — one the device may
+    /// still take. One it is known to refuse (removed there) is no reason not to pair again:
+    /// nothing that works would be lost, and on a Mac nobody sits at there is no other way back.
     private func holdsPairing(like device: DeviceProfile) -> Bool {
         profiles.contains { p in
-            (p.providerIP == device.providerIP || p.instanceName == device.instanceName) && controlUDID(p).map { deviceControl.state(of: p.id, udid: $0).paired } == true
+            like(p, device) && controlUDID(p).map { udid in
+                let state = deviceControl.state(of: p.id, udid: udid)
+                return state.paired && !state.refused
+            } == true
         }
     }
 
-    /// A pairing the app made for a device another Mac introduced: kept as one brought in is,
-    /// but never in the place of one this Mac holds.
+    /// A pairing the app made for a device another Mac introduced: kept as one brought in is.
+    /// Also in the place of a pairing this Mac held for it, when it turns out to be that device
+    /// only now: having paired again it knows no earlier pairing of this Mac's, and refusing
+    /// this one would leave it with none this Mac holds.
     nonisolated private func keepIntroduced(_ device: DeviceProfile, _ paired: DevicePairing.Paired, wanted: @Sendable () -> Bool) -> Result<ControlIntroductions.Kept, ControlIntroductions.NotKept> {
         guard !paired.udid.isEmpty, DeviceControlWire.plausible(udid: paired.udid) else {
             return .failure(.init(.notKept, "\(paired.name) paired without saying which device it is. Nothing was kept; the pairing just made can be removed on it, in Settings."))
         }
         importing.lock()
         defer { importing.unlock() }
-        switch takeIn(device, udid: paired.udid, pairing: paired.pairing, as: nil, replacing: false, wanted: wanted) {
+        // A name of its own where the one it comes with is taken here: found out now, not after it paired.
+        let name = DispatchQueue.main.sync { MainActor.assumeIsolated { profiles.nameProblem(device.displayName) == nil ? nil : uniqueName(device.displayName) } }
+        switch takeIn(device, udid: paired.udid, pairing: paired.pairing, as: name, wanted: wanted) {
         case .success(let taken): return .success(.init(name: taken.saved.displayName, on: taken.on))
         case .failure(let why):
-            let how: PairWire.Refusal = why.exists ? .exists : why.why == DeviceControlHub.nobodyWaits ? .cancelled : .notKept
+            let how: PairWire.Refusal = why.why == DeviceControlHub.nobodyWaits ? .cancelled : .notKept
             return .failure(.init(how, why.why + (how == .cancelled ? "" : " The pairing just made can be removed on the device, in Settings › Privacy & Security › Developer Mode.")))
         }
     }
@@ -1152,7 +1162,7 @@ final class AppCoordinator: ObservableObject {
             return .failure("\(path) isn't a pairing made by `roamrun key create`")
         }
         let taken: TakenIn
-        switch takeIn(shared.device, udid: udid, pairing: Data(shared.pairing.utf8), as: name, replacing: true, wanted: wanted) {
+        switch takeIn(shared.device, udid: udid, pairing: Data(shared.pairing.utf8), as: name, wanted: wanted) {
         case .failure(let why): return .failure(why.why)
         case .success(let t): taken = t
         }

@@ -276,7 +276,11 @@ yourself, and never ask for or pass on its code**: it would be in your output.
 device is paired here ("and switched on": `roamrun look <name>` works; "switched
 off": the user switches it on in the app, nothing is to be paired again). Exit
 1: it says what happened — "already holds a pairing" (the user removes it in the
-app first), "went away", "didn't pair in time": say which, don't loop. An end
+app first), "the pairing wasn't completed" (a wrong code: both commands again),
+"went away", "didn't pair in time", "no device named …" (`--peer <Tailscale
+name>` when the device has another name on this Mac's tailnet): say which, don't
+loop. "…that goes on" or "isn't known": what was being kept may yet be — ask
+with `--attempt`, don't start again before that. An end
 that didn't reach the other Mac is asked about here with
 `roamrun pair control --attempt <id>` (the id both commands print) or `--last`.
 

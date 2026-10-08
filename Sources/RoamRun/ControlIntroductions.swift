@@ -35,6 +35,8 @@ final class ControlIntroductions: @unchecked Sendable {
         var asked = Date()
         let began = Date()
         var cancelled = false
+        /// Its turn is given back: once, when it ends or has taken too long over keeping.
+        var released = false
         /// What to tell whoever runs the command here: the device's name, or why not.
         var said: String?
     }
@@ -45,7 +47,9 @@ final class ControlIntroductions: @unchecked Sendable {
 
     var listen: @Sendable (_ ip: String, _ interface: String, _ only: String) throws -> Listening = { _, _, _ in throw DeviceSession.Failure.message("stopping") }
     var ready: @Sendable () throws -> Void = {}
-    var busy: @Sendable () -> Bool = { false }
+    /// The one turn at pairing this Mac has, shared with a pairing made on its own screen.
+    var claim: @Sendable (UUID) -> Bool = { _ in true }
+    var release: @Sendable (UUID) -> Void = { _ in }
     /// Whether this Mac holds a pairing for the device already.
     var held: @Sendable (DeviceProfile) -> Bool = { _ in false }
     var keep: @Sendable (DeviceProfile, DevicePairing.Paired, _ wanted: @Sendable () -> Bool) -> Result<Kept, NotKept> = { _, _, _ in .failure(.init(.failed, "stopping")) }
@@ -76,20 +80,23 @@ final class ControlIntroductions: @unchecked Sendable {
               device.serviceType == Introduction.deviceService, ["local", "local."].contains(device.domain) else {
             return refused(.failed, "that isn't a device to be introduced to")
         }
-        guard !busy(), !lock.withLock({ attempts.values.contains { $0.state == .waiting || $0.state == .checking } }) else {
-            return refused(.failed, "another pairing is under way on this Mac")
+        // The turn is had before anything is opened: two that begin at once don't both listen.
+        guard claim(id) else { return refused(.failed, "another pairing is under way on this Mac") }
+        func refusing(_ how: PairWire.Refusal, _ why: String) -> DeviceControlWire.Response {
+            release(id)
+            return refused(how, why)
         }
         if held(device) {
-            return refused(.exists, "this Mac already holds a pairing for that device: remove it first (the RoamRun app, on the device's page), then pair again")
+            return refusing(.exists, "this Mac already holds a pairing for that device: remove it first (the RoamRun app, on the device's page), then pair again")
         }
         // Before the device is asked anything: a Keychain that then refused would leave it paired with nothing kept here.
-        do { try ready() } catch { return refused(.failed, "\(error)") }
+        do { try ready() } catch { return refusing(.failed, "\(error)") }
         let listening: Listening
-        do { listening = try listen(ip, interface, only) } catch { return refused(.failed, "couldn't listen on \(ip) (\(interface)): \(error)") }
+        do { listening = try listen(ip, interface, only) } catch { return refusing(.failed, "couldn't listen on \(ip) (\(interface)): \(error)") }
         let offer = Introduction.line(Introduction.Offer(port: listening.port, txt: listening.txt))
         guard case .success = Introduction.offer(from: offer) else {
             listening.listener.cancel()
-            return refused(.failed, "this Mac's own offer doesn't read as one")
+            return refusing(.failed, "this Mac's own offer doesn't read as one")
         }
         lock.withLock {
             attempts[id] = Attempt(offer: offer, listener: listening.listener)
@@ -110,6 +117,7 @@ final class ControlIntroductions: @unchecked Sendable {
                 attempts[id]?.code = nil
                 attempts[id]?.listener = nil
             }
+            giveBack(id)
         }
         let cancelled: @Sendable () -> Bool = { [self] in lock.withLock { attempts[id]?.cancelled != false } }
         do {
@@ -129,21 +137,35 @@ final class ControlIntroductions: @unchecked Sendable {
             case .failure(let not): end(.failed(not.how), not.why)
             }
         } catch {
-            end(.failed(cancelled() ? .cancelled : .failed), cancelled() ? nil : "\(error)")
+            // The listener's own end: no device came to an end with it, or one did and the pairing wasn't made.
+            end(.failed(cancelled() ? .cancelled : .notPaired), cancelled() ? nil : "\(error)")
         }
     }
 
+    private func giveBack(_ id: UUID) {
+        let first = lock.withLock { () -> Bool in
+            guard attempts[id]?.released == false else { return false }
+            attempts[id]?.released = true
+            return true
+        }
+        if first { release(id) }
+    }
+
     /// The command that began it is the only one that can stop it by asking: gone without a
-    /// word, it is stopped here. Not once the device has paired: that is seen through.
+    /// word, it is stopped here. Not once the device has paired: that is seen through — but what
+    /// takes too long over it (a Keychain that waits to be answered) gives its turn back, so
+    /// another pairing can begin; it is still said as it ends, when it does.
     private func watch(_ id: UUID) {
         while true {
             Thread.sleep(forTimeInterval: tick)
-            let over = lock.withLock { () -> Bool? in
-                guard let a = attempts[id], a.state == .waiting else { return nil }
-                return Date().timeIntervalSince(a.asked) > quiet || Date().timeIntervalSince(a.began) > longest
+            let (waiting, late) = lock.withLock { () -> (Bool?, Bool) in
+                guard let a = attempts[id], !a.released else { return (nil, false) }
+                let late = Date().timeIntervalSince(a.began) > longest
+                return (a.state == .waiting ? Date().timeIntervalSince(a.asked) > quiet || late : false, a.state == .checking && late)
             }
-            guard let over else { return }
-            if over { _ = cancel(id); return }
+            guard let waiting else { return }
+            if waiting { _ = cancel(id); return }
+            if late { giveBack(id); return }
         }
     }
 

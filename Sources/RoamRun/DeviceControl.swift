@@ -519,8 +519,16 @@ final class DeviceControlHub: @unchecked Sendable {
     /// knows the saved devices.
     var onImport: (@Sendable (String, String?, _ wanted: @Sendable () -> Bool) -> DeviceControlWire.Response)?
     var onIntroduction: (@Sendable (DeviceControlWire.Request) -> DeviceControlWire.Response)?
-    /// A pairing is being made on this Mac's own screen.
-    var isPairing: Bool { lock.withLock { pairingUnderWay != nil } }
+    /// One pairing at a time, however it was begun: two under this Mac's one identity would each
+    /// undo the other on the device. A pairing another Mac introduces takes the same turn Set Up does.
+    func claimPairing(_ attempt: UUID) -> Bool {
+        lock.withLock {
+            guard pairingUnderWay == nil else { return false }
+            pairingUnderWay = attempt
+            return true
+        }
+    }
+    func releasePairing(_ attempt: UUID) { lock.withLock { if pairingUnderWay == attempt { pairingUnderWay = nil } } }
     /// The key pairings are sealed with is at hand, or why it isn't: asked before a device is.
     func keyReady() throws { _ = try key(true) }
     /// Whether commands and agents may use a pairing, named by its mark (a session's `Held.mark`):

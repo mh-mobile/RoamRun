@@ -190,7 +190,8 @@ bounded.
     come, nine more for the device; twelve at most whatever the command does, and
     not past fifteen seconds without the command asking how it stands (a command
     killed leaves no listener). The command itself listens as `pair xcode --with`
-    does, on port 41830.
+    does, on port 41830. One pairing is made at a time on a Mac, however begun: an
+    introduction takes the turn Set Up takes, before anything listens.
   - The other Mac is held to being the one named exactly as for `pair xcode --with`:
     the machine, by Tailscale's lasting id — not the program or the person on it.
   - **The code is shown on the Mac that introduces, and comes from this one.** It
@@ -200,14 +201,21 @@ bounded.
     screen — which keeps it out of an agent's output here, and no more than that:
     a program running as you on this Mac can ask the app what the command asks.
     Run `pair introduce` yourself: its output has the code.
+  - It doesn't begin for a device this Mac holds a pairing for (one the device is
+    known to refuse, having removed it, doesn't count) — as far as it can
+    tell before the device pairs: by its address, what it announces, or its
+    Tailscale name. The UDID is told only by the pairing. A device that turns out
+    then to be one this Mac held a pairing for has, by pairing again, dropped that
+    one: the new pairing is kept in its place, as Set Up does, rather than leave
+    the device with none this Mac holds.
   - What pairs is kept only if it opens a connection to the device at its address
-    on this Mac's own tailnet, and never in the place of a pairing this Mac already
-    holds (it says so before the device is asked anything, and again before it
-    saves). Kept, it is switched on, as one set up here is; when the Keychain
-    doesn't keep the switch it stays off and says so, and the pairing stays.
+    on this Mac's own tailnet. Kept, it is switched on, as one set up here is; when
+    the Keychain doesn't keep the switch it stays off and says so, and the pairing stays.
   - A stop that comes while what paired is being kept doesn't undo it: the device
     would be left knowing a pairing nothing holds. Stopped before, nothing is kept
-    here — the device may list the pairing all the same: remove it there.
+    here — the device may list the pairing all the same: remove it there. Keeping
+    isn't cut short either when it takes long (a Keychain that waits to be
+    answered): after the twelve minutes it only stops holding up another pairing.
   - The device, its pairing and the switch are three things in three places, written
     one after the other. An app that dies between them can leave a device saved
     without a pairing (as any device added and not set up), or a pairing switched
