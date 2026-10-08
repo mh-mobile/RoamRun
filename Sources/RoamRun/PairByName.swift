@@ -30,7 +30,7 @@ enum PairWire {
         case anotherDevice = "another-device"
         /// Paired, and nothing of it could be kept here: the device's own record of it stays.
         case notKept = "not-kept"
-        /// The device came and the pairing wasn't made: a wrong code, dismissed, or not in time.
+        /// The device came and the pairing wasn't made: a wrong code, refused, or not in time.
         case notPaired = "not-paired"
         case noApp = "no-app"
         case failed
@@ -487,7 +487,7 @@ enum PairByName {
         var start: @Sendable (_ device: String) async -> Started
         var status: @Sendable (_ attempt: String) async -> Status
         var cancel: @Sendable (_ attempt: String) async -> Void
-        /// A code typed wrong, or the pairing dismissed on the device, isn't the end here: the
+        /// A code typed wrong, or the pairing refused by the device, isn't the end here: the
         /// other Mac's command is run again and this one has waited. So many times at most.
         var tries = 5
         var stopped: @Sendable () -> Bool = { false }

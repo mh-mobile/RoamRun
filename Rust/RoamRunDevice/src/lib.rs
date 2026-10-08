@@ -1306,6 +1306,9 @@ fn after_code(e: &idevice::IdeviceError) -> NotPaired {
             NotPaired { incomplete: true, why: "the code entered on the device wasn't the one shown".into() },
         idevice::IdeviceError::RemotePairing(E::PairingRejected(_)) =>
             NotPaired { incomplete: true, why: "the pairing was refused on the device".into() },
+        // As the responder, idevice reports the device's error answer this way (pinned in Cargo.toml).
+        idevice::IdeviceError::UnexpectedResponse(m) if m.starts_with("device returned pairing error") =>
+            NotPaired { incomplete: true, why: "the pairing was refused on the device".into() },
         other => NotPaired {
             incomplete: false,
             why: format!("the pairing didn't complete: the connection ended after the code was shown — its screen closed on the device, or the network dropped ({other:?})"),
@@ -1415,6 +1418,8 @@ mod tests {
         let wrong = after_code(&idevice::IdeviceError::RemotePairing(E::SrpAuthFailed));
         assert!(wrong.incomplete && !wrong.why.contains("Srp"));
         assert!(after_code(&idevice::IdeviceError::RemotePairing(E::PairingRejected("no".into()))).incomplete);
+        assert!(after_code(&idevice::IdeviceError::UnexpectedResponse("device returned pairing error: [2]".into())).incomplete);
+        assert!(!after_code(&idevice::IdeviceError::UnexpectedResponse("pair-setup M3 missing public key or proof".into())).incomplete);
         // A connection that broke after the code was shown: what the device made of it isn't known.
         let broke = after_code(&io(std::io::ErrorKind::ConnectionReset));
         assert!(!broke.incomplete && broke.why.starts_with("the pairing didn't complete"));
