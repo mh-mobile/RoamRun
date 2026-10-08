@@ -453,7 +453,8 @@ enum PairByName {
     /// The Mac that offers a pairing of its own, for device control. Its app makes the pairing
     /// and keeps it; this only carries, between that app and the one Mac named.
     struct FarControl: Sendable {
-        enum Started: Equatable, Sendable { case offer(String), refused(PairWire.Refusal) }
+        /// `attempt`: which of the app's attempts this offer belongs to; each try is one of its own.
+        enum Started: Equatable, Sendable { case offer(String, attempt: String), refused(PairWire.Refusal) }
         enum Status: Equatable, Sendable {
             case waiting
             /// The code to pass on; it goes on being said until the pairing is made or given up.
@@ -464,7 +465,11 @@ enum PairByName {
             /// The app doesn't answer, or doesn't know the attempt.
             case unknown
         }
-        enum Event: Equatable, Sendable { case refused(from: String), unsure(from: String), connected, offerSent, codeSent }
+        enum Event: Equatable, Sendable {
+            case refused(from: String), unsure(from: String), connected, offerSent(attempt: String), codeSent
+            /// The device came and didn't pair: the other Mac is waited for again.
+            case again
+        }
         enum End: Equatable, Sendable {
             case done(on: Bool)
             case failed(PairWire.Refusal)
@@ -478,11 +483,13 @@ enum PairByName {
         }
 
         var peer: Peer
-        var attempt: String
         var owner: @Sendable (String) -> String?
         var start: @Sendable (_ device: String) async -> Started
-        var status: @Sendable () async -> Status
-        var cancel: @Sendable () async -> Void
+        var status: @Sendable (_ attempt: String) async -> Status
+        var cancel: @Sendable (_ attempt: String) async -> Void
+        /// A code typed wrong, or the pairing dismissed on the device, isn't the end here: the
+        /// other Mac's command is run again and this one has waited. So many times at most.
+        var tries = 5
         var stopped: @Sendable () -> Bool = { false }
         var say: @Sendable (Event) -> Void = { _ in }
         var connectWindow: TimeInterval = 600
@@ -492,8 +499,9 @@ enum PairByName {
         var pause: TimeInterval = 2
 
         func run(_ listener: PairLink.Listener) async -> End {
-            let until = Date().addingTimeInterval(connectWindow)
-            while true {
+            var until = Date().addingTimeInterval(connectWindow)
+            var tried = 0
+            retries: while true {
                 if stopped() { return .stopped }
                 if Date() >= until { return .noOne }
                 guard let (link, from) = listener.accept(within: 0.25) else { continue }
@@ -504,36 +512,44 @@ enum PairByName {
                 say(.connected)
                 guard link.read(within: lineWait, stop: stopped).message == .wantOffer, link.send(.wantDevice),
                       case .device(let device) = link.read(within: lineWait, stop: stopped).message else { continue }
-                // Begun once: whatever happens to this connection, another isn't waited for.
+                // Begun: whatever happens to this connection from here, it isn't taken up again.
+                let attempt: String
                 switch await start(device) {
                 case .refused(let why):
                     link.send(.result(.failed(why)))
                     return .failed(why)
-                case .offer(let offer):
-                    guard link.send(.offer(offer)), link.send(.attempt(attempt)) else { return await given(up: ()) }
-                    say(.offerSent)
+                case .offer(let offer, let id):
+                    attempt = id
+                    guard link.send(.offer(offer)), link.send(.attempt(attempt)) else { return await given(up: attempt) }
+                    say(.offerSent(attempt: attempt))
                 }
                 let end = Date().addingTimeInterval(resultWindow)
                 var passed = false, silent = 0
                 while Date() < end {
                     if stopped() {
                         link.send(.ended(.stopped))
-                        return await given(up: (), as: .stopped)
+                        return await given(up: attempt, as: .stopped)
                     }
-                    switch await status() {
+                    switch await status(attempt) {
                     case .done(let on):
                         link.send(.result(.done(on: on)))
                         return .done(on: on)
                     case .failed(let why):
                         link.send(.result(.failed(why)))
-                        return .failed(why)
+                        tried += 1
+                        // The device came and didn't pair, and nothing was kept: the other Mac's
+                        // command ends on that and is run again; this one goes on waiting for it.
+                        guard why == .notPaired, tried < tries else { return .failed(why) }
+                        say(.again)
+                        until = Date().addingTimeInterval(connectWindow)
+                        continue retries
                     // The app gone: not waited out. What it kept, if it had begun to, isn't known here.
                     case .unknown:
                         silent += 1
                         if silent >= 3 { return .lost(.unknown) }
                     case .code(let digits) where !passed:
                         // A code that didn't get to where it is shown isn't one to wait on.
-                        guard PairWire.isCode(digits), link.send(.code(digits)) else { return await given(up: ()) }
+                        guard PairWire.isCode(digits), link.send(.code(digits)) else { return await given(up: attempt) }
                         passed = true
                         say(.codeSent)
                     default: silent = 0
@@ -541,20 +557,20 @@ enum PairByName {
                     switch link.read(within: pause, stop: stopped) {
                     case .timeout: continue
                     case .line(let text):
-                        if case .ended(let why) = PairWire.message(from: text) { return await given(up: (), as: .ended(why)) }
-                        return await given(up: ())
-                    case .closed, .tooLong: return await given(up: ())
+                        if case .ended(let why) = PairWire.message(from: text) { return await given(up: attempt, as: .ended(why)) }
+                        return await given(up: attempt)
+                    case .closed, .tooLong: return await given(up: attempt)
                     }
                 }
-                return await given(up: (), as: .noResult)
+                return await given(up: attempt, as: .noResult)
             }
         }
 
         /// The app is told to stop, and asked once more. What it had kept by then stays kept, and
         /// what it is keeping it goes on keeping: neither is said as nothing.
-        private func given(up: Void, as end: End? = nil) async -> End {
-            await cancel()
-            switch await status() {
+        private func given(up attempt: String, as end: End? = nil) async -> End {
+            await cancel(attempt)
+            switch await status(attempt) {
             case .done(let on): return .done(on: on)
             case .checking: return .lost(.checking)
             case .unknown: return .lost(.unknown)

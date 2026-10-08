@@ -7464,13 +7464,15 @@ extension TimingSensitive {
 }
 }
 
-private func farControl(start: @escaping @Sendable (String) async -> PairByName.FarControl.Started = { _ in .offer("offer-1") },
+private let anAttempt = "6BF40D22-D414-41D0-BE80-7567AE75B2BC"
+
+private func farControl(start: @escaping @Sendable (String) async -> PairByName.FarControl.Started = { _ in .offer("offer-1", attempt: anAttempt) },
                         status: @escaping @Sendable () async -> PairByName.FarControl.Status,
                         cancelled: Counted<Int> = .init(), events: Counted<PairByName.FarControl.Event> = .init(),
                         owner: @escaping @Sendable (String) -> String? = { _ in "home" },
-                        resultWindow: TimeInterval = 5) -> PairByName.FarControl {
-    PairByName.FarControl(peer: .init(ip: "127.0.0.1", id: "home"), attempt: "6BF40D22-D414-41D0-BE80-7567AE75B2BC", owner: owner,
-                          start: start, status: status, cancel: { cancelled.add(1) }, say: { events.add($0) },
+                        resultWindow: TimeInterval = 5, tries: Int = 5) -> PairByName.FarControl {
+    PairByName.FarControl(peer: .init(ip: "127.0.0.1", id: "home"), owner: owner,
+                          start: start, status: { _ in await status() }, cancel: { _ in cancelled.add(1) }, tries: tries, say: { events.add($0) },
                           connectWindow: 5, resultWindow: resultWindow, lineWait: 1, pause: 0.05)
 }
 
@@ -7489,7 +7491,7 @@ extension TimingSensitive.DeviceControlIntroduced {
     @Test func theDeviceIsAskedForFirstAndTheCodeAndTheResultArePassedOn() async throws {
         let listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
         let given = Counted<String>(), asks = Counted<Int>(), cancelled = Counted<Int>(), events = Counted<PairByName.FarControl.Event>()
-        let far = farControl(start: { given.add($0); return .offer("offer-1") },
+        let far = farControl(start: { given.add($0); return .offer("offer-1", attempt: anAttempt) },
                              status: { asks.add(1); return [1: .waiting, 2: .code("246810"), 3: .code("246810"), 4: .checking][asks.all.count] ?? .done(on: true) },
                              cancelled: cancelled, events: events)
         let end = startedControl(far, listener)
@@ -7498,7 +7500,7 @@ extension TimingSensitive.DeviceControlIntroduced {
         #expect(link.read(within: 2).message == .code("246810"))
         #expect(link.read(within: 2).message == .result(.done(on: true)))    // the code went once, not each time it was said
         #expect(await end.value == .done(on: true))
-        #expect(cancelled.all.isEmpty && events.all == [.connected, .offerSent, .codeSent])
+        #expect(cancelled.all.isEmpty && events.all == [.connected, .offerSent(attempt: anAttempt), .codeSent])
     }
 
     @Test func aMacThatOffersForXcodeIsAskedAsBeforeAndOneWithoutADeviceToGiveAsksNothingMore() async throws {
@@ -7550,6 +7552,46 @@ extension TimingSensitive.DeviceControlIntroduced {
         guard case .control(_, _, let third) = await homeForControl(listener.port).fetch() else { Issue.record("no offer"); return }
         third.close()
         #expect(await end.value == .done(on: true))
+    }
+
+    /// A wrong code ends the introducing Mac's command, not this one: it waits for that Mac again,
+    /// with an attempt of its own each time, and gives up after so many.
+    @Test func aPairingThatWasNotMadeIsWaitedForAgainOnTheFarMac() async throws {
+        let listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        let begun = Counted<String>(), events = Counted<PairByName.FarControl.Event>()
+        let far = PairByName.FarControl(
+            peer: .init(ip: "127.0.0.1", id: "home"), owner: { _ in "home" },
+            start: { _ in
+                let id = UUID().uuidString
+                begun.add(id)
+                return .offer("offer-\(begun.all.count)", attempt: id)
+            },
+            status: { id in id == begun.all.first ? .failed(.notPaired) : .done(on: true) },
+            cancel: { _ in }, say: { events.add($0) }, connectWindow: 5, resultWindow: 5, lineWait: 1, pause: 0.05)
+        let end = startedControl(far, listener)
+        guard case .control(let first, let one, let link) = await homeForControl(listener.port).fetch() else { Issue.record("no offer"); return }
+        #expect(link.read(within: 2).message == .result(.failed(.notPaired)))
+        link.close()
+        guard case .control(let second, let two, let again) = await homeForControl(listener.port).fetch() else { Issue.record("not waited for again"); return }
+        #expect(first == "offer-1" && second == "offer-2" && one != two && begun.all == [one, two])
+        #expect(again.read(within: 2).message == .result(.done(on: true)))
+        #expect(await end.value == .done(on: true))
+        #expect(events.all.contains(.again))
+
+        // Not for ever, and not for what isn't the device's doing.
+        var other = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        var ended = startedControl(farControl(status: { .failed(.notPaired) }, tries: 2), other)
+        for _ in 1...2 {
+            guard case .control(_, _, let link) = await homeForControl(other.port).fetch() else { Issue.record("no offer"); return }
+            #expect(link.read(within: 2).message == .result(.failed(.notPaired)))
+            link.close()
+        }
+        #expect(await ended.value == .failed(.notPaired))
+        other = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        ended = startedControl(farControl(status: { .failed(.notKept) }), other)
+        guard case .control(_, _, let last) = await homeForControl(other.port).fetch() else { Issue.record("no offer"); return }
+        #expect(last.read(within: 2).message == .result(.failed(.notKept)))
+        #expect(await ended.value == .failed(.notKept))
     }
 
     @Test func aCodeThatIsNotOneOrCannotBeSentEndsTheAttempt() async throws {
