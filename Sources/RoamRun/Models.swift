@@ -41,6 +41,18 @@ struct MeshDevice: Identifiable, Hashable {
     }
 }
 
+extension Array where Element == MeshDevice {
+    /// The device Tailscale reaches directly at one of these addresses — which, on this Mac's
+    /// LAN, says which Tailscale device a host seen there is. nil for none, and for more than one.
+    func reached(at addresses: [String]) -> MeshDevice? {
+        let found = filter { device in
+            let parts = device.curAddr.split(separator: ":")
+            return parts.count == 2 && addresses.contains(String(parts[0]))
+        }
+        return found.count == 1 ? found[0] : nil
+    }
+}
+
 /// A saved pairing between a captured Bonjour identity and a mesh-VPN address.
 struct DeviceProfile: Identifiable, Codable, Equatable {
     var id = UUID()
