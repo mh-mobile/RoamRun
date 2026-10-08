@@ -35,7 +35,13 @@ jobs:
       - run: xcrun swift --version
       - name: Rust (the version Rust/RoamRunDevice/rust-toolchain.toml names; rustup fetches it)
         run: cd Rust/RoamRunDevice && cargo --version
-      - run: make test
+      - name: Tests (still running after ten minutes, the test process's stacks are printed)
+        timeout-minutes: 15
+        run: |
+          (sleep 600; for p in $(pgrep -f swiftpm-testing); do sample "$p" 2 -mayDie 2>/dev/null | head -300; done) &
+          rc=0; make test || rc=$?
+          kill %1 2>/dev/null || true
+          exit $rc
       - name: The licenses the app carries are those of the crates it is built from
         run: |
           make licenses

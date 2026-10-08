@@ -22,6 +22,11 @@ enum DeviceControlWire {
         /// For "tap" and "swipe": the look the points are of, when the caller keeps it (the MCP
         /// tools do; a command run by hand is of whatever was looked at last).
         var look: Int?
+        /// For "pair-start": this Mac's address on the tailnet, the interface it is on, and the
+        /// one address the device's connection will come from (the Mac that introduces it).
+        var address: String?
+        var interface: String?
+        var peer: String?
     }
 
     struct Response: Codable, Equatable {
@@ -47,6 +52,13 @@ enum DeviceControlWire {
         var listUnreadable: Bool?
         /// For "import": whether the file the pairing came in is gone (`error` may say more than that).
         var removed: Bool?
+        /// For "pair-start": this Mac's offer to pair. For "pair-status": where the attempt stands
+        /// (waiting, code, checking, done, failed, unknown), its code while one is shown, and
+        /// why it failed, as a word.
+        var offer: String?
+        var state: String?
+        var code: String?
+        var reason: String?
         static func failure(_ why: String) -> Response { Response(ok: false, error: why) }
     }
 
@@ -506,6 +518,19 @@ final class DeviceControlHub: @unchecked Sendable {
     /// A pairing made on another Mac is brought in (the file's path): the app's to do, which
     /// knows the saved devices.
     var onImport: (@Sendable (String, String?, _ wanted: @Sendable () -> Bool) -> DeviceControlWire.Response)?
+    var onIntroduction: (@Sendable (DeviceControlWire.Request) -> DeviceControlWire.Response)?
+    /// One pairing at a time, however it was begun: two under this Mac's one identity would each
+    /// undo the other on the device. A pairing another Mac introduces takes the same turn Set Up does.
+    func claimPairing(_ attempt: UUID) -> Bool {
+        lock.withLock {
+            guard pairingUnderWay == nil else { return false }
+            pairingUnderWay = attempt
+            return true
+        }
+    }
+    func releasePairing(_ attempt: UUID) { lock.withLock { if pairingUnderWay == attempt { pairingUnderWay = nil } } }
+    /// The key pairings are sealed with is at hand, or why it isn't: asked before a device is.
+    func keyReady() throws { _ = try key(true) }
     /// Whether commands and agents may use a pairing, named by its mark (a session's `Held.mark`):
     /// the device's switch in the app. Asked at every request, off the main thread.
     var allowed: @Sendable (String) -> Bool = { _ in true }
@@ -1179,6 +1204,9 @@ final class DeviceControlHub: @unchecked Sendable {
         let notSetUp = DeviceControlWire.Response.failure("device control isn't set up for this device: the user sets it up in the RoamRun app, on the device's page")
         if request.op == "import" {
             return onImport?(request.path ?? "", request.text, wanted) ?? .failure("this RoamRun can't take a pairing in")
+        }
+        if request.op.hasPrefix("pair-") {
+            return onIntroduction?(request) ?? .failure("this RoamRun can't be introduced to a device")
         }
         // How it stands is said at once, whatever runs on the device.
         if request.op == "state" {

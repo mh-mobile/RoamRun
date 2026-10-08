@@ -1183,6 +1183,8 @@ pub struct RRPairing {
     info: PairableHostInfo,
     file: Mutex<RpPairingFile>,
     cancelled: AtomicBool,
+    /// The one address connections are taken from; any, when none is given.
+    only: Option<std::net::IpAddr>,
 }
 
 /// A device that connects gets this long to ask for a code; one that stays silent is dropped
@@ -1196,13 +1198,39 @@ const TICK: Duration = Duration::from_millis(250);
 /// `name`, `model` and `host` are null or NUL-terminated strings; `advert` and `error` are null or writable.
 #[no_mangle]
 pub unsafe extern "C" fn rr_pairing_listen(name: *const c_char, model: *const c_char, host: *const c_char, advert: *mut *mut c_char, error: *mut *mut c_char) -> *mut RRPairing {
+    unsafe { rr_pairing_listen_on(name, model, host, -1, std::ptr::null(), advert, error) }
+}
+
+/// # Safety
+/// As rr_pairing_listen. `socket` is -1, or a listening TCP socket that becomes this
+/// function's whatever it returns; `only` is null or a NUL-terminated address.
+#[no_mangle]
+pub unsafe extern "C" fn rr_pairing_listen_on(name: *const c_char, model: *const c_char, host: *const c_char, socket: std::ffi::c_int, only: *const c_char, advert: *mut *mut c_char, error: *mut *mut c_char) -> *mut RRPairing {
+    use std::os::fd::FromRawFd;
     let arg = |p: *const c_char| (!p.is_null()).then(|| unsafe { CStr::from_ptr(p) }.to_str().ok()).flatten();
+    // Taken first: every way out from here closes it.
+    let given = (socket >= 0).then(|| unsafe { std::net::TcpListener::from_raw_fd(socket) });
+    let only = match arg(only).map(|a| a.parse::<std::net::IpAddr>()) {
+        None if only.is_null() => None,
+        Some(Ok(address)) => Some(address),
+        _ => {
+            unsafe { set_error(error, "the address to take connections from isn't one".into()) };
+            return std::ptr::null_mut();
+        }
+    };
     let listening = match (arg(name), arg(model), arg(host)) {
         (Some(name), Some(model), Some(host)) => tokio::runtime::Builder::new_multi_thread().worker_threads(1).thread_stack_size(STACK).enable_all().build()
             .map_err(|e| format!("no runtime: {e}"))
             .and_then(|runtime| {
-                // Both families: the device reaches this Mac by whichever address its name resolves to.
-                let listener = runtime.block_on(TcpListener::bind("[::]:0")).map_err(|e| format!("can't listen: {e}"))?;
+                let listener = match given {
+                    Some(given) => {
+                        given.set_nonblocking(true).map_err(|e| format!("can't listen: {e}"))?;
+                        let _in = runtime.enter();
+                        TcpListener::from_std(given).map_err(|e| format!("can't listen: {e}"))?
+                    }
+                    // Both families: the device reaches this Mac by whichever address its name resolves to.
+                    None => runtime.block_on(TcpListener::bind("[::]:0")).map_err(|e| format!("can't listen: {e}"))?,
+                };
                 let port = listener.local_addr().map_err(|e| format!("no port: {e}"))?.port();
                 // One identity per `host`, whatever it is named: pairing again replaces the
                 // device's record of it, and another Mac of the same name doesn't.
@@ -1212,7 +1240,7 @@ pub unsafe extern "C" fn rr_pairing_listen(name: *const c_char, model: *const c_
                 let txt = info.mdns_txt_records(file.identifier()).iter()
                     .map(|(k, v)| format!("{}:{}", quoted(k), quoted(v))).collect::<Vec<_>>().join(",");
                 let said = format!("{{\"port\":{port},\"identifier\":{},\"txt\":{{{txt}}}}}", quoted(file.identifier()));
-                Ok((RRPairing { runtime, listener, info, file: Mutex::new(file), cancelled: AtomicBool::new(false) }, said))
+                Ok((RRPairing { runtime, listener, info, file: Mutex::new(file), cancelled: AtomicBool::new(false), only }, said))
             }),
         _ => Err("bad arguments".into()),
     };
@@ -1243,12 +1271,49 @@ pub unsafe extern "C" fn rr_pairing_accept(
     let show = move |pin: &str| {
         if let Ok(pin) = CString::new(pin) { unsafe { code(pin.as_ptr(), context as *mut std::ffi::c_void) } }
     };
-    let result = with_room(|| pairing.runtime.block_on(accept_pairing(pairing, &show)));
+    let result = with_room(|| Ok(pairing.runtime.block_on(accept_pairing(pairing, &show)))).unwrap_or_else(|why| Err(why.into()));
     c_string(match result {
         Ok((peer, file)) => format!("{{\"ok\":true,\"udid\":{},\"name\":{},\"model\":{},\"pairing\":{}}}",
                             quoted(&peer.remotepairing_udid), quoted(&peer.name), quoted(&peer.model), quoted(&file)),
-        Err(why) => failure(&why),
+        // `incomplete`: the device's own doing, after which it can simply be tried again.
+        Err(not) if not.incomplete => format!("{{\"ok\":false,\"incomplete\":true,\"error\":{}}}", quoted(&not.why)),
+        Err(not) => failure(&not.why),
     })
+}
+
+/// Why no pairing came of it. `incomplete`: the device came, a code was shown, and the device
+/// didn't take it (a wrong code, a refusal, none entered in time) — nothing is in doubt, and it
+/// can be tried again. Anything else (a connection that broke, a pairing that can't be used)
+/// isn't known to be that.
+struct NotPaired {
+    incomplete: bool,
+    why: String,
+}
+
+impl From<String> for NotPaired {
+    fn from(why: String) -> Self { NotPaired { incomplete: false, why } }
+}
+
+impl From<&str> for NotPaired {
+    fn from(why: &str) -> Self { NotPaired { incomplete: false, why: why.into() } }
+}
+
+/// What a failure after the code was shown is: the device's answer to the code, or not.
+fn after_code(e: &idevice::IdeviceError) -> NotPaired {
+    use idevice::remote_pairing::errors::RemotePairingError as E;
+    match e {
+        idevice::IdeviceError::RemotePairing(E::SrpAuthFailed) =>
+            NotPaired { incomplete: true, why: "the code entered on the device wasn't the one shown".into() },
+        idevice::IdeviceError::RemotePairing(E::PairingRejected(_)) =>
+            NotPaired { incomplete: true, why: "the pairing was refused on the device".into() },
+        // As the responder, idevice reports the device's error answer this way (pinned in Cargo.toml).
+        idevice::IdeviceError::UnexpectedResponse(m) if m.starts_with("device returned pairing error") =>
+            NotPaired { incomplete: true, why: "the pairing was refused on the device".into() },
+        other => NotPaired {
+            incomplete: false,
+            why: format!("the pairing didn't complete: the connection ended after the code was shown — its screen closed on the device, or the network dropped ({other:?})"),
+        },
+    }
 }
 
 /// Makes a running rr_pairing_accept return, and the next one return at once.
@@ -1283,13 +1348,21 @@ fn own_hardware(identifier: &str) -> (String, [u8; 6]) {
     (serial, mac)
 }
 
-async fn accept_pairing(pairing: &RRPairing, show: &(impl Fn(&str) + Sync)) -> Result<(idevice::remote_pairing::PeerDevice, String), String> {
+/// Whether a connection from `from` is one to answer. Written as IPv4 or as IPv4 in IPv6's
+/// form, an address is one address.
+fn taken(from: std::net::IpAddr, only: Option<std::net::IpAddr>) -> bool {
+    only.is_none_or(|only| from.to_canonical() == only.to_canonical())
+}
+
+async fn accept_pairing(pairing: &RRPairing, show: &(impl Fn(&str) + Sync)) -> Result<(idevice::remote_pairing::PeerDevice, String), NotPaired> {
     let cancelled = || pairing.cancelled.load(Ordering::Relaxed);
     loop {
         let stream = loop {
             if cancelled() { return Err("cancelled".into()); }
             if let Ok(accepted) = tokio::time::timeout(TICK, pairing.listener.accept()).await {
-                break accepted.map_err(|e| format!("can't accept: {e}"))?.0;
+                let (stream, from) = accepted.map_err(|e| format!("can't accept: {e}"))?;
+                if !taken(from.ip(), pairing.only) { continue; }
+                break stream;
             }
         };
         let mut file = pairing.file.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -1311,7 +1384,7 @@ async fn accept_pairing(pairing: &RRPairing, show: &(impl Fn(&str) + Sync)) -> R
                         if cancelled() { return Err("cancelled".into()); }
                         match when_shown() {
                             None if connected.elapsed() >= BEFORE_CODE => break None,
-                            Some(at) if at.elapsed() >= ENTER_CODE => return Err("the code wasn't entered in time".into()),
+                            Some(at) if at.elapsed() >= ENTER_CODE => return Err(NotPaired { incomplete: true, why: "the code wasn't entered in time".into() }),
                             _ => {}
                         }
                     }
@@ -1326,7 +1399,7 @@ async fn accept_pairing(pairing: &RRPairing, show: &(impl Fn(&str) + Sync)) -> R
                 return Ok((peer, file));
             }
             // After the code was shown, a failure is the pairing's (a wrong code, a change of mind).
-            Some(Err(e)) if when_shown().is_some() => return Err(format!("the pairing didn't complete: {e:?}")),
+            Some(Err(e)) if when_shown().is_some() => return Err(after_code(&e)),
             // Before it, it was no device that wanted to pair: the next one is waited for.
             _ => continue,
         }
@@ -1338,6 +1411,31 @@ mod tests {
     use super::*;
 
     fn io(kind: std::io::ErrorKind) -> idevice::IdeviceError { idevice::IdeviceError::Socket(std::io::Error::from(kind)) }
+
+    #[test]
+    fn only_the_devices_answer_to_the_code_is_a_pairing_to_try_again() {
+        use idevice::remote_pairing::errors::RemotePairingError as E;
+        let wrong = after_code(&idevice::IdeviceError::RemotePairing(E::SrpAuthFailed));
+        assert!(wrong.incomplete && !wrong.why.contains("Srp"));
+        assert!(after_code(&idevice::IdeviceError::RemotePairing(E::PairingRejected("no".into()))).incomplete);
+        assert!(after_code(&idevice::IdeviceError::UnexpectedResponse("device returned pairing error: [2]".into())).incomplete);
+        assert!(!after_code(&idevice::IdeviceError::UnexpectedResponse("pair-setup M3 missing public key or proof".into())).incomplete);
+        // A connection that broke after the code was shown: what the device made of it isn't known.
+        let broke = after_code(&io(std::io::ErrorKind::ConnectionReset));
+        assert!(!broke.incomplete && broke.why.starts_with("the pairing didn't complete"));
+        assert!(!NotPaired::from("cancelled").incomplete && !NotPaired::from(String::from("can't accept")).incomplete);
+    }
+
+    #[test]
+    fn a_pairing_for_one_peer_takes_that_address_however_it_is_written() {
+        let ip = |text: &str| text.parse::<std::net::IpAddr>().unwrap();
+        assert!(taken(ip("192.168.0.9"), None));
+        assert!(taken(ip("100.64.0.1"), Some(ip("100.64.0.1"))));
+        assert!(taken(ip("::ffff:100.64.0.1"), Some(ip("100.64.0.1"))));
+        assert!(!taken(ip("100.64.0.2"), Some(ip("100.64.0.1"))));
+        assert!(!taken(ip("192.168.0.9"), Some(ip("100.64.0.1"))));
+        assert!(!taken(ip("::1"), Some(ip("100.64.0.1"))));
+    }
 
     #[test]
     fn an_input_is_sent_again_only_when_none_of_it_went() {

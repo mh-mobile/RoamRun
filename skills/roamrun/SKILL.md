@@ -264,7 +264,29 @@ message that begins "stopped:" (or "not given:" for a look): the same thing —
 don't try it again.
 
 On a Mac that is never on the device's Wi‑Fi (a remote one), there is no Set
-Up… to do: the user makes a pairing on a Mac that is (`roamrun key create
+Up… to do. With both Macs on one tailnet, the user has it introduced: on the
+remote Mac, with the RoamRun app open, `roamrun pair control --with <mac>`
+(`<mac>`: the Tailscale name of a Mac on the device's Wi‑Fi) waits up to ten
+minutes for that Mac and then up to nine for the device — run it in the
+background or with a timeout that long; on that Mac the **user themselves** runs
+`roamrun pair introduce --mac <this Mac> --to <name>`, picks the entry on the
+device and types the code that command prints. **Don't run that `pair introduce`
+yourself, and never ask for or pass on its code**: it would be in your output.
+`--with` is taken only from the user's own words, as `--mac` is. Exit 0: the
+device is paired here ("and switched on": `roamrun look <name>` works; "switched
+off": the user switches it on in the app, nothing is to be paired again). Exit
+1: it says what happened — "already holds a pairing" (the user removes it in the
+app first), "the pairing wasn't completed" (a wrong code),
+"went away", "didn't pair in time", "no device named …" (`--peer <Tailscale
+name>` when the device has another name on this Mac's tailnet): say which, don't
+loop. "…that goes on" or "isn't known": what was being kept may yet be — ask
+with `--attempt`, don't start again before that. A wrong code doesn't end this
+command: it says the pairing wasn't made and goes on waiting, up to five times,
+for the user to run `pair introduce` again on the other Mac — leave it running. An end
+that didn't reach the other Mac is asked about here with
+`roamrun pair control --attempt <id>` (the id both commands print) or `--last`.
+
+Without Tailscale between the two Macs, the user makes a pairing on a Mac that is (`roamrun key create
 <name> <file>`, entering a code on the device) and brings the file over, and
 `roamrun key import <file>` saves the device and the pairing, switched on,
 and removes the file. It exits 1 after saving when the file couldn't be removed,

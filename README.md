@@ -71,6 +71,31 @@ sequenceDiagram
 - **The tunnel port changes every time** (it goes up by one). `remotepairingd` connects about 5 ms after announcing it, so each time RoamRun sees a port in the log (`log stream`) it opens relays for the next 16 ports in advance.
 - **The very first tunnel after a bridge starts** can't be caught in time. RoamRun runs `devicectl` in the background at startup to use up that first tunnel, so your first Run already succeeds.
 
+### The same thing the other way round: a Mac that is never near the device
+
+A bridge needs a Mac that is paired with the device, and pairing happens on one Wi‑Fi: the device finds the Mac there by Bonjour and connects to it. A Mac elsewhere is never found. So a Mac that *is* on the device's Wi‑Fi stands in for it — the bridge's trick, turned around: **the device is told the far Mac is on its Wi‑Fi, and the traffic actually goes over Tailscale.**
+
+```mermaid
+flowchart RL
+  subgraph home["Mac on the device's Wi-Fi"]
+    fake["Stand-in Bonjour record<br/>(the far Mac's offer, pointing at this Mac)"]
+    relay["RoamRun relay<br/>(takes the device's address only)"]
+  end
+  subgraph far["Far Mac"]
+    host["Xcode, or the RoamRun app<br/>(waiting to pair; the key is made and stays here)"]
+  end
+  iphone["iPhone / iPad"]
+  iphone -. "① finds “Pair with far-mac”" .-> fake
+  iphone -- "② connects over Wi-Fi" --> relay
+  relay == "③ over Tailscale" ==> host
+```
+
+1. The far Mac offers to pair (Xcode's Device Hub › Pair Nearby Device, or the RoamRun app for device control) and hands its offer to the Mac on the device's Wi‑Fi — over Tailscale, each naming the other, or as a line carried by hand.
+2. That Mac announces the offer on its Wi‑Fi with itself as the destination, for five minutes at most, and relays the device's one connection to the far Mac.
+3. The pairing is made end to end between the device and the far Mac, with the code typed on the device. No key passes through the Mac in between, and none is carried anywhere. For Xcode the code is the one Device Hub shows on the far Mac; for device control the far Mac's app makes it and it is shown on the Mac that introduces.
+
+From then on the far Mac bridges to the device like any other — the first diagram, with the far Mac as "Mac at home". The commands, what each side checks, and what it doesn't: [A Mac the device was never near](#a-mac-the-device-was-never-near) and, for device control, [Seeing and operating the device](#seeing-and-operating-the-device).
+
 ## Requirements
 
 - macOS 13+ on Apple Silicon (Intel Macs aren't supported), with an **administrator account** (RoamRun reads remotepairingd's log with `log stream`, which macOS only allows admins)
@@ -220,7 +245,17 @@ roamrun elements iPhone                   # what accessibility says is on the sc
 
 Each `look` serves one action: look, act, look again. The image is the screen as the device holds it: an app in landscape shows turned on its side, and its points are still the image's. For an agent, the same are MCP tools: `claude mcp add roamrun -- roamrun mcp`, or the like for another agent; the skill (`roamrun init`) tells it how to use them.
 
-**From a Mac that can't pair itself.** Setting up needs the Mac and the device on one Wi‑Fi, which a Mac elsewhere (in a data centre, say) never is. Make its pairing on a Mac that is, and take it there:
+**From a Mac that can't pair itself.** Setting up needs the Mac and the device on one Wi‑Fi, which a Mac elsewhere (in a data centre, say) never is. When both Macs are on one tailnet, a Mac on the device's Wi‑Fi introduces it, and the far Mac makes its own pairing — no key is carried, and none is written to a file:
+
+```sh
+roamrun pair control --with macbook-pro              # there, with the RoamRun app open: waits for this Mac, 10 minutes at most
+roamrun pair introduce --mac cloud-mac --to iPhone   # here, run by you: pick “cloud-mac” on the device and type the code this prints
+roamrun look iPhone                                  # there, once it says the device is paired
+```
+
+The names are the Macs' Tailscale names. The far Mac's app listens for the pairing on its Tailscale address alone, from this Mac alone, and announces nothing; this Mac stands in for it where the device is, as for Xcode's pairing ([below](#a-mac-the-device-was-never-near)), and shows the code the far Mac's app made. Run `pair introduce` yourself, in a terminal of your own: an agent that ran it would have the code in its output. A wrong code ends that command, not the far Mac's: run it again and the far Mac, which has gone on waiting, makes a new code. The far Mac needs the RoamRun app open in a session that is logged in (it keeps the pairing sealed, with a key in that login's Keychain) — Xcode isn't needed there, nor the device saved. It doesn't begin for a device that Mac already holds a pairing for: remove that one first, on the device's page there. `roamrun pair control --attempt <id>` on the far Mac says what came of an attempt whose end didn't reach this Mac.
+
+Without Tailscale between the two Macs, make the pairing on a Mac that is on the device's Wi‑Fi and take it there:
 
 ```sh
 roamrun key create iPhone ~/iphone-for-cloud.json --as cloud-mac   # here: pick "cloud-mac" on the device, enter the code

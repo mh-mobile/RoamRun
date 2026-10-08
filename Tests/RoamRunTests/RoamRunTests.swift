@@ -777,6 +777,18 @@ import ServiceManagement
     #expect(Introduction.device(of: two[1]) != nil && two[1].providerHostName == forOther.providerHostName)
     #expect(two[1].udid == "00008130-000C1C5C307A8D3A")   // the same device's: what it is stays
 
+    // A device saved long since is tried, for an introduction, where it was found a moment ago — and saved there once that held.
+    var old = new; old.remotePairingPort = 50000; old.providerIP = "100.64.0.9"
+    var now = new; now.remotePairingPort = 51000; now.providerIP = "100.64.0.9"
+    #expect(AppCoordinator.tryAt(saved: old, given: now, fresh: true) == ("100.64.0.9", 51000))
+    #expect(AppCoordinator.tryAt(saved: old, given: now, fresh: false) == ("100.64.0.9", 50000))   // a file's is where it was when the file was made
+    let moved2 = AppCoordinator.keepSaved(old.id, udid: "00008130-000C1C5C307A8D3A", at: ("100.64.0.10", 51000), in: [old], save: { _ in true })
+    #expect(moved2?.remotePairingPort == 51000 && moved2?.providerIP == "100.64.0.10" && moved2?.udid == "00008130-000C1C5C307A8D3A")
+    #expect(AppCoordinator.keepSaved(old.id, udid: "x", in: [old], save: { _ in true })?.remotePairingPort == 50000)
+    // A bridge running for it is rebuilt only when the device is somewhere else: not for a UDID learned.
+    #expect(AppCoordinator.moved(old, to: ("100.64.0.9", 51000)) && AppCoordinator.moved(old, to: ("100.64.0.10", 50000)))
+    #expect(!AppCoordinator.moved(old, to: ("100.64.0.9", 50000)) && !AppCoordinator.moved(nil, to: ("100.64.0.9", 50000)))
+
     // What another Mac sent is shown only as a device read and written again.
     #expect(Introduction.shown(Introduction.line(device)) == Introduction.line(device))
     #expect(Introduction.shown("\u{1B}]52;c;aGk=\u{07}") == nil && Introduction.shown("rr-device-v1:\u{1B}[2J") == nil)
@@ -7146,4 +7158,506 @@ extension TimingSensitive.RelayOnLocalhost {
     #expect(said == [.ended(.stopped, clean: true)])
     #expect(await eventuallyOnMain { !TailscaleClient.listening(on: 58701) })
 }
+}
+
+// MARK: - Device control, introduced by another Mac
+
+@Test func whatIsSaidForDeviceControlIsReadBackAndACodeIsSixDigits() {
+    let id = UUID().uuidString
+    let all: [PairWire.Message] = [.wantDevice, .device("rr-device-v1:abc"), .attempt(id), .code("012345"), .result(.done(on: true)), .result(.done(on: false))]
+        + PairWire.Refusal.allCases.map { .result(.failed($0)) }
+    for m in all { #expect(PairWire.message(from: PairWire.line(m)) == m) }
+    for line in ["rr-pair-v1 code 12345", "rr-pair-v1 code 1234567", "rr-pair-v1 code 12345a", "rr-pair-v1 code １２３４５６", "rr-pair-v1 code \u{1B}[2J12",
+                 "rr-pair-v1 attempt not-an-id", "rr-pair-v1 result done", "rr-pair-v1 result done maybe", "rr-pair-v1 result failed because", "rr-pair-v1 device"] {
+        #expect(PairWire.message(from: line) == nil, "\(line)")
+    }
+    #expect(PairWire.isCode("000000") && !PairWire.isCode("") && !PairWire.isCode("12 456") && !PairWire.isCode("１２３４５６"))
+
+    // The other command that waits on this Mac is named, by its pid, so it can be stopped; this one isn't.
+    let listed = """
+    812 /usr/bin/ssh --with-something host
+    4021 /Applications/RoamRun.app/Contents/MacOS/RoamRun pair control --with macbook-pro
+    4388 /usr/local/bin/roamrun pair xcode --with macbook-pro
+    """
+    #expect(CLI.otherWaiting(inPgrep: listed, me: 4388)?.pid == 4021)
+    #expect(CLI.otherWaiting(inPgrep: listed, me: 4021)?.command == "roamrun pair xcode --with macbook-pro")
+    #expect(CLI.otherWaiting(inPgrep: "4388 /usr/local/bin/roamrun pair xcode --with x\n", me: 4388) == nil)
+    #expect(CLI.otherWaiting(inPgrep: "77 /bin/zsh -c echo pair control --with x\n9 tart exec -t vm /x/RoamRun pair introduce --mac a --to b", me: 1) == nil)
+
+    // The name this Mac offers under is one an offer may have, whatever the computer is called.
+    func offered(_ name: String) -> Bool {
+        var txt = ["identifier": "6BF40D22-D414-41D0-BE80-7567AE75B2BC", "authTag": "BsVby0td", "model": "Mac16,1", "flags": "1", "ver": "26", "minVer": "17"]
+        txt["name"] = Introduction.hostName(name)
+        if case .success = Introduction.offer(from: Introduction.line(Introduction.Offer(port: 50000, txt: txt))) { return true }
+        return false
+    }
+    #expect(Introduction.hostName("RoamRun (Studio)") == "RoamRun (Studio)")
+    for name in ["RoamRun (" + String(repeating: "x", count: 54) + ")", "RoamRun (" + String(repeating: "開", count: 18) + ")", "RoamRun (a=b\\c)", "RoamRun (tab\tand\nline)", "", "\u{202E}"] {
+        #expect(offered(name) && Introduction.hostName(name).utf8.count <= 63, "\(name)")
+    }
+    #expect(Introduction.hostName("RoamRun (" + String(repeating: "開", count: 30) + ")").unicodeScalars.allSatisfy { $0 != "\u{FFFD}" })   // cut between characters
+}
+
+/// A pairing that shows its code, then waits to be told the device paired.
+private final class IntroducedPairing: PairingListener, @unchecked Sendable {
+    let name = "RoamRun (test)"
+    private let turn = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var cancelled = false
+    var code: String? = "246810"
+    func pairNow() { turn.signal() }
+    var wasCancelled: Bool { lock.withLock { cancelled } }
+    func accept(code show: @escaping @Sendable (String) -> Void) throws -> DevicePairing.Paired {
+        if let code { show(code) }
+        turn.wait()
+        if lock.withLock({ cancelled }) { throw DeviceSession.Failure.message("cancelled") }
+        if didFail { throw DevicePairing.NotCompleted(description: "the code entered on the device wasn't the one shown") }
+        if didBreak { throw DeviceSession.Failure.message("the pairing didn't complete: Socket(ConnectionReset)") }
+        return .init(udid: "00008130-000C1C5C307A8D3A", name: "iPhone", model: "iPhone16,1", pairing: Data("<plist/>".utf8))
+    }
+    func cancel() {
+        lock.withLock { cancelled = true }
+        turn.signal()
+    }
+    /// The device came and didn't take the pairing (`fail`), or the connection to it broke (`break`).
+    private var failed = false, broken = false
+    func fail() {
+        lock.withLock { failed = true }
+        turn.signal()
+    }
+    func breakOff() {
+        lock.withLock { broken = true }
+        turn.signal()
+    }
+    var didFail: Bool { lock.withLock { failed } }
+    var didBreak: Bool { lock.withLock { broken } }
+}
+
+private let offerTXT = ["identifier": "6BF40D22-D414-41D0-BE80-7567AE75B2BC", "authTag": "BsVby0td", "model": "Mac16,1",
+                        "name": "RoamRun (test)", "flags": "1", "ver": "26", "minVer": "17"]
+
+/// The one turn at pairing a Mac has, as the hub keeps it.
+private final class Turn: @unchecked Sendable {
+    private let lock = NSLock()
+    private var holder: UUID?
+    let taken = Counted<UUID>(), given = Counted<UUID>()
+    var held: UUID? { lock.withLock { holder } }
+    func claim(_ id: UUID) -> Bool {
+        lock.withLock {
+            guard holder == nil else { return false }
+            holder = id
+            taken.add(id)
+            return true
+        }
+    }
+    func release(_ id: UUID) { lock.withLock { if holder == id { holder = nil; given.add(id) } } }
+}
+
+private func introductions(_ pairing: IntroducedPairing, turn: Turn = Turn(), keep: @escaping @Sendable (@Sendable () -> Bool) -> Result<ControlIntroductions.Kept, ControlIntroductions.NotKept> = { _ in .success(.init(name: "iPhone", on: true)) }) -> ControlIntroductions {
+    let made = ControlIntroductions()
+    made.listen = { _, _, _ in .init(listener: pairing, port: 50123, txt: offerTXT) }
+    made.keep = { _, _, wanted in keep(wanted) }
+    made.claim = { turn.claim($0) }
+    made.release = { turn.release($0) }
+    made.tick = 0.02
+    return made
+}
+
+private func candidate() -> String {
+    let device = DeviceProfile(displayName: "iPhone", instanceName: "3DACFF68-D8B5-4990-B842-3BC99758E0A1", serviceType: "_remotepairing._tcp", domain: "local",
+                               remotePairingPort: 49152, bonjourHost: "", txt: [:], providerID: "tailscale", providerHostName: "iphone", providerIP: "100.64.0.9")
+    return String(decoding: try! JSONEncoder().encode(device), as: UTF8.self)
+}
+
+private func begin(_ i: ControlIntroductions, _ id: UUID, text: String? = candidate()) -> DeviceControlWire.Response {
+    i.answer(.init(op: "pair-start", device: id, text: text, address: "100.64.0.2", interface: "utun9", peer: "100.64.0.1"))
+}
+private func how(_ i: ControlIntroductions, _ id: UUID) -> DeviceControlWire.Response { i.answer(.init(op: "pair-status", device: id)) }
+/// A wait that a missed moment ends as a failure, not as a test that never returns.
+private func soon(_ signal: DispatchSemaphore) -> Bool { signal.wait(timeout: .now() + 10) == .success }
+private func until(_ what: () -> Bool) -> Bool {
+    for _ in 0..<200 where !what() { usleep(10_000) }
+    return what()
+}
+
+extension TimingSensitive {
+@Suite struct DeviceControlIntroduced {
+    @Test func theAppOffersShowsItsCodeOnlyToWhoAsksAndSaysWhatItKept() {
+        let pairing = IntroducedPairing(), i = introductions(pairing), id = UUID()
+        let started = begin(i, id)
+        #expect(started.ok && started.offer.map { if case .success = Introduction.offer(from: $0) { true } else { false } } == true)
+        #expect(begin(i, id).offer == started.offer)                    // its answer lost: asked again, the same offer
+        #expect(until { how(i, id).state == "code" } && how(i, id).code == "246810")
+        #expect(begin(i, UUID()).reason == PairWire.Refusal.failed.rawValue)   // one at a time
+        pairing.pairNow()
+        #expect(until { how(i, id).state == "done" })
+        let done = how(i, id)
+        #expect(done.allowed == true && done.name == "iPhone" && done.code == nil)   // the code isn't kept once it is over
+        #expect(i.answer(.init(op: "pair-status", device: UUID(), text: "last")).state == "done")
+        #expect(how(i, UUID()).state == "unknown")                      // another attempt's is never said for this one
+        #expect(begin(i, UUID()).ok)                                    // and the next may begin
+    }
+
+    @Test func nothingIsAskedOfTheDeviceWhereItCouldNotBeKept() {
+        // A pairing held already, a Keychain that refuses, a pairing on this Mac's own screen: no listener is opened.
+        for refuse in 0..<3 {
+            let pairing = IntroducedPairing(), i = introductions(pairing)
+            let opened = Counted<Int>()
+            i.listen = { _, _, _ in opened.add(1); return .init(listener: pairing, port: 50123, txt: offerTXT) }
+            if refuse == 0 { i.held = { _ in true } }
+            if refuse == 1 { i.ready = { throw DeviceSession.Failure.message("the Keychain said no") } }
+            let turn = Turn()
+            i.claim = { turn.claim($0) }
+            i.release = { turn.release($0) }
+            if refuse == 2 { _ = turn.claim(UUID()) }   // a pairing on this Mac's own screen has the turn
+            let r = begin(i, UUID())
+            #expect(!r.ok && r.offer == nil && opened.all.isEmpty)
+            #expect(r.reason == (refuse == 0 ? PairWire.Refusal.exists : .failed).rawValue)
+            // And the turn is back where one was taken for nothing.
+            if refuse < 2 { #expect(turn.held == nil && turn.given.all.count == 1) }
+        }
+        let i = introductions(IntroducedPairing())
+        #expect(!begin(i, UUID(), text: "{}").ok && !begin(i, UUID(), text: nil).ok)
+    }
+
+    @Test func stoppedBeforeTheDevicePairedNothingIsKeptAndOnceItPairedItIsSeenThrough() {
+        // Stopped while it waits: the listener goes, nothing is kept.
+        var pairing = IntroducedPairing()
+        let kept = Counted<Int>()
+        var i = introductions(pairing) { _ in kept.add(1); return .success(.init(name: "iPhone", on: true)) }
+        var id = UUID()
+        #expect(begin(i, id).ok)
+        let stopped = i.answer(.init(op: "pair-cancel", device: id))
+        #expect(stopped.state == "failed" && stopped.reason == PairWire.Refusal.cancelled.rawValue)
+        #expect(pairing.wasCancelled && kept.all.isEmpty)
+
+        // Stopped while what paired is being kept: it is kept, and said to be.
+        pairing = IntroducedPairing()
+        let keeping = DispatchSemaphore(value: 0), go = DispatchSemaphore(value: 0)
+        // (What keeps it asks, as the app's does, whether it is still wanted: a stop that came too late doesn't make it say no.)
+        i = introductions(pairing) { wanted in
+            keeping.signal(); go.wait()
+            return wanted() ? .success(.init(name: "iPhone", on: false)) : .failure(.init(.cancelled, "stopped"))
+        }
+        id = UUID()
+        #expect(begin(i, id).ok)
+        pairing.pairNow()
+        #expect(soon(keeping))
+        #expect(how(i, id).state == "checking")
+        let late = i.answer(.init(op: "pair-cancel", device: id))
+        #expect(late.state == "checking")
+        go.signal()
+        #expect(until { how(i, id).state == "done" } && how(i, id).allowed == false)   // kept, and switched off: said as that
+    }
+
+    @Test func aCommandThatStopsAskingIsTakenForGoneButNotWhileTheAppKeepsWhatPaired() {
+        var pairing = IntroducedPairing()
+        var i = introductions(pairing)
+        i.quiet = 0.2
+        var id = UUID()
+        #expect(begin(i, id).ok)
+        #expect(until { pairing.wasCancelled })
+        #expect(until { how(i, id).reason == PairWire.Refusal.cancelled.rawValue })   // said once the listener has let go
+
+        // Asked often enough, it stays; and while it keeps, silence stops nothing.
+        pairing = IntroducedPairing()
+        let keeping = DispatchSemaphore(value: 0), go = DispatchSemaphore(value: 0)
+        i = introductions(pairing) { wanted in keeping.signal(); go.wait(); return wanted() ? .success(.init(name: "iPhone", on: true)) : .failure(.init(.cancelled, "stopped")) }
+        i.quiet = 1
+        id = UUID()
+        #expect(begin(i, id).ok)
+        for _ in 0..<8 { usleep(200_000); _ = how(i, id) }
+        #expect(!pairing.wasCancelled)
+        pairing.pairNow()
+        #expect(soon(keeping))
+        usleep(1_500_000)
+        go.signal()
+        #expect(until { how(i, id).state == "done" })
+
+        // And none waits longer than the longest it may.
+        pairing = IntroducedPairing()
+        i = introductions(pairing)
+        i.longest = 0.2
+        id = UUID()
+        #expect(begin(i, id).ok)
+        for _ in 0..<20 where !pairing.wasCancelled { usleep(40_000); _ = how(i, id) }
+        #expect(pairing.wasCancelled)
+    }
+
+    /// One pairing at a time, however begun: the turn is had before anything listens, and given back once.
+    @Test func theTurnAtPairingIsTakenFirstAndGivenBackOnceHoweverItEnds() {
+        // Two that begin at the same instant: one listens.
+        var pairing = IntroducedPairing(), turn = Turn()
+        var i = introductions(pairing, turn: turn)
+        let opened = Counted<Int>(), first = pairing
+        i.listen = { _, _, _ in opened.add(1); usleep(100_000); return .init(listener: first, port: 50123, txt: offerTXT) }
+        let answers = Counted<Bool>(), both = DispatchGroup()
+        for _ in 0..<2 {
+            both.enter()
+            let mine = i
+            Thread.detachNewThread { answers.add(begin(mine, UUID()).ok); both.leave() }
+        }
+        #expect(both.wait(timeout: .now() + 10) == .success)
+        #expect(answers.all.sorted { !$0 && $1 } == [false, true] && opened.all.count == 1)
+        let id = turn.held
+        #expect(id != nil)
+        pairing.pairNow()
+        #expect(until { turn.held == nil } && turn.given.all.count == 1)
+
+        // Stopped, or the device came and didn't pair: given back too, and said as which.
+        pairing = IntroducedPairing(); turn = Turn(); i = introductions(pairing, turn: turn)
+        var attempt = UUID()
+        #expect(begin(i, attempt).ok)
+        _ = i.answer(.init(op: "pair-cancel", device: attempt))
+        #expect(until { turn.held == nil })
+        pairing = IntroducedPairing(); turn = Turn(); i = introductions(pairing, turn: turn)
+        attempt = UUID()
+        #expect(begin(i, attempt).ok)
+        pairing.fail()
+        #expect(until { how(i, attempt).reason == PairWire.Refusal.notPaired.rawValue } && turn.held == nil)
+        // A connection that broke isn't the device's answer: not said as one to simply try again.
+        pairing = IntroducedPairing(); turn = Turn(); i = introductions(pairing, turn: turn)
+        attempt = UUID()
+        #expect(begin(i, attempt).ok)
+        pairing.breakOff()
+        #expect(until { how(i, attempt).reason == PairWire.Refusal.failed.rawValue } && turn.held == nil)
+        #expect(how(i, attempt).error?.contains("ConnectionReset") == true)
+
+        // Keeping what paired takes longer than anything may: the turn is kept all the same — a
+        // pairing begun meanwhile could have the device drop the one being kept — and given back when it ends.
+        pairing = IntroducedPairing(); turn = Turn()
+        let keeping = DispatchSemaphore(value: 0), go = DispatchSemaphore(value: 0)
+        i = introductions(pairing, turn: turn) { wanted in keeping.signal(); go.wait(); return wanted() ? .success(.init(name: "iPhone", on: true)) : .failure(.init(.cancelled, "stopped")) }
+        i.longest = 1
+        attempt = UUID()
+        #expect(begin(i, attempt).ok)
+        pairing.pairNow()
+        #expect(soon(keeping))
+        usleep(1_500_000)
+        #expect(turn.held == attempt && how(i, attempt).state == "checking")
+        #expect(begin(i, UUID()).reason == PairWire.Refusal.failed.rawValue)   // no other begins meanwhile
+        go.signal()
+        #expect(until { how(i, attempt).state == "done" } && turn.held == nil && turn.given.all.count == 1)
+    }
+
+    /// Nothing listens once the device has paired, however long keeping takes: the listener is let go then.
+    @Test func theListenerIsLetGoTheMomentTheDeviceHasPaired() {
+        final class Seen: @unchecked Sendable { weak var listener: IntroducedPairing? }
+        let seen = Seen(), i = ControlIntroductions()
+        let keeping = DispatchSemaphore(value: 0), go = DispatchSemaphore(value: 0)
+        i.listen = { _, _, _ in
+            let made = IntroducedPairing()
+            seen.listener = made
+            return .init(listener: made, port: 50123, txt: offerTXT)
+        }
+        i.keep = { _, _, _ in keeping.signal(); go.wait(); return .success(.init(name: "iPhone", on: true)) }
+        i.tick = 0.02
+        let id = UUID()
+        #expect(begin(i, id).ok && seen.listener != nil)
+        seen.listener?.pairNow()
+        #expect(soon(keeping))
+        #expect(until { seen.listener == nil })     // while what paired is still being kept
+        #expect(how(i, id).state == "checking")
+        go.signal()
+        #expect(until { how(i, id).state == "done" })
+    }
+
+    /// Asked to begin again under the same id while it is still being made ready (its answer was
+    /// lost): told so, with no second listener; any other is turned away.
+    @Test func begunAgainWhileItIsMadeReadyItSaysSoAndOpensNothingMore() {
+        let pairing = IntroducedPairing(), i = introductions(pairing)
+        let opened = Counted<Int>(), readying = DispatchSemaphore(value: 0), go = DispatchSemaphore(value: 0)
+        i.ready = { readying.signal(); go.wait() }
+        i.listen = { _, _, _ in opened.add(1); return .init(listener: pairing, port: 50123, txt: offerTXT) }
+        let id = UUID(), first = Counted<Bool>()
+        Thread.detachNewThread { first.add(begin(i, id).offer != nil) }
+        #expect(soon(readying))
+        let again = begin(i, id)
+        #expect(again.ok && again.state == "preparing" && again.offer == nil)
+        #expect(how(i, id).state == "preparing")
+        #expect(begin(i, UUID()).reason == PairWire.Refusal.failed.rawValue)
+        go.signal()
+        #expect(until { first.all == [true] } && opened.all.count == 1)
+        #expect(begin(i, id).offer != nil && opened.all.count == 1)
+    }
+
+    @Test func whatCouldNotBeKeptIsSaidWithItsWord() {
+        let pairing = IntroducedPairing()
+        let i = introductions(pairing) { _ in .failure(.init(.exists, "this Mac already holds a pairing")) }
+        let id = UUID()
+        #expect(begin(i, id).ok)
+        pairing.pairNow()
+        #expect(until { how(i, id).state == "failed" })
+        #expect(how(i, id).reason == "exists" && how(i, id).error == "this Mac already holds a pairing")
+    }
+}
+}
+
+private let anAttempt = "6BF40D22-D414-41D0-BE80-7567AE75B2BC"
+
+private func farControl(start: @escaping @Sendable (String) async -> PairByName.FarControl.Started = { _ in .offer("offer-1", attempt: anAttempt) },
+                        status: @escaping @Sendable () async -> PairByName.FarControl.Status,
+                        cancelled: Counted<Int> = .init(), events: Counted<PairByName.FarControl.Event> = .init(),
+                        owner: @escaping @Sendable (String) -> String? = { _ in "home" },
+                        resultWindow: TimeInterval = 5, tries: Int = 5) -> PairByName.FarControl {
+    PairByName.FarControl(peer: .init(ip: "127.0.0.1", id: "home"), owner: owner,
+                          start: start, status: { _ in await status() }, cancel: { _ in cancelled.add(1) }, tries: tries, say: { events.add($0) },
+                          connectWindow: 5, resultWindow: resultWindow, lineWait: 1, pause: 0.05)
+}
+
+private func startedControl(_ far: PairByName.FarControl, _ listener: PairLink.Listener) -> Task<PairByName.FarControl.End, Never> {
+    Task.detached { await far.run(listener) }
+}
+
+private func homeForControl(_ port: UInt16, device: String? = "device-1") -> PairByName.Home {
+    PairByName.Home(peer: .init(ip: "127.0.0.1", id: "far"), owner: { _ in "far" },
+                    connect: { PairLink.connect(to: "127.0.0.1", port: port, interface: nil, within: 1) },
+                    device: device, window: 5, lineWait: 1, pause: .milliseconds(20))
+}
+
+extension TimingSensitive.DeviceControlIntroduced {
+    /// The whole exchange between the two Macs: the device first, then the offer, the code once, the result.
+    @Test func theDeviceIsAskedForFirstAndTheCodeAndTheResultArePassedOn() async throws {
+        let listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        let given = Counted<String>(), asks = Counted<Int>(), cancelled = Counted<Int>(), events = Counted<PairByName.FarControl.Event>()
+        let far = farControl(start: { given.add($0); return .offer("offer-1", attempt: anAttempt) },
+                             status: { asks.add(1); return [1: .waiting, 2: .code("246810"), 3: .code("246810"), 4: .checking][asks.all.count] ?? .done(on: true) },
+                             cancelled: cancelled, events: events)
+        let end = startedControl(far, listener)
+        guard case .control(let offer, let attempt, let link) = await homeForControl(listener.port).fetch() else { Issue.record("no offer"); return }
+        #expect(offer == "offer-1" && attempt == "6BF40D22-D414-41D0-BE80-7567AE75B2BC" && given.all == ["device-1"])
+        #expect(link.read(within: 2).message == .code("246810"))
+        #expect(link.read(within: 2).message == .result(.done(on: true)))    // the code went once, not each time it was said
+        #expect(await end.value == .done(on: true))
+        #expect(cancelled.all.isEmpty && events.all == [.connected, .offerSent(attempt: anAttempt), .codeSent])
+    }
+
+    @Test func aMacThatOffersForXcodeIsAskedAsBeforeAndOneWithoutADeviceToGiveAsksNothingMore() async throws {
+        // #96's far Mac answers the same first line with its offer: nothing changes for it.
+        var listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        let saved = Counted<String>()
+        let xcode = started(farMac(saved: saved), listener)
+        guard case .offer(_, let link) = await homeForControl(listener.port).fetch() else { Issue.record("not the Xcode turn"); return }
+        #expect(PairByName.Home.handOver("device-1", on: link) == .saved)
+        #expect(await xcode.value == .saved)
+
+        // Asked for a device it has none to give: it ends there.
+        listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        let far = farControl(status: { .waiting })
+        let end = startedControl(far, listener)
+        guard case .garbled = await homeForControl(listener.port, device: nil).fetch() else { Issue.record("went on without a device"); return }
+        end.cancel()
+    }
+
+    @Test func whereItCannotBeginOrTheOtherMacStopsTheAppIsToldAndNothingIsWaitedFor() async throws {
+        // The app refuses: the other Mac is told before it announces anything.
+        var listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        var end = startedControl(farControl(start: { _ in .refused(.exists) }, status: { .unknown }), listener)
+        guard case .refused(.exists) = await homeForControl(listener.port).fetch() else { Issue.record("not told why"); return }
+        #expect(await end.value == .failed(.exists))
+
+        // The other Mac says it stopped (its five minutes): the app is told to stop.
+        listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        let cancelled1 = Counted<Int>()
+        end = startedControl(farControl(status: { cancelled1.all.isEmpty ? .waiting : .failed(.cancelled) }, cancelled: cancelled1), listener)
+        guard case .control(_, _, let link) = await homeForControl(listener.port).fetch() else { Issue.record("no offer"); return }
+        link.send(.ended(.deadline))
+        #expect(await end.value == .ended(.deadline))
+        #expect(cancelled1.all.count == 1)
+
+        // It goes away without a word while the device's pairing is being kept: stopped too late, and said as that.
+        listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        let cancelled2 = Counted<Int>()
+        end = startedControl(farControl(status: { .checking }, cancelled: cancelled2), listener)
+        guard case .control(_, _, let second) = await homeForControl(listener.port).fetch() else { Issue.record("no offer"); return }
+        second.close()
+        #expect(await end.value == .lost(.checking))
+        #expect(cancelled2.all.count == 1)
+
+        // …and when it had been kept by then, that is what is said.
+        listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        let cancelled3 = Counted<Int>()
+        end = startedControl(farControl(status: { cancelled3.all.isEmpty ? .checking : .done(on: true) }, cancelled: cancelled3), listener)
+        guard case .control(_, _, let third) = await homeForControl(listener.port).fetch() else { Issue.record("no offer"); return }
+        third.close()
+        #expect(await end.value == .done(on: true))
+    }
+
+    /// A wrong code ends the introducing Mac's command, not this one: it waits for that Mac again,
+    /// with an attempt of its own each time, and gives up after so many.
+    @Test func aPairingThatWasNotMadeIsWaitedForAgainOnTheFarMac() async throws {
+        let listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        let begun = Counted<String>(), events = Counted<PairByName.FarControl.Event>()
+        let far = PairByName.FarControl(
+            peer: .init(ip: "127.0.0.1", id: "home"), owner: { _ in "home" },
+            start: { _ in
+                let id = UUID().uuidString
+                begun.add(id)
+                return .offer("offer-\(begun.all.count)", attempt: id)
+            },
+            status: { id in id == begun.all.first ? .failed(.notPaired) : .done(on: true) },
+            cancel: { _ in }, say: { events.add($0) }, connectWindow: 5, resultWindow: 5, lineWait: 1, pause: 0.05)
+        let end = startedControl(far, listener)
+        guard case .control(let first, let one, let link) = await homeForControl(listener.port).fetch() else { Issue.record("no offer"); return }
+        #expect(link.read(within: 2).message == .result(.failed(.notPaired)))
+        link.close()
+        guard case .control(let second, let two, let again) = await homeForControl(listener.port).fetch() else { Issue.record("not waited for again"); return }
+        #expect(first == "offer-1" && second == "offer-2" && one != two && begun.all == [one, two])
+        #expect(again.read(within: 2).message == .result(.done(on: true)))
+        #expect(await end.value == .done(on: true))
+        #expect(events.all.contains(.again))
+
+        // Not for ever, and not for what isn't the device's doing.
+        var other = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        var ended = startedControl(farControl(status: { .failed(.notPaired) }, tries: 2), other)
+        for _ in 1...2 {
+            guard case .control(_, _, let link) = await homeForControl(other.port).fetch() else { Issue.record("no offer"); return }
+            #expect(link.read(within: 2).message == .result(.failed(.notPaired)))
+            link.close()
+        }
+        #expect(await ended.value == .failed(.notPaired))
+        other = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        ended = startedControl(farControl(status: { .failed(.notKept) }), other)
+        guard case .control(_, _, let last) = await homeForControl(other.port).fetch() else { Issue.record("no offer"); return }
+        #expect(last.read(within: 2).message == .result(.failed(.notKept)))
+        #expect(await ended.value == .failed(.notKept))
+    }
+
+    @Test func aCodeThatIsNotOneOrCannotBeSentEndsTheAttempt() async throws {
+        let listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        let cancelled = Counted<Int>()
+        let end = startedControl(farControl(status: { cancelled.all.isEmpty ? .code("12\u{1B}[2J") : .failed(.cancelled) }, cancelled: cancelled), listener)
+        guard case .control(_, _, let link) = await homeForControl(listener.port).fetch() else { Issue.record("no offer"); return }
+        #expect(link.read(within: 2) == .closed)     // nothing that isn't a code is passed on
+        #expect(await end.value == .lost(.failed(.cancelled)))
+        #expect(cancelled.all.count == 1)
+    }
+
+    /// Stopped, or out of time, while the app keeps what paired: that goes on, and isn't said as nothing kept.
+    @Test func anEndWhileTheAppKeepsWhatPairedIsNotSaidAsNothingKept() async throws {
+        var listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        let end = startedControl(farControl(status: { .checking }, resultWindow: 0.4), listener)
+        guard case .control(_, _, let link) = await homeForControl(listener.port).fetch() else { Issue.record("no offer"); return }
+        #expect(await end.value == .lost(.checking))
+        link.close()
+
+        // The app gone: not waited out, and not said as nothing kept either.
+        listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        let gone = startedControl(farControl(status: { .unknown }, resultWindow: 30), listener)
+        guard case .control(_, _, let second) = await homeForControl(listener.port).fetch() else { Issue.record("no offer"); return }
+        let asked = Date()
+        #expect(await gone.value == .lost(.unknown))
+        #expect(Date().timeIntervalSince(asked) < 10)   // after a few questions, not at the end of all the time there is
+        second.close()
+    }
+
+    @Test func noResultInTimeIsSaidAndTheAppStopped() async throws {
+        let listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        let cancelled = Counted<Int>()
+        let end = startedControl(farControl(status: { cancelled.all.isEmpty ? .waiting : .failed(.cancelled) }, cancelled: cancelled, resultWindow: 0.4), listener)
+        guard case .control(_, _, let link) = await homeForControl(listener.port).fetch() else { Issue.record("no offer"); return }
+        #expect(await end.value == .noResult)
+        #expect(cancelled.all.count == 1)
+        link.close()
+    }
 }
