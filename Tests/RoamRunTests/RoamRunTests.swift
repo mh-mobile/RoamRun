@@ -734,6 +734,54 @@ import ServiceManagement
     moved = device; moved.txt["authTag"] = "other"
     #expect(!Introduction.unchanged(kept, by: moved, at: "100.64.0.9"))
     #expect(!Introduction.unchanged(half, by: device, at: half.providerIP))
+
+    // Added under the store's lock: the same device from two commands at once is there once.
+    guard let new = made else { return }
+    var list: [DeviceProfile] = []
+    #expect(Introduction.add(new, from: device, to: &list) == .added)
+    var again = new; again.id = UUID()
+    #expect(Introduction.add(again, from: device, to: &list) == .unchanged("Test iPhone"))
+    #expect(Introduction.add(again, from: moved, to: &list) == .already("Test iPhone"))
+    #expect(list.count == 1)
+    var other = new; other.id = UUID(); other.instanceName = "0F0F0F0F-D414-41D0-BE80-7567AE75B2BC"; other.txt["identifier"] = other.instanceName
+    other.providerIP = "100.64.0.77"
+    if case .nameProblem = Introduction.add(other, from: device, to: &list) {} else { Issue.record("a second device took a name in use") }
+    #expect(list.count == 1)
+
+    // What another Mac sent is shown only as a device read and written again.
+    #expect(Introduction.shown(Introduction.line(device)) == Introduction.line(device))
+    #expect(Introduction.shown("\u{1B}]52;c;aGk=\u{07}") == nil && Introduction.shown("rr-device-v1:\u{1B}[2J") == nil)
+    #expect(Introduction.shown(Introduction.line(Introduction.Offer(port: 50000, txt: [:]))) == nil)
+}
+
+/// An offer is this Mac's to give only when it reads whole: its port arrives before its values.
+@Test func anOfferHalfArrivedIsWaitedForAndTwoAreNotChosenBetween() {
+    let txt = ["identifier": "6BF40D22-D414-41D0-BE80-7567AE75B2BC", "authTag": "BsVby0td", "model": "VirtualMac2,1",
+               "name": "far-mac", "flags": "1", "ver": "26", "minVer": "17"]
+    func service(_ txt: [String: String], _ name: String = "a") -> CapturedService {
+        CapturedService(instanceName: name, serviceType: Introduction.hostService, domain: "local", port: 50000, host: "h.local", hostIPs: [], txt: txt, lastSeen: .now)
+    }
+    #expect(Introduction.current(among: []) == .none)
+    #expect(Introduction.current(among: [service([:])]) == .none)
+    var partial = txt; partial["authTag"] = nil
+    #expect(Introduction.current(among: [service(partial)]) == .none)
+    #expect(Introduction.current(among: [service(txt)]) == .one(Introduction.line(Introduction.Offer(port: 50000, txt: txt))))
+    // One that reads and one that doesn't (half arrived, or another host's): the one that reads.
+    #expect(Introduction.current(among: [service(txt), service([:], "b")]) == .one(Introduction.line(Introduction.Offer(port: 50000, txt: txt))))
+    var second = txt; second["identifier"] = "0F0F0F0F-D414-41D0-BE80-7567AE75B2BC"
+    #expect(Introduction.current(among: [service(txt), service(second, "b")]) == .several)
+}
+
+/// Add Device's second step follows the row picked while the choice there was made for the user.
+@Test func aChoiceMadeForTheUserFollowsTheRowAndTheirOwnStays() {
+    func follow(_ chosen: String?, _ auto: String?, _ match: String?) -> [String?] {
+        let r = MeshDevice.follow(chosen: chosen, auto: auto, match: match); return [r.chosen, r.auto]
+    }
+    #expect(follow(nil, nil, "a") == ["a", "a"])
+    #expect(follow("a", "a", "b") == ["b", "b"])
+    #expect(follow("a", "a", nil) == [nil, nil])      // another row, no device known for it: not the last row's
+    #expect(follow("x", "a", "b") == ["x", "a"])      // chosen by hand
+    #expect(follow("x", nil, nil) == ["x", nil])
 }
 
 // With the other relays on the loopback, one at a time: they count the pairs open in the process.
@@ -6821,7 +6869,7 @@ extension TimingSensitive {
         // Another address: turned away without a question to Tailscale.
         var listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
         let questions = Counted<String>(), events = Counted<PairByName.Far.Event>()
-        var far = farMac(peer: .init(ip: "127.0.0.9", id: "home"), owner: { questions.add($0); return "home" }, events: events, connectWindow: 0.6)
+        var far = farMac(peer: .init(ip: "127.0.0.9", id: "home"), owner: { questions.add($0); return "home" }, events: events, connectWindow: 2)
         let none = started(far, listener)
         let stranger = try #require(PairLink.connect(to: "127.0.0.1", port: listener.port, interface: nil))
         stranger.send(.wantOffer)
@@ -6900,12 +6948,40 @@ extension TimingSensitive {
         #expect(events.all.filter { $0 == .dropped }.count >= 1)
     }
 
+    @Test func aFarMacThatMakesNoOfferSaysSoRatherThanGoQuiet() async throws {
+        let listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        let end = started(farMac(offers: { .none }, connectWindow: 1), listener)
+        guard case .ended(.noOffer) = await homeMac(listener.port).fetch() else { Issue.record("not told"); return }
+        #expect(await end.value == .noOne)
+    }
+
+    @Test func theIntroducingMacItselfAsksAgainUntilTheOfferHasArrived() async throws {
+        let listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        let port = listener.port
+        async let fetched = homeMac(port).fetch()
+        // Dropped once asked, then dropped with the offer half sent; the third time it arrives.
+        var (link, _) = try #require(listener.accept(within: 2))
+        #expect(link.read(within: 2) == .line(PairWire.line(.wantOffer)))
+        link.close()
+        (link, _) = try #require(listener.accept(within: 3))
+        _ = link.read(within: 2)
+        link.write("rr-pair-v1 offer half")
+        link.close()
+        (link, _) = try #require(listener.accept(within: 3))
+        _ = link.read(within: 2)
+        link.send(.offer("offer-1"))
+        guard case .offer(let offer, let mine) = await fetched else { Issue.record("no offer"); return }
+        #expect(offer == "offer-1")
+        mine.close()
+        #expect(listener.accept(within: 0.5).map { _ in true } == nil)   // and never after
+    }
+
     @Test func theResultIsWaitedForPastTheTimeAConnectionMayBegin() async throws {
         let listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
         let saved = Counted<String>()
-        let end = started(farMac(saved: saved, connectWindow: 0.4, resultWindow: 5), listener)
+        let end = started(farMac(saved: saved, connectWindow: 1.5, resultWindow: 8), listener)
         guard case .offer(_, let link) = await homeMac(listener.port).fetch() else { Issue.record("no offer"); return }
-        try await Task.sleep(for: .seconds(1))   // standing in, past the first window
+        try await Task.sleep(for: .seconds(2))   // standing in, past the first window
         #expect(PairByName.Home.handOver("device-1", on: link) == .saved)
         #expect(await end.value == .saved)
     }
@@ -6982,7 +7058,11 @@ extension TimingSensitive {
         #expect(to.read(within: 2) == .line(PairWire.line(.unsaved)))
         #expect(to.read(within: 0.2) == .timeout)
         #expect(!to.gone)
-        to.send(.offer(String(repeating: "x", count: PairWire.maxLine * 3)))   // one line, far too long
+        // At the limit and just past it, whatever a line ends with in the same read.
+        let head = PairWire.line(.offer("")).utf8.count
+        to.send(.offer(String(repeating: "x", count: PairWire.maxLine - head)))
+        #expect(from.read(within: 5) == .line(PairWire.line(.offer(String(repeating: "x", count: PairWire.maxLine - head)))))
+        to.send(.offer(String(repeating: "x", count: PairWire.maxLine - head + 1)))
         #expect(from.read(within: 5) == .tooLong)
         from.close()
         for _ in 0..<50 where !to.gone { usleep(20_000) }
@@ -6995,5 +7075,42 @@ extension TimingSensitive {
         let taken = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
         #expect(throws: (any Error).self) { try PairLink.Listener(ip: "127.0.0.1", port: taken.port, interface: nil) }
     }
+}
+}
+
+@MainActor private final class LateRecord: BonjourRecord {
+    var onExit: ((Int32) -> Void)?
+    var announced = false
+    func register(instanceName: String, serviceType: String, domain: String,
+                  port: UInt16, host: String, ip: String, txt: [String: String]) throws { announced = true }
+    func registerOnItsInterface(instanceName: String, serviceType: String, domain: String,
+                                port: UInt16, host: String, ip: String, txt: [String: String]) throws { announced = true }
+    func stop() { announced = false }
+    func renew() {}
+    func previousExited() async -> Bool { true }
+}
+
+extension TimingSensitive.RelayOnLocalhost {
+/// Stopped while its listener was still starting: it said nothing is announced, so nothing may be afterwards.
+@MainActor @Test func aStandInStoppedWhileItStartsAnnouncesNothingAfterward() async throws {
+    let record = LateRecord()
+    let txt = ["identifier": "6BF40D22-D414-41D0-BE80-7567AE75B2BC", "authTag": "BsVby0td", "model": "VirtualMac2,1",
+               "name": "far-mac", "flags": "1", "ver": "26", "minVer": "17"]
+    var said: [Introducer.Event] = []
+    let standIn = Introducer(.init(offer: .init(port: 58701, txt: txt), farIP: "127.0.0.1", localIP: "127.0.0.1",
+                                   interface: "lo0", accept: .ownAddress, deadline: 0.1),
+                             record: record, addressNow: { "127.0.0.1" }) { said.append($0) }
+    var entered = false
+    let starting = Task { @MainActor in
+        entered = true
+        try await standIn.start()
+    }
+    while !entered { await Task.yield() }
+    await standIn.end(.stopped)
+    _ = try? await starting.value
+    try await Task.sleep(for: .milliseconds(150))
+    #expect(!record.announced)
+    #expect(said == [.ended(.stopped, clean: true)])
+    #expect(await eventuallyOnMain { !TailscaleClient.listening(on: 58701) })
 }
 }

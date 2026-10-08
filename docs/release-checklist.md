@@ -213,7 +213,9 @@ tunnel and Xcode has to run again.
     `roamrun devices add <line>`, `roamrun up <name>` → Ready, `devicectl … process launch`,
     and — with the OS symbols copied over — lldb at a breakpoint. The device lists that Mac under
     its own computer name, as `pair introduce` said. Then once more with the sheet on the far Mac
-    closed: `pair introduce` says that Mac isn't waiting and announces nothing.
+    closed: `pair introduce` says that Mac isn't waiting and announces nothing, exit 1, no line.
+    And with the device asleep or on cellular: it says Tailscale doesn't say where the device is
+    on this Wi‑Fi, and announces nothing.
     Then by name, the far Mac's entry removed on the device first: there
     `roamrun pair xcode --with <this Mac's Tailscale name>`, here `roamrun pair introduce --mac
     <its Tailscale name> --to <name>` with no line, and the button pressed after both wait → the

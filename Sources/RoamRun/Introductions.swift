@@ -170,6 +170,38 @@ extension Introduction {
         return whole
     }
 
+    /// What this Mac offers right now, of the offers found to be its own: what doesn't read as
+    /// an offer isn't one (yet: its port arrives before its values), and two are not chosen between.
+    static func current(among own: [CapturedService]) -> PairByName.Offers {
+        let whole = own.map { line(Offer(port: $0.port, txt: $0.txt)) }.filter { if case .success = offer(from: $0) { true } else { false } }
+        return whole.count > 1 ? .several : whole.first.map(PairByName.Offers.one) ?? .none
+    }
+
+    /// A device's line fit to show: read and written again, never the bytes that came.
+    static func shown(_ text: String) -> String? {
+        guard case .success(let device) = device(from: text) else { return nil }
+        return line(device)
+    }
+
+    enum Added: Equatable {
+        case added
+        case unchanged(String)
+        case already(String)
+        case nameProblem(String)
+    }
+
+    /// Adds a device to the list as it is at that moment — under the store's lock, so two
+    /// commands adding one device leave one.
+    static func add(_ new: DeviceProfile, from device: Device, to all: inout [DeviceProfile]) -> Added {
+        // Before the name: a device saved already is the likelier reason its name is taken.
+        if let same = all.first(where: { ProfileStore.sameDevice($0, new) }) {
+            return unchanged(same, by: device, at: new.providerIP) ? .unchanged(same.displayName) : .already(same.displayName)
+        }
+        if let problem = all.nameProblem(new.displayName) { return .nameProblem(problem) }
+        all.append(new)
+        return .added
+    }
+
     /// What is saved of a device already says all a line for it does.
     static func unchanged(_ saved: DeviceProfile, by device: Device, at ip: String) -> Bool {
         guard let have = Introduction.device(of: saved) else { return false }
@@ -241,7 +273,11 @@ final class Introducer {
                               accept: plan.accept, cap: 2,
                               onFailure: { [weak self] _ in Task { @MainActor in await self?.end(.announcementLost) } },
                               onPair: { [weak self] event in Task { @MainActor in self?.pair(event) } })
-            do { try await relay.start(); self.relay = relay; break } catch { failure = error.localizedDescription }
+            do { try await relay.start() } catch { failure = error.localizedDescription; continue }
+            // Ended while that waited: nothing may be announced after it was said nothing is.
+            if ended { relay.stop(); throw CancellationError() }
+            self.relay = relay
+            break
         }
         guard let relay else {
             throw RelayError.bindFailed("no port of \(ports.lowerBound)–\(ports.upperBound) on \(plan.localIP) could be listened on (\(failure))")

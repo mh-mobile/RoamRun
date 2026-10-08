@@ -40,11 +40,15 @@ bounded.
     The Mac it relays to is the one Tailscale has under that name: the line it is
     given carries a port and what to announce, never an address, a host or a
     service type.
-  - It takes connections from the device's address on that LAN alone when Tailscale
-    reports one for the device, two at once at most. When it doesn't (a relayed
-    path, a sleeping device), it takes them from that LAN's hosts by the interface's
-    netmask and says so: any of them can then reach that Mac's pairing port for
-    those minutes, as this Mac. Pairing still needs the code.
+  - It takes connections from the device's address on that LAN alone, two at once
+    at most. It has that address from Tailscale, and doesn't start when Tailscale
+    reports none (a relayed path, a sleeping device): the port it relays to is the
+    one the offer names, and opening that to a whole LAN would let any host there
+    reach whatever listens on it on that Mac. A host that takes the device's
+    address on the LAN is taken for the device; pairing still needs the code.
+  - The offer's port is not checked to be Xcode's pairing port — only that it is
+    1024 or above and answers. Give `pair introduce` only an offer from a Mac you
+    trust; by name, it comes from the Mac you named.
   - **The code doesn't prove which Mac is at the other end.** It is shown by
     whatever listens on the named Mac's port and typed on the device; this Mac
     sees neither. What you are trusting is the Mac you named: introduce one only
@@ -93,6 +97,15 @@ bounded.
     isn't proof one was made: `roamrun up` shows it.
   - The Mac that introduces listens for nothing more than before. If the
     connection to the other Mac ends while it stands in, it stops standing in.
+    A Mac that goes away without closing it (asleep, off the tailnet) isn't
+    noticed: the stand-in then runs to its five minutes.
+  - Which offer is this Mac's own is read from what is announced on its network:
+    one whose port something on this Mac listens on. A host on that network can
+    announce another, and so make the command stop ("more than once") or pass on
+    an offer that isn't Xcode's. Nothing is paired by that — the code is still
+    Xcode's to show — but run it on a network you'd run Xcode's own pairing on.
+  - A connection still open when the five minutes end is cut, and reported as
+    nothing paired, whatever it carried.
   - Not tried with a Mac shared in from another tailnet.
 - **The lines carried between Macs are not secrets, and are not trusted.**
   `roamrun pair xcode` prints a port and seven announced values; `roamrun devices

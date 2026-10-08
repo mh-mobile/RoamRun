@@ -117,10 +117,11 @@ struct AddDeviceView: View {
         .onChange(of: meshDeviceID) { _ in refusal = nil }
         .onChange(of: manualIP) { _ in refusal = nil }
         .onChange(of: name) { _ in refusal = nil }
-        .onChange(of: provider) { _ in refusal = nil }
+        .onChange(of: provider) { _ in refusal = nil; followSelection() }
         // The chosen Tailscale device gone from a refreshed list: no choice, not a blank one.
         .onChange(of: coordinator.tailscaleDevices) { devices in
             if let id = meshDeviceID, !devices.contains(where: { $0.id == id }) { meshDeviceID = nil }
+            followSelection()
         }
     }
 
@@ -325,10 +326,9 @@ struct AddDeviceView: View {
 
     /// Step 2 follows step 1 where the device's address settles it, until the user chooses there.
     private func followSelection() {
-        guard provider == .tailscale, meshDeviceID == nil || meshDeviceID == autoMeshID,
-              let match = newest(for: selectedHost).flatMap(tailscaleDevice(for:)) else { return }
-        meshDeviceID = match.id
-        autoMeshID = match.id
+        guard provider == .tailscale else { return }
+        let match = newest(for: selectedHost).flatMap(tailscaleDevice(for:))
+        (meshDeviceID, autoMeshID) = MeshDevice.follow(chosen: meshDeviceID, auto: autoMeshID, match: match?.id)
     }
 
     /// A host's IPv4 addresses by the system's resolver (mDNS for `.local`); empty when it has none.

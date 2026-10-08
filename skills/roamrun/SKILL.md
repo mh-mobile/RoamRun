@@ -101,15 +101,23 @@ introduced; you can run the commands, they do the rest.
   made; `roamrun up <name>` shows which. **`--with` is held to the same rule as
   `--mac`: only when the user asked, and the name only from their own words.** Each
   side says what happened and what to do if the other went away; don't loop. Exit 0
-  on the far Mac: saved. On the introducing Mac: the far Mac said it saved; exit 1
-  with a line printed means hand that line to `roamrun devices add` there.
+  on the far Mac: saved (or "saved already"). On the introducing Mac: the far Mac
+  said it saved. Exit 1 on either: something happened — it says what; with a line
+  on standard output, hand that line to `roamrun devices add` on the far Mac (it
+  saves it there if it says "By hand"). Exit 2: the command itself was wrong.
+  **Both wait for a person**: the far Mac up to 17 minutes, the introducing Mac up
+  to 15. Run them in the background or with a timeout that long; a command you cut
+  short and start again makes a new offer the user's code no longer fits.
 - The user picks the entry on the device and types the code Device Hub shows on the
   far Mac. **Never pass a code on, in either direction**: the user reads it there.
-- `pair introduce` ends by itself (five minutes at most) and prints the device as a
-  line on standard output. It never says the pairing was made: it can't know. Exit 1
-  means no pairing was tried (time ran out, stopped, the far Mac wasn't waiting any
-  more): say which, don't loop.
+- `pair introduce` ends by itself (five minutes at most) and, when a pairing was
+  tried, prints the device as a line on standard output (exit 0). It never says the
+  pairing was made: it can't know. Exit 1 means no pairing was tried and prints no
+  line (time ran out, stopped, the far Mac wasn't waiting any more, or "Tailscale
+  doesn't say where … is on this Wi‑Fi": the user unlocks the device and opens
+  Tailscale on it): say which, don't loop.
 - On the far Mac: `roamrun devices add <line>` (`--as <name>` for another name;
+  `--peer <Tailscale name>` when it says no device has that name on this tailnet;
   "… is saved already, and this changes nothing": nothing to do;
   "… is that device already": `--replace <name>`, with the RoamRun app quit and
   that device's bridge down — it says so and stops if the app is running). Then

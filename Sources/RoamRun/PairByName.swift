@@ -12,6 +12,8 @@ enum PairWire {
         case offerRefused = "offer-refused"
         case unreachable
         case ambiguous
+        /// The Mac that offers made no offer in the time it waits.
+        case noOffer = "no-offer"
         case deadline
         case stopped
         case addressLost = "address-lost"
@@ -82,6 +84,7 @@ final class PairLink: @unchecked Sendable {
         let end = Date().addingTimeInterval(seconds)
         while true {
             if let nl = buffer.firstIndex(of: 0x0A) {
+                guard nl - buffer.startIndex <= PairWire.maxLine else { return .tooLong }
                 let line = String(decoding: buffer[buffer.startIndex..<nl], as: UTF8.self)
                 buffer.removeSubrange(buffer.startIndex...nl)
                 return .line(line)
@@ -99,8 +102,11 @@ final class PairLink: @unchecked Sendable {
     }
 
     @discardableResult
-    func send(_ message: PairWire.Message) -> Bool {
-        let bytes = Array((PairWire.line(message) + "\n").utf8)
+    func send(_ message: PairWire.Message) -> Bool { write(PairWire.line(message) + "\n") }
+
+    @discardableResult
+    func write(_ text: String) -> Bool {
+        let bytes = Array(text.utf8)
         var sent = 0
         while sent < bytes.count {
             let n = bytes[sent...].withUnsafeBytes { Darwin.send(fd, $0.baseAddress, $0.count, 0) }
@@ -277,7 +283,12 @@ enum PairByName {
                         try? await Task.sleep(for: pause)
                     }
                 }
-                guard let offer, link.send(.offer(offer)) else { continue }
+                guard let offer else {
+                    // Said, so the other Mac doesn't go on asking a Mac that has stopped.
+                    if stopped() { link.send(.ended(.stopped)) } else if Date() >= until { link.send(.ended(.noOffer)) }
+                    continue
+                }
+                guard link.send(.offer(offer)) else { continue }
                 say(.offerSent)
                 switch link.read(within: resultWindow, stop: stopped) {
                 case .line(let line):

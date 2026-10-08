@@ -39,6 +39,12 @@ struct MeshDevice: Identifiable, Hashable {
     var stableID: String?
 
     var ipv4: String? { ips.first(where: { $0.contains(".") }) }
+
+    /// The device chosen once another host is picked: a choice made for the user follows the
+    /// host — to no device where that host has none — and one they made stays.
+    static func follow(chosen: String?, auto: String?, match: String?) -> (chosen: String?, auto: String?) {
+        chosen == nil || chosen == auto ? (match, match) : (chosen, auto)
+    }
     var pathDescription: String {
         curAddr.isEmpty ? "via DERP relay (\(relay.isEmpty ? "?" : relay)) — works, but slower" : "direct (\(curAddr))"
     }

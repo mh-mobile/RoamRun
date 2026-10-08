@@ -348,7 +348,7 @@ roamrun pair xcode                                           # その Mac のペ
 # デバイスと同じ Wi‑Fi にいる Mac で（RoamRun にそのデバイスを保存済み）:
 roamrun pair introduce <offer> --mac cloud-mac --to iPhone   # cloud-mac: 離れた Mac の Tailscale 上の名前
 #   デバイスで: 設定 › プライバシーとセキュリティ › デベロッパモード › 「Pair with cloud-mac」、離れた Mac の Device Hub に出たコード
-#   自分で終わり、デバイスの登録を 1 行で出す
+#   自分で終わり、ペアリングが試みられたら、デバイスの登録を 1 行で出す
 
 # 離れた Mac に戻って:
 roamrun devices add <line>                                   # デバイスを保存（鍵も UDID も含まない）
@@ -370,13 +370,13 @@ roamrun up iPhone
 
 このために、離れた Mac は `pair xcode --with` が動いている間だけ、自分の Tailscale のアドレス（ポート 41830）で待ち受け、名指しされた Mac にだけ答えます。相手は、アドレスと、そのアドレスをその時点で持っていると Tailscale が言う端末の両方で確かめます。引き合わせる側の Mac は、何も待ち受けません。「保存した」は「ペアリングできた」ではありません。離れた Mac は、ペアリングが試みられたときにデバイスを保存し、できたかどうかは、そこでの `roamrun up` で分かります。離れた Mac のファイアウォールがオンなら、RoamRun への着信を許可する必要があります（始めるときに、そう表示します）。途中で接続が切れたら、それぞれが次にすることを表示します。上の、行を運ぶ形は、いつでも使えます。同じ tailnet の 2 台の Mac で確かめました。別の tailnet から共有された Mac では、確かめていません。
 
-`pair introduce` は、離れた Mac の申し出を、この Mac の Wi‑Fi に、Tailscale がその Mac に付けた名前で出し、デバイスからの 1 本の接続を tailnet 越しに取り次ぎます。ペアリングは、デバイスと離れた Mac の Xcode の間で行われます。鍵はどちらからも出ず、この Mac も通りません。接続は、Tailscale がデバイスのこの Wi‑Fi 上のアドレスを知っていれば、そのアドレスからだけ受けます（分からなければ、その Wi‑Fi の中からに広げ、そう表示します）。デバイスがペアリングを試みたら、または 5 分たったら止まり、名乗りも待ち受けも残しません。ペアリングができたかどうかは、この Mac には分かりません（コードの打ち間違いは、まだ打っていないのと同じに見えます）。なので、できたとは言いません。離れた Mac の `roamrun up` で分かります。
+`pair introduce` は、離れた Mac の申し出を、この Mac の Wi‑Fi に、Tailscale がその Mac に付けた名前で出し、デバイスからの 1 本の接続を tailnet 越しに取り次ぎます。ペアリングは、デバイスと離れた Mac の Xcode の間で行われます。鍵はどちらからも出ず、この Mac も通りません。接続は、デバイスのこの Wi‑Fi 上のアドレスからだけ受けます。そのアドレスは Tailscale から得るので、Tailscale が答えられないとき（デバイスがスリープしている、中継経由でしか届かない）は、始めません。デバイスのロックを解除して、Tailscale を開いてください。デバイスがペアリングを試みたら、または 5 分たったら止まり、名乗りも待ち受けも残しません。ペアリングができたかどうかは、この Mac には分かりません（コードの打ち間違いは、まだ打っていないのと同じに見えます）。なので、できたとは言いません。離れた Mac の `roamrun up` で分かります。
 
 どのコマンドも、運ぶ 1 行だけを標準出力に出します。離れた Mac に ssh できるなら、手で運ぶものはありません。
 
 ```sh
-OFFER=$(ssh cloud-mac roamrun pair xcode)
-LINE=$(roamrun pair introduce "$OFFER" --mac cloud-mac --to iPhone)
+OFFER=$(ssh cloud-mac roamrun pair xcode) &&
+LINE=$(roamrun pair introduce "$OFFER" --mac cloud-mac --to iPhone) &&
 ssh cloud-mac roamrun devices add "$LINE"
 ```
 
