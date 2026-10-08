@@ -253,6 +253,19 @@ roamrun up iPhone                                            # Ready: Xcode ther
 
 None of it needs the RoamRun app open on the far Mac; the commands are enough, and the app lists the device when it is next opened.
 
+When both Macs are on one tailnet they pass those two lines between themselves: each names the other, and nothing is carried.
+
+```sh
+# there: Device Hub › + › Pair Nearby Device (before or after), and
+roamrun pair xcode --with macbook-pro                # macbook-pro: this Mac's Tailscale name; it waits, 10 minutes at most
+# here:
+roamrun pair introduce --mac cloud-mac --to iPhone   # asks cloud-mac for its offer, stands in, hands it the device
+# there, once it says the device is saved:
+roamrun up iPhone
+```
+
+For that the far Mac listens on its Tailscale address (port 41830), only while `pair xcode --with` runs, and answers only the Mac it was given: by its address and by the machine Tailscale says holds that address at that moment. The Mac that introduces listens for nothing. “Saved” isn't “paired” — the far Mac saves the device when a pairing was tried, and `roamrun up` there shows whether it was made. A firewall on the far Mac has to let RoamRun in (it says so when it starts). If a connection is lost on the way, each side says what to do; the lines above always work. Tried between two Macs of one tailnet; a Mac shared in from another tailnet hasn't been.
+
 `pair introduce` announces the far Mac's offer on this Mac's Wi‑Fi, under the name Tailscale has for that Mac, and carries the device's one connection to it over the tailnet. The pairing is made between the device and Xcode on the far Mac: no key leaves either, and none passes through here. It takes connections from the device's own address on this Wi‑Fi when Tailscale knows it (else from that Wi‑Fi's hosts, and says so), stops when the device has tried to pair or after five minutes, and leaves nothing announced or listening. It can't tell whether the pairing was made — a wrong code looks the same from here as one not yet typed — so it doesn't say; `roamrun up` on the far Mac does.
 
 Each prints its line alone on standard output, so with ssh to the far Mac nothing is carried by hand:

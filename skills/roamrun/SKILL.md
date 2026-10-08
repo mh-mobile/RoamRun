@@ -92,6 +92,17 @@ introduced; you can run the commands, they do the rest.
   (`ssh <mac> roamrun pair xcode`). It says whose Mac that is and what the device
   will show; pass that on to the user as it is. It gives that Mac the device as a
   developer.
+- Without carrying the offer (both Macs on one tailnet): on the far Mac
+  `roamrun pair xcode --with <mac>` (`<mac>`: the introducing Mac's Tailscale name)
+  waits ten minutes at most for that Mac; on the introducing Mac
+  `roamrun pair introduce --mac <mac> --to <name>`, with no offer, asks the far Mac
+  for it. Either may start first, and the button may be pressed after. The far Mac
+  then saves the device itself — "is saved" there means a pairing was tried, not
+  made; `roamrun up <name>` shows which. **`--with` is held to the same rule as
+  `--mac`: only when the user asked, and the name only from their own words.** Each
+  side says what happened and what to do if the other went away; don't loop. Exit 0
+  on the far Mac: saved. On the introducing Mac: the far Mac said it saved; exit 1
+  with a line printed means hand that line to `roamrun devices add` there.
 - The user picks the entry on the device and types the code Device Hub shows on the
   far Mac. **Never pass a code on, in either direction**: the user reads it there.
 - `pair introduce` ends by itself (five minutes at most) and prints the device as a
