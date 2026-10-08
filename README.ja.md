@@ -376,7 +376,7 @@ ssh cloud-mac roamrun devices add "$LINE"
 - 借りた Mac やクラウドの Mac で作ったペアリングは、デバイスで削除するまで、そのマシンのディスク、イメージ、スナップショットに残ります。
 - 離れた Mac が保存しているデバイスの情報は、この Mac のものの写しです。この Mac のものが合わなくなったら（「制限・既知の課題」を参照）、ここでデバイスを追加し直してから `roamrun devices export <name>`、離れた Mac で、アプリとそのデバイスのブリッジを止めたうえで `roamrun devices add <line> --replace <name>`。
 
-確かめた範囲: iPhone 15 Pro（iOS 27）、Xcode 27、離れた Mac は仮想の Mac とクラウドの Mac（Tailscale の中継サーバー経由を含む）で、ペアリング、ブリッジの Ready、Xcode の実行先に出ること、`devicectl` での起動、仮想の Mac からは `lldb` でのブレークポイントまで。2 台の Mac から同時にデバイスを使えました。未確認: iPad、仮想ではない離れた Mac、ほかの Tailscale 利用者の Mac やタグ付きの Mac、ファイアウォールがオンの引き合わせ側の Mac。
+確かめた範囲: iPhone 15 Pro（iOS 27）、Xcode 27。これらのコマンドでは、離れた Mac を仮想の Mac にして、Tailscale の直結の経路で、ペアリング、`devices add`、ブリッジの Ready、`devicectl` での起動、`lldb` でのブレークポイントまで。2 台の Mac から同時にデバイスを使えました。コマンドができる前に同じ手順を手作業で行ったときは、クラウドの Mac と、Tailscale の中継サーバー経由でも、ペアリング、ブリッジの Ready、Xcode の実行先に出ること、`devicectl` での起動まで確かめています。未確認: 中継経由でのこれらのコマンド、iPad、仮想ではない離れた Mac、ほかの Tailscale 利用者の Mac やタグ付きの Mac、ファイアウォールがオンの引き合わせ側の Mac。
 
 ## Mac に作るもの・アンインストール
 

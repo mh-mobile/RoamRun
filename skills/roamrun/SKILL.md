@@ -350,6 +350,13 @@ already-running app, and never exits on its own — run it in the background:
   (iOS Tailscale sometimes shows "MagicSock function ReceiveIPv4 is not running"
   and stops passing data while looking connected), to keep the Tailscale app
   updated, and to check it's on Wi-Fi.
+- "doesn't recognize …'s pairing", or "answered by another device" → what this Mac
+  has saved of the device no longer fits. Where the Mac can be on the device's
+  Wi‑Fi, the user removes the device in RoamRun and adds it again there. On a Mac
+  that never is: a Mac that is runs `roamrun devices export <name>`, and here
+  `roamrun devices add <line> --replace <name>` (RoamRun app quit, that bridge
+  down). If that doesn't bring it back, Xcode's pairing here is gone: the user has
+  it introduced again (section 2).
 - `The peer is no longer reachable` → macOS rebuilds the control channel about
   every 42 s; retry the command once, then run `doctor`.
 - To see when a session was lost and what came before (`status` only says now):

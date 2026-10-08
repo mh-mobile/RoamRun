@@ -1945,7 +1945,7 @@ enum CLI {
             let ours = plain(p.instanceName) ? adverts("Resolved bonjour advert \(p.instanceName) to identity").last { $0.0 == p.instanceName } : nil
             if let ours, ours.1 == nil {
                 check(false, "This Mac does not recognize the device's pairing (identity nil)",
-                      fix: "Put the device on this Mac's Wi-Fi, remove it in RoamRun and add it again. If Xcode lost it too, pair it in Xcode first.")
+                      fix: "Put the device on this Mac's Wi-Fi, remove it in RoamRun and add it again; a Mac never on its Wi-Fi takes it again from one that is (`roamrun devices export` there, `roamrun devices add <line> --replace` here). If Xcode lost it too, pair it in Xcode first (from afar: `roamrun pair xcode`, and have this Mac introduced again).")
             } else if ours != nil || (udid.map(plain) == true && adverts("associated with udid \(udid ?? "")")
                 .contains { $0.1?.caseInsensitiveCompare(udid ?? "") == .orderedSame }) {
                 check(true, "This Mac recognizes the device's pairing")

@@ -272,7 +272,7 @@ ssh cloud-mac roamrun devices add "$LINE"
 - A pairing made on a rented or cloud Mac stays with that machine's disk, image and snapshots until it is removed on the device.
 - What the far Mac has saved of the device is a copy of this Mac's. If this Mac's stops matching (see Limitations), add the device again here, then `roamrun devices export <name>` and, there, `roamrun devices add <line> --replace <name>` with the app and that device's bridge stopped.
 
-Tried with an iPhone 15 Pro on iOS 27 and Xcode 27, with a virtual Mac and a cloud Mac as the far one, also over Tailscale's relay servers: pairing, the bridge Ready, the device as a run destination in Xcode, `devicectl` launch, and from the virtual Mac `lldb` at a breakpoint. Both Macs used the device at the same moment. Not tried: an iPad, a far Mac that isn't virtual, a far Mac of another Tailscale user or a tagged one, an introducing Mac with its firewall on.
+Tried with an iPhone 15 Pro on iOS 27 and Xcode 27. These commands, from a virtual Mac as the far one, on a direct Tailscale path: pairing, `devices add`, the bridge Ready, `devicectl` launch and `lldb` at a breakpoint, with both Macs using the device at the same moment. The same steps done by hand before the commands existed, also from a cloud Mac and over Tailscale's relay servers: pairing, the bridge Ready, the device as a run destination in Xcode and `devicectl` launch. Not tried: the commands on a relayed path, an iPad, a far Mac that isn't virtual, a far Mac of another Tailscale user or a tagged one, an introducing Mac with its firewall on.
 
 ## Installing without the bridge: over the air
 
