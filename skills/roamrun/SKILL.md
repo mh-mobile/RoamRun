@@ -110,6 +110,7 @@ introduced; you can run the commands, they do the rest.
   means no pairing was tried (time ran out, stopped, the far Mac wasn't waiting any
   more): say which, don't loop.
 - On the far Mac: `roamrun devices add <line>` (`--as <name>` for another name;
+  "… is saved already, and this changes nothing": nothing to do;
   "… is that device already": `--replace <name>`, with the RoamRun app quit and
   that device's bridge down — it says so and stops if the app is running). Then
   `roamrun up <name>`: Ready means the pairing was made. None of this needs the

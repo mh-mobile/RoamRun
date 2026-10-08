@@ -194,6 +194,11 @@ enum CLI {
             guard let new = Introduction.profile(from: device, peer: found, name: wantedName) else { throw Refusal("\(found.dnsName) has no IPv4 address on the tailnet") }
             // Before the name: a device saved already is the likelier reason its name is taken.
             if let same = saved.first(where: { ProfileStore.sameDevice($0, new) }) {
+                // Paired again with nothing moved: there is nothing to put in its place.
+                if Introduction.unchanged(same, by: device, at: new.providerIP) {
+                    print("\(same.displayName) is saved already, and this changes nothing in it. Next: roamrun up \(shellName(same.displayName))")
+                    return
+                }
                 throw Refusal("\(same.displayName) is that device already. To put this in its place: --replace \(shellName(same.displayName))")
             }
             if let problem = saved.nameProblem(wantedName) { throw Refusal("\(problem) Give it one: --as <name>") }

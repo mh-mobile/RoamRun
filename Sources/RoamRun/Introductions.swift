@@ -170,6 +170,12 @@ extension Introduction {
         return whole
     }
 
+    /// What is saved of a device already says all a line for it does.
+    static func unchanged(_ saved: DeviceProfile, by device: Device, at ip: String) -> Bool {
+        guard let have = Introduction.device(of: saved) else { return false }
+        return have.port == device.port && have.txt == device.txt && saved.providerIP == ip
+    }
+
     /// The device to save from a line: where it is comes from this Mac's own Tailscale (`peer`), never the line.
     static func profile(from device: Device, peer: MeshDevice, name: String) -> DeviceProfile? {
         guard let ip = peer.ipv4, let identifier = device.txt["identifier"] else { return nil }

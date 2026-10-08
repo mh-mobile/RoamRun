@@ -724,6 +724,16 @@ import ServiceManagement
     #expect(made?.providerIP == "100.64.0.9" && made?.providerHostName == "phone-here" && made?.udid == nil)
     #expect(made?.instanceName == saved.txt["identifier"] && made?.serviceType == "_remotepairing._tcp" && made?.displayName == "Test iPhone")
     #expect(Introduction.profile(from: device, peer: MeshDevice(id: "n2", name: "v6", os: "iOS", ips: ["fd7a::9"], online: true), name: "x") == nil)
+    // Paired again, nothing moved: what is saved says it all already — under any name, with a UDID or without.
+    guard var kept = made else { return }
+    kept.displayName = "Another name"; kept.udid = "00008130-000C1C5C307A8D3A"
+    #expect(Introduction.unchanged(kept, by: device, at: "100.64.0.9"))
+    #expect(!Introduction.unchanged(kept, by: device, at: "100.64.0.10"))
+    var moved = device; moved.port += 1
+    #expect(!Introduction.unchanged(kept, by: moved, at: "100.64.0.9"))
+    moved = device; moved.txt["authTag"] = "other"
+    #expect(!Introduction.unchanged(kept, by: moved, at: "100.64.0.9"))
+    #expect(!Introduction.unchanged(half, by: device, at: half.providerIP))
 }
 
 // With the other relays on the loopback, one at a time: they count the pairs open in the process.
