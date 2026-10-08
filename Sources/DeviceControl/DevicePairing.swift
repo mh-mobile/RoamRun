@@ -24,6 +24,32 @@ public final class DevicePairing: @unchecked Sendable {
     private let advert: DNSServiceRef?
     /// What the device's Settings lists this Mac as.
     public let name: String
+    /// Where it listens and what would be announced of it: what another Mac announces in its stead.
+    public let port: UInt16
+    public let txt: [String: String]
+
+    /// Listens on a socket of the caller's making, for connections from `only` alone, and
+    /// announces nothing: another Mac stands in for this one where the device is.
+    /// `socket` is this object's from the call on, whether or not it throws.
+    public init(name: String, host: String, socket: Int32, only: String) throws {
+        var said: UnsafeMutablePointer<CChar>?
+        var error: UnsafeMutablePointer<CChar>?
+        guard let listening = rr_pairing_listen_on(name, Self.model, host, socket, only, &said, &error) else {
+            defer { rr_string_free(error) }
+            throw DeviceSession.Failure.message(error.map { String(cString: $0) } ?? "can't listen")
+        }
+        defer { rr_string_free(said) }
+        guard let said, let object = try? JSONSerialization.jsonObject(with: Data(String(cString: said).utf8)) as? [String: Any],
+              let port = (object["port"] as? Int).flatMap(UInt16.init(exactly:)), let txt = object["txt"] as? [String: String] else {
+            rr_pairing_free(listening)
+            throw DeviceSession.Failure.message("unreadable advert")
+        }
+        self.pairing = listening
+        self.advert = nil
+        self.name = name
+        self.port = port
+        self.txt = txt
+    }
 
     /// Starts listening and advertising. Both networks have to be the same one: the device
     /// finds this by Bonjour. `host` is this Mac's own, the same each time: what the device
@@ -66,6 +92,8 @@ public final class DevicePairing: @unchecked Sendable {
         self.pairing = listening
         self.advert = advert
         self.name = name
+        self.port = UInt16(exactly: port) ?? 0
+        self.txt = txt
         whole = true
     }
 

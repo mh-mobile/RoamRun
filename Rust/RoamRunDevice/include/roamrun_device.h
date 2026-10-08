@@ -141,6 +141,15 @@ RRPairing *rr_pairing_listen(const char *name, const char *model, const char *ho
                              char **advert, char **error);
 
 /**
+ * As rr_pairing_listen, on a socket of the caller's making and for one peer: `socket` is a
+ * listening TCP socket (it is this function's from the call on, closed on failure too), and
+ * connections from any address but `only` are dropped unanswered. Nothing is to be published
+ * for it by the caller unless a device is to find it by itself.
+ */
+RRPairing *rr_pairing_listen_on(const char *name, const char *model, const char *host,
+                                int socket, const char *only, char **advert, char **error);
+
+/**
  * Waits for a device to pair, however long one takes to come; once the code is shown it has
  * three minutes to be entered. After rr_pairing_cancel this returns at once. `code` is called
  * with the six digits to show the user (on another thread, before this returns). On success the pairing is

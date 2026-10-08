@@ -225,6 +225,17 @@ tunnel and Xcode has to run again.
     (`lsof -nP -iTCP:41830`). From a third machine of the tailnet, `nc <far Mac> 41830` while it
     waits: "Turned away a connection from …".
 
+28. Device control on a far Mac (when `pair control`, the app's pairing, or the pairing
+    library changed). On the far Mac (item 27's will do), the RoamRun app open and no pairing
+    for the device held: `roamrun pair control --with <this Mac's Tailscale name>`; here, in a
+    terminal of your own, `roamrun pair introduce --mac <its Tailscale name> --to <name>` → it
+    says "for device control", the device lists "Pair with <its Tailscale name>", and the code
+    shows here and not there. Typed: here "is paired … switched on there", there exit 0, and
+    `roamrun look <name>` there gives the screen. `lsof -nP -iTCP -sTCP:LISTEN | grep RoamRun`
+    there shows nothing on its Tailscale address. Again without removing the pairing there:
+    both say that Mac already holds one, and nothing is announced here. And once with the far
+    command killed (`kill -9`) while it waits: within half a minute the app listens no more.
+
 ## Debug logs worth a look after an iOS or Xcode update
 
 - What a bridge did and when (kept by the system, no `--level debug`): `log show` with

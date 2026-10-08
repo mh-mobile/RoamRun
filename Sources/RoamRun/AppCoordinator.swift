@@ -1,4 +1,5 @@
 import CryptoKit
+import DeviceControl
 import Foundation
 import AppKit
 import ServiceManagement
@@ -120,6 +121,20 @@ final class AppCoordinator: ObservableObject {
                 }
                 DeviceControlAllowed.shared.prune(keeping: marks)
             }
+        }
+        deviceControl.onIntroduction = { [introductions] request in introductions.answer(request) }
+        introductions.busy = { [deviceControl] in deviceControl.isPairing }
+        introductions.ready = { [deviceControl] in try deviceControl.keyReady() }
+        introductions.listen = { ip, interface, only in
+            let socket = try PairLink.listening(ip: ip, port: 0, interface: interface)
+            let pairing = try DevicePairing(name: Self.controlHostName, host: DeviceControlHub.hostID(in: ProfileStore.directory), socket: socket.fd, only: only)
+            return .init(listener: pairing, port: pairing.port, txt: pairing.txt)
+        }
+        introductions.held = { [weak self] device in
+            DispatchQueue.main.sync { MainActor.assumeIsolated { self?.holdsPairing(like: device) ?? false } }
+        }
+        introductions.keep = { [weak self] device, paired, wanted in
+            self?.keepIntroduced(device, paired, wanted: wanted) ?? .failure(.init(.failed, "stopping"))
         }
         deviceControl.onImport = { [weak self] path, name, wanted in self?.importPairing(path: path, as: name, wanted: wanted) ?? .failure("stopping") }
         syncDeviceControl()
@@ -1005,33 +1020,42 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
-    /// Asked for by `roamrun key import`, on the thread that answers it: the device is found
-    /// or added, the pairing kept only if it connects, and then the file is removed.
-    nonisolated private func importPairing(path: String, as name: String?, wanted: @Sendable () -> Bool) -> DeviceControlWire.Response {
-        importing.lock()
-        defer { importing.unlock() }
-        // Whoever asked may have left while it waited its turn, or while the pairing was tried:
-        // nothing is saved for them then, and their file stays. Once saving begins it is seen through.
-        guard wanted() else { return .failure(DeviceControlHub.nobodyWaits) }
-        let file = URL(fileURLWithPath: path)
-        let fd: Int32, data: Data
-        do { (fd, data) = try DeviceControlHub.readTaken(path) } catch { return .failure("\(error)") }
-        defer { close(fd) }
-        guard let shared = SharedPairing.read(data), let udid = shared.device.udid else {
-            return .failure("\(path) isn't a pairing made by `roamrun key create`")
-        }
+    /// A pairing taken in with its device.
+    struct TakenIn {
+        var saved: DeviceProfile
+        /// Switched on, and known to be.
+        var on: Bool
+        /// A pairing made on this Mac meanwhile took its place.
+        var replacedMeanwhile: Bool
+    }
+    struct NotTaken: Error {
+        var why: String
+        /// This Mac holds a pairing for the device, and wasn't to put another in its place.
+        var exists = false
+        /// The device may know the pairing all the same: it was tried, and went no further here.
+        var made = false
+        init(_ why: String, exists: Bool = false, made: Bool = false) { self.why = why; self.exists = exists; self.made = made }
+    }
+
+    /// The device found or added, the pairing kept only if it connects, and switched on — in
+    /// that order, each only after the one before. Under `importing`, off the main thread.
+    nonisolated private func takeIn(_ given: DeviceProfile, udid: String, pairing: Data, as name: String?, replacing: Bool,
+                                    wanted: @Sendable () -> Bool) -> Result<TakenIn, NotTaken> {
         // Where it goes is worked out first and saved last: a pairing that doesn't connect leaves
         // the saved devices as they were.
-        let placed = DispatchQueue.main.sync { MainActor.assumeIsolated { profiles.placement(of: shared.device, udid: udid, as: name) } }
+        let placed = DispatchQueue.main.sync { MainActor.assumeIsolated { profiles.placement(of: given, udid: udid, as: name) } }
         let place: DevicePlacement
         switch placed {
         case .success(let p): place = p
-        case .failure(let why): return .failure("\(why)")
+        case .failure(let why): return .failure(.init("\(why)"))
         }
         let p = place.profile
+        // Not in the place of one this Mac holds, when that wasn't asked: the one held would be gone, and with it the way back.
+        if !replacing, deviceControl.state(of: p.id, udid: p.udid ?? udid).paired {
+            return .failure(.init("this Mac already holds a pairing for “\(p.displayName)”: remove it first (the RoamRun app, on the device's page), then pair again", exists: true))
+        }
         var target = DeviceControlHub.Target(id: p.id, name: p.displayName, ip: p.providerIP, port: p.remotePairingPort, udid: p.udid ?? udid)   // as it is spelled here, when known
-        var device = shared.device
-        let pairing = Data(shared.pairing.utf8)
+        var device = given
         // Tried, the device saved, the pairing sealed, the file removed — in that order, each only
         // after the one before: a step that fails leaves the file where it is and a pairing the
         // device had before as it was (a saved device may have learned its UDID by then).
@@ -1041,12 +1065,12 @@ final class AppCoordinator: ObservableObject {
             // device restarts. A device not saved here has no page to find it from: it is looked
             // for now, at the address the file names, and the pairing tried there.
             guard place.isNew, Self.portMoved("\(error)"), let port = Self.portNow(at: target.ip),
-                  port != target.port else { return .failure("\(error)") }
+                  port != target.port else { return .failure(.init("\(error)")) }
             target.port = port
             device.remotePairingPort = port
-            do { sealing = try deviceControl.tryPairing(pairing, for: target) } catch { return .failure("\(error)") }
+            do { sealing = try deviceControl.tryPairing(pairing, for: target) } catch { return .failure(.init("\(error)")) }
         }
-        guard wanted() else { return .failure(DeviceControlHub.nobodyWaits) }
+        guard wanted() else { return .failure(.init(DeviceControlHub.nobodyWaits)) }
         // The device saved and its pairing sealed in one turn of the main thread, where a device
         // is removed too: removed before, it is placed again here; removed after, its pairing is
         // there to go with it. Nothing gets in between.
@@ -1068,7 +1092,7 @@ final class AppCoordinator: ObservableObject {
         }
         let saved: DeviceProfile
         switch kept {
-        case .failure(let why): return .failure("\(why)")
+        case .failure(let why): return .failure(.init("\(why)", made: true))
         case .success(let s): saved = s
         }
         // The connection takes its time, and is made off that thread.
@@ -1083,8 +1107,58 @@ final class AppCoordinator: ObservableObject {
         let asked = DeviceControlAllowed.shared.now()
         // On is what it is known as afterwards: a switch-off that came meanwhile (Remove, the page) stands.
         let on = switching.sync { mark.map { DeviceControlAllowed.shared.set($0, true, asked: asked) && DeviceControlAllowed.shared.known($0) == true } ?? false }
+        return .success(.init(saved: saved, on: on, replacedMeanwhile: mark == nil))
+    }
+
+    /// Pairings another Mac introduces (`roamrun pair control --with`): made here, kept as one brought in is.
+    nonisolated let introductions = ControlIntroductions()
+
+    /// Whether this Mac holds a pairing for the saved device a candidate is.
+    private func holdsPairing(like device: DeviceProfile) -> Bool {
+        profiles.contains { p in
+            (p.providerIP == device.providerIP || p.instanceName == device.instanceName) && controlUDID(p).map { deviceControl.state(of: p.id, udid: $0).paired } == true
+        }
+    }
+
+    /// A pairing the app made for a device another Mac introduced: kept as one brought in is,
+    /// but never in the place of one this Mac holds.
+    nonisolated private func keepIntroduced(_ device: DeviceProfile, _ paired: DevicePairing.Paired, wanted: @Sendable () -> Bool) -> Result<ControlIntroductions.Kept, ControlIntroductions.NotKept> {
+        guard !paired.udid.isEmpty, DeviceControlWire.plausible(udid: paired.udid) else {
+            return .failure(.init(.notKept, "\(paired.name) paired without saying which device it is. Nothing was kept; the pairing just made can be removed on it, in Settings."))
+        }
+        importing.lock()
+        defer { importing.unlock() }
+        switch takeIn(device, udid: paired.udid, pairing: paired.pairing, as: nil, replacing: false, wanted: wanted) {
+        case .success(let taken): return .success(.init(name: taken.saved.displayName, on: taken.on))
+        case .failure(let why):
+            let how: PairWire.Refusal = why.exists ? .exists : why.why == DeviceControlHub.nobodyWaits ? .cancelled : .notKept
+            return .failure(.init(how, why.why + (how == .cancelled ? "" : " The pairing just made can be removed on the device, in Settings › Privacy & Security › Developer Mode.")))
+        }
+    }
+
+    /// Asked for by `roamrun key import`, on the thread that answers it: the device is found
+    /// or added, the pairing kept only if it connects, and then the file is removed.
+    nonisolated private func importPairing(path: String, as name: String?, wanted: @Sendable () -> Bool) -> DeviceControlWire.Response {
+        importing.lock()
+        defer { importing.unlock() }
+        // Whoever asked may have left while it waited its turn, or while the pairing was tried:
+        // nothing is saved for them then, and their file stays. Once saving begins it is seen through.
+        guard wanted() else { return .failure(DeviceControlHub.nobodyWaits) }
+        let file = URL(fileURLWithPath: path)
+        let fd: Int32, data: Data
+        do { (fd, data) = try DeviceControlHub.readTaken(path) } catch { return .failure("\(error)") }
+        defer { close(fd) }
+        guard let shared = SharedPairing.read(data), let udid = shared.device.udid else {
+            return .failure("\(path) isn't a pairing made by `roamrun key create`")
+        }
+        let taken: TakenIn
+        switch takeIn(shared.device, udid: udid, pairing: Data(shared.pairing.utf8), as: name, replacing: true, wanted: wanted) {
+        case .failure(let why): return .failure(why.why)
+        case .success(let t): taken = t
+        }
+        let saved = taken.saved, on = taken.on
         let left = DeviceControlHub.removeTaken(file, readThrough: fd)
-        let off = on ? nil : mark == nil
+        let off = on ? nil : taken.replacedMeanwhile
             ? "a pairing made on this Mac meanwhile took this one's place: the device uses that one"
             : "device control is switched off for it (the Keychain didn't keep it switched on): the user switches it on in the RoamRun app, on the device's page"
         let said = [left, off].compactMap { $0 }

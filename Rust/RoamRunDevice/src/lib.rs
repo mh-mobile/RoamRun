@@ -1183,6 +1183,8 @@ pub struct RRPairing {
     info: PairableHostInfo,
     file: Mutex<RpPairingFile>,
     cancelled: AtomicBool,
+    /// The one address connections are taken from; any, when none is given.
+    only: Option<std::net::IpAddr>,
 }
 
 /// A device that connects gets this long to ask for a code; one that stays silent is dropped
@@ -1196,13 +1198,39 @@ const TICK: Duration = Duration::from_millis(250);
 /// `name`, `model` and `host` are null or NUL-terminated strings; `advert` and `error` are null or writable.
 #[no_mangle]
 pub unsafe extern "C" fn rr_pairing_listen(name: *const c_char, model: *const c_char, host: *const c_char, advert: *mut *mut c_char, error: *mut *mut c_char) -> *mut RRPairing {
+    unsafe { rr_pairing_listen_on(name, model, host, -1, std::ptr::null(), advert, error) }
+}
+
+/// # Safety
+/// As rr_pairing_listen. `socket` is -1, or a listening TCP socket that becomes this
+/// function's whatever it returns; `only` is null or a NUL-terminated address.
+#[no_mangle]
+pub unsafe extern "C" fn rr_pairing_listen_on(name: *const c_char, model: *const c_char, host: *const c_char, socket: std::ffi::c_int, only: *const c_char, advert: *mut *mut c_char, error: *mut *mut c_char) -> *mut RRPairing {
+    use std::os::fd::FromRawFd;
     let arg = |p: *const c_char| (!p.is_null()).then(|| unsafe { CStr::from_ptr(p) }.to_str().ok()).flatten();
+    // Taken first: every way out from here closes it.
+    let given = (socket >= 0).then(|| unsafe { std::net::TcpListener::from_raw_fd(socket) });
+    let only = match arg(only).map(|a| a.parse::<std::net::IpAddr>()) {
+        None if only.is_null() => None,
+        Some(Ok(address)) => Some(address),
+        _ => {
+            unsafe { set_error(error, "the address to take connections from isn't one".into()) };
+            return std::ptr::null_mut();
+        }
+    };
     let listening = match (arg(name), arg(model), arg(host)) {
         (Some(name), Some(model), Some(host)) => tokio::runtime::Builder::new_multi_thread().worker_threads(1).thread_stack_size(STACK).enable_all().build()
             .map_err(|e| format!("no runtime: {e}"))
             .and_then(|runtime| {
-                // Both families: the device reaches this Mac by whichever address its name resolves to.
-                let listener = runtime.block_on(TcpListener::bind("[::]:0")).map_err(|e| format!("can't listen: {e}"))?;
+                let listener = match given {
+                    Some(given) => {
+                        given.set_nonblocking(true).map_err(|e| format!("can't listen: {e}"))?;
+                        let _in = runtime.enter();
+                        TcpListener::from_std(given).map_err(|e| format!("can't listen: {e}"))?
+                    }
+                    // Both families: the device reaches this Mac by whichever address its name resolves to.
+                    None => runtime.block_on(TcpListener::bind("[::]:0")).map_err(|e| format!("can't listen: {e}"))?,
+                };
                 let port = listener.local_addr().map_err(|e| format!("no port: {e}"))?.port();
                 // One identity per `host`, whatever it is named: pairing again replaces the
                 // device's record of it, and another Mac of the same name doesn't.
@@ -1212,7 +1240,7 @@ pub unsafe extern "C" fn rr_pairing_listen(name: *const c_char, model: *const c_
                 let txt = info.mdns_txt_records(file.identifier()).iter()
                     .map(|(k, v)| format!("{}:{}", quoted(k), quoted(v))).collect::<Vec<_>>().join(",");
                 let said = format!("{{\"port\":{port},\"identifier\":{},\"txt\":{{{txt}}}}}", quoted(file.identifier()));
-                Ok((RRPairing { runtime, listener, info, file: Mutex::new(file), cancelled: AtomicBool::new(false) }, said))
+                Ok((RRPairing { runtime, listener, info, file: Mutex::new(file), cancelled: AtomicBool::new(false), only }, said))
             }),
         _ => Err("bad arguments".into()),
     };
@@ -1283,13 +1311,21 @@ fn own_hardware(identifier: &str) -> (String, [u8; 6]) {
     (serial, mac)
 }
 
+/// Whether a connection from `from` is one to answer. Written as IPv4 or as IPv4 in IPv6's
+/// form, an address is one address.
+fn taken(from: std::net::IpAddr, only: Option<std::net::IpAddr>) -> bool {
+    only.is_none_or(|only| from.to_canonical() == only.to_canonical())
+}
+
 async fn accept_pairing(pairing: &RRPairing, show: &(impl Fn(&str) + Sync)) -> Result<(idevice::remote_pairing::PeerDevice, String), String> {
     let cancelled = || pairing.cancelled.load(Ordering::Relaxed);
     loop {
         let stream = loop {
             if cancelled() { return Err("cancelled".into()); }
             if let Ok(accepted) = tokio::time::timeout(TICK, pairing.listener.accept()).await {
-                break accepted.map_err(|e| format!("can't accept: {e}"))?.0;
+                let (stream, from) = accepted.map_err(|e| format!("can't accept: {e}"))?;
+                if !taken(from.ip(), pairing.only) { continue; }
+                break stream;
             }
         };
         let mut file = pairing.file.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -1338,6 +1374,17 @@ mod tests {
     use super::*;
 
     fn io(kind: std::io::ErrorKind) -> idevice::IdeviceError { idevice::IdeviceError::Socket(std::io::Error::from(kind)) }
+
+    #[test]
+    fn a_pairing_for_one_peer_takes_that_address_however_it_is_written() {
+        let ip = |text: &str| text.parse::<std::net::IpAddr>().unwrap();
+        assert!(taken(ip("192.168.0.9"), None));
+        assert!(taken(ip("100.64.0.1"), Some(ip("100.64.0.1"))));
+        assert!(taken(ip("::ffff:100.64.0.1"), Some(ip("100.64.0.1"))));
+        assert!(!taken(ip("100.64.0.2"), Some(ip("100.64.0.1"))));
+        assert!(!taken(ip("192.168.0.9"), Some(ip("100.64.0.1"))));
+        assert!(!taken(ip("::1"), Some(ip("100.64.0.1"))));
+    }
 
     #[test]
     fn an_input_is_sent_again_only_when_none_of_it_went() {

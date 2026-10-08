@@ -220,7 +220,17 @@ roamrun elements iPhone                   # what accessibility says is on the sc
 
 Each `look` serves one action: look, act, look again. The image is the screen as the device holds it: an app in landscape shows turned on its side, and its points are still the image's. For an agent, the same are MCP tools: `claude mcp add roamrun -- roamrun mcp`, or the like for another agent; the skill (`roamrun init`) tells it how to use them.
 
-**From a Mac that can't pair itself.** Setting up needs the Mac and the device on one Wi‑Fi, which a Mac elsewhere (in a data centre, say) never is. Make its pairing on a Mac that is, and take it there:
+**From a Mac that can't pair itself.** Setting up needs the Mac and the device on one Wi‑Fi, which a Mac elsewhere (in a data centre, say) never is. When both Macs are on one tailnet, a Mac on the device's Wi‑Fi introduces it, and the far Mac makes its own pairing — no key is carried, and none is written to a file:
+
+```sh
+roamrun pair control --with macbook-pro              # there, with the RoamRun app open: waits for this Mac, 10 minutes at most
+roamrun pair introduce --mac cloud-mac --to iPhone   # here, run by you: pick “cloud-mac” on the device and type the code this prints
+roamrun look iPhone                                  # there, once it says the device is paired
+```
+
+The names are the Macs' Tailscale names. The far Mac's app listens for the pairing on its Tailscale address alone, from this Mac alone, and announces nothing; this Mac stands in for it where the device is, as for Xcode's pairing ([below](#a-mac-the-device-was-never-near)), and shows the code the far Mac's app made. Run `pair introduce` yourself, in a terminal of your own: an agent that ran it would have the code in its output. The far Mac needs the RoamRun app open in a session that is logged in (it keeps the pairing sealed, with a key in that login's Keychain) — Xcode isn't needed there, nor the device saved. It doesn't put a pairing in the place of one that Mac already holds: remove that one first, on the device's page there. `roamrun pair control --attempt <id>` on the far Mac says what came of an attempt whose end didn't reach this Mac.
+
+Without Tailscale between the two Macs, make the pairing on a Mac that is on the device's Wi‑Fi and take it there:
 
 ```sh
 roamrun key create iPhone ~/iphone-for-cloud.json --as cloud-mac   # here: pick "cloud-mac" on the device, enter the code

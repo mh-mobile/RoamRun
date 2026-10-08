@@ -28,9 +28,10 @@ bounded.
   qualifies, as it could reach the device's Tailscale address anyway) — anything
   else is dropped immediately. It forwards bytes unchanged to the device's Tailscale (or
   manually entered) address and never reads, stores or alters them.
-- **Two commands take a connection from another host, each only while it runs:**
-  `roamrun pair introduce`, from the device's LAN, and `roamrun pair xcode --with`,
-  from one Mac of the tailnet (the next point). `pair introduce` lets a Mac that was never on the
+- **Three commands take a connection from another host, each only while it runs:**
+  `roamrun pair introduce`, from the device's LAN, and `roamrun pair xcode --with`
+  and `roamrun pair control --with`, from one Mac of the tailnet (the next point,
+  and the one on device control below). `pair introduce` lets a Mac that was never on the
   device's network pair with it: for five minutes at most it announces that Mac's
   offer to pair on this Mac's LAN interface — on that one interface, or not at all —
   and relays what connects to the port it opens there to that Mac's pairing port,
@@ -180,6 +181,38 @@ bounded.
   ask for a code and then say nothing, which holds the wait (three minutes at
   most each time). It gets nothing by it: without the code shown on this Mac
   there is no pairing. Pair on a network you trust.
+- **`roamrun pair control --with <Mac>` has the app here pair for device control with a
+  device that Mac introduces.** No key is carried and none is written unsealed:
+  the app makes the pairing and keeps it as it keeps one it set up itself. What to know:
+  - The app listens for the pairing on this Mac's Tailscale address and interface
+    alone, takes connections from the one Mac named alone, and announces nothing. It
+    listens only for an attempt its command began: ten minutes for the other Mac to
+    come, nine more for the device; twelve at most whatever the command does, and
+    not past fifteen seconds without the command asking how it stands (a command
+    killed leaves no listener). The command itself listens as `pair xcode --with`
+    does, on port 41830.
+  - The other Mac is held to being the one named exactly as for `pair xcode --with`:
+    the machine, by Tailscale's lasting id — not the program or the person on it.
+  - **The code is shown on the Mac that introduces, and comes from this one.** It
+    reaches that Mac over the same connection, as six digits or not at all. So it
+    says "this is the pairing the Mac you named began", and nothing about who sits
+    at that Mac. The command here prints it nowhere and the app shows it on no
+    screen — which keeps it out of an agent's output here, and no more than that:
+    a program running as you on this Mac can ask the app what the command asks.
+    Run `pair introduce` yourself: its output has the code.
+  - What pairs is kept only if it opens a connection to the device at its address
+    on this Mac's own tailnet, and never in the place of a pairing this Mac already
+    holds (it says so before the device is asked anything, and again before it
+    saves). Kept, it is switched on, as one set up here is; when the Keychain
+    doesn't keep the switch it stays off and says so, and the pairing stays.
+  - A stop that comes while what paired is being kept doesn't undo it: the device
+    would be left knowing a pairing nothing holds. Stopped before, nothing is kept
+    here — the device may list the pairing all the same: remove it there.
+  - The device, its pairing and the switch are three things in three places, written
+    one after the other. An app that dies between them can leave a device saved
+    without a pairing (as any device added and not set up), or a pairing switched
+    off. Nothing is cleaned up at the next start, so nothing kept is removed by it.
+  - Not tried with a Mac shared in from another tailnet.
 - **A pairing made for another Mac is a key in a file.** `roamrun key create`
   pairs once more, under an identity of its own, and writes that pairing to a
   file (yours only, not sealed: the Mac it is for has another key). Nothing of it
