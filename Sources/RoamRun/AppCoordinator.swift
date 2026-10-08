@@ -986,10 +986,12 @@ final class AppCoordinator: ObservableObject {
     /// once the list is written, and that is asked whatever changed: a device can be here and
     /// not in the file (a save that failed when it was added, or when its UDID was learned).
     /// nil: not written, or no such device.
-    nonisolated static func keepSaved(_ id: UUID, udid: String, in profiles: [DeviceProfile], save: ([DeviceProfile]) -> Bool) -> DeviceProfile? {
+    /// `at`: where its pairing was just proved to connect, when that isn't where it was saved.
+    nonisolated static func keepSaved(_ id: UUID, udid: String, at: (ip: String, port: UInt16)? = nil, in profiles: [DeviceProfile], save: ([DeviceProfile]) -> Bool) -> DeviceProfile? {
         var changed = profiles
         guard let i = changed.firstIndex(where: { $0.id == id }) else { return nil }
         if changed[i].udid == nil { changed[i].udid = udid }
+        if let at { changed[i].providerIP = at.ip; changed[i].remotePairingPort = at.port }
         return save(changed) ? changed[i] : nil
     }
 
@@ -999,7 +1001,7 @@ final class AppCoordinator: ObservableObject {
     /// The device a pairing that connected is for is saved now — worked out again, the saved
     /// devices being what they are by now (one removed, or added, while the pairing was tried).
     /// A failure leaves them as they were; no pairing has been written yet.
-    private func keep(_ device: DeviceProfile, udid: String, as name: String?) -> Result<(saved: DeviceProfile, isNew: Bool), DeviceControlWire.WireError> {
+    private func keep(_ device: DeviceProfile, udid: String, as name: String?, at: (ip: String, port: UInt16)? = nil) -> Result<(saved: DeviceProfile, isNew: Bool), DeviceControlWire.WireError> {
         let unsaved = DeviceControlWire.WireError.message("the device couldn't be saved here (\(ProfileStore.directory.path)/profiles.json): nothing was kept")
         switch profiles.placement(of: device, udid: udid, as: name) {
         case .failure(let why): return .failure(why)
@@ -1011,13 +1013,14 @@ final class AppCoordinator: ObservableObject {
             return .success((place.profile, true))
         case .success(let place):
             let id = place.profile.id, before = profiles
-            guard let kept = Self.keepSaved(id, udid: udid, in: profiles, save: { changed in
+            guard let kept = Self.keepSaved(id, udid: udid, at: at, in: profiles, save: { changed in
                 profiles = changed
                 return persist()
             }) else {
                 profiles = before
                 return .failure(unsaved)
             }
+            if at != nil { replaceBridge(with: kept) }   // a bridge running for it goes where the device is now
             return .success((kept, false))
         }
     }
@@ -1037,7 +1040,15 @@ final class AppCoordinator: ObservableObject {
 
     /// The device found or added, the pairing kept only if it connects, and switched on — in
     /// that order, each only after the one before. Under `importing`, off the main thread.
-    nonisolated private func takeIn(_ given: DeviceProfile, udid: String, pairing: Data, as name: String?,
+    /// Where a pairing is tried for a device: where it is saved to be — or, for one just
+    /// introduced, where it was found a moment ago, which a device saved long since may have left.
+    nonisolated static func tryAt(saved: DeviceProfile, given: DeviceProfile, fresh: Bool) -> (ip: String, port: UInt16) {
+        fresh ? (given.providerIP, given.remotePairingPort) : (saved.providerIP, saved.remotePairingPort)
+    }
+
+    /// `fresh`: `given` says where the device is now (found on this Mac's tailnet a moment ago),
+    /// not where it was when a file was made.
+    nonisolated private func takeIn(_ given: DeviceProfile, udid: String, pairing: Data, as name: String?, fresh: Bool = false,
                                     wanted: @Sendable () -> Bool) -> Result<TakenIn, NotTaken> {
         // Where it goes is worked out first and saved last: a pairing that doesn't connect leaves
         // the saved devices as they were.
@@ -1048,7 +1059,8 @@ final class AppCoordinator: ObservableObject {
         case .failure(let why): return .failure(.init("\(why)"))
         }
         let p = place.profile
-        var target = DeviceControlHub.Target(id: p.id, name: p.displayName, ip: p.providerIP, port: p.remotePairingPort, udid: p.udid ?? udid)   // as it is spelled here, when known
+        let at = Self.tryAt(saved: p, given: given, fresh: fresh)
+        var target = DeviceControlHub.Target(id: p.id, name: p.displayName, ip: at.ip, port: at.port, udid: p.udid ?? udid)   // as it is spelled here, when known
         var device = given
         // Tried, the device saved, the pairing sealed, the file removed — in that order, each only
         // after the one before: a step that fails leaves the file where it is and a pairing the
@@ -1058,7 +1070,7 @@ final class AppCoordinator: ObservableObject {
             // The file carries the port the device had when it was made, and that changes when the
             // device restarts. A device not saved here has no page to find it from: it is looked
             // for now, at the address the file names, and the pairing tried there.
-            guard place.isNew, Self.portMoved("\(error)"), let port = Self.portNow(at: target.ip),
+            guard place.isNew || fresh, Self.portMoved("\(error)"), let port = Self.portNow(at: target.ip),
                   port != target.port else { return .failure(.init("\(error)")) }
             target.port = port
             device.remotePairingPort = port
@@ -1073,7 +1085,7 @@ final class AppCoordinator: ObservableObject {
         nonisolated(unsafe) var sealedMark: String?
         let kept = DispatchQueue.main.sync {
             MainActor.assumeIsolated { () -> Result<DeviceProfile, DeviceControlWire.WireError> in
-                switch keep(device, udid: udid, as: name) {
+                switch keep(device, udid: udid, as: name, at: fresh ? (target.ip, target.port) : nil) {
                 case .failure(let why): return .failure(why)
                 case .success(let (saved, isNew)):
                     do { sealedMark = try deviceControl.sealPairing(pairing, with: sealing, udid: saved.udid ?? udid) } catch {
@@ -1138,7 +1150,7 @@ final class AppCoordinator: ObservableObject {
         defer { importing.unlock() }
         // A name of its own where the one it comes with is taken here: found out now, not after it paired.
         let name = DispatchQueue.main.sync { MainActor.assumeIsolated { profiles.nameProblem(device.displayName) == nil ? nil : uniqueName(device.displayName) } }
-        switch takeIn(device, udid: paired.udid, pairing: paired.pairing, as: name, wanted: wanted) {
+        switch takeIn(device, udid: paired.udid, pairing: paired.pairing, as: name, fresh: true, wanted: wanted) {
         case .success(let taken): return .success(.init(name: taken.saved.displayName, on: taken.on))
         case .failure(let why):
             let how: PairWire.Refusal = why.why == DeviceControlHub.nobodyWaits ? .cancelled : .notKept

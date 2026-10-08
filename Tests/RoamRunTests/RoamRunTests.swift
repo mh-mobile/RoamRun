@@ -777,6 +777,15 @@ import ServiceManagement
     #expect(Introduction.device(of: two[1]) != nil && two[1].providerHostName == forOther.providerHostName)
     #expect(two[1].udid == "00008130-000C1C5C307A8D3A")   // the same device's: what it is stays
 
+    // A device saved long since is tried, for an introduction, where it was found a moment ago — and saved there once that held.
+    var old = new; old.remotePairingPort = 50000; old.providerIP = "100.64.0.9"
+    var now = new; now.remotePairingPort = 51000; now.providerIP = "100.64.0.9"
+    #expect(AppCoordinator.tryAt(saved: old, given: now, fresh: true) == ("100.64.0.9", 51000))
+    #expect(AppCoordinator.tryAt(saved: old, given: now, fresh: false) == ("100.64.0.9", 50000))   // a file's is where it was when the file was made
+    let moved2 = AppCoordinator.keepSaved(old.id, udid: "00008130-000C1C5C307A8D3A", at: ("100.64.0.10", 51000), in: [old], save: { _ in true })
+    #expect(moved2?.remotePairingPort == 51000 && moved2?.providerIP == "100.64.0.10" && moved2?.udid == "00008130-000C1C5C307A8D3A")
+    #expect(AppCoordinator.keepSaved(old.id, udid: "x", in: [old], save: { _ in true })?.remotePairingPort == 50000)
+
     // What another Mac sent is shown only as a device read and written again.
     #expect(Introduction.shown(Introduction.line(device)) == Introduction.line(device))
     #expect(Introduction.shown("\u{1B}]52;c;aGk=\u{07}") == nil && Introduction.shown("rr-device-v1:\u{1B}[2J") == nil)
@@ -7385,7 +7394,8 @@ extension TimingSensitive {
         pairing.fail()
         #expect(until { how(i, attempt).reason == PairWire.Refusal.notPaired.rawValue } && turn.held == nil)
 
-        // Keeping what paired takes longer than anything may: the turn is given back, and it is still seen through.
+        // Keeping what paired takes longer than anything may: the turn is kept all the same — a
+        // pairing begun meanwhile could have the device drop the one being kept — and given back when it ends.
         pairing = IntroducedPairing(); turn = Turn()
         let keeping = DispatchSemaphore(value: 0), go = DispatchSemaphore(value: 0)
         i = introductions(pairing, turn: turn) { _ in keeping.signal(); go.wait(); return .success(.init(name: "iPhone", on: true)) }
@@ -7394,9 +7404,52 @@ extension TimingSensitive {
         #expect(begin(i, attempt).ok)
         pairing.pairNow()
         keeping.wait()
-        #expect(until { turn.held == nil } && how(i, attempt).state == "checking")
+        usleep(500_000)
+        #expect(turn.held == attempt && how(i, attempt).state == "checking")
+        #expect(begin(i, UUID()).reason == PairWire.Refusal.failed.rawValue)   // no other begins meanwhile
         go.signal()
-        #expect(until { how(i, attempt).state == "done" } && turn.given.all.count == 1)
+        #expect(until { how(i, attempt).state == "done" } && turn.held == nil && turn.given.all.count == 1)
+    }
+
+    /// Nothing listens once the device has paired, however long keeping takes: the listener is let go then.
+    @Test func theListenerIsLetGoTheMomentTheDeviceHasPaired() {
+        final class Seen: @unchecked Sendable { weak var listener: IntroducedPairing? }
+        let seen = Seen(), i = ControlIntroductions()
+        let keeping = DispatchSemaphore(value: 0), go = DispatchSemaphore(value: 0)
+        i.listen = { _, _, _ in
+            let made = IntroducedPairing()
+            seen.listener = made
+            return .init(listener: made, port: 50123, txt: offerTXT)
+        }
+        i.keep = { _, _, _ in keeping.signal(); go.wait(); return .success(.init(name: "iPhone", on: true)) }
+        i.tick = 0.02
+        let id = UUID()
+        #expect(begin(i, id).ok && seen.listener != nil)
+        seen.listener?.pairNow()
+        keeping.wait()
+        #expect(until { seen.listener == nil })     // while what paired is still being kept
+        #expect(how(i, id).state == "checking")
+        go.signal()
+        #expect(until { how(i, id).state == "done" })
+    }
+
+    /// Asked to begin again under the same id while it is still being made ready (its answer was
+    /// lost): told so, with no second listener; any other is turned away.
+    @Test func begunAgainWhileItIsMadeReadyItSaysSoAndOpensNothingMore() {
+        let pairing = IntroducedPairing(), i = introductions(pairing)
+        let opened = Counted<Int>(), readying = DispatchSemaphore(value: 0), go = DispatchSemaphore(value: 0)
+        i.ready = { readying.signal(); go.wait() }
+        i.listen = { _, _, _ in opened.add(1); return .init(listener: pairing, port: 50123, txt: offerTXT) }
+        let id = UUID(), first = Counted<Bool>()
+        Thread.detachNewThread { first.add(begin(i, id).offer != nil) }
+        readying.wait()
+        let again = begin(i, id)
+        #expect(again.ok && again.state == "preparing" && again.offer == nil)
+        #expect(how(i, id).state == "preparing")
+        #expect(begin(i, UUID()).reason == PairWire.Refusal.failed.rawValue)
+        go.signal()
+        #expect(until { first.all == [true] } && opened.all.count == 1)
+        #expect(begin(i, id).offer != nil && opened.all.count == 1)
     }
 
     @Test func whatCouldNotBeKeptIsSaidWithItsWord() {

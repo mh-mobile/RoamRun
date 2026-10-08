@@ -29,6 +29,7 @@ final class ControlIntroductions: @unchecked Sendable {
     }
     private struct Attempt {
         var state = State.waiting
+        /// Empty while it is being made ready: the turn is had, nothing listens yet.
         var offer: String
         var code: String?
         var listener: (any PairingListener)?
@@ -73,8 +74,10 @@ final class ControlIntroductions: @unchecked Sendable {
 
     private func start(_ request: DeviceControlWire.Request) -> DeviceControlWire.Response {
         let id = request.device
-        // Asked again (its answer was lost): the same offer, not a second listener.
-        if let begun = lock.withLock({ attempts[id] }) { return .init(ok: true, offer: begun.offer) }
+        // Asked again (its answer was lost): the same offer, not a second listener — or that it is still being made ready.
+        if let begun = lock.withLock({ attempts[id] }) {
+            return begun.offer.isEmpty ? .init(ok: true, state: "preparing") : .init(ok: true, offer: begun.offer)
+        }
         guard let text = request.text, let device = try? JSONDecoder().decode(DeviceProfile.self, from: Data(text.utf8)),
               let ip = request.address, let interface = request.interface, let only = request.peer,
               device.serviceType == Introduction.deviceService, ["local", "local."].contains(device.domain) else {
@@ -82,7 +85,9 @@ final class ControlIntroductions: @unchecked Sendable {
         }
         // The turn is had before anything is opened: two that begin at once don't both listen.
         guard claim(id) else { return refused(.failed, "another pairing is under way on this Mac") }
+        lock.withLock { attempts[id] = Attempt(offer: "") }
         func refusing(_ how: PairWire.Refusal, _ why: String) -> DeviceControlWire.Response {
+            lock.withLock { attempts[id] = nil }
             release(id)
             return refused(how, why)
         }
@@ -102,14 +107,15 @@ final class ControlIntroductions: @unchecked Sendable {
             attempts[id] = Attempt(offer: offer, listener: listening.listener)
             last = id
             // What ended long ago is forgotten: the last few are kept to be asked about.
-            for old in attempts.filter({ $0.key != id && $0.value.listener == nil }).sorted(by: { $0.value.began < $1.value.began }).dropLast(8) { attempts[old.key] = nil }
+            let ended = attempts.filter { $0.key != id && $0.value.state != .waiting && $0.value.state != .checking }
+            for old in ended.sorted(by: { $0.value.began < $1.value.began }).dropLast(8) { attempts[old.key] = nil }
         }
-        Thread.detachNewThread { [self] in pair(id, device, listening.listener) }
+        Thread.detachNewThread { [self] in pair(id, device) }
         Thread.detachNewThread { [self] in watch(id) }
         return .init(ok: true, offer: offer)
     }
 
-    private func pair(_ id: UUID, _ device: DeviceProfile, _ listener: any PairingListener) {
+    private func pair(_ id: UUID, _ device: DeviceProfile) {
         func end(_ state: State, _ said: String?) {
             lock.withLock {
                 attempts[id]?.state = state
@@ -121,9 +127,15 @@ final class ControlIntroductions: @unchecked Sendable {
         }
         let cancelled: @Sendable () -> Bool = { [self] in lock.withLock { attempts[id]?.cancelled != false } }
         do {
-            let paired = try listener.accept { [self] code in lock.withLock { attempts[id]?.code = code } }
+            // The listener is this attempt's alone, and let go the moment the device has paired:
+            // nothing listens while what paired is being kept, however long that takes.
+            let paired = try { () throws -> DevicePairing.Paired in
+                guard let listener = lock.withLock({ attempts[id]?.listener }) else { throw DeviceSession.Failure.message("stopped") }
+                return try listener.accept { [self] code in lock.withLock { attempts[id]?.code = code } }
+            }()
             // Stopped or kept: whichever came first, under the one lock.
             let goes = lock.withLock { () -> Bool in
+                attempts[id]?.listener = nil
                 guard attempts[id]?.cancelled == false else { return false }
                 attempts[id]?.state = .checking
                 attempts[id]?.code = nil
@@ -152,20 +164,18 @@ final class ControlIntroductions: @unchecked Sendable {
     }
 
     /// The command that began it is the only one that can stop it by asking: gone without a
-    /// word, it is stopped here. Not once the device has paired: that is seen through — but what
-    /// takes too long over it (a Keychain that waits to be answered) gives its turn back, so
-    /// another pairing can begin; it is still said as it ends, when it does.
+    /// word, it is stopped here. Not once the device has paired: that is seen through, with the
+    /// turn kept until it ends — another pairing begun meanwhile could have the device drop the
+    /// one being kept. (A Keychain that never answers is ended by opening RoamRun anew.)
     private func watch(_ id: UUID) {
         while true {
             Thread.sleep(forTimeInterval: tick)
-            let (waiting, late) = lock.withLock { () -> (Bool?, Bool) in
-                guard let a = attempts[id], !a.released else { return (nil, false) }
-                let late = Date().timeIntervalSince(a.began) > longest
-                return (a.state == .waiting ? Date().timeIntervalSince(a.asked) > quiet || late : false, a.state == .checking && late)
+            let over = lock.withLock { () -> Bool? in
+                guard let a = attempts[id], a.state == .waiting else { return nil }
+                return Date().timeIntervalSince(a.asked) > quiet || Date().timeIntervalSince(a.began) > longest
             }
-            guard let waiting else { return }
-            if waiting { _ = cancel(id); return }
-            if late { giveBack(id); return }
+            guard let over else { return }
+            if over { _ = cancel(id); return }
         }
     }
 
@@ -175,6 +185,7 @@ final class ControlIntroductions: @unchecked Sendable {
                 return .init(ok: false, error: "this RoamRun doesn't know that attempt (it was opened anew since, or it is another Mac's)", state: "unknown")
             }
             attempts[id]?.asked = Date()
+            if a.offer.isEmpty { return .init(ok: true, state: "preparing") }
             switch a.state {
             case .waiting: return .init(ok: true, state: a.code == nil ? "waiting" : "code", code: a.code)
             case .checking: return .init(ok: true, state: "checking")

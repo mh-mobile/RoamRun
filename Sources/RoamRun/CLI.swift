@@ -831,20 +831,26 @@ enum CLI {
             case "pair":
                 switch (words.first, words.count) {
                 case ("control", 1):
-                    if let extra = Set(parsed.values.keys).union(parsed.flags).subtracting(["--with", "--attempt", "--last", "--peer"]).sorted().first {
-                        fail("`roamrun pair control` doesn't take \(extra): the Mac to wait for is --with <its Tailscale name>")
+                    // One form at a time: an option of another isn't dropped in silence.
+                    let given = Set(parsed.values.keys).union(parsed.flags)
+                    let form: Set<String> = given.contains("--with") ? ["--with", "--peer"] : given.contains("--attempt") ? ["--attempt"] : ["--last"]
+                    if let extra = given.subtracting(form).sorted().first {
+                        fail("`roamrun pair control` doesn't take \(extra) here: --with <Mac> [--peer <device>], or --attempt <id>, or --last")
                     }
                     if let home = parsed.values["--with"] { Task { await offerControlPairing(with: home, peer: parsed.values["--peer"]) } }
                     else if let id = parsed.values["--attempt"] { controlAttempt(id) }
                     else if parsed.flags.contains("--last") { controlAttempt(nil) }
                     else { fail("usage: roamrun pair control --with <the other Mac's Tailscale name> | roamrun pair control --attempt <id> | roamrun pair control --last") }
                 case ("xcode", 1):
-                    if let extra = Set(parsed.values.keys).subtracting(["--with"]).sorted().first {
+                    if let extra = Set(parsed.values.keys).union(parsed.flags).subtracting(["--with"]).sorted().first {
                         fail("`roamrun pair xcode` doesn't take \(extra): the Mac to wait for is --with <its Tailscale name>")
                     }
                     if let home = parsed.values["--with"] { Task { await offerXcodePairing(with: home) } } else { Task { await offerXcodePairing() } }
                 case ("introduce", 1), ("introduce", 2):
                     if parsed.values["--with"] != nil { fail("`roamrun pair introduce` doesn't take --with: the Mac to introduce is --mac <its Tailscale name>") }
+                    if let extra = Set(parsed.values.keys).union(parsed.flags).subtracting(["--mac", "--to"]).sorted().first {
+                        fail("`roamrun pair introduce` doesn't take \(extra) — see roamrun --help")
+                    }
                     guard let mac = parsed.values["--mac"], let to = parsed.values["--to"] else {
                         fail("usage: roamrun pair introduce [<offer>] --mac <the other Mac's Tailscale name> --to <device>")
                     }

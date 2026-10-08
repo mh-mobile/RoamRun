@@ -191,7 +191,9 @@ bounded.
     not past fifteen seconds without the command asking how it stands (a command
     killed leaves no listener). The command itself listens as `pair xcode --with`
     does, on port 41830. One pairing is made at a time on a Mac, however begun: an
-    introduction takes the turn Set Up takes, before anything listens.
+    introduction takes the turn Set Up takes, before anything listens, and keeps it
+    until what paired is kept. The app's listener is closed the moment the device
+    has paired.
   - The other Mac is held to being the one named exactly as for `pair xcode --with`:
     the machine, by Tailscale's lasting id — not the program or the person on it.
   - **The code is shown on the Mac that introduces, and comes from this one.** It
@@ -208,14 +210,16 @@ bounded.
     then to be one this Mac held a pairing for has, by pairing again, dropped that
     one: the new pairing is kept in its place, as Set Up does, rather than leave
     the device with none this Mac holds.
-  - What pairs is kept only if it opens a connection to the device at its address
-    on this Mac's own tailnet. Kept, it is switched on, as one set up here is; when
+  - What pairs is kept only if it opens a connection to the device where this Mac's
+    own tailnet has it now (not where a device saved here long since was: its port
+    changes when it restarts, and what is saved is brought up to date). Kept, it is switched on, as one set up here is; when
     the Keychain doesn't keep the switch it stays off and says so, and the pairing stays.
   - A stop that comes while what paired is being kept doesn't undo it: the device
     would be left knowing a pairing nothing holds. Stopped before, nothing is kept
     here — the device may list the pairing all the same: remove it there. Keeping
-    isn't cut short either when it takes long (a Keychain that waits to be
-    answered): after the twelve minutes it only stops holding up another pairing.
+    isn't cut short when it takes long (a Keychain that waits to be answered), and
+    no other pairing begins on this Mac meanwhile; one that never ends is ended by
+    quitting RoamRun and opening it again.
   - The device, its pairing and the switch are three things in three places, written
     one after the other. An app that dies between them can leave a device saved
     without a pairing (as any device added and not set up), or a pairing switched
