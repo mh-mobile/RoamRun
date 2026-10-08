@@ -7173,6 +7173,17 @@ extension TimingSensitive.RelayOnLocalhost {
     }
     #expect(PairWire.isCode("000000") && !PairWire.isCode("") && !PairWire.isCode("12 456") && !PairWire.isCode("１２３４５６"))
 
+    // The other command that waits on this Mac is named, by its pid, so it can be stopped; this one isn't.
+    let listed = """
+    812 /usr/bin/ssh --with-something host
+    4021 /Applications/RoamRun.app/Contents/MacOS/RoamRun pair control --with macbook-pro
+    4388 /usr/local/bin/roamrun pair xcode --with macbook-pro
+    """
+    #expect(CLI.otherWaiting(inPgrep: listed, me: 4388)?.pid == 4021)
+    #expect(CLI.otherWaiting(inPgrep: listed, me: 4021)?.command == "roamrun pair xcode --with macbook-pro")
+    #expect(CLI.otherWaiting(inPgrep: "4388 /usr/local/bin/roamrun pair xcode --with x\n", me: 4388) == nil)
+    #expect(CLI.otherWaiting(inPgrep: "77 /bin/zsh -c echo pair control --with x\n9 tart exec -t vm /x/RoamRun pair introduce --mac a --to b", me: 1) == nil)
+
     // The name this Mac offers under is one an offer may have, whatever the computer is called.
     func offered(_ name: String) -> Bool {
         var txt = ["identifier": "6BF40D22-D414-41D0-BE80-7567AE75B2BC", "authTag": "BsVby0td", "model": "Mac16,1", "flags": "1", "ver": "26", "minVer": "17"]

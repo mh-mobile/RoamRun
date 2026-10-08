@@ -309,6 +309,28 @@ enum CLI {
         }
     }
 
+    /// Another `roamrun pair … --with` among the processes `pgrep -fl -- --with` lists: its pid and
+    /// what it was run as. nil when there is none but this one.
+    nonisolated static func otherWaiting(inPgrep out: String, me: Int32) -> (pid: Int32, command: String)? {
+        for line in out.split(separator: "\n") {
+            let words = line.split(separator: " ")
+            guard let pid = words.first.flatMap({ Int32($0) }), pid != me,
+                  let pair = words.firstIndex(of: "pair"), words.count > pair + 1, ["xcode", "control"].contains(words[pair + 1]),
+                  words[pair - 1].lowercased().hasSuffix("roamrun") else { continue }
+            return (pid, "roamrun " + words[pair...].joined(separator: " "))
+        }
+        return nil
+    }
+
+    /// The port both `--with` commands wait on is taken: by which, and what to do about it.
+    private static func taken(waitingFor other: String, _ error: Error) -> String {
+        let listed = Proc.run("/usr/bin/pgrep", ["-fl", "--", "--with"], timeout: 5).out
+        guard let found = otherWaiting(inPgrep: listed, me: getpid()) else {
+            return "couldn't listen for \(other) (\(error.localizedDescription)): another program on this Mac has port \(PairWire.port) on its Tailscale address."
+        }
+        return "another `\(found.command)` is waiting on this Mac (process \(found.pid)), and only one can at a time. It ends by itself once it has waited its time out (ten minutes for the other Mac); to stop it now: kill -INT \(found.pid)"
+    }
+
     /// `pair control --attempt` / `--last`: what the app made of an attempt, while it remembers.
     private static func controlAttempt(_ id: String?) -> Never {
         let attempt: UUID
@@ -336,7 +358,7 @@ enum CLI {
         }
         let listener: PairLink.Listener
         do { listener = try PairLink.Listener(ip: own, port: PairWire.port, interface: interface) } catch {
-            stop("couldn't listen for \(other.dnsName) (\(error.localizedDescription)): is another `roamrun pair … --with` running here?")
+            stop(taken(waitingFor: other.dnsName, error))
         }
         let halted = OSAllocatedUnfairLock(initialState: false)
         for sig in [SIGINT, SIGTERM, SIGHUP] {
@@ -445,7 +467,7 @@ enum CLI {
         let (peer, own, interface) = byName(mesh, other, ip)
         let listener: PairLink.Listener
         do { listener = try PairLink.Listener(ip: own, port: PairWire.port, interface: interface) } catch {
-            stop("couldn't listen for \(other.dnsName) (\(error.localizedDescription)): is another `roamrun pair xcode --with` running here? Carrying the lines still works: `roamrun pair xcode` alone")
+            stop(taken(waitingFor: other.dnsName, error) + " Carrying the lines still works: `roamrun pair xcode` alone")
         }
         let capture = BonjourCapture()
         capture.start(serviceType: Introduction.hostService)
