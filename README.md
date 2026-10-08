@@ -142,6 +142,8 @@ The app binary doubles as a CLI (handy over SSH or in scripts). To put `roamrun`
 
 ```sh
 roamrun devices               # saved devices (name, UDID, id) and their status
+roamrun devices export <name> # a saved device as a line for another Mac (no key, no UDID); `devices add <line>` takes it there
+roamrun pair xcode            # on a Mac the device was never near: its offer to pair, for `pair introduce` on one that is (see below)
 roamrun up <name>             # start a bridge and show progress until Ready; Ctrl-C stops and cleans up
 roamrun up <name> -d          # start in the background (survives closing the terminal; log in ~/Library/Logs/RoamRun/)
                               #   waits up to 60s for Ready (or On this Wi‑Fi) and exits 1 if not — the bridge keeps trying unless it exits with an error retrying can't fix (see the log)
@@ -230,6 +232,47 @@ roamrun key import ~/iphone-for-cloud.json                         # there, once
 **While the device is looked at or operated, its sound is taken.** Each look and each action runs a screen-sharing session on the device, kept for about five seconds after the last one, and the device sends its sound into it: its speaker goes silent (what was playing goes on playing, unheard, and is heard again by itself afterwards) and voice input on it — dictation, an app that listens — doesn't hear. So a screen that is being watched, look after look, has no sound and no voice input for as long as the watching goes on. Stop looking for some ten seconds and both are back.
 
 These press what is really on the screen, and a `look` shows whatever is there — notifications and messages too. A `look` written to a file is yours only (0600) and stays until you delete it. **Device control is not given to one agent or one command: while a device is switched on, any program you run on this Mac can see and operate it** through the app — a build script, a package's install step, another agent. The switch beside **Device control** on the device's page turns it off for all of them (and back on); it is on after Set Up, after Pair Again (also for a device you had switched off) and after `key import`, so turn it off when nothing of yours is using the device. Locking the device doesn't stop it: its lock screen is seen and operated too (unlocking still takes the passcode or Face ID). The device shows each look or action as a screen-sharing session, and lists RoamRun's pairing under Developer Mode, where you can remove it. The pairing holds a private key; how it is kept, and who can use it, is in [SECURITY.md](SECURITY.md).
+
+## A Mac the device was never near
+
+A bridge needs a Mac that Xcode has paired with the device, and Xcode pairs on one network. A Mac elsewhere — in a data centre, an agent's, yours in another place — never shares one with the device. With iOS 27 and Xcode 27, a Mac that does can introduce it, once:
+
+```sh
+# there (the far Mac): Device Hub › + › Pair Nearby Device, leave “Waiting to pair.” open, then
+roamrun pair xcode                                           # prints that Mac's offer to pair, one line
+
+# here (a Mac on the device's Wi‑Fi, with the device saved in RoamRun):
+roamrun pair introduce <offer> --mac cloud-mac --to iPhone   # cloud-mac: the far Mac's Tailscale name
+#   on the device: Settings › Privacy & Security › Developer Mode › Pair with “cloud-mac”, and the code Device Hub shows there
+#   it ends by itself and prints the device as a line
+
+# there again:
+roamrun devices add <line>                                   # the device, saved without a key or a UDID
+roamrun up iPhone                                            # Ready: Xcode there has the device
+```
+
+`pair introduce` announces the far Mac's offer on this Mac's Wi‑Fi, under the name Tailscale has for that Mac, and carries the device's one connection to it over the tailnet. The pairing is made between the device and Xcode on the far Mac: no key leaves either, and none passes through here. It takes connections from the device's own address on this Wi‑Fi when Tailscale knows it (else from that Wi‑Fi's hosts, and says so), stops when the device has tried to pair or after five minutes, and leaves nothing announced or listening. It can't tell whether the pairing was made — a wrong code looks the same from here as one not yet typed — so it doesn't say; `roamrun up` on the far Mac does.
+
+Each prints its line alone on standard output, so with ssh to the far Mac nothing is carried by hand:
+
+```sh
+OFFER=$(ssh cloud-mac roamrun pair xcode)
+LINE=$(roamrun pair introduce "$OFFER" --mac cloud-mac --to iPhone)
+ssh cloud-mac roamrun devices add "$LINE"
+```
+
+**Who gets the device.** Introducing a Mac lets it use the device as a developer from then on — install and run apps, debug them, read their data — the same as plugging the device into it and tapping Trust. Before it starts, `pair introduce` says whose that Mac is, as Tailscale has it: yours, another person's, or a shared (tagged) machine, where it is whoever can use Xcode on it. It introduces only the Mac you name with `--mac`; neither line says where anything is to go. To withdraw it, remove that Mac on the device (Settings › Privacy & Security › Developer Mode); there it is listed under the name the Mac gives itself, which `pair introduce` tells you, not its Tailscale name. Xcode's pairing has no switch in RoamRun.
+
+**What it needs, and what it doesn't do.**
+- The device on the introducing Mac's own Wi‑Fi for that one step — not a guest or isolated network, and not a hotspot behind it. Afterwards the bridge works from anywhere, as usual.
+- Someone who can press the button in Device Hub on the far Mac and read its code: at its screen or over screen sharing. Over ssh alone it can't be done.
+- Tailscale on the far Mac that stays signed in: one joined with an ephemeral key is signed out when it restarts.
+- Debugging from the far Mac needs the device's OS symbols there. Xcode copies them from the device on first contact (about 6 GB); over Tailscale's relay servers that hardly moves. Copying `~/Library/Developer/Xcode/iOS DeviceSupport/<model> <version> (<build>)` from a Mac that has it does: with it, `lldb` on the far Mac attached and hit a breakpoint in 20 seconds (on a direct path); without, it waited four minutes and attached nothing. `devicectl`, `roamrun run` and `roamrun logs` don't need them.
+- Macs made from one image are one Mac to the device: pairing a second replaces the first's entry there, and removing it cuts off both.
+- A pairing made on a rented or cloud Mac stays with that machine's disk, image and snapshots until it is removed on the device.
+- What the far Mac has saved of the device is a copy of this Mac's. If this Mac's stops matching (see Limitations), add the device again here, then `roamrun devices export <name>` and, there, `roamrun devices add <line> --replace <name>` with the app and that device's bridge stopped.
+
+Tried with an iPhone 15 Pro on iOS 27 and Xcode 27, with a virtual Mac and a cloud Mac as the far one, also over Tailscale's relay servers: pairing, the bridge Ready, the device as a run destination in Xcode, `devicectl` launch, and from the virtual Mac `lldb` at a breakpoint. Both Macs used the device at the same moment. Not tried: an iPad, a far Mac that isn't virtual, a far Mac of another Tailscale user or a tagged one, an introducing Mac with its firewall on.
 
 ## Installing without the bridge: over the air
 
@@ -429,6 +472,7 @@ defaults delete com.roamrun.app 2>/dev/null      # left by versions before 0.1.1
 - Away from home, **running with the debugger (⌘R) takes a while**. Attaching lldb takes hundreds of round trips, so latency and packet loss add up directly. The number of round trips grows with the number of frameworks loaded, and install time is roughly proportional to the app's size (measured with a ~600 KB app over tethering at about 25–60 ms latency: about 1 minute with the debugger, about 4 seconds without; transfer rate 0.4–0.9 MB/s). When you don't need breakpoints, turn off "Debug executable" under Edit Scheme › Run › Info; when you do, turning off "Queue Debugging" (Options) and "Main Thread Checker" / "Thread Performance Checker" (Diagnostics) speeds it up
 - After the iPhone restarts, re-staging the DDI may need one USB connection
 - If the TXT record's authTag/identifier changes, add the iPhone again on the same Wi-Fi
+- **Introducing a far Mac needs iOS 27 and Xcode 27**, and rests on how they pair: an update of either may need an update of RoamRun. `roamrun pair xcode` says so when Xcode's offer isn't the kind it knows.
 - While bridging, RoamRun keeps advertising the iPhone's Bonjour identifiers (identifier / authTag) on **every local network this Mac is on** (Wi-Fi, Ethernet — every interface with mDNS). Unlike the iPhone's own advertisement these values are fixed, so someone on the same network could track the device's presence — also on networks a laptop Mac joins while bridging (a café's, a hotel's). Someone there can also replay the record to make the bridge stand aside for a while; it can't use the device. The relay immediately drops any connection that doesn't come from this Mac. The iPhone's side is encrypted by Tailscale, so whichever Wi-Fi it's on doesn't matter
 - **Seeing or operating the device takes its sound for the moment**: silent speaker, no voice input, until about five seconds after the last look or action (see [Seeing and operating the device](#seeing-and-operating-the-device)). Looking at it continuously keeps that up.
 - **Tested with Xcode and `devicectl`.** Flutter and React Native build and install through the same tools, so they should work while the bridge is Ready, but this hasn't been verified yet ([#5](https://github.com/mh-mobile/RoamRun/issues/5)). `roamrun run` builds the Xcode project in the current folder (for those, `cd ios` first)

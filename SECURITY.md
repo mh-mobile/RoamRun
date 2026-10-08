@@ -23,11 +23,61 @@ bounded.
   e.g. a café's if you bridge from a laptop. Bridges stand aside (publish
   nothing) while the device is on the Mac's own network.
 - **It listens for TCP on the Mac's LAN interface (en0 unless chosen otherwise in
-  Settings › Network).** The relay accepts
+  Settings › Network).** A bridge's relay accepts
   a connection only if it comes from this Mac's own address (so any local process
   qualifies, as it could reach the device's Tailscale address anyway) — anything
   else is dropped immediately. It forwards bytes unchanged to the device's Tailscale (or
   manually entered) address and never reads, stores or alters them.
+- **`roamrun pair introduce` is the one thing that takes a connection from another
+  host, and it does only while it runs.** It lets a Mac that was never on the
+  device's network pair with it: for five minutes at most it announces that Mac's
+  offer to pair on this Mac's LAN interface — on that one interface, or not at all —
+  and relays what connects to the port it opens there to that Mac's pairing port,
+  over the tailnet. What to know:
+  - Nothing can ask for it. RoamRun listens for no such request; a person (or an
+    agent they told to) runs the command, naming the Mac by its Tailscale name.
+    The Mac it relays to is the one Tailscale has under that name: the line it is
+    given carries a port and what to announce, never an address, a host or a
+    service type.
+  - It takes connections from the device's address on that LAN alone when Tailscale
+    reports one for the device, two at once at most. When it doesn't (a relayed
+    path, a sleeping device), it takes them from that LAN's hosts by the interface's
+    netmask and says so: any of them can then reach that Mac's pairing port for
+    those minutes, as this Mac. Pairing still needs the code.
+  - **The code doesn't prove which Mac is at the other end.** It is shown by
+    whatever listens on the named Mac's port and typed on the device; this Mac
+    sees neither. What you are trusting is the Mac you named: introduce one only
+    if you would plug the device into it. For a Mac of your own, type only a code
+    you read off its screen yourself.
+  - The device shows the entry under that Mac's Tailscale name, which is this
+    Mac's doing: the name the offer carried is that Mac's own to choose and isn't
+    announced. Once paired, though, the device lists it under the name that Mac
+    gives in the pairing itself — its computer name, which can be anything,
+    another Mac's name included. `pair introduce` says which name that will be.
+  - While it runs, that Mac's Tailscale name, model and the offer's identifier are
+    announced on the LAN.
+  - It ends when a connection that carried data both ways has closed, at its five
+    minutes, when stopped, or when the interface loses its address (it doesn't
+    announce elsewhere instead). It then closes its listener, waits for its
+    `dns-sd` to be gone and says so — or that it couldn't confirm it. Other hosts
+    may show the announcement from their caches a little longer; nothing answers it.
+  - A Mac introduced can use the device as a developer until it is removed on the
+    device. RoamRun has no switch for Xcode's pairing, there or here. Tailscale's
+    access rules are the other way to cut it off.
+  - A pairing made on a rented or cloud Mac lives on that machine's disk, and in its
+    images and snapshots. Macs made from one image hold one identity: the device
+    treats them as one Mac.
+- **The lines carried between Macs are not secrets, and are not trusted.**
+  `roamrun pair xcode` prints a port and seven announced values; `roamrun devices
+  export` (and `pair introduce`, at its end) prints a saved device's name, its
+  Tailscale name, its port and five announced values — no key, no UDID, no
+  address. Each is read only as exactly that, value by value, and refused
+  otherwise. `roamrun devices add` finds the device by that Tailscale name on its
+  own tailnet (`--peer` names another) and saves it without a UDID, which the
+  bridge then learns from that Mac's own pairing. A line whose announced identifier
+  is another paired device's would have the bridge learn that device's UDID — the
+  case described below, reachable here by pasting a line: add only a line from a
+  Mac of yours.
 - **Authentication and encryption are Apple's.** Pairing verification and the
   encrypted CoreDevice tunnel run end to end between the Mac and the device.
   The bridge holds no keys and can't bypass pairing: a device that isn't paired
@@ -165,12 +215,16 @@ bounded.
   never overwrite other files (they do replace an existing RoamRun link or
   RoamRun skill).
 - Any process of your user can ask the app to stop a bridge (`roamrun down`
-  uses an unauthenticated distributed notification); it can't start one.
+  uses an unauthenticated distributed notification); it can't start one. It can run
+  the CLI, as you can: `roamrun pair introduce` included, which the device's own
+  pairing screen and code then stand between and a pairing.
 - The system log gets RoamRun's messages with device identifiers and addresses
   marked private; the in-app activity log shows them in full.
 - **Nothing about you is sent anywhere** — no telemetry, no analytics, no update
   check; there is no code in RoamRun that talks to a server of ours or anyone
-  else's. It does open connections of its own — to your device: a TCP probe to see
+  else's. It does open connections of its own — to your device (and, for `pair
+  introduce`, one to the pairing port of the Mac you named, to see that it is
+  waiting, before anything is announced): a TCP probe to see
   whether it answers, the RemotePairing handshake to confirm the answer really
   comes from it, and a scan for its RemotePairing port when that has changed; with
   device control set up, also its own tunnel to the device, kept open. It

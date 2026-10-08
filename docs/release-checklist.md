@@ -200,6 +200,21 @@ tunnel and Xcode has to run again.
   and the menu bar icon reads "RoamRun: <status>". With Reduce Motion on, the status
   icon doesn't spin.
 
+27. Introducing a far Mac (when `pair`, `devices add`, the relay, Xcode or iOS changed). On a Mac
+    that reaches the device only over the tailnet (a macOS VM will do; if it was cloned from an
+    image another clone of which is paired, remove that one's entry on the device first), with no
+    entry of its own on the device: Device Hub › Pair Nearby Device, `roamrun pair xcode` → one
+    line on stdout. Here, device on this Wi‑Fi: `roamrun pair introduce <line> --mac <its
+    Tailscale name> --to <name>` → it says whose Mac that is, that it takes connections "from
+    <the device's address> only", and the device lists "Pair with <its Tailscale name>". A wrong
+    code first: the command stays, the device lets the code be typed again. The right one: it
+    ends by itself, says nothing is announced or listening (`ps -ax | grep "dns-sd.*roamrun.local"`
+    and `lsof -nP -iTCP -sTCP:LISTEN | grep RoamRun` agree), and prints a line. There:
+    `roamrun devices add <line>`, `roamrun up <name>` → Ready, `devicectl … process launch`,
+    and — with the OS symbols copied over — lldb at a breakpoint. The device lists that Mac under
+    its own computer name, as `pair introduce` said. Then once more with the sheet on the far Mac
+    closed: `pair introduce` says that Mac isn't waiting and announces nothing.
+
 ## Debug logs worth a look after an iOS or Xcode update
 
 - What a bridge did and when (kept by the system, no `--level debug`): `log show` with

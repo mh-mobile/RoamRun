@@ -142,6 +142,8 @@ Mac の IP が変わるとブリッジは自動再起動します。
 
 ```sh
 roamrun devices               # 登録済み iPhone（名前・UDID・id）と状態
+roamrun devices export <name> # 保存済みのデバイスを、別の Mac に渡す 1 行にする（鍵も UDID も含まない）。渡した先では `devices add <line>`
+roamrun pair xcode            # デバイスと同じ場所にいたことのない Mac で: ペアリングの申し出を出す（下の節を参照）
 roamrun up <name>             # ブリッジを起動し、Ready まで表示。Ctrl-C で停止・後片付け
 roamrun up <name> -d          # バックグラウンドで起動（ターミナルを閉じても継続。ログは ~/Library/Logs/RoamRun/）
                               #   最大 60 秒 Ready（または On this Wi‑Fi）を待ち、間に合わなければ exit 1（ブリッジは試し続けます。ただし再試行で直らないエラーで終了した場合はすぐ exit 1。ログを参照）
@@ -335,6 +337,47 @@ look・tap・swipe・type・paste・press・elements の各コマンドと `roam
 - **デバイス操作は、特定のエージェントやコマンドだけに許可する仕組みではありません。** オンにしている間は、この Mac であなたが実行するどのプログラム（ビルドスクリプト、パッケージのインストール処理、別のエージェント）でも、起動中の RoamRun を通じてデバイスを見て操作できます。デバイスのページの **Device control** のスイッチをオフにすると、すべて断ります。Set Up・Pair Again（オフにしていたデバイスでも）・`key import` の直後はオンなので、使っていないときはオフにしてください。**デバイスをロックしても止まりません。** ロック画面も見えて操作できます（ロックの解除には、これまでどおりパスコードか Face ID が要ります）。
 - 接続のたびに、Mac とデバイスは互いを確かめます（デバイスは、ペアリング時に渡した鍵で署名します）。デバイスのアドレスで別のものが応答しても、この Mac の身元も入力も送らずに断ります。詳しくは [SECURITY.md](SECURITY.md) を参照してください。
 
+## デバイスと同じ場所にいたことのない Mac
+
+ブリッジには、Xcode がそのデバイスとペアリング済みの Mac が要ります。Xcode のペアリングは、同じネットワークの上で行うものです。離れた場所の Mac（データセンターの Mac、エージェントの Mac、別の場所にある自分の Mac）は、デバイスと同じネットワークにいたことがありません。iOS 27 と Xcode 27 なら、同じネットワークにいる Mac が、1 度だけ引き合わせられます。
+
+```sh
+# 離れた Mac で: Device Hub › + › Pair Nearby Device を押し、「Waiting to pair.」を開いたまま
+roamrun pair xcode                                           # その Mac のペアリングの申し出を 1 行で出す
+
+# デバイスと同じ Wi‑Fi にいる Mac で（RoamRun にそのデバイスを保存済み）:
+roamrun pair introduce <offer> --mac cloud-mac --to iPhone   # cloud-mac: 離れた Mac の Tailscale 上の名前
+#   デバイスで: 設定 › プライバシーとセキュリティ › デベロッパモード › 「Pair with cloud-mac」、離れた Mac の Device Hub に出たコード
+#   自分で終わり、デバイスの登録を 1 行で出す
+
+# 離れた Mac に戻って:
+roamrun devices add <line>                                   # デバイスを保存（鍵も UDID も含まない）
+roamrun up iPhone                                            # Ready: その Mac の Xcode でデバイスが使える
+```
+
+`pair introduce` は、離れた Mac の申し出を、この Mac の Wi‑Fi に、Tailscale がその Mac に付けた名前で出し、デバイスからの 1 本の接続を tailnet 越しに取り次ぎます。ペアリングは、デバイスと離れた Mac の Xcode の間で行われます。鍵はどちらからも出ず、この Mac も通りません。接続は、Tailscale がデバイスのこの Wi‑Fi 上のアドレスを知っていれば、そのアドレスからだけ受けます（分からなければ、その Wi‑Fi の中からに広げ、そう表示します）。デバイスがペアリングを試みたら、または 5 分たったら止まり、名乗りも待ち受けも残しません。ペアリングができたかどうかは、この Mac には分かりません（コードの打ち間違いは、まだ打っていないのと同じに見えます）。なので、できたとは言いません。離れた Mac の `roamrun up` で分かります。
+
+どのコマンドも、運ぶ 1 行だけを標準出力に出します。離れた Mac に ssh できるなら、手で運ぶものはありません。
+
+```sh
+OFFER=$(ssh cloud-mac roamrun pair xcode)
+LINE=$(roamrun pair introduce "$OFFER" --mac cloud-mac --to iPhone)
+ssh cloud-mac roamrun devices add "$LINE"
+```
+
+**誰がデバイスを使えるようになるか。** 引き合わせた Mac は、それ以降、開発者としてそのデバイスを使えます（アプリのインストールと実行、デバッグ、アプリのデータの読み出し）。デバイスをその Mac に USB で挿して「信頼」を押すのと同じ重さです。`pair introduce` は、始める前に、その Mac が誰のものかを Tailscale の情報から表示します（自分の Mac、ほかの人の Mac、共有の（タグ付きの）マシン＝そこで Xcode を使える人）。引き合わせるのは、`--mac` で名指しした Mac だけです。運ぶ 1 行は、行き先を決めません。取り消すには、デバイスの 設定 › プライバシーとセキュリティ › デベロッパモード でその Mac を削除します。一覧には、Tailscale 上の名前ではなく、その Mac が自分で名乗る名前で並びます（`pair introduce` が、どの名前かを表示します）。Xcode のペアリングには、RoamRun の側のスイッチはありません。
+
+**必要なもの・できないこと。**
+- その 1 回だけ、デバイスが、引き合わせる Mac と同じ Wi‑Fi にいること（ゲスト用や端末どうしを隔てるネットワーク、その後ろのホットスポットは不可）。そのあとは、いつもどおり、どこからでもブリッジで使えます。
+- 離れた Mac の Device Hub のボタンを押し、コードを読める人（その場で、または画面共有で）。ssh だけではできません。
+- 離れた Mac の Tailscale が、サインインしたままでいること。使い捨て（ephemeral）のキーで入れた Mac は、再起動でサインアウトします。
+- 離れた Mac でデバッグするには、デバイスの OS のシンボルがその Mac に要ります。Xcode は初回にデバイスから取り込みます（約 6 GB）が、Tailscale の中継サーバー経由ではほとんど進みません。シンボルを持っている Mac から `~/Library/Developer/Xcode/iOS DeviceSupport/<機種> <バージョン> (<ビルド>)` を写せば足ります。写したあとは、離れた Mac の `lldb` が 20 秒で接続してブレークポイントで止まりました（直結の経路）。無いと、4 分待っても接続できませんでした。`devicectl`、`roamrun run`、`roamrun logs` には要りません。
+- 1 つのイメージから作った Mac どうしは、デバイスから見ると 1 台です。2 台目をペアリングすると 1 台目の項目が置き換わり、それを削除すると両方とも使えなくなります。
+- 借りた Mac やクラウドの Mac で作ったペアリングは、デバイスで削除するまで、そのマシンのディスク、イメージ、スナップショットに残ります。
+- 離れた Mac が保存しているデバイスの情報は、この Mac のものの写しです。この Mac のものが合わなくなったら（「制限・既知の課題」を参照）、ここでデバイスを追加し直してから `roamrun devices export <name>`、離れた Mac で、アプリとそのデバイスのブリッジを止めたうえで `roamrun devices add <line> --replace <name>`。
+
+確かめた範囲: iPhone 15 Pro（iOS 27）、Xcode 27、離れた Mac は仮想の Mac とクラウドの Mac（Tailscale の中継サーバー経由を含む）で、ペアリング、ブリッジの Ready、Xcode の実行先に出ること、`devicectl` での起動、仮想の Mac からは `lldb` でのブレークポイントまで。2 台の Mac から同時にデバイスを使えました。未確認: iPad、仮想ではない離れた Mac、ほかの Tailscale 利用者の Mac やタグ付きの Mac、ファイアウォールがオンの引き合わせ側の Mac。
+
 ## Mac に作るもの・アンインストール
 
 RoamRun が書き込むのは次の場所だけです（システム設定や他のアプリには触れません。`roamrun ota` を使う場合は、これに加えて `tailscale serve` にポートが 1 つ登録されます。下記参照）。
@@ -388,6 +431,7 @@ security delete-generic-password -s io.github.mh-mobile.roamrun.device-control -
 - 外出先では、**デバッガ付きの実行（⌘R）に時間がかかります**。lldb の接続には数百回の往復が必要で、回線の遅延やパケットロスがそのまま効くためです。往復の回数は読み込むフレームワークの数とともに増え、インストールの時間はアプリのサイズにほぼ比例します（実測: 約 600KB のアプリ、テザリング経由、遅延 約 25〜60ms で、デバッガ付き約 1 分、デバッガなし約 4 秒。転送速度は 0.4〜0.9MB/秒）。ブレークポイントが不要なときは Edit Scheme › Run › Info の「Debug executable」をオフに、デバッガを使うときは Options の「Queue Debugging」と Diagnostics の「Main Thread Checker」「Thread Performance Checker」をオフにすると速くなります
 - iPhone 再起動後など、DDI の再ステージングで一度 USB 接続が必要な場合があります
 - TXT の authTag/identifier が変わった場合は、同じ Wi-Fi で iPhone を追加し直してください
+- **離れた Mac の引き合わせには iOS 27 と Xcode 27 が必要**で、それらのペアリングの動きに依存します。どちらかの更新で、RoamRun の更新が必要になることがあります。Xcode の申し出が知らない形のとき、`roamrun pair xcode` はそう表示します。
 - ブリッジ中は、**この Mac が属するローカルネットワーク**（Wi-Fi・有線など mDNS が有効な全インターフェース）に iPhone の Bonjour 識別子（identifier / authTag）を広告し続けます。iPhone 本体と違い値が固定のため、同じネットワークの第三者に端末の存在を追跡される可能性があります。ノート型の Mac でブリッジしたままカフェやホテルの Wi-Fi に入ると、そこでも広告されます。そのネットワークの第三者は、広告を再送してブリッジを一時的に待機状態にさせることもできます（端末を操作されることはありません）。中継は、この Mac 自身から以外の接続を即座に切断します。iPhone 側の通信は Tailscale で暗号化されるため、iPhone がどの Wi-Fi にいても影響しません
 - **動作確認は Xcode と `devicectl` で行っています。** Flutter や React Native も同じツールでビルド・インストールするため、ブリッジが Ready なら動くはずですが、まだ確認していません（[#5](https://github.com/mh-mobile/RoamRun/issues/5)）。`roamrun run` は今いるフォルダの Xcode プロジェクトをビルドします（Flutter / React Native なら先に `cd ios`）
 - 開発しない期間は、iPhone のデベロッパモードをオフにする、または不要なペアリングを解除すると安全です（Apple の推奨）
