@@ -352,7 +352,8 @@ struct AddDeviceView: View {
     }
 
     private func newest(for host: String?) -> CapturedService? {
-        coordinator.capture.services.values.filter { $0.host == host }.max { $0.lastSeen < $1.lastSeen }
+        if let fake = Snapshot.fakeServices { return fake.first { $0.host == host } }
+        return coordinator.capture.services.values.filter { $0.host == host }.max { $0.lastSeen < $1.lastSeen }
     }
 
     /// iPhones first, then online peers — the one you want is near the top.
