@@ -1306,7 +1306,10 @@ fn after_code(e: &idevice::IdeviceError) -> NotPaired {
             NotPaired { incomplete: true, why: "the code entered on the device wasn't the one shown".into() },
         idevice::IdeviceError::RemotePairing(E::PairingRejected(_)) =>
             NotPaired { incomplete: true, why: "the pairing was refused on the device".into() },
-        other => NotPaired { incomplete: false, why: format!("the pairing didn't complete: {other:?}") },
+        other => NotPaired {
+            incomplete: false,
+            why: format!("the pairing didn't complete: the connection ended after the code was shown — its screen closed on the device, or the network dropped ({other:?})"),
+        },
     }
 }
 
