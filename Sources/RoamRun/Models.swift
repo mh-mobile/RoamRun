@@ -30,14 +30,39 @@ struct MeshDevice: Identifiable, Hashable {
     var curAddr = ""
     /// Home DERP region, e.g. "tok".
     var relay = ""
+    /// The name Tailscale gave it, whole and without the last dot; empty without MagicDNS.
+    var dnsName = ""
+    /// Whose it is, as Tailscale numbers its users; a tagged device has tags instead.
+    var userID: Int?
+    var tags: [String] = []
+    /// Tailscale's lasting id for the machine; nil when it gave none. `id` falls back to other things.
+    var stableID: String?
 
     var ipv4: String? { ips.first(where: { $0.contains(".") }) }
+
+    /// The device chosen once another host is picked: a choice made for the user follows the
+    /// host — to no device where that host has none — and one they made stays.
+    static func follow(chosen: String?, auto: String?, match: String?) -> (chosen: String?, auto: String?) {
+        chosen == nil || chosen == auto ? (match, match) : (chosen, auto)
+    }
     var pathDescription: String {
         curAddr.isEmpty ? "via DERP relay (\(relay.isEmpty ? "?" : relay)) — works, but slower" : "direct (\(curAddr))"
     }
     var label: String {
         let suffix = ipv4.map { " (\($0))" } ?? ""
         return "\(name)\(suffix)\(online ? "" : " — offline")"
+    }
+}
+
+extension Array where Element == MeshDevice {
+    /// The device Tailscale reaches directly at one of these addresses — which, on this Mac's
+    /// LAN, says which Tailscale device a host seen there is. nil for none, and for more than one.
+    func reached(at addresses: [String]) -> MeshDevice? {
+        let found = filter { device in
+            let parts = device.curAddr.split(separator: ":")
+            return parts.count == 2 && addresses.contains(String(parts[0]))
+        }
+        return found.count == 1 ? found[0] : nil
     }
 }
 

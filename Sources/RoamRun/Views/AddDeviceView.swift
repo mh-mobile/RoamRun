@@ -17,6 +17,10 @@ struct AddDeviceView: View {
     /// mDNS cache keeps dead records for ~75min, so zone-dump hits alone
     /// don't mean the device is still here.
     @State private var liveness: [String: Bool] = [:]
+    /// host -> its IPv4 addresses, where the browse gave none: what says which Tailscale device it is.
+    @State private var addresses: [String: [String]] = [:]
+    /// The Tailscale device chosen for the user, by its address: followed until they pick their own.
+    @State private var autoMeshID: String?
     @State private var showUnresponsive = false
     @State private var added = false
     @State private var advertsKnown = false
@@ -62,7 +66,8 @@ struct AddDeviceView: View {
                     .keyboardShortcut(.cancelAction)
                 Button("Add Device") {
                     refusal = nil
-                    guard let captured = newest(for: selectedHost) else { return }
+                    // A made-up row is for looking at: it is never saved.
+                    guard Snapshot.fakeServices == nil, let captured = newest(for: selectedHost) else { return }
                     switch coordinator.addDevice(captured: captured, provider: provider, meshDevice: meshDevice,
                                                  manualIP: manualIP, name: name) {
                     case .added(let id):
@@ -105,15 +110,19 @@ struct AddDeviceView: View {
                 name = coordinator.uniqueName(s.shortHost)
                 autoName = name
             }
+            followSelection()
         }
+        // Its address may only be known a moment after it was picked.
+        .onChange(of: addresses) { _ in followSelection() }
         // A refusal is about what was asked then: any change makes it stale.
         .onChange(of: meshDeviceID) { _ in refusal = nil }
         .onChange(of: manualIP) { _ in refusal = nil }
         .onChange(of: name) { _ in refusal = nil }
-        .onChange(of: provider) { _ in refusal = nil }
+        .onChange(of: provider) { _ in refusal = nil; followSelection() }
         // The chosen Tailscale device gone from a refreshed list: no choice, not a blank one.
         .onChange(of: coordinator.tailscaleDevices) { devices in
             if let id = meshDeviceID, !devices.contains(where: { $0.id == id }) { meshDeviceID = nil }
+            followSelection()
         }
     }
 
@@ -184,7 +193,7 @@ struct AddDeviceView: View {
                 // A button, not a tap gesture: reachable with the keyboard (Tab, Space) and VoiceOver.
                 Button { selectedHost = s.host } label: {
                     ServiceRow(service: s, live: Snapshot.fakeServices == nil ? liveness[s.host] : true,
-                               selected: selectedHost == s.host,
+                               selected: selectedHost == s.host, tailscaleName: tailscaleDevice(for: s)?.name,
                                symbol: DeviceProfile.symbol(for: deviceType(ofHost: s.host)))
                         .contentShape(Rectangle())
                 }
@@ -200,6 +209,8 @@ struct AddDeviceView: View {
         let service: CapturedService
         let live: Bool?
         let selected: Bool
+        /// Which Tailscale device this is, when its address here says so: two phones are both "iPhone".
+        var tailscaleName: String?
         let symbol: String
 
         var body: some View {
@@ -210,8 +221,9 @@ struct AddDeviceView: View {
                 Image(systemName: symbol).foregroundStyle(.secondary).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(service.shortHost).lineLimit(1).truncationMode(.middle)
-                    Text(service.hostIPs.first(where: { $0.contains(".") }) ?? service.host)
-                        .font(.caption).foregroundStyle(.secondary)
+                    Text((service.hostIPs.first(where: { $0.contains(".") }) ?? service.host)
+                         + (tailscaleName.map { " · \($0) on Tailscale" } ?? ""))
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                 }
                 Spacer()
                 switch live {
@@ -308,8 +320,41 @@ struct AddDeviceView: View {
         }
     }
 
+    /// The Tailscale device a host on this LAN is, by the address Tailscale reaches it at.
+    private func tailscaleDevice(for service: CapturedService) -> MeshDevice? {
+        coordinator.tailscaleDevices.reached(at: service.hostIPs + (addresses[service.host] ?? []))
+    }
+
+    /// Step 2 follows step 1 where the device's address settles it, until the user chooses there.
+    private func followSelection() {
+        guard provider == .tailscale else { return }
+        let match = newest(for: selectedHost).flatMap(tailscaleDevice(for:))
+        (meshDeviceID, autoMeshID) = MeshDevice.follow(chosen: meshDeviceID, auto: autoMeshID, match: match?.id)
+    }
+
+    /// A host's IPv4 addresses by the system's resolver (mDNS for `.local`); empty when it has none.
+    nonisolated private static func ipv4(of host: String) async -> [String] {
+        await Task.detached {
+            var hints = addrinfo(), list: UnsafeMutablePointer<addrinfo>?
+            hints.ai_family = AF_INET
+            hints.ai_socktype = SOCK_STREAM
+            guard getaddrinfo(host, nil, &hints, &list) == 0, let first = list else { return [] }
+            defer { freeaddrinfo(list) }
+            var found: [String] = []
+            for info in sequence(first: first, next: { $0.pointee.ai_next }) {
+                var name = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                if getnameinfo(info.pointee.ai_addr, info.pointee.ai_addrlen, &name, socklen_t(name.count), nil, 0, NI_NUMERICHOST) == 0 {
+                    let address = name.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
+                    if !found.contains(address) { found.append(address) }
+                }
+            }
+            return found
+        }.value
+    }
+
     private func newest(for host: String?) -> CapturedService? {
-        coordinator.capture.services.values.filter { $0.host == host }.max { $0.lastSeen < $1.lastSeen }
+        if let fake = Snapshot.fakeServices { return fake.first { $0.host == host } }
+        return coordinator.capture.services.values.filter { $0.host == host }.max { $0.lastSeen < $1.lastSeen }
     }
 
     /// iPhones first, then online peers — the one you want is near the top.
@@ -340,6 +385,13 @@ struct AddDeviceView: View {
                 return found
             }
             liveness.merge(results) { _, new in new }
+            // Only for rows that answer and whose address the browse didn't give. Asked each round:
+            // a device that moved to another network keeps its name and not its address.
+            for s in servicesSorted where s.hostIPs.isEmpty && results[s.host] == true {
+                let now = await Self.ipv4(of: s.host)
+                // A lookup that fails once doesn't take away an address that was known.
+                if addresses[s.host] != now, !now.isEmpty || addresses[s.host] == nil { addresses[s.host] = now }
+            }
             // Re-check every 4s, but a newly seen device right away.
             for _ in 0..<8 where !servicesSorted.contains(where: { liveness[$0.host] == nil }) {
                 try? await Task.sleep(for: .seconds(0.5))

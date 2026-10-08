@@ -1188,7 +1188,7 @@ final class ProxyBridge: ObservableObject {
         log("remotepairingd does not recognize this device (identity nil)")
         stop()
         memory.block = .pairingLost
-        setState(.error("This Mac doesn't recognize \(profile.displayName)'s pairing — its Bonjour identity changed or the pairing was reset. Put the device on this Mac's Wi‑Fi, remove it here and add it again. If Xcode also lost it, pair it in Xcode first."))
+        setState(.error("This Mac doesn't recognize \(profile.displayName)'s pairing — its Bonjour identity changed or the pairing was reset. Put the device on this Mac's Wi‑Fi, remove it here and add it again; a Mac that is never on its Wi‑Fi takes it again from one that is (`roamrun devices export` there, `roamrun devices add <line> --replace \(CLI.shellName(profile.displayName))` here). If Xcode also lost it, pair it in Xcode first (from afar: `roamrun pair xcode`, and have this Mac introduced again)."))
     }
 
     /// Our record resolved to another device than the one saved. Its UDID is never taken; a
@@ -1202,7 +1202,7 @@ final class ProxyBridge: ObservableObject {
         }
         stop()
         memory.block = .pairingLost
-        setState(.error("What this Mac has saved for \(profile.displayName) is answered by another device paired with it. Remove \(profile.displayName) here and add it again."))
+        setState(.error("What this Mac has saved for \(profile.displayName) is answered by another device paired with it. Remove \(profile.displayName) here and add it again (a Mac that is never on its Wi‑Fi: `roamrun devices add <line> --replace \(CLI.shellName(profile.displayName))`, with a line exported on one that is)."))
     }
 
     static var noAddressMessage: String {
