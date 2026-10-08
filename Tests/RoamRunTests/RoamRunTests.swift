@@ -6721,3 +6721,254 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     try Data(count: 1 << 20).write(to: file)
     #expect(!DeviceControlWire.hasPairing(udid: "UDID-1", in: dir))
 }
+
+// MARK: - Two Macs that name each other (no line carried)
+
+@Test func whatTwoMacsSayIsReadBackAndNothingElseIs() {
+    let all: [PairWire.Message] = [.wantOffer, .offer("rr-xcode-offer-v1:abc"), .tried("rr-device-v1:abc"), .saved, .unsaved]
+        + PairWire.Reason.allCases.map(PairWire.Message.ended)
+    for m in all { #expect(PairWire.message(from: PairWire.line(m)) == m) }
+    for line in ["", "offer?", "rr-pair-v2 offer?", "rr-pair-v1 ", "rr-pair-v1 offer", "rr-pair-v1 offer ", "rr-pair-v1 offer a b",
+                 "rr-pair-v1 ended because", "rr-pair-v1 saved it", "rr-pair-v1 OFFER?"] {
+        #expect(PairWire.message(from: line) == nil, "\(line)")
+    }
+}
+
+@Test func aMachineIsHeldToItsLastingIDAndNothingStandsInForOne() {
+    // whois has a number called ID as well; a peer's ID in status is whois' StableID.
+    #expect(TailscaleClient.owner(fromWhoisJSON: #"{"Node":{"ID":4477722,"StableID":"nABCDNTRL","Key":"nodekey:1"}}"#) == "nABCDNTRL")
+    #expect(TailscaleClient.owner(fromWhoisJSON: #"{"Node":{"ID":4477722}}"#) == nil)
+    #expect(TailscaleClient.owner(fromWhoisJSON: #"{"Node":{"StableID":""}}"#) == nil)
+    #expect(TailscaleClient.owner(fromWhoisJSON: "no such peer") == nil)
+    let status = #"{"Peer":{"k1":{"ID":"nABCDNTRL","TailscaleIPs":["100.64.0.1"],"DNSName":"a.t.ts.net."},"k2":{"TailscaleIPs":["100.64.0.2"],"DNSName":"b.t.ts.net."}}}"#
+    let peers = TailscaleClient.devices(fromStatusJSON: status) ?? []
+    #expect(peers.first { $0.name == "a" }?.stableID == "nABCDNTRL")
+    #expect(peers.first { $0.name == "b" }?.stableID == nil)   // its `id` falls back to the address; this doesn't
+}
+
+private final class Counted<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [T] = []
+    func add(_ item: T) { lock.lock(); items.append(item); lock.unlock() }
+    var all: [T] { lock.lock(); defer { lock.unlock() }; return items }
+}
+
+private func farMac(peer: PairByName.Peer = .init(ip: "127.0.0.1", id: "home"),
+                    owner: @escaping @Sendable (String) -> String? = { _ in "home" },
+                    offers: @escaping @Sendable () async -> PairByName.Offers = { .one("offer-1") },
+                    rescan: @escaping @Sendable () async -> Void = {},
+                    saved: Counted<String> = .init(), saves: Bool = true,
+                    events: Counted<PairByName.Far.Event> = .init(),
+                    connectWindow: TimeInterval = 5, resultWindow: TimeInterval = 5) -> PairByName.Far {
+    PairByName.Far(peer: peer, owner: owner, offers: offers, rescan: rescan,
+                   save: { saved.add($0); return saves }, say: { events.add($0) },
+                   connectWindow: connectWindow, resultWindow: resultWindow, lineWait: 1, pause: .milliseconds(20))
+}
+
+private func homeMac(_ port: UInt16, owner: @escaping @Sendable (String) -> String? = { _ in "far" }, window: TimeInterval = 5) -> PairByName.Home {
+    PairByName.Home(peer: .init(ip: "127.0.0.1", id: "far"), owner: owner,
+                    connect: { PairLink.connect(to: "127.0.0.1", port: port, interface: nil, within: 1) },
+                    window: window, pause: .milliseconds(20))
+}
+
+private func started(_ far: PairByName.Far, _ listener: PairLink.Listener) -> Task<PairByName.Far.End, Never> {
+    Task.detached { await far.run(listener) }
+}
+
+extension TimingSensitive {
+@Suite struct TwoMacsByName {
+    /// The whole of it, in the order a person may do it: the other Mac connects first, the offer comes later.
+    @Test func theOfferIsWaitedForThenTheDeviceIsSavedOnce() async throws {
+        let listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
+        let asked = Counted<Int>(), saved = Counted<String>(), events = Counted<PairByName.Far.Event>()
+        let far = farMac(offers: { asked.add(1); return asked.all.count < 4 ? .none : .one("offer-1") }, saved: saved, events: events)
+        let end = started(far, listener)
+        guard case .offer(let offer, let link) = await homeMac(listener.port).fetch() else { Issue.record("no offer"); return }
+        #expect(offer == "offer-1")
+        #expect(asked.all.count >= 4)
+        #expect(PairByName.Home.handOver("device-1", on: link) == .saved)
+        #expect(await end.value == .saved)
+        #expect(saved.all == ["device-1"])
+        #expect(events.all == [.connected, .waitingForOffer, .offerSent])
+    }
+
+    @Test func onlyTheMacNamedIsAnsweredAndAStrangerDoesNotShutItOut() async throws {
+        // Another address: turned away without a question to Tailscale.
+        var listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        let questions = Counted<String>(), events = Counted<PairByName.Far.Event>()
+        var far = farMac(peer: .init(ip: "127.0.0.9", id: "home"), owner: { questions.add($0); return "home" }, events: events, connectWindow: 0.6)
+        let none = started(far, listener)
+        let stranger = try #require(PairLink.connect(to: "127.0.0.1", port: listener.port, interface: nil))
+        stranger.send(.wantOffer)
+        #expect(stranger.read(within: 2) == .closed)
+        #expect(await none.value == .noOne)
+        #expect(questions.all.isEmpty)
+        #expect(events.all == [.refused(from: "127.0.0.1")])
+
+        // The right address, held by another machine now, or by one Tailscale can't name: turned
+        // away each time; then the Mac itself gets through.
+        listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        let answers = Counted<Int>(), saved = Counted<String>()
+        far = farMac(owner: { _ in answers.add(1); return [1: "another", 2: nil][answers.all.count] ?? "home" }, saved: saved)
+        let end = started(far, listener)
+        for _ in 1...2 {
+            let link = try #require(PairLink.connect(to: "127.0.0.1", port: listener.port, interface: nil))
+            link.send(.wantOffer)
+            #expect(link.read(within: 2) == .closed)
+        }
+        guard case .offer(_, let link) = await homeMac(listener.port).fetch() else { Issue.record("no offer"); return }
+        #expect(PairByName.Home.handOver("device-1", on: link) == .saved)
+        #expect(await end.value == .saved)
+        #expect(saved.all == ["device-1"])
+    }
+
+    @Test func whatIsNotALineOfTheseGetsNoOffer() async throws {
+        let listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        let saved = Counted<String>()
+        let end = started(farMac(saved: saved), listener)
+        // Too long, never ending; then one byte and silence; then another version's word.
+        let long = try #require(PairLink.connect(to: "127.0.0.1", port: listener.port, interface: nil))
+        long.send(.offer(String(repeating: "x", count: PairWire.maxLine + 100)))
+        #expect(long.read(within: 3) == .closed)
+        let slow = try #require(PairLink.connect(to: "127.0.0.1", port: listener.port, interface: nil))
+        #expect(slow.read(within: 3) == .closed)   // lineWait, not for ever
+        let other = try #require(PairLink.connect(to: "127.0.0.1", port: listener.port, interface: nil))
+        other.send(.saved)
+        #expect(other.read(within: 3) == .closed)
+        guard case .offer(_, let link) = await homeMac(listener.port).fetch() else { Issue.record("no offer"); return }
+        #expect(PairByName.Home.handOver("device-1", on: link) == .saved)
+        #expect(await end.value == .saved)
+    }
+
+    @Test func twoOffersAreLookedAtAgainAndNeverChosenBetween() async throws {
+        // Two, and after looking again one: sent.
+        var listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        let looks = Counted<Int>()
+        var far = farMac(offers: { looks.all.isEmpty ? .several : .one("offer-new") }, rescan: { looks.add(1) })
+        let one = started(far, listener)
+        guard case .offer(let offer, let link) = await homeMac(listener.port).fetch() else { Issue.record("no offer"); return }
+        #expect(offer == "offer-new")
+        #expect(PairByName.Home.handOver("device-1", on: link) == .saved)
+        #expect(await one.value == .saved)
+
+        // Still two: neither is sent, and both Macs are told.
+        listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        far = farMac(offers: { .several })
+        let two = started(far, listener)
+        guard case .ended(.ambiguous) = await homeMac(listener.port).fetch() else { Issue.record("an offer was chosen"); return }
+        #expect(await two.value == .ambiguous)
+    }
+
+    @Test func aConnectionLostBeforeTheOfferArrivedIsMadeAgainAndOneLostAfterIsNot() async throws {
+        let listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        let saved = Counted<String>(), events = Counted<PairByName.Far.Event>()
+        let end = started(farMac(saved: saved, events: events, connectWindow: 1.5), listener)
+        // Dropped with the offer on its way: the other Mac may ask again, and does.
+        let first = try #require(PairLink.connect(to: "127.0.0.1", port: listener.port, interface: nil))
+        first.send(.wantOffer)
+        first.close()
+        guard case .offer(_, let link) = await homeMac(listener.port).fetch() else { Issue.record("no offer"); return }
+        // Dropped with the offer taken: nothing asks again, and the far Mac stops once a connection may no longer begin.
+        link.close()
+        #expect(await end.value == .noOne)
+        #expect(saved.all.isEmpty)
+        #expect(events.all.filter { $0 == .dropped }.count >= 1)
+    }
+
+    @Test func theResultIsWaitedForPastTheTimeAConnectionMayBegin() async throws {
+        let listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        let saved = Counted<String>()
+        let end = started(farMac(saved: saved, connectWindow: 0.4, resultWindow: 5), listener)
+        guard case .offer(_, let link) = await homeMac(listener.port).fetch() else { Issue.record("no offer"); return }
+        try await Task.sleep(for: .seconds(1))   // standing in, past the first window
+        #expect(PairByName.Home.handOver("device-1", on: link) == .saved)
+        #expect(await end.value == .saved)
+    }
+
+    @Test func nothingIsSavedUnlessAPairingWasTriedAndNoResultIsSaidAsThat() async throws {
+        var listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        let saved = Counted<String>()
+        var far = farMac(saved: saved)
+        let ended = started(far, listener)
+        guard case .offer(_, let link) = await homeMac(listener.port).fetch() else { Issue.record("no offer"); return }
+        link.send(.ended(.deadline))
+        #expect(await ended.value == .ended(.deadline))
+
+        listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        far = farMac(saved: saved, resultWindow: 0.4)
+        let silent = started(far, listener)
+        guard case .offer(_, let quiet) = await homeMac(listener.port).fetch() else { Issue.record("no offer"); return }
+        #expect(await silent.value == .noResult)
+        quiet.close()
+        #expect(saved.all.isEmpty)
+
+        // Tried, and the far Mac wouldn't save it: said so, not as saved.
+        listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        far = farMac(saved: saved, saves: false)
+        let refused = started(far, listener)
+        guard case .offer(_, let third) = await homeMac(listener.port).fetch() else { Issue.record("no offer"); return }
+        #expect(PairByName.Home.handOver("device-1", on: third) == .unsaved)
+        #expect(await refused.value == .unsaved)
+    }
+
+    @Test func theIntroducingMacAsksOnlyTheMacItNamedAndSaysWhatItCannotKnow() async throws {
+        // The address is another machine's now: nothing is asked of it.
+        var listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        var port = listener.port
+        async let wrong = homeMac(port, owner: { _ in "another" }).fetch()
+        var (link, _) = try #require(listener.accept(within: 2))
+        #expect(link.read(within: 2) == .closed)
+        guard case .notThatMac = await wrong else { Issue.record("asked a stranger"); return }
+        async let unnamed = homeMac(port, owner: { _ in nil }).fetch()
+        (link, _) = try #require(listener.accept(within: 2))
+        #expect(link.read(within: 2) == .closed)
+        guard case .notThatMac = await unnamed else { Issue.record("asked a stranger"); return }
+
+        // Another version answering.
+        async let garbled = homeMac(port).fetch()
+        (link, _) = try #require(listener.accept(within: 2))
+        #expect(link.read(within: 2) == .line(PairWire.line(.wantOffer)))
+        link.send(.saved)
+        guard case .garbled = await garbled else { Issue.record("took it"); return }
+
+        // No one there in time.
+        listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        port = listener.port
+        guard case .noOne = await homeMac(port &+ 1, window: 0.3).fetch() else { Issue.record("someone?"); return }
+
+        // The device handed over, and the answer lost: unknown, not "not saved".
+        async let fetched = homeMac(port).fetch()
+        (link, _) = try #require(listener.accept(within: 2))
+        _ = link.read(within: 2)
+        link.send(.offer("offer-1"))
+        guard case .offer(_, let mine) = await fetched else { Issue.record("no offer"); return }
+        async let answer = Task.detached { PairByName.Home.handOver("device-1", on: mine, within: 1) }.value
+        #expect(link.read(within: 2) == .line(PairWire.line(.tried("device-1"))))
+        link.close()
+        #expect(await answer == .unknown)
+    }
+
+    @Test func aLineIsReadWholeAndOneWithoutEndIsNotKept() throws {
+        let listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        let from = try #require(PairLink.connect(to: "127.0.0.1", port: listener.port, interface: nil))
+        let (to, _) = try #require(listener.accept(within: 2))
+        from.send(.saved); from.send(.unsaved)
+        #expect(to.read(within: 2) == .line(PairWire.line(.saved)))
+        #expect(to.read(within: 2) == .line(PairWire.line(.unsaved)))
+        #expect(to.read(within: 0.2) == .timeout)
+        #expect(!to.gone)
+        to.send(.offer(String(repeating: "x", count: PairWire.maxLine * 3)))   // one line, far too long
+        #expect(from.read(within: 5) == .tooLong)
+        from.close()
+        for _ in 0..<50 where !to.gone { usleep(20_000) }
+        #expect(to.gone)
+    }
+
+    @Test func aListenerKeepsToItsInterfaceOrDoesNotListen() throws {
+        _ = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
+        #expect(throws: (any Error).self) { try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "nosuch9") }
+        let taken = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
+        #expect(throws: (any Error).self) { try PairLink.Listener(ip: "127.0.0.1", port: taken.port, interface: nil) }
+    }
+}
+}

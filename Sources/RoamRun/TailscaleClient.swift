@@ -319,7 +319,8 @@ struct TailscaleClient {
                                           relay: (p["Relay"] as? String) ?? "",
                                           dnsName: Self.undotted((p["DNSName"] as? String) ?? ""),
                                           userID: p["UserID"] as? Int,
-                                          tags: (p["Tags"] as? [String]) ?? []))
+                                          tags: (p["Tags"] as? [String]) ?? [],
+                                          stableID: (p["ID"] as? String).flatMap { $0.isEmpty ? nil : $0 }))
             }
         }
         return devices.sorted { ($0.os == "iOS") != ($1.os == "iOS") ? $0.os == "iOS" : $0.name < $1.name }
@@ -356,6 +357,21 @@ struct TailscaleClient {
         if let problem = Self.stateProblem(inStatusJSON: out) { throw TailscaleClientError.commandFailed(problem) }
         guard let mesh = Self.mesh(fromStatusJSON: out) else { throw TailscaleClientError.commandFailed("tailscale status: bad JSON") }
         return mesh
+    }
+
+    /// The lasting id of the machine `tailscale whois --json` describes: what a peer's `ID` in
+    /// `status --json` is. (whois has a number called ID too; that is another thing.)
+    static func owner(fromWhoisJSON out: String) -> String? {
+        guard let data = out.data(using: .utf8),
+              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let id = (root["Node"] as? [String: Any])?["StableID"] as? String, !id.isEmpty else { return nil }
+        return id
+    }
+
+    /// Whose a tailnet address is right now; nil when Tailscale can't be asked or doesn't say.
+    func owner(of ip: String) -> String? {
+        guard let path = resolvedPath(), let out = try? run(path, ["whois", "--json", ip]) else { return nil }
+        return Self.owner(fromWhoisJSON: out)
     }
 
     enum NamedPeer: Equatable {

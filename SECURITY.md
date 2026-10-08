@@ -28,8 +28,9 @@ bounded.
   qualifies, as it could reach the device's Tailscale address anyway) — anything
   else is dropped immediately. It forwards bytes unchanged to the device's Tailscale (or
   manually entered) address and never reads, stores or alters them.
-- **`roamrun pair introduce` is the one thing that takes a connection from another
-  host, and it does only while it runs.** It lets a Mac that was never on the
+- **Two commands take a connection from another host, each only while it runs:**
+  `roamrun pair introduce`, from the device's LAN, and `roamrun pair xcode --with`,
+  from one Mac of the tailnet (the next point). `pair introduce` lets a Mac that was never on the
   device's network pair with it: for five minutes at most it announces that Mac's
   offer to pair on this Mac's LAN interface — on that one interface, or not at all —
   and relays what connects to the port it opens there to that Mac's pairing port,
@@ -67,6 +68,32 @@ bounded.
   - A pairing made on a rented or cloud Mac lives on that machine's disk, and in its
     images and snapshots. Macs made from one image hold one identity: the device
     treats them as one Mac.
+- **`roamrun pair xcode --with <Mac>` listens for one Mac, over Tailscale.** It
+  spares carrying the two lines below by hand: the Mac that offers to pair waits
+  for the Mac that will introduce it, gives it the offer, and is handed the device
+  to save. What to know:
+  - It listens on this Mac's Tailscale address, port 41830, and on Tailscale's
+    interface alone: an address by itself doesn't keep out a host on the LAN that
+    routes to it. It listens only while the command runs — ten minutes at most
+    for a connection to begin, seven more for the result of one that got the offer.
+  - It answers one machine. The name given is looked up once, in this Mac's own
+    Tailscale; from then on a connection is taken only from that machine's address,
+    and only if Tailscale says, at that moment, that the address is still that
+    machine's (by Tailscale's lasting id for it — never by a name, and never when
+    Tailscale can't say). The Mac that connects holds the Mac it named to the same.
+    One connection at a time; one turned away doesn't count.
+  - That is the machine, not the program or the person: anything running on the
+    Mac named can connect. It is the trust `pair introduce` already places in a
+    Mac that is named.
+  - What arrives is read as one of six short lines, 4 KB at most, and dropped
+    otherwise; the offer and the device inside them are checked exactly as the
+    carried lines are. Why something ended travels as a code word; the sentence
+    shown is this Mac's own.
+  - The device is saved only when the other Mac says a pairing was tried. That
+    isn't proof one was made: `roamrun up` shows it.
+  - The Mac that introduces listens for nothing more than before. If the
+    connection to the other Mac ends while it stands in, it stops standing in.
+  - Not tried with a Mac shared in from another tailnet.
 - **The lines carried between Macs are not secrets, and are not trusted.**
   `roamrun pair xcode` prints a port and seven announced values; `roamrun devices
   export` (and `pair introduce`, at its end) prints a saved device's name, its

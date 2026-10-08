@@ -214,6 +214,14 @@ tunnel and Xcode has to run again.
     and — with the OS symbols copied over — lldb at a breakpoint. The device lists that Mac under
     its own computer name, as `pair introduce` said. Then once more with the sheet on the far Mac
     closed: `pair introduce` says that Mac isn't waiting and announces nothing.
+    Then by name, the far Mac's entry removed on the device first: there
+    `roamrun pair xcode --with <this Mac's Tailscale name>`, here `roamrun pair introduce --mac
+    <its Tailscale name> --to <name>` with no line, and the button pressed after both wait → the
+    far Mac says the device is saved, this Mac says that Mac saved it, `roamrun up <name>` there
+    → Ready. Once more with the far Mac's command stopped (Ctrl-C) while this Mac stands in: this
+    Mac stops, says that Mac went away, and nothing is announced or listening on either
+    (`lsof -nP -iTCP:41830`). From a third machine of the tailnet, `nc <far Mac> 41830` while it
+    waits: "Turned away a connection from …".
 
 ## Debug logs worth a look after an iOS or Xcode update
 

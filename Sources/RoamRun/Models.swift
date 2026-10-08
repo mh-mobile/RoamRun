@@ -35,6 +35,8 @@ struct MeshDevice: Identifiable, Hashable {
     /// Whose it is, as Tailscale numbers its users; a tagged device has tags instead.
     var userID: Int?
     var tags: [String] = []
+    /// Tailscale's lasting id for the machine; nil when it gave none. `id` falls back to other things.
+    var stableID: String?
 
     var ipv4: String? { ips.first(where: { $0.contains(".") }) }
     var pathDescription: String {
