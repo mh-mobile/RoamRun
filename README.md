@@ -251,6 +251,8 @@ roamrun devices add <line>                                   # the device, saved
 roamrun up iPhone                                            # Ready: Xcode there has the device
 ```
 
+None of it needs the RoamRun app open on the far Mac; the commands are enough, and the app lists the device when it is next opened.
+
 `pair introduce` announces the far Mac's offer on this Mac's Wi‑Fi, under the name Tailscale has for that Mac, and carries the device's one connection to it over the tailnet. The pairing is made between the device and Xcode on the far Mac: no key leaves either, and none passes through here. It takes connections from the device's own address on this Wi‑Fi when Tailscale knows it (else from that Wi‑Fi's hosts, and says so), stops when the device has tried to pair or after five minutes, and leaves nothing announced or listening. It can't tell whether the pairing was made — a wrong code looks the same from here as one not yet typed — so it doesn't say; `roamrun up` on the far Mac does.
 
 Each prints its line alone on standard output, so with ssh to the far Mac nothing is carried by hand:

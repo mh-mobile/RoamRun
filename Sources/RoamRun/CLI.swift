@@ -162,7 +162,7 @@ enum CLI {
             guard let old = find(replacing, in: saved) else { fail("no device named \(shellName(replacing)). " + names(saved)) }
             if StatusFile.read()[old.id] != nil { fail("\(old.displayName)'s bridge is running: `roamrun down \(shellName(old.displayName))` first") }
             if !NSRunningApplication.runningApplications(withBundleIdentifier: AppID.bundle).filter({ $0.processIdentifier != getpid() }).isEmpty {
-                fail("quit the RoamRun app first: it would write back what it has of \(old.displayName)")
+                fail("the RoamRun app is running on this Mac. Quit it (its menu bar icon › Quit RoamRun), then run this again: while it runs it would put back its older copy of \(old.displayName)")
             }
             guard let new = Introduction.profile(from: device, peer: found, name: old.displayName) else { fail("\(found.dnsName) has no IPv4 address on the tailnet") }
             called = old.displayName
@@ -188,7 +188,7 @@ enum CLI {
         print(replacing != nil
               ? "\(called) now has that announcement and address; its UDID is as it was. Next: roamrun up \(shellName(called))"
               : "\(called) is saved, without a UDID: the bridge learns it from this Mac's own pairing. Next: roamrun up \(shellName(called))")
-        note("(the RoamRun app lists it once it is opened again)")
+        note("(no need to open the RoamRun app for this; when it is next opened it lists \(called))")
         exit(0)
     }
 
@@ -217,6 +217,7 @@ enum CLI {
           roamrun pair introduce <that line> --mac \(me) --to <device>
         Keep “Waiting to pair.” open: pressing the button again makes a new offer, and this line is then no good.
         The code to type on the device is the one Device Hub shows here.
+        Afterwards, here: roamrun devices add <the line that prints>, then roamrun up <device>. The RoamRun app needn't be open on this Mac for any of it.
         """)
         exit(0)
     }

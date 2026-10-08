@@ -98,8 +98,9 @@ introduced; you can run the commands, they do the rest.
   more): say which, don't loop.
 - On the far Mac: `roamrun devices add <line>` (`--as <name>` for another name;
   "… is that device already": `--replace <name>`, with the RoamRun app quit and
-  that device's bridge down). Then `roamrun up <name>`: Ready means the pairing
-  was made. The app there lists the device once it is opened again.
+  that device's bridge down — it says so and stops if the app is running). Then
+  `roamrun up <name>`: Ready means the pairing was made. None of this needs the
+  RoamRun app open on that Mac; when it is next opened, it lists the device.
 - lldb from that Mac needs the device's OS symbols there; without them an attach
   waits for minutes. `devicectl`, `roamrun run` and `roamrun logs` don't. Tell the
   user (the README says how they are copied over) rather than wait.

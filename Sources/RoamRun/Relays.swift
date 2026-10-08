@@ -49,7 +49,8 @@ final class Relay: @unchecked Sendable {
     /// Pairs this relay takes at once, where that is fewer than any relay may.
     let cap: Int
     /// A pair reached the far side, or ended: who it was, and at the end what it carried
-    /// each way and, when it didn't end by itself, why. Off-main.
+    /// each way. `why`: the error its end showed as, if it showed as one — which a pair
+    /// that simply finished may too, by the order its two closes are seen in. Off-main.
     enum PairEvent: Equatable, Sendable {
         case opened(from: String)
         case closed(from: String, up: Int, down: Int, why: String?)

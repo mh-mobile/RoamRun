@@ -1423,7 +1423,14 @@ extension TimingSensitive {
             let relay = try await startedRelay(upstream: upstream, cap: 1, onPair: told.add); defer { relay.stop() }
             #expect(await roundTrip(port: relay.localPort, payload: Data("hello".utf8)) == Data("hello".utf8))
             #expect(try await eventually { told.events.count == 2 })
-            #expect(told.events == [.opened(from: "127.0.0.1"), .closed(from: "127.0.0.1", up: 5, down: 5, why: nil)])
+            // How a finished pair's end shows depends on which side's close is seen first: both
+            // done, or an error on the other leg. What it carried, and that it is told once, don't.
+            guard told.events.count == 2, case .closed(let from, let up, let down, _) = told.events[1] else {
+                Issue.record("told: \(told.events)"); return
+            }
+            #expect(told.events[0] == .opened(from: "127.0.0.1") && from == "127.0.0.1" && up == 5 && down == 5)
+            try await Task.sleep(for: .milliseconds(300))
+            #expect(told.events.count == 2)
             relay.stop()
 
             let nobody = Told()
