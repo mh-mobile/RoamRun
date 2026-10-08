@@ -226,6 +226,7 @@ extension Introduction {
         all[i].instanceName = new.instanceName; all[i].txt = new.txt
         all[i].remotePairingPort = new.remotePairingPort
         all[i].providerIP = new.providerIP; all[i].providerHostName = new.providerHostName
+        all[i].providerID = new.providerID   // one saved by its address is a Tailscale device from here on
         return .replaced
     }
 

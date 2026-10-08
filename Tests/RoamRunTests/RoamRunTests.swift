@@ -770,6 +770,12 @@ import ServiceManagement
     #expect(Introduction.replace(two[1].id, with: forOther, in: &two) == .replaced)
     #expect(two[1].remotePairingPort == forOther.remotePairingPort && two[1].displayName == "Other iPhone")
     #expect(Introduction.replace(UUID(), with: forOther, in: &two) == .gone)
+    // One saved by its address becomes the Tailscale device the line names: it can then be exported.
+    two[1].providerID = MeshProvider.manual.rawValue; two[1].providerHostName = two[1].providerIP; two[1].udid = "00008130-000C1C5C307A8D3A"
+    #expect(Introduction.device(of: two[1]) == nil)
+    #expect(Introduction.replace(two[1].id, with: forOther, in: &two) == .replaced)
+    #expect(Introduction.device(of: two[1]) != nil && two[1].providerHostName == forOther.providerHostName)
+    #expect(two[1].udid == "00008130-000C1C5C307A8D3A")   // the same device's: what it is stays
 
     // What another Mac sent is shown only as a device read and written again.
     #expect(Introduction.shown(Introduction.line(device)) == Introduction.line(device))
@@ -836,7 +842,8 @@ extension TimingSensitive.RelayOnLocalhost {
     #expect(ended(said) == nil && !standIn.ended)
     #expect(await roundTrip(port: announced.port, payload: Data("pair".utf8)) == Data("pair".utf8))
     #expect(await eventuallyOnMain { ended(said) == .ended(.carried, clean: true) })
-    #expect(record.stopped == 1 && !TailscaleClient.listening(on: announced.port))
+    #expect(record.stopped == 1)
+    #expect(await eventuallyOnMain { !TailscaleClient.listening(on: announced.port) })
     await standIn.end(.stopped)
     #expect(said.events.filter { if case .ended = $0 { return true }; return false }.count == 1)   // an end is said once
 
@@ -848,7 +855,8 @@ extension TimingSensitive.RelayOnLocalhost {
     _ = await roundTrip(port: port, payload: Data("x".utf8), timeout: 1)
     #expect(await eventuallyOnMain { said.events.contains { if case .farDidNotAnswer = $0 { return true }; return false } })
     #expect(await eventuallyOnMain { ended(said) == .ended(.deadline, clean: true) })
-    #expect(record.stopped == 1 && !TailscaleClient.listening(on: port))
+    #expect(record.stopped == 1)
+    #expect(await eventuallyOnMain { !TailscaleClient.listening(on: port) })
 
     // The interface's address gone: it stops rather than be announced elsewhere.
     said = Said(); record = FakeRecord()

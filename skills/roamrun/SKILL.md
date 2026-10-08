@@ -120,7 +120,8 @@ introduced; you can run the commands, they do the rest.
 - On the far Mac: `roamrun devices add <line>` (`--as <name>` for another name;
   `--peer <Tailscale name>` when it says no device has that name on this tailnet;
   "… is saved already, and this changes nothing": nothing to do;
-  "… is that device already": `--replace <name>`, with the RoamRun app quit and
+  "… is that device already": `--replace <name>` — for that same device only; its
+  UDID is kept, so another device goes under a name of its own — with the RoamRun app quit and
   that device's bridge down — it says so and stops if the app is running). Then
   `roamrun up <name>`: Ready means the pairing was made. None of this needs the
   RoamRun app open on that Mac; when it is next opened, it lists the device.

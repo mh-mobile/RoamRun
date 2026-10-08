@@ -62,8 +62,9 @@ enum CLI {
       devices export <name>          A saved device as a line for another Mac: no key, no UDID
       devices add <line> [--as <name>] [--replace <name>] [--peer <Tailscale name>]
                                      Save the device of such a line (found by its Tailscale name on this
-                                     Mac's tailnet; --replace: put it in a saved one's place, with the
-                                     app and that device's bridge stopped)
+                                     Mac's tailnet; --replace: put it in the place of what is saved of
+                                     that same device — its UDID is kept — with the app and that
+                                     device's bridge stopped)
       pair xcode [--with <Tailscale name>]
                                      On a Mac the device was never near, with Device Hub › Pair Nearby
                                      Device: print this Mac's offer to pair, for `pair introduce`.
@@ -219,7 +220,7 @@ enum CLI {
         }
         note("\(called): \(found.dnsName) (\(found.ipv4 ?? "")), port \(device.port), announced as \(device.txt["identifier"] ?? "")")
         print(replacing != nil
-              ? "\(called) now has that announcement and address; its UDID is as it was. Next: roamrun up \(shellName(called))"
+              ? "\(called) now has that announcement and address; its UDID is as it was (this is for the same device: another one is added under a name of its own). Next: roamrun up \(shellName(called))"
               : "\(called) is saved, without a UDID: the bridge learns it from this Mac's own pairing. Next: roamrun up \(shellName(called))")
         note("(no need to open the RoamRun app for this; when it is next opened it lists \(called))")
     }
