@@ -113,9 +113,10 @@ introduced; you can run the commands, they do the rest.
 - `pair introduce` ends by itself (five minutes at most) and, when a pairing was
   tried, prints the device as a line on standard output (exit 0). It never says the
   pairing was made: it can't know. Exit 1 means no pairing was tried and prints no
-  line (time ran out, stopped, the far Mac wasn't waiting any more, or "Tailscale
-  doesn't say where … is on this Wi‑Fi": the user unlocks the device and opens
-  Tailscale on it): say which, don't loop.
+  line (time ran out, stopped, the far Mac wasn't waiting any more, "Tailscale
+  doesn't reach … directly on this Wi‑Fi": the user unlocks the device and sees it
+  is on that Wi‑Fi and connected in Tailscale; or "… is saved by its address": it
+  has to be added again as a Tailscale device): say which, don't loop.
 - On the far Mac: `roamrun devices add <line>` (`--as <name>` for another name;
   `--peer <Tailscale name>` when it says no device has that name on this tailnet;
   "… is saved already, and this changes nothing": nothing to do;

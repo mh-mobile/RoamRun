@@ -41,8 +41,9 @@ bounded.
     given carries a port and what to announce, never an address, a host or a
     service type.
   - It takes connections from the device's address on that LAN alone, two at once
-    at most. It has that address from Tailscale, and doesn't start when Tailscale
-    reports none (a relayed path, a sleeping device): the port it relays to is the
+    at most. It has that address from Tailscale (pinging the device when Tailscale
+    hasn't talked to it lately), and doesn't start when Tailscale reaches the
+    device only through a relay or over IPv6: the port it relays to is the
     one the offer names, and opening that to a whole LAN would let any host there
     reach whatever listens on it on that Mac. A host that takes the device's
     address on the LAN is taken for the device; pairing still needs the code.

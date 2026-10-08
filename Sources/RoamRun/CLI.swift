@@ -131,11 +131,20 @@ enum CLI {
 
     nonisolated private static func note(_ text: String) { FileHandle.standardError.write(Data((text + "\n").utf8)) }
 
+    /// A saved device as another Mac can be told of it, or why it can't be.
+    private static func handover(of profile: DeviceProfile) -> Introduction.Device {
+        guard profile.providerID == MeshProvider.tailscale.rawValue else {
+            stop("\(profile.displayName) is saved by its address, not as a Tailscale device, so another Mac can't be told which device it is: remove it and add it again on its Wi‑Fi, choosing its Tailscale device")
+        }
+        guard let device = Introduction.device(of: profile) else {
+            stop("what is saved of \(profile.displayName)'s announcement isn't whole: remove it and add it again on its Wi‑Fi first")
+        }
+        return device
+    }
+
     /// `devices export`: the line alone on stdout, what to do with it on stderr.
     private static func exportDevice(_ profile: DeviceProfile) -> Never {
-        guard let device = Introduction.device(of: profile) else {
-            fail("what is saved of \(profile.displayName)'s announcement isn't whole (or its Tailscale name is missing): remove it and add it again on its Wi‑Fi, then export")
-        }
+        let device = handover(of: profile)
         print(Introduction.line(device))
         note("On the other Mac: roamrun devices add <that line>   (no key is in it; it names the device \(device.peer) on your tailnet)")
         exit(0)
@@ -143,13 +152,15 @@ enum CLI {
 
     /// `devices add`: where the device is comes from this Mac's own Tailscale, never from the line.
     private static func addDevice(line: String, name: String?, replacing: String?, peer: String?, store: ProfileStore) -> Never {
-        do { try saveDevice(line: line, name: name, replacing: replacing, peer: peer, store: store) } catch { fail(error.why) }
+        do { try saveDevice(line: line, name: name, replacing: replacing, peer: peer, store: store) } catch { error.happened ? stop(error.why) : fail(error.why) }
         exit(0)
     }
 
     private struct Refusal: Error {
         let why: String
-        init(_ why: String) { self.why = why }
+        /// Not a mistake in the command, but how things are (exit 1, not 2).
+        let happened: Bool
+        init(_ why: String, happened: Bool = false) { self.why = why; self.happened = happened }
     }
 
     private static func saveDevice(line: String, name: String?, replacing: String?, peer: String?, store: ProfileStore) throws(Refusal) {
@@ -161,7 +172,7 @@ enum CLI {
         case .failure(.refused(let why)): throw Refusal("not taken: \(why)")
         }
         let mesh: TailscaleClient.Mesh
-        do { mesh = try TailscaleClient.fromSettings().mesh() } catch { throw Refusal("Tailscale on this Mac couldn't be asked: \(error.localizedDescription)") }
+        do { mesh = try TailscaleClient.fromSettings().mesh() } catch { throw Refusal("Tailscale on this Mac couldn't be asked: \(error.localizedDescription)", happened: true) }
         let wanted = peer ?? device.peer
         let found: MeshDevice
         switch TailscaleClient.peer(named: wanted, in: mesh) {
@@ -175,29 +186,28 @@ enum CLI {
         let saved = store.load()
         var change: (inout [DeviceProfile]) -> Void
         let called: String
-        var added = Introduction.Added.added, gone = false
+        var added = Introduction.Added.added, replaced = Introduction.Replaced.replaced
         if let replacing {
             guard let old = find(replacing, in: saved) else { throw Refusal("no device named \(shellName(replacing)). " + names(saved)) }
-            if StatusFile.read()[old.id] != nil { throw Refusal("\(old.displayName)'s bridge is running: `roamrun down \(shellName(old.displayName))` first") }
+            if StatusFile.read()[old.id] != nil { throw Refusal("\(old.displayName)'s bridge is running: `roamrun down \(shellName(old.displayName))` first", happened: true) }
             if !NSRunningApplication.runningApplications(withBundleIdentifier: AppID.bundle).filter({ $0.processIdentifier != getpid() }).isEmpty {
-                throw Refusal("the RoamRun app is running on this Mac. Quit it (its menu bar icon › Quit RoamRun), then run this again: while it runs it would put back its older copy of \(old.displayName)")
+                throw Refusal("the RoamRun app is running on this Mac. Quit it (its menu bar icon › Quit RoamRun), then run this again: while it runs it would put back its older copy of \(old.displayName)", happened: true)
             }
-            guard let new = Introduction.profile(from: device, peer: found, name: old.displayName) else { throw Refusal("\(found.dnsName) has no IPv4 address on the tailnet") }
+            guard let new = Introduction.profile(from: device, peer: found, name: old.displayName) else { throw Refusal("\(found.dnsName) has no IPv4 address on the tailnet", happened: true) }
             called = old.displayName
-            change = { all in
-                guard let i = all.firstIndex(where: { $0.id == old.id }) else { gone = true; return }
-                all[i].instanceName = new.instanceName; all[i].txt = new.txt
-                all[i].remotePairingPort = new.remotePairingPort
-                all[i].providerIP = new.providerIP; all[i].providerHostName = new.providerHostName
-            }
+            change = { replaced = Introduction.replace(old.id, with: new, in: &$0) }
         } else {
             let wantedName = (name ?? device.name).trimmingCharacters(in: .whitespaces)
-            guard let new = Introduction.profile(from: device, peer: found, name: wantedName) else { throw Refusal("\(found.dnsName) has no IPv4 address on the tailnet") }
+            guard let new = Introduction.profile(from: device, peer: found, name: wantedName) else { throw Refusal("\(found.dnsName) has no IPv4 address on the tailnet", happened: true) }
             called = wantedName
             change = { added = Introduction.add(new, from: device, to: &$0) }
         }
-        guard store.update(change) else { throw Refusal("couldn't write \(ProfileStore.directory.path)/profiles.json") }
-        if gone { throw Refusal("\(called) was removed while this ran: nothing was changed") }
+        guard store.update(change) else { throw Refusal("couldn't write \(ProfileStore.directory.path)/profiles.json", happened: true) }
+        switch replaced {
+        case .replaced: break
+        case .gone: throw Refusal("\(called) was removed while this ran: nothing was changed", happened: true)
+        case .already(let name): throw Refusal("that line is for the device saved as \(name), not \(called): nothing was changed. To put it in \(name)'s place: --replace \(shellName(name))")
+        }
         switch added {
         case .added: break
         case .unchanged(let name):
@@ -288,7 +298,7 @@ enum CLI {
             note("This Mac's firewall is on. If \(other.dnsName) connects and nothing shows here, let RoamRun in: System Settings › Network › Firewall › Options (or `sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add` and `--unblockapp` with this roamrun's path).")
         }
         let client = TailscaleClient.fromSettings()
-        let sawOffer = OSAllocatedUnfairLock(initialState: false)
+        let sawOffer = OSAllocatedUnfairLock(initialState: false), met = OSAllocatedUnfairLock(initialState: false)
         let far = PairByName.Far(
             peer: peer,
             owner: { client.owner(of: $0) },
@@ -316,7 +326,10 @@ enum CLI {
             say: { event in
                 switch event {
                 case .refused(let from): note("Turned away a connection from \(from): it isn't \(other.dnsName).")
-                case .connected: note("\(other.dnsName) connected.")
+                case .unsure(let from): note("Turned away a connection from \(from): Tailscale couldn't say just then whether that is \(other.dnsName).")
+                case .connected:
+                    met.withLock { $0 = true }
+                    note("\(other.dnsName) connected.")
                 case .waitingForOffer: note("This Mac isn't offering to pair yet: Device Hub: + › Pair Nearby Device.")
                 case .offerSent:
                     sawOffer.withLock { $0 = true }
@@ -337,6 +350,8 @@ enum CLI {
         case .noOne:
             stop(sawOffer.withLock { $0 }
                  ? "\(other.dnsName) didn't come back in time. If a pairing was tried, the line its `roamrun pair introduce` printed works with `roamrun devices add` here; otherwise run both again"
+                 : met.withLock { $0 }
+                 ? "\(other.dnsName) connected, but this Mac made no offer to pair in 10 minutes: Device Hub: + › Pair Nearby Device, leave “Waiting to pair.” open, and run both commands again"
                  : "\(other.dnsName) got no offer in 10 minutes. Is `roamrun pair introduce --mac \(me) --to <device>` running there, was Pair Nearby Device pressed here, and do Tailscale's rules let that Mac reach port \(PairWire.port) here?")
         case .stopped: stop("stopped; nothing was saved")
         }
@@ -344,9 +359,7 @@ enum CLI {
 
     /// `pair introduce` without a line: asks the Mac named for its offer, then stands in as with one.
     private static func introduceByName(mac name: String, to profile: DeviceProfile) async -> Never {
-        guard Introduction.device(of: profile) != nil else {
-            fail("what is saved of \(profile.displayName)'s announcement isn't whole: remove it and add it again on its Wi‑Fi first")
-        }
+        _ = handover(of: profile)
         let (mesh, far, ip) = mac(named: name)
         let (peer, _, interface) = byName(mesh, far, ip)
         let me = (try? TailscaleClient.fromSettings().selfDNSName()).flatMap { $0 }?.split(separator: ".").first.map(String.init) ?? "<this Mac's Tailscale name>"
@@ -418,24 +431,29 @@ enum CLI {
         case .failure(.refused(let why)): fail("not taken: \(why)", .offerRefused)
         }
         // Before anything is announced: without this the pairing could be made and the device not handed over.
-        guard let handover = Introduction.device(of: profile) else {
-            fail("what is saved of \(profile.displayName)'s announcement isn't whole: remove it and add it again on its Wi‑Fi first")
-        }
+        let handover = Self.handover(of: profile)
         let (mesh, far, farIP) = known ?? Self.mac(named: mac)
         // The device lists a paired Mac under the name that Mac gives itself, whatever was announced.
         let listedAs = offer.txt["name"] ?? far.name
         offer = Introduction.announced(offer, as: far.name)
         let interface = InterfaceMonitor.lanInterface
         guard let local = InterfaceMonitor.currentIPv4(on: interface), let mask = InterfaceMonitor.netmask(of: local) else {
-            fail("this Mac has no address on \(interface): the device has to be on a Wi‑Fi this Mac is on (Settings › Network picks the interface)")
+            fail("this Mac has no address on \(interface): the device has to be on a Wi‑Fi this Mac is on (Settings › Network picks the interface)", happened: true)
         }
         // Asked again when the offer took a while to come: where the device is may have changed.
         let now = link == nil ? mesh : ((try? TailscaleClient.fromSettings().mesh()) ?? mesh)
-        let endpoint = now.peers.first { $0.ips.contains(profile.providerIP) }?.curAddr ?? ""
+        var endpoint = now.peers.first { $0.ips.contains(profile.providerIP) }?.curAddr ?? ""
+        // A device nothing has talked to has no address in Tailscale's list: a ping gives it one.
+        if endpoint.isEmpty {
+            let ip = profile.providerIP
+            endpoint = Introduction.endpoint(pinged: await Blocking.run { (try? TailscaleClient.fromSettings().directHost(ip)) ?? nil })
+        }
         let accept = Introduction.accept(deviceEndpoint: endpoint, local: local, mask: mask)
         // Not from the whole LAN: any host there could then reach the port the offer names on that Mac.
         guard case .only(let deviceIP) = accept else {
-            fail("Tailscale doesn't say where \(profile.displayName) is on this Wi‑Fi (it reaches it through a relay, or the device sleeps), so its connection couldn't be told from another host's. On the device: unlock it, open Tailscale and see that it is connected; then run this again", happened: true)
+            fail(endpoint.hasPrefix("[")
+                 ? "Tailscale reaches \(profile.displayName) over IPv6 here, and the device's connection to this Mac would come over IPv4: which host it is couldn't be told, so nothing was announced. It can be done on a network where Tailscale reaches it over IPv4"
+                 : "Tailscale doesn't reach \(profile.displayName) directly on this Wi‑Fi (through a relay, or not at all), so its connection couldn't be told from another host's and nothing was announced. See that the device is unlocked, on this Mac's Wi‑Fi, and connected in Tailscale; then run this again", happened: true)
         }
         guard await ReachabilityProbe.checkTCP(host: farIP, port: offer.port) else {
             fail(link == nil

@@ -66,7 +66,8 @@ struct AddDeviceView: View {
                     .keyboardShortcut(.cancelAction)
                 Button("Add Device") {
                     refusal = nil
-                    guard let captured = newest(for: selectedHost) else { return }
+                    // A made-up row is for looking at: it is never saved.
+                    guard Snapshot.fakeServices == nil, let captured = newest(for: selectedHost) else { return }
                     switch coordinator.addDevice(captured: captured, provider: provider, meshDevice: meshDevice,
                                                  manualIP: manualIP, name: name) {
                     case .added(let id):
@@ -384,9 +385,12 @@ struct AddDeviceView: View {
                 return found
             }
             liveness.merge(results) { _, new in new }
-            // Only for rows that answer and whose address the browse didn't give: the name is asked once.
-            for s in servicesSorted where s.hostIPs.isEmpty && addresses[s.host] == nil && results[s.host] == true {
-                addresses[s.host] = await Self.ipv4(of: s.host)
+            // Only for rows that answer and whose address the browse didn't give. Asked each round:
+            // a device that moved to another network keeps its name and not its address.
+            for s in servicesSorted where s.hostIPs.isEmpty && results[s.host] == true {
+                let now = await Self.ipv4(of: s.host)
+                // A lookup that fails once doesn't take away an address that was known.
+                if addresses[s.host] != now, !now.isEmpty || addresses[s.host] == nil { addresses[s.host] = now }
             }
             // Re-check every 4s, but a newly seen device right away.
             for _ in 0..<8 where !servicesSorted.contains(where: { liveness[$0.host] == nil }) {

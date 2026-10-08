@@ -162,8 +162,17 @@ extension Introduction {
         return .only(host)
     }
 
-    /// A saved device as a line for another Mac; nil when what was saved of its announcement isn't whole.
+    /// What a ping of the device said of its direct path ("192.168.0.19", an IPv6 address, or
+    /// nil: relayed or silent), in the form Tailscale's list gives one.
+    static func endpoint(pinged host: String?) -> String {
+        guard let host, !host.isEmpty else { return "" }
+        return host.contains(":") ? "[\(host)]:0" : "\(host):0"
+    }
+
+    /// A saved device as a line for another Mac; nil when what was saved of its announcement isn't
+    /// whole, or it was saved by an address: the line names a device by its Tailscale name.
     static func device(of profile: DeviceProfile) -> Device? {
+        guard profile.providerID == MeshProvider.tailscale.rawValue else { return nil }
         let txt = profile.txt.filter { Device.keys.contains($0.key) }
         let device = Device(name: profile.displayName, peer: profile.providerHostName, port: profile.remotePairingPort, txt: txt)
         guard case .success(let whole) = Introduction.device(from: line(device)) else { return nil }
@@ -195,17 +204,37 @@ extension Introduction {
     static func add(_ new: DeviceProfile, from device: Device, to all: inout [DeviceProfile]) -> Added {
         // Before the name: a device saved already is the likelier reason its name is taken.
         if let same = all.first(where: { ProfileStore.sameDevice($0, new) }) {
-            return unchanged(same, by: device, at: new.providerIP) ? .unchanged(same.displayName) : .already(same.displayName)
+            return unchanged(same, by: device, as: new) ? .unchanged(same.displayName) : .already(same.displayName)
         }
         if let problem = all.nameProblem(new.displayName) { return .nameProblem(problem) }
         all.append(new)
         return .added
     }
 
-    /// What is saved of a device already says all a line for it does.
-    static func unchanged(_ saved: DeviceProfile, by device: Device, at ip: String) -> Bool {
+    enum Replaced: Equatable {
+        case replaced
+        /// Removed since it was looked up.
+        case gone
+        /// Another saved device is the one the line is for.
+        case already(String)
+    }
+
+    /// Puts what a line says in a saved device's place, in the list as it is at that moment.
+    static func replace(_ id: UUID, with new: DeviceProfile, in all: inout [DeviceProfile]) -> Replaced {
+        guard let i = all.firstIndex(where: { $0.id == id }) else { return .gone }
+        if let other = all.first(where: { $0.id != id && ProfileStore.sameDevice($0, new) }) { return .already(other.displayName) }
+        all[i].instanceName = new.instanceName; all[i].txt = new.txt
+        all[i].remotePairingPort = new.remotePairingPort
+        all[i].providerIP = new.providerIP; all[i].providerHostName = new.providerHostName
+        return .replaced
+    }
+
+    /// What is saved of a device already says all a line for it does (`new`: the line as it
+    /// would be saved here, with the device's address and name on this tailnet).
+    static func unchanged(_ saved: DeviceProfile, by device: Device, as new: DeviceProfile) -> Bool {
         guard let have = Introduction.device(of: saved) else { return false }
-        return have.port == device.port && have.txt == device.txt && saved.providerIP == ip
+        return have.port == device.port && have.txt == device.txt
+            && saved.providerIP == new.providerIP && saved.providerHostName == new.providerHostName
     }
 
     /// The device to save from a line: where it is comes from this Mac's own Tailscale (`peer`), never the line.

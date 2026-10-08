@@ -718,6 +718,16 @@ import ServiceManagement
     var half = saved; half.txt["authTag"] = nil
     var unnamed = saved; unnamed.providerHostName = ""
     #expect(Introduction.device(of: half) == nil && Introduction.device(of: unnamed) == nil)
+    // Saved by its address: what stands where its Tailscale name would is that address, and no Mac knows a device by it.
+    var byAddress = saved; byAddress.providerID = MeshProvider.manual.rawValue; byAddress.providerHostName = saved.providerIP
+    #expect(Introduction.device(of: byAddress) == nil)
+
+    // A device nothing has talked to has no address in Tailscale's list; a ping's answer stands in for it.
+    #expect(Introduction.accept(deviceEndpoint: Introduction.endpoint(pinged: "192.168.0.19"), local: "192.168.0.15", mask: "255.255.255.0") == .only("192.168.0.19"))
+    #expect(Introduction.endpoint(pinged: nil) == "" && Introduction.endpoint(pinged: "") == "")
+    let six = Introduction.endpoint(pinged: "2400:1:2::19")
+    #expect(six.hasPrefix("[") && Introduction.accept(deviceEndpoint: six, local: "192.168.0.15", mask: "255.255.255.0") != .only("2400:1:2::19"))
+    if case .only = Introduction.accept(deviceEndpoint: six, local: "192.168.0.15", mask: "255.255.255.0") { Issue.record("an IPv6 path was taken for an address on the LAN") }
 
     let peer = MeshDevice(id: "n1", name: "phone-here", os: "iOS", ips: ["fd7a::9", "100.64.0.9"], online: true)
     let made = Introduction.profile(from: device, peer: peer, name: "Test iPhone")
@@ -727,13 +737,16 @@ import ServiceManagement
     // Paired again, nothing moved: what is saved says it all already — under any name, with a UDID or without.
     guard var kept = made else { return }
     kept.displayName = "Another name"; kept.udid = "00008130-000C1C5C307A8D3A"
-    #expect(Introduction.unchanged(kept, by: device, at: "100.64.0.9"))
-    #expect(!Introduction.unchanged(kept, by: device, at: "100.64.0.10"))
+    #expect(Introduction.unchanged(kept, by: device, as: kept))
+    var elsewhere = kept; elsewhere.providerIP = "100.64.0.10"
+    #expect(!Introduction.unchanged(kept, by: device, as: elsewhere))
+    var renamed = kept; renamed.providerHostName = "phone-renamed"   // its Tailscale name changed: export would hand on the old one
+    #expect(!Introduction.unchanged(kept, by: device, as: renamed))
     var moved = device; moved.port += 1
-    #expect(!Introduction.unchanged(kept, by: moved, at: "100.64.0.9"))
+    #expect(!Introduction.unchanged(kept, by: moved, as: kept))
     moved = device; moved.txt["authTag"] = "other"
-    #expect(!Introduction.unchanged(kept, by: moved, at: "100.64.0.9"))
-    #expect(!Introduction.unchanged(half, by: device, at: half.providerIP))
+    #expect(!Introduction.unchanged(kept, by: moved, as: kept))
+    #expect(!Introduction.unchanged(half, by: device, as: half))
 
     // Added under the store's lock: the same device from two commands at once is there once.
     guard let new = made else { return }
@@ -747,6 +760,16 @@ import ServiceManagement
     other.providerIP = "100.64.0.77"
     if case .nameProblem = Introduction.add(other, from: device, to: &list) {} else { Issue.record("a second device took a name in use") }
     #expect(list.count == 1)
+
+    // Put in a saved device's place: not when the line is for another saved device, nor when the one to replace is gone.
+    var two = [new, other]
+    two[1].displayName = "Other iPhone"
+    var forOther = other; forOther.id = UUID(); forOther.remotePairingPort += 1
+    #expect(Introduction.replace(new.id, with: forOther, in: &two) == .already("Other iPhone"))
+    #expect(two[0].instanceName == new.instanceName)
+    #expect(Introduction.replace(two[1].id, with: forOther, in: &two) == .replaced)
+    #expect(two[1].remotePairingPort == forOther.remotePairingPort && two[1].displayName == "Other iPhone")
+    #expect(Introduction.replace(UUID(), with: forOther, in: &two) == .gone)
 
     // What another Mac sent is shown only as a device read and written again.
     #expect(Introduction.shown(Introduction.line(device)) == Introduction.line(device))
@@ -6881,8 +6904,8 @@ extension TimingSensitive {
         // The right address, held by another machine now, or by one Tailscale can't name: turned
         // away each time; then the Mac itself gets through.
         listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
-        let answers = Counted<Int>(), saved = Counted<String>()
-        far = farMac(owner: { _ in answers.add(1); return [1: "another", 2: nil][answers.all.count] ?? "home" }, saved: saved)
+        let answers = Counted<Int>(), saved = Counted<String>(), turned = Counted<PairByName.Far.Event>()
+        far = farMac(owner: { _ in answers.add(1); return [1: "another", 2: nil][answers.all.count] ?? "home" }, saved: saved, events: turned)
         let end = started(far, listener)
         for _ in 1...2 {
             let link = try #require(PairLink.connect(to: "127.0.0.1", port: listener.port, interface: nil))
@@ -6893,6 +6916,8 @@ extension TimingSensitive {
         #expect(PairByName.Home.handOver("device-1", on: link) == .saved)
         #expect(await end.value == .saved)
         #expect(saved.all == ["device-1"])
+        // Said as what it was: another machine's, or one Tailscale couldn't name just then.
+        #expect(Array(turned.all.prefix(2)) == [.refused(from: "127.0.0.1"), .unsure(from: "127.0.0.1")])
     }
 
     @Test func whatIsNotALineOfTheseGetsNoOffer() async throws {
@@ -6950,7 +6975,7 @@ extension TimingSensitive {
 
     @Test func aFarMacThatMakesNoOfferSaysSoRatherThanGoQuiet() async throws {
         let listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
-        let end = started(farMac(offers: { .none }, connectWindow: 1), listener)
+        let end = started(farMac(offers: { .none }, connectWindow: 2.5), listener)
         guard case .ended(.noOffer) = await homeMac(listener.port).fetch() else { Issue.record("not told"); return }
         #expect(await end.value == .noOne)
     }

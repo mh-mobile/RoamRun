@@ -224,6 +224,8 @@ enum PairByName {
     struct Far: Sendable {
         enum Event: Equatable, Sendable {
             case refused(from: String)
+            /// From the right address, and Tailscale couldn't say whose it is just then.
+            case unsure(from: String)
             case connected
             case waitingForOffer
             case offerSent
@@ -266,7 +268,9 @@ enum PairByName {
                 guard let (link, from) = listener.accept(within: 0.25) else { continue }
                 defer { link.close() }
                 // The address first: a stranger costs no question to Tailscale.
-                guard from == peer.ip, owner(from) == peer.id else { say(.refused(from: from)); continue }
+                guard from == peer.ip else { say(.refused(from: from)); continue }
+                guard let holder = owner(from) else { say(.unsure(from: from)); continue }
+                guard holder == peer.id else { say(.refused(from: from)); continue }
                 say(.connected)
                 guard link.read(within: lineWait, stop: stopped) == .line(PairWire.line(.wantOffer)) else { continue }
                 var offer: String?
