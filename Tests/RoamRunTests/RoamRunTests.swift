@@ -7273,6 +7273,8 @@ private func begin(_ i: ControlIntroductions, _ id: UUID, text: String? = candid
     i.answer(.init(op: "pair-start", device: id, text: text, address: "100.64.0.2", interface: "utun9", peer: "100.64.0.1"))
 }
 private func how(_ i: ControlIntroductions, _ id: UUID) -> DeviceControlWire.Response { i.answer(.init(op: "pair-status", device: id)) }
+/// A wait that a missed moment ends as a failure, not as a test that never returns.
+private func soon(_ signal: DispatchSemaphore) -> Bool { signal.wait(timeout: .now() + 10) == .success }
 private func until(_ what: () -> Bool) -> Bool {
     for _ in 0..<200 where !what() { usleep(10_000) }
     return what()
@@ -7340,7 +7342,7 @@ extension TimingSensitive {
         id = UUID()
         #expect(begin(i, id).ok)
         pairing.pairNow()
-        keeping.wait()
+        #expect(soon(keeping))
         #expect(how(i, id).state == "checking")
         let late = i.answer(.init(op: "pair-cancel", device: id))
         #expect(late.state == "checking")
@@ -7360,15 +7362,15 @@ extension TimingSensitive {
         // Asked often enough, it stays; and while it keeps, silence stops nothing.
         pairing = IntroducedPairing()
         let keeping = DispatchSemaphore(value: 0), go = DispatchSemaphore(value: 0)
-        i = introductions(pairing) { _ in keeping.signal(); go.wait(); return .success(.init(name: "iPhone", on: true)) }
-        i.quiet = 0.2
+        i = introductions(pairing) { wanted in keeping.signal(); go.wait(); return wanted() ? .success(.init(name: "iPhone", on: true)) : .failure(.init(.cancelled, "stopped")) }
+        i.quiet = 1
         id = UUID()
         #expect(begin(i, id).ok)
-        for _ in 0..<8 { usleep(60_000); _ = how(i, id) }
+        for _ in 0..<8 { usleep(200_000); _ = how(i, id) }
         #expect(!pairing.wasCancelled)
         pairing.pairNow()
-        keeping.wait()
-        usleep(500_000)
+        #expect(soon(keeping))
+        usleep(1_500_000)
         go.signal()
         #expect(until { how(i, id).state == "done" })
 
@@ -7395,7 +7397,7 @@ extension TimingSensitive {
             let mine = i
             Thread.detachNewThread { answers.add(begin(mine, UUID()).ok); both.leave() }
         }
-        both.wait()
+        #expect(both.wait(timeout: .now() + 10) == .success)
         #expect(answers.all.sorted { !$0 && $1 } == [false, true] && opened.all.count == 1)
         let id = turn.held
         #expect(id != nil)
@@ -7425,13 +7427,13 @@ extension TimingSensitive {
         // pairing begun meanwhile could have the device drop the one being kept — and given back when it ends.
         pairing = IntroducedPairing(); turn = Turn()
         let keeping = DispatchSemaphore(value: 0), go = DispatchSemaphore(value: 0)
-        i = introductions(pairing, turn: turn) { _ in keeping.signal(); go.wait(); return .success(.init(name: "iPhone", on: true)) }
-        i.longest = 0.2
+        i = introductions(pairing, turn: turn) { wanted in keeping.signal(); go.wait(); return wanted() ? .success(.init(name: "iPhone", on: true)) : .failure(.init(.cancelled, "stopped")) }
+        i.longest = 1
         attempt = UUID()
         #expect(begin(i, attempt).ok)
         pairing.pairNow()
-        keeping.wait()
-        usleep(500_000)
+        #expect(soon(keeping))
+        usleep(1_500_000)
         #expect(turn.held == attempt && how(i, attempt).state == "checking")
         #expect(begin(i, UUID()).reason == PairWire.Refusal.failed.rawValue)   // no other begins meanwhile
         go.signal()
@@ -7453,7 +7455,7 @@ extension TimingSensitive {
         let id = UUID()
         #expect(begin(i, id).ok && seen.listener != nil)
         seen.listener?.pairNow()
-        keeping.wait()
+        #expect(soon(keeping))
         #expect(until { seen.listener == nil })     // while what paired is still being kept
         #expect(how(i, id).state == "checking")
         go.signal()
@@ -7469,7 +7471,7 @@ extension TimingSensitive {
         i.listen = { _, _, _ in opened.add(1); return .init(listener: pairing, port: 50123, txt: offerTXT) }
         let id = UUID(), first = Counted<Bool>()
         Thread.detachNewThread { first.add(begin(i, id).offer != nil) }
-        readying.wait()
+        #expect(soon(readying))
         let again = begin(i, id)
         #expect(again.ok && again.state == "preparing" && again.offer == nil)
         #expect(how(i, id).state == "preparing")
