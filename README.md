@@ -71,6 +71,31 @@ sequenceDiagram
 - **The tunnel port changes every time** (it goes up by one). `remotepairingd` connects about 5 ms after announcing it, so each time RoamRun sees a port in the log (`log stream`) it opens relays for the next 16 ports in advance.
 - **The very first tunnel after a bridge starts** can't be caught in time. RoamRun runs `devicectl` in the background at startup to use up that first tunnel, so your first Run already succeeds.
 
+### The same thing the other way round: a Mac that is never near the device
+
+A bridge needs a Mac that is paired with the device, and pairing happens on one Wi‑Fi: the device finds the Mac there by Bonjour and connects to it. A Mac elsewhere is never found. So a Mac that *is* on the device's Wi‑Fi stands in for it — the bridge's trick, turned around: **the device is told the far Mac is on its Wi‑Fi, and the traffic actually goes over Tailscale.**
+
+```mermaid
+flowchart RL
+  subgraph home["Mac on the device's Wi-Fi"]
+    fake["Stand-in Bonjour record<br/>(the far Mac's offer, pointing at this Mac)"]
+    relay["RoamRun relay<br/>(takes the device's address only)"]
+  end
+  subgraph far["Far Mac"]
+    host["Xcode, or the RoamRun app<br/>(waiting to pair; the key is made and stays here)"]
+  end
+  iphone["iPhone / iPad"]
+  iphone -. "① finds “Pair with far-mac”" .-> fake
+  iphone -- "② connects over Wi-Fi" --> relay
+  relay == "③ over Tailscale" ==> host
+```
+
+1. The far Mac offers to pair (Xcode's Device Hub › Pair Nearby Device, or the RoamRun app for device control) and hands its offer to the Mac on the device's Wi‑Fi — over Tailscale, each naming the other, or as a line carried by hand.
+2. That Mac announces the offer on its Wi‑Fi with itself as the destination, for five minutes at most, and relays the device's one connection to the far Mac.
+3. The pairing is made end to end between the device and the far Mac, with the code typed on the device. No key passes through the Mac in between, and none is carried anywhere. For Xcode the code is the one Device Hub shows on the far Mac; for device control the far Mac's app makes it and it is shown on the Mac that introduces.
+
+From then on the far Mac bridges to the device like any other — the first diagram, with the far Mac as "Mac at home". The commands, what each side checks, and what it doesn't: [A Mac the device was never near](#a-mac-the-device-was-never-near) and, for device control, [Seeing and operating the device](#seeing-and-operating-the-device).
+
 ## Requirements
 
 - macOS 13+ on Apple Silicon (Intel Macs aren't supported), with an **administrator account** (RoamRun reads remotepairingd's log with `log stream`, which macOS only allows admins)
