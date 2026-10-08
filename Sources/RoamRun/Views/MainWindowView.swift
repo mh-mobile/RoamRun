@@ -238,7 +238,9 @@ private struct WelcomeView: View {
                     .font(.caption.weight(.bold))
                     .frame(width: 20, height: 20)
                     .background(Circle().fill(Color.accentColor.opacity(0.2)))
+                // As tall as the text needs: left to the stack, a long step is cut to one line.
                 Text(text)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
