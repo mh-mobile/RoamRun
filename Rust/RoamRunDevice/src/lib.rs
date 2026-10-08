@@ -1271,12 +1271,43 @@ pub unsafe extern "C" fn rr_pairing_accept(
     let show = move |pin: &str| {
         if let Ok(pin) = CString::new(pin) { unsafe { code(pin.as_ptr(), context as *mut std::ffi::c_void) } }
     };
-    let result = with_room(|| pairing.runtime.block_on(accept_pairing(pairing, &show)));
+    let result = with_room(|| Ok(pairing.runtime.block_on(accept_pairing(pairing, &show)))).unwrap_or_else(|why| Err(why.into()));
     c_string(match result {
         Ok((peer, file)) => format!("{{\"ok\":true,\"udid\":{},\"name\":{},\"model\":{},\"pairing\":{}}}",
                             quoted(&peer.remotepairing_udid), quoted(&peer.name), quoted(&peer.model), quoted(&file)),
-        Err(why) => failure(&why),
+        // `incomplete`: the device's own doing, after which it can simply be tried again.
+        Err(not) if not.incomplete => format!("{{\"ok\":false,\"incomplete\":true,\"error\":{}}}", quoted(&not.why)),
+        Err(not) => failure(&not.why),
     })
+}
+
+/// Why no pairing came of it. `incomplete`: the device came, a code was shown, and the device
+/// didn't take it (a wrong code, a refusal, none entered in time) — nothing is in doubt, and it
+/// can be tried again. Anything else (a connection that broke, a pairing that can't be used)
+/// isn't known to be that.
+struct NotPaired {
+    incomplete: bool,
+    why: String,
+}
+
+impl From<String> for NotPaired {
+    fn from(why: String) -> Self { NotPaired { incomplete: false, why } }
+}
+
+impl From<&str> for NotPaired {
+    fn from(why: &str) -> Self { NotPaired { incomplete: false, why: why.into() } }
+}
+
+/// What a failure after the code was shown is: the device's answer to the code, or not.
+fn after_code(e: &idevice::IdeviceError) -> NotPaired {
+    use idevice::remote_pairing::errors::RemotePairingError as E;
+    match e {
+        idevice::IdeviceError::RemotePairing(E::SrpAuthFailed) =>
+            NotPaired { incomplete: true, why: "the code entered on the device wasn't the one shown".into() },
+        idevice::IdeviceError::RemotePairing(E::PairingRejected(_)) =>
+            NotPaired { incomplete: true, why: "the pairing was refused on the device".into() },
+        other => NotPaired { incomplete: false, why: format!("the pairing didn't complete: {other:?}") },
+    }
 }
 
 /// Makes a running rr_pairing_accept return, and the next one return at once.
@@ -1317,7 +1348,7 @@ fn taken(from: std::net::IpAddr, only: Option<std::net::IpAddr>) -> bool {
     only.is_none_or(|only| from.to_canonical() == only.to_canonical())
 }
 
-async fn accept_pairing(pairing: &RRPairing, show: &(impl Fn(&str) + Sync)) -> Result<(idevice::remote_pairing::PeerDevice, String), String> {
+async fn accept_pairing(pairing: &RRPairing, show: &(impl Fn(&str) + Sync)) -> Result<(idevice::remote_pairing::PeerDevice, String), NotPaired> {
     let cancelled = || pairing.cancelled.load(Ordering::Relaxed);
     loop {
         let stream = loop {
@@ -1347,7 +1378,7 @@ async fn accept_pairing(pairing: &RRPairing, show: &(impl Fn(&str) + Sync)) -> R
                         if cancelled() { return Err("cancelled".into()); }
                         match when_shown() {
                             None if connected.elapsed() >= BEFORE_CODE => break None,
-                            Some(at) if at.elapsed() >= ENTER_CODE => return Err("the code wasn't entered in time".into()),
+                            Some(at) if at.elapsed() >= ENTER_CODE => return Err(NotPaired { incomplete: true, why: "the code wasn't entered in time".into() }),
                             _ => {}
                         }
                     }
@@ -1362,7 +1393,7 @@ async fn accept_pairing(pairing: &RRPairing, show: &(impl Fn(&str) + Sync)) -> R
                 return Ok((peer, file));
             }
             // After the code was shown, a failure is the pairing's (a wrong code, a change of mind).
-            Some(Err(e)) if when_shown().is_some() => return Err(format!("the pairing didn't complete: {e:?}")),
+            Some(Err(e)) if when_shown().is_some() => return Err(after_code(&e)),
             // Before it, it was no device that wanted to pair: the next one is waited for.
             _ => continue,
         }
@@ -1374,6 +1405,18 @@ mod tests {
     use super::*;
 
     fn io(kind: std::io::ErrorKind) -> idevice::IdeviceError { idevice::IdeviceError::Socket(std::io::Error::from(kind)) }
+
+    #[test]
+    fn only_the_devices_answer_to_the_code_is_a_pairing_to_try_again() {
+        use idevice::remote_pairing::errors::RemotePairingError as E;
+        let wrong = after_code(&idevice::IdeviceError::RemotePairing(E::SrpAuthFailed));
+        assert!(wrong.incomplete && !wrong.why.contains("Srp"));
+        assert!(after_code(&idevice::IdeviceError::RemotePairing(E::PairingRejected("no".into()))).incomplete);
+        // A connection that broke after the code was shown: what the device made of it isn't known.
+        let broke = after_code(&io(std::io::ErrorKind::ConnectionReset));
+        assert!(!broke.incomplete && broke.why.starts_with("the pairing didn't complete"));
+        assert!(!NotPaired::from("cancelled").incomplete && !NotPaired::from(String::from("can't accept")).incomplete);
+    }
 
     #[test]
     fn a_pairing_for_one_peer_takes_that_address_however_it_is_written() {

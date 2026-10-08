@@ -986,6 +986,10 @@ final class AppCoordinator: ObservableObject {
     /// once the list is written, and that is asked whatever changed: a device can be here and
     /// not in the file (a save that failed when it was added, or when its UDID was learned).
     /// nil: not written, or no such device.
+    nonisolated static func moved(_ saved: DeviceProfile?, to at: (ip: String, port: UInt16)) -> Bool {
+        saved.map { $0.providerIP != at.ip || $0.remotePairingPort != at.port } ?? false
+    }
+
     /// `at`: where its pairing was just proved to connect, when that isn't where it was saved.
     nonisolated static func keepSaved(_ id: UUID, udid: String, at: (ip: String, port: UInt16)? = nil, in profiles: [DeviceProfile], save: ([DeviceProfile]) -> Bool) -> DeviceProfile? {
         var changed = profiles
@@ -1020,7 +1024,9 @@ final class AppCoordinator: ObservableObject {
                 profiles = before
                 return .failure(unsaved)
             }
-            if at != nil { replaceBridge(with: kept) }   // a bridge running for it goes where the device is now
+            // A bridge running for it goes where the device is now — only when that is somewhere
+            // else: rebuilt for a UDID learned, it would drop what Xcode is doing for nothing.
+            if let at, Self.moved(before.first { $0.id == id }, to: at) { replaceBridge(with: kept) }
             return .success((kept, false))
         }
     }

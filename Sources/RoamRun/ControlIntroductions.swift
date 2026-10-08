@@ -148,9 +148,12 @@ final class ControlIntroductions: @unchecked Sendable {
             case .success(let kept): end(.done(on: kept.on), kept.name)
             case .failure(let not): end(.failed(not.how), not.why)
             }
+        } catch let not as DevicePairing.NotCompleted {
+            // The device's own answer: the one failure after which the other Mac is simply waited for again.
+            end(.failed(cancelled() ? .cancelled : .notPaired), cancelled() ? nil : "\(not)")
         } catch {
-            // The listener's own end: no device came to an end with it, or one did and the pairing wasn't made.
-            end(.failed(cancelled() ? .cancelled : .notPaired), cancelled() ? nil : "\(error)")
+            // Anything else — a connection that broke, a pairing that can't be used: not known to be that.
+            end(.failed(cancelled() ? .cancelled : .failed), cancelled() ? nil : "\(error)")
         }
     }
 

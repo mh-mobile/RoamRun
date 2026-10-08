@@ -785,6 +785,9 @@ import ServiceManagement
     let moved2 = AppCoordinator.keepSaved(old.id, udid: "00008130-000C1C5C307A8D3A", at: ("100.64.0.10", 51000), in: [old], save: { _ in true })
     #expect(moved2?.remotePairingPort == 51000 && moved2?.providerIP == "100.64.0.10" && moved2?.udid == "00008130-000C1C5C307A8D3A")
     #expect(AppCoordinator.keepSaved(old.id, udid: "x", in: [old], save: { _ in true })?.remotePairingPort == 50000)
+    // A bridge running for it is rebuilt only when the device is somewhere else: not for a UDID learned.
+    #expect(AppCoordinator.moved(old, to: ("100.64.0.9", 51000)) && AppCoordinator.moved(old, to: ("100.64.0.10", 50000)))
+    #expect(!AppCoordinator.moved(old, to: ("100.64.0.9", 50000)) && !AppCoordinator.moved(nil, to: ("100.64.0.9", 50000)))
 
     // What another Mac sent is shown only as a device read and written again.
     #expect(Introduction.shown(Introduction.line(device)) == Introduction.line(device))
@@ -7197,20 +7200,26 @@ private final class IntroducedPairing: PairingListener, @unchecked Sendable {
         if let code { show(code) }
         turn.wait()
         if lock.withLock({ cancelled }) { throw DeviceSession.Failure.message("cancelled") }
-        if didFail { throw DeviceSession.Failure.message("the pairing didn't complete") }
+        if didFail { throw DevicePairing.NotCompleted(description: "the code entered on the device wasn't the one shown") }
+        if didBreak { throw DeviceSession.Failure.message("the pairing didn't complete: Socket(ConnectionReset)") }
         return .init(udid: "00008130-000C1C5C307A8D3A", name: "iPhone", model: "iPhone16,1", pairing: Data("<plist/>".utf8))
     }
     func cancel() {
         lock.withLock { cancelled = true }
         turn.signal()
     }
-    /// The device came and the pairing wasn't made.
-    private var failed = false
+    /// The device came and didn't take the pairing (`fail`), or the connection to it broke (`break`).
+    private var failed = false, broken = false
     func fail() {
         lock.withLock { failed = true }
         turn.signal()
     }
+    func breakOff() {
+        lock.withLock { broken = true }
+        turn.signal()
+    }
     var didFail: Bool { lock.withLock { failed } }
+    var didBreak: Bool { lock.withLock { broken } }
 }
 
 private let offerTXT = ["identifier": "6BF40D22-D414-41D0-BE80-7567AE75B2BC", "authTag": "BsVby0td", "model": "Mac16,1",
@@ -7393,6 +7402,13 @@ extension TimingSensitive {
         #expect(begin(i, attempt).ok)
         pairing.fail()
         #expect(until { how(i, attempt).reason == PairWire.Refusal.notPaired.rawValue } && turn.held == nil)
+        // A connection that broke isn't the device's answer: not said as one to simply try again.
+        pairing = IntroducedPairing(); turn = Turn(); i = introductions(pairing, turn: turn)
+        attempt = UUID()
+        #expect(begin(i, attempt).ok)
+        pairing.breakOff()
+        #expect(until { how(i, attempt).reason == PairWire.Refusal.failed.rawValue } && turn.held == nil)
+        #expect(how(i, attempt).error?.contains("ConnectionReset") == true)
 
         // Keeping what paired takes longer than anything may: the turn is kept all the same — a
         // pairing begun meanwhile could have the device drop the one being kept — and given back when it ends.

@@ -190,7 +190,11 @@ bounded.
     come, nine more for the device; twelve at most whatever the command does, and
     not past fifteen seconds without the command asking how it stands (a command
     killed leaves no listener). The command itself listens as `pair xcode --with`
-    does, on port 41830. One pairing is made at a time on a Mac, however begun: an
+    does, on port 41830 — for longer than that when a code was typed wrong: it then
+    waits ten minutes more for the other Mac's command to be run again, five tries
+    at most, each a pairing of its own with a listener and a code of its own. Only
+    for the device's own answer (a wrong code, a refusal, no code in time); a
+    connection that broke ends it. One pairing is made at a time on a Mac, however begun: an
     introduction takes the turn Set Up takes, before anything listens, and keeps it
     until what paired is kept. The app's listener is closed the moment the device
     has paired.

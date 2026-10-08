@@ -116,9 +116,19 @@ public final class DevicePairing: @unchecked Sendable {
             throw DeviceSession.Failure.message("unreadable answer")
         }
         guard object["ok"] as? Bool == true, let udid = object["udid"] as? String, let pairing = object["pairing"] as? String else {
-            throw DeviceSession.Failure.message(object["error"] as? String ?? "failed")
+            let why = object["error"] as? String ?? "failed"
+            if object["incomplete"] as? Bool == true { throw NotCompleted(description: why) }
+            throw DeviceSession.Failure.message(why)
         }
         return Paired(udid: udid, name: object["name"] as? String ?? "", model: object["model"] as? String ?? "", pairing: Data(pairing.utf8))
+    }
+
+    /// The device came, was shown a code, and didn't take the pairing: a wrong code, a refusal,
+    /// none entered in time. Nothing is in doubt after it, and it can be tried again — unlike a
+    /// connection that broke, of which the device's side isn't known.
+    public struct NotCompleted: Error, CustomStringConvertible, Sendable {
+        public let description: String
+        public init(description: String) { self.description = description }
     }
 
     public func cancel() { rr_pairing_cancel(pairing) }

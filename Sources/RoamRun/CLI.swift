@@ -289,7 +289,7 @@ enum CLI {
         case .notPaired: "the pairing wasn't completed on \(device) (a wrong code, dismissed there, or not in time); nothing was kept on \(other). Run this again: \(other) goes on waiting for it (if its command has ended, run that again first)"
         case .notKept: "\(device) paired, but \(other) couldn't keep the pairing (it says why). Remove the pairing just made on the device (Settings › Privacy & Security › Developer Mode)"
         case .noApp: "the RoamRun app isn't running on \(other): it makes and keeps the pairing. Open it there and run both commands again"
-        case .failed: "\(other) couldn't begin (it says why)"
+        case .failed: "it failed on \(other) (it says why there); nothing was kept there. Run both commands again"
         }
     }
 
@@ -359,6 +359,7 @@ enum CLI {
         }
         let client = TailscaleClient.fromSettings()
         let said = OSAllocatedUnfairLock<String?>(initialState: nil), met = OSAllocatedUnfairLock(initialState: false)
+        let waitedAgain = OSAllocatedUnfairLock(initialState: false)
         let far = PairByName.FarControl(
             peer: peer,
             owner: { client.owner(of: $0) },
@@ -403,7 +404,9 @@ enum CLI {
                     met.withLock { $0 = true }
                     note("\(other.dnsName) connected.")
                 case .offerSent(let id): note("\(other.dnsName) has this Mac's offer and announces it to the device. Waiting for the device (9 minutes at most). Attempt \(id).")
-                case .again: note("The device came and the pairing wasn't made (a wrong code, or dismissed there); nothing was kept. Still waiting for \(other.dnsName), 10 minutes more: there, run `roamrun pair introduce` again.")
+                case .again:
+                    waitedAgain.withLock { $0 = true }
+                    note("The device came and the pairing wasn't made (a wrong code, or dismissed there); nothing was kept. Still waiting for \(other.dnsName), 10 minutes more: there, run `roamrun pair introduce` again.")
                 case .codeSent: note("The device asked to pair; its code is shown on \(other.dnsName).")
                 }
             })
@@ -426,6 +429,8 @@ enum CLI {
         case .lost:
             stop("\(other.dnsName) went away. Nothing was kept here" + (more.map { " (\($0))" } ?? "") + ". Run both commands again")
         case .noResult: stop("the device didn't pair in time; nothing was kept here. Run both commands again")
+        case .noOne where waitedAgain.withLock({ $0 }):
+            stop("the pairing wasn't made, and \(other.dnsName) didn't run `roamrun pair introduce` again in 10 minutes; nothing was kept here. Run both commands again")
         case .noOne where met.withLock({ $0 }):
             stop("\(other.dnsName) connected and didn't go on: is RoamRun there a version that knows `pair control`? Update it, then run both commands again")
         case .noOne: stop("\(other.dnsName) didn't connect in 10 minutes. Is `roamrun pair introduce --mac \(me) --to <device>` running there, and do Tailscale's rules and this Mac's firewall let that Mac reach port \(PairWire.port) here?")
