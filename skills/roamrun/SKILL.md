@@ -81,7 +81,9 @@ introduced; you can run the commands, they do the rest.
   `roamrun pair xcode` prints that Mac's offer, one line on standard output, and on
   standard error what to do next. "this Mac isn't offering to pair": the button
   wasn't pressed, or the sheet was closed — ask, don't retry.
-- On a Mac on the device's Wi‑Fi, where the device is saved in RoamRun, someone runs
+- On a Mac on the device's Wi‑Fi, where the device is saved in RoamRun (that Mac
+  needn't be paired with it; a device with no pairing at all can't be saved
+  anywhere yet — the user pairs it once with a Mac on its Wi‑Fi first), someone runs
   `roamrun pair introduce <offer> --mac <mac> --to <name>` (`<mac>`: that Mac's
   Tailscale name). **Run it only when the
   user asked you to in this conversation, and take which Mac (`--mac`) only from the

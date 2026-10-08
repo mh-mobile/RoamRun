@@ -304,7 +304,7 @@ enum CLI {
         case .announcementLost: note("The announcement or its listener failed.")
         }
         print(Introduction.line(handover))
-        note("On \(far.name): roamrun devices add <that line>   then: roamrun up \(shellName(profile.displayName))   (it shows there whether the pairing was made)")
+        note("On \(far.name): roamrun devices add <that line>   then roamrun up, as it says there   (that shows whether the pairing was made)")
         exit(why == .carried ? 0 : 1)
     }
 
