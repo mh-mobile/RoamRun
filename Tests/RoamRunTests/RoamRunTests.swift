@@ -873,6 +873,21 @@ extension TimingSensitive.RelayOnLocalhost {
     #expect(TailscaleClient.mesh(fromStatusJSON: "not json") == nil)
 }
 
+/// Which Tailscale device a host on this LAN is: the one reached directly at its address, and
+/// no guess where that is none or two.
+@Test func aHostOnTheLANIsMatchedToItsTailscaleDeviceByAddress() {
+    func device(_ name: String, _ curAddr: String) -> MeshDevice {
+        MeshDevice(id: name, name: name, os: "iOS", ips: ["100.64.0.1"], online: true, curAddr: curAddr)
+    }
+    let devices = [device("iphone-15-pro", "192.168.0.19:41641"), device("iphone-xs", ""), device("ipad", "203.0.113.9:41641")]
+    #expect(devices.reached(at: ["192.168.0.19"])?.name == "iphone-15-pro")
+    #expect(devices.reached(at: ["fe80::1", "192.168.0.19"])?.name == "iphone-15-pro")
+    // Relayed (no direct address), another address, or nothing known: no match.
+    #expect(devices.reached(at: ["192.168.0.38"]) == nil && devices.reached(at: []) == nil && devices.reached(at: [""]) == nil)
+    // Two behind one address (a hotspot's): not told apart, so not chosen.
+    #expect((devices + [device("other", "192.168.0.19:5555")]).reached(at: ["192.168.0.19"]) == nil)
+}
+
 @Test func tailscalePeersFromStatusJSON() {
     let json = #"{"Peer":{"k1":{"DNSName":"mac.tail.ts.net.","OS":"macOS","TailscaleIPs":["100.64.0.2"],"Online":true},"k2":{"DNSName":"my-iphone.tail.ts.net.","OS":"iOS","TailscaleIPs":["100.64.0.10"],"Online":false,"CurAddr":"203.0.113.50:41641"}}}"#
     let d = TailscaleClient.devices(fromStatusJSON: json)
