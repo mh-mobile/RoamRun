@@ -133,13 +133,13 @@ release-dmg:
 	@echo "Release $(DMG) is signed, notarized and stapled, built from $$(git rev-parse HEAD) (gh release create --target)"
 
 # roamrunctl's archives for a release: the ones CI built from this very commit (Linux, Windows),
-# and the checksums the install scripts hold them to. The Mac's is built by Homebrew, from source.
+# and their checksums. The Mac's is built by Homebrew, from source.
 roamrunctl-archives:
 	@run=$$(gh run list --workflow CI --commit $$(git rev-parse HEAD) --status success --json databaseId --jq '.[0].databaseId'); \
 	[ -n "$$run" ] || { echo "no CI run has passed for $$(git rev-parse HEAD) yet"; exit 1; }; \
 	rm -rf roamrunctl-dist && gh run download $$run --pattern 'roamrunctl-*' --dir roamrunctl-dist
-	cd roamrunctl-dist && mv */roamrunctl-$(VERSION)-* . && rmdir roamrunctl-*/ \
-		&& shasum -a 256 roamrunctl-$(VERSION)-*.tar.gz roamrunctl-$(VERSION)-*.zip > roamrunctl-$(VERSION)-SHA256SUMS
+	cd roamrunctl-dist && for d in */; do mv "$$d"* . && rmdir "$$d"; done \
+		&& shasum -a 256 roamrunctl-*.tar.gz roamrunctl-*.zip > roamrunctl-SHA256SUMS
 	@ls roamrunctl-dist; echo "gh release upload v$(VERSION) roamrunctl-dist/*"
 
 # `roamrun` on PATH, pointing into the app bundle (one binary for app + CLI).

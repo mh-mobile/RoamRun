@@ -100,8 +100,8 @@ AND category == "input"'`. Text that arrives short with a line here was dropped 
    and `sha256` (`shasum -a 256` of the dmg), `brew style` + `brew audit --cask --online`, push.
    And `Formula/roamrunctl.rb`, from `Rust/roamrunctl/roamrunctl.rb`: the tag in `url`, the
    `sha256` of that tarball (`curl -L <url> | shasum -a 256`), `brew audit --formula`.
-5. The install scripts read the newest release: once it is out, run each of roamrunctl's
-   install commands (its README) on its system and see `roamrunctl --version` say this version.
+5. roamrunctl's install commands (its README) take the newest release's archives by name: once
+   it is out, run each on its system and see `roamrunctl --version` say this version.
 
 ## Rules
 

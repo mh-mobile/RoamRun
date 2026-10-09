@@ -51,7 +51,8 @@ jobs:
           version=$(sed -n '/CFBundleShortVersionString/{n;s/.*<string>\(.*\)<\/string>.*/\1/p;}' ../../Info.plist)
           rustup target add ${{ matrix.target }}
           cargo build --locked --release --target ${{ matrix.target }}
-          dir=roamrunctl-$version-${{ matrix.name }}
+          # Named without the version: the newest release's is then always at one address.
+          dir=roamrunctl-${{ matrix.name }}
           mkdir "$dir"
           cp target/${{ matrix.target }}/release/roamrunctl* README.md THIRD-PARTY-LICENSES.txt ../../LICENSE "$dir/"
           rm -f "$dir"/roamrunctl.d "$dir"/roamrunctl.pdb
