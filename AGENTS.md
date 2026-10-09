@@ -106,7 +106,8 @@ AND category == "input"'`. Text that arrives short with a line here was dropped 
 ## Rules
 
 - Keep the skill (`skills/roamrun/SKILL.md`) in sync with CLI behaviour; it
-  ships inside the app for `roamrun init`.
+  ships inside the app for `roamrun init`. Likewise `skills/roamrunctl/SKILL.md` with
+  roamrunctl, whose archives carry it.
 - Never mention inspecting or reverse-engineering other products in anything
   committed (README, comments, commit messages). Credit public sources only.
 - Keep comments short; no multi-line narration of what the code already says.

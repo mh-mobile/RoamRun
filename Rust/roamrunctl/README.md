@@ -31,6 +31,9 @@ the binary alone out of it). `roamrunctl-SHA256SUMS` there lists their checksums
 are static, for any distribution. The Windows one isn't signed: SmartScreen may ask before it runs the first time.
 It isn't on Homebrew's or crates.io's own lists. Its version is RoamRun's: use the same on the far Mac.
 
+For an agent that is to use it: the skill in [`skills/roamrunctl`](../../skills/roamrunctl/SKILL.md) —
+`npx skills add mh-mobile/RoamRun` offers it, and each archive carries it as `SKILL.md`.
+
 ## Use
 
 ```

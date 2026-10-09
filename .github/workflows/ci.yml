@@ -55,7 +55,7 @@ jobs:
           # Named without the version: the newest release's is then always at one address.
           dir=roamrunctl-${{ matrix.name }}
           mkdir "$dir"
-          cp target/${{ matrix.target }}/release/roamrunctl* README.md THIRD-PARTY-LICENSES.txt ../../LICENSE "$dir/"
+          cp target/${{ matrix.target }}/release/roamrunctl* README.md THIRD-PARTY-LICENSES.txt ../../LICENSE ../../skills/roamrunctl/SKILL.md "$dir/"
           rm -f "$dir"/roamrunctl.d "$dir"/roamrunctl.pdb
           "$dir"/roamrunctl* --version | grep -qx "roamrunctl $version"
           if [ "${{ runner.os }}" = Windows ]; then 7z a -tzip "$dir.zip" "$dir" >/dev/null; else tar czf "$dir.tar.gz" "$dir"; fi
