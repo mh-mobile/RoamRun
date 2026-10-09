@@ -49,5 +49,7 @@ ends the run, the device line is made, and the goodbye reaches a browser within 
   up Ready, and nothing was left announced or listening on either machine.
 - Not run on Windows beyond the tests: how its announcement sits beside Windows' own mDNS, and what a firewall
   there asks, isn't known. Not run on Linux with a firewall on, or without avahi.
-- Device control's pairing: only against a fake far Mac so far (`scripts/local-check.py`), not a real one.
+- Device control's pairing, once, from the same Linux machine: the far Mac ran `roamrun pair control --with <it>`
+  with the RoamRun app open, this printed the code once the device had picked the far Mac, the code was typed,
+  and both said the pairing was kept and switched on; the far Mac then showed device control as connected.
 - Not packaged: no release archive, no skill, and its crates' licenses aren't gathered anywhere yet.

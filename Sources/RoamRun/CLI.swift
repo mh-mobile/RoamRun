@@ -508,7 +508,7 @@ enum CLI {
             stop("\(other.dnsName) connected and didn't go on: is RoamRun there a version that knows `pair control`? Update it, then run both commands again")
         case .noOne where itself:
             stop("\(other.dnsName) didn't connect in 10 minutes. Was Introduce tapped in its app with this Mac's name (\(me)), and do Tailscale's rules and this Mac's firewall let it reach port \(PairWire.port) here?")
-        case .noOne: stop("\(other.dnsName) didn't connect in 10 minutes. Is `\(introduce)` running there, and do Tailscale's rules and this Mac's firewall let that Mac reach port \(PairWire.port) here?")
+        case .noOne: stop("\(other.dnsName) didn't connect in 10 minutes. Is `\(introduce)` running there, and do Tailscale's rules and this Mac's firewall let it reach port \(PairWire.port) here?")
         case .stopped: stop("stopped; nothing was kept here")
         }
     }
@@ -619,7 +619,7 @@ enum CLI {
                  ? "\(other.dnsName) didn't come back in time. If a pairing was tried, the line its `roamrun pair introduce` printed works with `roamrun devices add` here; otherwise run both again"
                  : met.withLock { $0 }
                  ? "\(other.dnsName) connected, but this Mac made no offer to pair in 10 minutes: Device Hub: + › Pair Nearby Device, leave “Waiting to pair.” open, and run both commands again"
-                 : "\(other.dnsName) got no offer in 10 minutes. Is `\(introduce)` running there, was Pair Nearby Device pressed here, and do Tailscale's rules let that Mac reach port \(PairWire.port) here?")
+                 : "\(other.dnsName) got no offer in 10 minutes. Is `\(introduce)` running there, was Pair Nearby Device pressed here, and do Tailscale's rules let it reach port \(PairWire.port) here?")
         case .stopped: stop("stopped; nothing was saved")
         }
     }
