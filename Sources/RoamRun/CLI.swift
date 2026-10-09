@@ -542,7 +542,7 @@ enum CLI {
         let introduce = other.os.lowercased() == "macos" ? "roamrun pair introduce --mac \(me) --to <device>"
             : "roamrunctl pair introduce --mac \(me) --to <the device's Tailscale name>"
         note("""
-        Waiting for \(other.dnsName), 10 minutes at most; only \(itself ? "it" : "that Mac") is answered.
+        Waiting for \(other.dnsName), 10 minutes at most; only \(itself ? "it" : other.os.lowercased() == "macos" ? "that Mac" : "that machine") is answered.
           There\(itself ? ":  the RoamRun Introducer app, far Mac “\(me)”, Introduce" : " (on the device's Wi‑Fi):  \(introduce)")
           Here:  Xcode's Device Hub: + › Pair Nearby Device, and leave “Waiting to pair.” open (before or after)
         """)

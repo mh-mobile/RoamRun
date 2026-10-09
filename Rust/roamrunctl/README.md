@@ -39,6 +39,9 @@ ends the run, the device line is made, and the goodbye reaches a browser within 
   `roamrun devices add` on the far Mac, and the bridge there came up Ready. That far Mac's earlier pairings had
   been removed on the device beforehand; the device was still paired with another Mac. A device no Mac has paired
   with wasn't tried.
+- And once the same way with no line carried: the far Mac ran `roamrun pair xcode --with <the Linux machine>`,
+  gave its offer over Tailscale, and saved the device itself when told a pairing was tried; the bridge there came
+  up Ready, and nothing was left announced or listening on either machine.
 - Not run on Windows beyond the tests: how its announcement sits beside Windows' own mDNS, and what a firewall
   there asks, isn't known. Not run on Linux with a firewall on, or without avahi.
 - Xcode's pairing only: device control's (`pair control`) isn't here.
