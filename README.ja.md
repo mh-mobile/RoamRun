@@ -352,7 +352,7 @@ iPhone から Mac を操作する方法は 3 つあります。どの方法で�
 
 ## 実機を見る・操作する（デバイス操作）
 
-look・tap・swipe・type・paste・press・elements の各コマンドと `roamrun mcp` で、実機の画面を見て操作できます。コマンドと使い方は [README.md](README.md#seeing-and-operating-the-device) を参照してください。使う前に知っておくこと:
+look・tap・swipe・type・paste・press・elements の各コマンドと `roamrun mcp` で、実機の画面を見て操作できます。コマンドと使い方は [README.md](README.md#seeing-and-operating-the-device) を参照してください。手元にない Mac（クラウドの Mac、CI など）を、Tailscale の認証キーの用意から RoamRun の導入、ペアリングの取り込みまで通して使えるようにする手順と、それを行うスクリプトは [docs/another-mac.md](docs/another-mac.md)（英語）にあります。使う前に知っておくこと:
 
 - **iOS / iPadOS 27 以降が必要です**（それより前は遠隔操作を断ります。確認は iPhone で行っており、iPad は同じように動くはずですが未確認です）。**Set Up… は、デバイスが Mac と同じ Wi‑Fi にいるときに行います。** 接続は RoamRun アプリが持つので、アプリが起動している必要があります。
 - **look は、そのとき画面に出ているものをそのまま写します**（通知やメッセージも）。
