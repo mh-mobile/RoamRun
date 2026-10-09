@@ -72,7 +72,9 @@ AND category == "input"'`. Text that arrives short with a line here was dropped 
 
 0. Run docs/release-checklist.md on real devices.
 1. Bump `CFBundleShortVersionString` (shown by `roamrun --version`) and
-   `CFBundleVersion` (+1 each release) in `Info.plist`; commit, push, wait for CI.
+   `CFBundleVersion` (+1 each release) in `Info.plist`, on a `release/<version>` branch; open a
+   pull request, wait for CI, merge. `main` takes changes by pull request only (a ruleset on
+   GitHub: no direct push, no force push), whoever pushes.
 2. Build the dmg from a fresh clone of that commit (a working copy can hold
    uncommitted changes): `make release-dmg` → `RoamRun-<version>.dmg`, Developer ID
    signed, notarized and stapled — it fails otherwise (it checks `stapler validate`
