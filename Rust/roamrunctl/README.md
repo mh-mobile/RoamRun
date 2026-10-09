@@ -34,8 +34,9 @@ ends the run, the device line is made, and the goodbye reaches a browser within 
 - Run once against a real device, on Linux, with the offer carried (`--offer`): Ubuntu 24.04 (arm64) on the
   device's Wi‑Fi, avahi running beside it, an iPhone 15 Pro on iOS 27 and a far Mac reached only through Tailscale's
   relay servers. The device listed the far Mac under Pair with…, the code was typed, the line it printed went to
-  `roamrun devices add` on the far Mac, and the bridge there came up Ready. The far Mac was paired with that device
-  already: a device no Mac has paired with wasn't tried.
+  `roamrun devices add` on the far Mac, and the bridge there came up Ready. That far Mac's earlier pairings had
+  been removed on the device beforehand; the device was still paired with another Mac. A device no Mac has paired
+  with wasn't tried.
 - Not run on Windows beyond the tests: how its announcement sits beside Windows' own mDNS, and what a firewall
   there asks, isn't known. Not run on Linux with a firewall on, or without avahi.
 - Xcode's pairing only: device control's (`pair control`) isn't here.
