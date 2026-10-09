@@ -744,8 +744,12 @@ import ServiceManagement
     #expect(!Introduction.unchanged(kept, by: device, as: renamed))
     var moved = device; moved.port += 1
     #expect(!Introduction.unchanged(kept, by: moved, as: kept))
-    moved = device; moved.txt["authTag"] = "other"
-    #expect(!Introduction.unchanged(kept, by: moved, as: kept))
+    // Announced anew, under another name with its own tag: not unchanged, and nothing else moved.
+    var anew = device; anew.txt["identifier"] = "0A0A0A0A-D414-41D0-BE80-7567AE75B2BC"; anew.txt["authTag"] = "other"
+    #expect(!Introduction.unchanged(kept, by: anew, as: kept) && Introduction.announcedAnew(kept, by: anew, as: kept))
+    #expect(!Introduction.announcedAnew(kept, by: anew, as: elsewhere) && !Introduction.announcedAnew(kept, by: anew, as: renamed))
+    moved = anew; moved.txt["ver"] = "99"
+    #expect(!Introduction.unchanged(kept, by: moved, as: kept) && !Introduction.announcedAnew(kept, by: moved, as: kept))
     #expect(!Introduction.unchanged(half, by: device, as: half))
 
     // Added under the store's lock: the same device from two commands at once is there once.
@@ -755,7 +759,39 @@ import ServiceManagement
     var again = new; again.id = UUID()
     #expect(Introduction.add(again, from: device, to: &list) == .unchanged("Test iPhone"))
     #expect(Introduction.add(again, from: moved, to: &list) == .already("Test iPhone"))
-    #expect(list.count == 1)
+    #expect(list.count == 1 && list[0].instanceName == new.instanceName)
+    // Announced anew where it was: the one saved takes the newest announcement, and keeps its id, name and UDID.
+    list[0].udid = "00008130-000C1C5C307A8D3A"
+    guard var renewed = Introduction.profile(from: anew, peer: peer, name: "Whatever") else { return }
+    renewed.id = UUID()
+    #expect(Introduction.add(renewed, from: anew, to: &list) == .renewed("Test iPhone"))
+    #expect(list.count == 1 && list[0].id == new.id && list[0].udid != nil)
+    #expect(list[0].instanceName == "0A0A0A0A-D414-41D0-BE80-7567AE75B2BC" && list[0].txt["authTag"] == "other")
+    #expect(Introduction.add(renewed, from: anew, to: &list) == .unchanged("Test iPhone"))
+    // Not for a line turned to another device than it names, nor where two saved ones match it: refused as before.
+    var again2 = anew; again2.txt["identifier"] = "0B0B0B0B-D414-41D0-BE80-7567AE75B2BC"
+    guard var turned = Introduction.profile(from: again2, peer: peer, name: "Whatever") else { return }
+    turned.id = UUID()
+    #expect(Introduction.add(turned, from: again2, to: &list, renewing: false) == .already("Test iPhone"))
+    var pairOfThem = list
+    var twin = list[0]; twin.id = UUID(); twin.displayName = "Twin"; twin.providerIP = "100.64.0.50"; twin.instanceName = again2.txt["identifier"]!
+    pairOfThem.insert(twin, at: 0)
+    #expect(Introduction.add(turned, from: again2, to: &pairOfThem, renewing: true) == .already("Twin"))
+    #expect(pairOfThem.map(\.instanceName) == [twin.instanceName, list[0].instanceName] && list[0].instanceName == "0A0A0A0A-D414-41D0-BE80-7567AE75B2BC")
+    // The app, running, saves over what the CLI renewed: an announcement it left alone stays the newer one on disk.
+    var appHas = list[0]; appHas.instanceName = new.instanceName; appHas.txt = new.txt
+    var appWants = appHas; appWants.displayName = "Renamed in the app"
+    let kept2 = ProfileStore.merge(base: [appHas], wanted: [appWants], disk: list)
+    #expect(kept2.count == 1 && kept2[0].displayName == "Renamed in the app" && kept2[0].instanceName == list[0].instanceName && kept2[0].txt == list[0].txt)
+    // …and one it changed itself is its own.
+    var appChanged = appHas; appChanged.instanceName = "0C0C0C0C-D414-41D0-BE80-7567AE75B2BC"; appChanged.txt["identifier"] = appChanged.instanceName
+    #expect(ProfileStore.merge(base: [appHas], wanted: [appChanged], disk: list)[0].instanceName == appChanged.instanceName)
+    // A code's address: the Mac's name alone, or with its offer by parts, whatever a name holds.
+    #expect(Introduction.codeURL(mac: "rr-cloud.example.ts.net") == "roamrun-introducer://rr-cloud.example.ts.net")
+    let coded = Introduction.Offer(port: 53050, txt: ["identifier": "0A0A0A0A-D414-41D0-BE80-7567AE75B2BC", "authTag": "a+b/c", "model": "Mac16,1", "name": "M&M’s Mac", "flags": "1", "ver": "26", "minVer": "17"])
+    let parts = URLComponents(string: Introduction.codeURL(mac: "rr-cloud.example.ts.net", offer: coded) ?? "")
+    let read = Dictionary(uniqueKeysWithValues: (parts?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+    #expect(parts?.host == "rr-cloud.example.ts.net" && read == ["p": "53050", "i": coded.txt["identifier"]!, "a": "a+b/c", "m": "Mac16,1", "n": "M&M’s Mac", "f": "1", "v": "26", "w": "17"])
     var other = new; other.id = UUID(); other.instanceName = "0F0F0F0F-D414-41D0-BE80-7567AE75B2BC"; other.txt["identifier"] = other.instanceName
     other.providerIP = "100.64.0.77"
     if case .nameProblem = Introduction.add(other, from: device, to: &list) {} else { Issue.record("a second device took a name in use") }
@@ -7660,4 +7696,16 @@ extension TimingSensitive.DeviceControlIntroduced {
         #expect(cancelled.all.count == 1)
         link.close()
     }
+}
+
+@Test func aTerminalQRIsTheRightWayUp() {
+    let m = TerminalQR.modules("roamrun-introducer://rr-cloud.example.ts.net")
+    #expect(m.count >= 23 && m.allSatisfy { $0.count == m.count })
+    // A finder's top edge is seven dark modules over five light ones; the bottom right has none.
+    func finder(_ y: Int, _ x: Int) -> Bool { m[y][x..<x + 7].allSatisfy { $0 } && !m[y + 1][x + 1..<x + 6].contains(true) }
+    let far = m.count - 8
+    #expect(finder(1, 1) && finder(1, far) && finder(far, 1) && !finder(far, far))
+    #expect(TerminalQR.lines("x").allSatisfy { $0.hasPrefix("\u{1B}[30;107m") })
+    let address = "roamrun-introducer://rr-cloud.example.ts.net?p=53050&i=0A0A0A0A-D414-41D0-BE80-7567AE75B2BC&a=Y8PpfsRx&m=Mac16,1&n=rr-cloud&f=1&v=26&w=17"
+    #expect(TerminalQR.modules(address, level: "L").count < TerminalQR.modules(address, level: "M").count)
 }

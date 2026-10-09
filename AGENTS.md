@@ -20,6 +20,10 @@ see `skills/roamrun/SKILL.md` — installed with `roamrun init` or
 - `make install-cli` links `/usr/local/bin/roamrun` to the build in the repo
   folder (for development; the app's first screen / Settings link the copy that
   is running, e.g. `/Applications`). `make dmg` packages.
+- `iOS/` is RoamRun Introducer, the app with which a device introduces a far Mac itself. It isn't
+  part of `make app`: `cd iOS && xcodegen generate`, then Xcode (set a team). Its engine runs on a
+  Mac under a test service type — the command is at the top of `iOS/Checks/relay-check.swift` — and
+  `iOS/Sources/Introduction.swift` mirrors `Sources/RoamRun/Introductions.swift`: change both.
 - `make test` runs the unit tests (log parsing, port attribution, status-file
   ownership, names). They never touch the real status/profile files or start a
   real bridge — keep it that way (no `AppCoordinator` in tests). A bridge on a

@@ -137,6 +137,19 @@ enum Introduction {
 }
 
 extension Introduction {
+    /// A Mac's name and, with an offer, the offer by its parts under short names: what a code
+    /// drawn in a terminal holds (the line itself makes one too large for it).
+    static func codeURL(mac: String, offer: Offer? = nil) -> String? {
+        var url = URLComponents()
+        url.scheme = "roamrun-introducer"; url.host = mac
+        if let offer {
+            url.queryItems = [URLQueryItem(name: "p", value: String(offer.port))]
+                + [("i", "identifier"), ("a", "authTag"), ("m", "model"), ("n", "name"), ("f", "flags"), ("v", "ver"), ("w", "minVer")]
+                    .map { URLQueryItem(name: $0.0, value: offer.txt[$0.1]) }
+        }
+        return url.string
+    }
+
     /// What a Mac announces while it waits to be paired with.
     static let hostService = "_remotepairing-pairable-host._tcp"
     static let deviceService = "_remotepairing._tcp"
@@ -206,16 +219,25 @@ extension Introduction {
     enum Added: Equatable {
         case added
         case unchanged(String)
+        /// Saved already, where it was: only its announcement was put in the older one's place.
+        case renewed(String)
         case already(String)
         case nameProblem(String)
     }
 
     /// Adds a device to the list as it is at that moment — under the store's lock, so two
     /// commands adding one device leave one.
-    static func add(_ new: DeviceProfile, from device: Device, to all: inout [DeviceProfile]) -> Added {
+    /// `renewing`: one saved already may take the line's announcement in the older one's place. Not
+    /// for a line turned to a device other than the one it names: nothing in a line says whose it is.
+    static func add(_ new: DeviceProfile, from device: Device, to all: inout [DeviceProfile], renewing: Bool = true) -> Added {
         // Before the name: a device saved already is the likelier reason its name is taken.
-        if let same = all.first(where: { ProfileStore.sameDevice($0, new) }) {
-            return unchanged(same, by: device, as: new) ? .unchanged(same.displayName) : .already(same.displayName)
+        if let i = all.firstIndex(where: { ProfileStore.sameDevice($0, new) }) {
+            if unchanged(all[i], by: device, as: new) { return .unchanged(all[i].displayName) }
+            // One saved device and no other: with two that match, whose announcement this is can't be told.
+            guard renewing, all.filter({ ProfileStore.sameDevice($0, new) }).count == 1,
+                  announcedAnew(all[i], by: device, as: new) else { return .already(all[i].displayName) }
+            all[i].instanceName = new.instanceName; all[i].txt = new.txt
+            return .renewed(all[i].displayName)
         }
         if let problem = all.nameProblem(new.displayName) { return .nameProblem(problem) }
         all.append(new)
@@ -246,6 +268,15 @@ extension Introduction {
     static func unchanged(_ saved: DeviceProfile, by device: Device, as new: DeviceProfile) -> Bool {
         guard let have = Introduction.device(of: saved) else { return false }
         return have.port == device.port && have.txt == device.txt
+            && saved.providerIP == new.providerIP && saved.providerHostName == new.providerHostName
+    }
+
+    /// The same device where it was, announced under another name with that name's tag: the device
+    /// makes new ones all the time, and the newest is what a Mac should hold.
+    static func announcedAnew(_ saved: DeviceProfile, by device: Device, as new: DeviceProfile) -> Bool {
+        guard let have = Introduction.device(of: saved) else { return false }
+        func lasting(_ txt: [String: String]) -> [String: String] { txt.filter { $0.key != "identifier" && $0.key != "authTag" } }
+        return have.port == device.port && lasting(have.txt) == lasting(device.txt)
             && saved.providerIP == new.providerIP && saved.providerHostName == new.providerHostName
     }
 
