@@ -210,6 +210,15 @@ extension Introduction {
         return whole.count > 1 ? .several : whole.first.map(PairByName.Offers.one) ?? .none
     }
 
+    /// A line the device sent of itself, as the device named here: its Tailscale name and the name
+    /// it is saved under are this Mac's to say. What doesn't read as a device's line stays as it came.
+    static func line(_ sent: String, ofDevice peer: String, named name: String?) -> String {
+        guard case .success(var device) = device(from: sent) else { return sent }
+        device.peer = peer
+        device.name = name ?? device.name
+        return line(device)
+    }
+
     /// A device's line fit to show: read and written again, never the bytes that came.
     static func shown(_ text: String) -> String? {
         guard case .success(let device) = device(from: text) else { return nil }

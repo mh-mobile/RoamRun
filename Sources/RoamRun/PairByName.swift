@@ -50,6 +50,8 @@ enum PairWire {
         case ended(Reason)
         case saved
         case unsaved
+        /// To a device that introduces this Mac itself: its Tailscale name here, which it can't ask for.
+        case you(String)
         // For device control: the Mac that offers asks for the device first, says which attempt
         // this is, passes the code on, and says what came of it itself.
         case wantDevice
@@ -67,6 +69,7 @@ enum PairWire {
         case .ended(let why): prefix + "ended " + why.rawValue
         case .saved: prefix + "saved"
         case .unsaved: prefix + "unsaved"
+        case .you(let name): prefix + "you " + name
         case .wantDevice: prefix + "device?"
         case .device(let line): prefix + "device " + line
         case .attempt(let id): prefix + "attempt " + id
@@ -91,6 +94,7 @@ enum PairWire {
         case ("unsaved", 1): return .unsaved
         case ("offer", 2) where !words[1].isEmpty: return .offer(words[1])
         case ("tried", 2) where !words[1].isEmpty: return .tried(words[1])
+        case ("you", 2) where !words[1].isEmpty: return .you(words[1])
         case ("ended", 2): return Reason(rawValue: words[1]).map(Message.ended)
         case ("device?", 1): return .wantDevice
         case ("device", 2) where !words[1].isEmpty: return .device(words[1])
@@ -313,6 +317,8 @@ enum PairByName {
         var resultWindow: TimeInterval = 420
         var lineWait: TimeInterval = 10
         var pause: Duration = .seconds(1)
+        /// The other's Tailscale name, said to it before the offer: only to a device, which doesn't know its own.
+        var named: String?
 
         func run(_ listener: PairLink.Listener) async -> End {
             let until = Date().addingTimeInterval(connectWindow)
@@ -347,6 +353,7 @@ enum PairByName {
                     if stopped() { link.send(.ended(.stopped)) } else if Date() >= until { link.send(.ended(.noOffer)) }
                     continue
                 }
+                if let named { link.send(.you(named)) }
                 guard link.send(.offer(offer)) else { continue }
                 say(.offerSent)
                 switch link.read(within: resultWindow, stop: stopped) {

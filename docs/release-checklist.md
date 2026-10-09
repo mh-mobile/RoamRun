@@ -242,7 +242,7 @@ tunnel and Xcode has to run again.
     `roamrun pair xcode --with <the device's Tailscale name> --qr` → a code is drawn last; in a
     window too small it says so instead. In the app: Scan → that Mac's name, Introduce → "Pair
     with <its name>" on the device, the code from Device Hub → the far Mac says the device is
-    saved (or "saved already; it now holds the device's newest announcement"), the app says that
+    saved (or "saved already; it now holds that line's announcement"), the app says that
     Mac knows it, `roamrun up <name>` there → Ready. With nothing waiting there: the app says that
     Mac isn't waiting. Stopped in the app before the button was pressed there, then Introduce
     again: the far Mac answers the second time. `roamrun pair control --with <device>` with the

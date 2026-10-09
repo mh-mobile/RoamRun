@@ -786,6 +786,11 @@ import ServiceManagement
     // …and one it changed itself is its own.
     var appChanged = appHas; appChanged.instanceName = "0C0C0C0C-D414-41D0-BE80-7567AE75B2BC"; appChanged.txt["identifier"] = appChanged.instanceName
     #expect(ProfileStore.merge(base: [appHas], wanted: [appChanged], disk: list)[0].instanceName == appChanged.instanceName)
+    // From the device itself: the line's own names are placeholders, and the one named here is what is saved.
+    let placed = Introduction.Device(name: "iPhone", peer: "this-device.invalid", port: device.port, txt: device.txt)
+    guard case .success(let named) = Introduction.device(from: Introduction.line(Introduction.line(placed), ofDevice: "iphone-15-pro.example.ts.net", named: "iphone-15-pro")) else { Issue.record("a device's own line didn't read"); return }
+    #expect(named.peer == "iphone-15-pro.example.ts.net" && named.name == "iphone-15-pro" && named.txt == device.txt && named.port == device.port)
+    #expect(Introduction.line("not a line", ofDevice: "x", named: "y") == "not a line")
     // A code's address: the Mac's name alone, or with its offer by parts, whatever a name holds.
     #expect(Introduction.codeURL(mac: "rr-cloud.example.ts.net") == "roamrun-introducer://rr-cloud.example.ts.net")
     let coded = Introduction.Offer(port: 53050, txt: ["identifier": "0A0A0A0A-D414-41D0-BE80-7567AE75B2BC", "authTag": "a+b/c", "model": "Mac16,1", "name": "M&M’s Mac", "flags": "1", "ver": "26", "minVer": "17"])
@@ -989,6 +994,10 @@ extension TimingSensitive.RelayOnLocalhost {
     var twice = mesh
     twice.peers.append(MeshDevice(id: "n6", name: "cloud-mac", os: "macOS", ips: [], online: true, dnsName: "cloud-mac.tail1.ts.net"))
     #expect(TailscaleClient.peer(named: "cloud-mac", in: twice) == .several(["cloud-mac.tail1.ts.net", "cloud-mac.tail1.ts.net"]))
+    // What the Introducer app puts for a device the far Mac names itself is no device's name, whatever is on the tailnet.
+    var phones = mesh
+    phones.peers.append(MeshDevice(id: "n7", name: "iphone", os: "iOS", ips: [], online: true, dnsName: "iphone.tail1.ts.net"))
+    #expect(TailscaleClient.peer(named: "this-device.invalid", in: phones) == .none && TailscaleClient.peer(named: "iphone", in: phones) != .none)
 
     func holder(_ name: String) -> TailscaleClient.Holder? {
         if case .one(let p) = named(name) { return TailscaleClient.holder(of: p, in: mesh) }
@@ -6877,10 +6886,10 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
 // MARK: - Two Macs that name each other (no line carried)
 
 @Test func whatTwoMacsSayIsReadBackAndNothingElseIs() {
-    let all: [PairWire.Message] = [.wantOffer, .offer("rr-xcode-offer-v1:abc"), .tried("rr-device-v1:abc"), .saved, .unsaved]
+    let all: [PairWire.Message] = [.wantOffer, .offer("rr-xcode-offer-v1:abc"), .tried("rr-device-v1:abc"), .saved, .unsaved, .you("iphone.t.ts.net")]
         + PairWire.Reason.allCases.map(PairWire.Message.ended)
     for m in all { #expect(PairWire.message(from: PairWire.line(m)) == m) }
-    for line in ["", "offer?", "rr-pair-v2 offer?", "rr-pair-v1 ", "rr-pair-v1 offer", "rr-pair-v1 offer ", "rr-pair-v1 offer a b",
+    for line in ["", "offer?", "rr-pair-v2 offer?", "rr-pair-v1 ", "rr-pair-v1 offer", "rr-pair-v1 offer ", "rr-pair-v1 offer a b", "rr-pair-v1 you", "rr-pair-v1 you ",
                  "rr-pair-v1 ended because", "rr-pair-v1 saved it", "rr-pair-v1 OFFER?"] {
         #expect(PairWire.message(from: line) == nil, "\(line)")
     }
@@ -6942,6 +6951,21 @@ extension TimingSensitive {
         #expect(await end.value == .saved)
         #expect(saved.all == ["device-1"])
         #expect(events.all == [.connected, .waitingForOffer, .offerSent])
+    }
+
+    /// A device that introduces this Mac itself is told its Tailscale name before the offer; a Mac isn't.
+    @Test func aDeviceIsToldItsNameBeforeTheOffer() async throws {
+        let listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
+        let saved = Counted<String>()
+        var far = farMac(saved: saved)
+        far.named = "iphone.t.ts.net"
+        let end = started(far, listener)
+        let link = try #require(PairLink.connect(to: "127.0.0.1", port: listener.port, interface: nil))
+        link.send(.wantOffer)
+        #expect(link.read(within: 2).message == .you("iphone.t.ts.net"))
+        #expect(link.read(within: 2).message == .offer("offer-1"))
+        #expect(PairByName.Home.handOver("device-1", on: link) == .saved)
+        #expect(await end.value == .saved && saved.all == ["device-1"])
     }
 
     @Test func onlyTheMacNamedIsAnsweredAndAStrangerDoesNotShutItOut() async throws {
@@ -7706,6 +7730,11 @@ extension TimingSensitive.DeviceControlIntroduced {
     let far = m.count - 8
     #expect(finder(1, 1) && finder(1, far) && finder(far, 1) && !finder(far, far))
     #expect(TerminalQR.lines("x").allSatisfy { $0.hasPrefix("\u{1B}[30;107m") })
+    // The window it asks for is the code's own width (margins in, colour codes out) and two rows more.
+    let drawn = TerminalQR.lines("roamrun-introducer://rr-cloud.example.ts.net", level: "L")
+    let room = TerminalQR.room(for: drawn)
+    #expect(room.across == TerminalQR.modules("roamrun-introducer://rr-cloud.example.ts.net", level: "L").count + 6 && room.down == drawn.count + 2)
+    #expect(TerminalQR.room(for: []) == (0, 2))
     let address = "roamrun-introducer://rr-cloud.example.ts.net?p=53050&i=0A0A0A0A-D414-41D0-BE80-7567AE75B2BC&a=Y8PpfsRx&m=Mac16,1&n=rr-cloud&f=1&v=26&w=17"
     #expect(TerminalQR.modules(address, level: "L").count < TerminalQR.modules(address, level: "M").count)
 }

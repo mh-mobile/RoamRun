@@ -63,7 +63,7 @@ enum CLI {
       devices add <line> [--as <name>] [--replace <name>] [--peer <Tailscale name>]
                                      Save the device of such a line (found by its Tailscale name on this
                                      Mac's tailnet; one saved already where it was takes the line's
-                                     newer announcement; --replace: put it in the place of what is
+                                     announcement; --replace: put it in the place of what is
                                      saved of that same device — its UDID is kept — with the app and
                                      that device's bridge stopped)
       pair xcode [--with <Tailscale name>] [--qr]
@@ -236,7 +236,7 @@ enum CLI {
         case .renewed(let name):
             let inUse = StatusFile.read()[saved.first { $0.displayName == name }?.id ?? UUID()] != nil
                 || !NSRunningApplication.runningApplications(withBundleIdentifier: AppID.bundle).filter({ $0.processIdentifier != getpid() }).isEmpty
-            print("\(name) is saved already; it now holds the device's newest announcement. Next: roamrun up \(shellName(name))"
+            print("\(name) is saved already; it now holds that line's announcement. Next: roamrun up \(shellName(name))"
                   + (inUse ? " (what runs here now — the app, or its bridge — goes on with the older one until it is started again)" : ""))
             return
         case .already(let name): throw Refusal("\(name) is that device already. To put this in its place: --replace \(shellName(name))")
@@ -365,10 +365,10 @@ enum CLI {
     nonisolated private static func drawCode(_ url: String?, for whom: String) {
         guard let url else { note("No code: Tailscale gives this Mac no name to put in one. Type the name in the app instead."); return }
         guard isatty(STDERR_FILENO) != 0 else { note("No code is drawn where this isn't a terminal. For the app: \(url)"); return }
-        let lines = TerminalQR.lines(url, level: "L"), across = (lines.first?.unicodeScalars.count ?? 12) - 12
+        let lines = TerminalQR.lines(url, level: "L"), (across, down) = TerminalQR.room(for: lines)
         var window = winsize()
-        if ioctl(STDERR_FILENO, TIOCGWINSZ, &window) == 0, window.ws_row > 0, Int(window.ws_row) < lines.count + 2 || Int(window.ws_col) < across {
-            note("This window is too small for the code (\(across) across, \(lines.count + 2) down; it is \(window.ws_col) by \(window.ws_row)): make it larger or its text smaller, and run this again.")
+        if ioctl(STDERR_FILENO, TIOCGWINSZ, &window) == 0, window.ws_row > 0, Int(window.ws_row) < down || Int(window.ws_col) < across {
+            note("This window is too small for the code (\(across) across, \(down) down; it is \(window.ws_col) by \(window.ws_row)): make it larger or its text smaller, and run this again.")
             return
         }
         note("With \(whom)'s camera, or the app's own Scan — it takes this Mac's name from it:\n" + lines.joined(separator: "\n"))
@@ -556,13 +556,8 @@ enum CLI {
             },
             save: { sent in
                 // From the device itself, the line's own name and Tailscale name are placeholders: it is the one named here.
-                var line = sent
-                if itself, case .success(var device) = Introduction.device(from: sent) {
-                    device.peer = other.dnsName
-                    device.name = label ?? device.name
-                    line = Introduction.line(device)
-                }
-                return await MainActor.run { [line] in
+                let line = itself ? Introduction.line(sent, ofDevice: other.dnsName, named: label) : sent
+                return await MainActor.run {
                     do throws(Refusal) { try saveDevice(line: line, name: nil, replacing: nil, peer: nil, store: ProfileStore()); return true } catch {
                         note("roamrun: not saved: \(error.why)")
                         // Only a line that reads as a device is shown: what came is the other Mac's to write.
@@ -588,7 +583,8 @@ enum CLI {
                     note("\(other.dnsName) has this Mac's offer. On the device: Settings › Privacy & Security › Developer Mode › Pair with “\(me)”, and type the code Device Hub shows here. Waiting for what came of it (7 minutes at most).")
                 case .dropped: note("The connection to \(other.dnsName) dropped; it is waited for again.")
                 }
-            })
+            },
+            named: itself ? other.dnsName : nil)
         let end = await Task.detached { await far.run(listener) }.value
         capture.stop()
         switch end {
@@ -601,7 +597,7 @@ enum CLI {
         case .noResult: stop("\(other.dnsName) took the offer and said nothing more in 7 minutes. See what its `roamrun pair introduce` printed: a line there works with `roamrun devices add` here")
         case .noOne where itself:
             stop(sawOffer.withLock { $0 }
-                 ? "\(other.dnsName) didn't come back in time. If a pairing was tried and its app shows a line, that works here with `roamrun devices add <line> --peer \(other.dnsName)`; otherwise run this again and Introduce in the app"
+                 ? "\(other.dnsName) didn't come back in time. If a pairing was tried and its app shows a line, that works here with `roamrun devices add <line>`; otherwise run this again and Introduce in the app"
                  : met.withLock { $0 }
                  ? "\(other.dnsName) connected, but this Mac made no offer to pair in 10 minutes: Device Hub: + › Pair Nearby Device, leave “Waiting to pair.” open, and run this again"
                  : "\(other.dnsName) didn't connect in 10 minutes. Was Introduce tapped in its app with this Mac's name (\(me)), and do Tailscale's rules let it reach port \(PairWire.port) here?")
@@ -943,7 +939,7 @@ enum CLI {
                     let given = Set(parsed.values.keys).union(parsed.flags)
                     let form: Set<String> = given.contains("--with") ? ["--with", "--peer", "--qr"] : given.contains("--attempt") ? ["--attempt"] : ["--last"]
                     if let extra = given.subtracting(form).sorted().first {
-                        fail("`roamrun pair control` doesn't take \(extra) here: --with <Mac> [--peer <device>], or --attempt <id>, or --last")
+                        fail("`roamrun pair control` doesn't take \(extra) here: --with <Mac or device> [--peer <device>] [--qr], or --attempt <id>, or --last")
                     }
                     if let home = parsed.values["--with"] { Task { await offerControlPairing(with: home, peer: parsed.values["--peer"], qr: parsed.flags.contains("--qr")) } }
                     else if let id = parsed.values["--attempt"] { controlAttempt(id) }
@@ -951,7 +947,7 @@ enum CLI {
                     else { fail("usage: roamrun pair control --with <the other Mac's Tailscale name> | roamrun pair control --attempt <id> | roamrun pair control --last") }
                 case ("xcode", 1):
                     if let extra = Set(parsed.values.keys).union(parsed.flags).subtracting(["--with", "--qr"]).sorted().first {
-                        fail("`roamrun pair xcode` doesn't take \(extra): the Mac to wait for is --with <its Tailscale name>")
+                        fail("`roamrun pair xcode` doesn't take \(extra): the Mac or device to wait for is --with <its Tailscale name>, and --qr draws a code")
                     }
                     let qr = parsed.flags.contains("--qr")
                     if let home = parsed.values["--with"] { Task { await offerXcodePairing(with: home, qr: qr) } }

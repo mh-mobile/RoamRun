@@ -14,6 +14,8 @@ final class Wire: @unchecked Sendable {
         /// The far Mac's reason, as its word.
         case ended(String)
         case saved, unsaved
+        /// This device's Tailscale name, as the far Mac has it; its offer follows.
+        case you(String)
         /// Device control: the far Mac asks which device this is before it offers.
         case wantDevice
         /// Device control: the code to type on this device.
@@ -62,6 +64,7 @@ final class Wire: @unchecked Sendable {
         case ("ended", 2): return .ended(words[1])
         case ("saved", 1): return .saved
         case ("unsaved", 1): return .unsaved
+        case ("you", 2) where isPeerName(words[1]): return .you(words[1])
         case ("device?", 1): return .wantDevice
         case ("attempt", 2): return .attempt
         case ("code", 2) where words[1].utf8.count == 6 && words[1].utf8.allSatisfy({ (0x30...0x39).contains($0) }): return .code(words[1])
@@ -91,6 +94,32 @@ final class Wire: @unchecked Sendable {
         case "cancelled": "was stopped; nothing was kept there."
         default: "kept nothing; it says why there."
         }
+    }
+
+    /// A Tailscale name as a device's line may hold one (the far Mac's own rule for it).
+    static func isPeerName(_ name: String) -> Bool {
+        (1...253).contains(name.utf8.count) && !name.hasPrefix("-") && !name.hasPrefix(".")
+            && name.unicodeScalars.allSatisfy { $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "-" || $0 == ".") }
+    }
+
+    /// What a line says of this device's Tailscale name where the far Mac says it itself: no name on a tailnet.
+    static let unnamedPeer = "this-device.invalid"
+
+    /// The name's first label when it is a name; the address itself otherwise.
+    static func label(_ host: String) -> String {
+        IPv4Address(host) == nil && IPv6Address(host) == nil ? String(host.split(separator: ".").first ?? "") : host
+    }
+
+    /// The offer as it is announced for a far Mac called so: under what the person called it, never
+    /// the name that Mac gave itself.
+    static func announced(_ offer: Introduction.Offer, for host: String) -> Introduction.Offer {
+        Introduction.announced(offer, as: label(host))
+    }
+
+    /// After a pairing was carried, an ending that says nothing of it is said as "a pairing was
+    /// tried". Not one that succeeded, has a line to carry, says so already, or is the far Mac's own word.
+    static func saidAsTried(carried: Bool, success: Bool, line: Bool, title: String?, farsWord: Bool) -> Bool {
+        carried && !success && !line && !farsWord && title?.hasPrefix("A pairing was tried") != true
     }
 
     /// An address Tailscale gives: 100.64.0.0/10 or fd7a:115c:a1e0::/48.
@@ -206,6 +235,8 @@ final class Wire: @unchecked Sendable {
             return
         }
         guard let completion = pending else { return }
+        // Its name comes before its offer: said, and the offer still waited for.
+        if case .you = answer { completion(answer); read(); return }
         pending = nil
         timer?.cancel()
         completion(answer)

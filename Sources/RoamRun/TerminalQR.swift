@@ -24,7 +24,14 @@ enum TerminalQR {
         rows = [blank, blank, blank] + rows.map { side + $0 + side } + [blank, blank, blank]
         if rows.count % 2 == 1 { rows.append(blank) }
         return stride(from: 0, to: rows.count, by: 2).map { y in
-            "\u{1B}[30;107m" + zip(rows[y], rows[y + 1]).map { $0 ? ($1 ? "█" : "▀") : ($1 ? "▄" : " ") }.joined() + "\u{1B}[0m"
+            on + zip(rows[y], rows[y + 1]).map { $0 ? ($1 ? "█" : "▀") : ($1 ? "▄" : " ") }.joined() + off
         }
+    }
+
+    private static let on = "\u{1B}[30;107m", off = "\u{1B}[0m"
+
+    /// The window those lines take: their own width, and two rows more for what is said around them.
+    static func room(for lines: [String]) -> (across: Int, down: Int) {
+        (max(0, (lines.first?.unicodeScalars.count ?? 0) - on.unicodeScalars.count - off.unicodeScalars.count), lines.count + 2)
     }
 }

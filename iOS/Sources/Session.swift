@@ -63,11 +63,11 @@ final class Session {
     private var begun = false
     private var carried = false
     private var announced = false
+    /// This iPhone's Tailscale name, once the far Mac said it.
+    private var ownName: String?
 
     /// The name's first label when it is a name; the address itself otherwise.
-    static func label(_ host: String) -> String {
-        IPv4Address(host) == nil && IPv6Address(host) == nil ? String(host.split(separator: ".").first ?? "") : host
-    }
+    static func label(_ host: String) -> String { Wire.label(host) }
     var name: String { Self.label(running || outcome != nil ? host : far.trimmingCharacters(in: .whitespaces)) }
 
     /// A far Mac is named as Tailscale names it: one word, a name under ts.net, or an address of Tailscale's.
@@ -87,9 +87,7 @@ final class Session {
 
     /// The Tailscale name a line carries for this iPhone, by the far Mac's own rules for one.
     nonisolated static func peerProblem(_ peer: String) -> String? {
-        let ok = (1...253).contains(peer.utf8.count) && !peer.hasPrefix("-") && !peer.hasPrefix(".")
-            && peer.unicodeScalars.allSatisfy { $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "-" || $0 == ".") }
-        return ok ? nil : "Enter this iPhone's Tailscale name (as the Tailscale app shows it): the far Mac finds it by that."
+        return Wire.isPeerName(peer) ? nil : "Enter this iPhone's Tailscale name (as the Tailscale app shows it): the far Mac finds it by that."
     }
 
     /// From the code `roamrun pair xcode --qr` shows: the far Mac's name — and, without `--with`
@@ -139,7 +137,7 @@ final class Session {
         kind = .xcode
         stage = .asking
         code = nil; hint = nil; limited = false; outcome = nil; notice = nil; log = []
-        begun = false; carried = false; announced = false
+        begun = false; carried = false; announced = false; ownName = nil
         keeper.onExpire = { [weak self] in self?.expired(run) }
         keeper.onLimited = { [weak self] in
             guard let self, self.live(run) else { return }
@@ -186,6 +184,14 @@ final class Session {
     }
 
     private func fetched(_ answer: Wire.Answer, _ run: Int) {
+        // Its name is taken whenever it arrives: nothing waits on it, and the offer may be handled first.
+        if case .you(let name) = answer {
+            guard live(run) else { return }
+            ownName = name
+            // Kept for the lines carried by hand too: there it would have to be typed.
+            if peerName.trimmingCharacters(in: .whitespaces).isEmpty { peerName = name }
+            return
+        }
         guard live(run), standIn == nil else { return }
         switch answer {
         case .offer(let line):
@@ -201,7 +207,7 @@ final class Session {
             hint = "Looking for this iPhone's own announcement…"
             note("\(name) asks which device this is: it pairs for device control.")
             Task { _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) }
-            finder?.line(name: UIDevice.current.name, peer: "iphone") { [weak self] found in Task { @MainActor in self?.answerDevice(found, run) } }
+            finder?.line(name: UIDevice.current.name, peer: Wire.unnamedPeer) { [weak self] found in Task { @MainActor in self?.answerDevice(found, run) } }
         case .ended(let why): finish(.init(tone: .failure, title: "\(name) isn't offering to pair", detail: "\(name) \(Wire.sentence(ended: why))"))
         case .notWaiting:
             finish(.init(tone: .failure, title: "\(name) isn't waiting for this iPhone",
@@ -276,7 +282,7 @@ final class Session {
     }
 
     private func start(_ offer: Introduction.Offer, _ run: Int) {
-        let shown = Introduction.announced(offer, as: IPv4Address(host) == nil && IPv6Address(host) == nil ? name : "")
+        let shown = Wire.announced(offer, for: host)
         announcedName = shown.txt["name"] ?? name
         stage = .pairing
         hint = nil
@@ -324,7 +330,8 @@ final class Session {
                 if kind == .control { return }
                 // The keeper stays until the far Mac has it: iOS would suspend the app mid-way otherwise.
                 // Asked by wire, the far Mac names the device and knows its Tailscale name itself.
-                finder?.line(name: UIDevice.current.name, peer: wire == nil ? peerName.trimmingCharacters(in: .whitespaces) : "iphone") { [weak self] found in
+                finder?.line(name: wire == nil ? UIDevice.current.name : ownName.map(Wire.label) ?? UIDevice.current.name,
+                             peer: wire == nil ? peerName.trimmingCharacters(in: .whitespaces) : ownName ?? Wire.unnamedPeer) { [weak self] found in
                     Task { @MainActor in self?.found(found, run) }
                 }
             case .deadline: finish(.init(tone: .failure, title: "Nothing was paired in 5 minutes", detail: "Introduce again when the far Mac is ready, and pick “\(announcedName)” in Settings › Privacy & Security › Developer Mode."), saying: "deadline")
@@ -356,20 +363,20 @@ final class Session {
         guard live(run), carried else { return }
         switch answer {
         case .saved: finish(.init(tone: .success, title: "\(name) knows this iPhone", detail: "Whether Xcode paired shows there. Next, on \(name): roamrun up, with the name it just printed."))
-        case .unsaved: finish(.init(tone: .attention, title: "\(name) didn't save this iPhone", detail: "Its terminal says why, and how to save it by hand."))
+        case .unsaved: finish(.init(tone: .attention, title: "\(name) didn't save this iPhone", detail: "Its terminal says why, and how to save it by hand."), farsWord: true)
         default:
-            finish(.init(tone: .attention, title: "\(name) didn't say whether it saved this iPhone", detail: "If it didn't, take this line there:\nroamrun devices add <line>", line: line))
+            finish(.init(tone: .attention, title: "\(name) didn't say whether it saved this iPhone", detail: "If it didn't, take this line there:\nroamrun devices add <line>" + (ownName == nil ? " --peer <this iPhone's Tailscale name>" : ""), line: line))
         }
     }
 
     /// Everything of this introduction is over. The far Mac is told why only while that means
     /// something to it: once it has begun, and before a pairing was carried to it.
-    private func finish(_ given: Outcome?, saying reason: String? = nil) {
+    private func finish(_ given: Outcome?, saying reason: String? = nil, farsWord: Bool = false) {
         guard running else { return }
         running = false
         var outcome = given
         // After a pairing was carried, whatever ends this isn't "nothing happened": it may have been made.
-        if carried, outcome?.tone != .success, outcome?.line == nil, outcome?.title.hasPrefix("A pairing was tried") != true {
+        if Wire.saidAsTried(carried: carried, success: outcome?.tone == .success, line: outcome?.line != nil, title: outcome?.title, farsWord: farsWord) {
             let why = outcome.map { "\($0.title). " } ?? "Stopped. "
             outcome = .init(tone: .attention, title: "A pairing was tried",
                             detail: why + "Whether it was made shows on \(name):\n" + (kind == .control ? "roamrun pair control --last" : "roamrun devices"))
