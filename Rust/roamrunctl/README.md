@@ -3,7 +3,7 @@
 A prototype of RoamRun's `pair introduce` for a machine that isn't a Mac (Windows, Linux, macOS):
 on the device's Wi‑Fi it announces a far Mac's offer to pair with Xcode and carries the device's one
 connection to that Mac over Tailscale. Behaviour follows `Sources/RoamRun/Introductions.swift` and
-`PairByName.swift`. Nothing here is shipped yet, and it hasn't met a real device: see the last section.
+`PairByName.swift`. Nothing here is shipped yet; what it has been tried with is in the last section.
 
 ```
 roamrunctl pair introduce --mac <far Mac's Tailscale name> --to <device's Tailscale name> [--offer <line>] [--as <name>] [--deadline <secs>]
@@ -31,7 +31,12 @@ ends the run, the device line is made, and the goodbye reaches a browser within 
 
 - Built and tested (`cargo test`) on macOS; CI builds and tests it on Linux and Windows too.
 - `scripts/local-check.py` passes on macOS: the mechanics, against a fake far Mac and a fake device.
-- Not yet run against a real device, on any system. Not yet run at all on Linux or Windows beyond the tests:
-  how its announcement sits beside avahi or Windows' own mDNS, and what a firewall there asks, isn't known.
+- Run once against a real device, on Linux, with the offer carried (`--offer`): Ubuntu 24.04 (arm64) on the
+  device's Wi‑Fi, avahi running beside it, an iPhone 15 Pro on iOS 27 and a far Mac reached only through Tailscale's
+  relay servers. The device listed the far Mac under Pair with…, the code was typed, the line it printed went to
+  `roamrun devices add` on the far Mac, and the bridge there came up Ready. The far Mac was paired with that device
+  already: a device no Mac has paired with wasn't tried.
+- Not run on Windows beyond the tests: how its announcement sits beside Windows' own mDNS, and what a firewall
+  there asks, isn't known. Not run on Linux with a firewall on, or without avahi.
 - Xcode's pairing only: device control's (`pair control`) isn't here.
 - Not packaged: no release archive, no skill, and its crates' licenses aren't gathered anywhere yet.
