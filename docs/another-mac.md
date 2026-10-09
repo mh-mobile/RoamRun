@@ -47,7 +47,8 @@ the key a tag and write a grant for that tag in your tailnet's policy.
 
 ## 3. On the other Mac
 
-With the pairing file brought over:
+With the pairing file brought over, and the device awake and on a Wi‑Fi (the import at the end
+connects to it, once):
 
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/mh-mobile/RoamRun/main/scripts/set-up-mac.sh
