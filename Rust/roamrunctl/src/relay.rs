@@ -28,8 +28,12 @@ pub enum Event {
     Deadline,
     Stopped,
     AddressLost,
-    /// The far Mac's command ended (its wire said something, or closed).
+    /// The far Mac said this on its wire.
+    Far(String),
+    /// The far Mac's command ended (its wire closed, or said something that isn't ours).
     FarGone,
+    /// Device control: the device is done here, and the far Mac hasn't said what it kept in time.
+    NoResult,
 }
 
 /// Takes connections from `only_from` alone and carries each to `far`.

@@ -1,8 +1,8 @@
 # roamrunctl
 
 A prototype of RoamRun's `pair introduce` for a machine that isn't a Mac (Windows, Linux, macOS):
-on the device's Wi‑Fi it announces a far Mac's offer to pair with Xcode and carries the device's one
-connection to that Mac over Tailscale. Behaviour follows `Sources/RoamRun/Introductions.swift` and
+on the device's Wi‑Fi it announces a far Mac's offer to pair — with Xcode, or with the RoamRun app there for
+device control — and carries the device's one connection to that Mac over Tailscale. Behaviour follows `Sources/RoamRun/Introductions.swift` and
 `PairByName.swift`. Nothing here is shipped yet; what it has been tried with is in the last section.
 
 ```
@@ -16,6 +16,11 @@ Without `--offer`, the far Mac runs `roamrun pair xcode --with <this machine>` a
 is shut, the offer is carried: `--offer "$(ssh <far Mac> roamrun pair xcode)"`.
 On a tried pairing, the device's line for `roamrun devices add` is printed on stdout; everything else goes to stderr.
 The far Mac saves the device under its Tailscale name; `--as` gives another.
+
+For device control the far Mac runs `roamrun pair control --with <this machine>` instead, with the RoamRun app
+open there; the same command here answers it (there is no line to carry for this, so no `--offer`). The code to
+type on the device is made on the far Mac and printed here, on standard error: run this yourself, in a terminal of
+your own — an agent that ran it would have the code in its output. Exit 0: that Mac's app kept the pairing.
 Exit 0: the far Mac said it saved the device (or none was asked). Exit 1 with a line: hand it to `roamrun devices add` there.
 
 ## Build and check
@@ -44,5 +49,5 @@ ends the run, the device line is made, and the goodbye reaches a browser within 
   up Ready, and nothing was left announced or listening on either machine.
 - Not run on Windows beyond the tests: how its announcement sits beside Windows' own mDNS, and what a firewall
   there asks, isn't known. Not run on Linux with a firewall on, or without avahi.
-- Xcode's pairing only: device control's (`pair control`) isn't here.
+- Device control's pairing: only against a fake far Mac so far (`scripts/local-check.py`), not a real one.
 - Not packaged: no release archive, no skill, and its crates' licenses aren't gathered anywhere yet.

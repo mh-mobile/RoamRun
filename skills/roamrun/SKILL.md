@@ -124,7 +124,10 @@ introduced; you can run the commands, they do the rest.
   `roamrunctl` (a prototype in the repository's `Rust/roamrunctl/`): the far Mac
   names it after `--with` as it names a Mac, and there
   `roamrunctl pair introduce --mac <far Mac> --to <the device's Tailscale name>`
-  does what `roamrun pair introduce` does. For Xcode's pairing only.
+  does what `roamrun pair introduce` does, for Xcode's pairing and (after
+  `roamrun pair control --with` on the far Mac) for device control, where it
+  prints the code to type: as with `pair introduce`, **the user runs it
+  themselves, and you never ask for or pass on that code.**
 - The user picks the entry on the device and types the code Device Hub shows on the
   far Mac. **Never pass a code on, in either direction**: the user reads it there.
 - `pair introduce` ends by itself (five minutes at most) and, when a pairing was

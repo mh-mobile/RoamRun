@@ -2,6 +2,9 @@
 """Mechanics check on one Mac, under a test service type (never the real one): the record is
 seen by mDNSResponder, a stranger is refused, the "device" is carried to a fake far Mac, the
 device's line is made from a fake `_remotepairing._tcp` record, and the goodbye goes out.
+Then device control against a fake far Mac's wire (port 41830 on 127.0.0.1): asked which device
+it is, it answers with that record, announces the offer it then gets, shows the code, and ends
+on what that Mac says it kept.
 
     cargo build && python3 scripts/local-check.py target/debug/roamrunctl $(ipconfig getifaddr en0)
 """
@@ -83,5 +86,44 @@ if line.startswith("rr-device-v1:"):
 time.sleep(4); browser.kill(); seen = browser.communicate()[0]
 check("dns-sd -B saw Add", any("Add" in l and IDENT in l for l in seen.splitlines()))
 check("dns-sd -B saw Rmv (goodbye)", any("Rmv" in l and IDENT in l for l in seen.splitlines()))
+
+# --- device control: a fake far Mac's wire, which asks for the device before it offers
+print("-- device control", flush=True)
+CONTROL_IDENT, ATTEMPT = str(uuid.uuid4()).upper(), str(uuid.uuid4()).upper()
+control_offer = pack("rr-xcode-offer-v1:", {"v": 1, "port": FAR_PORT, "txt": {
+    "identifier": CONTROL_IDENT, "authTag": "dGVzdA", "model": "Mac16,1", "name": "Fake Offer Name", "flags": "1", "ver": "2", "minVer": "1"}})
+said, carried = [], threading.Event()
+wire = socket.socket(); wire.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); wire.bind(("127.0.0.1", 41830)); wire.listen(1)
+def far_wire():
+    c, _ = wire.accept(); f = c.makefile("rw", newline="\n")
+    def tell(words): f.write("rr-pair-v1 " + words + "\n"); f.flush()
+    said.append(f.readline().strip()); tell("device?")
+    said.append(f.readline().strip()); tell("offer " + control_offer); tell("attempt " + ATTEMPT)
+    carried.wait(30); tell("code 456640"); time.sleep(1); tell("result done on")
+    said.append(f.readline().strip()); c.close()
+threading.Thread(target=far_wire, daemon=True).start()
+proc = subprocess.Popen([BIN, "pair", "introduce", "--mac", "fake-mac.tail.ts.net", "--to", "fake-iphone",
+                         "--service", SERVICE, "--far-ip", "127.0.0.1", "--device-ip", LAN, "--deadline", "60"],
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+time.sleep(12)
+check("asked for the offer, then answered which device it is", len(said) >= 2 and said[0] == "rr-pair-v1 offer?" and said[1].startswith("rr-pair-v1 device rr-device-v1:"), repr(said[:1]))
+if len(said) >= 2 and "rr-device-v1:" in said[1]:
+    b = said[1].split("rr-device-v1:")[1]
+    d = json.loads(base64.urlsafe_b64decode(b + "=" * (-len(b) % 4)))
+    check("the device named by its Tailscale name, with its own announcement", d.get("name") == "fake-iphone" and d.get("peer") == "fake-iphone"
+          and d.get("txt", {}).get("identifier") == DEV_IDENT, json.dumps(d))
+out = probe(["dns-sd", "-L", CONTROL_IDENT, SERVICE, "local."])
+check("the offer that came by wire is announced", f"rr-intro-{CONTROL_IDENT[:8].lower()}.roamrun.local." in out)
+s = socket.socket(); s.settimeout(5); s.bind((LAN, 0)); s.connect((LAN, FAR_PORT)); s.sendall(b"ping"); got = s.recv(100); s.close()
+check("device relayed to the fake far Mac", got == b"hello-from-far ping", repr(got))
+carried.set()
+try:
+    stdout, stderr = proc.communicate(timeout=20)
+except subprocess.TimeoutExpired:
+    proc.kill(); stdout, stderr = proc.communicate()
+print(stderr, end="", flush=True)
+check("the code is shown", "Code to type on the device: 456640" in stderr)
+check("exit 0 on what the far Mac kept, and no line on stdout", proc.returncode == 0 and stdout.strip() == "" and "switched on there" in stderr, f"exit {proc.returncode}")
+check("nothing said to the far Mac after its result", len(said) == 3 and said[2] == "", repr(said[2:]))
 fake_device.kill()
 sys.exit(1 if failures else 0)

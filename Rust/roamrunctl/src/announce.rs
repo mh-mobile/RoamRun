@@ -59,6 +59,31 @@ impl Announcement {
     }
 }
 
+/// The device's own announcement, looked for on the interface that has `local`, for as long as
+/// `within`: its host's first label, its port and the TXT keys a line needs. For device control,
+/// where the far Mac asks which device it is before it offers anything.
+pub fn find_device(local: Ipv4Addr, lan: Ipv4Addr, keys: &[&str], within: Duration) -> Option<(String, u16, BTreeMap<String, String>)> {
+    let daemon = ServiceDaemon::new().ok()?;
+    daemon.disable_interface(IfKind::All).ok()?;
+    daemon.enable_interface(IfKind::Addr(IpAddr::V4(local))).ok()?;
+    let rx = daemon.browse(DEVICE_SERVICE).ok()?;
+    let until = std::time::Instant::now() + within;
+    let mut found = None;
+    while found.is_none() {
+        let Some(left) = until.checked_duration_since(std::time::Instant::now()).filter(|d| !d.is_zero()) else { break };
+        match rx.recv_timeout(left) {
+            Ok(ServiceEvent::ServiceResolved(service)) => {
+                found = device_among(std::iter::once(&*service), lan, keys)
+                    .map(|(s, txt)| (s.host.split('.').next().unwrap_or_default().to_string(), s.port, txt));
+            }
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    let _ = daemon.shutdown();
+    found
+}
+
 /// Of the services seen, the one the device at `lan` announces, with the TXT keys a line needs.
 pub fn device_among<'a>(seen: impl Iterator<Item = &'a ResolvedService>, lan: Ipv4Addr, keys: &[&str]) -> Option<(&'a ResolvedService, BTreeMap<String, String>)> {
     seen.filter(|s| s.get_addresses_v4().contains(&lan)).find_map(|s| {
