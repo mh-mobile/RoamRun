@@ -232,7 +232,7 @@ final class Session {
     }
 
     private static let noLocalNetwork = Outcome(tone: .failure, title: "Local Network access is off",
-                                                detail: "This app announces the far Mac on this iPhone's own network. Allow it in Settings › Apps › Introducer, then Introduce again.")
+                                                detail: "This app announces the far Mac on this iPhone's own network. Allow it in Settings › Apps › RoamRun, then Introduce again.")
 
     private func controlSaid(_ answer: Wire.Answer, _ run: Int) {
         guard live(run), kind == .control else { return }

@@ -44,7 +44,7 @@ struct ContentView: View {
     private func scan() {
         Task {
             if await AVCaptureDevice.requestAccess(for: .video) { scanning = true }
-            else { session.notice = "The camera is off for this app. Allow it in Settings › Apps › Introducer, or enter the Mac's name." }
+            else { session.notice = "The camera is off for this app. Allow it in Settings › Apps › RoamRun, or enter the Mac's name." }
         }
     }
 }

@@ -5,7 +5,7 @@ Mac's pairing offer on the device's own Wi-Fi, takes the one connection Settings
 carries it to the far Mac over the Tailscale VPN already on the device. No Mac near the device is
 needed. How it is used from the far Mac: the main README, "From the device itself".
 
-It isn't part of `make app`, and isn't on the App Store: build it here. On the Home Screen it is “Introducer”: the whole name doesn't fit under an icon. `Sources/Introduction.swift`
+It isn't part of `make app`, and isn't on the App Store: build it here. On the Home Screen and in Settings it is “RoamRun”: the whole name doesn't fit under an icon. `Sources/Introduction.swift`
 mirrors `Sources/RoamRun/Introductions.swift` (the line formats and their rules); keep them identical.
 
 ## Build and run on a device
