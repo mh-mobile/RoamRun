@@ -20,7 +20,7 @@ SIGN_ID ?= -
 NOTARY_PROFILE ?=
 SIGN_FLAGS = --force --options runtime $(if $(filter -,$(SIGN_ID))$(findstring Apple Development,$(SIGN_ID)),,--timestamp)
 
-.PHONY: all build app run dmg release-dmg icon install-cli test clean device-lib device-probe licenses audit
+.PHONY: all build app run dmg release-dmg icon install-cli test clean device-lib device-probe licenses audit roamrunctl-archives
 
 all: app
 
@@ -65,6 +65,9 @@ device-lib:
 licenses: device-lib
 	cd Rust/RoamRunDevice && $(CARGO) metadata --format-version 1 --locked --filter-platform aarch64-apple-darwin \
 		| $(CURDIR)/scripts/third-party-licenses.py > $(CURDIR)/THIRD-PARTY-LICENSES.txt
+	# roamrunctl's, for every system it is built for: its archives carry this file.
+	cd Rust/roamrunctl && $(CARGO) fetch --locked && $(CARGO) metadata --format-version 1 --locked \
+		| $(CURDIR)/scripts/third-party-licenses.py roamrunctl > THIRD-PARTY-LICENSES.txt
 
 # The crates both Cargo.lock files pin, against the published advisories (asks api.osv.dev).
 audit:
@@ -128,6 +131,16 @@ release-dmg:
 	spctl -a -vv -t exec $(BUNDLE) 2>&1 | grep -q "source=Notarized Developer ID"
 	mv $(PENDING_DMG) $(DMG)
 	@echo "Release $(DMG) is signed, notarized and stapled, built from $$(git rev-parse HEAD) (gh release create --target)"
+
+# roamrunctl's archives for a release: the ones CI built from this very commit (Linux, Windows),
+# and the checksums the install scripts hold them to. The Mac's is built by Homebrew, from source.
+roamrunctl-archives:
+	@run=$$(gh run list --workflow CI --commit $$(git rev-parse HEAD) --status success --json databaseId --jq '.[0].databaseId'); \
+	[ -n "$$run" ] || { echo "no CI run has passed for $$(git rev-parse HEAD) yet"; exit 1; }; \
+	rm -rf roamrunctl-dist && gh run download $$run --pattern 'roamrunctl-*' --dir roamrunctl-dist
+	cd roamrunctl-dist && mv */roamrunctl-$(VERSION)-* . && rmdir roamrunctl-*/ \
+		&& shasum -a 256 roamrunctl-$(VERSION)-*.tar.gz roamrunctl-$(VERSION)-*.zip > roamrunctl-$(VERSION)-SHA256SUMS
+	@ls roamrunctl-dist; echo "gh release upload v$(VERSION) roamrunctl-dist/*"
 
 # `roamrun` on PATH, pointing into the app bundle (one binary for app + CLI).
 BINDIR ?= /usr/local/bin

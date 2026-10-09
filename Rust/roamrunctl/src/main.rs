@@ -1,4 +1,4 @@
-//! `roamrunctl`: RoamRun's `pair introduce` from a machine that isn't a Mac. Prototype.
+//! `roamrunctl`: RoamRun's `pair introduce` from a machine that has no RoamRun.
 #![forbid(unsafe_code)]
 
 mod announce;
@@ -22,7 +22,7 @@ use tokio::sync::mpsc;
 const HOST_SERVICE: &str = "_remotepairing-pairable-host._tcp";
 
 #[derive(Parser)]
-#[command(name = "roamrunctl", version, about = "RoamRun from a machine that isn't a Mac (prototype)")]
+#[command(name = "roamrunctl", version = env!("ROAMRUN_VERSION"), about = "Introduces a far Mac to a device, from a machine that has no RoamRun")]
 struct Cli {
     #[command(subcommand)]
     command: Command,

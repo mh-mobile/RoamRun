@@ -25,9 +25,11 @@ see `skills/roamrun/SKILL.md` — installed with `roamrun init` or
   Mac under a test service type — the command is at the top of `iOS/Checks/relay-check.swift` — and
   `iOS/Sources/Introduction.swift` mirrors `Sources/RoamRun/Introductions.swift`: change both
   (and the code's short names: `codeURL` on the Mac, `Session.open` in the app).
-- `Rust/roamrunctl/` is a prototype of `pair introduce` for a machine that isn't a Mac (its own crate
-  and `Cargo.lock`; not part of `make app`): `cargo build --locked && cargo test` there, and
-  `scripts/local-check.py` for the mechanics on this Mac. `make audit` covers its lock too.
+- `Rust/roamrunctl/` is `pair introduce` for a machine that has no RoamRun (its own crate and
+  `Cargo.lock`; not part of `make app`): `cargo build --locked && cargo test` there, and
+  `scripts/local-check.py` for the mechanics on this Mac. Its version is RoamRun's (its `build.rs`
+  reads `Info.plist`). `make audit` covers its lock too, and `make licenses` writes its
+  `THIRD-PARTY-LICENSES.txt`, which its archives carry: both after changing its `Cargo.lock`.
 - `make test` runs the unit tests (log parsing, port attribution, status-file
   ownership, names). They never touch the real status/profile files or start a
   real bridge — keep it that way (no `AppCoordinator` in tests). A bridge on a
@@ -89,11 +91,17 @@ AND category == "input"'`. Text that arrives short with a line here was dropped 
    It fetches idevice from the fork at the commit `Cargo.toml` pins: that commit carries a tag
    there (`roamrun-<version>`) — tag a new pin before releasing, or the build stops when its branch goes.
    Plain `make dmg` is the ad-hoc developer build, never a release.
-3. `gh release create v<version> RoamRun-<version>.dmg --target <that commit's full sha> --title "RoamRun <version>" --notes …`
+   Then `make roamrunctl-archives` → `roamrunctl-dist/`: roamrunctl's archives as CI built them
+   from that same commit (it stops if no CI run has passed for it), and their checksums.
+3. `gh release create v<version> RoamRun-<version>.dmg roamrunctl-dist/* --target <that commit's full sha> --title "RoamRun <version>" --notes …`
    — the tag must point at the commit the dmg was built from. Keep the notes'
    claims in line with the README.
 4. Homebrew tap (`mh-mobile/homebrew-tap`, `Casks/roamrun.rb`): set `version`
    and `sha256` (`shasum -a 256` of the dmg), `brew style` + `brew audit --cask --online`, push.
+   And `Formula/roamrunctl.rb`, from `Rust/roamrunctl/roamrunctl.rb`: the tag in `url`, the
+   `sha256` of that tarball (`curl -L <url> | shasum -a 256`), `brew audit --formula`.
+5. The install scripts read the newest release: once it is out, run each of roamrunctl's
+   install commands (its README) on its system and see `roamrunctl --version` say this version.
 
 ## Rules
 

@@ -19,17 +19,25 @@ jobs:
       - name: No advisory against a crate Cargo.lock pins that hasn't been looked into
         run: python3 scripts/audit-crates.py
 
-  # The stand-in for a machine that isn't a Mac: it has to build where it is meant to run.
+  # The stand-in for a machine that has no RoamRun: tested where it is meant to run, and built
+  # there as the archives a release carries (kept two weeks; `make roamrunctl-archives` takes
+  # those of the release's commit). The Mac's isn't here: Homebrew builds it from source.
   roamrunctl:
     if: github.event_name != 'schedule'
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-latest, windows-latest, macos-26]
+        include:
+          # musl: one binary for any distribution, whatever its libc.
+          - { runner: ubuntu-latest, target: x86_64-unknown-linux-musl, name: linux-x86_64 }
+          - { runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, name: linux-aarch64 }
+          - { runner: windows-latest, target: x86_64-pc-windows-msvc, name: windows-x86_64 }
+          - { runner: macos-26, target: "", name: macos }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     defaults:
       run:
+        shell: bash
         working-directory: Rust/roamrunctl
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5
@@ -37,14 +45,25 @@ jobs:
         run: cargo --version
       - run: cargo build --locked
       - run: cargo test --locked
-      - run: cargo build --locked --release
-      - name: The binary, for trying it on a machine that has no Rust (kept two weeks)
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9   # v7.0.2
+      - name: The archive a release carries
+        if: matrix.target != ''
+        run: |
+          version=$(sed -n '/CFBundleShortVersionString/{n;s/.*<string>\(.*\)<\/string>.*/\1/p;}' ../../Info.plist)
+          rustup target add ${{ matrix.target }}
+          cargo build --locked --release --target ${{ matrix.target }}
+          dir=roamrunctl-$version-${{ matrix.name }}
+          mkdir "$dir"
+          cp target/${{ matrix.target }}/release/roamrunctl* README.md THIRD-PARTY-LICENSES.txt ../../LICENSE "$dir/"
+          rm -f "$dir"/roamrunctl.d "$dir"/roamrunctl.pdb
+          "$dir"/roamrunctl* --version | grep -qx "roamrunctl $version"
+          if [ "${{ runner.os }}" = Windows ]; then 7z a -tzip "$dir.zip" "$dir" >/dev/null; else tar czf "$dir.tar.gz" "$dir"; fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9   # v7.0.2
+        if: matrix.target != ''
         with:
-          name: roamrunctl-${{ matrix.runner }}
+          name: roamrunctl-${{ matrix.name }}
           path: |
-            Rust/roamrunctl/target/release/roamrunctl
-            Rust/roamrunctl/target/release/roamrunctl.exe
+            Rust/roamrunctl/roamrunctl-*.tar.gz
+            Rust/roamrunctl/roamrunctl-*.zip
           retention-days: 14
           if-no-files-found: error
 
@@ -74,7 +93,7 @@ jobs:
       - name: The licenses the app carries are those of the crates it is built from
         run: |
           make licenses
-          git diff --exit-code THIRD-PARTY-LICENSES.txt
+          git diff --exit-code THIRD-PARTY-LICENSES.txt Rust/roamrunctl/THIRD-PARTY-LICENSES.txt
       - name: Build the app bundle
         run: |
           make app

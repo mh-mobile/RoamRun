@@ -1,10 +1,11 @@
 [package]
 name = "roamrunctl"
+# Not shown anywhere: `--version` says RoamRun's, which build.rs reads from Info.plist.
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
 publish = false
-description = "Stands in for `roamrun pair introduce` on a machine that isn't a Mac (prototype)"
+description = "Stands in for `roamrun pair introduce` on a machine that has no RoamRun: Windows, Linux, or a Mac"
 
 [[bin]]
 name = "roamrunctl"

@@ -1,9 +1,26 @@
 # roamrunctl
 
-A prototype of RoamRun's `pair introduce` for a machine that isn't a Mac (Windows, Linux, macOS):
-on the device's Wi‑Fi it announces a far Mac's offer to pair — with Xcode, or with the RoamRun app there for
-device control — and carries the device's one connection to that Mac over Tailscale. Behaviour follows `Sources/RoamRun/Introductions.swift` and
-`PairByName.swift`. Nothing here is shipped yet; what it has been tried with is in the last section.
+RoamRun's `pair introduce` for a machine that has no RoamRun — Windows, Linux, or a Mac: on the device's Wi‑Fi
+it announces a far Mac's offer to pair — with Xcode, or with the RoamRun app there for device control — and carries
+the device's one connection to that Mac over Tailscale. Behaviour follows `Sources/RoamRun/Introductions.swift` and
+`PairByName.swift`. What it has been tried with is in the last section.
+
+## Install
+
+| On | |
+|---|---|
+| Linux | `curl -fsSL https://raw.githubusercontent.com/mh-mobile/RoamRun/main/scripts/install-roamrunctl.sh \| sh` — into `~/.local/bin` |
+| Windows | `irm https://raw.githubusercontent.com/mh-mobile/RoamRun/main/scripts/install-roamrunctl.ps1 \| iex` (PowerShell) — into `%LOCALAPPDATA%\Programs\roamrunctl`, and on your PATH |
+| macOS, or Linux with Homebrew | `brew install mh-mobile/tap/roamrunctl` — built from source |
+| anywhere with Rust | `cargo install --locked --git https://github.com/mh-mobile/RoamRun roamrunctl` |
+
+The scripts take the archive for your machine from the newest [release](https://github.com/mh-mobile/RoamRun/releases)
+(`roamrunctl-<version>-linux-x86_64.tar.gz`, `-linux-aarch64.tar.gz`, `-windows-x86_64.zip`) and hold it to the
+checksums listed there; the archives can be unpacked by hand as well. The Linux builds are static, for any
+distribution. The Windows one isn't signed: SmartScreen may ask before it runs the first time. It isn't on
+Homebrew's or crates.io's own lists. Its version is RoamRun's: use the same on the far Mac.
+
+## Use
 
 ```
 roamrunctl pair introduce --mac <far Mac's Tailscale name> --to <device's Tailscale name> [--offer <line>] [--as <name>] [--deadline <secs>]
@@ -26,7 +43,7 @@ Exit 0: the far Mac said it saved the device (or none was asked). Exit 1 with a 
 ## Build and check
 
 ```
-cargo build --locked && cargo test
+cargo build --locked && cargo test   # in this folder, inside a checkout: the version comes from ../../Info.plist
 python3 scripts/local-check.py target/debug/roamrunctl $(ipconfig getifaddr en0)   # macOS: mechanics on this Mac alone
 ```
 

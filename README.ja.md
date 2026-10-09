@@ -427,6 +427,20 @@ roamrun up iphone-15-pro
 
 `--qr` は、離れた Mac の Tailscale 上の名前を、ターミナルにコードとして描きます。アプリがそれを読み取ります。アプリは名前を覚えるので、次からコードは要りません。離れた Mac は、Mac を相手にするときと同じく、名指ししたデバイスにだけ答え、そのデバイスを Tailscale 上の名前で保存します。`roamrun pair control --with iphone-15-pro` なら、同じ流れでデバイス操作のペアリングができます。このとき入力するコードは、デバイスに通知で表示されます。`--with` を付けない `roamrun pair xcode --qr` は、申し出もコードに含めます（コードが大きくなるので、ウインドウは 55 桁 × 30 行ほど要ります）。手で運ぶ形で、ペアリングのあと、アプリが `devices add` に渡す 1 行を表示します。アプリが名乗りと取り次ぎをするのは、引き合わせている間だけです。問い合わせもペアリングも、Tailscale のものではないアドレスへは送りません。Mac の名前を書くべきところにデバイスの名前を書いても、この使い方と区別できません。コマンドは、存在しないアプリを 10 分待ちます。iOS 27 の iPhone 15 Pro と、離れた Mac 役の仮想 Mac で確かめました。Xcode のペアリング（名指しする形と、手で運ぶ形）とその後のブリッジの Ready、デバイス操作のペアリングとその後の `roamrun look` です。iPad では試していません。Apple Vision Pro はペアリングの向きが違い（Vision Pro で 設定 › 一般 › リモートデバイス を開き、Mac の側が Vision Pro を選びます）、この方法では扱えません。
 
+**Windows や Linux のマシンに引き合わせてもらう。** デバイスのそばにあるマシンが引き合わせることもできます。`roamrunctl` は、RoamRun の入っていないマシンのための `pair introduce` です。コマンド 1 つで入ります（[Rust/roamrunctl](Rust/roamrunctl/README.md#install)）。Linux では `curl -fsSL https://raw.githubusercontent.com/mh-mobile/RoamRun/main/scripts/install-roamrunctl.sh | sh`、Windows では `irm https://raw.githubusercontent.com/mh-mobile/RoamRun/main/scripts/install-roamrunctl.ps1 | iex`、Mac では `brew install mh-mobile/tap/roamrunctl` です。そのマシンには Tailscale が要ります。離れた Mac とデバイスがいる tailnet にサインインしておきます。
+
+```sh
+# 離れた Mac で: Device Hub › + › Pair Nearby Device を押して、
+roamrun pair xcode --with my-pc                                # my-pc: そのマシンの Tailscale 上の名前
+# そのマシンで（デバイスと同じ Wi‑Fi）:
+roamrunctl pair introduce --mac cloud-mac --to iphone-15-pro   # 離れた Mac の Tailscale 上の名前と、デバイスの名前
+# デバイスで: 設定 › プライバシーとセキュリティ › デベロッパモード › 「Pair with cloud-mac」、離れた Mac の Device Hub に出たコード
+# 離れた Mac で（デバイスを保存したと出たら）:
+roamrun up iphone-15-pro
+```
+
+離れた Mac で RoamRun のアプリを開いて `roamrun pair control --with my-pc` を実行すれば、同じ流れでデバイス操作のペアリングができます。このとき、入力するコードは `roamrunctl` が表示します。自分のターミナルで、自分で実行してください。Linux（Ubuntu 24.04）と iOS 27 の iPhone 15 Pro で確かめました。Xcode のペアリングとその後のブリッジの Ready、デバイス操作のペアリングです。Windows では、ビルドとテストは通っていますが、デバイスを相手に動かしたことはまだありません。
+
 **誰がデバイスを使えるようになるか。** 引き合わせた Mac は、それ以降、開発者としてそのデバイスを使えます（アプリのインストールと実行、デバッグ、アプリのデータの読み出し）。デバイスをその Mac に USB で挿して「信頼」を押すのと同じ重さです。`pair introduce` は、始める前に、その Mac が誰のものかを Tailscale の情報から表示します（自分の Mac、ほかの人の Mac、共有の（タグ付きの）マシン＝そこで Xcode を使える人）。引き合わせるのは、`--mac` で名指しした Mac だけです。運ぶ 1 行は、行き先を決めません。取り消すには、デバイスの 設定 › プライバシーとセキュリティ › デベロッパモード でその Mac を削除します。一覧には、Tailscale 上の名前ではなく、その Mac が自分で名乗る名前で並びます（`pair introduce` が、どの名前かを表示します）。Xcode のペアリングには、RoamRun の側のスイッチはありません。
 
 **必要なもの・できないこと。**

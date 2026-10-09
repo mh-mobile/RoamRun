@@ -326,6 +326,20 @@ roamrun up iphone-15-pro
 
 `--qr` draws the far Mac's Tailscale name as a code in the terminal for the app to read; the app keeps the name, so later the code isn't needed. The far Mac answers that device alone, as it answers a Mac, and saves it under its Tailscale name. `roamrun pair control --with iphone-15-pro` pairs for device control the same way, and the code to type then shows on the device, in a notification. Without `--with`, `roamrun pair xcode --qr` draws its offer too (a larger code: a window of about 55 by 30), to carry by hand, and the app shows the line for `devices add` afterwards. The app announces and relays only during an introduction, and neither its question nor the pairing goes to an address that isn't Tailscale's. A device's name given where a Mac's was meant isn't told apart: the command waits its ten minutes for an app that isn't there. Tried with an iPhone 15 Pro on iOS 27 and a virtual Mac as the far one: Xcode's pairing by name and by hand with the bridge Ready afterwards, and device control's with `roamrun look` afterwards. Not tried: an iPad. An Apple Vision Pro pairs another way — the Mac picks it, with Settings › General › Remote Devices open on it — which this doesn't do.
 
+**From a Windows or Linux machine.** Or the machine beside the device introduces: `roamrunctl` is `pair introduce` for one that has no RoamRun. It installs with one command ([Rust/roamrunctl](Rust/roamrunctl/README.md#install)): on Linux `curl -fsSL https://raw.githubusercontent.com/mh-mobile/RoamRun/main/scripts/install-roamrunctl.sh | sh`, on Windows `irm https://raw.githubusercontent.com/mh-mobile/RoamRun/main/scripts/install-roamrunctl.ps1 | iex`, on a Mac `brew install mh-mobile/tap/roamrunctl`. The machine needs Tailscale, signed in to the tailnet the far Mac and the device are on.
+
+```sh
+# on the far Mac: Device Hub › + › Pair Nearby Device, and
+roamrun pair xcode --with my-pc                                # my-pc: that machine's Tailscale name
+# on that machine, on the device's Wi‑Fi:
+roamrunctl pair introduce --mac cloud-mac --to iphone-15-pro   # the far Mac's Tailscale name, and the device's
+# on the device: Settings › Privacy & Security › Developer Mode › Pair with “cloud-mac”, and the code Device Hub shows there
+# on the far Mac, once it says the device is saved:
+roamrun up iphone-15-pro
+```
+
+`roamrun pair control --with my-pc`, with the RoamRun app open on the far Mac, pairs for device control the same way; `roamrunctl` then prints the code to type, so run it yourself, in a terminal of your own. Tried from Linux (Ubuntu 24.04) with an iPhone 15 Pro on iOS 27: Xcode's pairing with the bridge Ready afterwards, and device control's. On Windows it is built and its tests pass, and it hasn't yet been run against a device.
+
 **Who gets the device.** Introducing a Mac lets it use the device as a developer from then on — install and run apps, debug them, read their data — the same as plugging the device into it and tapping Trust. Before it starts, `pair introduce` says whose that Mac is, as Tailscale has it: yours, another person's, or a shared (tagged) machine, where it is whoever can use Xcode on it. It introduces only the Mac you name with `--mac`; neither line says where anything is to go. To withdraw it, remove that Mac on the device (Settings › Privacy & Security › Developer Mode); there it is listed under the name the Mac gives itself, which `pair introduce` tells you, not its Tailscale name. Xcode's pairing has no switch in RoamRun.
 
 **What it needs, and what it doesn't do.**
