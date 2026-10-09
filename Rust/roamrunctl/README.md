@@ -13,6 +13,9 @@ Linux — the binary into `~/.local/bin`:
 mkdir -p ~/.local/bin && curl -fsSL https://github.com/mh-mobile/RoamRun/releases/latest/download/roamrunctl-linux-$(uname -m).tar.gz | tar -xz -C ~/.local/bin --strip-components 1 roamrunctl-linux-$(uname -m)/roamrunctl
 ```
 
+If `roamrunctl` isn't found afterwards, `~/.local/bin` isn't on your PATH yet: log in again (most distributions add
+it once it exists), or run `~/.local/bin/roamrunctl`.
+
 Windows (PowerShell) — into a folder `roamrunctl-windows-x86_64` where you are (on an ARM PC, `aarch64` in place of
 `x86_64`, both times):
 
