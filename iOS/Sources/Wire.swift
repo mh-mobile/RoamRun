@@ -122,6 +122,14 @@ final class Wire: @unchecked Sendable {
         carried && !success && !line && !farsWord && title?.hasPrefix("A pairing was tried") != true
     }
 
+    /// Whether the local network may be used, by what a browse has said after so many half seconds;
+    /// nil: not known yet. A refusal isn't the answer for half a minute: iOS may refuse before the
+    /// person has answered its question, and allows once they have.
+    static func mayUseNetwork(looking: Bool, denied: Bool, waited: Int) -> Bool? {
+        if denied { return waited >= 60 ? false : nil }
+        return looking || waited >= 120 ? true : nil
+    }
+
     /// An address Tailscale gives: 100.64.0.0/10 or fd7a:115c:a1e0::/48.
     static func onTailnet(_ raw: Data) -> Bool {
         let b = [UInt8](raw)

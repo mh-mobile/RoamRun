@@ -105,6 +105,17 @@ func echo(_ c: NWConnection, on queue: DispatchQueue) {
     c.start(queue: queue); loop()
 }
 
+/// Says `size` bytes once the client has closed its side, then closes.
+func answerAfterFIN(_ c: NWConnection, size: Int, on queue: DispatchQueue) {
+    @Sendable func loop() {
+        c.receive(minimumIncompleteLength: 1, maximumLength: 65536) { _, _, eof, err in
+            if eof || err != nil { c.send(content: Data(count: size), contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in c.cancel() }); return }
+            loop()
+        }
+    }
+    c.start(queue: queue); loop()
+}
+
 @main struct RelayCheck {
     static func main() {
         let queue = DispatchQueue(label: "check")
@@ -193,6 +204,36 @@ func echo(_ c: NWConnection, on queue: DispatchQueue) {
         check(device.wait { _, closed, _, _ in closed }, "FIN forwarded back: device saw the close")
         check(evB.wait { $0.contains(.ended(.carried(up: 4, down: 4))) }, "ended(.carried(up: 4, down: 4))")
         check(browse.wait { $0.contains("Rmv") && $0.contains(idB) }, "dns-sd -B sees Rmv within a few seconds of the end")
+
+        // 2b. What the far Mac says last, after the device closed its side, arrives whole.
+        print("-- last words")
+        let late = try! NWListener(using: farParams)
+        let lateReady = DispatchSemaphore(value: 0), size = 4 << 20
+        late.stateUpdateHandler = { if case .ready = $0 { lateReady.signal() } }
+        late.newConnectionHandler = { answerAfterFIN($0, size: size, on: queue) }
+        late.start(queue: queue)
+        check(lateReady.wait(timeout: .now() + 5) == .success, "a far Mac that answers after the close listens")
+        var lastWords = Introduction.Offer(port: late.port!.rawValue, txt: offer(UUID().uuidString).txt)
+        lastWords.txt["identifier"] = UUID().uuidString
+        for round in 1...3 {
+            let evL = Events()
+            let l = StandIn(offer: lastWords, farHost: "127.0.0.1", serviceType: type, allowed: [IPv4Address.loopback.rawValue], deadline: 60, anywhere: true) { evL.add($0) }
+            try! l.start()
+            check(evL.wait { $0.contains { if case .announced = $0 { return true }; return false } }, "announced (\(round))")
+            let portL = evL.list.compactMap { if case .announced(_, let p) = $0 { return p }; return nil }.first!
+            let asker = Client(port: portL, queue: queue)
+            check(asker.wait { ready, _, _, _ in ready }, "connected (\(round))")
+            asker.send("ping"); asker.fin()
+            check(asker.wait(10) { _, closed, _, got in closed && got.count == size }, "all \(size) bytes after the device's close came through (\(round))")
+            l.end(.stopped)
+            check(evL.wait { $0.contains { if case .ended = $0 { return true }; return false } }, "ended (\(round))")
+        }
+        late.cancel()
+
+        // 2c. A refusal of the local network isn't final while the person may still be answering.
+        check(Wire.mayUseNetwork(looking: false, denied: true, waited: 0) == nil && Wire.mayUseNetwork(looking: false, denied: true, waited: 60) == false
+              && Wire.mayUseNetwork(looking: true, denied: false, waited: 3) == true && Wire.mayUseNetwork(looking: false, denied: false, waited: 5) == nil
+              && Wire.mayUseNetwork(looking: false, denied: false, waited: 120) == true, "a refusal waits half a minute for the person's answer")
 
         // 3. Deadline.
         print("-- deadline")

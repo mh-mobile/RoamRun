@@ -189,6 +189,7 @@ private final class Pair: @unchecked Sendable {
     private var up = 0, down = 0, endedDirections = 0
     private var failure: String?
     private var reported = false
+    private var connected = false
     private var connectTimeout: DispatchWorkItem?
 
     init(inbound: NWConnection, farHost: String, farPort: UInt16, anywhere: Bool, queue: DispatchQueue, onClose: @escaping @Sendable (Pair, Int, Int, String?) -> Void) {
@@ -210,10 +211,11 @@ private final class Pair: @unchecked Sendable {
                 connectTimeout?.cancel()
                 // Not a byte of a pairing to an address that isn't Tailscale's, whatever the name led to.
                 guard anywhere || Wire.onTailnet(outbound.currentPath?.remoteEndpoint) else { fail("\(farHost) isn't an address on the tailnet"); return }
+                connected = true
                 pump(inbound, outbound) { self.up += $0 }
                 pump(outbound, inbound) { self.down += $0 }
             // Waiting is a refused or unreachable far port: nothing to wait for during a pairing.
-            case .waiting(let error), .failed(let error): fail("\(farHost) didn't take it: \(error.localizedDescription)")
+            case .waiting(let error), .failed(let error): ended("\(farHost) didn't take it: \(error.localizedDescription)")
             case .cancelled: close()
             case .setup, .preparing: break
             @unknown default: break
@@ -221,7 +223,7 @@ private final class Pair: @unchecked Sendable {
         }
         inbound.stateUpdateHandler = { [weak self] state in
             switch state {
-            case .failed(let error): self?.fail(error.localizedDescription)
+            case .failed(let error): self?.ended(error.localizedDescription)
             case .cancelled: self?.close()
             default: break
             }
@@ -258,6 +260,13 @@ private final class Pair: @unchecked Sendable {
     private func fail(_ why: String) {
         failure = failure ?? why
         close()
+    }
+
+    /// A side went. Before the far Mac took the connection, that is the end; after, what it sent
+    /// already is still to be read and passed on, and the reading says when it is over.
+    private func ended(_ why: String) {
+        guard connected else { fail(why); return }
+        failure = failure ?? why
     }
 
     func close() {
