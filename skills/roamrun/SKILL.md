@@ -125,7 +125,7 @@ introduced; you can run the commands, they do the rest.
   names it after `--with` as it names a Mac, and there
   `roamrunctl pair introduce --mac <far Mac> --to <the device's Tailscale name>`
   does what `roamrun pair introduce` does, for Xcode's pairing and (after
-  `roamrun pair control --with` on the far Mac) for device control, where it
+  `roamrun pair control --with <machine>` on the far Mac) for device control, where it
   prints the code to type: as with `pair introduce`, **the user runs it
   themselves, and you never ask for or pass on that code.**
 - The user picks the entry on the device and types the code Device Hub shows on the
