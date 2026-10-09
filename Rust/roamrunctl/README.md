@@ -46,7 +46,8 @@ ends the run, the device line is made, and the goodbye reaches a browser within 
   with wasn't tried.
 - And once the same way with no line carried: the far Mac ran `roamrun pair xcode --with <the Linux machine>`,
   gave its offer over Tailscale, and saved the device itself when told a pairing was tried; the bridge there came
-  up Ready, and nothing was left announced or listening on either machine.
+  up Ready, and nothing was left announced or listening on either machine. Run again the same way after the
+  far Mac's side of the exchange changed (it tells a device its Tailscale name now): the same.
 - Not run on Windows beyond the tests: how its announcement sits beside Windows' own mDNS, and what a firewall
   there asks, isn't known. Not run on Linux with a firewall on, or without avahi.
 - Device control's pairing, once, from the same Linux machine: the far Mac ran `roamrun pair control --with <it>`
