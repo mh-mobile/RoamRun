@@ -48,7 +48,7 @@ if [ -n "$pairing" ]; then
         sleep 1
     done
     sleep 3
-    roamrun pairing import "$pairing"
+    roamrun key import "$pairing"
 fi
 
 say "As it stands"

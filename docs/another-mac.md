@@ -14,12 +14,18 @@ its screen — the RoamRun app holds the connection, and an app needs a session 
 With the device on your Mac's Wi‑Fi, unlocked:
 
 ```sh
-roamrun pairing create iPhone ~/for-the-other-mac.json --as other-mac
+roamrun key create iPhone ~/for-the-other-mac.json --as other-mac
 ```
 
 Pick "other-mac" on the device, under Settings › Privacy & Security › Developer Mode,
 and enter the code shown. The file is a key to the device: carry it as one, and leave no copy
 behind. It is this one pairing you remove on the device to take the other Mac's access away.
+
+Once the other Mac is on your tailnet (steps 2 and 3, without the file), there is a way that
+carries nothing: there, with the RoamRun app open, `roamrun pair control --with <this-mac>`,
+and here `roamrun pair introduce --mac <that-mac> --to iPhone`, run by you — the code to enter
+on the device prints here. The README's "From a Mac that can't pair itself" (under Seeing and
+operating the device) has it; it needs iOS 27.
 
 ## 2. In Tailscale's admin console: an auth key for it
 
@@ -62,7 +68,7 @@ sudo tailscale up --auth-key=tskey-auth-…
 brew install --cask mh-mobile/tap/roamrun
 open -a RoamRun
 roamrun init
-roamrun pairing import ~/for-the-other-mac.json
+roamrun key import ~/for-the-other-mac.json
 ```
 
 Without Homebrew, RoamRun is the dmg on [Releases](https://github.com/mh-mobile/RoamRun/releases/latest)
