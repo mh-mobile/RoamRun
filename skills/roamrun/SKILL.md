@@ -120,6 +120,11 @@ introduced; you can run the commands, they do the rest.
   Tailscale name. `roamrun pair xcode --qr` alone prints the offer as ever and
   draws a code holding it, for the app to carry by hand; the app then shows the
   line for `roamrun devices add`.
+- The machine near the device may also be a Windows or Linux one that runs
+  `roamrunctl` (a prototype in the repository's `Rust/roamrunctl/`): the far Mac
+  names it after `--with` as it names a Mac, and there
+  `roamrunctl pair introduce --mac <far Mac> --to <the device's Tailscale name>`
+  does what `roamrun pair introduce` does. For Xcode's pairing only.
 - The user picks the entry on the device and types the code Device Hub shows on the
   far Mac. **Never pass a code on, in either direction**: the user reads it there.
 - `pair introduce` ends by itself (five minutes at most) and, when a pairing was

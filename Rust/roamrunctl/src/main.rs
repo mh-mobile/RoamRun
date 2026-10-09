@@ -137,6 +137,10 @@ fn introduce(a: Introduce) -> Result<(String, bool), String> {
                         break line.to_string();
                     }
                     Some(("ended", why)) => return Err(format!("far Mac: {}", ended(why))),
+                    // Asked which device this is, before any offer: it waits to pair for device control.
+                    None if answer == "device?" => {
+                        return Err("the far Mac waits to pair for device control (`roamrun pair control`), which roamrunctl doesn't introduce yet: there, `roamrun pair xcode --with …`".into())
+                    }
                     _ => return Err(format!("far Mac said something else: {answer:?}")),
                 }
             }
@@ -188,9 +192,8 @@ fn introduce(a: Introduce) -> Result<(String, bool), String> {
         }
         return Err("the device's own announcement wasn't seen here: on the far Mac, run `roamrun devices add` by hand with a line from a Mac that has it".into());
     };
-    if let Some(name) = a.save_as {
-        found.name = name;
-    }
+    // Saved there under its Tailscale name unless another was asked for: what it announces itself as is "iPhone" for most.
+    found.name = a.save_as.unwrap_or_else(|| short(&device.dns).to_string());
     found.peer = short(&device.dns).to_lowercase();
     let line = lines::device_line(&found);
     if let Err(why) = lines::device(&line) {

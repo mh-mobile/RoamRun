@@ -10,10 +10,12 @@ roamrunctl pair introduce --mac <far Mac's Tailscale name> --to <device's Tailsc
 ```
 
 Needs Tailscale installed and logged in (`tailscale` in PATH, the App Store app on macOS, or the installer's copy on Windows).
-Without `--offer`, the far Mac would run `roamrun pair xcode --with <this machine>` and the offer come over port 41830
-(`--deadline` is then 300 s at most: the far Mac waits no longer) — but `roamrun` answers only a Mac, or the device
-itself, after `--with`, so for now the offer is carried: `--offer "$(ssh <far Mac> roamrun pair xcode)"`.
+Without `--offer`, the far Mac runs `roamrun pair xcode --with <this machine>` and the offer comes over port 41830
+(`--deadline` is then 300 s at most: the far Mac waits no longer); it then saves the device itself. That takes a
+`roamrun` that answers a Windows or Linux machine after `--with` (0.5.0); with an older one, or where that port
+is shut, the offer is carried: `--offer "$(ssh <far Mac> roamrun pair xcode)"`.
 On a tried pairing, the device's line for `roamrun devices add` is printed on stdout; everything else goes to stderr.
+The far Mac saves the device under its Tailscale name; `--as` gives another.
 Exit 0: the far Mac said it saved the device (or none was asked). Exit 1 with a line: hand it to `roamrun devices add` there.
 
 ## Build and check
