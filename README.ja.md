@@ -90,7 +90,7 @@ flowchart RL
   relay == "③ Tailscale 経由" ==> host
 ```
 
-1. 離れた Mac が、ペアリングの申し出を出します（Xcode の Device Hub › Pair Nearby Device、またはデバイス操作のための RoamRun のアプリ）。その申し出を、デバイスの Wi‑Fi にいる Mac に渡します。Tailscale 越しにお互いを名指しして渡すか、1 行の文字列として手で運びます。
+1. 離れた Mac が、ペアリングの申し出を出します（Xcode の Device Hub › Pair Nearby Device、またはデバイス操作のための RoamRun のアプリ）。その申し出を、デバイスの Wi‑Fi にいる Mac に渡します。Tailscale 越しにお互いを名指しして渡します。Xcode のペアリングなら、1 行の文字列として手で運ぶこともできます。
 2. その Mac が、申し出を自分の Wi‑Fi で、自分を宛先にして名乗ります（最長 5 分）。デバイスからの 1 本の接続を、離れた Mac に取り次ぎます。
 3. ペアリングは、デバイスと離れた Mac の間で、端から端まで行われます。コードは、デバイスに入力します。あいだの Mac を鍵が通ることはなく、鍵はどこにも運ばれません。Xcode の場合、コードは離れた Mac の Device Hub に出るものです。デバイス操作の場合は、離れた Mac のアプリが決めたコードが、引き合わせる側の Mac に表示されます。
 
@@ -414,6 +414,19 @@ LINE=$(roamrun pair introduce "$OFFER" --mac cloud-mac --to iPhone) &&
 ssh cloud-mac roamrun devices add "$LINE"
 ```
 
+**デバイス自身に引き合わせてもらう。** デバイスの近くに RoamRun の入った Mac がないとき（そばにあるのが Windows や Linux のマシンだけ、など）は、デバイス上のアプリが代わりを務めます。[`iOS/`](iOS/) にある RoamRun Introducer です。Xcode でビルドして入れます。App Store にはありません。離れた Mac では、もう 1 台の Mac を名指しする場所に、デバイスを名指しします。
+
+```sh
+# あちら: Device Hub › + › Pair Nearby Device を押して、
+roamrun pair xcode --with iphone-15-pro --qr   # iphone-15-pro: デバイスの Tailscale 上の名前
+# デバイスで: アプリを開き、Scan（または離れた Mac の名前を入力）、Introduce。続けて
+#   設定 › プライバシーとセキュリティ › デベロッパモード › 「Pair with cloud-mac」、離れた Mac の Device Hub に出たコード
+# あちら（デバイスを保存したと出たら）:
+roamrun up iphone-15-pro
+```
+
+`--qr` は、離れた Mac の Tailscale 上の名前を、ターミナルにコードとして描きます。アプリがそれを読み取ります。アプリは名前を覚えるので、次からコードは要りません。離れた Mac は、Mac を相手にするときと同じく、名指ししたデバイスにだけ答え、そのデバイスを Tailscale 上の名前で保存します。`roamrun pair control --with iphone-15-pro` なら、同じ流れでデバイス操作のペアリングができます。このとき入力するコードは、デバイスに通知で表示されます。`--with` を付けない `roamrun pair xcode --qr` は、申し出もコードに含めます。手で運ぶ形で、ペアリングのあと、アプリが `devices add` に渡す 1 行を表示します。アプリが名乗りと取り次ぎをするのは、引き合わせている間だけです。問い合わせもペアリングも、Tailscale のものではないアドレスへは送りません。Mac の名前を書くべきところにデバイスの名前を書いても、この使い方と区別できません。コマンドは、存在しないアプリを 10 分待ちます。iOS 27 の iPhone 15 Pro と、離れた Mac 役の仮想 Mac で確かめました。Xcode のペアリング（名指しする形と、手で運ぶ形）とその後のブリッジの Ready、デバイス操作のペアリングとその後の `roamrun look` です。iPad と Apple Vision Pro では試していません。
+
 **誰がデバイスを使えるようになるか。** 引き合わせた Mac は、それ以降、開発者としてそのデバイスを使えます（アプリのインストールと実行、デバッグ、アプリのデータの読み出し）。デバイスをその Mac に USB で挿して「信頼」を押すのと同じ重さです。`pair introduce` は、始める前に、その Mac が誰のものかを Tailscale の情報から表示します（自分の Mac、ほかの人の Mac、共有の（タグ付きの）マシン＝そこで Xcode を使える人）。引き合わせるのは、`--mac` で名指しした Mac だけです。運ぶ 1 行は、行き先を決めません。取り消すには、デバイスの 設定 › プライバシーとセキュリティ › デベロッパモード でその Mac を削除します。一覧には、Tailscale 上の名前ではなく、その Mac が自分で名乗る名前で並びます（`pair introduce` が、どの名前かを表示します）。Xcode のペアリングには、RoamRun の側のスイッチはありません。
 
 **必要なもの・できないこと。**
@@ -424,7 +437,7 @@ ssh cloud-mac roamrun devices add "$LINE"
 - 離れた Mac でデバッグするには、デバイスの OS のシンボルがその Mac に要ります。Xcode は初回にデバイスから取り込みます（約 6 GB）が、Tailscale の中継サーバー経由ではほとんど進みません。シンボルを持っている Mac から `~/Library/Developer/Xcode/iOS DeviceSupport/<機種> <バージョン> (<ビルド>)` を写せば足ります。写したあとは、離れた Mac の `lldb` が約 20 秒で接続してブレークポイントで止まりました（直結の経路でも、中継サーバー経由でも）。無いと、4 分待っても接続できませんでした。`devicectl`、`roamrun run`、`roamrun logs` には要りません。
 - 1 つのイメージから作った Mac どうしは、デバイスから見ると 1 台です。2 台目をペアリングすると 1 台目の項目が置き換わり、それを削除すると両方とも使えなくなります。
 - 借りた Mac やクラウドの Mac で作ったペアリングは、デバイスで削除するまで、そのマシンのディスク、イメージ、スナップショットに残ります。
-- 離れた Mac が保存しているデバイスの情報は、この Mac のものの写しです。この Mac のものが合わなくなったら（「制限・既知の課題」を参照）、ここでデバイスを追加し直してから `roamrun devices export <name>`、離れた Mac で、アプリとそのデバイスのブリッジを止めたうえで `roamrun devices add <line> --replace <name>`。
+- 離れた Mac が保存しているデバイスの情報は、この Mac のものの写しです。この Mac のものが合わなくなったら（「制限・既知の課題」を参照）、ここでデバイスを追加し直してから `roamrun devices export <name>`、離れた Mac で `roamrun devices add <line>` を実行します。同じ場所に保存済みなら、新しい名乗りに入れ替わります（アドレスや Tailscale 上の名前も変わっているときは、アプリとそのデバイスのブリッジを止めたうえで `--replace <name>`）。
 
 確かめた範囲: iPhone 15 Pro（iOS 27）、Xcode 27。これらのコマンドで、離れた Mac を仮想の Mac にし、引き合わせる Mac からは Tailscale の中継サーバー経由でしか届かない状態で、ペアリング、`devices add`、ブリッジの Ready、`devicectl` での起動、`lldb` でのブレークポイントまで（離れた Mac からデバイスへは、直結の経路と中継経由の両方）。2 台の Mac から同時にデバイスを使えました。デバイスとペアリングしていない Mac を引き合わせ役にしても同じように通り、その Mac が保存していた内容で、離れた Mac のブリッジが Ready になりました。コマンドができる前に同じ手順を手作業で行ったときは、クラウドの Mac でも、ペアリング、ブリッジの Ready、Xcode の実行先に出ること、`devicectl` での起動まで確かめています。未確認: iPad、仮想ではない離れた Mac、ほかの Tailscale 利用者の Mac やタグ付きの Mac、ファイアウォールがオンの引き合わせ側の Mac。
 
