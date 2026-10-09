@@ -13,7 +13,8 @@ Linux — the binary into `~/.local/bin`:
 mkdir -p ~/.local/bin && curl -fsSL https://github.com/mh-mobile/RoamRun/releases/latest/download/roamrunctl-linux-$(uname -m).tar.gz | tar -xz -C ~/.local/bin --strip-components 1 roamrunctl-linux-$(uname -m)/roamrunctl
 ```
 
-Windows (PowerShell) — into a folder `roamrunctl-windows-x86_64` where you are:
+Windows (PowerShell) — into a folder `roamrunctl-windows-x86_64` where you are (on an ARM PC, `aarch64` in place of
+`x86_64`, both times):
 
 ```
 irm https://github.com/mh-mobile/RoamRun/releases/latest/download/roamrunctl-windows-x86_64.zip -OutFile roamrunctl.zip; Expand-Archive roamrunctl.zip .
@@ -23,7 +24,8 @@ macOS, or Linux with Homebrew — built from source: `brew install mh-mobile/tap
 Anywhere with Rust: `cargo install --locked --git https://github.com/mh-mobile/RoamRun roamrunctl`.
 
 Those two commands only fetch an archive of the newest [release](https://github.com/mh-mobile/RoamRun/releases)
-and unpack it: `roamrunctl-linux-x86_64.tar.gz`, `roamrunctl-linux-aarch64.tar.gz` or `roamrunctl-windows-x86_64.zip`,
+and unpack it: `roamrunctl-linux-x86_64.tar.gz`, `roamrunctl-linux-aarch64.tar.gz`, `roamrunctl-windows-x86_64.zip` or
+`roamrunctl-windows-aarch64.zip`,
 each with the binary, this file and the licenses of the crates it is built from (the Linux command above takes
 the binary alone out of it). `roamrunctl-SHA256SUMS` there lists their checksums. The Linux builds
 are static, for any distribution. The Windows one isn't signed: SmartScreen may ask before it runs the first time.
