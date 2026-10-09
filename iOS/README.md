@@ -8,6 +8,8 @@ needed. How it is used from the far Mac: the main README, "From the device itsel
 It isn't part of `make app`, and isn't on the App Store: build it here. On the Home Screen and in Settings it is “RoamRun”: the whole name doesn't fit under an icon. `Sources/Introduction.swift`
 mirrors `Sources/RoamRun/Introductions.swift` (the line formats and their rules); keep them identical.
 
+It needs iOS 27 or later: what it stands in for is a Mac waiting in Device Hub's Pair Nearby Device, which Xcode 27 makes for devices on iOS 27 and later (its release notes, under Device Hub).
+
 ## Build and run on a device
 
 ```
