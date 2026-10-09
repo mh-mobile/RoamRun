@@ -25,6 +25,9 @@ see `skills/roamrun/SKILL.md` — installed with `roamrun init` or
   Mac under a test service type — the command is at the top of `iOS/Checks/relay-check.swift` — and
   `iOS/Sources/Introduction.swift` mirrors `Sources/RoamRun/Introductions.swift`: change both
   (and the code's short names: `codeURL` on the Mac, `Session.open` in the app).
+- `Rust/roamrunctl/` is a prototype of `pair introduce` for a machine that isn't a Mac (its own crate
+  and `Cargo.lock`; not part of `make app`): `cargo build --locked && cargo test` there, and
+  `scripts/local-check.py` for the mechanics on this Mac. `make audit` covers its lock too.
 - `make test` runs the unit tests (log parsing, port attribution, status-file
   ownership, names). They never touch the real status/profile files or start a
   real bridge — keep it that way (no `AppCoordinator` in tests). A bridge on a

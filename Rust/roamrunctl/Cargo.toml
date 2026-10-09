@@ -1,0 +1,23 @@
+[package]
+name = "roamrunctl"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "Stands in for `roamrun pair introduce` on a machine that isn't a Mac (prototype)"
+
+[[bin]]
+name = "roamrunctl"
+path = "src/main.rs"
+
+[dependencies]
+base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
+if-addrs = "0.15"
+mdns-sd = "0.19"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "signal", "sync"] }
+
+[profile.release]
+opt-level = "s"

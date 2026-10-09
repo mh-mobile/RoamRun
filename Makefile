@@ -66,9 +66,9 @@ licenses: device-lib
 	cd Rust/RoamRunDevice && $(CARGO) metadata --format-version 1 --locked --filter-platform aarch64-apple-darwin \
 		| $(CURDIR)/scripts/third-party-licenses.py > $(CURDIR)/THIRD-PARTY-LICENSES.txt
 
-# The crates Cargo.lock pins, against the published advisories (asks api.osv.dev).
+# The crates both Cargo.lock files pin, against the published advisories (asks api.osv.dev).
 audit:
-	scripts/audit-crates.py Rust/RoamRunDevice/Cargo.lock
+	scripts/audit-crates.py
 
 # Links it into a Swift executable. With no arguments it only says what it is; with
 # <device ip> <RemotePairing port> <pairing file> it verifies the pairing, opens a tunnel

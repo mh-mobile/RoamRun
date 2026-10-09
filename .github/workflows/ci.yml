@@ -19,6 +19,25 @@ jobs:
       - name: No advisory against a crate Cargo.lock pins that hasn't been looked into
         run: python3 scripts/audit-crates.py
 
+  # The stand-in for a machine that isn't a Mac: it has to build where it is meant to run.
+  roamrunctl:
+    if: github.event_name != 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, windows-latest, macos-26]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: Rust/roamrunctl
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5
+      - name: Rust (the version rust-toolchain.toml names; rustup fetches it)
+        run: cargo --version
+      - run: cargo build --locked
+      - run: cargo test --locked
+
   test:
     if: github.event_name != 'schedule'
     strategy:
