@@ -76,8 +76,8 @@ How it ends. Xcode's pairing: exit 0 once the far Mac said it saved the device (
 exit 0 with the line, which is then `roamrun devices add`'s there); exit 1 with a line when it didn't say so — hand
 it to `roamrun devices add` there; exit 1 without one when nothing was tried, or when one was and the device's own
 announcement wasn't seen here. Device control: exit 0 when that Mac's app kept the pairing, exit 1 with why not.
-Ctrl-C, a closed terminal and a dropped ssh session all take the announcement back before it ends (seen on macOS;
-on Windows Ctrl-Break and a closed console are listened for the same way, untried).
+Ctrl-C, a closed terminal and a dropped ssh session all take the announcement back before it ends (seen on macOS,
+and on Windows for Ctrl-C and a closed console; Ctrl-Break is listened for the same way, untried).
 
 ## Build and check
 
@@ -129,5 +129,10 @@ ends the run, the device line is made, and the goodbye reaches a browser within 
 - No release carries it yet (0.5.0 is the first): the Linux and Windows install commands were run against archives
   served locally, not against a release; the tap's formula and `cargo install --git` weren't run.
 - After a review changed how it reads the far Mac's wire, ends its relay, picks its interface and stops, the mechanics
-  were checked again on macOS (`cargo test`, `scripts/local-check.py`, a fake far Mac that misbehaves). The runs
-  against a real device above are from before that.
+  were checked again on macOS (`cargo test`, `scripts/local-check.py`, a fake far Mac that misbehaves), and against
+  the real device once each: Xcode's pairing from the Windows machine with no line carried (the far Mac saved the
+  device, its bridge came up Ready, and this ended by itself), and device control's pairing from the Linux machine
+  (the far Mac said it was kept and switched on; nothing was left running or listening). On that Windows machine,
+  under a test service type: the announcement was taken back on Ctrl-C and on closing the console's window.
+  Ctrl-Break, a dropped ssh session against a real device, and a machine with two interfaces on the device's
+  network weren't tried.
