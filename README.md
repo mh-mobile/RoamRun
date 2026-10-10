@@ -338,7 +338,7 @@ roamrunctl pair introduce --mac cloud-mac --to iphone-15-pro   # the far Mac's T
 roamrun up iphone-15-pro
 ```
 
-`roamrun pair control --with my-pc`, with the RoamRun app open on the far Mac, pairs for device control the same way; `roamrunctl` then prints the code to type, so run it yourself, in a terminal of your own. Tried from Linux (Ubuntu 24.04) with an iPhone 15 Pro on iOS 27: Xcode's pairing with the bridge Ready afterwards, and device control's. From Windows 11 (ARM): Xcode's pairing with the bridge Ready afterwards; Windows' firewall asks once whether to let it in.
+`roamrun pair control --with my-pc`, with the RoamRun app open on the far Mac, pairs for device control the same way; `roamrunctl` then prints the code to type, so run it yourself, in a terminal of your own. Tried from Linux (Ubuntu 24.04) with an iPhone 15 Pro on iOS 27: Xcode's pairing with the bridge Ready afterwards, and device control's. From Windows 11 (ARM): the same two; Windows' firewall asks once whether to let it in.
 
 **Who gets the device.** Introducing a Mac lets it use the device as a developer from then on — install and run apps, debug them, read their data — the same as plugging the device into it and tapping Trust. Before it starts, `pair introduce` says whose that Mac is, as Tailscale has it: yours, another person's, or a shared (tagged) machine, where it is whoever can use Xcode on it. It introduces only the Mac you name with `--mac`; neither line says where anything is to go. To withdraw it, remove that Mac on the device (Settings › Privacy & Security › Developer Mode); there it is listed under the name the Mac gives itself, which `pair introduce` tells you, not its Tailscale name. Xcode's pairing has no switch in RoamRun.
 

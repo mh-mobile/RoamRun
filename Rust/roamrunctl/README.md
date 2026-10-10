@@ -90,8 +90,11 @@ ends the run, the device line is made, and the goodbye reaches a browser within 
   bridge came up Ready; nothing was left announced afterwards. That machine took a route to its own LAN from
   another Tailscale node ("Use Tailscale subnets", on by default on Windows), so its routing table led to the device
   through Tailscale: it finds its LAN address among its own interfaces for that reason.
-- Not tried on Windows: the x86_64 build beyond CI's tests, `--offer`, device control's pairing. Not run on Linux
-  with a firewall on, or without avahi.
+- And device control's pairing from that same Windows machine: the code was printed there once the device had picked
+  the far Mac, typed, and both said the pairing was kept and switched on; the far Mac then showed device control as
+  connected.
+- Not tried on Windows: the x86_64 build beyond CI's tests, and `--offer`. Not run on Linux with a firewall on, or
+  without avahi.
 - Device control's pairing, once, from the same Linux machine: the far Mac ran `roamrun pair control --with <it>`
   with the RoamRun app open, this printed the code once the device had picked the far Mac, the code was typed,
   and both said the pairing was kept and switched on; the far Mac then showed device control as connected.

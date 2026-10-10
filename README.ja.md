@@ -439,7 +439,7 @@ roamrunctl pair introduce --mac cloud-mac --to iphone-15-pro   # 離れた Mac �
 roamrun up iphone-15-pro
 ```
 
-離れた Mac で RoamRun のアプリを開いて `roamrun pair control --with my-pc` を実行すれば、同じ流れでデバイス操作のペアリングができます。このとき、入力するコードは `roamrunctl` が表示します。自分のターミナルで、自分で実行してください。Linux（Ubuntu 24.04）と iOS 27 の iPhone 15 Pro で確かめました。Xcode のペアリングとその後のブリッジの Ready、デバイス操作のペアリングです。Windows 11（ARM 版）でも、Xcode のペアリングとその後のブリッジの Ready を確かめました。Windows のファイアウォールが、通信を許可するかを一度尋ねます。
+離れた Mac で RoamRun のアプリを開いて `roamrun pair control --with my-pc` を実行すれば、同じ流れでデバイス操作のペアリングができます。このとき、入力するコードは `roamrunctl` が表示します。自分のターミナルで、自分で実行してください。Linux（Ubuntu 24.04）と iOS 27 の iPhone 15 Pro で確かめました。Xcode のペアリングとその後のブリッジの Ready、デバイス操作のペアリングです。Windows 11（ARM 版）でも、同じ 2 つを確かめました。Windows のファイアウォールが、通信を許可するかを一度尋ねます。
 
 **誰がデバイスを使えるようになるか。** 引き合わせた Mac は、それ以降、開発者としてそのデバイスを使えます（アプリのインストールと実行、デバッグ、アプリのデータの読み出し）。デバイスをその Mac に USB で挿して「信頼」を押すのと同じ重さです。`pair introduce` は、始める前に、その Mac が誰のものかを Tailscale の情報から表示します（自分の Mac、ほかの人の Mac、共有の（タグ付きの）マシン＝そこで Xcode を使える人）。引き合わせるのは、`--mac` で名指しした Mac だけです。運ぶ 1 行は、行き先を決めません。取り消すには、デバイスの 設定 › プライバシーとセキュリティ › デベロッパモード でその Mac を削除します。一覧には、Tailscale 上の名前ではなく、その Mac が自分で名乗る名前で並びます（`pair introduce` が、どの名前かを表示します）。Xcode のペアリングには、RoamRun の側のスイッチはありません。
 
