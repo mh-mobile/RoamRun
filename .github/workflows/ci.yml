@@ -85,11 +85,11 @@ jobs:
       - run: xcrun swift --version
       - name: Rust (the version Rust/RoamRunDevice/rust-toolchain.toml names; rustup fetches it)
         run: cd Rust/RoamRunDevice && cargo --version
-      - name: Tests (still running after ten minutes, the test process's stacks are printed)
+      - name: Tests (still running after ten minutes, the tests not finished are named and the test process's stacks printed)
         timeout-minutes: 15
         run: |
-          (sleep 600; for p in $(pgrep -f swiftpm-testing); do sample "$p" 2 -mayDie 2>/dev/null | head -300; done) &
-          rc=0; make test || rc=$?
+          (sleep 600; python3 scripts/unfinished-tests.py test.log; for p in $(pgrep -f swiftpm-testing); do sample "$p" 2 -mayDie 2>/dev/null | head -120; done) &
+          rc=0; make test > >(tee test.log) 2>&1 || rc=$?
           kill %1 2>/dev/null || true
           exit $rc
       - name: The licenses the app carries are those of the crates it is built from
