@@ -414,7 +414,7 @@ private struct OtherWays: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("rr-cloud", text: $session.far)
+                    TextField("cloud-mac", text: $session.far)
                         .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
                 } header: {
                     Text("Far Mac's Tailscale name")

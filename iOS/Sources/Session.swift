@@ -405,16 +405,16 @@ final class Session {
     #if DEBUG
     /// For looking at a screen without a far Mac: INTRODUCER_PREVIEW=pairing|code|finishing|done|byhand|failed.
     func preview(_ what: String) {
-        far = "rr-cloud.tailnet-966e.ts.net"; host = far; announcedName = "rr-cloud"
-        log = ["Asking rr-cloud.tailnet-966e.ts.net for its offer.", "Announced as “rr-cloud”.", "A device connected from 192.168.0.19:65442."]
+        far = "cloud-mac.example.ts.net"; host = far; announcedName = "cloud-mac"
+        log = ["Asking cloud-mac.example.ts.net for its offer.", "Announced as “cloud-mac”.", "A device connected from 192.168.1.20:50123."]
         switch what {
         case "asking": running = true; stage = .asking
-        case "pairing": running = true; stage = .pairing; hint = "Connected. Type the code Device Hub shows on rr-cloud."
+        case "pairing": running = true; stage = .pairing; hint = "Connected. Type the code Device Hub shows on cloud-mac."
         case "code": running = true; kind = .control; stage = .pairing; code = "456640"
         case "finishing": running = true; stage = .finishing
-        case "done": outcome = .init(tone: .success, title: "rr-cloud knows this iPhone", detail: "Whether Xcode paired shows there. Next, on rr-cloud: roamrun up, with the name it just printed.")
-        case "byhand": outcome = .init(tone: .attention, title: "A pairing was tried", detail: "Whether it was made shows on rr-cloud. Take this line there:\nroamrun devices add <line>\nthen roamrun up", line: "rr-device-v1:eyJuYW1lIjoiaVBob25lIiwicGVlciI6ImlwaG9uZS0xNS1wcm8iLCJwb3J0Ijo0OTE1MiwidHh0Ijp7ImF1dGhUYWciOiJZOXdYV21kaCJ9fQ")
-        case "failed": outcome = .init(tone: .failure, title: "rr-cloud isn't waiting for this iPhone", detail: "Run this there first, then Introduce again:\nroamrun pair xcode --with <this iPhone> --qr\n(or pair control, for device control)")
+        case "done": outcome = .init(tone: .success, title: "cloud-mac knows this iPhone", detail: "Whether Xcode paired shows there. Next, on cloud-mac: roamrun up, with the name it just printed.")
+        case "byhand": outcome = .init(tone: .attention, title: "A pairing was tried", detail: "Whether it was made shows on cloud-mac. Take this line there:\nroamrun devices add <line>\nthen roamrun up", line: "rr-device-v1:eyJuYW1lIjoiaVBob25lIiwicGVlciI6ImlwaG9uZS0xNS1wcm8iLCJwb3J0Ijo0OTE1MiwidHh0Ijp7ImF1dGhUYWciOiJZOXdYV21kaCJ9fQ")
+        case "failed": outcome = .init(tone: .failure, title: "cloud-mac isn't waiting for this iPhone", detail: "Run this there first, then Introduce again:\nroamrun pair xcode --with <this iPhone> --qr\n(or pair control, for device control)")
         case "empty": far = ""
         default: break
         }
