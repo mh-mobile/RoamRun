@@ -1707,12 +1707,13 @@ extension TimingSensitive {
             #expect(live.heardFromDevice(within: 0.3))                // a device that answers is heard
         }
 
-        /// Below 49152, the Mac's ephemeral range: any test's server may listen there, and
-        /// one that answered the probe would end the scan early and race the deadline.
+        /// The 256 ports it scans are under every other test's (`Ports`): a server of theirs
+        /// that answered the probe would end the scan early and race the deadline, and the
+        /// scan's own connections would be counted by whatever relay they reached.
         @Test func portScanKeepsItsDeadlineEvenOnASilentPort() async throws {
             // A port that accepts and never answers the handshake (4 s timeout on its own).
             var silent: EchoServer?, from: UInt16 = 0
-            for port in UInt16(39152)...39160 where silent == nil {
+            for port in UInt16(19152)...19160 where silent == nil {
                 if let s = try? EchoServer(silent: true, port: port), await s.start() != 0 { silent = s; from = port }
             }
             guard let silent else { return }   // all taken: nothing to test here
@@ -3087,14 +3088,15 @@ func aNewAddressAndPortAreFoundTogether(scanFinds: Bool) async {
     rig.world.answering = []
     rig.world.advertAnswers = false
     rig.world.ping = .pong
-    rig.world.scan = scanFinds ? .found(39999) : .notFound
+    let found = rig.bridge.profile.remotePairingPort + 20   // in this rig's own band
+    rig.world.scan = scanFinds ? .found(found) : .notFound
     rig.world.peers = [MeshDevice(id: "1", name: "iphone", os: "iOS", ips: ["127.0.0.2"], online: true)]
     var saved: DeviceProfile?
     rig.bridge.onProfileChange = { saved = $0 }
     await rig.bridge.start(.manual)
     #expect(rig.world.scannedHost == "127.0.0.2")         // the new address is what was scanned
     if scanFinds {
-        #expect(saved?.providerIP == "127.0.0.2" && saved?.remotePairingPort == 39999)
+        #expect(saved?.providerIP == "127.0.0.2" && saved?.remotePairingPort == found)
     } else {
         #expect(saved == nil && rig.bridge.profile.providerIP == "127.0.0.1")
     }
@@ -3495,10 +3497,24 @@ extension TimingSensitive.RelayOnLocalhost {
     return e
 }
 
-/// Outside 49152…, the ephemeral range other tests' servers listen in.
+/// Ports no other test has: parallel tests' bridges each bind a control relay, a listener's
+/// port frees only some time after it is cancelled, and a scan finds whatever listens in its way.
+private enum Ports {
+    private static let next = OSAllocatedUnfairLock<UInt16>(initialState: 20000)
+    /// The first of 25, from 20000 up: under the relays' own (40000…49000) and the ephemeral
+    /// range other tests' servers listen in (49152…). Never handed out twice in a run.
+    static func band() -> UInt16 {
+        next.withLock { port in
+            precondition(port < 39000, "more bridges in the tests than port bands: widen Ports")
+            defer { port += 25 }
+            return port
+        }
+    }
+}
+
 private func inertProfile(_ name: String) -> DeviceProfile {
     var p = profile(name)
-    p.remotePairingPort = 39300
+    p.remotePairingPort = Ports.band()
     p.providerIP = "127.0.0.1"
     p.instanceName = "FAKE-\(name)"
     return p
@@ -3565,18 +3581,10 @@ private final class World: @unchecked Sendable {
     let bridge: ProxyBridge
     var id: UUID { bridge.profile.id }
 
-    /// A port band per rig: parallel tests' bridges each bind a control relay, and a
-    /// listener's port frees only some time after it is cancelled.
-    private static let lock = NSLock()
-    nonisolated(unsafe) private static var nextPort: UInt16 = 39300
-
     /// `keepPort`: a bridge rebuilt for a profile another rig ran keeps its endpoint.
     init(_ given: DeviceProfile = inertProfile("iPhone"), memory: DeviceMemory = DeviceMemory(), keepPort: Bool = false) {
         var p = given
-        if !keepPort { p.remotePairingPort = Self.lock.withLock {
-            defer { Self.nextPort = Self.nextPort >= 39_975 ? 39300 : Self.nextPort + 25 }
-            return Self.nextPort
-        } }
+        if !keepPort { p.remotePairingPort = Ports.band() }   // `given` may be one another rig runs
         var e = inertEnv(record: record, watcher: watcher)
         let w = world
         e.now = { w.now }
@@ -3605,13 +3613,14 @@ enum StartCase: String, CaseIterable {
 func startOutcomes(_ c: StartCase) async {
     let rig = Rig()
     defer { rig.done() }
+    let found = rig.bridge.profile.remotePairingPort + 20   // in this rig's own band
     switch c {
     case .answers: break
     case .onThisWiFi: rig.world.onLAN = true
     case .silentAndUnreached: rig.world.answering = []
     case .silentScanFindsNothing: rig.world.answering = []; rig.world.ping = .pong
     case .silentScanTimesOut: rig.world.answering = []; rig.world.ping = .pong; rig.world.scan = .timedOut
-    case .silentScanFindsAPort: rig.world.answering = []; rig.world.ping = .pong; rig.world.scan = .found(39999)
+    case .silentScanFindsAPort: rig.world.answering = []; rig.world.ping = .pong; rig.world.scan = .found(found)
     case .noLANAddress: rig.world.lan = nil
     }
     var saved: DeviceProfile?
@@ -3630,7 +3639,7 @@ func startOutcomes(_ c: StartCase) async {
     #expect(rig.world.scans == expected.scans, "\(c)")
     #expect(rig.bridge.autoRetry, "\(c)")              // none of these stops the retries
     if c == .silentScanFindsAPort {
-        #expect(rig.bridge.profile.remotePairingPort == 39999 && saved?.remotePairingPort == 39999)
+        #expect(rig.bridge.profile.remotePairingPort == found && saved?.remotePairingPort == found)
     } else {
         #expect(saved == nil, "\(c)")
     }
