@@ -6897,6 +6897,17 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     let ends = rust.matches(of: /"ended ([a-z-]+)"|Err\(\(\s*"([a-z-]+)"|String\| \("([a-z-]+)"/).compactMap { $0.1 ?? $0.2 ?? $0.3 }.map(String.init)
     #expect(Set(ends).count >= 7, "\(ends)")
     for word in ends { #expect(PairWire.message(from: "rr-pair-v1 ended " + word) != nil, "\(word)") }
+    // The Introducer app writes its words itself too, and reads what this Mac says to a device by their first word.
+    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    let app = { (file: String) in (try? String(contentsOf: root.appendingPathComponent("iOS/Sources/" + file), encoding: .utf8)) ?? "" }
+    let said = app("Session.swift").matches(of: /saying: "([a-z-]+)"|noLine = "([a-z-]+)"/).compactMap { $0.1 ?? $0.2 }.map(String.init)
+    #expect(Set(said).count >= 5, "\(said)")
+    for word in said { #expect(PairWire.message(from: "rr-pair-v1 ended " + word) != nil, "\(word)") }
+    let toADevice: [PairWire.Message] = [.offer("x"), .ended(.stopped), .saved, .unsaved, .you("x"), .wantDevice, .attempt("x"), .code("123456"), .result(.done(on: true))]
+    for m in toADevice {
+        let first = PairWire.line(m).dropFirst("rr-pair-v1 ".count).split(separator: " ")[0]
+        #expect(app("Wire.swift").contains("(\"\(first)\", "), "the app doesn't read \(first)")
+    }
     for line in ["", "offer?", "rr-pair-v2 offer?", "rr-pair-v1 ", "rr-pair-v1 offer", "rr-pair-v1 offer ", "rr-pair-v1 offer a b", "rr-pair-v1 you", "rr-pair-v1 you ",
                  "rr-pair-v1 ended because", "rr-pair-v1 saved it", "rr-pair-v1 OFFER?"] {
         #expect(PairWire.message(from: line) == nil, "\(line)")

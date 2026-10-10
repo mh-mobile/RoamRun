@@ -253,16 +253,21 @@ tunnel and Xcode has to run again.
 
 30. Introducing from a machine without RoamRun (when `Rust/roamrunctl`, `pair … --with` or the
     wire changed). `Rust/roamrunctl/scripts/local-check.py` as its header says → every line ok. On
-    a Linux machine on the device's Wi‑Fi, signed in to the tailnet, with the roamrunctl CI built
-    for this commit: the far Mac's `roamrun pair xcode --with <that machine>`, there `roamrunctl
+    a Linux machine on the device's Wi‑Fi, signed in to the tailnet, with the roamrunctl the pull
+    request's CI built (its artifacts): the far Mac's `roamrun pair xcode --with <that machine>`, there `roamrunctl
     pair introduce --mac <far Mac> --to <the device's Tailscale name>` → the device lists the far
     Mac, the code from Device Hub → both say saved, `roamrun up <name>` on the far Mac → Ready,
     and nothing is left announced or listening on either (`pgrep roamrunctl`, `lsof -nP
-    -iTCP:41830`). The same with `--offer "$(ssh <far Mac> roamrun pair xcode)"` and no `--with`:
+    -iTCP:41830`; on Windows `Get-Process roamrunctl`, `netstat -an | findstr 41830`). The same with `--offer "$(ssh <far Mac> roamrun pair xcode)"` and no `--with`:
     a line on stdout that `roamrun devices add` takes. `roamrun pair control --with <that
     machine>` with the app open on the far Mac, roamrunctl run by yourself: the code shows there,
-    typed → both say paired and switched on. On Windows, the same three. After the release: each
-    install command of roamrunctl's README, then `roamrunctl --version`.
+    typed → both say paired and switched on. On Windows, the same three. On a Mac without RoamRun
+    running it, Xcode's pairing once. `--as <name>` once: the far Mac saves it under that. Stopped
+    with Ctrl-C while announced: nothing left announced (`dns-sd -B
+    _remotepairing-pairable-host._tcp` on a Mac there). On a machine with wired and Wi‑Fi both on
+    the device's network, if one is at hand: it says its other address, and `--on <that>` takes
+    it. After the release: each install command of roamrunctl's README — Linux, Windows, `brew
+    install mh-mobile/tap/roamrunctl`, `cargo install` — then `roamrunctl --version`.
 
 ## Debug logs worth a look after an iOS or Xcode update
 

@@ -37,7 +37,7 @@ https://github.com/mh-mobile/RoamRun/blob/main/Rust/roamrunctl/README.md#install
   with Tailscale connected. "Tailscale doesn't reach … directly on this LAN (relayed,
   IPv6, or off this subnet)" means it isn't: the user checks, you don't loop.
 - Names are Tailscale's (`tailscale status` lists them), not what a device calls itself.
-  "… is more than one peer": use the whole name it lists. "This machine is also … on
+  "… is more than one peer": use the whole name it lists. "this machine is also … on
   that network" is only said: if the device then doesn't list the far Mac, run it again
   with `--on <one of those addresses>`.
 - Someone at the far Mac's screen (or its screen sharing) for Xcode's pairing: the
@@ -122,7 +122,7 @@ or with why not (exit 1): the far Mac "already holds a pairing for that device" 
 user removes it in the app there first), "the pairing wasn't completed" (a wrong
 code: they run it again, the far Mac goes on waiting), "…'s own announcement wasn't
 seen on this LAN" (a device no Mac has paired with yet doesn't announce itself: pair
-Xcode first, as above). "What the far Mac kept couldn't be learned": there,
+Xcode first, as above). "what the far Mac kept couldn't be learned": there,
 `roamrun pair control --attempt <id>` says, with the id it printed (stopping it
 with Ctrl-C once the code was typed ends the same way: the far Mac's app goes on).
 

@@ -225,8 +225,8 @@ final class Session {
         case .unreached(let why):
             finish(.init(tone: .failure, title: "Couldn't reach \(name)", detail: "\(why.prefix(200)). Is Tailscale connected on this iPhone, and is “\(host)” the far Mac's Tailscale name?"))
         case .none(let why):
-            finish(.init(tone: .failure, title: "\(name) gave no offer", detail: "\(why.prefix(200)). Is Pair Nearby Device waiting there, and is RoamRun there the version this app goes with?"))
-        default: finish(.init(tone: .failure, title: "\(name) answered out of turn", detail: "Is RoamRun there the version this app goes with?"))
+            finish(.init(tone: .failure, title: "\(name) gave no offer", detail: "\(why.prefix(200)). Is Pair Nearby Device waiting there, and is RoamRun there 0.5.0 or later?"))
+        default: finish(.init(tone: .failure, title: "\(name) answered out of turn", detail: "Is RoamRun there 0.5.0 or later?"))
         }
     }
 
@@ -284,7 +284,7 @@ final class Session {
             finish(.init(tone: .failure, title: "\(name) didn't go on", detail: "It closed the connection. Nothing was begun there: Introduce again."))
         case .none(let why), .unreached(let why):
             finish(.init(tone: .attention, title: "Lost \(name) before it said what it kept", detail: "\(why.prefix(200)). On \(name):\nroamrun pair control --last"))
-        default: finish(.init(tone: .failure, title: "\(name) answered out of turn", detail: "Is RoamRun there the version this app goes with?"))
+        default: finish(.init(tone: .failure, title: "\(name) answered out of turn", detail: "Is RoamRun there 0.5.0 or later?"))
         }
     }
 
@@ -360,9 +360,9 @@ final class Session {
             }
             wire.tried(line) { [weak self] answer in Task { @MainActor in self?.told(answer, line, run) } }
         case .notSeen:
-            finish(.init(tone: .attention, title: "A pairing was tried", detail: "This iPhone's own announcement wasn't seen here, so \(name) wasn't told which device it is. On \(name): roamrun devices — if this iPhone is saved there, roamrun up <its name>."))
-        case .denied: finish(Self.noLocalNetwork)
-        case .refused(let why): finish(.init(tone: .attention, title: "A pairing was tried", detail: "This iPhone's announcement can't be carried (\(why)), so \(name) wasn't told which device it is."))
+            finish(.init(tone: .attention, title: "A pairing was tried", detail: "This iPhone's own announcement wasn't seen here, so \(name) wasn't told which device it is. On \(name): roamrun devices — if this iPhone is saved there, roamrun up <its name>."), saying: Self.noLine)
+        case .denied: finish(Self.noLocalNetwork, saying: Self.noLine)
+        case .refused(let why): finish(.init(tone: .attention, title: "A pairing was tried", detail: "This iPhone's announcement can't be carried (\(why)), so \(name) wasn't told which device it is."), saying: Self.noLine)
         }
     }
 
@@ -376,8 +376,12 @@ final class Session {
         }
     }
 
+    /// The far Mac's word for a pairing that was tried and has no line to show: it goes on waiting otherwise.
+    private static let noLine = "no-line"
+
     /// Everything of this introduction is over. The far Mac is told why only while that means
-    /// something to it: once it has begun, and before a pairing was carried to it.
+    /// something to it: once it has begun, and before a pairing was carried to it — or, after
+    /// one for Xcode was, that no line comes of it.
     private func finish(_ given: Outcome?, saying reason: String? = nil, farsWord: Bool = false) {
         guard running else { return }
         running = false
@@ -390,7 +394,7 @@ final class Session {
         }
         self.outcome = outcome
         if outcome == nil { notice = "Stopped. Nothing is announced any more." }
-        wire?.end(begun && !carried ? reason : nil)
+        wire?.end(begun && (!carried || reason == Self.noLine && kind != .control) ? reason : nil)
         wire = nil
         let ending = standIn
         standIn = nil
@@ -413,7 +417,7 @@ final class Session {
         case "code": running = true; kind = .control; stage = .pairing; code = "456640"
         case "finishing": running = true; stage = .finishing
         case "done": outcome = .init(tone: .success, title: "cloud-mac knows this iPhone", detail: "Whether Xcode paired shows there. Next, on cloud-mac: roamrun up, with the name it just printed.")
-        case "byhand": outcome = .init(tone: .attention, title: "A pairing was tried", detail: "Whether it was made shows on cloud-mac. Take this line there:\nroamrun devices add <line>\nthen roamrun up", line: "rr-device-v1:eyJuYW1lIjoiaVBob25lIiwicGVlciI6ImlwaG9uZS0xNS1wcm8iLCJwb3J0Ijo0OTE1MiwidHh0Ijp7ImF1dGhUYWciOiJZOXdYV21kaCJ9fQ")
+        case "byhand": outcome = .init(tone: .attention, title: "A pairing was tried", detail: "Whether it was made shows on cloud-mac. Take this line there:\nroamrun devices add <line>\nthen roamrun up", line: "rr-device-v1:eyJuYW1lIjoiaVBob25lIiwicGVlciI6ImlwaG9uZSIsInBvcnQiOjQ5MTUyLCJ0eHQiOnsiYXV0aFRhZyI6IkFBRUNBd1FGIn19")
         case "failed": outcome = .init(tone: .failure, title: "cloud-mac isn't waiting for this iPhone", detail: "Run this there first, then Introduce again:\nroamrun pair xcode --with <this iPhone> --qr\n(or pair control, for device control)")
         case "empty": far = ""
         default: break

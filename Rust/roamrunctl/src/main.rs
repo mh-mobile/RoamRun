@@ -100,9 +100,9 @@ fn name(s: &str) -> Result<String, String> {
 /// far Mac saved it (true when no far Mac was asked: the line is all there is). For device control
 /// there is no line: whether that Mac's app kept the pairing.
 fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
-    // The far Mac waits 420 s after its offer; RoamRun's own introducer waits 300.
+    // The far Mac waits 420 s after its offer, for a stand-in that takes RoamRun's own 300.
     if a.offer.is_none() && a.deadline > 300 {
-        return Err("--deadline above 300 s isn't waited out by the far Mac".into());
+        return Err("--deadline is 300 s at most when the far Mac is asked for its offer (as long as RoamRun's own `pair introduce` waits; that Mac waits little longer)".into());
     }
     let status = (a.far_ip.is_none() || a.device_ip.is_none()).then(tailscale::status).transpose()?;
     let far = lookup(&status, &a.mac, a.far_ip, None)?;

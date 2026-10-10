@@ -84,26 +84,30 @@ AND category == "input"'`. Text that arrives short with a line here was dropped 
 1. Bump `CFBundleShortVersionString` (shown by `roamrun --version`) and
    `CFBundleVersion` (+1 each release) in `Info.plist`, on a `release/<version>` branch; open a
    pull request, wait for CI, merge. `main` takes changes by pull request only (a ruleset on
-   GitHub: no direct push, no force push), whoever pushes.
-2. Build the dmg from a fresh clone of that commit (a working copy can hold
-   uncommitted changes): `make release-dmg` → `RoamRun-<version>.dmg`, Developer ID
+   GitHub: no direct push, no force push), whoever pushes. The release is the commit that merge
+   makes on `main` — not the branch's own tip, which a squash leaves behind: wait for CI on it too.
+2. In a fresh clone of that commit on `main` (a working copy can hold uncommitted changes), first
+   `make roamrunctl-archives` → `roamrunctl-dist/`: roamrunctl's archives as CI built them from
+   that same commit (it stops if no CI run of a push has passed for it), and their checksums.
+   Then the dmg: `make release-dmg` → `RoamRun-<version>.dmg`, Developer ID
    signed, notarized and stapled — it fails otherwise (it checks `stapler validate`
    and `spctl`). It needs the Developer ID Application identity in the keychain,
    the notary profile from `xcrun notarytool store-credentials roamrun-notary`, and rustup.
    It fetches idevice from the fork at the commit `Cargo.toml` pins: that commit carries a tag
    there (`roamrun-<version>`) — tag a new pin before releasing, or the build stops when its branch goes.
    Plain `make dmg` is the ad-hoc developer build, never a release.
-   Then `make roamrunctl-archives` → `roamrunctl-dist/`: roamrunctl's archives as CI built them
-   from that same commit (it stops if no CI run has passed for it), and their checksums.
 3. `gh release create v<version> RoamRun-<version>.dmg roamrunctl-dist/* --target <that commit's full sha> --title "RoamRun <version>" --notes …`
    — the tag must point at the commit the dmg was built from. Keep the notes'
    claims in line with the README.
 4. Homebrew tap (`mh-mobile/homebrew-tap`, `Casks/roamrun.rb`): set `version`
    and `sha256` (`shasum -a 256` of the dmg), `brew style` + `brew audit --cask --online`, push.
    And `Formula/roamrunctl.rb`, from `Rust/roamrunctl/roamrunctl.rb`: the tag in `url`, the
-   `sha256` of that tarball (`curl -L <url> | shasum -a 256`), `brew audit --formula`.
+   `sha256` of that tarball (`curl -L <url> | shasum -a 256`), `brew audit --formula`, and built
+   once before the push: `brew install --build-from-source mh-mobile/tap/roamrunctl && brew test roamrunctl`.
 5. roamrunctl's install commands (its README) take the newest release's archives by name: once
-   it is out, run each on its system and see `roamrunctl --version` say this version.
+   it is out, run each on its system — Linux, Windows, `brew install`, and
+   `cargo install --locked --git … --tag v<version> roamrunctl` — and see `roamrunctl --version`
+   say this version. The Introducer app (`iOS/`) isn't in a release: the notes say it is built from source.
 
 ## Rules
 

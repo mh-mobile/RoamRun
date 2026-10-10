@@ -73,7 +73,7 @@ sequenceDiagram
 
 ### 同じことを逆向きに: デバイスのそばにいたことのない Mac
 
-ブリッジには、デバイスとペアリング済みの Mac が要ります。そしてペアリングは、1 つの Wi‑Fi の上で行われます。デバイスが、その Wi‑Fi で Mac を Bonjour で見つけて、つなぎに行くからです。離れた場所の Mac は、見つけてもらえません。そこで、デバイスの Wi‑Fi に**いる** Mac が、代わりに名乗ります。ブリッジの仕掛けを、逆向きにしたものです。**デバイスには「離れた Mac が同じ Wi‑Fi にいる」と思わせ、通信は実際には Tailscale を通します。**
+ブリッジには、デバイスとペアリング済みの Mac が要ります。そしてペアリングは、1 つの Wi‑Fi の上で行われます。デバイスが、その Wi‑Fi で Mac を Bonjour で見つけて、つなぎに行くからです。離れた場所の Mac は、見つけてもらえません。そこで、デバイスの Wi‑Fi に**いる** Mac が、代わりに名乗ります（Mac が無ければ、デバイス自身のアプリや、Windows・Linux の機械でもできます。下の「デバイス自身に引き合わせてもらう」「Windows や Linux のマシンに引き合わせてもらう」）。ブリッジの仕掛けを、逆向きにしたものです。**デバイスには「離れた Mac が同じ Wi‑Fi にいる」と思わせ、通信は実際には Tailscale を通します。**
 
 ```mermaid
 flowchart RL
@@ -349,6 +349,9 @@ iPhone から Mac を操作する方法は 3 つあります。どの方法で�
 | `AppCoordinator.swift` | プロファイル管理・ブリッジ制御・プレゼンスチェック |
 | `StatusFile.swift` | アプリと CLI で共有するブリッジの状態（どの端末をどちらが動かしているか） |
 | `CLI.swift` | `roamrun` コマンド（アプリと同じバイナリ） |
+| `DeviceControl.swift` | デバイス操作: アプリが保つ接続、ペアリング、CLI や MCP のツールが問い合わせるソケット |
+| `DeviceControlKey.swift` | 保存したペアリングを封じる Keychain の鍵 |
+| `DeviceMCP.swift` | `roamrun mcp`: 同じコマンドを MCP のツールとして |
 
 ## 実機を見る・操作する（デバイス操作）
 
@@ -433,7 +436,7 @@ roamrun up iphone-15-pro
 # 離れた Mac で: Device Hub › + › Pair Nearby Device を押して、
 roamrun pair xcode --with my-pc                                # my-pc: そのマシンの Tailscale 上の名前
 # そのマシンで（デバイスと同じ Wi‑Fi）:
-roamrunctl pair introduce --mac cloud-mac --to iphone-15-pro   # 離れた Mac の Tailscale 上の名前と、デバイスの名前
+roamrunctl pair introduce --mac cloud-mac --to iphone-15-pro   # 離れた Mac の Tailscale 上の名前と、デバイスの Tailscale 上の名前
 # デバイスで: 設定 › プライバシーとセキュリティ › デベロッパモード › 「Pair with cloud-mac」、離れた Mac の Device Hub に出たコード
 # 離れた Mac で（デバイスを保存したと出たら）:
 roamrun up iphone-15-pro
@@ -444,7 +447,7 @@ roamrun up iphone-15-pro
 **誰がデバイスを使えるようになるか。** 引き合わせた Mac は、それ以降、開発者としてそのデバイスを使えます（アプリのインストールと実行、デバッグ、アプリのデータの読み出し）。デバイスをその Mac に USB で挿して「信頼」を押すのと同じ重さです。`pair introduce` は、始める前に、その Mac が誰のものかを Tailscale の情報から表示します（自分の Mac、ほかの人の Mac、共有の（タグ付きの）マシン＝そこで Xcode を使える人）。引き合わせるのは、`--mac` で名指しした Mac だけです。運ぶ 1 行は、行き先を決めません。取り消すには、デバイスの 設定 › プライバシーとセキュリティ › デベロッパモード でその Mac を削除します。一覧には、Tailscale 上の名前ではなく、その Mac が自分で名乗る名前で並びます（`pair introduce` が、どの名前かを表示します）。Xcode のペアリングには、RoamRun の側のスイッチはありません。
 
 **必要なもの・できないこと。**
-- デバイスが、すでにどこかとペアリング済みで、引き合わせる Mac の RoamRun に保存されていること。ペアリングが 1 つも無いデバイスは、自分を名乗らないので、RoamRun には追加できません（デバイスのペアリングの画面には、名乗っている Mac が出ます）。先に、同じ Wi‑Fi にいるどれかの Mac と 1 度ペアリングしてください。引き合わせる Mac がその Mac である必要はなく、引き合わせる Mac 自身がデバイスとペアリングしている必要もありません。保存してあれば足ります。
+- デバイスが、すでにどこかとペアリング済みで、引き合わせる Mac の RoamRun に保存されていること。ペアリングが 1 つも無いデバイスは、自分を名乗らないので、RoamRun には追加できません（デバイスのペアリングの画面には、名乗っている Mac が出ます）。先に、同じ Wi‑Fi にいるどれかの Mac と 1 度ペアリングしてください。引き合わせる Mac がその Mac である必要はなく、引き合わせる Mac 自身がデバイスとペアリングしている必要もありません。保存してあれば足ります。（デバイス自身のアプリや roamrunctl が引き合わせるときは、保存は要りません。デバイスの名乗りを、その場で見て渡します。）
 - その 1 回だけ、デバイスが、引き合わせる Mac と同じ Wi‑Fi にいること（ゲスト用や端末どうしを隔てるネットワーク、その後ろのホットスポットは不可）。そのあとは、いつもどおり、どこからでもブリッジで使えます。
 - 離れた Mac の Device Hub のボタンを押し、コードを読める人（その場で、または画面共有で）。ssh だけではできません。
 - 離れた Mac の Tailscale が、サインインしたままでいること。使い捨て（ephemeral）のキーで入れた Mac は、再起動でサインアウトします。
@@ -506,6 +509,7 @@ security delete-generic-password -s io.github.mh-mobile.roamrun.device-control -
 - remotepairingd は約 42 秒ごとに制御チャネルを張り直します（Mac 自身の IP への ARP 確認が通らないため）。トンネルは約 0.4 秒で自動復旧し、デバッグセッションは継続します
 - Tailscale の中継サーバー（DERP）経由だと動作しますが遅くなります（`roamrun doctor` で経路を確認できます）
 - 外出先では、**デバッガ付きの実行（⌘R）に時間がかかります**。lldb の接続には数百回の往復が必要で、回線の遅延やパケットロスがそのまま効くためです。往復の回数は読み込むフレームワークの数とともに増え、インストールの時間はアプリのサイズにほぼ比例します（実測: 約 600KB のアプリ、テザリング経由、遅延 約 25〜60ms で、デバッガ付き約 1 分、デバッガなし約 4 秒。転送速度は 0.4〜0.9MB/秒）。ブレークポイントが不要なときは Edit Scheme › Run › Info の「Debug executable」をオフに、デバッガを使うときは Options の「Queue Debugging」と Diagnostics の「Main Thread Checker」「Thread Performance Checker」をオフにすると速くなります
+- **実機を見る・操作する間は、デバイスの音が一時的に取られます**: 最後の look や操作から約 5 秒間、スピーカーは無音になり、音声入力もできません（「実機を見る・操作する」を参照）。見続けている間は、その状態が続きます。
 - iPhone 再起動後など、DDI の再ステージングで一度 USB 接続が必要な場合があります
 - TXT の authTag/identifier が変わった場合は、同じ Wi-Fi で iPhone を追加し直してください
 - **離れた Mac の引き合わせには iOS 27 と Xcode 27 が必要**で、それらのペアリングの動きに依存します。どちらかの更新で、RoamRun の更新が必要になることがあります。Xcode の申し出が知らない形のとき、`roamrun pair xcode` はそう表示します。
@@ -532,6 +536,8 @@ RoamRun は、mh-mobile の指揮のもと、Claude Code（Claude Opus 5.5）が
 この実装は以下の公開情報をベースにしています:
 
 - Kevin Paterson, ["How to remotely iterate & deploy your sideloaded iOS-apps over tailnet"](https://dev.to/kvnpt/how-to-remotely-iterate-deploy-your-sideloaded-ios-apps-over-tailnet-jak) (DEV Community) — `dns-sd -P` + `socat` による同等構成の実証
+
+デバイス操作は、[idevice](https://github.com/jkcoxson/idevice)（Jackson Coxson）の上に作っています。Mac がデバイスと話すときのプロトコルを Rust で実装したものです。idevice と、RoamRun が使うほかの crate のライセンスは [THIRD-PARTY-LICENSES.txt](THIRD-PARTY-LICENSES.txt) にあり、アプリにも同梱しています。
 
 ## 関連プロジェクト
 

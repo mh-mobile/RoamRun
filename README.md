@@ -73,7 +73,7 @@ sequenceDiagram
 
 ### The same thing the other way round: a Mac that is never near the device
 
-A bridge needs a Mac that is paired with the device, and pairing happens on one Wi‑Fi: the device finds the Mac there by Bonjour and connects to it. A Mac elsewhere is never found. So a Mac that *is* on the device's Wi‑Fi stands in for it — the bridge's trick, turned around: **the device is told the far Mac is on its Wi‑Fi, and the traffic actually goes over Tailscale.**
+A bridge needs a Mac that is paired with the device, and pairing happens on one Wi‑Fi: the device finds the Mac there by Bonjour and connects to it. A Mac elsewhere is never found. So a Mac that *is* on the device's Wi‑Fi stands in for it (or, with no such Mac, an app on the device itself or a Windows or Linux machine there: "From the device itself" and "From a Windows or Linux machine", below) — the bridge's trick, turned around: **the device is told the far Mac is on its Wi‑Fi, and the traffic actually goes over Tailscale.**
 
 ```mermaid
 flowchart RL
@@ -343,7 +343,7 @@ roamrun up iphone-15-pro
 **Who gets the device.** Introducing a Mac lets it use the device as a developer from then on — install and run apps, debug them, read their data — the same as plugging the device into it and tapping Trust. Before it starts, `pair introduce` says whose that Mac is, as Tailscale has it: yours, another person's, or a shared (tagged) machine, where it is whoever can use Xcode on it. It introduces only the Mac you name with `--mac`; neither line says where anything is to go. To withdraw it, remove that Mac on the device (Settings › Privacy & Security › Developer Mode); there it is listed under the name the Mac gives itself, which `pair introduce` tells you, not its Tailscale name. Xcode's pairing has no switch in RoamRun.
 
 **What it needs, and what it doesn't do.**
-- The device already paired with something, and saved in RoamRun on the introducing Mac. A device with no pairing at all doesn't announce itself, so RoamRun has nothing to add it from (its pairing screen still lists a Mac that offers): pair it once first, with any Mac on its Wi‑Fi. The introducing Mac needn't be that Mac, nor be paired with the device itself — one that only has it saved will do.
+- The device already paired with something, and saved in RoamRun on the introducing Mac. A device with no pairing at all doesn't announce itself, so RoamRun has nothing to add it from (its pairing screen still lists a Mac that offers): pair it once first, with any Mac on its Wi‑Fi. The introducing Mac needn't be that Mac, nor be paired with the device itself — one that only has it saved will do. (The app on the device itself, and roamrunctl, need nothing saved: they see the device's announcement there and then.)
 - The device on the introducing Mac's own Wi‑Fi for that one step — not a guest or isolated network, and not a hotspot behind it. Afterwards the bridge works from anywhere, as usual.
 - Someone who can press the button in Device Hub on the far Mac and read its code: at its screen or over screen sharing. Over ssh alone it can't be done.
 - Tailscale on the far Mac that stays signed in: one joined with an ephemeral key is signed out when it restarts.

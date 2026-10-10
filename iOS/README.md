@@ -18,6 +18,10 @@ xcodegen generate
 open RoamRunIntroducer.xcodeproj   # set your team under Signing, run on the iPhone
 ```
 
+It takes a Mac with Xcode 27 and [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`), once: the
+app then needs no Mac near the device. Signed with a free personal team it runs for seven days and is installed again;
+with a paid one, a year. Its own version stays 0.1: what matters is the far Mac's RoamRun, 0.5.0 or later.
+
 Or from the shell: `xcodebuild -project RoamRunIntroducer.xcodeproj -scheme RoamRunIntroducer -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`.
 No entitlements, no background modes: Local Network permission and `BGContinuedProcessingTask` carry it.
 
@@ -39,7 +43,7 @@ doesn't hold the name of): the app needs no other setting — the far Mac's
 answer says which pairing it is. The code is made on the far Mac and shown here, in a notification and where iOS
 shows the app's background task, over Settings.
 
-**Carry the lines by hand** brings back the first form (the `rr-xcode-offer-v1:` line from `roamrun pair xcode`, pasted —
+**Carry the lines by hand** is the way without `--with` (the `rr-xcode-offer-v1:` line from `roamrun pair xcode`, pasted —
 or read with the far Mac's name from the code `roamrun pair xcode --qr` draws —
 copy the `rr-device-v1:` line the app shows to `roamrun devices add`), for a far Mac that can't be asked. The app
 also shows that line when the far Mac didn't say whether it saved.
@@ -68,16 +72,14 @@ SIMCTL_CHILD_INTRODUCER_PREVIEW=pairing xcrun simctl launch booted io.github.mh-
 A far Mac is named as Tailscale names it — one word, a name under `ts.net`, or an address of Tailscale's — and neither
 the question nor the pairing itself goes to an address that isn't Tailscale's, whatever a code, a link or a name led to.
 
-## What to test on the device (unknowns the Mac can't answer)
+## What was tried on a device
 
-- Does Settings list a host announced by an app on the same phone with Xcode's own TXT (model, flags…)? Does pairing go through to the far Mac's Xcode?
-- Where does the connection from Settings come from (127.0.0.1, the Wi-Fi IPv4, a link-local IPv6)? The first accepted connection is logged:
-  `log stream --level debug --predicate 'subsystem == "io.github.mh-mobile.roamrun.introducer"'` (via the Mac's Console for the device). Tighten the allowlist afterwards.
-- Does `BGContinuedProcessingTask` keep the listener and the Bonjour record alive while Settings is in front? Does the task survive 5 minutes with progress advancing every 15 s?
-- Does the phone's own `_remotepairing._tcp` record show up to the app, and does the resolved host match an own address (the device line depends on it)?
-- By wire: does the far Mac see the connection come from this iPhone's Tailscale address (it answers no other), and does the
-  connection to it last through the time in Settings?
-- Does the record disappear from a Mac's `dns-sd -B _remotepairing-pairable-host._tcp local.` within seconds of Stop?
+On an iPhone 15 Pro on iOS 27, against a far Mac reached over Tailscale: Xcode's pairing by wire and by a code
+from `--qr`, the lines carried by hand, and device control's pairing — as the main README says of each. An iPad and
+other iOS versions weren't tried.
+
+Where a connection from Settings came from is logged, the first one accepted:
+`log stream --level debug --predicate 'subsystem == "io.github.mh-mobile.roamrun.introducer"'` (through the Mac's Console for the device).
 
 The icon is RoamRun's, edge to edge: `xcrun swift ../scripts/make-icon.swift --ios Sources/Assets.xcassets/AppIcon.appiconset/icon-1024.png`.
 
