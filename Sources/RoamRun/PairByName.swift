@@ -18,6 +18,8 @@ enum PairWire {
         case stopped
         case addressLost = "address-lost"
         case announcementLost = "announcement-lost"
+        /// A pairing was tried, and the one that stood in didn't see the device's own announcement to make a line from.
+        case noLine = "no-line"
         case failed
     }
 

@@ -1,0 +1,4 @@
+# The Rust that Rust/RoamRunDevice is built with; rustup takes this one.
+[toolchain]
+channel = "1.95.0"
+profile = "minimal"

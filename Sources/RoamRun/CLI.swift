@@ -72,7 +72,8 @@ enum CLI {
                                      --with: wait instead for that Mac's `pair introduce` (10 minutes at
                                      most), give it the offer over Tailscale, and save the device it
                                      hands back — no line is carried. --with may name the device
-                                     itself, where the RoamRun Introducer app on it introduces.
+                                     itself, where the RoamRun Introducer app on it introduces, or
+                                     a Windows or Linux machine that runs roamrunctl.
                                      --qr: draw this Mac's name as a code for that app (without
                                      --with: its offer too, to carry by hand)
       pair control --with <Tailscale name> [--peer <Tailscale name>] [--qr]
@@ -80,8 +81,9 @@ enum CLI {
                                      for that Mac's `pair introduce`, and have the app here pair with
                                      the device for device control (look, tap, type). The code shows on
                                      that Mac. --peer: the device's Tailscale name here, when it differs.
-                                     --with may name the device itself, and --qr draw the code, as
-                                     for `pair xcode`: the code to type then shows on the device.
+                                     --with may name the device itself (and --qr draw the code) or a
+                                     Windows or Linux machine, as for `pair xcode`: the code to type
+                                     then shows on the device, or on that machine.
                                      `pair control --attempt <id>` (or --last): what came of one
       pair introduce [<offer>] --mac <Tailscale name> --to <device>
                                      On a Mac on the device's Wi‑Fi: stand in for that Mac until the
@@ -263,16 +265,21 @@ enum CLI {
         case .one(let p):
             guard let ip = p.ipv4 else { stop("\(p.dnsName) has no IPv4 address on the tailnet") }
             return (mesh, p, ip)
-        case .none: fail("no Mac named \(shellName(name)) on this Mac's tailnet (its Tailscale name; a Mac of another tailnet by its whole name)")
+        case .none: fail("nothing named \(shellName(name)) on this Mac's tailnet (its Tailscale name; one of another tailnet by its whole name)")
         case .several(let names): fail("\(shellName(name)) names more than one (\(names.joined(separator: ", "))): give the whole Tailscale name")
         }
     }
 
     /// What `--with` and `pair introduce` without a line hold the other Mac to, and this Mac's way to it.
-    /// `orDevice`: the device itself may be the one named, introducing this Mac from an app on it.
-    private static func byName(_ mesh: TailscaleClient.Mesh, _ other: MeshDevice, _ ip: String, orDevice: Bool = false) -> (PairByName.Peer, own: String, interface: String) {
-        guard other.os.lowercased() == "macos" || (orDevice && ["ios", "ipados"].contains(other.os.lowercased())) else { fail("\(other.dnsName) is a \(other.os.isEmpty ? "device of another kind" : other.os) device, not a Mac") }
-        guard let id = other.stableID else { stop("Tailscale gives no lasting id for \(other.dnsName), so it can't be held to being that Mac: carry the lines instead (`roamrun pair xcode` alone prints the first)") }
+    /// `also`: what else than a Mac may be the one named, by the OS Tailscale gives for it — the device
+    /// itself (the app on it introduces this Mac), a Windows or Linux machine (roamrunctl does). That only
+    /// turns a wrong name away sooner: whose the connection is, is held to the id and address below.
+    private static func byName(_ mesh: TailscaleClient.Mesh, _ other: MeshDevice, _ ip: String, also: Set<String> = []) -> (PairByName.Peer, own: String, interface: String) {
+        guard other.os.lowercased() == "macos" || also.contains(other.os.lowercased()) else {
+            fail("\(other.dnsName) is a \(other.os.isEmpty ? "device of another kind" : other.os) device, "
+                 + (also.isEmpty ? "not a Mac" : "not one that introduces here (a Mac, the device itself\(also.contains("linux") ? ", or a Windows or Linux machine with roamrunctl" : ""))"))
+        }
+        guard let id = other.stableID else { stop("Tailscale gives no lasting id for \(other.dnsName), so it can't be held to being that one: carry the lines instead (`roamrun pair xcode` alone prints the first)") }
         guard let own = mesh.ownIPs.first(where: { $0.contains(".") }),
               let interface = InterfaceMonitor.ipv4Addresses().first(where: { $0.value == own })?.key else {
             stop("this Mac's Tailscale address isn't on any of its interfaces: is Tailscale connected?")
@@ -290,6 +297,7 @@ enum CLI {
         case .stopped: "it was stopped on \(other) before a pairing was tried"
         case .addressLost: "\(other)'s address on the device's Wi‑Fi changed, so it stopped"
         case .announcementLost: "\(other)'s announcement or its listener failed"
+        case .noLine: "a pairing was tried, but \(other) didn't see the device's own announcement, so it has no line to save the device from. Whether the pairing was made shows in Device Hub here; if the device isn't saved here yet (`roamrun devices`), add it with `roamrun devices add` and a line from a Mac that has it"
         case .failed: "\(other) couldn't start standing in: its own terminal says why"
         }
     }
@@ -341,7 +349,7 @@ enum CLI {
         guard let found = otherWaiting(inPgrep: listed, me: getpid()) else {
             return "couldn't listen for \(other) (\(error.localizedDescription)): another program on this Mac has port \(PairWire.port) on its Tailscale address."
         }
-        return "another `\(found.command)` is waiting on this Mac (process \(found.pid)), and only one can at a time. It ends by itself once it has waited its time out (ten minutes for the other Mac); to stop it now: kill -INT \(found.pid)"
+        return "another `\(found.command)` is waiting on this Mac (process \(found.pid)), and only one can at a time. It ends by itself once it has waited its time out (ten minutes for the one it names); to stop it now: kill -INT \(found.pid)"
     }
 
     /// `pair control --attempt` / `--last`: what the app made of an attempt, while it remembers.
@@ -378,11 +386,11 @@ enum CLI {
     /// device the one Mac named introduces; this carries between the two. No code is shown here.
     private static func offerControlPairing(with home: String, peer peerName: String?, qr: Bool = false) async -> Never {
         let (mesh, other, ip) = mac(named: home)
-        let (peer, own, interface) = byName(mesh, other, ip, orDevice: true)
+        let (peer, own, interface) = byName(mesh, other, ip, also: ["ios", "ipados", "linux", "windows"])
         // Named itself, the device is the one that connects: its Tailscale name is known, and names it here.
-        let itself = other.os.lowercased() != "macos"
+        let itself = ["ios", "ipados"].contains(other.os.lowercased())
         let label = other.dnsName.split(separator: ".").first.map(String.init)
-        if qr, !itself { fail("--qr is for a device named with --with: \(other.dnsName) is a Mac, and takes `roamrun pair introduce`") }
+        if qr, !itself { fail("--qr is for a device named with --with, whose app reads the code: \(other.dnsName) is given this Mac's name as an argument") }
         if itself, peerName != nil { fail("--peer says which device a Mac introduces; \(other.dnsName) is the device itself") }
         // Its name here is its Tailscale name: found taken before anything waits, not after the code was typed.
         if itself, let label, ProfileStore().load().contains(where: { $0.displayName.caseInsensitiveCompare(label) == .orderedSame && $0.providerIP != ip }) {
@@ -406,11 +414,16 @@ enum CLI {
         }
         let whole = (try? TailscaleClient.fromSettings().selfDNSName()).flatMap { $0 }
         let me = whole?.split(separator: ".").first.map(String.init) ?? "<this Mac's Tailscale name>"
+        // What the one named runs: a Mac has RoamRun, another machine roamrunctl, which knows the device by its Tailscale name.
+        let introduce = other.os.lowercased() == "macos" ? "roamrun pair introduce --mac \(me) --to <device>"
+            : "roamrunctl pair introduce --mac \(me) --to <the device's Tailscale name>"
+        // A Mac may have roamrunctl alone: Tailscale doesn't tell.
+        let without = other.os.lowercased() == "macos" && !itself ? "\n    (a Mac without RoamRun:  roamrunctl pair introduce --mac \(me) --to <the device's Tailscale name>)" : ""
         // Each try is an attempt of the app's own; the one under way, or last made, is what is asked about.
         let current = OSAllocatedUnfairLock(initialState: UUID())
         note("""
-        Waiting for \(other.dnsName), 10 minutes at most; only \(itself ? "it" : "that Mac") is answered.
-          There\(itself ? ":  the RoamRun Introducer app, far Mac “\(me)”, Introduce" : " (on the device's Wi‑Fi), run by a person:  roamrun pair introduce --mac \(me) --to <device>")
+        Waiting for \(other.dnsName), 10 minutes at most; only \(itself ? "it" : other.os.lowercased() == "macos" ? "that Mac" : "that machine") is answered.
+          There\(itself ? ":  the RoamRun Introducer app, far Mac “\(me)”, Introduce" : " (on the device's Wi‑Fi), run by a person:  \(introduce)\(without)")
           The code to type on the device shows there, not here.
         """)
         if Proc.run("/usr/libexec/ApplicationFirewall/socketfilterfw", ["--getglobalstate"], timeout: 5).out.contains("enabled") {
@@ -466,7 +479,7 @@ enum CLI {
                 case .offerSent(let id): note("\(other.dnsName) has this Mac's offer and announces it to the device. Waiting for the device (9 minutes at most). Attempt \(id).")
                 case .again:
                     waitedAgain.withLock { $0 = true }
-                    note("The device came and the pairing wasn't made (a wrong code, or refused there); nothing was kept. Still waiting for \(other.dnsName), 10 minutes more: \(itself ? "in its app, Introduce again" : "there, run `roamrun pair introduce` again").")
+                    note("The device came and the pairing wasn't made (a wrong code, or refused there); nothing was kept. Still waiting for \(other.dnsName), 10 minutes more: \(itself ? "in its app, Introduce again" : "there, run `\(introduce.split(separator: " ").first ?? "roamrun") pair introduce` again").")
                 case .codeSent: note("The device asked to pair; its code is shown on \(other.dnsName)\(itself ? " itself" : "").")
                 }
             })
@@ -491,14 +504,14 @@ enum CLI {
             stop("\(other.dnsName) went away. Nothing was kept here" + (more.map { " (\($0))" } ?? "") + ". \(again)")
         case .noResult: stop("the device didn't pair in time; nothing was kept here. \(again)")
         case .noOne where waitedAgain.withLock({ $0 }):
-            stop("the pairing wasn't made, and \(other.dnsName) didn't \(itself ? "Introduce" : "run `roamrun pair introduce`") again in 10 minutes; nothing was kept here. \(again)")
+            stop("the pairing wasn't made, and \(other.dnsName) didn't \(itself ? "Introduce" : "run `\(introduce.prefix { $0 != " " }) pair introduce`") again in 10 minutes; nothing was kept here. \(again)")
         case .noOne where met.withLock({ $0 }) && itself:
             stop("\(other.dnsName) connected and didn't go on: its app didn't find the device's own announcement in time, or was stopped. \(again)")
         case .noOne where met.withLock({ $0 }):
             stop("\(other.dnsName) connected and didn't go on: is RoamRun there a version that knows `pair control`? Update it, then run both commands again")
         case .noOne where itself:
             stop("\(other.dnsName) didn't connect in 10 minutes. Was Introduce tapped in its app with this Mac's name (\(me)), and do Tailscale's rules and this Mac's firewall let it reach port \(PairWire.port) here?")
-        case .noOne: stop("\(other.dnsName) didn't connect in 10 minutes. Is `roamrun pair introduce --mac \(me) --to <device>` running there, and do Tailscale's rules and this Mac's firewall let that Mac reach port \(PairWire.port) here?")
+        case .noOne: stop("\(other.dnsName) didn't connect in 10 minutes. Is `\(introduce)` running there, and do Tailscale's rules and this Mac's firewall let it reach port \(PairWire.port) here?")
         case .stopped: stop("stopped; nothing was kept here")
         }
     }
@@ -507,11 +520,11 @@ enum CLI {
     /// device it says a pairing was tried with.
     private static func offerXcodePairing(with home: String, qr: Bool = false) async -> Never {
         let (mesh, other, ip) = mac(named: home)
-        let (peer, own, interface) = byName(mesh, other, ip, orDevice: true)
+        let (peer, own, interface) = byName(mesh, other, ip, also: ["ios", "ipados", "linux", "windows"])
         // Named itself, the device is saved under its Tailscale name: what its app calls it isn't asked.
-        let itself = other.os.lowercased() != "macos"
+        let itself = ["ios", "ipados"].contains(other.os.lowercased())
         let label = other.dnsName.split(separator: ".").first.map(String.init)
-        if qr, !itself { fail("--qr is for a device named with --with: \(other.dnsName) is a Mac, and takes `roamrun pair introduce`") }
+        if qr, !itself { fail("--qr is for a device named with --with, whose app reads the code: \(other.dnsName) is given this Mac's name as an argument") }
         // Its name here is its Tailscale name: found taken before anything waits.
         if itself, let label, ProfileStore().load().contains(where: { $0.displayName.caseInsensitiveCompare(label) == .orderedSame && $0.providerIP != ip }) {
             stop("another device is saved here as \(label), which is the name \(other.dnsName) would get: rename that one first (the RoamRun app, on its page)")
@@ -532,9 +545,14 @@ enum CLI {
         }
         let whole = (try? TailscaleClient.fromSettings().selfDNSName()).flatMap { $0 }
         let me = whole?.split(separator: ".").first.map(String.init) ?? "<this Mac's Tailscale name>"
+        // What the one named runs: a Mac has RoamRun, another machine roamrunctl, which knows the device by its Tailscale name.
+        let introduce = other.os.lowercased() == "macos" ? "roamrun pair introduce --mac \(me) --to <device>"
+            : "roamrunctl pair introduce --mac \(me) --to <the device's Tailscale name>"
+        // A Mac may have roamrunctl alone: Tailscale doesn't tell.
+        let without = other.os.lowercased() == "macos" && !itself ? "\n    (a Mac without RoamRun:  roamrunctl pair introduce --mac \(me) --to <the device's Tailscale name>)" : ""
         note("""
-        Waiting for \(other.dnsName), 10 minutes at most; only \(itself ? "it" : "that Mac") is answered.
-          There\(itself ? ":  the RoamRun Introducer app, far Mac “\(me)”, Introduce" : " (on the device's Wi‑Fi):  roamrun pair introduce --mac \(me) --to <device>")
+        Waiting for \(other.dnsName), 10 minutes at most; only \(itself ? "it" : other.os.lowercased() == "macos" ? "that Mac" : "that machine") is answered.
+          There\(itself ? ":  the RoamRun Introducer app, far Mac “\(me)”, Introduce" : " (on the device's Wi‑Fi):  \(introduce)\(without)")
           Here:  Xcode's Device Hub: + › Pair Nearby Device, and leave “Waiting to pair.” open (before or after)
         """)
         // Held by the firewall, a connection looks made to the other Mac and never arrives here.
@@ -594,7 +612,7 @@ enum CLI {
         case .unsaved: exit(1)
         case .ended(let why): stop(sentence(why, other: other.dnsName))
         case .ambiguous: stop(sentence(.ambiguous, other: "this Mac").replacingOccurrences(of: "there, ", with: ""))
-        case .noResult: stop("\(other.dnsName) took the offer and said nothing more in 7 minutes. See what its `roamrun pair introduce` printed: a line there works with `roamrun devices add` here")
+        case .noResult: stop("\(other.dnsName) took the offer and said nothing more in 7 minutes. See what its `\(introduce.prefix { $0 != " " }) pair introduce` printed: a line there works with `roamrun devices add` here")
         case .noOne where itself:
             stop(sawOffer.withLock { $0 }
                  ? "\(other.dnsName) didn't come back in time. If a pairing was tried and its app shows a line, that works here with `roamrun devices add <line>`; otherwise run this again and Introduce in the app"
@@ -603,10 +621,10 @@ enum CLI {
                  : "\(other.dnsName) didn't connect in 10 minutes. Was Introduce tapped in its app with this Mac's name (\(me)), and do Tailscale's rules let it reach port \(PairWire.port) here?")
         case .noOne:
             stop(sawOffer.withLock { $0 }
-                 ? "\(other.dnsName) didn't come back in time. If a pairing was tried, the line its `roamrun pair introduce` printed works with `roamrun devices add` here; otherwise run both again"
+                 ? "\(other.dnsName) didn't come back in time. If a pairing was tried, the line its `\(introduce.prefix { $0 != " " }) pair introduce` printed works with `roamrun devices add` here; otherwise run both again"
                  : met.withLock { $0 }
                  ? "\(other.dnsName) connected, but this Mac made no offer to pair in 10 minutes: Device Hub: + › Pair Nearby Device, leave “Waiting to pair.” open, and run both commands again"
-                 : "\(other.dnsName) got no offer in 10 minutes. Is `roamrun pair introduce --mac \(me) --to <device>` running there, was Pair Nearby Device pressed here, and do Tailscale's rules let that Mac reach port \(PairWire.port) here?")
+                 : "\(other.dnsName) got no offer in 10 minutes. Is `\(introduce)` running there, was Pair Nearby Device pressed here, and do Tailscale's rules let it reach port \(PairWire.port) here?")
         case .stopped: stop("stopped; nothing was saved")
         }
     }

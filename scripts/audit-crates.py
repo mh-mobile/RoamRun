@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Checks the crates Cargo.lock pins against the advisories OSV holds (RustSec's among them).
+"""Checks the crates the Cargo.lock files pin against the advisories OSV holds (RustSec's among them).
 Exits 1 for an advisory that isn't listed below with why it doesn't reach RoamRun.
-usage: audit-crates.py [Cargo.lock]"""
+usage: audit-crates.py [Cargo.lock …]   (both crates' by default)"""
 import json, re, sys, urllib.request
 
 # Looked into, and why each doesn't apply. One that no longer matches is said, to be removed.
@@ -16,12 +16,13 @@ def ask(url, body=None):
     request = urllib.request.Request(url, data=body and json.dumps(body).encode(), headers={"Content-Type": "application/json"})
     return json.load(urllib.request.urlopen(request, timeout=60))
 
-lock = open(sys.argv[1] if len(sys.argv) > 1 else "Rust/RoamRunDevice/Cargo.lock").read()
 crates = []
-for block in lock.split("[[package]]")[1:]:
-    field = lambda name: (re.search(rf'^{name} = "([^"]+)"', block, re.M) or [None, None])[1]
-    if (field("source") or "").startswith("registry+"):   # ours and the pinned fork aren't on crates.io
-        crates.append((field("name"), field("version")))
+for path in sys.argv[1:] or ["Rust/RoamRunDevice/Cargo.lock", "Rust/roamrunctl/Cargo.lock"]:
+    for block in open(path).read().split("[[package]]")[1:]:
+        field = lambda name: (re.search(rf'^{name} = "([^"]+)"', block, re.M) or [None, None])[1]
+        # ours and the pinned fork aren't on crates.io; a crate both pin is asked about once
+        if (field("source") or "").startswith("registry+") and (field("name"), field("version")) not in crates:
+            crates.append((field("name"), field("version")))
 answer = ask("https://api.osv.dev/v1/querybatch",
              {"queries": [{"package": {"name": n, "ecosystem": "crates.io"}, "version": v} for n, v in crates]})
 found = [(n, v, a["id"]) for (n, v), r in zip(crates, answer["results"]) for a in r.get("vulns", [])]

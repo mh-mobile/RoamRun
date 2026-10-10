@@ -6071,7 +6071,7 @@ import ImageIO
 
 /// Agents run SKILL.md's commands as written, and people copy the READMEs': each `roamrun …`
 /// in their code (fenced blocks and inline code) must be a command the CLI knows, with options it takes.
-@Test(arguments: ["skills/roamrun/SKILL.md", "README.md", "README.ja.md", "docs/another-mac.md"])
+@Test(arguments: ["skills/roamrun/SKILL.md", "skills/roamrunctl/SKILL.md", "README.md", "README.ja.md", "docs/another-mac.md"])
 func everyDocumentedCommandParses(_ doc: String) throws {
     let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     let text = try String(contentsOf: root.appendingPathComponent(doc), encoding: .utf8)
@@ -6113,7 +6113,8 @@ func everyDocumentedCommandParses(_ doc: String) throws {
             }
         }
     }
-    #expect(checked > (doc.hasPrefix("docs/") ? 5 : 15))   // the extraction itself still finds them
+    // The extraction itself still finds them; roamrunctl's skill shows few of `roamrun`'s own.
+    #expect(checked > (doc.hasPrefix("docs/") || doc.contains("roamrunctl") ? 5 : 15))
 }
 
 /// A second `roamrun up` for a device another one handles is refused in every state, an
@@ -6889,6 +6890,13 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     let all: [PairWire.Message] = [.wantOffer, .offer("rr-xcode-offer-v1:abc"), .tried("rr-device-v1:abc"), .saved, .unsaved, .you("iphone.t.ts.net")]
         + PairWire.Reason.allCases.map(PairWire.Message.ended)
     for m in all { #expect(PairWire.message(from: PairWire.line(m)) == m) }
+    // roamrunctl writes these words itself: each one it can end with is one this Mac reads.
+    #expect(PairWire.message(from: "rr-pair-v1 ended no-line") == .ended(.noLine))
+    let rust = (try? String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        .appendingPathComponent("Rust/roamrunctl/src/main.rs"), encoding: .utf8)) ?? ""
+    let ends = rust.matches(of: /"ended ([a-z-]+)"|Err\(\(\s*"([a-z-]+)"|String\| \("([a-z-]+)"/).compactMap { $0.1 ?? $0.2 ?? $0.3 }.map(String.init)
+    #expect(Set(ends).count >= 7, "\(ends)")
+    for word in ends { #expect(PairWire.message(from: "rr-pair-v1 ended " + word) != nil, "\(word)") }
     for line in ["", "offer?", "rr-pair-v2 offer?", "rr-pair-v1 ", "rr-pair-v1 offer", "rr-pair-v1 offer ", "rr-pair-v1 offer a b", "rr-pair-v1 you", "rr-pair-v1 you ",
                  "rr-pair-v1 ended because", "rr-pair-v1 saved it", "rr-pair-v1 OFFER?"] {
         #expect(PairWire.message(from: line) == nil, "\(line)")
