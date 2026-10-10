@@ -33,7 +33,8 @@ each with the binary, this file and the licenses of the crates it is built from 
 the binary alone out of it). `roamrunctl-SHA256SUMS` there lists their checksums. The Linux builds
 are static, for any distribution. The Windows ones aren't signed: SmartScreen may ask before one runs the first time, and Windows' firewall
 asks, the first time it announces, whether to let it in — allow it, on the kind of network the Wi‑Fi is set as (the
-device connects to it, and it answers the device's questions over mDNS).
+device connects to it, and it answers the device's questions over mDNS). The device asked while that question
+stood: if Settings doesn't list the far Mac afterwards, leave Developer Mode and open it again.
 It isn't on Homebrew's or crates.io's own lists. Its version is RoamRun's: use the same on the far Mac.
 
 For an agent that is to use it: the skill in [`skills/roamrunctl`](../../skills/roamrunctl/SKILL.md) —
@@ -93,8 +94,9 @@ ends the run, the device line is made, and the goodbye reaches a browser within 
 - And device control's pairing from that same Windows machine: the code was printed there once the device had picked
   the far Mac, typed, and both said the pairing was kept and switched on; the far Mac then showed device control as
   connected.
-- Not tried on Windows: the x86_64 build beyond CI's tests, and `--offer`. Not run on Linux with a firewall on, or
-  without avahi.
+- And the x86_64 build there (Windows on ARM runs it), with the offer carried (`--offer`): the line it printed went
+  to `roamrun devices add` on the far Mac, whose bridge came up Ready with it.
+- Not run on Windows on an x86_64 machine, nor on Linux with a firewall on or without avahi.
 - Device control's pairing, once, from the same Linux machine: the far Mac ran `roamrun pair control --with <it>`
   with the RoamRun app open, this printed the code once the device had picked the far Mac, the code was typed,
   and both said the pairing was kept and switched on; the far Mac then showed device control as connected.
