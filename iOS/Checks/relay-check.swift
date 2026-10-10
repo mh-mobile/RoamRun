@@ -156,7 +156,7 @@ func answerAfterFIN(_ c: NWConnection, size: Int, on queue: DispatchQueue) {
         check(Wire.onTailnet(Data([0xFD, 0x7A, 0x11, 0x5C, 0xA1, 0xE0] + [UInt8](repeating: 1, count: 10))) && !Wire.onTailnet(Data([UInt8](repeating: 0xFD, count: 16))), "only fd7a:115c:a1e0::/48 is Tailscale's IPv6")
         check(!Wire.sentence(ended: "<b>anything it sent</b>").contains("anything"), "a word this app doesn't know isn't shown as it came")
         let own = Introduction.Offer(port: 53050, txt: ["identifier": UUID().uuidString, "authTag": "dGVzdA", "model": "Mac16,1", "name": "Its Own Name", "flags": "1", "ver": "2", "minVer": "1"])
-        check(Wire.announced(own, for: "rr-cloud.example.ts.net").txt["name"] == "rr-cloud" && Wire.announced(own, for: "100.101.102.103").txt["name"] == "100.101.102.103", "announced under what the person called it, an address too")
+        check(Wire.announced(own, for: "cloud-mac.example.ts.net").txt["name"] == "cloud-mac" && Wire.announced(own, for: "100.101.102.103").txt["name"] == "100.101.102.103", "announced under what the person called it, an address too")
         check(Wire.saidAsTried(carried: true, success: false, line: false, title: "iOS stopped it in the background", farsWord: false)
               && !Wire.saidAsTried(carried: true, success: false, line: false, title: "it didn't save this iPhone", farsWord: true)
               && !Wire.saidAsTried(carried: false, success: false, line: false, title: nil, farsWord: false)

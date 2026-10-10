@@ -322,7 +322,7 @@ mod tests {
 
     #[test]
     fn announced_names() {
-        assert_eq!(announced_name("rr-cloud.tail1234.ts.net."), Some("rr-cloud".into()));
+        assert_eq!(announced_name("cloud-mac.tail1234.ts.net."), Some("cloud-mac".into()));
         assert_eq!(announced_name(&"a".repeat(70)), Some("a".repeat(63)));
         assert_eq!(announced_name(&"é".repeat(40)), Some("é".repeat(31)));
         assert_eq!(announced_name(""), None);
