@@ -40,6 +40,10 @@ It isn't on Homebrew's or crates.io's own lists. Its version is RoamRun's: use t
 For an agent that is to use it: the skill in [`skills/roamrunctl`](../../skills/roamrunctl/SKILL.md) —
 `npx skills add mh-mobile/RoamRun` offers it, and each archive carries it as `SKILL.md`.
 
+A firewall on the machine has to let the device in: it connects over TCP to the port `roamrunctl` says it announces
+on, from the address it says the device has. With ufw on Ubuntu (which lets mDNS in as it comes) that is
+`sudo ufw allow proto tcp from <the device's address>`; on Windows, the question it asks is enough.
+
 ## Use
 
 ```
@@ -96,7 +100,10 @@ ends the run, the device line is made, and the goodbye reaches a browser within 
   connected.
 - And the x86_64 build there (Windows on ARM runs it), with the offer carried (`--offer`): the line it printed went
   to `roamrun devices add` on the far Mac, whose bridge came up Ready with it.
-- Not run on Windows on an x86_64 machine, nor on Linux with a firewall on or without avahi.
+- With ufw on, on that Linux machine, under a test service type and with a Mac standing in for the device: the
+  announcement was seen and answered as ufw comes (it lets mDNS in), a connection got no answer until TCP from the
+  device's address was allowed, and then connected. firewalld and others weren't tried.
+- Not run on Windows or Linux on an x86_64 machine, nor on Linux without avahi.
 - Device control's pairing, once, from the same Linux machine: the far Mac ran `roamrun pair control --with <it>`
   with the RoamRun app open, this printed the code once the device had picked the far Mac, the code was typed,
   and both said the pairing was kept and switched on; the far Mac then showed device control as connected.

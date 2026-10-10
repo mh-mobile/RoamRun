@@ -81,7 +81,8 @@ How it ends:
 - **Exit 1 without a line**: nothing was paired. It says why — "far Mac isn't waiting
   (port 41830)" (its `roamrun pair xcode --with <machine>` isn't running, or names
   another machine, or Tailscale's rules or its firewall keep this machine out), "nothing was
-  paired in time", "the far Mac's command ended", "no peer named …" (a name that
+  paired in time" (when the device listed the far Mac and got no further, a firewall
+  here keeps it out: the message says which address and port to let in), "the far Mac's command ended", "no peer named …" (a name that
   isn't on this tailnet). Say which; don't loop.
 
 With a far Mac that can't be asked (an older RoamRun, or that port shut), the offer is

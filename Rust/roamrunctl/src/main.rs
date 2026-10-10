@@ -411,7 +411,11 @@ async fn session(plan: Plan, far_link: Option<&wire::Wire>) -> Result<Ended, (&'
                 wire::Said::Other => break Err(("stopped", "the far Mac said something else, and was left".to_string())),
             },
             Some(Event::Far(_)) | Some(Event::NoResult) => break Err(("stopped", "the far Mac's command ended".to_string())),
-            Some(Event::Deadline) => break Err(("deadline", "nothing was paired in time".to_string())),
+            // Listed on the device and no connection here is what a firewall in between looks like.
+            Some(Event::Deadline) => break Err((
+                "deadline",
+                format!("nothing was paired in time. If the device listed the far Mac and got no further, a firewall here keeps it out: let TCP from {} in on port {port}", plan.lan),
+            )),
             Some(Event::Stopped) => break Err(("stopped", "stopped".to_string())),
             Some(Event::AddressLost) => break Err(("address-lost", "this machine's address on the LAN changed".to_string())),
             Some(Event::FarGone) => break Err(("stopped", "the far Mac's command ended".to_string())),
