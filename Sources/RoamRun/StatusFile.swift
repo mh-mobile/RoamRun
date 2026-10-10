@@ -49,7 +49,8 @@ enum StatusFile {
         var all: [UUID: Entry] = [:]
         for i in stride(from: 0, to: raw.count - 1, by: 2) {
             guard let key = raw[i] as? String, let id = UUID(uuidString: key),
-                  let d = try? JSONSerialization.data(withJSONObject: raw[i + 1]),
+                  let value = raw[i + 1] as? [String: Any],   // anything else stops the process, uncaught
+                  let d = try? JSONSerialization.data(withJSONObject: value),
                   let e = try? JSONDecoder().decode(Entry.self, from: d) else { continue }
             all[id] = e
         }

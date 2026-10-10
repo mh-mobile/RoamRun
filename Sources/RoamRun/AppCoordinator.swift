@@ -932,7 +932,8 @@ final class AppCoordinator: ObservableObject {
         // By UDID when remotepairingd knows the advert (instance names rotate), else the exact advert.
         let udid = advertUDIDs[captured.instanceName]
         guard !ip.isEmpty else { return .refused("Choose its VPN address.") }
-        if let problem = profiles.nameProblem(displayName) { return .refused(problem) }
+        // Against what the CLI saved meanwhile too: the save would keep both under one name.
+        if let problem = store.known(with: profiles).nameProblem(displayName) { return .refused(problem) }
         if let same = profiles.first(where: { $0.providerIP == ip || $0.instanceName == captured.instanceName
             || (udid != nil && $0.udid?.caseInsensitiveCompare(udid!) == .orderedSame) }) {
             return .refused("This device is already saved as “\(same.displayName)”.")
@@ -1155,7 +1156,10 @@ final class AppCoordinator: ObservableObject {
         importing.lock()
         defer { importing.unlock() }
         // A name of its own where the one it comes with is taken here: found out now, not after it paired.
-        let name = DispatchQueue.main.sync { MainActor.assumeIsolated { profiles.nameProblem(device.displayName) == nil ? nil : uniqueName(device.displayName) } }
+        let name = DispatchQueue.main.sync { MainActor.assumeIsolated { () -> String? in
+            let known = store.known(with: profiles)
+            return known.nameProblem(device.displayName) == nil ? nil : known.uniqueName(device.displayName)
+        } }
         switch takeIn(device, udid: paired.udid, pairing: paired.pairing, as: name, fresh: true, wanted: wanted) {
         case .success(let taken): return .success(.init(name: taken.saved.displayName, on: taken.on))
         case .failure(let why):
@@ -1379,7 +1383,7 @@ final class AppCoordinator: ObservableObject {
     @discardableResult
     func rename(_ id: UUID, to newName: String) -> Bool {
         let n = newName.trimmingCharacters(in: .whitespaces)
-        guard profiles.nameProblem(n, except: id) == nil,
+        guard store.known(with: profiles).nameProblem(n, except: id) == nil,
               let i = profiles.firstIndex(where: { $0.id == id }) else { return false }
         profiles[i].displayName = n
         persist()

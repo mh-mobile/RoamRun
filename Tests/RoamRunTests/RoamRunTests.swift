@@ -1084,6 +1084,45 @@ extension TimingSensitive.RelayOnLocalhost {
     #expect(c.services["FAKE._remotepairing._tcp"] == nil)
 }
 
+/// A host's address heard again makes none of its records newer: Add Device takes the newest.
+@MainActor @Test func anAddressHeardAgainDoesntMakeARecordNewer() {
+    let c = BonjourCapture()
+    c.parse(line: "OLD._remotepairing._tcp SRV 0 0 49152 my-iphone.local.")
+    let heard = c.services["OLD._remotepairing._tcp"]?.lastSeen
+    Thread.sleep(forTimeInterval: 0.01)
+    c.parse(line: "my-iphone.local. A 192.168.1.9")
+    #expect(heard != nil && c.services["OLD._remotepairing._tcp"]?.lastSeen == heard)
+    #expect(c.services["OLD._remotepairing._tcp"]?.hostIPs == ["192.168.1.9"])
+}
+
+/// What isn't a device at all, among the saved ones, costs neither the others nor the process.
+@Test func aListWithSomethingElseInItKeepsItsDevices() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let one = String(decoding: try JSONEncoder().encode(profile("iPhone")), as: UTF8.self)
+    try Data(#"[null, "x", 3, [], \#(one)]"#.utf8).write(to: dir.appendingPathComponent("profiles.json"))
+    #expect(ProfileStore(directory: dir).load().map(\.displayName) == ["iPhone"])
+
+    let entry = String(decoding: try JSONEncoder().encode(StatusFile.Entry(pid: 1, status: "Ready", detail: "", ready: true, tunnelPorts: [], updated: Date(timeIntervalSince1970: 0))), as: UTF8.self)
+    let (bad, good) = (UUID(), UUID())
+    let status = StatusFile.decode(Data(#"["\#(bad)", null, "\#(UUID())", "x", "\#(good)", \#(entry)]"#.utf8))
+    #expect(Array(status.keys) == [good])
+}
+
+/// A name is taken by a device the CLI saved since the app read its list, too.
+@Test func aNameSavedByAnotherProcessMeanwhileIsTaken() {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let app = ProfileStore(directory: dir), cli = ProfileStore(directory: dir)
+    let mine = profile("iPad")
+    #expect(app.save(base: [], wanted: [mine]) != nil)
+    #expect(cli.update { $0.append(profile("iPhone")) })
+    let known = app.known(with: [mine])   // the app's list, as it read it before
+    #expect(known.count == 2 && known.nameProblem("iphone") != nil)
+    #expect([mine].nameProblem("iphone") == nil)
+    #expect(known.nameProblem("iPad", except: mine.id) == nil && known.uniqueName("iPhone") == "iPhone 2")
+}
+
 @MainActor @Test func aFloodingPeerCantGrowTheTablesOrLockOutARealDevice() {
     let c = BonjourCapture()
     for i in 0..<600 { c.parse(line: "I\(i)._remotepairing._tcp SRV 0 0 49152 h\(i).local.") }
@@ -4846,7 +4885,7 @@ private final class StandInDevice: ControlledDevice, @unchecked Sendable {
     var pairing: (@Sendable () throws -> Data)?
     private(set) var gated: (@Sendable () -> Bool)?
     func gate(_ mayBegin: @escaping @Sendable () -> Bool) { gated = mayBegin }
-    /// A text waits here when set, until it is interrupted.
+    /// An input waits here when set, until it is interrupted.
     var typeHold: DispatchSemaphore?
     let typeBegan = DispatchSemaphore(value: 0)
     func interrupt() {
@@ -4867,15 +4906,16 @@ private final class StandInDevice: ControlledDevice, @unchecked Sendable {
     /// Where the last tap went, as fractions of the screen.
     var tapped: (x: Double, y: Double)?
     func elements(limit: Int) throws -> (captions: [String], complete: Bool) { count("elements"); return ([], true) }
-    func tap(x: Double, y: Double) throws { count("tap"); lock.withLock { tapped = (x, y) }; Thread.sleep(forTimeInterval: 0.01) }
-    func swipe(from: (x: Double, y: Double), to: (x: Double, y: Double), milliseconds: Int) throws { count("swipe") }
-    func type(_ text: String) throws {
-        count("type")
+    func tap(x: Double, y: Double) throws { input("tap"); lock.withLock { tapped = (x, y) }; Thread.sleep(forTimeInterval: 0.01) }
+    func swipe(from: (x: Double, y: Double), to: (x: Double, y: Double), milliseconds: Int) throws { input("swipe") }
+    func type(_ text: String) throws { input("type") }
+    func paste(_ text: String) throws { input("paste") }
+    func press(_ button: String) throws { input("press") }
+    private func input(_ call: String) {
+        count(call)
         typeBegan.signal()
         held(typeHold)
     }
-    func paste(_ text: String) throws { count("paste") }
-    func press(_ button: String) throws { count("press") }
 }
 
 /// A hub over stand-ins, one made for each session the hub opens.
@@ -6671,9 +6711,10 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     #expect(hub.answer(.init(op: "press", device: id, text: "home")).error == DeviceControlHub.switchedOff)
 }
 
-/// A text stops where it is when whoever asked for it leaves, and when its device is switched
-/// off: neither waits for it to be typed out.
-@Test func aTextIsInterruptedWhenItsAskerLeavesOrItsDeviceIsSwitchedOff() throws {
+/// An input stops where it is when whoever asked for it leaves, and when its device is switched
+/// off: neither waits for it — a text to be typed out, or any of them for its connection.
+@Test(arguments: ["type", "paste", "press", "tap", "swipe"])
+func anInputIsInterruptedWhenItsAskerLeavesOrItsDeviceIsSwitchedOff(_ op: String) throws {
     for leaving in [true, false] {
         let dir = scratchDir()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -6685,9 +6726,10 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
         let device = try #require(made().last)
         let there = OSAllocatedUnfairLock(initialState: true), on = OSAllocatedUnfairLock(initialState: true)
         hub.allowedKnown = { _ in on.withLock { $0 } }
+        #expect(hub.answer(.init(op: "look", device: id, path: lookFile(in: dir))).ok)   // a point is read off one
         let answered = DispatchSemaphore(value: 0)
         Thread.detachNewThread {
-            _ = hub.answer(.init(op: "type", device: id, text: "a long text"), wanted: { there.withLock { $0 } })
+            _ = hub.answer(.init(op: op, device: id, x: 10, y: 10, x2: 20, y2: 20, text: "home"), wanted: { there.withLock { $0 } })
             answered.signal()
         }
         #expect(soon(device.typeBegan))

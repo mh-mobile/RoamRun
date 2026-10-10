@@ -1246,6 +1246,9 @@ final class DeviceControlHub: @unchecked Sendable {
         defer { if request.op != "look" { h.acted = Date() } }
         /// The look's size, for a point to be read against; taken away by `spend` once the request is one that goes to the device.
         func spend() { h.looked = nil }
+        // A call can wait for its connection, and a text takes its time: an asker who leaves
+        // meanwhile has it stopped where it is, or not begun.
+        let session = h.session
         do {
             switch request.op {
             case "elements":
@@ -1267,7 +1270,7 @@ final class DeviceControlHub: @unchecked Sendable {
                     return .failure("a swipe takes 50...5000 ms")
                 }
                 spend()
-                try h.session.swipe(from: from, to: to, milliseconds: duration)
+                try Self.whileWanted(wanted, else: { session.interrupt() }) { try session.swipe(from: from, to: to, milliseconds: duration) }
                 return .init(ok: true)
             case "type", "paste", "press":
                 spend()
@@ -1275,12 +1278,10 @@ final class DeviceControlHub: @unchecked Sendable {
                 switch request.op {
                 case "type":
                     let started = Date()
-                    // A text takes its time: an asker who leaves meanwhile has it stopped where it is.
-                    let session = h.session
                     try Self.whileWanted(wanted, else: { session.interrupt() }) { try session.type(text) }
                     Self.inputLog.debug("\(name, privacy: .public): typed \(text.count) keys, \(text.filter { $0 == " " }.count) spaces, in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
-                case "paste": try h.session.paste(text)
-                default: try h.session.press(text)
+                case "paste": try Self.whileWanted(wanted, else: { session.interrupt() }) { try session.paste(text) }
+                default: try Self.whileWanted(wanted, else: { session.interrupt() }) { try session.press(text) }
                 }
                 return .init(ok: true)
             case "look":
@@ -1315,7 +1316,7 @@ final class DeviceControlHub: @unchecked Sendable {
                     return .failure("the point must be inside the last look (\(size.width) x \(size.height))")
                 }
                 spend()
-                try h.session.tap(x: point.x, y: point.y)
+                try Self.whileWanted(wanted, else: { session.interrupt() }) { try session.tap(x: point.x, y: point.y) }
                 return .init(ok: true)
             default:
                 return .failure("unknown request")
