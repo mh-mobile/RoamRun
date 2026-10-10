@@ -208,7 +208,8 @@ final class BonjourCapture: ObservableObject {
             host: srv.host,
             hostIPs: ipsByHost[srv.host] ?? [],
             txt: txtByRecord[recordName] ?? [:],
-            lastSeen: Date()
+            // When the record itself was last heard: its host's address coming again says nothing of it.
+            lastSeen: seen[recordName] ?? Date()
         )
     }
 }

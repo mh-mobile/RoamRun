@@ -44,7 +44,8 @@ final class ProfileStore {
         if let profiles = try? JSONDecoder().decode([DeviceProfile].self, from: data) { return profiles }
         // One malformed entry shouldn't cost the others: keep what decodes (and a copy of the file below).
         let salvaged = ((try? JSONSerialization.jsonObject(with: data)) as? [Any])?.compactMap { item in
-            (try? JSONSerialization.data(withJSONObject: item)).flatMap { try? JSONDecoder().decode(DeviceProfile.self, from: $0) }
+            // Only an object: anything else there isn't an error to catch, it stops the process.
+            (item as? [String: Any]).flatMap { try? JSONSerialization.data(withJSONObject: $0) }.flatMap { try? JSONDecoder().decode(DeviceProfile.self, from: $0) }
         }
         // The next save would replace it with an empty list: keep a copy, once per distinct content.
         let fm = FileManager.default
@@ -56,6 +57,13 @@ final class ProfileStore {
             if (try? fm.copyItem(at: url, to: copy)) != nil { keptUnreadable = copy }
         }
         return salvaged ?? []
+    }
+
+    /// `mine`, and what another process saved since this one read the list: a name is taken
+    /// by any of them.
+    func known(with mine: [DeviceProfile]) -> [DeviceProfile] {
+        let ids = Set(mine.map(\.id))
+        return mine + load().filter { !ids.contains($0.id) }
     }
 
     /// Reads, changes and writes the list under the lock, so nothing another
