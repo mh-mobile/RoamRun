@@ -443,7 +443,13 @@ LINE=$(roamrun pair introduce "$OFFER" --mac cloud-mac --to iPhone) &&
 ssh cloud-mac roamrun devices add "$LINE"
 ```
 
-**デバイス自身に引き合わせてもらう。** デバイスの近くに RoamRun の入った Mac がないとき（そばにあるのが Windows や Linux のマシンだけ、など）は、デバイス上のアプリが代わりを務めます。[`iOS/`](iOS/) にある RoamRun Introducer です。Xcode でビルドして入れます（iOS 27 以降）。App Store にはありません。離れた Mac では、もう 1 台の Mac を名指しする場所に、デバイスを名指しします。
+**デバイス自身に引き合わせてもらう。** デバイスの近くに RoamRun の入った Mac がないとき（そばにあるのが Windows や Linux のマシンだけ、など）は、デバイス上のアプリが代わりを務めます。[`iOS/`](iOS/README.ja.md) にある RoamRun Introducer です。Xcode でビルドして入れます（iOS 27 以降）。App Store にはありません。離れた Mac では、もう 1 台の Mac を名指しする場所に、デバイスを名指しします。
+
+<p align="center">
+  <img src="docs/introducer-home.png" width="200" alt="RoamRun Introducer: 離れた Mac の名前と Introduce">
+  <img src="docs/introducer-pairing.png" width="200" alt="引き合わせの途中: 設定でペアリングする">
+  <img src="docs/introducer-done.png" width="200" alt="終わり: 離れた Mac がこの iPhone を保存した">
+</p>
 
 ```sh
 # あちら: Device Hub › + › Pair Nearby Device を押して、
