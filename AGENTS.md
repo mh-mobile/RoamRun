@@ -101,8 +101,8 @@ AND category == "input"'`. Text that arrives short with a line here was dropped 
    claims in line with the README.
 4. Homebrew tap (`mh-mobile/homebrew-tap`, `Casks/roamrun.rb`): set `version`
    and `sha256` (`shasum -a 256` of the dmg), `brew style` + `brew audit --cask --online`, push.
-   And `Formula/roamrunctl.rb`, from `Rust/roamrunctl/roamrunctl.rb`: the tag in `url`, the
-   `sha256` of that tarball (`curl -L <url> | shasum -a 256`), `brew audit --formula`, and built
+   And `Formula/roamrunctl.rb` there (roamrunctl built from source; the tap alone holds it, as it
+   holds the cask): the tag in `url`, the `sha256` of that tarball (`curl -L <url> | shasum -a 256`), `brew audit --formula`, and built
    once before the push — edited in the tap as Homebrew has it checked out (`cd "$(brew --repository mh-mobile/tap)"`),
    which is what this builds: `brew install --build-from-source mh-mobile/tap/roamrunctl && brew test roamrunctl`.
 5. roamrunctl's install commands (its README) take the newest release's archives by name: once
