@@ -137,4 +137,6 @@ ends the run, the device line is made, and the goodbye reaches a browser within 
   Ctrl-Break, a dropped ssh session against a real device, and a machine with two interfaces on the device's
   network weren't tried.
 - A second round of review then changed how the relay ends a broken connection, how a line is read, and what is
-  asked of Tailscale again after the wait for an offer: checked the same way on macOS, not yet against a real device.
+  asked of Tailscale again after the wait for an offer: checked the same way on macOS, and run against the real device
+  again, the same two ways (Xcode's pairing from the Windows machine: saved, Ready; device control's from the Linux
+  machine: kept and switched on; nothing left on either). The far Mac got the device's whole Tailscale name and saved it by it.
