@@ -24,6 +24,8 @@ struct Tailnet {
 
 #[derive(Deserialize)]
 pub struct Node {
+    #[serde(rename = "ID", default)]
+    id: String,
     #[serde(rename = "DNSName", default)]
     pub dns_name: String,
     #[serde(rename = "TailscaleIPs", default)]
@@ -34,10 +36,19 @@ pub struct Node {
 
 /// A peer by its Tailscale name.
 pub struct Peer {
+    /// Tailscale's lasting id for it; empty when it was given by address.
+    pub id: String,
     pub ip: Ipv4Addr,
     pub dns: String,
     /// Its address on this LAN when Tailscale talks to it directly there; None when relayed or IPv6.
     pub lan: Option<Ipv4Addr>,
+}
+
+impl Peer {
+    /// Still the machine `earlier` was: an address can pass to another while this waits.
+    pub fn is(&self, earlier: &Peer) -> bool {
+        !self.id.is_empty() && self.id == earlier.id && self.ip == earlier.ip
+    }
 }
 
 /// The first label of a Tailscale DNS name.
@@ -88,7 +99,9 @@ pub fn state_problem(state: &str) -> Option<String> {
 /// tailnet. Never the name a device gives itself, and never a guess between two (as RoamRun does).
 pub fn peer(status: &Status, name: &str) -> Result<Peer, String> {
     let want = name.trim_end_matches('.').to_lowercase();
-    let suffix = status.tailnet.as_ref().map(|t| t.suffix.trim_matches('.').to_lowercase()).unwrap_or_default();
+    // An older Tailscale doesn't say its tailnet's suffix: this machine's own name has it.
+    let own = status.this.dns_name.trim_end_matches('.').split_once('.').map_or("", |(_, rest)| rest);
+    let suffix = status.tailnet.as_ref().map(|t| t.suffix.trim_matches('.')).filter(|s| !s.is_empty()).unwrap_or(own).to_lowercase();
     let mut found: Vec<&Node> = status
         .peers
         .values()
@@ -119,7 +132,7 @@ pub fn peer(status: &Status, name: &str) -> Result<Peer, String> {
     } else {
         direct(&node.cur_addr)
     };
-    Ok(Peer { ip, dns, lan })
+    Ok(Peer { id: node.id.clone(), ip, dns, lan })
 }
 
 /// The host of a direct "ip:port" endpoint; None for IPv6.
@@ -167,7 +180,7 @@ mod tests {
         let json = r#"{"Self":{"DNSName":"me.tail.ts.net.","HostName":"me","TailscaleIPs":["100.64.0.1"]},
             "CurrentTailnet":{"MagicDNSSuffix":"tail.ts.net"},
             "Peer":{"shared":{"DNSName":"iphone-15.other.ts.net.","HostName":"iPhone 15","TailscaleIPs":["100.64.0.7"]},
-                "same":{"DNSName":"iphone-15-1.tail.ts.net.","HostName":"iPhone 15","TailscaleIPs":["100.64.0.8"]},"k":{"DNSName":"iPhone-15.tail.ts.net.","HostName":"iPhone 15","TailscaleIPs":["fd7a::1","100.64.0.9"],"CurAddr":"192.168.0.19:41641"}}}"#;
+                "same":{"ID":"n2","DNSName":"iphone-15-1.tail.ts.net.","HostName":"iPhone 15","TailscaleIPs":["100.64.0.8"]},"k":{"ID":"n1","DNSName":"iPhone-15.tail.ts.net.","HostName":"iPhone 15","TailscaleIPs":["fd7a::1","100.64.0.9"],"CurAddr":"192.168.0.19:41641"}}}"#;
         let st: Status = serde_json::from_str(json).unwrap();
         for name in ["iphone-15", "iPhone-15.tail.ts.net", "iphone-15.tail.ts.net."] {
             let p = peer(&st, name).unwrap();
@@ -177,6 +190,17 @@ mod tests {
         // What a device calls itself is anyone's to choose, and two here choose the same.
         assert!(peer(&st, "iphone 15").is_err());
         assert_eq!(peer(&st, "iphone-15.other.ts.net").unwrap().ip, Ipv4Addr::new(100, 64, 0, 7));
+        // The same machine later: its id and its address both, and an id there is.
+        let (was, other) = (peer(&st, "iphone-15").unwrap(), peer(&st, "iphone-15-1").unwrap());
+        assert!(peer(&st, "iphone-15").unwrap().is(&was));
+        assert!(!other.is(&was));
+        assert!(!Peer { id: "n2".into(), ..peer(&st, "iphone-15").unwrap() }.is(&was));
+        assert!(!Peer { ip: other.ip, ..peer(&st, "iphone-15").unwrap() }.is(&was));
+        // Without the tailnet's suffix said, this machine's own name gives it.
+        let old: Status = serde_json::from_str(&json.replace(r#""CurrentTailnet":{"MagicDNSSuffix":"tail.ts.net"},"#, "")).unwrap();
+        assert_eq!(peer(&old, "iphone-15").unwrap().ip, Ipv4Addr::new(100, 64, 0, 9));
+        let unnamed = peer(&st, "iphone-15.other.ts.net").unwrap();
+        assert!(!unnamed.is(&unnamed));
         assert_eq!(short(&st.this.dns_name), "me");
         assert_eq!(st.backend_state, "");
     }

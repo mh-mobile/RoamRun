@@ -136,3 +136,5 @@ ends the run, the device line is made, and the goodbye reaches a browser within 
   under a test service type: the announcement was taken back on Ctrl-C and on closing the console's window.
   Ctrl-Break, a dropped ssh session against a real device, and a machine with two interfaces on the device's
   network weren't tried.
+- A second round of review then changed how the relay ends a broken connection, how a line is read, and what is
+  asked of Tailscale again after the wait for an offer: checked the same way on macOS, not yet against a real device.

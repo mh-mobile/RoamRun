@@ -108,22 +108,8 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
     let far = lookup(&status, &a.mac, a.far_ip, None)?;
     let device = lookup(&status, &a.to, a.device_ip, a.device_ip)?;
     let own = status.as_ref().map_or("<this machine's Tailscale name>", |s| short(&s.this.dns_name)).to_string();
-    let (lan, local, also) = match device.lan.map(|lan| (lan, lan_ip(lan, a.on))) {
-        Some((lan, Ok((local, also)))) => (lan, local, also),
-        Some((_, Err(Elsewhere::NotOn(why)))) => return Err(why),
-        _ => {
-            return Err(format!(
-                "Tailscale doesn't reach {} directly on this LAN (relayed, IPv6, or off this subnet): its connection couldn't be told from another host's",
-                device.dns
-            ))
-        }
-    };
+    let (mut lan, mut local, mut also) = place(&device, a.on)?;
     say!("this machine {local}; device {} at {lan}; far Mac {} at {}", device.dns, far.dns, far.ip);
-    // Which of them the device is beyond can't be told from here when they aren't one network.
-    let also = also.iter().map(Ipv4Addr::to_string).collect::<Vec<_>>().join(", ");
-    if !also.is_empty() {
-        say!("this machine is also {also} on that network: if the device doesn't list the far Mac, run this again with --on <one of them>");
-    }
 
     let mut wire = None;
     // Device control: which of the far Mac's attempts this is, to ask it about afterwards.
@@ -136,8 +122,8 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
             loop {
                 let left = until.saturating_duration_since(Instant::now()).max(Duration::from_secs(1));
                 let mut w = wire::Wire::connect(far.ip, left).ok_or("far Mac isn't waiting (port 41830)")?;
-                w.send("offer?")?;
-                let answer = match w.read(left) {
+                // Gone before it was asked is gone before it answered: tried again, as RoamRun does.
+                let answer = match w.send("offer?").map_err(|_| wire::CLOSED.to_string()).and_then(|_| w.read(left)) {
                     Ok(answer) => answer,
                     // Closed without a word: it couldn't tell whose this address is just then, and listens on.
                     Err(why) if why == wire::CLOSED && Instant::now() < until => {
@@ -159,7 +145,7 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
                         let Some((_, port, txt)) = announce::find_device(local, lan, &DEVICE_KEYS, Duration::from_secs(7)) else {
                             return Err(format!("{}'s own announcement wasn't seen on this LAN. It announces once it is paired with a Mac: pair Xcode first (there: roamrun pair xcode --with {own}), then this", device.dns));
                         };
-                        let named = Device { name: a.save_as.clone().unwrap_or_else(|| short(&device.dns).to_string()), peer: short(&device.dns).to_lowercase(), port, txt, v: 1 };
+                        let named = Device { name: a.save_as.clone().unwrap_or_else(|| short(&device.dns).to_string()), peer: device.dns.to_lowercase(), port, txt, v: 1 };
                         let line = lines::device_line(&named);
                         lines::device(&line).map_err(|why| format!("what the device announces can't be handed over ({why})"))?;
                         w.send(&format!("device {line}"))?;
@@ -184,6 +170,32 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
             }
         }
     };
+    // The wait for an offer may have been ten minutes: whose the far Mac's address is, and where
+    // the device is, are asked again before anything is announced, as RoamRun does.
+    if let (Some(w), Some(_)) = (wire.as_mut(), &status) {
+        let now = tailscale::status().and_then(|now| Ok((tailscale::peer(&now, &a.mac)?, tailscale::peer(&now, &a.to)?)));
+        let placed = now.and_then(|(far_now, device_now)| match (far_now.is(&far), device_now.is(&device)) {
+            (true, true) => place(&device_now, a.on),
+            (false, _) => Err(format!("{} isn't the machine it was when this began", far.dns)),
+            (_, false) => Err(format!("{} isn't the device it was when this began", device.dns)),
+        });
+        match placed {
+            Ok(now) if now == (lan, local, also.clone()) => {}
+            Ok(now) => {
+                (lan, local, also) = now;
+                say!("the device is at {lan} now; this machine {local}");
+            }
+            Err(why) => {
+                let _ = w.send("ended failed");
+                return Err(format!("{why}; nothing was announced"));
+            }
+        }
+    }
+    // Which of them the device is beyond can't be told from here when they aren't one network.
+    let also = also.iter().map(Ipv4Addr::to_string).collect::<Vec<_>>().join(", ");
+    if !also.is_empty() {
+        say!("this machine is also {also} on that network: if the device doesn't list the far Mac, run this again with --on <one of them>");
+    }
     let mut offer = match lines::offer(&offer_line) {
         Ok(offer) => offer,
         Err(why) => {
@@ -247,7 +259,8 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
     };
     // Saved there under its Tailscale name unless another was asked for: what it announces itself as is "iPhone" for most.
     found.name = a.save_as.unwrap_or_else(|| short(&device.dns).to_string());
-    found.peer = short(&device.dns).to_lowercase();
+    // Its whole name: the far Mac may be of another tailnet, where the first label alone is another's.
+    found.peer = device.dns.to_lowercase();
     let line = lines::device_line(&found);
     if let Err(why) = lines::device(&line) {
         if let Some(w) = wire.as_mut() {
@@ -257,6 +270,8 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
     }
     let Some(mut w) = wire else { return Ok((Some(line), true)) };
     let unknown = "whether the far Mac saved it couldn't be learned: there, `roamrun devices` shows; if it isn't listed, `roamrun devices add` with the line below.";
+    // Told before anything can stop this: a far Mac left without it would wait its ten minutes out.
+    let told = w.send(&format!("tried {line}"));
     // Stopping is this program's to act on by now: without this it would wait out the read.
     let on_stop = rt.spawn({
         let (line, mut stopped) = (line.clone(), stopped);
@@ -268,10 +283,7 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
             }
         }
     });
-    let exchange = {
-        let line = line.clone();
-        rt.spawn_blocking(move || w.send(&format!("tried {line}")).and_then(|_| w.read(Duration::from_secs(30))))
-    };
+    let exchange = rt.spawn_blocking(move || told.and_then(|_| w.read(Duration::from_secs(30))));
     let answer = rt.block_on(exchange).unwrap_or_else(|e| Err(e.to_string()));
     on_stop.abort();
     match answer.as_deref() {
@@ -285,7 +297,7 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
 
 fn lookup(status: &Option<Status>, name: &str, ip: Option<Ipv4Addr>, lan: Option<Ipv4Addr>) -> Result<Peer, String> {
     match (ip, status) {
-        (Some(ip), _) => Ok(Peer { ip, dns: name.to_string(), lan }),
+        (Some(ip), _) => Ok(Peer { id: String::new(), ip, dns: name.to_string(), lan }),
         (None, Some(status)) => tailscale::peer(status, name),
         (None, None) => Err("no tailscale status".into()),
     }
@@ -315,6 +327,18 @@ fn kept_nothing(reason: &str) -> String {
     .into()
 }
 
+/// Where the device is on this LAN, this machine's address there, and its others there.
+fn place(device: &Peer, on: Option<Ipv4Addr>) -> Result<(Ipv4Addr, Ipv4Addr, Vec<Ipv4Addr>), String> {
+    match device.lan.map(|lan| (lan, lan_ip(lan, on))) {
+        Some((lan, Ok((local, also)))) => Ok((lan, local, also)),
+        Some((_, Err(Elsewhere::NotOn(why)))) => Err(why),
+        _ => Err(format!(
+            "Tailscale doesn't reach {} directly on this LAN (relayed, IPv6, or off this subnet): its connection couldn't be told from another host's",
+            device.dns
+        )),
+    }
+}
+
 /// Why this machine has no address on a device's LAN.
 enum Elsewhere {
     None,
@@ -336,12 +360,11 @@ fn lan_ip(toward: Ipv4Addr, on: Option<Ipv4Addr>) -> Result<(Ipv4Addr, Vec<Ipv4A
         })
         .collect();
     // Where the system would send from: no more than a hint between interfaces that are there anyway.
-    let routed = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).and_then(|s| s.connect((toward, 9)).and_then(|_| s.local_addr())).ok();
-    let routed = routed.and_then(|a| match a.ip() {
+    let routed = || match std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).and_then(|s| s.connect((toward, 9)).and_then(|_| s.local_addr())).ok()?.ip() {
         std::net::IpAddr::V4(ip) => Some(ip),
         _ => None,
-    });
-    on_lan(&interfaces, toward, on.or(routed), on.is_some())
+    };
+    on_lan(&interfaces, toward, on.or_else(routed), on.is_some())
 }
 
 /// Of (address, prefix length, up), the one on `toward`'s network, and the others alike: the
@@ -353,10 +376,10 @@ fn on_lan(interfaces: &[(Ipv4Addr, u8, bool)], toward: Ipv4Addr, wanted: Option<
         if !here.iter().any(|i| i.0 == on) {
             return Err(Elsewhere::NotOn(format!("--on {on} isn't an address of this machine on {toward}'s network")));
         }
-    } else {
-        let narrowest = here.iter().map(|i| i.1).max().ok_or(Elsewhere::None)?;
-        here.retain(|i| i.1 == narrowest);
     }
+    // The one asked for stays, wherever it is; the others are those of the narrowest network alone.
+    let narrowest = here.iter().map(|i| i.1).max().ok_or(Elsewhere::None)?;
+    here.retain(|i| i.1 == narrowest || asked && Some(i.0) == wanted);
     let one = here.iter().map(|i| i.0).find(|ip| Some(*ip) == wanted).or(here.first().map(|i| i.0)).ok_or(Elsewhere::None)?;
     Ok((one, here.iter().map(|i| i.0).filter(|ip| *ip != one).collect()))
 }
@@ -458,7 +481,8 @@ async fn session(plan: Plan, far_link: Option<&wire::Wire>, mut stopped: watch::
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(2)).await;
-            if lan_ip(lan, Some(local)).is_err() {
+            // Not there any more; interfaces that couldn't be read just then say nothing.
+            if matches!(lan_ip(lan, Some(local)), Err(Elsewhere::NotOn(_))) {
                 let _ = lost.send(Event::AddressLost).await;
                 return;
             }
@@ -478,10 +502,15 @@ async fn session(plan: Plan, far_link: Option<&wire::Wire>, mut stopped: watch::
          if plan.control { "that shows here once it is picked" } else { "the far Mac shows" }, plan.deadline);
     say!("Once paired the device lists it as “{}”.", plan.listed_as);
 
+    let mut connected = false;
     let end = loop {
         match events.recv().await {
-            Some(Event::Connected(from)) => say!("a device connected from {from}"),
+            Some(Event::Connected(from)) => {
+                connected = true;
+                say!("a device connected from {from}")
+            }
             Some(Event::Refused(from)) => say!("refused connection from {from}"),
+            Some(Event::Full(from)) => say!("two connections are carried already; one more from {from} wasn't taken"),
             Some(Event::FarDidNotAnswer(why)) => say!("far Mac didn't take it ({why})"),
             Some(Event::Carried) => break Ok(None),
             // For device control the far Mac passes the code on and says what it kept; for Xcode's
@@ -497,11 +526,15 @@ async fn session(plan: Plan, far_link: Option<&wire::Wire>, mut stopped: watch::
             // Listed on the device and no connection here is what a firewall in between looks like.
             Some(Event::Deadline) => break Err((
                 "deadline",
-                format!(
-                    "nothing was paired in time. If the device listed the far Mac and got no further, a firewall here keeps it out: let TCP from {} in on port {port}{}",
-                    plan.lan,
-                    if plan.also.is_empty() { String::new() } else { format!(". If it didn't list it at all: run this again with --on <one of {}>", plan.also) }
-                ),
+                if connected {
+                    "nothing was paired in time: the device connected, and its pairing didn't come to an end".to_string()
+                } else {
+                    format!(
+                        "nothing was paired in time. If the device listed the far Mac and got no further, a firewall here keeps it out: let TCP from {} in on port {port}{}",
+                        plan.lan,
+                        if plan.also.is_empty() { String::new() } else { format!(". If it didn't list it at all: run this again with --on <one of {}>", plan.also) }
+                    )
+                },
             )),
             Some(Event::Stopped) => break Err(("stopped", "stopped".to_string())),
             Some(Event::AddressLost) => break Err(("address-lost", "this machine's address on the LAN changed".to_string())),
@@ -643,6 +676,8 @@ mod tests {
         assert_eq!(pick(&[wired, wifi], Some(ip(20)), true), Some((ip(20), vec![ip(10)])));
         assert_eq!(pick(&[wired, wifi], Some(ip(99)), true), None);
         assert_eq!(pick(&[vpn, wifi], Some(vpn.0), true), Some((vpn.0, vec![ip(20)])));
+        // The others said are never of a wider network.
+        assert_eq!(pick(&[vpn, wired, wifi], Some(ip(20)), true), Some((ip(20), vec![ip(10)])));
     }
 
     #[test]
