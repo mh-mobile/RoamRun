@@ -315,6 +315,12 @@ ssh cloud-mac roamrun devices add "$LINE"
 
 **From the device itself.** Where no Mac with RoamRun is near the device — the machine beside it is Windows or Linux, say — an app on the device stands in instead: RoamRun Introducer, in [`iOS/`](iOS/). It is built and installed with Xcode, for iOS 27 or later; it isn't on the App Store. The far Mac names the device where it would name the other Mac:
 
+<p align="center">
+  <img src="docs/introducer-home.png" width="200" alt="RoamRun Introducer: the far Mac's name, and Introduce">
+  <img src="docs/introducer-pairing.png" width="200" alt="An introduction under way: pair in Settings">
+  <img src="docs/introducer-done.png" width="200" alt="The end: the far Mac has saved this iPhone">
+</p>
+
 ```sh
 # there: Device Hub › + › Pair Nearby Device, and
 roamrun pair xcode --with iphone-15-pro --qr   # iphone-15-pro: the device's Tailscale name

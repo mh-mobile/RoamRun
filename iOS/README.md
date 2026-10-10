@@ -1,9 +1,17 @@
 # RoamRun Introducer
 
+<p align="center">English | <a href="README.ja.md">日本語</a></p>
+
 An iOS app that stands in for `roamrun pair introduce` on the device itself: it announces a far
 Mac's pairing offer on the device's own Wi-Fi, takes the one connection Settings makes to it, and
 carries it to the far Mac over the Tailscale VPN already on the device. No Mac near the device is
 needed. How it is used from the far Mac: the main README, "From the device itself".
+
+<p align="center">
+  <img src="../docs/introducer-home.png" width="200" alt="The first screen: the far Mac's name, and Introduce">
+  <img src="../docs/introducer-pairing.png" width="200" alt="An introduction under way: pair in Settings">
+  <img src="../docs/introducer-done.png" width="200" alt="The end: the far Mac has saved this iPhone">
+</p>
 
 It isn't part of `make app`, and isn't on the App Store: build it here. On the Home Screen and in Settings it is “RoamRun”: the whole name doesn't fit under an icon. `Sources/Introduction.swift`
 mirrors `Sources/RoamRun/Introductions.swift` (the line formats and their rules); keep them identical.
@@ -32,7 +40,7 @@ No line is carried by hand: the app speaks the introducing side of `roamrun pair
 1. On the far Mac: Xcode › Device Hub › Pair Nearby Device, then `roamrun pair xcode --with <this iPhone's Tailscale name>`
    (RoamRun 0.5.0 or later: earlier ones take only a Mac after `--with`).
 2. In the app: the far Mac's Tailscale name (typed once, kept). Tap **Introduce**; allow Local Network when asked.
-   With `--qr` after `--with`, the far Mac draws a code in its terminal: the app's **Scan the far Mac's code**, or the iPhone's camera, opens the app with that
+   With `--qr` after `--with`, the far Mac draws a code in its terminal: the app's **Scan a Code**, or the iPhone's camera, opens the app with that
    name filled in (`roamrun-introducer://<far Mac's Tailscale name>`), and nothing is typed.
 3. Settings › Privacy & Security › Developer Mode › Pair with “<far Mac>”, type the code Device Hub shows on the far Mac.
 4. The app tells the far Mac, which saves this iPhone under its Tailscale name. There: `roamrun up`.
@@ -42,6 +50,11 @@ Device control (`look`, `tap`…) is paired the same way, with the RoamRun app o
 doesn't hold the name of): the app needs no other setting — the far Mac's
 answer says which pairing it is. The code is made on the far Mac and shown here, in a notification and where iOS
 shows the app's background task, over Settings.
+
+<p align="center">
+  <img src="../docs/introducer-code.png" width="200" alt="Device control's pairing: the code shows on this iPhone">
+  <img src="../docs/introducer-byhand.png" width="200" alt="By hand: the line for roamrun devices add">
+</p>
 
 **Carry the lines by hand** is the way without `--with` (the `rr-xcode-offer-v1:` line from `roamrun pair xcode`, pasted —
 or read with the far Mac's name from the code `roamrun pair xcode --qr` draws —
@@ -67,7 +80,8 @@ line to carry when there is one. To look at a screen without a far Mac, in a deb
 SIMCTL_CHILD_INTRODUCER_PREVIEW=pairing xcrun simctl launch booted io.github.mh-mobile.roamrun.introducer
 ```
 
-(`empty`, `asking`, `pairing`, `code`, `finishing`, `done`, `byhand`, `failed`.)
+(`empty`, `asking`, `pairing`, `code`, `finishing`, `done`, `byhand`, `failed`.) The pictures on this page are that
+preview in the simulator: its names and its code are made up.
 
 A far Mac is named as Tailscale names it — one word, a name under `ts.net`, or an address of Tailscale's — and neither
 the question nor the pairing itself goes to an address that isn't Tailscale's, whatever a code, a link or a name led to.
