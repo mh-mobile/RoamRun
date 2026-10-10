@@ -266,7 +266,7 @@ private func timed(_ path: String, _ args: [String]) -> (Proc.Result, TimeInterv
 /// Suites that time things, or block every Swift concurrency thread to test that, run one
 /// after another: `.serialized` on each alone only orders its own tests, so one suite
 /// filling the pool would still skew another's deadlines.
-@Suite(.serialized) struct TimingSensitive {}
+@Suite(.serialized, .timeLimit(.minutes(2))) struct TimingSensitive {}
 
 // Timing tests run one at a time: in parallel on a small CI runner they'd skew each other.
 extension TimingSensitive {
@@ -348,19 +348,34 @@ extension TimingSensitive {
         /// the child must still go, and the watchdog with it.
         @Test func aWatchdogStoppedAtOnceTakesItsChildAlong() async throws {
             let marker = "41.\(Int.random(in: 100_000...999_999))"   // sleep's argument, to find strays
-            for i in 0..<60 {
+            // The TERM comes later each round, from before the shell has set its trap (it just
+            // dies) on through the moment between the trap and `c=$!`, until enough rounds
+            // were the watchdog's own to end: those take the fifth of a second its loop sleeps.
+            var its = 0
+            for i in 0..<160 where its < 12 {
                 let t = Proc.tied("/bin/sleep", [marker])
                 t.standardOutput = FileHandle.nullDevice
                 try t.run()
-                usleep(useconds_t(i % 30) * 100)   // 0–3 ms: sweep the moment between the trap and `c=$!`
+                usleep(useconds_t(i) * 250)   // 0–40 ms
+                let sent = ContinuousClock().now
                 t.terminate()
+                // That it ends, not how fast: a busy machine takes its time over the shell's own
+                // forks. Never killed from here — that is what would leave its child behind.
                 let clock = ContinuousClock(), start = clock.now
-                while t.isRunning && clock.now - start < .seconds(3) { try await Task.sleep(for: .milliseconds(20)) }
-                #expect(!t.isRunning, "the watchdog outlived its TERM")
-                if t.isRunning { kill(t.processIdentifier, SIGKILL) }
+                while t.isRunning && clock.now - start < .seconds(10) { try await Task.sleep(for: .milliseconds(20)) }
+                if t.isRunning {
+                    let pid = t.processIdentifier
+                    let family = Proc.run("/bin/sh", ["-c", "ps -o pid,ppid,stat,etime,command -p \(pid) $(pgrep -P \(pid) | sed 's/^/-p /')"]).out
+                    Issue.record("round \(i): the watchdog outlived its TERM by 10 s:\n\(family)")
+                    _ = await Proc.ensureGone(t, grace: .zero)
+                    break
+                }
+                if ContinuousClock().now - sent > .milliseconds(100) { its += 1 }
             }
+            #expect(its > 0, "no TERM came after the trap was set: nothing of the watchdog was tried")
             try await Task.sleep(for: .milliseconds(200))
-            let strays = Proc.run("/usr/bin/pgrep", ["-f", "sleep \(marker)"]).out
+            // `sleep <marker>` as a command of its own: the watchdog's own line holds the words too.
+            let strays = Proc.run("/usr/bin/pgrep", ["-fl", "^/bin/sleep \(marker)"]).out
             #expect(strays.isEmpty, "left behind: \(strays)")
             _ = Proc.run("/usr/bin/pkill", ["-f", "sleep \(marker)"])
         }
@@ -382,7 +397,8 @@ extension TimingSensitive {
             let pids = child.split(separator: "\n").compactMap { Int32($0) }   // may include its `sleep 0.5`
             #expect(!pids.isEmpty)
             for pid in pids { #expect(kill(pid, 0) != 0, "pid \(pid) outlived the watchdog") }
-            for pid in pids { kill(pid, SIGKILL) }
+            // Only what is still there: a pid that has gone may be another process's by now.
+            for pid in pids where kill(pid, 0) == 0 { kill(pid, SIGKILL) }
         }
 
         @Test func toolThatExitsKeepsItsResultWhileABackgroundChildHoldsThePipe() {
@@ -1206,6 +1222,8 @@ private func ask(_ port: UInt16, _ request: String, hold: TimeInterval = 0) asyn
     let conn = NWConnection(host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
     defer { conn.cancel() }
     conn.start(queue: .global())
+    // A server that neither answers nor closes: the read below ends with the connection.
+    DispatchQueue.global().asyncAfter(deadline: .now() + hold + 30) { conn.cancel() }
     if hold > 0 { try? await Task.sleep(for: .seconds(hold)) }
     if !request.isEmpty {
         conn.send(content: Data(request.utf8), completion: .contentProcessed { _ in })
@@ -2803,7 +2821,7 @@ private func scratchDir() -> URL {
 }
 
 @MainActor private func eventuallyOnMain(_ condition: () -> Bool) async -> Bool {
-    for _ in 0..<100 {
+    for _ in 0..<300 {   // 15 s, as `eventually`: other tests may hold the pool meanwhile
         if condition() { return true }
         try? await Task.sleep(for: .milliseconds(50))
     }
@@ -4751,7 +4769,7 @@ private func silentPort() throws -> (fd: Int32, port: UInt16) {
         entered.signal()
         try? session.connect()   // waits on the silent port, up to the library's 20 s
     }
-    entered.wait()
+    #expect(soon(entered))
     Thread.sleep(forTimeInterval: 0.3)   // it holds the session's lock by now
     let asked = Date()
     #expect(!session.isOpen && !session.isRefused)
@@ -4820,7 +4838,7 @@ private final class StandInDevice: ControlledDevice, @unchecked Sendable {
     func connect() throws {
         count("connect")
         connectBegan.signal()
-        connectHold?.wait()
+        held(connectHold)
         lock.withLock { open = true; goneWhenChecked = false }
     }
     func letGo() { count("letGo") }
@@ -4840,7 +4858,7 @@ private final class StandInDevice: ControlledDevice, @unchecked Sendable {
     func look() throws -> CGImage {
         count("look")
         lookBegan.signal()
-        hold?.wait()
+        held(hold)
         return CGContext(data: nil, width: screen.width, height: screen.height, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
                          bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!.makeImage()!
     }
@@ -4854,7 +4872,7 @@ private final class StandInDevice: ControlledDevice, @unchecked Sendable {
     func type(_ text: String) throws {
         count("type")
         typeBegan.signal()
-        typeHold?.wait()
+        held(typeHold)
     }
     func paste(_ text: String) throws { count("paste") }
     func press(_ button: String) throws { count("press") }
@@ -5015,10 +5033,10 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1", paired: Bool = true
         _ = hub.answer(.init(op: "look", device: id, path: png))
         looked.signal()
     }
-    old.lookBegan.wait()
+    #expect(soon(old.lookBegan))
     hub.update([target(port: 2)])   // found at another port while the look runs
     old.hold?.signal()
-    looked.wait()
+    #expect(soon(looked))
     let fresh = try #require(made().last)
     #expect(fresh !== old)
     let tap = hub.answer(.init(op: "tap", device: id, x: 10, y: 10))
@@ -5048,7 +5066,7 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1", paired: Bool = true
         _ = hub.answer(.init(op: "look", device: id, path: png))
         first.signal()
     }
-    old.lookBegan.wait()
+    #expect(soon(old.lookBegan))
     hub.update([target(port: 2)])   // a new session while the look runs through the old
     let fresh = try #require(made().last)
     #expect(fresh !== old)
@@ -5062,7 +5080,7 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1", paired: Bool = true
     #expect(fresh.calls.isEmpty && old.calls == ["look", "letGo"])
     #expect(hub.answer(.init(op: "state", device: id)).ok)     // how it stands is still said at once
     old.hold?.signal()
-    first.wait()
+    #expect(soon(first))
     #expect(second.wait(timeout: .now() + 5) == .success)
     #expect(answer.withLock { $0?.ok } == true)
     #expect(fresh.calls == ["press"] && old.calls == ["look", "letGo"])   // through the session held by then
@@ -5663,7 +5681,7 @@ private func listenerSoon(in dir: URL, _ handler: @escaping @Sendable (DeviceCon
     // A look that is held up has the device; a press asked for meanwhile waits behind it.
     device.hold = DispatchSemaphore(value: 0)
     Thread.detachNewThread { _ = hub.answer(.init(op: "look", device: id, path: lookFile(in: dir))) }
-    device.lookBegan.wait()
+    #expect(soon(device.lookBegan))
     let fd = socket(AF_UNIX, SOCK_STREAM, 0)
     var address = sockaddr_un()
     address.sun_family = sa_family_t(AF_UNIX)
@@ -6279,12 +6297,12 @@ func everyDocumentedCommandParses(_ doc: String) throws {
         let first = DispatchSemaphore(value: 0), free = DispatchSemaphore(value: 0)
         let server = DeviceMCP(profiles: { [device] }, looks: FileManager.default.temporaryDirectory) { request in
             let n = sent.withLock { $0.append(request.text ?? ""); return $0.count }
-            if n == 1 { first.signal(); free.wait() }
+            if n == 1 { first.signal(); held(free) }
             return .init(ok: true)
         }
         var read = 0
         server.serve(lines: {
-            if read == 1 { first.wait() }   // the first is under way before more is said
+            if read == 1 { held(first) }   // the first is under way before more is said
             if read == freedAfter, read < lines.count { free.signal() }
             if read == lines.count {
                 if freedAfter < lines.count {
@@ -6316,7 +6334,7 @@ func everyDocumentedCommandParses(_ doc: String) throws {
     let still = OSAllocatedUnfairLock<Bool?>(initialState: nil)
     let made = DeviceControlWire.Listener(directory: dir, answering: { _, wanted in
         reached.signal()
-        given.wait()
+        held(given)
         for _ in 0..<50 where wanted() { usleep(20_000) }
         let waits = wanted()
         still.withLock { $0 = waits }
@@ -6330,10 +6348,10 @@ func everyDocumentedCommandParses(_ doc: String) throws {
         _ = try? DeviceControlWire.ask(.init(op: "press", device: UUID(), text: "lock"), in: dir, asking: asking)
         done.signal()
     }
-    reached.wait()
+    #expect(soon(reached))
     asking.giveUp()
     given.signal()
-    done.wait()
+    #expect(soon(done))
     for _ in 0..<100 where still.withLock({ $0 }) == nil { usleep(20_000) }
     #expect(still.withLock { $0 } == false)
     #expect(throws: (any Error).self) { try DeviceControlWire.ask(.init(op: "press", device: UUID(), text: "lock"), in: dir, asking: asking) }
@@ -6355,7 +6373,7 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     func pairNow() { turn.signal() }
     func accept(code: @escaping @Sendable (String) -> Void) throws -> DevicePairing.Paired {
         waiting.signal()
-        turn.wait()
+        held(turn)
         if lock.withLock({ cancelled }) { throw DeviceSession.Failure.message("cancelled") }
         paired?()
         return .init(udid: "UDID-1", name: "iPhone", model: "iPhone16,1", pairing: Data("<plist/>".utf8))
@@ -6389,9 +6407,9 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
         hub.listening = { _, _ in listener }
         let (said, all, ended) = steps()
         hub.pair(request, as: "x", attempt: attempt, step: said)
-        listener.waiting.wait()
+        #expect(soon(listener.waiting))
         listener.pairNow()
-        ended.wait()
+        #expect(soon(ended))
         #expect(all().last == .failed(DeviceControlHub.pairingCancelled))
         #expect(!DeviceControlWire.hasPairing(udid: "UDID-1", in: dir))
     }
@@ -6402,21 +6420,21 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
         let hold = DispatchSemaphore(value: 0), began = DispatchSemaphore(value: 0)
         let (hub, _) = try standInHub(dir, paired: false) { device in
             device.connectHold = hold
-            Thread.detachNewThread { device.connectBegan.wait(); began.signal() }
+            Thread.detachNewThread { held(device.connectBegan); began.signal() }
         }
         defer { hub.stop() }
         let listener = StandInPairing(), attempt = UUID()
         hub.listening = { _, _ in listener }
         let (said, all, ended) = steps()
         hub.pair(request, as: "x", attempt: attempt, step: said)
-        listener.waiting.wait()
+        #expect(soon(listener.waiting))
         listener.pairNow()
-        began.wait()
+        #expect(soon(began))
         #expect(DeviceControlWire.hasPairing(udid: "UDID-1", in: dir))
         hub.cancelPairing(attempt)
         #expect(!DeviceControlWire.hasPairing(udid: "UDID-1", in: dir))   // at once, not when the try returns
         for _ in 0..<8 { hold.signal() }
-        ended.wait()
+        #expect(soon(ended))
         #expect(all().last == .failed(DeviceControlHub.pairingCancelled))
         #expect(!DeviceControlWire.hasPairing(udid: "UDID-1", in: dir))
     }
@@ -6430,9 +6448,9 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
         hub.listening = { _, _ in listener }
         let (said, all, ended) = steps()
         hub.pair(request, as: "x", step: said)
-        listener.waiting.wait()
+        #expect(soon(listener.waiting))
         listener.pairNow()
-        ended.wait()
+        #expect(soon(ended))
         #expect(all().last == .done(udid: "UDID-1", unreached: nil))
         #expect(DeviceControlWire.hasPairing(udid: "UDID-1", in: dir))
     }
@@ -6461,7 +6479,7 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     hub.pair(request, as: "x", attempt: second) { _ in }
     // Whichever the device pairs with, the first is not the one that keeps it.
     for _ in 0..<50 { made.withLock { $0 }.forEach { $0.pairNow() }; usleep(10_000) }
-    ended.wait()
+    #expect(soon(ended))
     if case .done = firstEnd.withLock({ $0 }) { Issue.record("the cancelled pairing was kept") }
     hub.cancelPairing(second)
 }
@@ -6672,7 +6690,7 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
             _ = hub.answer(.init(op: "type", device: id, text: "a long text"), wanted: { there.withLock { $0 } })
             answered.signal()
         }
-        device.typeBegan.wait()
+        #expect(soon(device.typeBegan))
         #expect(!device.calls.contains("interrupt"))
         // Its asker gone — or its pairing switched off under it, as the hub comes to know it.
         if leaving { there.withLock { $0 = false } } else { on.withLock { $0 = false } }
@@ -6793,7 +6811,7 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     let hold = DispatchSemaphore(value: 0), began = DispatchSemaphore(value: 0)
     let (hub, _) = try standInHub(dir, paired: false) { device in
         device.connectHold = hold
-        Thread.detachNewThread { device.connectBegan.wait(); began.signal() }
+        Thread.detachNewThread { held(device.connectBegan); began.signal() }
     }
     defer { hub.stop() }
     let request = DeviceControlHub.PairingRequest(id: UUID(), name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1", others: [])
@@ -6803,9 +6821,9 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     hub.pair(request, as: "x", attempt: attempt) { step in
         switch step { case .done, .failed: ended.signal(); default: break }
     }
-    listener.waiting.wait()
+    #expect(soon(listener.waiting))
     listener.pairNow()
-    began.wait()
+    #expect(soon(began))
     let saved = try #require(DeviceControlHub.pairingMark(udid: "UDID-1", in: dir))
     try hub.sealPairing(try scratchPairing(), with: scratchKey, udid: "UDID-1")   // another, brought in meanwhile
     let brought = try #require(DeviceControlHub.pairingMark(udid: "UDID-1", in: dir))
@@ -6813,7 +6831,7 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     hub.cancelPairing(attempt)
     #expect(DeviceControlHub.pairingMark(udid: "UDID-1", in: dir) == brought)
     for _ in 0..<8 { hold.signal() }
-    ended.wait()
+    #expect(soon(ended))
     #expect(DeviceControlHub.pairingMark(udid: "UDID-1", in: dir) == brought)
 }
 
@@ -7288,7 +7306,7 @@ private final class IntroducedPairing: PairingListener, @unchecked Sendable {
     var wasCancelled: Bool { lock.withLock { cancelled } }
     func accept(code show: @escaping @Sendable (String) -> Void) throws -> DevicePairing.Paired {
         if let code { show(code) }
-        turn.wait()
+        held(turn)
         if lock.withLock({ cancelled }) { throw DeviceSession.Failure.message("cancelled") }
         if didFail { throw DevicePairing.NotCompleted(description: "the code entered on the device wasn't the one shown") }
         if didBreak { throw DeviceSession.Failure.message("the pairing didn't complete: Socket(ConnectionReset)") }
@@ -7354,6 +7372,9 @@ private func begin(_ i: ControlIntroductions, _ id: UUID, text: String? = candid
 private func how(_ i: ControlIntroductions, _ id: UUID) -> DeviceControlWire.Response { i.answer(.init(op: "pair-status", device: id)) }
 /// A wait that a missed moment ends as a failure, not as a test that never returns.
 private func soon(_ signal: DispatchSemaphore) -> Bool { signal.wait(timeout: .now() + 10) == .success }
+/// A fake's hold, let go by its test: one whose test has gone on without it lets go by itself,
+/// rather than keep a thread for good.
+private func held(_ signal: DispatchSemaphore?) { _ = signal?.wait(timeout: .now() + 30) }
 private func until(_ what: () -> Bool) -> Bool {
     for _ in 0..<200 where !what() { usleep(10_000) }
     return what()
@@ -7415,7 +7436,7 @@ extension TimingSensitive {
         let keeping = DispatchSemaphore(value: 0), go = DispatchSemaphore(value: 0)
         // (What keeps it asks, as the app's does, whether it is still wanted: a stop that came too late doesn't make it say no.)
         i = introductions(pairing) { wanted in
-            keeping.signal(); go.wait()
+            keeping.signal(); held(go)
             return wanted() ? .success(.init(name: "iPhone", on: false)) : .failure(.init(.cancelled, "stopped"))
         }
         id = UUID()
@@ -7441,7 +7462,7 @@ extension TimingSensitive {
         // Asked often enough, it stays; and while it keeps, silence stops nothing.
         pairing = IntroducedPairing()
         let keeping = DispatchSemaphore(value: 0), go = DispatchSemaphore(value: 0)
-        i = introductions(pairing) { wanted in keeping.signal(); go.wait(); return wanted() ? .success(.init(name: "iPhone", on: true)) : .failure(.init(.cancelled, "stopped")) }
+        i = introductions(pairing) { wanted in keeping.signal(); held(go); return wanted() ? .success(.init(name: "iPhone", on: true)) : .failure(.init(.cancelled, "stopped")) }
         i.quiet = 1
         id = UUID()
         #expect(begin(i, id).ok)
@@ -7506,7 +7527,7 @@ extension TimingSensitive {
         // pairing begun meanwhile could have the device drop the one being kept — and given back when it ends.
         pairing = IntroducedPairing(); turn = Turn()
         let keeping = DispatchSemaphore(value: 0), go = DispatchSemaphore(value: 0)
-        i = introductions(pairing, turn: turn) { wanted in keeping.signal(); go.wait(); return wanted() ? .success(.init(name: "iPhone", on: true)) : .failure(.init(.cancelled, "stopped")) }
+        i = introductions(pairing, turn: turn) { wanted in keeping.signal(); held(go); return wanted() ? .success(.init(name: "iPhone", on: true)) : .failure(.init(.cancelled, "stopped")) }
         i.longest = 1
         attempt = UUID()
         #expect(begin(i, attempt).ok)
@@ -7529,7 +7550,7 @@ extension TimingSensitive {
             seen.listener = made
             return .init(listener: made, port: 50123, txt: offerTXT)
         }
-        i.keep = { _, _, _ in keeping.signal(); go.wait(); return .success(.init(name: "iPhone", on: true)) }
+        i.keep = { _, _, _ in keeping.signal(); held(go); return .success(.init(name: "iPhone", on: true)) }
         i.tick = 0.02
         let id = UUID()
         #expect(begin(i, id).ok && seen.listener != nil)
@@ -7546,7 +7567,7 @@ extension TimingSensitive {
     @Test func begunAgainWhileItIsMadeReadyItSaysSoAndOpensNothingMore() {
         let pairing = IntroducedPairing(), i = introductions(pairing)
         let opened = Counted<Int>(), readying = DispatchSemaphore(value: 0), go = DispatchSemaphore(value: 0)
-        i.ready = { readying.signal(); go.wait() }
+        i.ready = { readying.signal(); held(go) }
         i.listen = { _, _, _ in opened.add(1); return .init(listener: pairing, port: 50123, txt: offerTXT) }
         let id = UUID(), first = Counted<Bool>()
         Thread.detachNewThread { first.add(begin(i, id).offer != nil) }
