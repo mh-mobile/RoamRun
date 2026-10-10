@@ -39,7 +39,9 @@ https://github.com/mh-mobile/RoamRun/blob/main/Rust/roamrunctl/README.md#install
 - Someone at the far Mac's screen (or its screen sharing) for Xcode's pairing: the
   button there can't be pressed over ssh.
 - A firewall on this machine has to let the device connect to `roamrunctl`, and let
-  it announce itself on the LAN (mDNS). If the device never lists the far Mac, say so.
+  it answer on the LAN (mDNS). Windows asks the first time ("allow this app on public
+  and private networks?", publisher unknown): the user allows it, you don't answer for
+  them. If the device never lists the far Mac, say so.
 
 ## 3. Pairing the far Mac's Xcode with the device
 

@@ -31,7 +31,9 @@ and unpack it: `roamrunctl-linux-x86_64.tar.gz`, `roamrunctl-linux-aarch64.tar.g
 `roamrunctl-windows-aarch64.zip`,
 each with the binary, this file and the licenses of the crates it is built from (the Linux command above takes
 the binary alone out of it). `roamrunctl-SHA256SUMS` there lists their checksums. The Linux builds
-are static, for any distribution. The Windows one isn't signed: SmartScreen may ask before it runs the first time.
+are static, for any distribution. The Windows ones aren't signed: SmartScreen may ask before one runs the first time, and Windows' firewall
+asks, the first time it announces, whether to let it in — allow it, on the kind of network the Wi‑Fi is set as (the
+device connects to it, and it answers the device's questions over mDNS).
 It isn't on Homebrew's or crates.io's own lists. Its version is RoamRun's: use the same on the far Mac.
 
 For an agent that is to use it: the skill in [`skills/roamrunctl`](../../skills/roamrunctl/SKILL.md) —
@@ -82,8 +84,14 @@ ends the run, the device line is made, and the goodbye reaches a browser within 
   gave its offer over Tailscale, and saved the device itself when told a pairing was tried; the bridge there came
   up Ready, and nothing was left announced or listening on either machine. Run again the same way after the
   far Mac's side of the exchange changed (it tells a device its Tailscale name now): the same.
-- Not run on Windows beyond the tests: how its announcement sits beside Windows' own mDNS, and what a firewall
-  there asks, isn't known. Not run on Linux with a firewall on, or without avahi.
+- On Windows 11 (ARM, a virtual machine bridged onto the device's Wi‑Fi), once, with no line carried: installed with
+  the command above, it announced the far Mac, Windows' firewall asked whether to let it in (allowed, for private
+  and public networks), the device listed the far Mac, the code was typed, the far Mac saved the device and its
+  bridge came up Ready; nothing was left announced afterwards. That machine took a route to its own LAN from
+  another Tailscale node ("Use Tailscale subnets", on by default on Windows), so its routing table led to the device
+  through Tailscale: it finds its LAN address among its own interfaces for that reason.
+- Not tried on Windows: the x86_64 build beyond CI's tests, `--offer`, device control's pairing. Not run on Linux
+  with a firewall on, or without avahi.
 - Device control's pairing, once, from the same Linux machine: the far Mac ran `roamrun pair control --with <it>`
   with the RoamRun app open, this printed the code once the device had picked the far Mac, the code was typed,
   and both said the pairing was kept and switched on; the far Mac then showed device control as connected.
