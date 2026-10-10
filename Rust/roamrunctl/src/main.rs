@@ -12,7 +12,7 @@ use lines::{Device, Offer, DEVICE_KEYS};
 use mdns_sd::{ResolvedService, ServiceEvent};
 use relay::Event;
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -104,8 +104,7 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
     let device = lookup(&status, &a.to, a.device_ip, a.device_ip)?;
     let own = status.as_ref().map_or("<this machine's Tailscale name>", |s| short(&s.this.dns_name)).to_string();
     let (lan, local) = match device.lan.map(|lan| (lan, lan_ip(lan))) {
-        Some((lan, Ok(local))) if on_subnet(lan, local) => (lan, local),
-        Some((_, Err(why))) => return Err(why),
+        Some((lan, Ok(local))) => (lan, local),
         _ => {
             return Err(format!(
                 "Tailscale doesn't reach {} directly on this LAN (relayed, IPv6, or off this subnet): its connection couldn't be told from another host's",
@@ -297,27 +296,29 @@ fn kept_nothing(reason: &str) -> String {
     .into()
 }
 
-/// This machine's address on the LAN that has `toward`.
+/// This machine's address on the LAN that has `toward`: the one of its interfaces whose own
+/// network holds that address. Not what the routing table would pick (a route Tailscale took
+/// in may lead there another way), and from the prefix length each system gives as it is (the
+/// netmask is worked out differently on each, and on Windows by a guess).
 fn lan_ip(toward: Ipv4Addr) -> Result<Ipv4Addr, String> {
-    let socket = UdpSocket::bind("0.0.0.0:0").map_err(|e| e.to_string())?;
-    socket.connect((toward, 9)).map_err(|e| format!("no route to {toward} ({e})"))?;
-    match socket.local_addr().map_err(|e| e.to_string())?.ip() {
-        IpAddr::V4(ip) => Ok(ip),
-        other => Err(format!("{other} isn't an IPv4 address")),
-    }
+    if_addrs::get_if_addrs()
+        .map_err(|e| format!("this machine's interfaces couldn't be read ({e})"))?
+        .iter()
+        .find_map(|i| match &i.addr {
+            if_addrs::IfAddr::V4(a) if !a.ip.is_loopback() && same_net(toward, a.ip, mask(a.prefixlen)) => Some(a.ip),
+            _ => None,
+        })
+        .ok_or_else(|| format!("no interface of this machine is on {toward}'s network"))
 }
 
-/// Whether `other` is on the subnet of the interface that has `local`: a direct endpoint elsewhere
-/// (a public address through a NAT hairpin, another LAN) says nothing about the device's address here.
-fn on_subnet(other: Ipv4Addr, local: Ipv4Addr) -> bool {
-    if_addrs::get_if_addrs().unwrap_or_default().iter().any(|i| match &i.addr {
-        if_addrs::IfAddr::V4(a) if a.ip == local => same_net(other, local, a.netmask),
-        _ => false,
-    })
+fn mask(prefix: u8) -> Ipv4Addr {
+    Ipv4Addr::from(u32::MAX.checked_shl(32 - u32::from(prefix.min(32))).unwrap_or(0))
 }
 
+/// A network of more than one host: a direct endpoint elsewhere (a public address through a NAT
+/// hairpin, another LAN) or a point-to-point link says nothing about the device's address here.
 fn same_net(a: Ipv4Addr, b: Ipv4Addr, mask: Ipv4Addr) -> bool {
-    u32::from(mask) != 0 && u32::from(a) & u32::from(mask) == u32::from(b) & u32::from(mask)
+    u32::from(mask) != 0 && u32::from(mask) != u32::MAX && u32::from(a) & u32::from(mask) == u32::from(b) & u32::from(mask)
 }
 
 struct Plan {
@@ -507,6 +508,14 @@ mod tests {
         assert!(!same_net(a, Ipv4Addr::new(192, 168, 1, 1), mask));
         assert!(!same_net(a, Ipv4Addr::new(203, 0, 113, 7), mask));
         assert!(!same_net(a, a, Ipv4Addr::UNSPECIFIED));
+        // A point-to-point link (Tailscale's own interface is a /32) is nobody's LAN.
+        assert!(!same_net(a, a, Ipv4Addr::BROADCAST));
+        assert_eq!(super::mask(24), mask);
+        assert_eq!(super::mask(0), Ipv4Addr::UNSPECIFIED);
+        assert_eq!(super::mask(32), Ipv4Addr::BROADCAST);
+        assert_eq!(super::mask(20), Ipv4Addr::new(255, 255, 240, 0));
+        // Whatever the routing table says, loopback and an address on no interface's network aren't here.
+        assert!(lan_ip(Ipv4Addr::new(203, 0, 113, 7)).is_err());
         assert_eq!(name("  iPhone "), Ok("iPhone".into()));
         assert!(name("-x").is_err());
         assert!(name(" ").is_err());
