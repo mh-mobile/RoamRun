@@ -152,9 +152,16 @@ final class Session {
         // Nothing is asked of the far Mac before this app may announce: the first run's prompt may take
         // the person a while, and the far Mac's patience begins with the question.
         let offer = pasted
+        // Unanswered after a moment, it is iOS's question that is waited on: said, so the wait isn't a mystery.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard let self, self.live(run), self.stage == .asking, self.wire == nil, self.standIn == nil else { return }
+            self.hint = "Waiting for Local Network access: allow it when iOS asks, or in Settings › Apps › RoamRun."
+        }
         finder.allowed { [weak self] allowed in
             Task { @MainActor in
                 guard let self, self.live(run) else { return }
+                self.hint = nil
                 guard allowed else { self.finish(Self.noLocalNetwork); return }
                 if let offer { self.start(offer, run); return }
                 self.note("Asking \(host) for its offer.")

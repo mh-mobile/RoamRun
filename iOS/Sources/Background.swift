@@ -22,7 +22,6 @@ final class BackgroundKeeper {
     private var total: TimeInterval = 300
     private var title = "", subtitle = ""
     private var active = false
-    private var expiring = false
     private var registered: Bool?
 
     /// From the Info.plist wildcard, so a re-signed build whose plist follows its bundle id still matches.
@@ -42,7 +41,7 @@ final class BackgroundKeeper {
                 guard let self else { return }
                 // With the continued task attached, the grace window only ends; that task carries on.
                 guard self.task == nil, self.active else { self.endGrace(); return }
-                self.expire { self.endGrace() }
+                self.expire {}
             }
         }
         if registered == nil {
@@ -101,12 +100,13 @@ final class BackgroundKeeper {
 
     /// Says it is over, and gives what that starts (the record withdrawn, the far Mac told) a moment before letting go.
     private func expire(_ release: @escaping @MainActor () -> Void) {
-        expiring = true
+        // This introduction's window, taken now: a moment later another may have begun and opened its own.
+        let ending = grace
+        grace = .invalid
         onExpire?()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             release()
-            self?.expiring = false
-            self?.endGrace()
+            if ending != .invalid { UIApplication.shared.endBackgroundTask(ending) }
         }
     }
 
@@ -130,7 +130,7 @@ final class BackgroundKeeper {
             self.task = nil
         }
         BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: Self.identifier)
-        if !expiring { endGrace() }
+        endGrace()
     }
 
     private func endGrace() {

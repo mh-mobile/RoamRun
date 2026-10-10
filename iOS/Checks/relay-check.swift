@@ -230,6 +230,57 @@ func answerAfterFIN(_ c: NWConnection, size: Int, on queue: DispatchQueue) {
         }
         late.cancel()
 
+        // 2b'. A far Mac that resets after its answer ends the pair, though the device never closed its side.
+        let rude = try! NWListener(using: farParams)
+        let rudeReady = DispatchSemaphore(value: 0)
+        rude.stateUpdateHandler = { if case .ready = $0 { rudeReady.signal() } }
+        rude.newConnectionHandler = { c in
+            c.start(queue: queue)
+            c.receive(minimumIncompleteLength: 1, maximumLength: 16) { _, _, _, _ in
+                c.send(content: Data("pong".utf8), completion: .contentProcessed { _ in queue.asyncAfter(deadline: .now() + 0.2) { c.forceCancel() } })
+            }
+        }
+        rude.start(queue: queue)
+        check(rudeReady.wait(timeout: .now() + 5) == .success, "a far Mac that resets listens")
+        var reset = Introduction.Offer(port: rude.port!.rawValue, txt: lastWords.txt)
+        reset.txt["identifier"] = UUID().uuidString
+        let evR = Events()
+        let r = StandIn(offer: reset, farHost: "127.0.0.1", serviceType: type, allowed: [IPv4Address.loopback.rawValue], deadline: 60, anywhere: true) { evR.add($0) }
+        try! r.start()
+        check(evR.wait { $0.contains { if case .announced = $0 { return true }; return false } }, "announced")
+        let held = Client(port: evR.list.compactMap { if case .announced(_, let p) = $0 { return p }; return nil }.first!, queue: queue)
+        check(held.wait { ready, _, _, _ in ready }, "connected")
+        held.send("ping")
+        check(held.wait { _, _, _, got in got == Data("pong".utf8) }, "its answer came through before the reset")
+        check(evR.wait(5) { $0.contains { if case .ended(.carried) = $0 { return true }; return false } }, "the reset ended it as carried, with the device's side still open")
+        check(held.wait { _, closed, failed, _ in closed || failed }, "and closed the device's connection")
+        rude.cancel()
+
+        // 2b''. The same when that Mac had closed its side first, and went altogether afterwards: no reader is left to notice.
+        let gone = try! NWListener(using: farParams)
+        let goneReady = DispatchSemaphore(value: 0)
+        gone.stateUpdateHandler = { if case .ready = $0 { goneReady.signal() } }
+        gone.newConnectionHandler = { c in
+            c.start(queue: queue)
+            c.receive(minimumIncompleteLength: 1, maximumLength: 16) { _, _, _, _ in
+                c.send(content: Data("pong".utf8), contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in queue.asyncAfter(deadline: .now() + 0.5) { c.forceCancel() } })
+            }
+        }
+        gone.start(queue: queue)
+        check(goneReady.wait(timeout: .now() + 5) == .success, "a far Mac that closes its side, then goes, listens")
+        var going = Introduction.Offer(port: gone.port!.rawValue, txt: lastWords.txt)
+        going.txt["identifier"] = UUID().uuidString
+        let evG = Events()
+        let g = StandIn(offer: going, farHost: "127.0.0.1", serviceType: type, allowed: [IPv4Address.loopback.rawValue], deadline: 60, anywhere: true) { evG.add($0) }
+        try! g.start()
+        check(evG.wait { $0.contains { if case .announced = $0 { return true }; return false } }, "announced")
+        let kept = Client(port: evG.list.compactMap { if case .announced(_, let p) = $0 { return p }; return nil }.first!, queue: queue)
+        check(kept.wait { ready, _, _, _ in ready }, "connected")
+        kept.send("ping")
+        check(kept.wait { _, _, _, got in got == Data("pong".utf8) }, "its answer came through")
+        check(evG.wait(5) { $0.contains { if case .ended(.carried) = $0 { return true }; return false } }, "its going ended it, with the device's side still open")
+        gone.cancel()
+
         // 2c. A refusal of the local network isn't final while the person may still be answering.
         check(Wire.mayUseNetwork(looking: false, denied: true, waited: 0) == nil && Wire.mayUseNetwork(looking: false, denied: true, waited: 60) == false
               && Wire.mayUseNetwork(looking: true, denied: false, waited: 3) == true && Wire.mayUseNetwork(looking: false, denied: false, waited: 5) == nil

@@ -190,6 +190,8 @@ private final class Pair: @unchecked Sendable {
     private var failure: String?
     private var reported = false
     private var connected = false
+    /// The sides whose sending is over: nothing more is read from them.
+    private var readOut: [NWConnection] = []
     private var connectTimeout: DispatchWorkItem?
 
     init(inbound: NWConnection, farHost: String, farPort: UInt16, anywhere: Bool, queue: DispatchQueue, onClose: @escaping @Sendable (Pair, Int, Int, String?) -> Void) {
@@ -208,6 +210,8 @@ private final class Pair: @unchecked Sendable {
             guard let self else { return }
             switch state {
             case .ready:
+                // Once: a connection that is ready again has its two readers already.
+                guard !connected else { return }
                 connectTimeout?.cancel()
                 // Not a byte of a pairing to an address that isn't Tailscale's, whatever the name led to.
                 guard anywhere || Wire.onTailnet(outbound.currentPath?.remoteEndpoint) else { fail("\(farHost) isn't an address on the tailnet"); return }
@@ -215,7 +219,7 @@ private final class Pair: @unchecked Sendable {
                 pump(inbound, outbound) { self.up += $0 }
                 pump(outbound, inbound) { self.down += $0 }
             // Waiting is a refused or unreachable far port: nothing to wait for during a pairing.
-            case .waiting(let error), .failed(let error): ended("\(farHost) didn't take it: \(error.localizedDescription)")
+            case .waiting(let error), .failed(let error): ended(outbound, "\(farHost) didn't take it: \(error.localizedDescription)")
             case .cancelled: close()
             case .setup, .preparing: break
             @unknown default: break
@@ -223,7 +227,7 @@ private final class Pair: @unchecked Sendable {
         }
         inbound.stateUpdateHandler = { [weak self] state in
             switch state {
-            case .failed(let error): self?.ended(error.localizedDescription)
+            case .failed(let error): if let self { ended(inbound, error.localizedDescription) }
             case .cancelled: self?.close()
             default: break
             }
@@ -238,21 +242,26 @@ private final class Pair: @unchecked Sendable {
     private func pump(_ from: NWConnection, _ to: NWConnection, count: @escaping @Sendable (Int) -> Void) {
         from.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
             guard let self else { return }
-            let ended = isComplete || error != nil
+            let ended = isComplete || error != nil, broken = error != nil
             if let error { failure = failure ?? error.localizedDescription }
+            if ended { readOut.append(from) }
             // Bytes can arrive together with the FIN: forward them first, the FIN after they are sent.
-            guard let data, !data.isEmpty else { ended ? endDirection(to) : pump(from, to, count: count); return }
+            guard let data, !data.isEmpty else { ended ? endDirection(to, broken: broken) : pump(from, to, count: count); return }
             count(data.count)
             // The next receive waits for this send: backpressure.
             to.send(content: data, completion: .contentProcessed { [weak self] error in
                 guard let self else { return }
-                if let error { fail(error.localizedDescription) } else if ended { endDirection(to) } else { pump(from, to, count: count) }
+                if let error { fail(error.localizedDescription) } else if ended { endDirection(to, broken: broken) } else { pump(from, to, count: count) }
             })
         }
     }
 
-    private func endDirection(_ to: NWConnection) {
-        to.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in })  // forward the FIN
+    /// `broken`: it ended on an error, not a FIN — a reset, say. Then the other direction has no one
+    /// to go to either, and the pair is over once what was read has been passed on.
+    private func endDirection(_ to: NWConnection, broken: Bool) {
+        to.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { [weak self] _ in  // forward the FIN
+            if broken { self?.close() }
+        })
         endedDirections += 1
         if endedDirections == 2 { close() }
     }
@@ -262,10 +271,11 @@ private final class Pair: @unchecked Sendable {
         close()
     }
 
-    /// A side went. Before the far Mac took the connection, that is the end; after, what it sent
-    /// already is still to be read and passed on, and the reading says when it is over.
-    private func ended(_ why: String) {
-        guard connected else { fail(why); return }
+    /// A side went. Before the far Mac took the connection, that is the end, and so it is once that
+    /// side had been read out: no reader is left to notice. Otherwise what it sent already is still
+    /// to be read and passed on, and the reading says when it is over.
+    private func ended(_ side: NWConnection, _ why: String) {
+        guard connected, !readOut.contains(where: { $0 === side }) else { fail(why); return }
         failure = failure ?? why
     }
 
