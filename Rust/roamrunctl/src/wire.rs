@@ -64,9 +64,11 @@ impl Wire {
 
     /// The next line's words after the prefix; the far Mac saying something else is an error.
     pub fn read(&mut self, timeout: Duration) -> Result<String, String> {
-        self.stream.set_read_timeout(Some(timeout)).map_err(|e| e.to_string())?;
+        let mut reader = self.reader.lock().unwrap_or_else(|e| e.into_inner());
+        // On the reader's own handle: Windows doesn't carry a timeout over to a clone.
+        reader.get_ref().set_read_timeout(Some(timeout)).map_err(|e| e.to_string())?;
         let mut line = Vec::new();
-        match fill(&mut *self.reader.lock().unwrap_or_else(|e| e.into_inner()), &mut line) {
+        match fill(&mut *reader, &mut line) {
             Ok(()) => {}
             Err(e) if matches!(e.kind(), ErrorKind::UnexpectedEof | ErrorKind::ConnectionReset) => return Err(CLOSED.into()),
             Err(e) if e.kind() == ErrorKind::InvalidData => return Err("far Mac sent a line too long to be one of ours".into()),
@@ -80,10 +82,13 @@ impl Wire {
     /// or `said` answers false. For Xcode's pairing nothing is expected while a pairing is awaited;
     /// for device control the code and what was kept come this way. It holds the reader while it runs.
     pub fn watch(&self, over: Arc<AtomicBool>, mut said: impl FnMut(Option<String>) -> bool + Send + 'static) -> Option<std::thread::JoinHandle<()>> {
-        self.stream.set_read_timeout(Some(Duration::from_millis(500))).ok()?;
         let reader = self.reader.clone();
         Some(std::thread::spawn(move || {
             let mut reader = reader.lock().unwrap_or_else(|e| e.into_inner());
+            if reader.get_ref().set_read_timeout(Some(Duration::from_millis(500))).is_err() {
+                said(None);
+                return;
+            }
             let mut line = Vec::new();
             while !over.load(Ordering::Relaxed) {
                 match fill(&mut *reader, &mut line) {
