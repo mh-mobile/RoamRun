@@ -1,9 +1,9 @@
 //! The `rr-pair-v1` wire to the far Mac (port 41830), as `PairByName.swift` speaks it.
 
-use std::io::{BufRead, BufReader, ErrorKind, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub const PORT: u16 = 41830;
@@ -12,8 +12,29 @@ pub const CLOSED: &str = "far Mac closed the connection";
 const PREFIX: &str = "rr-pair-v1 ";
 const MAX_LINE: usize = 4096;
 
+/// One reader, whoever reads: what it has taken in ahead belongs to the next line read.
 pub struct Wire {
-    reader: BufReader<TcpStream>,
+    stream: TcpStream,
+    reader: Arc<Mutex<BufReader<TcpStream>>>,
+}
+
+/// Adds to `line` until its newline. A timeout leaves what came in `line`, for the next call;
+/// more than a line of ours is `InvalidData`, and the far side closing `UnexpectedEof`.
+fn fill<R: BufRead>(reader: &mut R, line: &mut Vec<u8>) -> std::io::Result<()> {
+    let limit = PREFIX.len() + MAX_LINE + 2;
+    if line.len() < limit {
+        Read::take(&mut *reader, (limit - line.len()) as u64).read_until(b'\n', line)?;
+    }
+    match line.last() {
+        Some(b'\n') => Ok(()),
+        _ if line.len() >= limit => Err(ErrorKind::InvalidData.into()),
+        _ => Err(ErrorKind::UnexpectedEof.into()),
+    }
+}
+
+/// A line's words after the prefix.
+fn words(line: &[u8]) -> Option<String> {
+    String::from_utf8_lossy(line).trim_end_matches(['\n', '\r']).strip_prefix(PREFIX).map(str::to_string)
 }
 
 impl Wire {
@@ -22,8 +43,8 @@ impl Wire {
         let until = Instant::now() + window;
         let addr = SocketAddr::from((ip, PORT));
         loop {
-            if let Ok(stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(10)) {
-                return Some(Wire { reader: BufReader::new(stream) });
+            if let Some(wire) = TcpStream::connect_timeout(&addr, Duration::from_secs(10)).ok().and_then(Wire::over) {
+                return Some(wire);
             }
             if Instant::now() >= until {
                 return None;
@@ -32,56 +53,52 @@ impl Wire {
         }
     }
 
+    fn over(stream: TcpStream) -> Option<Wire> {
+        let reader = Arc::new(Mutex::new(BufReader::new(stream.try_clone().ok()?)));
+        Some(Wire { stream, reader })
+    }
+
     pub fn send(&mut self, text: &str) -> Result<(), String> {
-        let mut stream = self.reader.get_ref();
-        stream.write_all(format!("{PREFIX}{text}\n").as_bytes()).and_then(|_| stream.flush()).map_err(|e| format!("far Mac went away ({e})"))
+        self.stream.write_all(format!("{PREFIX}{text}\n").as_bytes()).and_then(|_| self.stream.flush()).map_err(|e| format!("far Mac went away ({e})"))
     }
 
     /// The next line's words after the prefix; the far Mac saying something else is an error.
     pub fn read(&mut self, timeout: Duration) -> Result<String, String> {
-        self.reader.get_ref().set_read_timeout(Some(timeout)).map_err(|e| e.to_string())?;
-        let mut line = String::new();
-        match self.reader.read_line(&mut line) {
-            Ok(0) => return Err(CLOSED.into()),
-            Ok(_) => {}
-            Err(e) if e.kind() == ErrorKind::ConnectionReset => return Err(CLOSED.into()),
+        self.stream.set_read_timeout(Some(timeout)).map_err(|e| e.to_string())?;
+        let mut line = Vec::new();
+        match fill(&mut *self.reader.lock().unwrap_or_else(|e| e.into_inner()), &mut line) {
+            Ok(()) => {}
+            Err(e) if matches!(e.kind(), ErrorKind::UnexpectedEof | ErrorKind::ConnectionReset) => return Err(CLOSED.into()),
+            Err(e) if e.kind() == ErrorKind::InvalidData => return Err("far Mac sent a line too long to be one of ours".into()),
             Err(e) => return Err(format!("no answer from the far Mac ({e})")),
         }
-        if line.len() > MAX_LINE + PREFIX.len() + 1 {
-            return Err("far Mac sent a line too long to be one of ours".into());
-        }
-        line.trim_end_matches(['\n', '\r'])
-            .strip_prefix(PREFIX)
-            .map(str::to_string)
-            .ok_or_else(|| format!("far Mac said something else: {line:?}"))
+        words(&line).ok_or_else(|| format!("far Mac said something else: {:?}", String::from_utf8_lossy(&line)))
     }
 
     /// Hands `said` each line the far Mac says (its words after the prefix), and `None` once when it
-    /// closes or says something that isn't ours, until `over` is set (checked every half second).
-    /// For Xcode's pairing nothing is expected while a pairing is awaited; for device control the
-    /// code and what was kept come this way. The only reader of the wire while it runs.
-    pub fn watch(&self, over: Arc<AtomicBool>, mut said: impl FnMut(Option<String>) + Send + 'static) -> Option<std::thread::JoinHandle<()>> {
-        let stream = self.reader.get_ref().try_clone().ok()?;
-        stream.set_read_timeout(Some(Duration::from_millis(500))).ok()?;
+    /// closes or says something that isn't ours, until `over` is set (checked every half second)
+    /// or `said` answers false. For Xcode's pairing nothing is expected while a pairing is awaited;
+    /// for device control the code and what was kept come this way. It holds the reader while it runs.
+    pub fn watch(&self, over: Arc<AtomicBool>, mut said: impl FnMut(Option<String>) -> bool + Send + 'static) -> Option<std::thread::JoinHandle<()>> {
+        self.stream.set_read_timeout(Some(Duration::from_millis(500))).ok()?;
+        let reader = self.reader.clone();
         Some(std::thread::spawn(move || {
-            let mut reader = BufReader::new(stream);
-            let mut line = String::new();
+            let mut reader = reader.lock().unwrap_or_else(|e| e.into_inner());
+            let mut line = Vec::new();
             while !over.load(Ordering::Relaxed) {
-                match reader.read_line(&mut line) {
-                    // What came of a line before the timeout stays in `line`; the rest is added to it.
-                    Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
-                        if line.len() > MAX_LINE + PREFIX.len() {
-                            return said(None);
-                        }
-                    }
-                    Ok(n) if n > 0 && line.ends_with('\n') => {
-                        match line.trim_end_matches(['\n', '\r']).strip_prefix(PREFIX) {
-                            Some(words) => said(Some(words.to_string())),
-                            None => return said(None),
+                match fill(&mut *reader, &mut line) {
+                    Ok(()) => {
+                        let words = words(&line);
+                        if !said(words.clone()) || words.is_none() {
+                            return;
                         }
                         line.clear();
                     }
-                    _ => return said(None),
+                    Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
+                    Err(_) => {
+                        said(None);
+                        return;
+                    }
                 }
             }
         }))
@@ -98,6 +115,8 @@ pub enum Said {
     /// Nothing was kept, and its word for why.
     Failed(String),
     Ended(String),
+    /// Which of its attempts this is, to ask it about afterwards.
+    Attempt(String),
     Other,
 }
 
@@ -109,6 +128,8 @@ pub fn said(words: &str) -> Said {
         ["result", "done", "off"] => Said::Done(false),
         ["result", "failed", why] => Said::Failed(why.to_string()),
         ["ended", why] => Said::Ended(why.to_string()),
+        // Printed for a person to type there, so only what an id is.
+        ["attempt", id] if crate::lines::is_uuid(id) => Said::Attempt(id.to_string()),
         _ => Said::Other,
     }
 }
@@ -130,5 +151,45 @@ mod tests {
         assert_eq!(said("result failed not-paired"), Said::Failed("not-paired".into()));
         assert_eq!(said("ended stopped"), Said::Ended("stopped".into()));
         assert_eq!(said("offer x"), Said::Other);
+        let id = "6F9619FF-8B86-D011-B42D-00C04FC964FF";
+        assert_eq!(said(&format!("attempt {id}")), Said::Attempt(id.into()));
+        assert_eq!(said("attempt \x1b]0;x\x07"), Said::Other);
+    }
+
+    #[test]
+    fn a_line_is_bounded_and_survives_a_timeout() {
+        let mut line = Vec::new();
+        // No newline, however much comes: refused once it is past a line of ours, and not kept.
+        let mut endless = std::io::repeat(b'x');
+        assert_eq!(fill(&mut BufReader::new(&mut endless), &mut line).unwrap_err().kind(), ErrorKind::InvalidData);
+        assert!(line.len() <= PREFIX.len() + MAX_LINE + 2);
+        // What a first read brought stays for the second.
+        let mut line = b"rr-pair-v1 off".to_vec();
+        fill(&mut &b"er?\nrr-pair-v1 next\n"[..], &mut line).unwrap();
+        assert_eq!(words(&line), Some("offer?".into()));
+        assert_eq!(fill(&mut &b"rr-pair-v1 cut"[..], &mut Vec::new()).unwrap_err().kind(), ErrorKind::UnexpectedEof);
+        assert_eq!(words(b"hello\n"), None);
+    }
+
+    #[test]
+    fn lines_sent_together_all_arrive_whoever_reads() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let far = std::thread::spawn({
+            let addr = listener.local_addr().unwrap();
+            move || {
+                let mut far = TcpStream::connect(addr).unwrap();
+                far.write_all(b"rr-pair-v1 offer x\nrr-pair-v1 result failed cancelled\n").unwrap();
+                far
+            }
+        });
+        let mut wire = Wire::over(listener.accept().unwrap().0).unwrap();
+        let _far = far.join().unwrap();
+        assert_eq!(wire.read(Duration::from_secs(5)).as_deref(), Ok("offer x"));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let over = Arc::new(AtomicBool::new(false));
+        let watching = wire.watch(over.clone(), move |said| tx.send(said).is_ok()).unwrap();
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(Some("result failed cancelled".into())));
+        over.store(true, Ordering::Relaxed);
+        watching.join().unwrap();
     }
 }

@@ -20,11 +20,14 @@ Windows (PowerShell) — into a folder `roamrunctl-windows-x86_64` where you are
 `x86_64`, both times):
 
 ```
-irm https://github.com/mh-mobile/RoamRun/releases/latest/download/roamrunctl-windows-x86_64.zip -OutFile roamrunctl.zip; Expand-Archive roamrunctl.zip .
+irm https://github.com/mh-mobile/RoamRun/releases/latest/download/roamrunctl-windows-x86_64.zip -OutFile roamrunctl.zip; Expand-Archive -Force roamrunctl.zip .
 ```
 
+It isn't put on your PATH: run it as `.\roamrunctl-windows-x86_64\roamrunctl.exe`, or move the folder where you keep such things.
+
 macOS, or Linux with Homebrew — built from source: `brew install mh-mobile/tap/roamrunctl`.
-Anywhere with Rust: `cargo install --locked --git https://github.com/mh-mobile/RoamRun roamrunctl`.
+Anywhere with Rust: `cargo install --locked --git https://github.com/mh-mobile/RoamRun --tag v<version> roamrunctl`
+(built that way, outside this folder, it takes whichever Rust is installed, and on Windows isn't the static build the archives hold).
 
 Those two commands only fetch an archive of the newest [release](https://github.com/mh-mobile/RoamRun/releases)
 and unpack it: `roamrunctl-linux-x86_64.tar.gz`, `roamrunctl-linux-aarch64.tar.gz`, `roamrunctl-windows-x86_64.zip` or
@@ -47,8 +50,14 @@ on, from the address it says the device has. With ufw on Ubuntu (which lets mDNS
 ## Use
 
 ```
-roamrunctl pair introduce --mac <far Mac's Tailscale name> --to <device's Tailscale name> [--offer <line>] [--as <name>] [--deadline <secs>]
+roamrunctl pair introduce --mac <far Mac's Tailscale name> --to <device's Tailscale name> [--offer <line>] [--as <name>] [--deadline <secs>] [--on <address>]
 ```
+
+Both names are Tailscale's, as `tailscale status` lists them — the first label, or the whole name for a machine of
+another tailnet — never what a device calls itself: two may both be "iPhone". A name that is more than one peer is
+refused. A machine with more than one interface on the device's network (wired and Wi‑Fi both, say) goes on with
+the one its system sends to the device from, and says the others: on one network either does, and where they are
+two networks numbered alike and the device doesn't list the far Mac, `--on <one of the others>` is the way to the other.
 
 Needs Tailscale installed and logged in (`tailscale` in PATH, the App Store app on macOS, or the installer's copy on Windows).
 Without `--offer`, the far Mac runs `roamrun pair xcode --with <this machine>` and the offer comes over port 41830
@@ -61,8 +70,14 @@ The far Mac saves the device under its Tailscale name; `--as` gives another.
 For device control the far Mac runs `roamrun pair control --with <this machine>` instead, with the RoamRun app
 open there; the same command here answers it (there is no line to carry for this, so no `--offer`). The code to
 type on the device is made on the far Mac and printed here, on standard error: run this yourself, in a terminal of
-your own — an agent that ran it would have the code in its output. Exit 0: that Mac's app kept the pairing.
-Exit 0: the far Mac said it saved the device (or none was asked). Exit 1 with a line: hand it to `roamrun devices add` there.
+your own — an agent that ran it would have the code in its output.
+
+How it ends. Xcode's pairing: exit 0 once the far Mac said it saved the device (with `--offer` no Mac is asked:
+exit 0 with the line, which is then `roamrun devices add`'s there); exit 1 with a line when it didn't say so — hand
+it to `roamrun devices add` there; exit 1 without one when nothing was tried, or when one was and the device's own
+announcement wasn't seen here. Device control: exit 0 when that Mac's app kept the pairing, exit 1 with why not.
+Ctrl-C, a closed terminal and a dropped ssh session all take the announcement back before it ends (seen on macOS;
+on Windows Ctrl-Break and a closed console are listened for the same way, untried).
 
 ## Build and check
 
@@ -107,4 +122,12 @@ ends the run, the device line is made, and the goodbye reaches a browser within 
 - Device control's pairing, once, from the same Linux machine: the far Mac ran `roamrun pair control --with <it>`
   with the RoamRun app open, this printed the code once the device had picked the far Mac, the code was typed,
   and both said the pairing was kept and switched on; the far Mac then showed device control as connected.
-- Not packaged: no release archive, no skill, and its crates' licenses aren't gathered anywhere yet.
+- On macOS, once, with no line carried and the firewall off: the far Mac saved the device and its bridge came up
+  Ready; nothing was left announced. With the firewall on,
+  under a test service type and a Linux machine standing in for the device: macOS asked whether to let `roamrunctl`
+  take incoming connections; one got through while the question stood, and after it was allowed. Refusing wasn't tried.
+- No release carries it yet (0.5.0 is the first): the Linux and Windows install commands were run against archives
+  served locally, not against a release; the tap's formula and `cargo install --git` weren't run.
+- After a review changed how it reads the far Mac's wire, ends its relay, picks its interface and stops, the mechanics
+  were checked again on macOS (`cargo test`, `scripts/local-check.py`, a fake far Mac that misbehaves). The runs
+  against a real device above are from before that.

@@ -36,6 +36,10 @@ https://github.com/mh-mobile/RoamRun/blob/main/Rust/roamrunctl/README.md#install
 - The device unlocked, on this machine's Wi‑Fi (not a guest network, not a hotspot),
   with Tailscale connected. "Tailscale doesn't reach … directly on this LAN (relayed,
   IPv6, or off this subnet)" means it isn't: the user checks, you don't loop.
+- Names are Tailscale's (`tailscale status` lists them), not what a device calls itself.
+  "… is more than one peer": use the whole name it lists. "This machine is also … on
+  that network" is only said: if the device then doesn't list the far Mac, run it again
+  with `--on <one of those addresses>`.
 - Someone at the far Mac's screen (or its screen sharing) for Xcode's pairing: the
   button there can't be pressed over ssh.
 - A firewall on this machine has to let the device connect to `roamrunctl`, and let
@@ -68,7 +72,8 @@ as a developer: install and run apps, debug them, read their data.
    code on, in either direction**: the user reads it there.
 4. It ends by itself. Either may be started first, and the button pressed after.
 
-It waits for a person: run it in the background or with a timeout of fifteen minutes.
+It waits for a person: run it in the background or with a timeout of twenty minutes
+(ten for the offer, five for the pairing, and what the far Mac takes to answer).
 A command cut short and started again makes the far Mac wait anew.
 
 How it ends:
@@ -78,17 +83,22 @@ How it ends:
   pairing *tried* is all this machine can know.
 - **Exit 1 with a line** on standard output: a pairing was tried and the far Mac didn't
   say it saved the device. Hand that line to `roamrun devices add <line>` on the far Mac.
-- **Exit 1 without a line**: nothing was paired. It says why — "far Mac isn't waiting
-  (port 41830)" (its `roamrun pair xcode --with <machine>` isn't running, or names
-  another machine, or Tailscale's rules or its firewall keep this machine out), "nothing was
+- **Exit 1 without a line, after "A pairing was tried"**: the device's own announcement
+  wasn't seen here, so there is no line. Whether the pairing was made shows on the far
+  Mac; the device is added there with `roamrun devices add` and a line from a Mac that has it.
+- **Exit 1 without a line** otherwise: nothing was paired. It says why — "far Mac isn't waiting
+  (port 41830)" (its `roamrun pair xcode --with <machine>` isn't running, or Tailscale's
+  rules or its firewall keep this machine out), "far Mac closed the connection" (its
+  `--with` names another machine than this one), "nothing was
   paired in time" (when the device listed the far Mac and got no further, a firewall
   here keeps it out: the message says which address and port to let in), "the far Mac's command ended", "no peer named …" (a name that
   isn't on this tailnet). Say which; don't loop.
 
 With a far Mac that can't be asked (an older RoamRun, or that port shut), the offer is
 carried: `roamrun pair xcode` there prints it, and here
-`roamrunctl pair introduce --mac <far Mac> --to <device> --offer <that line>`. It then
-always prints the device's line for `roamrun devices add <line>` on the far Mac.
+`roamrunctl pair introduce --mac <far Mac> --to <device> --offer <that line>`. No Mac
+is asked then: on a tried pairing it exits 0 with the device's line, which always goes
+to `roamrun devices add <line>` on the far Mac.
 
 `--as <name>` gives the name the far Mac saves the device under (by default, its
 Tailscale name).
@@ -113,7 +123,8 @@ user removes it in the app there first), "the pairing wasn't completed" (a wrong
 code: they run it again, the far Mac goes on waiting), "…'s own announcement wasn't
 seen on this LAN" (a device no Mac has paired with yet doesn't announce itself: pair
 Xcode first, as above). "What the far Mac kept couldn't be learned": there,
-`roamrun pair control --last` says.
+`roamrun pair control --attempt <id>` says, with the id it printed (stopping it
+with Ctrl-C once the code was typed ends the same way: the far Mac's app goes on).
 
 ## 5. What it doesn't do
 

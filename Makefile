@@ -133,12 +133,14 @@ release-dmg:
 	@echo "Release $(DMG) is signed, notarized and stapled, built from $$(git rev-parse HEAD) (gh release create --target)"
 
 # roamrunctl's archives for a release: the ones CI built from this very commit (Linux, Windows),
-# and their checksums. The Mac's is built by Homebrew, from source.
+# and their checksums. The Mac's is built by Homebrew, from source. Never the weekly
+# run's: it builds none. CI keeps them 14 days: after that, run the commit's CI again.
 roamrunctl-archives:
-	@run=$$(gh run list --workflow CI --commit $$(git rev-parse HEAD) --status success --json databaseId --jq '.[0].databaseId'); \
+	@run=$$(gh run list --workflow CI --commit $$(git rev-parse HEAD) --status success --json databaseId,event --jq '[.[] | select(.event != "schedule")][0].databaseId // empty'); \
 	[ -n "$$run" ] || { echo "no CI run has passed for $$(git rev-parse HEAD) yet"; exit 1; }; \
 	rm -rf roamrunctl-dist && gh run download $$run --pattern 'roamrunctl-*' --dir roamrunctl-dist
 	cd roamrunctl-dist && for d in */; do mv "$$d"* . && rmdir "$$d"; done \
+		&& ls roamrunctl-linux-x86_64.tar.gz roamrunctl-linux-aarch64.tar.gz roamrunctl-windows-x86_64.zip roamrunctl-windows-aarch64.zip >/dev/null \
 		&& shasum -a 256 roamrunctl-*.tar.gz roamrunctl-*.zip > roamrunctl-SHA256SUMS
 	@ls roamrunctl-dist; echo "gh release upload v$(VERSION) roamrunctl-dist/*"
 

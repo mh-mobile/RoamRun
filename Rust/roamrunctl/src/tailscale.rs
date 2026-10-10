@@ -12,14 +12,20 @@ pub struct Status {
     pub this: Node,
     #[serde(rename = "Peer", default)]
     pub peers: std::collections::HashMap<String, Node>,
+    #[serde(rename = "CurrentTailnet", default)]
+    tailnet: Option<Tailnet>,
+}
+
+#[derive(Deserialize)]
+struct Tailnet {
+    #[serde(rename = "MagicDNSSuffix", default)]
+    suffix: String,
 }
 
 #[derive(Deserialize)]
 pub struct Node {
     #[serde(rename = "DNSName", default)]
     pub dns_name: String,
-    #[serde(rename = "HostName", default)]
-    pub host_name: String,
     #[serde(rename = "TailscaleIPs", default)]
     pub ips: Vec<String>,
     #[serde(rename = "CurAddr", default)]
@@ -78,16 +84,28 @@ pub fn state_problem(state: &str) -> Option<String> {
     }
 }
 
+/// The peer a person means by `name`: its whole Tailscale name, or the first label of one in this
+/// tailnet. Never the name a device gives itself, and never a guess between two (as RoamRun does).
 pub fn peer(status: &Status, name: &str) -> Result<Peer, String> {
     let want = name.trim_end_matches('.').to_lowercase();
-    let node = status
+    let suffix = status.tailnet.as_ref().map(|t| t.suffix.trim_matches('.').to_lowercase()).unwrap_or_default();
+    let mut found: Vec<&Node> = status
         .peers
         .values()
-        .find(|p| {
+        .filter(|p| {
             let dns = p.dns_name.trim_end_matches('.').to_lowercase();
-            want == dns || want == short(&dns) || want == p.host_name.to_lowercase()
+            !dns.is_empty() && (want == dns || !suffix.is_empty() && dns == format!("{want}.{suffix}"))
         })
-        .ok_or(format!("no peer named {name} on this tailnet"))?;
+        .collect();
+    let node = match found.len() {
+        0 => return Err(format!("no peer named {name} on this tailnet (its Tailscale name, as `tailscale status` lists it)")),
+        1 => found.remove(0),
+        _ => {
+            let mut names: Vec<&str> = found.iter().map(|p| p.dns_name.trim_end_matches('.')).collect();
+            names.sort();
+            return Err(format!("{name} is more than one peer: {}", names.join(", ")));
+        }
+    };
     let ip = node
         .ips
         .iter()
@@ -145,15 +163,20 @@ mod tests {
     }
 
     #[test]
-    fn peers_by_any_name() {
+    fn peers_by_their_tailscale_name() {
         let json = r#"{"Self":{"DNSName":"me.tail.ts.net.","HostName":"me","TailscaleIPs":["100.64.0.1"]},
-            "Peer":{"k":{"DNSName":"iPhone-15.tail.ts.net.","HostName":"iPhone 15","TailscaleIPs":["fd7a::1","100.64.0.9"],"CurAddr":"192.168.0.19:41641"}}}"#;
+            "CurrentTailnet":{"MagicDNSSuffix":"tail.ts.net"},
+            "Peer":{"shared":{"DNSName":"iphone-15.other.ts.net.","HostName":"iPhone 15","TailscaleIPs":["100.64.0.7"]},
+                "same":{"DNSName":"iphone-15-1.tail.ts.net.","HostName":"iPhone 15","TailscaleIPs":["100.64.0.8"]},"k":{"DNSName":"iPhone-15.tail.ts.net.","HostName":"iPhone 15","TailscaleIPs":["fd7a::1","100.64.0.9"],"CurAddr":"192.168.0.19:41641"}}}"#;
         let st: Status = serde_json::from_str(json).unwrap();
-        for name in ["iphone-15", "iPhone-15.tail.ts.net", "iphone 15"] {
+        for name in ["iphone-15", "iPhone-15.tail.ts.net", "iphone-15.tail.ts.net."] {
             let p = peer(&st, name).unwrap();
             assert_eq!((p.ip, p.dns.as_str(), p.lan), (Ipv4Addr::new(100, 64, 0, 9), "iPhone-15.tail.ts.net", Some(Ipv4Addr::new(192, 168, 0, 19))));
         }
         assert!(peer(&st, "nobody").is_err());
+        // What a device calls itself is anyone's to choose, and two here choose the same.
+        assert!(peer(&st, "iphone 15").is_err());
+        assert_eq!(peer(&st, "iphone-15.other.ts.net").unwrap().ip, Ipv4Addr::new(100, 64, 0, 7));
         assert_eq!(short(&st.this.dns_name), "me");
         assert_eq!(st.backend_state, "");
     }

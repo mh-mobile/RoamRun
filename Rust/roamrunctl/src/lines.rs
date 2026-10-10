@@ -168,7 +168,7 @@ fn is_format(u: u32) -> bool {
     )
 }
 
-fn is_uuid(s: &str) -> bool {
+pub fn is_uuid(s: &str) -> bool {
     let b = s.as_bytes();
     b.len() == 36
         && b.iter().enumerate().all(|(i, c)| match i {

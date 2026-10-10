@@ -12,12 +12,13 @@ use lines::{Device, Offer, DEVICE_KEYS};
 use mdns_sd::{ResolvedService, ServiceEvent};
 use relay::Event;
 use std::collections::HashMap;
+use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tailscale::{short, Peer, Status};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 const HOST_SERVICE: &str = "_remotepairing-pairable-host._tcp";
 
@@ -60,6 +61,9 @@ struct Introduce {
     /// Seconds to wait for the pairing
     #[arg(long, default_value_t = 300)]
     deadline: u64,
+    /// This machine's address on the device's LAN, when it has more than one there and the device doesn't list the far Mac
+    #[arg(long)]
+    on: Option<Ipv4Addr>,
     #[arg(long, hide = true, default_value = HOST_SERVICE)]
     service: String,
     #[arg(long, hide = true)]
@@ -68,14 +72,15 @@ struct Introduce {
     device_ip: Option<Ipv4Addr>,
 }
 
-macro_rules! say { ($($t:tt)*) => { eprintln!("roamrunctl: {}", format!($($t)*)) } }
+// Not eprintln!: it panics once the terminal is gone, and what is announced must still be taken back.
+macro_rules! say { ($($t:tt)*) => {{ let _ = writeln!(std::io::stderr(), "roamrunctl: {}", format!($($t)*)); }} }
 
 fn main() {
     let Cli { command: Command::Pair { command: Pair::Introduce(args) } } = Cli::parse();
     match introduce(args) {
         Ok((line, saved)) => {
             if let Some(line) = line {
-                println!("{line}");
+                let _ = writeln!(std::io::stdout(), "{line}");
             }
             std::process::exit(if saved { 0 } else { 1 });
         }
@@ -103,8 +108,9 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
     let far = lookup(&status, &a.mac, a.far_ip, None)?;
     let device = lookup(&status, &a.to, a.device_ip, a.device_ip)?;
     let own = status.as_ref().map_or("<this machine's Tailscale name>", |s| short(&s.this.dns_name)).to_string();
-    let (lan, local) = match device.lan.map(|lan| (lan, lan_ip(lan))) {
-        Some((lan, Ok(local))) => (lan, local),
+    let (lan, local, also) = match device.lan.map(|lan| (lan, lan_ip(lan, a.on))) {
+        Some((lan, Ok((local, also)))) => (lan, local, also),
+        Some((_, Err(Elsewhere::NotOn(why)))) => return Err(why),
         _ => {
             return Err(format!(
                 "Tailscale doesn't reach {} directly on this LAN (relayed, IPv6, or off this subnet): its connection couldn't be told from another host's",
@@ -113,6 +119,11 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
         }
     };
     say!("this machine {local}; device {} at {lan}; far Mac {} at {}", device.dns, far.dns, far.ip);
+    // Which of them the device is beyond can't be told from here when they aren't one network.
+    let also = also.iter().map(Ipv4Addr::to_string).collect::<Vec<_>>().join(", ");
+    if !also.is_empty() {
+        say!("this machine is also {also} on that network: if the device doesn't list the far Mac, run this again with --on <one of them>");
+    }
 
     let mut wire = None;
     // Device control: which of the far Mac's attempts this is, to ask it about afterwards.
@@ -155,8 +166,11 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
                         let offered = w.read(left)?;
                         match (offered.split_once(' '), wire::said(&offered)) {
                             (Some(("offer", line)), _) => {
-                                // Its attempt's id follows at once.
-                                attempt = w.read(Duration::from_secs(10)).ok().and_then(|l| l.strip_prefix("attempt ").map(str::to_string));
+                                // Its attempt's id follows at once; without it this isn't the pairing it asked about.
+                                let Ok(wire::Said::Attempt(id)) = w.read(Duration::from_secs(10)).map(|l| wire::said(&l)) else {
+                                    return Err("far Mac offered without saying which attempt it is; nothing was announced".into());
+                                };
+                                attempt = Some(id);
                                 wire = Some(w);
                                 break line.to_string();
                             }
@@ -197,9 +211,14 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
     }
 
     let control = attempt.is_some();
-    let plan = Plan { service, offer, far: far.ip, lan, local, deadline: a.deadline, listed_as, control };
+    let plan = Plan { service, offer, far: far.ip, lan, local, also, deadline: a.deadline, listed_as, control };
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
-    let outcome = rt.block_on(session(plan, wire.as_ref()));
+    // From here on: before anything is announced, and until the far Mac has been told.
+    let stopped = {
+        let _in = rt.enter();
+        stops()?
+    };
+    let outcome = rt.block_on(session(plan, wire.as_ref(), stopped.clone()));
 
     let found = match outcome {
         Err((reason, why)) => {
@@ -238,13 +257,13 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
     }
     let Some(mut w) = wire else { return Ok((Some(line), true)) };
     let unknown = "whether the far Mac saved it couldn't be learned: there, `roamrun devices` shows; if it isn't listed, `roamrun devices add` with the line below.";
-    // tokio holds SIGINT for the whole process: without this, Ctrl-C would wait out the read.
-    let on_ctrl_c = rt.spawn({
-        let line = line.clone();
+    // Stopping is this program's to act on by now: without this it would wait out the read.
+    let on_stop = rt.spawn({
+        let (line, mut stopped) = (line.clone(), stopped);
         async move {
-            if tokio::signal::ctrl_c().await.is_ok() {
+            if stopped.wait_for(|s| *s).await.is_ok() {
                 say!("stopped; {unknown}");
-                println!("{line}");
+                let _ = writeln!(std::io::stdout(), "{line}");
                 std::process::exit(1);
             }
         }
@@ -254,7 +273,7 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
         rt.spawn_blocking(move || w.send(&format!("tried {line}")).and_then(|_| w.read(Duration::from_secs(30))))
     };
     let answer = rt.block_on(exchange).unwrap_or_else(|e| Err(e.to_string()));
-    on_ctrl_c.abort();
+    on_stop.abort();
     match answer.as_deref() {
         Ok("saved") => say!("far Mac saved the device."),
         Ok("unsaved") => say!("far Mac didn't save it: run `roamrun devices add` there with the line below."),
@@ -296,19 +315,81 @@ fn kept_nothing(reason: &str) -> String {
     .into()
 }
 
+/// Why this machine has no address on a device's LAN.
+enum Elsewhere {
+    None,
+    /// `--on` names one it hasn't there: the sentence.
+    NotOn(String),
+}
+
 /// This machine's address on the LAN that has `toward`: the one of its interfaces whose own
 /// network holds that address. Not what the routing table would pick (a route Tailscale took
 /// in may lead there another way), and from the prefix length each system gives as it is (the
 /// netmask is worked out differently on each, and on Windows by a guess).
-fn lan_ip(toward: Ipv4Addr) -> Result<Ipv4Addr, String> {
-    if_addrs::get_if_addrs()
-        .map_err(|e| format!("this machine's interfaces couldn't be read ({e})"))?
+fn lan_ip(toward: Ipv4Addr, on: Option<Ipv4Addr>) -> Result<(Ipv4Addr, Vec<Ipv4Addr>), Elsewhere> {
+    let interfaces: Vec<(Ipv4Addr, u8, bool)> = if_addrs::get_if_addrs()
+        .map_err(|_| Elsewhere::None)?
         .iter()
-        .find_map(|i| match &i.addr {
-            if_addrs::IfAddr::V4(a) if !a.ip.is_loopback() && same_net(toward, a.ip, mask(a.prefixlen)) => Some(a.ip),
+        .filter_map(|i| match &i.addr {
+            if_addrs::IfAddr::V4(a) => Some((a.ip, a.prefixlen, i.is_oper_up())),
             _ => None,
         })
-        .ok_or_else(|| format!("no interface of this machine is on {toward}'s network"))
+        .collect();
+    // Where the system would send from: no more than a hint between interfaces that are there anyway.
+    let routed = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).and_then(|s| s.connect((toward, 9)).and_then(|_| s.local_addr())).ok();
+    let routed = routed.and_then(|a| match a.ip() {
+        std::net::IpAddr::V4(ip) => Some(ip),
+        _ => None,
+    });
+    on_lan(&interfaces, toward, on.or(routed), on.is_some())
+}
+
+/// Of (address, prefix length, up), the one on `toward`'s network, and the others alike: the
+/// narrowest network that holds it (a VPN's 10/8 also holds a Wi-Fi's 10.0.0/24), and among
+/// several of those `wanted` — which must be one of them when it is `asked` for — else the first.
+fn on_lan(interfaces: &[(Ipv4Addr, u8, bool)], toward: Ipv4Addr, wanted: Option<Ipv4Addr>, asked: bool) -> Result<(Ipv4Addr, Vec<Ipv4Addr>), Elsewhere> {
+    let mut here: Vec<_> = interfaces.iter().filter(|(ip, prefix, up)| *up && !ip.is_loopback() && same_net(toward, *ip, mask(*prefix))).collect();
+    if let (Some(on), true) = (wanted, asked) {
+        if !here.iter().any(|i| i.0 == on) {
+            return Err(Elsewhere::NotOn(format!("--on {on} isn't an address of this machine on {toward}'s network")));
+        }
+    } else {
+        let narrowest = here.iter().map(|i| i.1).max().ok_or(Elsewhere::None)?;
+        here.retain(|i| i.1 == narrowest);
+    }
+    let one = here.iter().map(|i| i.0).find(|ip| Some(*ip) == wanted).or(here.first().map(|i| i.0)).ok_or(Elsewhere::None)?;
+    Ok((one, here.iter().map(|i| i.0).filter(|ip| *ip != one).collect()))
+}
+
+/// Set once this is told to stop: Ctrl-C, and what a closed terminal or a dropped ssh session
+/// sends. Without the latter two the announcement would stay on the LAN for its 75 minutes.
+fn stops() -> Result<watch::Receiver<bool>, String> {
+    let (tx, rx) = watch::channel(false);
+    macro_rules! on {
+        ($signal:expr) => {{
+            let (mut signal, tx) = ($signal.map_err(|e| format!("signals couldn't be listened for ({e})"))?, tx.clone());
+            tokio::spawn(async move {
+                if signal.recv().await.is_some() {
+                    let _ = tx.send(true);
+                }
+            });
+        }};
+    }
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        on!(signal(SignalKind::interrupt()));
+        on!(signal(SignalKind::terminate()));
+        on!(signal(SignalKind::hangup()));
+    }
+    #[cfg(windows)]
+    {
+        use tokio::signal::windows::{ctrl_break, ctrl_c, ctrl_close};
+        on!(ctrl_c());
+        on!(ctrl_break());
+        on!(ctrl_close());
+    }
+    Ok(rx)
 }
 
 fn mask(prefix: u8) -> Ipv4Addr {
@@ -327,6 +408,8 @@ struct Plan {
     far: Ipv4Addr,
     lan: Ipv4Addr,
     local: Ipv4Addr,
+    /// This machine's other addresses on the device's network, for a person to read.
+    also: String,
     deadline: u64,
     listed_as: String,
     /// Device control: the far Mac's app pairs, passes the code on, and says what it kept.
@@ -349,7 +432,7 @@ type Seen = Arc<Mutex<HashMap<String, ResolvedService>>>;
 
 /// Announces, relays, and ends: the device as seen on the LAN when a pairing was tried (None:
 /// its announcement wasn't seen), or why nothing was (a wire reason word, and the sentence).
-async fn session(plan: Plan, far_link: Option<&wire::Wire>) -> Result<Ended, (&'static str, String)> {
+async fn session(plan: Plan, far_link: Option<&wire::Wire>, mut stopped: watch::Receiver<bool>) -> Result<Ended, (&'static str, String)> {
     let failed = |why: String| ("failed", why);
     let identifier = plan.offer.txt["identifier"].clone();
     let listener = relay::listen(plan.local, plan.offer.port).await.map_err(failed)?;
@@ -363,19 +446,19 @@ async fn session(plan: Plan, far_link: Option<&wire::Wire>) -> Result<Ended, (&'
     let serving = tokio::spawn(relay::serve(listener, plan.lan, SocketAddr::from((plan.far, plan.offer.port)), tx.clone()));
     let (deadline, stop) = (tx.clone(), tx.clone());
     tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(plan.deadline)).await;
-        let _ = deadline.send(Event::Deadline).await;
-    });
-    tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
+        if stopped.wait_for(|s| *s).await.is_ok() {
             let _ = stop.send(Event::Stopped).await;
         }
+    });
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(plan.deadline)).await;
+        let _ = deadline.send(Event::Deadline).await;
     });
     let (lan, local, lost) = (plan.lan, plan.local, tx.clone());
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(2)).await;
-            if lan_ip(lan).ok() != Some(local) {
+            if lan_ip(lan, Some(local)).is_err() {
                 let _ = lost.send(Event::AddressLost).await;
                 return;
             }
@@ -386,7 +469,7 @@ async fn session(plan: Plan, far_link: Option<&wire::Wire>) -> Result<Ended, (&'
     let watching = far_link.and_then(|w| {
         let far = tx.clone();
         w.watch(over.clone(), move |said| {
-            let _ = far.blocking_send(said.map_or(Event::FarGone, Event::Far));
+            far.blocking_send(said.map_or(Event::FarGone, Event::Far)).is_ok()
         })
     });
     let name = &plan.offer.txt["name"];
@@ -408,13 +491,17 @@ async fn session(plan: Plan, far_link: Option<&wire::Wire>) -> Result<Ended, (&'
                 wire::Said::Done(on) => break Ok(Some(Ended::Kept(on))),
                 wire::Said::Failed(why) => break Ok(Some(Ended::KeptNothing(why))),
                 wire::Said::Ended(why) => break Err(("stopped", format!("far Mac: {}", ended(&why)))),
-                wire::Said::Other => break Err(("stopped", "the far Mac said something else, and was left".to_string())),
+                wire::Said::Other | wire::Said::Attempt(_) => break Err(("stopped", "the far Mac said something else, and was left".to_string())),
             },
             Some(Event::Far(_)) | Some(Event::NoResult) => break Err(("stopped", "the far Mac's command ended".to_string())),
             // Listed on the device and no connection here is what a firewall in between looks like.
             Some(Event::Deadline) => break Err((
                 "deadline",
-                format!("nothing was paired in time. If the device listed the far Mac and got no further, a firewall here keeps it out: let TCP from {} in on port {port}", plan.lan),
+                format!(
+                    "nothing was paired in time. If the device listed the far Mac and got no further, a firewall here keeps it out: let TCP from {} in on port {port}{}",
+                    plan.lan,
+                    if plan.also.is_empty() { String::new() } else { format!(". If it didn't list it at all: run this again with --on <one of {}>", plan.also) }
+                ),
             )),
             Some(Event::Stopped) => break Err(("stopped", "stopped".to_string())),
             Some(Event::AddressLost) => break Err(("address-lost", "this machine's address on the LAN changed".to_string())),
@@ -446,7 +533,8 @@ async fn session(plan: Plan, far_link: Option<&wire::Wire>) -> Result<Ended, (&'
                         _ => break Ok(Ended::NotSaid),
                     },
                     Some(Event::FarGone) | Some(Event::NoResult) | None => break Ok(Ended::NotSaid),
-                    Some(Event::Stopped) => break Err(("stopped", "stopped".to_string())),
+                    // Its app holds the pairing by now and says what came of it, whoever listens.
+                    Some(Event::Stopped) => break Ok(Ended::NotSaid),
                     _ => {}
                 }
             }
@@ -454,6 +542,8 @@ async fn session(plan: Plan, far_link: Option<&wire::Wire>) -> Result<Ended, (&'
         Ok(None) => Ok(Ended::Tried(device_seen(&announcement, &seen, plan.lan).await)),
     };
     over.store(true, Ordering::Relaxed);
+    // A far Mac that goes on talking would otherwise hold its reader on a full channel, and this on it.
+    events.close();
     if let Some(w) = watching {
         let _ = w.join();
     }
@@ -463,9 +553,17 @@ async fn session(plan: Plan, far_link: Option<&wire::Wire>) -> Result<Ended, (&'
 
 async fn collect(rx: mdns_sd::Receiver<ServiceEvent>, seen: Seen) {
     while let Ok(event) = rx.recv_async().await {
-        if let ServiceEvent::ServiceResolved(service) = event {
-            seen.lock().unwrap_or_else(|e| e.into_inner()).insert(service.fullname.clone(), *service);
-        }
+        note(&seen, event);
+    }
+}
+
+/// Keeps what is announced now: a record taken back is no longer the device's.
+fn note(seen: &Seen, event: ServiceEvent) {
+    let mut seen = seen.lock().unwrap_or_else(|e| e.into_inner());
+    match event {
+        ServiceEvent::ServiceResolved(service) => drop(seen.insert(service.fullname.clone(), *service)),
+        ServiceEvent::ServiceRemoved(_, fullname) => drop(seen.remove(&fullname)),
+        _ => {}
     }
 }
 
@@ -492,10 +590,7 @@ async fn device_seen(announcement: &announce::Announcement, seen: &Seen, lan: Ip
             return None;
         };
         match tokio::time::timeout(left, rx.recv_async()).await {
-            Ok(Ok(ServiceEvent::ServiceResolved(service))) => {
-                seen.lock().unwrap_or_else(|e| e.into_inner()).insert(service.fullname.clone(), *service);
-            }
-            Ok(Ok(_)) => {}
+            Ok(Ok(event)) => note(seen, event),
             _ => return found(seen),
         }
     }
@@ -519,9 +614,44 @@ mod tests {
         assert_eq!(super::mask(32), Ipv4Addr::BROADCAST);
         assert_eq!(super::mask(20), Ipv4Addr::new(255, 255, 240, 0));
         // Whatever the routing table says, loopback and an address on no interface's network aren't here.
-        assert!(lan_ip(Ipv4Addr::new(203, 0, 113, 7)).is_err());
+        assert!(lan_ip(Ipv4Addr::new(203, 0, 113, 7), None).is_err());
         assert_eq!(name("  iPhone "), Ok("iPhone".into()));
         assert!(name("-x").is_err());
         assert!(name(" ").is_err());
+    }
+
+    #[test]
+    fn the_interface_on_the_devices_lan() {
+        let ip = |d: u8| Ipv4Addr::new(10, 0, 0, d);
+        let pick = |interfaces: &[(Ipv4Addr, u8, bool)], wanted, asked| on_lan(interfaces, ip(30), wanted, asked).ok();
+        let (vpn, wifi, wired) = ((Ipv4Addr::new(10, 8, 0, 2), 8, true), (ip(20), 24, true), (ip(10), 24, true));
+        let alone = |d| Some((ip(d), vec![]));
+        // A wider network that holds the device's address too isn't its LAN, whichever is listed
+        // first and wherever the system would send from.
+        assert_eq!(pick(&[vpn, wifi], None, false), alone(20));
+        assert_eq!(pick(&[wifi, vpn], Some(vpn.0), false), alone(20));
+        // One that is down announces nothing.
+        assert_eq!(pick(&[(ip(10), 24, false), wifi], None, false), alone(20));
+        assert_eq!(pick(&[(ip(20), 24, false)], None, false), None);
+        // Several alike: it goes on with where the system sends from, else the first, and says the rest.
+        let bridge = (ip(25), 24, true);
+        assert_eq!(pick(&[wired, wifi, bridge], None, false), Some((ip(10), vec![ip(20), ip(25)])));
+        assert_eq!(pick(&[wired, wifi, bridge], Some(ip(20)), false), Some((ip(20), vec![ip(10), ip(25)])));
+        // A route Tailscale took in leads elsewhere: not an address of this LAN, so not taken.
+        assert_eq!(pick(&[wired, wifi], Some(Ipv4Addr::new(100, 64, 0, 1)), false), Some((ip(10), vec![ip(20)])));
+        // Asked for, it is that one or nothing; a wider network may be asked for too.
+        assert_eq!(pick(&[wired, wifi], Some(ip(20)), true), Some((ip(20), vec![ip(10)])));
+        assert_eq!(pick(&[wired, wifi], Some(ip(99)), true), None);
+        assert_eq!(pick(&[vpn, wifi], Some(vpn.0), true), Some((vpn.0, vec![ip(20)])));
+    }
+
+    #[test]
+    fn a_record_taken_back_is_forgotten() {
+        let seen: Seen = Default::default();
+        let info = mdns_sd::ServiceInfo::new(announce::DEVICE_SERVICE, "phone", "phone.local.", "192.168.0.19", 49152, None).unwrap();
+        note(&seen, ServiceEvent::ServiceResolved(Box::new(info.clone().as_resolved_service())));
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        note(&seen, ServiceEvent::ServiceRemoved(announce::DEVICE_SERVICE.into(), info.get_fullname().into()));
+        assert!(seen.lock().unwrap().is_empty());
     }
 }

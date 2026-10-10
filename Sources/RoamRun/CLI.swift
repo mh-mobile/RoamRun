@@ -501,7 +501,7 @@ enum CLI {
             stop("\(other.dnsName) went away. Nothing was kept here" + (more.map { " (\($0))" } ?? "") + ". \(again)")
         case .noResult: stop("the device didn't pair in time; nothing was kept here. \(again)")
         case .noOne where waitedAgain.withLock({ $0 }):
-            stop("the pairing wasn't made, and \(other.dnsName) didn't \(itself ? "Introduce" : "run `roamrun pair introduce`") again in 10 minutes; nothing was kept here. \(again)")
+            stop("the pairing wasn't made, and \(other.dnsName) didn't \(itself ? "Introduce" : "run `\(introduce.prefix { $0 != " " }) pair introduce`") again in 10 minutes; nothing was kept here. \(again)")
         case .noOne where met.withLock({ $0 }) && itself:
             stop("\(other.dnsName) connected and didn't go on: its app didn't find the device's own announcement in time, or was stopped. \(again)")
         case .noOne where met.withLock({ $0 }):
@@ -607,7 +607,7 @@ enum CLI {
         case .unsaved: exit(1)
         case .ended(let why): stop(sentence(why, other: other.dnsName))
         case .ambiguous: stop(sentence(.ambiguous, other: "this Mac").replacingOccurrences(of: "there, ", with: ""))
-        case .noResult: stop("\(other.dnsName) took the offer and said nothing more in 7 minutes. See what its `roamrun pair introduce` printed: a line there works with `roamrun devices add` here")
+        case .noResult: stop("\(other.dnsName) took the offer and said nothing more in 7 minutes. See what its `\(introduce.prefix { $0 != " " }) pair introduce` printed: a line there works with `roamrun devices add` here")
         case .noOne where itself:
             stop(sawOffer.withLock { $0 }
                  ? "\(other.dnsName) didn't come back in time. If a pairing was tried and its app shows a line, that works here with `roamrun devices add <line>`; otherwise run this again and Introduce in the app"
@@ -616,7 +616,7 @@ enum CLI {
                  : "\(other.dnsName) didn't connect in 10 minutes. Was Introduce tapped in its app with this Mac's name (\(me)), and do Tailscale's rules let it reach port \(PairWire.port) here?")
         case .noOne:
             stop(sawOffer.withLock { $0 }
-                 ? "\(other.dnsName) didn't come back in time. If a pairing was tried, the line its `roamrun pair introduce` printed works with `roamrun devices add` here; otherwise run both again"
+                 ? "\(other.dnsName) didn't come back in time. If a pairing was tried, the line its `\(introduce.prefix { $0 != " " }) pair introduce` printed works with `roamrun devices add` here; otherwise run both again"
                  : met.withLock { $0 }
                  ? "\(other.dnsName) connected, but this Mac made no offer to pair in 10 minutes: Device Hub: + › Pair Nearby Device, leave “Waiting to pair.” open, and run both commands again"
                  : "\(other.dnsName) got no offer in 10 minutes. Is `\(introduce)` running there, was Pair Nearby Device pressed here, and do Tailscale's rules let it reach port \(PairWire.port) here?")
