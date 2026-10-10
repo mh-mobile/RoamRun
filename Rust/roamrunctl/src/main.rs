@@ -253,7 +253,7 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
     say!("A pairing was tried; whether it was made shows on the far Mac.");
     let Some(mut found) = found else {
         if let Some(w) = wire.as_mut() {
-            let _ = w.send("ended failed");
+            let _ = w.send("ended no-line");
         }
         return Err("the device's own announcement wasn't seen here: on the far Mac, run `roamrun devices add` by hand with a line from a Mac that has it".into());
     };
@@ -264,7 +264,7 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
     let line = lines::device_line(&found);
     if let Err(why) = lines::device(&line) {
         if let Some(w) = wire.as_mut() {
-            let _ = w.send("ended failed");
+            let _ = w.send("ended no-line");
         }
         return Err(format!("what the device announces can't be handed over ({why}): on the far Mac, run `roamrun devices add` by hand with a line from a Mac that has it"));
     }

@@ -120,7 +120,7 @@ introduced; you can run the commands, they do the rest.
   Tailscale name. `roamrun pair xcode --qr` alone prints the offer as ever and
   draws a code holding it, for the app to carry by hand; the app then shows the
   line for `roamrun devices add`.
-- The machine near the device may also be a Windows or Linux one that runs
+- The machine near the device may also be a Windows or Linux one, or a Mac without RoamRun, that runs
   `roamrunctl` (in an archive with each release; `Rust/roamrunctl/` in the repository): the far Mac
   names it after `--with` as it names a Mac, and there
   `roamrunctl pair introduce --mac <far Mac> --to <the device's Tailscale name>`
