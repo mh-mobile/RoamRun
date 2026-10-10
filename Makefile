@@ -20,7 +20,7 @@ SIGN_ID ?= -
 NOTARY_PROFILE ?=
 SIGN_FLAGS = --force --options runtime $(if $(filter -,$(SIGN_ID))$(findstring Apple Development,$(SIGN_ID)),,--timestamp)
 
-.PHONY: all build app run dmg release-dmg icon install-cli test clean device-lib device-probe licenses audit
+.PHONY: all build app run dmg release-dmg icon install-cli test clean device-lib device-probe licenses audit roamrunctl-archives
 
 all: app
 
@@ -65,10 +65,13 @@ device-lib:
 licenses: device-lib
 	cd Rust/RoamRunDevice && $(CARGO) metadata --format-version 1 --locked --filter-platform aarch64-apple-darwin \
 		| $(CURDIR)/scripts/third-party-licenses.py > $(CURDIR)/THIRD-PARTY-LICENSES.txt
+	# roamrunctl's, for every system it is built for: its archives carry this file.
+	cd Rust/roamrunctl && $(CARGO) fetch --locked && $(CARGO) metadata --format-version 1 --locked \
+		| $(CURDIR)/scripts/third-party-licenses.py roamrunctl > THIRD-PARTY-LICENSES.txt
 
-# The crates Cargo.lock pins, against the published advisories (asks api.osv.dev).
+# The crates both Cargo.lock files pin, against the published advisories (asks api.osv.dev).
 audit:
-	scripts/audit-crates.py Rust/RoamRunDevice/Cargo.lock
+	scripts/audit-crates.py
 
 # Links it into a Swift executable. With no arguments it only says what it is; with
 # <device ip> <RemotePairing port> <pairing file> it verifies the pairing, opens a tunnel
@@ -128,6 +131,18 @@ release-dmg:
 	spctl -a -vv -t exec $(BUNDLE) 2>&1 | grep -q "source=Notarized Developer ID"
 	mv $(PENDING_DMG) $(DMG)
 	@echo "Release $(DMG) is signed, notarized and stapled, built from $$(git rev-parse HEAD) (gh release create --target)"
+
+# roamrunctl's archives for a release: the ones CI built from this very commit (Linux, Windows),
+# and their checksums. The Mac's is built by Homebrew, from source. Only a push's run:
+# a pull request's builds its merge with the base, not this commit, and the weekly one none. CI keeps them 14 days: after that, run the commit's CI again.
+roamrunctl-archives:
+	@run=$$(gh run list --workflow CI --commit $$(git rev-parse HEAD) --event push --status success --json databaseId --jq '.[0].databaseId // empty'); \
+	[ -n "$$run" ] || { echo "no CI run of a push has passed for $$(git rev-parse HEAD) yet (a release is built from a commit on main)"; exit 1; }; \
+	rm -rf roamrunctl-dist && gh run download $$run --pattern 'roamrunctl-*' --dir roamrunctl-dist
+	cd roamrunctl-dist && for d in */; do mv "$$d"* . && rmdir "$$d"; done \
+		&& ls roamrunctl-linux-x86_64.tar.gz roamrunctl-linux-aarch64.tar.gz roamrunctl-windows-x86_64.zip roamrunctl-windows-aarch64.zip >/dev/null \
+		&& shasum -a 256 roamrunctl-*.tar.gz roamrunctl-*.zip > roamrunctl-SHA256SUMS
+	@ls roamrunctl-dist; echo "These go into the release with the dmg: gh release create v$(VERSION) RoamRun-$(VERSION).dmg roamrunctl-dist/* …"
 
 # `roamrun` on PATH, pointing into the app bundle (one binary for app + CLI).
 BINDIR ?= /usr/local/bin

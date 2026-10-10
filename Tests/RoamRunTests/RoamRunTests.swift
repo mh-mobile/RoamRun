@@ -711,7 +711,7 @@ import ServiceManagement
 
     var saved = inertProfile("iPhone")
     saved.txt = ["identifier": "6BF40D22-D414-41D0-BE80-7567AE75B2BC", "authTag": "66cI3FaC", "flags": "0", "ver": "26", "minVer": "8"]
-    saved.providerHostName = "iphone-15-pro"; saved.udid = "00008130-000C1C5C307A8D3A"
+    saved.providerHostName = "iphone-15-pro"; saved.udid = "00008130-000D00000000D004"
     guard let device = Introduction.device(of: saved) else { Issue.record("a whole device not handed over"); return }
     #expect(device.name == "iPhone" && device.peer == "iphone-15-pro" && device.port == saved.remotePairingPort)
     #expect(!Introduction.line(device).contains("00008130") && Introduction.line(device).hasPrefix("rr-device-v1:"))
@@ -736,7 +736,7 @@ import ServiceManagement
     #expect(Introduction.profile(from: device, peer: MeshDevice(id: "n2", name: "v6", os: "iOS", ips: ["fd7a::9"], online: true), name: "x") == nil)
     // Paired again, nothing moved: what is saved says it all already — under any name, with a UDID or without.
     guard var kept = made else { return }
-    kept.displayName = "Another name"; kept.udid = "00008130-000C1C5C307A8D3A"
+    kept.displayName = "Another name"; kept.udid = "00008130-000D00000000D004"
     #expect(Introduction.unchanged(kept, by: device, as: kept))
     var elsewhere = kept; elsewhere.providerIP = "100.64.0.10"
     #expect(!Introduction.unchanged(kept, by: device, as: elsewhere))
@@ -744,8 +744,12 @@ import ServiceManagement
     #expect(!Introduction.unchanged(kept, by: device, as: renamed))
     var moved = device; moved.port += 1
     #expect(!Introduction.unchanged(kept, by: moved, as: kept))
-    moved = device; moved.txt["authTag"] = "other"
-    #expect(!Introduction.unchanged(kept, by: moved, as: kept))
+    // Announced anew, under another name with its own tag: not unchanged, and nothing else moved.
+    var anew = device; anew.txt["identifier"] = "0A0A0A0A-D414-41D0-BE80-7567AE75B2BC"; anew.txt["authTag"] = "other"
+    #expect(!Introduction.unchanged(kept, by: anew, as: kept) && Introduction.announcedAnew(kept, by: anew, as: kept))
+    #expect(!Introduction.announcedAnew(kept, by: anew, as: elsewhere) && !Introduction.announcedAnew(kept, by: anew, as: renamed))
+    moved = anew; moved.txt["ver"] = "99"
+    #expect(!Introduction.unchanged(kept, by: moved, as: kept) && !Introduction.announcedAnew(kept, by: moved, as: kept))
     #expect(!Introduction.unchanged(half, by: device, as: half))
 
     // Added under the store's lock: the same device from two commands at once is there once.
@@ -755,7 +759,44 @@ import ServiceManagement
     var again = new; again.id = UUID()
     #expect(Introduction.add(again, from: device, to: &list) == .unchanged("Test iPhone"))
     #expect(Introduction.add(again, from: moved, to: &list) == .already("Test iPhone"))
-    #expect(list.count == 1)
+    #expect(list.count == 1 && list[0].instanceName == new.instanceName)
+    // Announced anew where it was: the one saved takes the newest announcement, and keeps its id, name and UDID.
+    list[0].udid = "00008130-000D00000000D004"
+    guard var renewed = Introduction.profile(from: anew, peer: peer, name: "Whatever") else { return }
+    renewed.id = UUID()
+    #expect(Introduction.add(renewed, from: anew, to: &list) == .renewed("Test iPhone"))
+    #expect(list.count == 1 && list[0].id == new.id && list[0].udid != nil)
+    #expect(list[0].instanceName == "0A0A0A0A-D414-41D0-BE80-7567AE75B2BC" && list[0].txt["authTag"] == "other")
+    #expect(Introduction.add(renewed, from: anew, to: &list) == .unchanged("Test iPhone"))
+    // Not for a line turned to another device than it names, nor where two saved ones match it: refused as before.
+    var again2 = anew; again2.txt["identifier"] = "0B0B0B0B-D414-41D0-BE80-7567AE75B2BC"
+    guard var turned = Introduction.profile(from: again2, peer: peer, name: "Whatever") else { return }
+    turned.id = UUID()
+    #expect(Introduction.add(turned, from: again2, to: &list, renewing: false) == .already("Test iPhone"))
+    var pairOfThem = list
+    var twin = list[0]; twin.id = UUID(); twin.displayName = "Twin"; twin.providerIP = "100.64.0.50"; twin.instanceName = again2.txt["identifier"]!
+    pairOfThem.insert(twin, at: 0)
+    #expect(Introduction.add(turned, from: again2, to: &pairOfThem, renewing: true) == .already("Twin"))
+    #expect(pairOfThem.map(\.instanceName) == [twin.instanceName, list[0].instanceName] && list[0].instanceName == "0A0A0A0A-D414-41D0-BE80-7567AE75B2BC")
+    // The app, running, saves over what the CLI renewed: an announcement it left alone stays the newer one on disk.
+    var appHas = list[0]; appHas.instanceName = new.instanceName; appHas.txt = new.txt
+    var appWants = appHas; appWants.displayName = "Renamed in the app"
+    let kept2 = ProfileStore.merge(base: [appHas], wanted: [appWants], disk: list)
+    #expect(kept2.count == 1 && kept2[0].displayName == "Renamed in the app" && kept2[0].instanceName == list[0].instanceName && kept2[0].txt == list[0].txt)
+    // …and one it changed itself is its own.
+    var appChanged = appHas; appChanged.instanceName = "0C0C0C0C-D414-41D0-BE80-7567AE75B2BC"; appChanged.txt["identifier"] = appChanged.instanceName
+    #expect(ProfileStore.merge(base: [appHas], wanted: [appChanged], disk: list)[0].instanceName == appChanged.instanceName)
+    // From the device itself: the line's own names are placeholders, and the one named here is what is saved.
+    let placed = Introduction.Device(name: "iPhone", peer: "this-device.invalid", port: device.port, txt: device.txt)
+    guard case .success(let named) = Introduction.device(from: Introduction.line(Introduction.line(placed), ofDevice: "iphone-15-pro.example.ts.net", named: "iphone-15-pro")) else { Issue.record("a device's own line didn't read"); return }
+    #expect(named.peer == "iphone-15-pro.example.ts.net" && named.name == "iphone-15-pro" && named.txt == device.txt && named.port == device.port)
+    #expect(Introduction.line("not a line", ofDevice: "x", named: "y") == "not a line")
+    // A code's address: the Mac's name alone, or with its offer by parts, whatever a name holds.
+    #expect(Introduction.codeURL(mac: "cloud-mac.example.ts.net") == "roamrun-introducer://cloud-mac.example.ts.net")
+    let coded = Introduction.Offer(port: 53050, txt: ["identifier": "0A0A0A0A-D414-41D0-BE80-7567AE75B2BC", "authTag": "a+b/c", "model": "Mac16,1", "name": "M&M’s Mac", "flags": "1", "ver": "26", "minVer": "17"])
+    let parts = URLComponents(string: Introduction.codeURL(mac: "cloud-mac.example.ts.net", offer: coded) ?? "")
+    let read = Dictionary(uniqueKeysWithValues: (parts?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+    #expect(parts?.host == "cloud-mac.example.ts.net" && read == ["p": "53050", "i": coded.txt["identifier"]!, "a": "a+b/c", "m": "Mac16,1", "n": "M&M’s Mac", "f": "1", "v": "26", "w": "17"])
     var other = new; other.id = UUID(); other.instanceName = "0F0F0F0F-D414-41D0-BE80-7567AE75B2BC"; other.txt["identifier"] = other.instanceName
     other.providerIP = "100.64.0.77"
     if case .nameProblem = Introduction.add(other, from: device, to: &list) {} else { Issue.record("a second device took a name in use") }
@@ -771,19 +812,19 @@ import ServiceManagement
     #expect(two[1].remotePairingPort == forOther.remotePairingPort && two[1].displayName == "Other iPhone")
     #expect(Introduction.replace(UUID(), with: forOther, in: &two) == .gone)
     // One saved by its address becomes the Tailscale device the line names: it can then be exported.
-    two[1].providerID = MeshProvider.manual.rawValue; two[1].providerHostName = two[1].providerIP; two[1].udid = "00008130-000C1C5C307A8D3A"
+    two[1].providerID = MeshProvider.manual.rawValue; two[1].providerHostName = two[1].providerIP; two[1].udid = "00008130-000D00000000D004"
     #expect(Introduction.device(of: two[1]) == nil)
     #expect(Introduction.replace(two[1].id, with: forOther, in: &two) == .replaced)
     #expect(Introduction.device(of: two[1]) != nil && two[1].providerHostName == forOther.providerHostName)
-    #expect(two[1].udid == "00008130-000C1C5C307A8D3A")   // the same device's: what it is stays
+    #expect(two[1].udid == "00008130-000D00000000D004")   // the same device's: what it is stays
 
     // A device saved long since is tried, for an introduction, where it was found a moment ago — and saved there once that held.
     var old = new; old.remotePairingPort = 50000; old.providerIP = "100.64.0.9"
     var now = new; now.remotePairingPort = 51000; now.providerIP = "100.64.0.9"
     #expect(AppCoordinator.tryAt(saved: old, given: now, fresh: true) == ("100.64.0.9", 51000))
     #expect(AppCoordinator.tryAt(saved: old, given: now, fresh: false) == ("100.64.0.9", 50000))   // a file's is where it was when the file was made
-    let moved2 = AppCoordinator.keepSaved(old.id, udid: "00008130-000C1C5C307A8D3A", at: ("100.64.0.10", 51000), in: [old], save: { _ in true })
-    #expect(moved2?.remotePairingPort == 51000 && moved2?.providerIP == "100.64.0.10" && moved2?.udid == "00008130-000C1C5C307A8D3A")
+    let moved2 = AppCoordinator.keepSaved(old.id, udid: "00008130-000D00000000D004", at: ("100.64.0.10", 51000), in: [old], save: { _ in true })
+    #expect(moved2?.remotePairingPort == 51000 && moved2?.providerIP == "100.64.0.10" && moved2?.udid == "00008130-000D00000000D004")
     #expect(AppCoordinator.keepSaved(old.id, udid: "x", in: [old], save: { _ in true })?.remotePairingPort == 50000)
     // A bridge running for it is rebuilt only when the device is somewhere else: not for a UDID learned.
     #expect(AppCoordinator.moved(old, to: ("100.64.0.9", 51000)) && AppCoordinator.moved(old, to: ("100.64.0.10", 50000)))
@@ -953,6 +994,10 @@ extension TimingSensitive.RelayOnLocalhost {
     var twice = mesh
     twice.peers.append(MeshDevice(id: "n6", name: "cloud-mac", os: "macOS", ips: [], online: true, dnsName: "cloud-mac.tail1.ts.net"))
     #expect(TailscaleClient.peer(named: "cloud-mac", in: twice) == .several(["cloud-mac.tail1.ts.net", "cloud-mac.tail1.ts.net"]))
+    // What the Introducer app puts for a device the far Mac names itself is no device's name, whatever is on the tailnet.
+    var phones = mesh
+    phones.peers.append(MeshDevice(id: "n7", name: "iphone", os: "iOS", ips: [], online: true, dnsName: "iphone.tail1.ts.net"))
+    #expect(TailscaleClient.peer(named: "this-device.invalid", in: phones) == .none && TailscaleClient.peer(named: "iphone", in: phones) != .none)
 
     func holder(_ name: String) -> TailscaleClient.Holder? {
         if case .one(let p) = named(name) { return TailscaleClient.holder(of: p, in: mesh) }
@@ -1136,7 +1181,7 @@ extension TimingSensitive.RelayOnLocalhost {
     #expect(StatusFile.write(errored, e(other, .error), in: dir, live: live) == .written)
     #expect(StatusFile.write(errored, e(getpid(), .starting), in: dir, live: live, claim: true) == .written)
     // A second profile for the same iPhone (same UDID) can't bridge it too; standing aside is fine.
-    func withUDID(_ x: StatusFile.Entry) -> StatusFile.Entry { var x = x; x.udid = "00008130-000c1c5c307a8d3a"; return x }
+    func withUDID(_ x: StatusFile.Entry) -> StatusFile.Entry { var x = x; x.udid = "00008130-000d00000000d004"; return x }
     let first = UUID(), second = UUID()
     #expect(StatusFile.write(first, withUDID(e(other, .ready)), in: dir, live: live) == .written)
     #expect(holder(StatusFile.write(second, withUDID(e(getpid(), .starting)), in: dir, live: live)) == other)
@@ -1834,7 +1879,7 @@ extension TimingSensitive {
         if let devices { p["ProvisionedDevices"] = devices }
         return p
     }
-    let udid = "00008130-000C1C5C307A8D3A"
+    let udid = "00008130-000D00000000D004"
     let mine = [OTA.Device(name: "iPhone", udid: udid)]
     // Enterprise: no device list, installs anywhere.
     #expect(try OTA.check(["ProvisionsAllDevices": true, "Entitlements": [:]], against: mine).coverage == .everyDevice)
@@ -1861,7 +1906,7 @@ extension TimingSensitive {
 @Test func aBuildIsCheckedAgainstEveryDeviceBecauseThePageOffersItToAll() throws {
     // The page has no idea which device is asking, so "does it cover the one you
     // named" was never the question — this is which of yours can take it.
-    let a = "00008130-000C1C5C307A8D3A", b = "00008120-001A2B3C4D5E6F70"
+    let a = "00008130-000D00000000D004", b = "00008120-001A2B3C4D5E6F70"
     let devices = [OTA.Device(name: "iPhone", udid: a),
                    OTA.Device(name: "iPad", udid: b),
                    OTA.Device(name: "Vision Pro", udid: nil)]   // never bridged, so unknown
@@ -2345,7 +2390,7 @@ extension TimingSensitive {
 }
 
 @Test func anExpiredProfileOrAnUnknownUdidIsRefusedBeforeTheDeviceSeesIt() throws {
-    let udid = "00008130-000C1C5C307A8D3A"
+    let udid = "00008130-000D00000000D004"
     let live: [String: Any] = ["ProvisionedDevices": [udid], "Entitlements": ["get-task-allow": false]]
     let mine = [OTA.Device(name: "iPhone", udid: udid)]
     #expect(throws: Never.self) { try OTA.check(live, against: mine) }
@@ -2372,7 +2417,7 @@ extension TimingSensitive {
     // covers, on a device that has been bridged.
     let loaded = profile("iPhone")                     // what the app read: no UDID yet
     var onDisk = loaded
-    onDisk.udid = "00008130-000C1C5C307A8D3A"          // what `roamrun up` wrote after that
+    onDisk.udid = "00008130-000D00000000D004"          // what `roamrun up` wrote after that
     var renamed = loaded
     renamed.displayName = "iPhone mh"                  // the app changed something else
     #expect(ProfileStore.merge(base: [loaded], wanted: [renamed], disk: [onDisk]).first?.udid == onDisk.udid)
@@ -2961,7 +3006,7 @@ func linkFollowsTheTable(_ row: Int) {
     await rig.bridge.start(.retry)
     #expect(rig.bridge.status == .local && !rig.bridge.memory.onCellular)
     let m = DeviceMemory()
-    m.adopt("00008130-000C1C5C307A8D3A"); m.onCellular = true
+    m.adopt("00008130-000D00000000D004"); m.onCellular = true
     m.adopt("00008101-000A00000000A001")
     #expect(!m.onCellular)
 }
@@ -3454,8 +3499,8 @@ private func inertProfile(_ name: String) -> DeviceProfile {
     #expect(record.registered == 1)
     #expect(watcher.subscribers[p.id] != nil)
     // The watcher says remotepairingd resolved our record: the UDID is learned.
-    watcher.subscribers[p.id]?.onDevice(p.instanceName, "00008130-000C1C5C307A8D3A")
-    #expect(bridge.udid == "00008130-000C1C5C307A8D3A")
+    watcher.subscribers[p.id]?.onDevice(p.instanceName, "00008130-000D00000000D004")
+    #expect(bridge.udid == "00008130-000D00000000D004")
     bridge.tick()
     #expect(bridge.status == .waiting)   // no control channel through it
     bridge.stop()
@@ -3682,7 +3727,7 @@ func claimOutcomes(_ c: ClaimCase) async {
 /// A record answered by another device than the one saved: its UDID is never taken, and the
 /// second sighting stops the bridge with the reason, instead of leaving it at Connecting.
 @MainActor @Test func aRecordAnsweredByAnotherDeviceIsSaidNotFollowed() async {
-    let saved = "00008130-000C1C5C307A8D3A", other = "00008027-001831103687002E"
+    let saved = "00008130-000D00000000D004", other = "00008027-000E00000000E005"
     var profile = inertProfile("iPhone")
     profile.udid = saved
     let rig = Rig(profile)
@@ -3790,7 +3835,7 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
     let rig = Rig()
     defer { rig.done() }
     await rig.bridge.start(.manual)
-    let udid = "00008130-000C1C5C307A8D3A"
+    let udid = "00008130-000D00000000D004"
     rig.watcher.subscribers[rig.id]?.onDevice(rig.bridge.profile.instanceName, udid)   // ours: learns the UDID
     rig.world.now += 1
     rig.watcher.subscribers[rig.id]?.onDevice("REAL-ADVERT", udid)
@@ -3861,13 +3906,13 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
     let checked = Date(timeIntervalSinceReferenceDate: 800_000_000)
     m.homeAdvert = "ADVERT"; m.block = .pairingLost; m.lastFullCheck = checked
     m.pauseScans(of: "100.64.0.10:49152", until: .distantFuture)
-    m.adopt("00008130-000C1C5C307A8D3A")                 // first learned: the same device
+    m.adopt("00008130-000D00000000D004")                 // first learned: the same device
     #expect(m.homeAdvert == "ADVERT" && !m.autoRetry && m.lastFullCheck == checked)
     #expect(m.scansPaused(of: "100.64.0.10:49152", now: .now))
-    m.adopt("00008130-000c1c5c307a8d3a")                 // case only
+    m.adopt("00008130-000d00000000d004")                 // case only
     #expect(m.homeAdvert == "ADVERT")
     m.adopt(nil)                                          // a profile without one says nothing
-    #expect(m.udid == "00008130-000c1c5c307a8d3a")
+    #expect(m.udid == "00008130-000d00000000d004")
     m.adopt("00008101-000A00000000A001")                 // another device
     #expect(m.homeAdvert == nil && m.autoRetry && m.lastFullCheck == .distantPast)
     #expect(!m.scansPaused(of: "100.64.0.10:49152", now: .now))
@@ -3880,14 +3925,14 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
     let memory = DeviceMemory()
     let first = Rig(memory: memory)
     await first.bridge.start(.manual)
-    first.watcher.subscribers[first.id]?.onDevice(first.bridge.profile.instanceName, "00008130-000C1C5C307A8D3A")
+    first.watcher.subscribers[first.id]?.onDevice(first.bridge.profile.instanceName, "00008130-000D00000000D004")
     first.watcher.subscribers[first.id]?.onExit("log stream exited (status 64): Must be admin")
     #expect(!first.bridge.autoRetry)
     first.done()
 
     let second = Rig(first.bridge.profile, memory: memory)   // the profile never saved the UDID
     defer { second.done() }
-    #expect(second.bridge.udid == "00008130-000C1C5C307A8D3A")
+    #expect(second.bridge.udid == "00008130-000D00000000D004")
     #expect(!second.bridge.autoRetry)                      // still blocked
     await second.bridge.start(.edit)
     #expect(!second.bridge.autoRetry && second.record.registered == 0)   // an edit doesn't lift it (2a)
@@ -3899,7 +3944,7 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
 /// first, and a profile that names another device starts it over.
 @MainActor @Test func aRebuiltBridgeKeepsTheAdvertUnlessTheDeviceChanged() async {
     let memory = DeviceMemory()
-    var p = inertProfile("iPhone"); p.udid = "00008130-000C1C5C307A8D3A"
+    var p = inertProfile("iPhone"); p.udid = "00008130-000D00000000D004"
     let first = Rig(p, memory: memory)
     first.world.onLAN = true
     await first.bridge.start(.manual)                     // standing aside
@@ -4449,7 +4494,7 @@ func claimByReason(_ r: StartReason, fromCLI: Bool) {
     let dir = scratchDir()
     defer { try? FileManager.default.removeItem(at: dir) }
     var p = profile("iPhone")
-    p.udid = "00008130-000C1C5C307A8D3A"
+    p.udid = "00008130-000D00000000D004"
     let live: StatusFile.Liveness = { _ in true }
     let twin = UUID()
     let cli = StatusFile.Entry(pid: 4242, cli: true, udid: p.udid, status: BridgeStatus.error.title,
@@ -4463,8 +4508,8 @@ func claimByReason(_ r: StartReason, fromCLI: Bool) {
 
 @Test func aDeviceAddedAgainWhileTheListWasUnreadableDoesntComeBackTwice() {
     var old = profile("iPhone"), again = profile("iPhone")
-    old.udid = "00008130-000C1C5C307A8D3A"
-    again.udid = "00008130-000c1c5c307a8d3a"
+    old.udid = "00008130-000D00000000D004"
+    again.udid = "00008130-000d00000000d004"
     let other = profile("iPad")
     let merged = ProfileStore.merge(base: [], wanted: [again], disk: [old, other])
     #expect(Set(merged.map(\.id)) == Set([again.id, other.id]))
@@ -4474,7 +4519,7 @@ func claimByReason(_ r: StartReason, fromCLI: Bool) {
     let dir = scratchDir()
     defer { try? FileManager.default.removeItem(at: dir) }
     let live: StatusFile.Liveness = { _ in true }
-    let udid = "00008130-000C1C5C307A8D3A", mine = UUID(), twin = UUID()
+    let udid = "00008130-000D00000000D004", mine = UUID(), twin = UUID()
     func entry(_ pid: Int32, cli: Bool, _ s: BridgeStatus) -> StatusFile.Entry {
         .init(pid: pid, cli: cli, udid: udid, status: s.title, detail: "", ready: false, tunnelPorts: [], updated: .now, state: s.rawValue)
     }
@@ -6026,7 +6071,7 @@ import ImageIO
 
 /// Agents run SKILL.md's commands as written, and people copy the READMEs': each `roamrun …`
 /// in their code (fenced blocks and inline code) must be a command the CLI knows, with options it takes.
-@Test(arguments: ["skills/roamrun/SKILL.md", "README.md", "README.ja.md", "docs/another-mac.md"])
+@Test(arguments: ["skills/roamrun/SKILL.md", "skills/roamrunctl/SKILL.md", "README.md", "README.ja.md", "docs/another-mac.md"])
 func everyDocumentedCommandParses(_ doc: String) throws {
     let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     let text = try String(contentsOf: root.appendingPathComponent(doc), encoding: .utf8)
@@ -6068,7 +6113,8 @@ func everyDocumentedCommandParses(_ doc: String) throws {
             }
         }
     }
-    #expect(checked > (doc.hasPrefix("docs/") ? 5 : 15))   // the extraction itself still finds them
+    // The extraction itself still finds them; roamrunctl's skill shows few of `roamrun`'s own.
+    #expect(checked > (doc.hasPrefix("docs/") || doc.contains("roamrunctl") ? 5 : 15))
 }
 
 /// A second `roamrun up` for a device another one handles is refused in every state, an
@@ -6206,7 +6252,7 @@ func everyDocumentedCommandParses(_ doc: String) throws {
         var device = DeviceProfile(displayName: "iPhone", instanceName: "abc", serviceType: "_remotepairing._tcp", domain: "local.",
                                    remotePairingPort: 49152, bonjourHost: "x.local.", txt: [:],
                                    providerID: "tailscale", providerHostName: "iphone", providerIP: "100.64.0.1")
-        device.udid = "00008130-000C1C5C307A8D3A"
+        device.udid = "00008130-000D00000000D004"
         change(&device)
         return SharedPairing.read(try JSONEncoder().encode(SharedPairing(device: device, pairing: "<plist/>")))
     }
@@ -6841,10 +6887,28 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
 // MARK: - Two Macs that name each other (no line carried)
 
 @Test func whatTwoMacsSayIsReadBackAndNothingElseIs() {
-    let all: [PairWire.Message] = [.wantOffer, .offer("rr-xcode-offer-v1:abc"), .tried("rr-device-v1:abc"), .saved, .unsaved]
+    let all: [PairWire.Message] = [.wantOffer, .offer("rr-xcode-offer-v1:abc"), .tried("rr-device-v1:abc"), .saved, .unsaved, .you("iphone.t.ts.net")]
         + PairWire.Reason.allCases.map(PairWire.Message.ended)
     for m in all { #expect(PairWire.message(from: PairWire.line(m)) == m) }
-    for line in ["", "offer?", "rr-pair-v2 offer?", "rr-pair-v1 ", "rr-pair-v1 offer", "rr-pair-v1 offer ", "rr-pair-v1 offer a b",
+    // roamrunctl writes these words itself: each one it can end with is one this Mac reads.
+    #expect(PairWire.message(from: "rr-pair-v1 ended no-line") == .ended(.noLine))
+    let rust = (try? String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        .appendingPathComponent("Rust/roamrunctl/src/main.rs"), encoding: .utf8)) ?? ""
+    let ends = rust.matches(of: /"ended ([a-z-]+)"|Err\(\(\s*"([a-z-]+)"|String\| \("([a-z-]+)"/).compactMap { $0.1 ?? $0.2 ?? $0.3 }.map(String.init)
+    #expect(Set(ends).count >= 7, "\(ends)")
+    for word in ends { #expect(PairWire.message(from: "rr-pair-v1 ended " + word) != nil, "\(word)") }
+    // The Introducer app writes its words itself too, and reads what this Mac says to a device by their first word.
+    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    let app = { (file: String) in (try? String(contentsOf: root.appendingPathComponent("iOS/Sources/" + file), encoding: .utf8)) ?? "" }
+    let said = app("Session.swift").matches(of: /saying: "([a-z-]+)"|noLine = "([a-z-]+)"/).compactMap { $0.1 ?? $0.2 }.map(String.init)
+    #expect(Set(said).count >= 5, "\(said)")
+    for word in said { #expect(PairWire.message(from: "rr-pair-v1 ended " + word) != nil, "\(word)") }
+    let toADevice: [PairWire.Message] = [.offer("x"), .ended(.stopped), .saved, .unsaved, .you("x"), .wantDevice, .attempt("x"), .code("123456"), .result(.done(on: true))]
+    for m in toADevice {
+        let first = PairWire.line(m).dropFirst("rr-pair-v1 ".count).split(separator: " ")[0]
+        #expect(app("Wire.swift").contains("(\"\(first)\", "), "the app doesn't read \(first)")
+    }
+    for line in ["", "offer?", "rr-pair-v2 offer?", "rr-pair-v1 ", "rr-pair-v1 offer", "rr-pair-v1 offer ", "rr-pair-v1 offer a b", "rr-pair-v1 you", "rr-pair-v1 you ",
                  "rr-pair-v1 ended because", "rr-pair-v1 saved it", "rr-pair-v1 OFFER?"] {
         #expect(PairWire.message(from: line) == nil, "\(line)")
     }
@@ -6906,6 +6970,21 @@ extension TimingSensitive {
         #expect(await end.value == .saved)
         #expect(saved.all == ["device-1"])
         #expect(events.all == [.connected, .waitingForOffer, .offerSent])
+    }
+
+    /// A device that introduces this Mac itself is told its Tailscale name before the offer; a Mac isn't.
+    @Test func aDeviceIsToldItsNameBeforeTheOffer() async throws {
+        let listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
+        let saved = Counted<String>()
+        var far = farMac(saved: saved)
+        far.named = "iphone.t.ts.net"
+        let end = started(far, listener)
+        let link = try #require(PairLink.connect(to: "127.0.0.1", port: listener.port, interface: nil))
+        link.send(.wantOffer)
+        #expect(link.read(within: 2).message == .you("iphone.t.ts.net"))
+        #expect(link.read(within: 2).message == .offer("offer-1"))
+        #expect(PairByName.Home.handOver("device-1", on: link) == .saved)
+        #expect(await end.value == .saved && saved.all == ["device-1"])
     }
 
     @Test func onlyTheMacNamedIsAnsweredAndAStrangerDoesNotShutItOut() async throws {
@@ -7213,7 +7292,7 @@ private final class IntroducedPairing: PairingListener, @unchecked Sendable {
         if lock.withLock({ cancelled }) { throw DeviceSession.Failure.message("cancelled") }
         if didFail { throw DevicePairing.NotCompleted(description: "the code entered on the device wasn't the one shown") }
         if didBreak { throw DeviceSession.Failure.message("the pairing didn't complete: Socket(ConnectionReset)") }
-        return .init(udid: "00008130-000C1C5C307A8D3A", name: "iPhone", model: "iPhone16,1", pairing: Data("<plist/>".utf8))
+        return .init(udid: "00008130-000D00000000D004", name: "iPhone", model: "iPhone16,1", pairing: Data("<plist/>".utf8))
     }
     func cancel() {
         lock.withLock { cancelled = true }
@@ -7660,4 +7739,21 @@ extension TimingSensitive.DeviceControlIntroduced {
         #expect(cancelled.all.count == 1)
         link.close()
     }
+}
+
+@Test func aTerminalQRIsTheRightWayUp() {
+    let m = TerminalQR.modules("roamrun-introducer://cloud-mac.example.ts.net")
+    #expect(m.count >= 23 && m.allSatisfy { $0.count == m.count })
+    // A finder's top edge is seven dark modules over five light ones; the bottom right has none.
+    func finder(_ y: Int, _ x: Int) -> Bool { m[y][x..<x + 7].allSatisfy { $0 } && !m[y + 1][x + 1..<x + 6].contains(true) }
+    let far = m.count - 8
+    #expect(finder(1, 1) && finder(1, far) && finder(far, 1) && !finder(far, far))
+    #expect(TerminalQR.lines("x").allSatisfy { $0.hasPrefix("\u{1B}[30;107m") })
+    // The window it asks for is the code's own width (margins in, colour codes out) and two rows more.
+    let drawn = TerminalQR.lines("roamrun-introducer://cloud-mac.example.ts.net", level: "L")
+    let room = TerminalQR.room(for: drawn)
+    #expect(room.across == TerminalQR.modules("roamrun-introducer://cloud-mac.example.ts.net", level: "L").count + 6 && room.down == drawn.count + 2)
+    #expect(TerminalQR.room(for: []) == (0, 2))
+    let address = "roamrun-introducer://cloud-mac.example.ts.net?p=53050&i=0A0A0A0A-D414-41D0-BE80-7567AE75B2BC&a=AAECAwQF&m=Mac16,1&n=cloud-mac&f=1&v=26&w=17"
+    #expect(TerminalQR.modules(address, level: "L").count < TerminalQR.modules(address, level: "M").count)
 }

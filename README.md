@@ -73,7 +73,7 @@ sequenceDiagram
 
 ### The same thing the other way round: a Mac that is never near the device
 
-A bridge needs a Mac that is paired with the device, and pairing happens on one Wi‑Fi: the device finds the Mac there by Bonjour and connects to it. A Mac elsewhere is never found. So a Mac that *is* on the device's Wi‑Fi stands in for it — the bridge's trick, turned around: **the device is told the far Mac is on its Wi‑Fi, and the traffic actually goes over Tailscale.**
+A bridge needs a Mac that is paired with the device, and pairing happens on one Wi‑Fi: the device finds the Mac there by Bonjour and connects to it. A Mac elsewhere is never found. So a Mac that *is* on the device's Wi‑Fi stands in for it (or, with no such Mac, an app on the device itself or a Windows or Linux machine there: "From the device itself" and "From a Windows or Linux machine", below) — the bridge's trick, turned around: **the device is told the far Mac is on its Wi‑Fi, and the traffic actually goes over Tailscale.**
 
 ```mermaid
 flowchart RL
@@ -90,7 +90,7 @@ flowchart RL
   relay == "③ over Tailscale" ==> host
 ```
 
-1. The far Mac offers to pair (Xcode's Device Hub › Pair Nearby Device, or the RoamRun app for device control) and hands its offer to the Mac on the device's Wi‑Fi — over Tailscale, each naming the other, or as a line carried by hand.
+1. The far Mac offers to pair (Xcode's Device Hub › Pair Nearby Device, or the RoamRun app for device control) and hands its offer to the Mac on the device's Wi‑Fi — over Tailscale, each naming the other, or, for Xcode's pairing, as a line carried by hand.
 2. That Mac announces the offer on its Wi‑Fi with itself as the destination, for five minutes at most, and relays the device's one connection to the far Mac.
 3. The pairing is made end to end between the device and the far Mac, with the code typed on the device. No key passes through the Mac in between, and none is carried anywhere. For Xcode the code is the one Device Hub shows on the far Mac; for device control the far Mac's app makes it and it is shown on the Mac that introduces.
 
@@ -268,7 +268,7 @@ Setting such a Mac up from nothing — Tailscale and its auth key, RoamRun, the 
 
 **While the device is looked at or operated, its sound is taken.** Each look and each action runs a screen-sharing session on the device, kept for about five seconds after the last one, and the device sends its sound into it: its speaker goes silent (what was playing goes on playing, unheard, and is heard again by itself afterwards) and voice input on it — dictation, an app that listens — doesn't hear. So a screen that is being watched, look after look, has no sound and no voice input for as long as the watching goes on. Stop looking for some ten seconds and both are back.
 
-These press what is really on the screen, and a `look` shows whatever is there — notifications and messages too. A `look` written to a file is yours only (0600) and stays until you delete it. **Device control is not given to one agent or one command: while a device is switched on, any program you run on this Mac can see and operate it** through the app — a build script, a package's install step, another agent. The switch beside **Device control** on the device's page turns it off for all of them (and back on); it is on after Set Up, after Pair Again (also for a device you had switched off) and after `key import`, so turn it off when nothing of yours is using the device. Locking the device doesn't stop it: its lock screen is seen and operated too (unlocking still takes the passcode or Face ID). The device shows each look or action as a screen-sharing session, and lists RoamRun's pairing under Developer Mode, where you can remove it. The pairing holds a private key; how it is kept, and who can use it, is in [SECURITY.md](SECURITY.md).
+These press what is really on the screen, and a `look` shows whatever is there — notifications and messages too. A `look` written to a file is yours only (0600) and stays until you delete it. **Device control is not given to one agent or one command: while a device is switched on, any program you run on this Mac can see and operate it** through the app — a build script, a package's install step, another agent. The switch beside **Device control** on the device's page turns it off for all of them (and back on); it is on after Set Up, after Pair Again (also for a device you had switched off) and after `key import`, so turn it off when nothing of yours is using the device. Locking the device doesn't stop it: its lock screen is seen and operated too (unlocking still takes the passcode or Face ID). The device shows each look or action as a screen-sharing session, and lists RoamRun's pairing under Developer Mode, where you can remove it. At every connection the Mac and the device verify each other (the device signs with the key it gave when it paired): something else answering at the device's address is refused, and gets neither this Mac's identity nor any input. The pairing holds a private key; how it is kept, and who can use it, is in [SECURITY.md](SECURITY.md).
 
 ## A Mac the device was never near
 
@@ -313,17 +313,44 @@ LINE=$(roamrun pair introduce "$OFFER" --mac cloud-mac --to iPhone) &&
 ssh cloud-mac roamrun devices add "$LINE"
 ```
 
+**From the device itself.** Where no Mac with RoamRun is near the device — the machine beside it is Windows or Linux, say — an app on the device stands in instead: RoamRun Introducer, in [`iOS/`](iOS/). It is built and installed with Xcode, for iOS 27 or later; it isn't on the App Store. The far Mac names the device where it would name the other Mac:
+
+```sh
+# there: Device Hub › + › Pair Nearby Device, and
+roamrun pair xcode --with iphone-15-pro --qr   # iphone-15-pro: the device's Tailscale name
+# on the device: the app, Scan (or the far Mac's name typed), Introduce; then
+#   Settings › Privacy & Security › Developer Mode › Pair with “cloud-mac”, and the code Device Hub shows there
+# there, once it says the device is saved:
+roamrun up iphone-15-pro
+```
+
+`--qr` draws the far Mac's Tailscale name as a code in the terminal for the app to read; the app keeps the name, so later the code isn't needed. The far Mac answers that device alone, as it answers a Mac, and saves it under its Tailscale name. `roamrun pair control --with iphone-15-pro` pairs for device control the same way, and the code to type then shows on the device, in a notification. Without `--with`, `roamrun pair xcode --qr` draws its offer too (a larger code: a window of about 55 by 30), to carry by hand, and the app shows the line for `devices add` afterwards. The app announces and relays only during an introduction, and neither its question nor the pairing goes to an address that isn't Tailscale's. A device's name given where a Mac's was meant isn't told apart: the command waits its ten minutes for an app that isn't there. Tried with an iPhone 15 Pro on iOS 27 and a virtual Mac as the far one: Xcode's pairing by name and by hand with the bridge Ready afterwards, and device control's with `roamrun look` afterwards. Not tried: an iPad. An Apple Vision Pro pairs another way — the Mac picks it, with Settings › General › Remote Devices open on it — which this doesn't do.
+
+**From a Windows or Linux machine.** Or the machine beside the device introduces: `roamrunctl` is `pair introduce` for one that has no RoamRun. It is one file, in an archive with each release — how to get it on Linux, Windows or a Mac: [Rust/roamrunctl](Rust/roamrunctl/README.md#install). The machine needs Tailscale, signed in to the tailnet the far Mac and the device are on.
+
+```sh
+# on the far Mac: Device Hub › + › Pair Nearby Device, and
+roamrun pair xcode --with my-pc                                # my-pc: that machine's Tailscale name
+# on that machine, on the device's Wi‑Fi:
+roamrunctl pair introduce --mac cloud-mac --to iphone-15-pro   # the far Mac's Tailscale name, and the device's
+# on the device: Settings › Privacy & Security › Developer Mode › Pair with “cloud-mac”, and the code Device Hub shows there
+# on the far Mac, once it says the device is saved:
+roamrun up iphone-15-pro
+```
+
+`roamrun pair control --with my-pc`, with the RoamRun app open on the far Mac, pairs for device control the same way; `roamrunctl` then prints the code to type, so run it yourself, in a terminal of your own. Tried from Linux (Ubuntu 24.04) with an iPhone 15 Pro on iOS 27: Xcode's pairing with the bridge Ready afterwards, and device control's. From Windows 11 (ARM): the same two; Windows' firewall asks once whether to let it in.
+
 **Who gets the device.** Introducing a Mac lets it use the device as a developer from then on — install and run apps, debug them, read their data — the same as plugging the device into it and tapping Trust. Before it starts, `pair introduce` says whose that Mac is, as Tailscale has it: yours, another person's, or a shared (tagged) machine, where it is whoever can use Xcode on it. It introduces only the Mac you name with `--mac`; neither line says where anything is to go. To withdraw it, remove that Mac on the device (Settings › Privacy & Security › Developer Mode); there it is listed under the name the Mac gives itself, which `pair introduce` tells you, not its Tailscale name. Xcode's pairing has no switch in RoamRun.
 
 **What it needs, and what it doesn't do.**
-- The device already paired with something, and saved in RoamRun on the introducing Mac. A device with no pairing at all doesn't announce itself, so RoamRun has nothing to add it from (its pairing screen still lists a Mac that offers): pair it once first, with any Mac on its Wi‑Fi. The introducing Mac needn't be that Mac, nor be paired with the device itself — one that only has it saved will do.
+- The device already paired with something, and saved in RoamRun on the introducing Mac. A device with no pairing at all doesn't announce itself, so RoamRun has nothing to add it from (its pairing screen still lists a Mac that offers): pair it once first, with any Mac on its Wi‑Fi. The introducing Mac needn't be that Mac, nor be paired with the device itself — one that only has it saved will do. (The app on the device itself, and roamrunctl, need nothing saved: they see the device's announcement there and then.)
 - The device on the introducing Mac's own Wi‑Fi for that one step — not a guest or isolated network, and not a hotspot behind it. Afterwards the bridge works from anywhere, as usual.
 - Someone who can press the button in Device Hub on the far Mac and read its code: at its screen or over screen sharing. Over ssh alone it can't be done.
 - Tailscale on the far Mac that stays signed in: one joined with an ephemeral key is signed out when it restarts.
 - Debugging from the far Mac needs the device's OS symbols there. Xcode copies them from the device on first contact (about 6 GB); over Tailscale's relay servers that hardly moves. Copying `~/Library/Developer/Xcode/iOS DeviceSupport/<model> <version> (<build>)` from a Mac that has it does: with it, `lldb` on the far Mac attached and hit a breakpoint in about 20 seconds, on a direct path and over the relay servers alike; without, it waited four minutes and attached nothing. `devicectl`, `roamrun run` and `roamrun logs` don't need them.
 - Macs made from one image are one Mac to the device: pairing a second replaces the first's entry there, and removing it cuts off both.
 - A pairing made on a rented or cloud Mac stays with that machine's disk, image and snapshots until it is removed on the device.
-- What the far Mac has saved of the device is a copy of this Mac's. If this Mac's stops matching (see Limitations), add the device again here, then `roamrun devices export <name>` and, there, `roamrun devices add <line> --replace <name>` with the app and that device's bridge stopped.
+- What the far Mac has saved of the device is a copy of this Mac's. If this Mac's stops matching (see Limitations), add the device again here, then `roamrun devices export <name>` and, there, `roamrun devices add <line>`: saved already where it was, it takes that line's announcement (`--replace <name>`, with the app and that device's bridge stopped, when its address, port or Tailscale name moved too).
 
 Tried with an iPhone 15 Pro on iOS 27 and Xcode 27, with these commands and a virtual Mac as the far one, reached from the introducing Mac only through Tailscale's relay servers: pairing, `devices add`, the bridge Ready, `devicectl` launch and `lldb` at a breakpoint — with the device on a direct path from the far Mac and on a relayed one — and both Macs using the device at the same moment. An introducing Mac that wasn't itself paired with the device did the same, and what it had saved brought the far Mac's bridge to Ready. The same steps done by hand before the commands existed, also from a cloud Mac: pairing, the bridge Ready, the device as a run destination in Xcode and `devicectl` launch. Not tried: an iPad, a far Mac that isn't virtual, a far Mac of another Tailscale user or a tagged one, an introducing Mac with its firewall on.
 

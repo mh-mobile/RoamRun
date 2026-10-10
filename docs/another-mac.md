@@ -25,7 +25,9 @@ Once the other Mac is on your tailnet (steps 2 and 3, without the file), there i
 carries nothing: there, with the RoamRun app open, `roamrun pair control --with <this-mac>`,
 and here `roamrun pair introduce --mac <that-mac> --to iPhone`, run by you — the code to enter
 on the device prints here. The README's "From a Mac that can't pair itself" (under Seeing and
-operating the device) has it; it needs iOS 27.
+operating the device) has it; it needs iOS 27. With no Mac of yours near the device, the device
+itself or a Windows or Linux machine beside it introduces instead: the README's "From the device
+itself" and "From a Windows or Linux machine".
 
 ## 2. In Tailscale's admin console: an auth key for it
 

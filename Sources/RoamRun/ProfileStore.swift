@@ -118,6 +118,8 @@ final class ProfileStore {
             if mine.providerIP == old.providerIP { out.providerIP = theirs.providerIP }
             if mine.remotePairingPort == old.remotePairingPort { out.remotePairingPort = theirs.remotePairingPort }
             if mine.providerHostName == old.providerHostName { out.providerHostName = theirs.providerHostName }
+            // The announcement too: `roamrun devices add` puts a newer one in place while the app runs.
+            if mine.instanceName == old.instanceName, mine.txt == old.txt { out.instanceName = theirs.instanceName; out.txt = theirs.txt }
             // A UDID learned meanwhile is taken; one that is known isn't given up for none
             // (nothing of ours writes that, and the device's own pairing is named by it).
             if mine.udid == old.udid, let learned = theirs.udid { out.udid = learned }

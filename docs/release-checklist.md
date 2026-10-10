@@ -236,6 +236,39 @@ tunnel and Xcode has to run again.
     both say that Mac already holds one, and nothing is announced here. And once with the far
     command killed (`kill -9`) while it waits: within half a minute the app listens no more.
 
+29. Introducing from the device itself (when `iOS/`, `pair … --with`, `--qr` or the wire changed).
+    The Introducer app built from `iOS/` and installed; `xcrun swiftc … iOS/Checks/relay-check.swift`
+    as its header says → "all checks passed". On the far Mac (item 27's), Pair Nearby Device, then
+    `roamrun pair xcode --with <the device's Tailscale name> --qr` → a code is drawn last; in a
+    window too small it says so instead. In the app: Scan → that Mac's name, Introduce → "Pair
+    with <its name>" on the device, the code from Device Hub → the far Mac says the device is
+    saved (or "saved already; it now holds that line's announcement"), the app says that
+    Mac knows it, `roamrun up <name>` there → Ready. With nothing waiting there: the app says that
+    Mac isn't waiting. Stopped in the app before the button was pressed there, then Introduce
+    again: the far Mac answers the second time. `roamrun pair control --with <device>` with the
+    RoamRun app open there: the code shows on the device (a notification, and where iOS shows the
+    app's task), typed → both say paired, `roamrun look <name>` there. `roamrun pair xcode --qr`
+    alone: the app reads name and offer, and afterwards shows a line that `roamrun devices add`
+    takes there. A link `roamrun-introducer://example.com` opened on the device: refused.
+
+30. Introducing from a machine without RoamRun (when `Rust/roamrunctl`, `pair … --with` or the
+    wire changed). `Rust/roamrunctl/scripts/local-check.py` as its header says → every line ok. On
+    a Linux machine on the device's Wi‑Fi, signed in to the tailnet, with the roamrunctl the pull
+    request's CI built (its artifacts): the far Mac's `roamrun pair xcode --with <that machine>`, there `roamrunctl
+    pair introduce --mac <far Mac> --to <the device's Tailscale name>` → the device lists the far
+    Mac, the code from Device Hub → both say saved, `roamrun up <name>` on the far Mac → Ready,
+    and nothing is left announced or listening on either (`pgrep roamrunctl`, `lsof -nP
+    -iTCP:41830`; on Windows `Get-Process roamrunctl`, `netstat -an | findstr 41830`). The same with `--offer "$(ssh <far Mac> roamrun pair xcode)"` and no `--with`:
+    a line on stdout that `roamrun devices add` takes. `roamrun pair control --with <that
+    machine>` with the app open on the far Mac, roamrunctl run by yourself: the code shows there,
+    typed → both say paired and switched on. On Windows, the same three. On a Mac without RoamRun
+    running it, Xcode's pairing once. `--as <name>` once: the far Mac saves it under that. Stopped
+    with Ctrl-C while announced: nothing left announced (`dns-sd -B
+    _remotepairing-pairable-host._tcp` on a Mac there). On a machine with wired and Wi‑Fi both on
+    the device's network, if one is at hand: it says its other address, and `--on <that>` takes
+    it. After the release: each install command of roamrunctl's README — Linux, Windows, `brew
+    install mh-mobile/tap/roamrunctl`, `cargo install` — then `roamrunctl --version`.
+
 ## Debug logs worth a look after an iOS or Xcode update
 
 - What a bridge did and when (kept by the system, no `--level debug`): `log show` with
