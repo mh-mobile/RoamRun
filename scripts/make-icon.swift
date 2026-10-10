@@ -2,10 +2,9 @@
 // app icons) and writes an .iconset. Run via `make icon`.
 //
 //   xcrun swift scripts/make-icon.swift Resources/AppIcon.iconset
+//   xcrun swift scripts/make-icon.swift --ios <file.png>   (1024, edge to edge, opaque: iOS masks it)
 import AppKit
 
-let out = URL(fileURLWithPath: CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "AppIcon.iconset")
-try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
 
 func rgb(_ hex: UInt32, _ a: CGFloat = 1) -> CGColor {
     CGColor(red: CGFloat((hex >> 16) & 0xff) / 255, green: CGFloat((hex >> 8) & 0xff) / 255,
@@ -13,12 +12,13 @@ func rgb(_ hex: UInt32, _ a: CGFloat = 1) -> CGColor {
 }
 
 /// Everything is laid out on the 1024 macOS icon grid and scaled.
-func draw(_ ctx: CGContext, size: CGFloat) {
+func draw(_ ctx: CGContext, size: CGFloat, edgeToEdge: Bool = false) {
     ctx.scaleBy(x: size / 1024, y: size / 1024)
+    if edgeToEdge { ctx.scaleBy(x: 1024 / 824, y: 1024 / 824); ctx.translateBy(x: -100, y: -100) }
 
     // Body: standard macOS squircle-ish rounded rect (824pt, r≈185) with drop shadow.
     let body = CGRect(x: 100, y: 100, width: 824, height: 824)
-    let bodyPath = CGPath(roundedRect: body, cornerWidth: 185, cornerHeight: 185, transform: nil)
+    let bodyPath = CGPath(roundedRect: body, cornerWidth: edgeToEdge ? 0 : 185, cornerHeight: edgeToEdge ? 0 : 185, transform: nil)
     ctx.saveGState()
     ctx.setShadow(offset: CGSize(width: 0, height: -12), blur: 28, color: rgb(0x000000, 0.35))
     ctx.addPath(bodyPath); ctx.setFillColor(rgb(0x1E3A8A)); ctx.fillPath()
@@ -28,7 +28,8 @@ func draw(_ ctx: CGContext, size: CGFloat) {
     ctx.addPath(bodyPath); ctx.clip()
     let bg = CGGradient(colorsSpace: nil, colors: [rgb(0x312E81), rgb(0x2563EB), rgb(0x06B6D4)] as CFArray,
                         locations: [0, 0.55, 1])!
-    ctx.drawLinearGradient(bg, start: CGPoint(x: 180, y: 924), end: CGPoint(x: 844, y: 100), options: [])
+    ctx.drawLinearGradient(bg, start: CGPoint(x: 180, y: 924), end: CGPoint(x: 844, y: 100),
+                           options: edgeToEdge ? [.drawsBeforeStartLocation, .drawsAfterEndLocation] : [])
 
     // Faint mesh lattice in the background.
     ctx.setStrokeColor(rgb(0xFFFFFF, 0.08)); ctx.setLineWidth(6)
@@ -76,6 +77,21 @@ func draw(_ ctx: CGContext, size: CGFloat) {
         ctx.fillEllipse(in: CGRect(x: p.x - 26, y: p.y - 26, width: 52, height: 52))
     }
 }
+
+if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "--ios" {
+    guard CommandLine.arguments.count > 2 else { print("usage: make-icon.swift --ios <file.png>"); exit(1) }
+    let ctx = CGContext(data: nil, width: 1024, height: 1024, bitsPerComponent: 8, bytesPerRow: 0,
+                        space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                        bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+    draw(ctx, size: 1024, edgeToEdge: true)
+    try NSBitmapImageRep(cgImage: ctx.makeImage()!).representation(using: .png, properties: [:])!
+        .write(to: URL(fileURLWithPath: CommandLine.arguments[2]))
+    print("wrote \(CommandLine.arguments[2])")
+    exit(0)
+}
+
+let out = URL(fileURLWithPath: CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "AppIcon.iconset")
+try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
 
 let sizes: [(String, Int)] = [
     ("16x16", 16), ("16x16@2x", 32), ("32x32", 32), ("32x32@2x", 64),

@@ -90,7 +90,7 @@ flowchart RL
   relay == "③ over Tailscale" ==> host
 ```
 
-1. The far Mac offers to pair (Xcode's Device Hub › Pair Nearby Device, or the RoamRun app for device control) and hands its offer to the Mac on the device's Wi‑Fi — over Tailscale, each naming the other, or as a line carried by hand.
+1. The far Mac offers to pair (Xcode's Device Hub › Pair Nearby Device, or the RoamRun app for device control) and hands its offer to the Mac on the device's Wi‑Fi — over Tailscale, each naming the other, or, for Xcode's pairing, as a line carried by hand.
 2. That Mac announces the offer on its Wi‑Fi with itself as the destination, for five minutes at most, and relays the device's one connection to the far Mac.
 3. The pairing is made end to end between the device and the far Mac, with the code typed on the device. No key passes through the Mac in between, and none is carried anywhere. For Xcode the code is the one Device Hub shows on the far Mac; for device control the far Mac's app makes it and it is shown on the Mac that introduces.
 
@@ -313,6 +313,19 @@ LINE=$(roamrun pair introduce "$OFFER" --mac cloud-mac --to iPhone) &&
 ssh cloud-mac roamrun devices add "$LINE"
 ```
 
+**From the device itself.** Where no Mac with RoamRun is near the device — the machine beside it is Windows or Linux, say — an app on the device stands in instead: RoamRun Introducer, in [`iOS/`](iOS/). It is built and installed with Xcode, for iOS 27 or later; it isn't on the App Store. The far Mac names the device where it would name the other Mac:
+
+```sh
+# there: Device Hub › + › Pair Nearby Device, and
+roamrun pair xcode --with iphone-15-pro --qr   # iphone-15-pro: the device's Tailscale name
+# on the device: the app, Scan (or the far Mac's name typed), Introduce; then
+#   Settings › Privacy & Security › Developer Mode › Pair with “cloud-mac”, and the code Device Hub shows there
+# there, once it says the device is saved:
+roamrun up iphone-15-pro
+```
+
+`--qr` draws the far Mac's Tailscale name as a code in the terminal for the app to read; the app keeps the name, so later the code isn't needed. The far Mac answers that device alone, as it answers a Mac, and saves it under its Tailscale name. `roamrun pair control --with iphone-15-pro` pairs for device control the same way, and the code to type then shows on the device, in a notification. Without `--with`, `roamrun pair xcode --qr` draws its offer too (a larger code: a window of about 55 by 30), to carry by hand, and the app shows the line for `devices add` afterwards. The app announces and relays only during an introduction, and neither its question nor the pairing goes to an address that isn't Tailscale's. A device's name given where a Mac's was meant isn't told apart: the command waits its ten minutes for an app that isn't there. Tried with an iPhone 15 Pro on iOS 27 and a virtual Mac as the far one: Xcode's pairing by name and by hand with the bridge Ready afterwards, and device control's with `roamrun look` afterwards. Not tried: an iPad. An Apple Vision Pro pairs another way — the Mac picks it, with Settings › General › Remote Devices open on it — which this doesn't do.
+
 **Who gets the device.** Introducing a Mac lets it use the device as a developer from then on — install and run apps, debug them, read their data — the same as plugging the device into it and tapping Trust. Before it starts, `pair introduce` says whose that Mac is, as Tailscale has it: yours, another person's, or a shared (tagged) machine, where it is whoever can use Xcode on it. It introduces only the Mac you name with `--mac`; neither line says where anything is to go. To withdraw it, remove that Mac on the device (Settings › Privacy & Security › Developer Mode); there it is listed under the name the Mac gives itself, which `pair introduce` tells you, not its Tailscale name. Xcode's pairing has no switch in RoamRun.
 
 **What it needs, and what it doesn't do.**
@@ -323,7 +336,7 @@ ssh cloud-mac roamrun devices add "$LINE"
 - Debugging from the far Mac needs the device's OS symbols there. Xcode copies them from the device on first contact (about 6 GB); over Tailscale's relay servers that hardly moves. Copying `~/Library/Developer/Xcode/iOS DeviceSupport/<model> <version> (<build>)` from a Mac that has it does: with it, `lldb` on the far Mac attached and hit a breakpoint in about 20 seconds, on a direct path and over the relay servers alike; without, it waited four minutes and attached nothing. `devicectl`, `roamrun run` and `roamrun logs` don't need them.
 - Macs made from one image are one Mac to the device: pairing a second replaces the first's entry there, and removing it cuts off both.
 - A pairing made on a rented or cloud Mac stays with that machine's disk, image and snapshots until it is removed on the device.
-- What the far Mac has saved of the device is a copy of this Mac's. If this Mac's stops matching (see Limitations), add the device again here, then `roamrun devices export <name>` and, there, `roamrun devices add <line> --replace <name>` with the app and that device's bridge stopped.
+- What the far Mac has saved of the device is a copy of this Mac's. If this Mac's stops matching (see Limitations), add the device again here, then `roamrun devices export <name>` and, there, `roamrun devices add <line>`: saved already where it was, it takes that line's announcement (`--replace <name>`, with the app and that device's bridge stopped, when its address, port or Tailscale name moved too).
 
 Tried with an iPhone 15 Pro on iOS 27 and Xcode 27, with these commands and a virtual Mac as the far one, reached from the introducing Mac only through Tailscale's relay servers: pairing, `devices add`, the bridge Ready, `devicectl` launch and `lldb` at a breakpoint — with the device on a direct path from the far Mac and on a relayed one — and both Macs using the device at the same moment. An introducing Mac that wasn't itself paired with the device did the same, and what it had saved brought the far Mac's bridge to Ready. The same steps done by hand before the commands existed, also from a cloud Mac: pairing, the bridge Ready, the device as a run destination in Xcode and `devicectl` launch. Not tried: an iPad, a far Mac that isn't virtual, a far Mac of another Tailscale user or a tagged one, an introducing Mac with its firewall on.
 

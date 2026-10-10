@@ -108,6 +108,18 @@ introduced; you can run the commands, they do the rest.
   **Both wait for a person**: the far Mac up to 17 minutes, the introducing Mac up
   to 15. Run them in the background or with a timeout that long; a command you cut
   short and start again makes a new offer the user's code no longer fits.
+- With no Mac near the device, the device may introduce the far Mac itself, from
+  the RoamRun Introducer app on it (built from the repository's `iOS/` folder): on
+  the far Mac `roamrun pair xcode --with <device>` (`<device>`: the device's
+  Tailscale name) waits as above, and the user taps Introduce in the app. `--qr`
+  draws the far Mac's name as a code on standard error for the app to read (only
+  where that is a terminal the user is looking at; otherwise it prints what the
+  code would hold). **Name a device after `--with` only when the user said that app
+  is on it**: a device's name given where a Mac's was meant isn't told apart, and
+  the command waits its ten minutes for nothing. The device is saved under its
+  Tailscale name. `roamrun pair xcode --qr` alone prints the offer as ever and
+  draws a code holding it, for the app to carry by hand; the app then shows the
+  line for `roamrun devices add`.
 - The user picks the entry on the device and types the code Device Hub shows on the
   far Mac. **Never pass a code on, in either direction**: the user reads it there.
 - `pair introduce` ends by itself (five minutes at most) and, when a pairing was
@@ -120,6 +132,8 @@ introduced; you can run the commands, they do the rest.
 - On the far Mac: `roamrun devices add <line>` (`--as <name>` for another name;
   `--peer <Tailscale name>` when it says no device has that name on this tailnet;
   "… is saved already, and this changes nothing": nothing to do;
+  "… is saved already; it now holds that line's announcement": nothing
+  to do either (what runs there keeps the older one until it is started again);
   "… is that device already": `--replace <name>` — for that same device only; its
   UDID is kept, so another device goes under a name of its own — with the RoamRun app quit and
   that device's bridge down — it says so and stops if the app is running). Then
@@ -272,7 +286,10 @@ background or with a timeout that long; on that Mac the **user themselves** runs
 `roamrun pair introduce --mac <this Mac> --to <name>`, picks the entry on the
 device and types the code that command prints. **Don't run that `pair introduce`
 yourself, and never ask for or pass on its code**: it would be in your output.
-`--with` is taken only from the user's own words, as `--mac` is. Exit 0: the
+`--with` is taken only from the user's own words, as `--mac` is. (Where the
+device's own Introducer app introduces — see pairing Xcode above — `--with
+<device>` names the device, the user taps Introduce there, and the code shows on
+the device: no `pair introduce` is run anywhere.) Exit 0: the
 device is paired here ("and switched on": `roamrun look <name>` works; "switched
 off": the user switches it on in the app, nothing is to be paired again). Exit
 1: it says what happened — "already holds a pairing" (the user removes it in the

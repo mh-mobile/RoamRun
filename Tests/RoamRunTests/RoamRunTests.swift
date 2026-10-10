@@ -744,8 +744,12 @@ import ServiceManagement
     #expect(!Introduction.unchanged(kept, by: device, as: renamed))
     var moved = device; moved.port += 1
     #expect(!Introduction.unchanged(kept, by: moved, as: kept))
-    moved = device; moved.txt["authTag"] = "other"
-    #expect(!Introduction.unchanged(kept, by: moved, as: kept))
+    // Announced anew, under another name with its own tag: not unchanged, and nothing else moved.
+    var anew = device; anew.txt["identifier"] = "0A0A0A0A-D414-41D0-BE80-7567AE75B2BC"; anew.txt["authTag"] = "other"
+    #expect(!Introduction.unchanged(kept, by: anew, as: kept) && Introduction.announcedAnew(kept, by: anew, as: kept))
+    #expect(!Introduction.announcedAnew(kept, by: anew, as: elsewhere) && !Introduction.announcedAnew(kept, by: anew, as: renamed))
+    moved = anew; moved.txt["ver"] = "99"
+    #expect(!Introduction.unchanged(kept, by: moved, as: kept) && !Introduction.announcedAnew(kept, by: moved, as: kept))
     #expect(!Introduction.unchanged(half, by: device, as: half))
 
     // Added under the store's lock: the same device from two commands at once is there once.
@@ -755,7 +759,44 @@ import ServiceManagement
     var again = new; again.id = UUID()
     #expect(Introduction.add(again, from: device, to: &list) == .unchanged("Test iPhone"))
     #expect(Introduction.add(again, from: moved, to: &list) == .already("Test iPhone"))
-    #expect(list.count == 1)
+    #expect(list.count == 1 && list[0].instanceName == new.instanceName)
+    // Announced anew where it was: the one saved takes the newest announcement, and keeps its id, name and UDID.
+    list[0].udid = "00008130-000C1C5C307A8D3A"
+    guard var renewed = Introduction.profile(from: anew, peer: peer, name: "Whatever") else { return }
+    renewed.id = UUID()
+    #expect(Introduction.add(renewed, from: anew, to: &list) == .renewed("Test iPhone"))
+    #expect(list.count == 1 && list[0].id == new.id && list[0].udid != nil)
+    #expect(list[0].instanceName == "0A0A0A0A-D414-41D0-BE80-7567AE75B2BC" && list[0].txt["authTag"] == "other")
+    #expect(Introduction.add(renewed, from: anew, to: &list) == .unchanged("Test iPhone"))
+    // Not for a line turned to another device than it names, nor where two saved ones match it: refused as before.
+    var again2 = anew; again2.txt["identifier"] = "0B0B0B0B-D414-41D0-BE80-7567AE75B2BC"
+    guard var turned = Introduction.profile(from: again2, peer: peer, name: "Whatever") else { return }
+    turned.id = UUID()
+    #expect(Introduction.add(turned, from: again2, to: &list, renewing: false) == .already("Test iPhone"))
+    var pairOfThem = list
+    var twin = list[0]; twin.id = UUID(); twin.displayName = "Twin"; twin.providerIP = "100.64.0.50"; twin.instanceName = again2.txt["identifier"]!
+    pairOfThem.insert(twin, at: 0)
+    #expect(Introduction.add(turned, from: again2, to: &pairOfThem, renewing: true) == .already("Twin"))
+    #expect(pairOfThem.map(\.instanceName) == [twin.instanceName, list[0].instanceName] && list[0].instanceName == "0A0A0A0A-D414-41D0-BE80-7567AE75B2BC")
+    // The app, running, saves over what the CLI renewed: an announcement it left alone stays the newer one on disk.
+    var appHas = list[0]; appHas.instanceName = new.instanceName; appHas.txt = new.txt
+    var appWants = appHas; appWants.displayName = "Renamed in the app"
+    let kept2 = ProfileStore.merge(base: [appHas], wanted: [appWants], disk: list)
+    #expect(kept2.count == 1 && kept2[0].displayName == "Renamed in the app" && kept2[0].instanceName == list[0].instanceName && kept2[0].txt == list[0].txt)
+    // …and one it changed itself is its own.
+    var appChanged = appHas; appChanged.instanceName = "0C0C0C0C-D414-41D0-BE80-7567AE75B2BC"; appChanged.txt["identifier"] = appChanged.instanceName
+    #expect(ProfileStore.merge(base: [appHas], wanted: [appChanged], disk: list)[0].instanceName == appChanged.instanceName)
+    // From the device itself: the line's own names are placeholders, and the one named here is what is saved.
+    let placed = Introduction.Device(name: "iPhone", peer: "this-device.invalid", port: device.port, txt: device.txt)
+    guard case .success(let named) = Introduction.device(from: Introduction.line(Introduction.line(placed), ofDevice: "iphone-15-pro.example.ts.net", named: "iphone-15-pro")) else { Issue.record("a device's own line didn't read"); return }
+    #expect(named.peer == "iphone-15-pro.example.ts.net" && named.name == "iphone-15-pro" && named.txt == device.txt && named.port == device.port)
+    #expect(Introduction.line("not a line", ofDevice: "x", named: "y") == "not a line")
+    // A code's address: the Mac's name alone, or with its offer by parts, whatever a name holds.
+    #expect(Introduction.codeURL(mac: "rr-cloud.example.ts.net") == "roamrun-introducer://rr-cloud.example.ts.net")
+    let coded = Introduction.Offer(port: 53050, txt: ["identifier": "0A0A0A0A-D414-41D0-BE80-7567AE75B2BC", "authTag": "a+b/c", "model": "Mac16,1", "name": "M&M’s Mac", "flags": "1", "ver": "26", "minVer": "17"])
+    let parts = URLComponents(string: Introduction.codeURL(mac: "rr-cloud.example.ts.net", offer: coded) ?? "")
+    let read = Dictionary(uniqueKeysWithValues: (parts?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+    #expect(parts?.host == "rr-cloud.example.ts.net" && read == ["p": "53050", "i": coded.txt["identifier"]!, "a": "a+b/c", "m": "Mac16,1", "n": "M&M’s Mac", "f": "1", "v": "26", "w": "17"])
     var other = new; other.id = UUID(); other.instanceName = "0F0F0F0F-D414-41D0-BE80-7567AE75B2BC"; other.txt["identifier"] = other.instanceName
     other.providerIP = "100.64.0.77"
     if case .nameProblem = Introduction.add(other, from: device, to: &list) {} else { Issue.record("a second device took a name in use") }
@@ -953,6 +994,10 @@ extension TimingSensitive.RelayOnLocalhost {
     var twice = mesh
     twice.peers.append(MeshDevice(id: "n6", name: "cloud-mac", os: "macOS", ips: [], online: true, dnsName: "cloud-mac.tail1.ts.net"))
     #expect(TailscaleClient.peer(named: "cloud-mac", in: twice) == .several(["cloud-mac.tail1.ts.net", "cloud-mac.tail1.ts.net"]))
+    // What the Introducer app puts for a device the far Mac names itself is no device's name, whatever is on the tailnet.
+    var phones = mesh
+    phones.peers.append(MeshDevice(id: "n7", name: "iphone", os: "iOS", ips: [], online: true, dnsName: "iphone.tail1.ts.net"))
+    #expect(TailscaleClient.peer(named: "this-device.invalid", in: phones) == .none && TailscaleClient.peer(named: "iphone", in: phones) != .none)
 
     func holder(_ name: String) -> TailscaleClient.Holder? {
         if case .one(let p) = named(name) { return TailscaleClient.holder(of: p, in: mesh) }
@@ -6841,10 +6886,10 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
 // MARK: - Two Macs that name each other (no line carried)
 
 @Test func whatTwoMacsSayIsReadBackAndNothingElseIs() {
-    let all: [PairWire.Message] = [.wantOffer, .offer("rr-xcode-offer-v1:abc"), .tried("rr-device-v1:abc"), .saved, .unsaved]
+    let all: [PairWire.Message] = [.wantOffer, .offer("rr-xcode-offer-v1:abc"), .tried("rr-device-v1:abc"), .saved, .unsaved, .you("iphone.t.ts.net")]
         + PairWire.Reason.allCases.map(PairWire.Message.ended)
     for m in all { #expect(PairWire.message(from: PairWire.line(m)) == m) }
-    for line in ["", "offer?", "rr-pair-v2 offer?", "rr-pair-v1 ", "rr-pair-v1 offer", "rr-pair-v1 offer ", "rr-pair-v1 offer a b",
+    for line in ["", "offer?", "rr-pair-v2 offer?", "rr-pair-v1 ", "rr-pair-v1 offer", "rr-pair-v1 offer ", "rr-pair-v1 offer a b", "rr-pair-v1 you", "rr-pair-v1 you ",
                  "rr-pair-v1 ended because", "rr-pair-v1 saved it", "rr-pair-v1 OFFER?"] {
         #expect(PairWire.message(from: line) == nil, "\(line)")
     }
@@ -6906,6 +6951,21 @@ extension TimingSensitive {
         #expect(await end.value == .saved)
         #expect(saved.all == ["device-1"])
         #expect(events.all == [.connected, .waitingForOffer, .offerSent])
+    }
+
+    /// A device that introduces this Mac itself is told its Tailscale name before the offer; a Mac isn't.
+    @Test func aDeviceIsToldItsNameBeforeTheOffer() async throws {
+        let listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
+        let saved = Counted<String>()
+        var far = farMac(saved: saved)
+        far.named = "iphone.t.ts.net"
+        let end = started(far, listener)
+        let link = try #require(PairLink.connect(to: "127.0.0.1", port: listener.port, interface: nil))
+        link.send(.wantOffer)
+        #expect(link.read(within: 2).message == .you("iphone.t.ts.net"))
+        #expect(link.read(within: 2).message == .offer("offer-1"))
+        #expect(PairByName.Home.handOver("device-1", on: link) == .saved)
+        #expect(await end.value == .saved && saved.all == ["device-1"])
     }
 
     @Test func onlyTheMacNamedIsAnsweredAndAStrangerDoesNotShutItOut() async throws {
@@ -7660,4 +7720,21 @@ extension TimingSensitive.DeviceControlIntroduced {
         #expect(cancelled.all.count == 1)
         link.close()
     }
+}
+
+@Test func aTerminalQRIsTheRightWayUp() {
+    let m = TerminalQR.modules("roamrun-introducer://rr-cloud.example.ts.net")
+    #expect(m.count >= 23 && m.allSatisfy { $0.count == m.count })
+    // A finder's top edge is seven dark modules over five light ones; the bottom right has none.
+    func finder(_ y: Int, _ x: Int) -> Bool { m[y][x..<x + 7].allSatisfy { $0 } && !m[y + 1][x + 1..<x + 6].contains(true) }
+    let far = m.count - 8
+    #expect(finder(1, 1) && finder(1, far) && finder(far, 1) && !finder(far, far))
+    #expect(TerminalQR.lines("x").allSatisfy { $0.hasPrefix("\u{1B}[30;107m") })
+    // The window it asks for is the code's own width (margins in, colour codes out) and two rows more.
+    let drawn = TerminalQR.lines("roamrun-introducer://rr-cloud.example.ts.net", level: "L")
+    let room = TerminalQR.room(for: drawn)
+    #expect(room.across == TerminalQR.modules("roamrun-introducer://rr-cloud.example.ts.net", level: "L").count + 6 && room.down == drawn.count + 2)
+    #expect(TerminalQR.room(for: []) == (0, 2))
+    let address = "roamrun-introducer://rr-cloud.example.ts.net?p=53050&i=0A0A0A0A-D414-41D0-BE80-7567AE75B2BC&a=Y8PpfsRx&m=Mac16,1&n=rr-cloud&f=1&v=26&w=17"
+    #expect(TerminalQR.modules(address, level: "L").count < TerminalQR.modules(address, level: "M").count)
 }

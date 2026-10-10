@@ -1,0 +1,25 @@
+name: RoamRunIntroducer
+options:
+  xcodeVersion: "27.0"
+  deploymentTarget:
+    iOS: "27.0"
+  createIntermediateGroups: true
+targets:
+  RoamRunIntroducer:
+    type: application
+    platform: iOS
+    scheme: {}
+    sources:
+      - path: Sources
+      - path: Info.plist
+        buildPhase: none
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.mh-mobile.roamrun.introducer
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Info.plist
+        SWIFT_VERSION: "6.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_USER_SCRIPT_SANDBOXING: YES

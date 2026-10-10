@@ -236,6 +236,21 @@ tunnel and Xcode has to run again.
     both say that Mac already holds one, and nothing is announced here. And once with the far
     command killed (`kill -9`) while it waits: within half a minute the app listens no more.
 
+29. Introducing from the device itself (when `iOS/`, `pair … --with`, `--qr` or the wire changed).
+    The Introducer app built from `iOS/` and installed; `xcrun swiftc … iOS/Checks/relay-check.swift`
+    as its header says → "all checks passed". On the far Mac (item 27's), Pair Nearby Device, then
+    `roamrun pair xcode --with <the device's Tailscale name> --qr` → a code is drawn last; in a
+    window too small it says so instead. In the app: Scan → that Mac's name, Introduce → "Pair
+    with <its name>" on the device, the code from Device Hub → the far Mac says the device is
+    saved (or "saved already; it now holds that line's announcement"), the app says that
+    Mac knows it, `roamrun up <name>` there → Ready. With nothing waiting there: the app says that
+    Mac isn't waiting. Stopped in the app before the button was pressed there, then Introduce
+    again: the far Mac answers the second time. `roamrun pair control --with <device>` with the
+    RoamRun app open there: the code shows on the device (a notification, and where iOS shows the
+    app's task), typed → both say paired, `roamrun look <name>` there. `roamrun pair xcode --qr`
+    alone: the app reads name and offer, and afterwards shows a line that `roamrun devices add`
+    takes there. A link `roamrun-introducer://example.com` opened on the device: refused.
+
 ## Debug logs worth a look after an iOS or Xcode update
 
 - What a bridge did and when (kept by the system, no `--level debug`): `log show` with
