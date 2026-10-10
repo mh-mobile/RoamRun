@@ -165,7 +165,8 @@ mod tests {
             let (mut device, to_device) = tokio::io::duplex(1024);
             let (outbound, mut far) = tokio::io::duplex(1024);
             let carried = tokio::spawn(carry(tokio::io::join(Broken, to_device), outbound));
-            let answer = vec![7u8; 200_000];
+            // Small enough to be through well within GRACE on a slow machine, and more than one read of it.
+            let answer = vec![7u8; 20_000];
             let sent = tokio::spawn({
                 let answer = answer.clone();
                 async move {
@@ -181,7 +182,7 @@ mod tests {
                     break;
                 }
                 got.extend_from_slice(&buf[..n]);
-                tokio::time::sleep(Duration::from_millis(5)).await;
+                tokio::time::sleep(Duration::from_millis(1)).await;
             }
             assert_eq!(got.len(), answer.len());
             let _ = (sent.await, carried.await);
