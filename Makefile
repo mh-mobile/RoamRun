@@ -142,7 +142,7 @@ roamrunctl-archives:
 	cd roamrunctl-dist && for d in */; do mv "$$d"* . && rmdir "$$d"; done \
 		&& ls roamrunctl-linux-x86_64.tar.gz roamrunctl-linux-aarch64.tar.gz roamrunctl-windows-x86_64.zip roamrunctl-windows-aarch64.zip >/dev/null \
 		&& shasum -a 256 roamrunctl-*.tar.gz roamrunctl-*.zip > roamrunctl-SHA256SUMS
-	@ls roamrunctl-dist; echo "gh release upload v$(VERSION) roamrunctl-dist/*"
+	@ls roamrunctl-dist; echo "These go into the release with the dmg: gh release create v$(VERSION) RoamRun-$(VERSION).dmg roamrunctl-dist/* …"
 
 # `roamrun` on PATH, pointing into the app bundle (one binary for app + CLI).
 BINDIR ?= /usr/local/bin

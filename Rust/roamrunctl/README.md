@@ -61,11 +61,13 @@ two networks numbered alike and the device doesn't list the far Mac, `--on <one 
 
 Needs Tailscale installed and logged in (`tailscale` in PATH, the App Store app on macOS, or the installer's copy on Windows).
 Without `--offer`, the far Mac runs `roamrun pair xcode --with <this machine>` and the offer comes over port 41830
-(`--deadline` is then 300 s at most: the far Mac waits no longer); it then saves the device itself. That takes a
+(`--deadline` is then 300 s at most, as long as RoamRun's own `pair introduce` waits); it then saves the device itself. That takes a
 `roamrun` that answers a Windows or Linux machine after `--with` (0.5.0); with an older one, or where that port
 is shut, the offer is carried: `--offer "$(ssh <far Mac> roamrun pair xcode)"`.
 On a tried pairing, the device's line for `roamrun devices add` is printed on stdout; everything else goes to stderr.
-The far Mac saves the device under its Tailscale name; `--as` gives another.
+The far Mac saves the device under its Tailscale name; `--as` gives another. That Mac has the last word on a
+name: one it has another device saved under, or doesn't take (a character no Unicode version assigns isn't told
+apart here), it doesn't save — the line this prints then goes to `roamrun devices add <line> --as <another name>` there.
 
 For device control the far Mac runs `roamrun pair control --with <this machine>` instead, with the RoamRun app
 open there; the same command here answers it (there is no line to carry for this, so no `--offer`). The code to
@@ -126,8 +128,8 @@ ends the run, the device line is made, and the goodbye reaches a browser within 
   Ready; nothing was left announced. With the firewall on,
   under a test service type and a Linux machine standing in for the device: macOS asked whether to let `roamrunctl`
   take incoming connections; one got through while the question stood, and after it was allowed. Refusing wasn't tried.
-- No release carries it yet (0.5.0 is the first): the Linux and Windows install commands were run against archives
-  served locally, not against a release; the tap's formula and `cargo install --git` weren't run.
+- 0.5.0 is the first release that carries it. Before it, the Linux and Windows install commands were run against
+  archives served locally; the tap's formula and `cargo install --git` are run as part of releasing.
 - After a review changed how it reads the far Mac's wire, ends its relay, picks its interface and stops, the mechanics
   were checked again on macOS (`cargo test`, `scripts/local-check.py`, a fake far Mac that misbehaves), and against
   the real device once each: Xcode's pairing from the Windows machine with no line carried (the far Mac saved the
