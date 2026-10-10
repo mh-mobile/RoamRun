@@ -355,7 +355,33 @@ iPhone から Mac を操作する方法は 3 つあります。どの方法で�
 
 ## 実機を見る・操作する（デバイス操作）
 
-look・tap・swipe・type・paste・press・elements の各コマンドと `roamrun mcp` で、実機の画面を見て操作できます。コマンドと使い方は [README.md](README.md#seeing-and-operating-the-device) を参照してください。手元にない Mac（クラウドの Mac、CI など）を、Tailscale の認証キーの用意から RoamRun の導入、ペアリングの取り込みまで通して使えるようにする手順と、それを行うスクリプトは [docs/another-mac.md](docs/another-mac.md)（英語）にあります。使う前に知っておくこと:
+実機の画面を見て、操作できます（タップ、スワイプ、文字入力、ボタン）。コマンドラインから使え、AI エージェントのツールにもなります。ブリッジも Xcode も通りません。RoamRun が、自分のペアリングと接続を持ちます。
+
+**準備は、デバイスごとに 1 度**、デバイスが Mac と同じ Wi‑Fi にいるときに行います。RoamRun でデバイスのページを開き、**Device control › Set Up…** を押します。デバイスの 設定 › プライバシーとセキュリティ › デベロッパモード で RoamRun を選び、Mac に出るコードを入力します。そのあとは、デバイスが Wi‑Fi につながっていて VPN 越しに届くときに自動でつながり、モバイル通信に移ってもつながったままです。
+
+```sh
+roamrun look iPhone /tmp/now.png          # いまの画面を PNG で（長いほうの辺が最大 1280）。パス、続けて大きさを表示
+roamrun tap iPhone 295 640                # その画像のピクセルで指定した点
+roamrun look iPhone /tmp/now.png          # 次の操作の前にもう一度: 1 回の look で 1 回の操作
+roamrun swipe iPhone 295 900 295 450      # ある点から別の点へドラッグ
+roamrun type iPhone "hello"               # US 配列のキーで、毎秒 16 字ほどまで。デバイスのキーボードが英語のときだけ正しく入る（日本語キーボードでは、スペースも変換になる）
+roamrun paste iPhone "任意の文字列"         # どんな文字でも、デバイスのペーストボード経由で（iOS が「ペーストを許可」を尋ねる）
+roamrun press iPhone home                 # home、lock、volume-up、volume-down
+roamrun elements iPhone                   # アクセシビリティが画面にあると言うもの（位置は無し）
+```
+
+`look` 1 回につき、操作は 1 回です。見て、操作して、また見ます。画像は、デバイスが持っているままの画面です。横向きのアプリは横倒しに写り、点の指定はその画像の上で行います。エージェントには、同じものが MCP のツールになります（`claude mcp add roamrun -- roamrun mcp`。ほかのエージェントでも同様）。使い方は、スキル（`roamrun init`）がエージェントに伝えます。ファイルに書き出した `look` は、自分だけが読めます（0600）。消すまで残ります。
+
+2 台の Mac の間に Tailscale が無いときは、デバイスの Wi‑Fi にいる Mac でペアリングを作り、それを運びます。
+
+```sh
+roamrun key create iPhone ~/iphone-for-cloud.json --as cloud-mac   # こちら: デバイスで「cloud-mac」を選び、コードを入力
+roamrun key import ~/iphone-for-cloud.json                         # あちら（ファイルを置いたら）: デバイスとそのペアリングを保存し（オンの状態）、ファイルを消す
+```
+
+`import` は、つながったときだけペアリングを残します。そのとき、デバイスに届く必要があります。ファイルを作ったあとでデバイスが再起動していると、ポートが変わっているので、`import` が探します（その Mac にまだ保存していないデバイスの場合。保存済みなら、先にその Mac でポートを見つけてください: デバイスのページ › Technical details › Find RemotePairing Port）。こうして作ったペアリングは、デバイスの 設定 › プライバシーとセキュリティ › デベロッパモード に、それぞれの名前で並び、1 つずつ削除できます。この Mac 自身のペアリングは別の項目で、残ります。
+
+手元にない Mac（クラウドの Mac、CI など）を、Tailscale の認証キーの用意から RoamRun の導入、ペアリングの取り込みまで通して使えるようにする手順と、それを行うスクリプトは [docs/another-mac.md](docs/another-mac.md)（英語）にあります。使う前に知っておくこと:
 
 - **iOS / iPadOS 27 以降が必要です**（それより前は遠隔操作を断ります。確認は iPhone で行っており、iPad は同じように動くはずですが未確認です）。**Set Up… は、デバイスが Mac と同じ Wi‑Fi にいるときに行います。** 接続は RoamRun アプリが持つので、アプリが起動している必要があります。
 - **look は、そのとき画面に出ているものをそのまま写します**（通知やメッセージも）。
