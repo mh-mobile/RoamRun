@@ -662,7 +662,7 @@ enum CLI {
         while let info = next {
             var text = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             if getnameinfo(info.pointee.ai_addr, info.pointee.ai_addrlen, &text, socklen_t(text.count), nil, 0, NI_NUMERICHOST) == 0 {
-                out.append(String(cString: text))
+                out.append(String(decoding: text.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self))
             }
             next = info.pointee.ai_next
         }
