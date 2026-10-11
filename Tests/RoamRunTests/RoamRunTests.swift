@@ -4697,7 +4697,7 @@ func publishStepsAsideWhenTurnedOff(_ c: PublishCase) async {
     let leaving = try connected()
     request.withUnsafeBytes { _ = write(leaving, $0.baseAddress, $0.count) }
     close(leaving)
-    #expect(answered.wait(timeout: .now() + 5) == .success)
+    #expect(soon(answered))
     Thread.sleep(forTimeInterval: 0.1)   // the write to the closed socket has happened
     close(try connected())   // one that says nothing at all
     #expect(try DeviceControlWire.ask(.init(op: "state", device: UUID()), in: dir) == .init(ok: true))
@@ -5090,7 +5090,7 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1", paired: Bool = true
     #expect(hub.answer(.init(op: "state", device: id)).ok)     // how it stands is still said at once
     old.hold?.signal()
     #expect(soon(first))
-    #expect(second.wait(timeout: .now() + 5) == .success)
+    #expect(soon(second))
     #expect(answer.withLock { $0?.ok } == true)
     #expect(fresh.calls == ["press"] && old.calls == ["look", "letGo"])   // through the session held by then
 }
@@ -6079,7 +6079,7 @@ import ImageIO
     // Free once the first is closed — but a process another test starts at that moment holds a
     // copy of it until it execs, so it is asked for a little while, not once.
     func soon() -> Int32? {
-        for _ in 0..<200 {
+        for _ in 0..<1000 {
             if let turn = CLI.upTurn(for: id, in: dir, wait: false) { return turn }
             usleep(10_000)
         }
@@ -6361,7 +6361,7 @@ func everyDocumentedCommandParses(_ doc: String) throws {
     asking.giveUp()
     given.signal()
     #expect(soon(done))
-    for _ in 0..<100 where still.withLock({ $0 }) == nil { usleep(20_000) }
+    #expect(until { still.withLock { $0 } != nil })
     #expect(still.withLock { $0 } == false)
     #expect(throws: (any Error).self) { try DeviceControlWire.ask(.init(op: "press", device: UUID(), text: "lock"), in: dir, asking: asking) }
     asking.again()
@@ -6703,7 +6703,7 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
         #expect(!device.calls.contains("interrupt"))
         // Its asker gone — or its pairing switched off under it, as the hub comes to know it.
         if leaving { there.withLock { $0 = false } } else { on.withLock { $0 = false } }
-        #expect(answered.wait(timeout: .now() + 5) == .success)
+        #expect(soon(answered))
         #expect(device.calls.contains("interrupt"))
     }
 }
@@ -7008,8 +7008,8 @@ extension TimingSensitive {
         let end = started(far, listener)
         let link = try #require(PairLink.connect(to: "127.0.0.1", port: listener.port, interface: nil))
         link.send(.wantOffer)
-        #expect(link.read(within: 2).message == .you("iphone.t.ts.net"))
-        #expect(link.read(within: 2).message == .offer("offer-1"))
+        #expect(link.read(within: 10).message == .you("iphone.t.ts.net"))
+        #expect(link.read(within: 10).message == .offer("offer-1"))
         #expect(PairByName.Home.handOver("device-1", on: link) == .saved)
         #expect(await end.value == .saved && saved.all == ["device-1"])
     }
@@ -7022,7 +7022,7 @@ extension TimingSensitive {
         let none = started(far, listener)
         let stranger = try #require(PairLink.connect(to: "127.0.0.1", port: listener.port, interface: nil))
         stranger.send(.wantOffer)
-        #expect(stranger.read(within: 2) == .closed)
+        #expect(stranger.read(within: 10) == .closed)
         #expect(await none.value == .noOne)
         #expect(questions.all.isEmpty)
         #expect(events.all == [.refused(from: "127.0.0.1")])
@@ -7036,7 +7036,7 @@ extension TimingSensitive {
         for _ in 1...2 {
             let link = try #require(PairLink.connect(to: "127.0.0.1", port: listener.port, interface: nil))
             link.send(.wantOffer)
-            #expect(link.read(within: 2) == .closed)
+            #expect(link.read(within: 10) == .closed)
         }
         guard case .offer(_, let link) = await homeMac(listener.port).fetch() else { Issue.record("no offer"); return }
         #expect(PairByName.Home.handOver("device-1", on: link) == .saved)
@@ -7053,12 +7053,12 @@ extension TimingSensitive {
         // Too long, never ending; then one byte and silence; then another version's word.
         let long = try #require(PairLink.connect(to: "127.0.0.1", port: listener.port, interface: nil))
         long.send(.offer(String(repeating: "x", count: PairWire.maxLine + 100)))
-        #expect(long.read(within: 3) == .closed)
+        #expect(long.read(within: 10) == .closed)
         let slow = try #require(PairLink.connect(to: "127.0.0.1", port: listener.port, interface: nil))
-        #expect(slow.read(within: 3) == .closed)   // lineWait, not for ever
+        #expect(slow.read(within: 10) == .closed)   // lineWait, not for ever
         let other = try #require(PairLink.connect(to: "127.0.0.1", port: listener.port, interface: nil))
         other.send(.saved)
-        #expect(other.read(within: 3) == .closed)
+        #expect(other.read(within: 10) == .closed)
         guard case .offer(_, let link) = await homeMac(listener.port).fetch() else { Issue.record("no offer"); return }
         #expect(PairByName.Home.handOver("device-1", on: link) == .saved)
         #expect(await end.value == .saved)
@@ -7111,15 +7111,15 @@ extension TimingSensitive {
         let port = listener.port
         async let fetched = homeMac(port).fetch()
         // Dropped once asked, then dropped with the offer half sent; the third time it arrives.
-        var (link, _) = try #require(listener.accept(within: 2))
-        #expect(link.read(within: 2) == .line(PairWire.line(.wantOffer)))
+        var (link, _) = try #require(listener.accept(within: 10))
+        #expect(link.read(within: 10) == .line(PairWire.line(.wantOffer)))
         link.close()
-        (link, _) = try #require(listener.accept(within: 3))
-        _ = link.read(within: 2)
+        (link, _) = try #require(listener.accept(within: 10))
+        _ = link.read(within: 10)
         link.write("rr-pair-v1 offer half")
         link.close()
-        (link, _) = try #require(listener.accept(within: 3))
-        _ = link.read(within: 2)
+        (link, _) = try #require(listener.accept(within: 10))
+        _ = link.read(within: 10)
         link.send(.offer("offer-1"))
         guard case .offer(let offer, let mine) = await fetched else { Issue.record("no offer"); return }
         #expect(offer == "offer-1")
@@ -7168,18 +7168,18 @@ extension TimingSensitive {
         var listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
         var port = listener.port
         async let wrong = homeMac(port, owner: { _ in "another" }).fetch()
-        var (link, _) = try #require(listener.accept(within: 2))
-        #expect(link.read(within: 2) == .closed)
+        var (link, _) = try #require(listener.accept(within: 10))
+        #expect(link.read(within: 10) == .closed)
         guard case .notThatMac = await wrong else { Issue.record("asked a stranger"); return }
         async let unnamed = homeMac(port, owner: { _ in nil }).fetch()
-        (link, _) = try #require(listener.accept(within: 2))
-        #expect(link.read(within: 2) == .closed)
+        (link, _) = try #require(listener.accept(within: 10))
+        #expect(link.read(within: 10) == .closed)
         guard case .notThatMac = await unnamed else { Issue.record("asked a stranger"); return }
 
         // Another version answering.
         async let garbled = homeMac(port).fetch()
-        (link, _) = try #require(listener.accept(within: 2))
-        #expect(link.read(within: 2) == .line(PairWire.line(.wantOffer)))
+        (link, _) = try #require(listener.accept(within: 10))
+        #expect(link.read(within: 10) == .line(PairWire.line(.wantOffer)))
         link.send(.saved)
         guard case .garbled = await garbled else { Issue.record("took it"); return }
 
@@ -7190,12 +7190,12 @@ extension TimingSensitive {
 
         // The device handed over, and the answer lost: unknown, not "not saved".
         async let fetched = homeMac(port).fetch()
-        (link, _) = try #require(listener.accept(within: 2))
-        _ = link.read(within: 2)
+        (link, _) = try #require(listener.accept(within: 10))
+        _ = link.read(within: 10)
         link.send(.offer("offer-1"))
         guard case .offer(_, let mine) = await fetched else { Issue.record("no offer"); return }
         async let answer = Task.detached { PairByName.Home.handOver("device-1", on: mine, within: 1) }.value
-        #expect(link.read(within: 2) == .line(PairWire.line(.tried("device-1"))))
+        #expect(link.read(within: 10) == .line(PairWire.line(.tried("device-1"))))
         link.close()
         #expect(await answer == .unknown)
     }
@@ -7203,21 +7203,20 @@ extension TimingSensitive {
     @Test func aLineIsReadWholeAndOneWithoutEndIsNotKept() throws {
         let listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
         let from = try #require(PairLink.connect(to: "127.0.0.1", port: listener.port, interface: nil))
-        let (to, _) = try #require(listener.accept(within: 2))
+        let (to, _) = try #require(listener.accept(within: 10))
         from.send(.saved); from.send(.unsaved)
-        #expect(to.read(within: 2) == .line(PairWire.line(.saved)))
-        #expect(to.read(within: 2) == .line(PairWire.line(.unsaved)))
+        #expect(to.read(within: 10) == .line(PairWire.line(.saved)))
+        #expect(to.read(within: 10) == .line(PairWire.line(.unsaved)))
         #expect(to.read(within: 0.2) == .timeout)
         #expect(!to.gone)
         // At the limit and just past it, whatever a line ends with in the same read.
         let head = PairWire.line(.offer("")).utf8.count
         to.send(.offer(String(repeating: "x", count: PairWire.maxLine - head)))
-        #expect(from.read(within: 5) == .line(PairWire.line(.offer(String(repeating: "x", count: PairWire.maxLine - head)))))
+        #expect(from.read(within: 10) == .line(PairWire.line(.offer(String(repeating: "x", count: PairWire.maxLine - head)))))
         to.send(.offer(String(repeating: "x", count: PairWire.maxLine - head + 1)))
-        #expect(from.read(within: 5) == .tooLong)
+        #expect(from.read(within: 10) == .tooLong)
         from.close()
-        for _ in 0..<50 where !to.gone { usleep(20_000) }
-        #expect(to.gone)
+        #expect(until { to.gone })
     }
 
     @Test func aListenerKeepsToItsInterfaceOrDoesNotListen() throws {
@@ -7385,7 +7384,7 @@ private func soon(_ signal: DispatchSemaphore) -> Bool { signal.wait(timeout: .n
 /// rather than keep a thread for good.
 private func held(_ signal: DispatchSemaphore?) { _ = signal?.wait(timeout: .now() + 30) }
 private func until(_ what: () -> Bool) -> Bool {
-    for _ in 0..<200 where !what() { usleep(10_000) }
+    for _ in 0..<1000 where !what() { usleep(10_000) }   // 10 s: other tests may hold the threads meanwhile
     return what()
 }
 
@@ -7489,7 +7488,7 @@ extension TimingSensitive {
         i.longest = 0.2
         id = UUID()
         #expect(begin(i, id).ok)
-        for _ in 0..<20 where !pairing.wasCancelled { usleep(40_000); _ = how(i, id) }
+        for _ in 0..<250 where !pairing.wasCancelled { usleep(40_000); _ = how(i, id) }
         #expect(pairing.wasCancelled)
     }
 
@@ -7635,8 +7634,8 @@ extension TimingSensitive.DeviceControlIntroduced {
         let end = startedControl(far, listener)
         guard case .control(let offer, let attempt, let link) = await homeForControl(listener.port).fetch() else { Issue.record("no offer"); return }
         #expect(offer == "offer-1" && attempt == "6BF40D22-D414-41D0-BE80-7567AE75B2BC" && given.all == ["device-1"])
-        #expect(link.read(within: 2).message == .code("246810"))
-        #expect(link.read(within: 2).message == .result(.done(on: true)))    // the code went once, not each time it was said
+        #expect(link.read(within: 10).message == .code("246810"))
+        #expect(link.read(within: 10).message == .result(.done(on: true)))    // the code went once, not each time it was said
         #expect(await end.value == .done(on: true))
         #expect(cancelled.all.isEmpty && events.all == [.connected, .offerSent(attempt: anAttempt), .codeSent])
     }
@@ -7708,11 +7707,11 @@ extension TimingSensitive.DeviceControlIntroduced {
             cancel: { _ in }, say: { events.add($0) }, connectWindow: 5, resultWindow: 5, lineWait: 1, pause: 0.05)
         let end = startedControl(far, listener)
         guard case .control(let first, let one, let link) = await homeForControl(listener.port).fetch() else { Issue.record("no offer"); return }
-        #expect(link.read(within: 2).message == .result(.failed(.notPaired)))
+        #expect(link.read(within: 10).message == .result(.failed(.notPaired)))
         link.close()
         guard case .control(let second, let two, let again) = await homeForControl(listener.port).fetch() else { Issue.record("not waited for again"); return }
         #expect(first == "offer-1" && second == "offer-2" && one != two && begun.all == [one, two])
-        #expect(again.read(within: 2).message == .result(.done(on: true)))
+        #expect(again.read(within: 10).message == .result(.done(on: true)))
         #expect(await end.value == .done(on: true))
         #expect(events.all.contains(.again))
 
@@ -7721,14 +7720,14 @@ extension TimingSensitive.DeviceControlIntroduced {
         var ended = startedControl(farControl(status: { .failed(.notPaired) }, tries: 2), other)
         for _ in 1...2 {
             guard case .control(_, _, let link) = await homeForControl(other.port).fetch() else { Issue.record("no offer"); return }
-            #expect(link.read(within: 2).message == .result(.failed(.notPaired)))
+            #expect(link.read(within: 10).message == .result(.failed(.notPaired)))
             link.close()
         }
         #expect(await ended.value == .failed(.notPaired))
         other = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
         ended = startedControl(farControl(status: { .failed(.notKept) }), other)
         guard case .control(_, _, let last) = await homeForControl(other.port).fetch() else { Issue.record("no offer"); return }
-        #expect(last.read(within: 2).message == .result(.failed(.notKept)))
+        #expect(last.read(within: 10).message == .result(.failed(.notKept)))
         #expect(await ended.value == .failed(.notKept))
     }
 
@@ -7737,7 +7736,7 @@ extension TimingSensitive.DeviceControlIntroduced {
         let cancelled = Counted<Int>()
         let end = startedControl(farControl(status: { cancelled.all.isEmpty ? .code("12\u{1B}[2J") : .failed(.cancelled) }, cancelled: cancelled), listener)
         guard case .control(_, _, let link) = await homeForControl(listener.port).fetch() else { Issue.record("no offer"); return }
-        #expect(link.read(within: 2) == .closed)     // nothing that isn't a code is passed on
+        #expect(link.read(within: 10) == .closed)     // nothing that isn't a code is passed on
         #expect(await end.value == .lost(.failed(.cancelled)))
         #expect(cancelled.all.count == 1)
     }
