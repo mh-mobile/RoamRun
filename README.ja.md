@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/icon.png" width="128" height="128" alt="RoamRun icon">
+  <img src="docs/images/icon.png" width="128" height="128" alt="RoamRun icon">
 </p>
 
 <h1 align="center">RoamRun</h1>
@@ -14,7 +14,7 @@
 
 <p align="center"><a href="https://mh-mobile.github.io/RoamRun/">Web サイト</a> · <a href="README.md">English</a> | 日本語</p>
 
-<p align="center"><img src="docs/main.png" width="800" alt="RoamRun のメイン画面"></p>
+<p align="center"><img src="docs/images/main.png" width="800" alt="RoamRun のメイン画面"></p>
 
 Xcode のワイヤレスデバッグを、Tailscale などの mesh VPN 越しに使えるようにする macOS メニューバーアプリ。
 
@@ -153,8 +153,8 @@ dmg は `make dmg` で作れます（`SIGN_ID` / `NOTARY_PROFILE` を渡すと D
 Mac の IP が変わるとブリッジは自動再起動します。
 
 <p align="center">
-  <img src="docs/add-device.png" width="520" alt="デバイスの追加">
-  <img src="docs/menu.png" width="260" alt="メニューバーのメニュー">
+  <img src="docs/images/add-device.png" width="520" alt="デバイスの追加">
+  <img src="docs/images/menu.png" width="260" alt="メニューバーのメニュー">
 </p>
 
 ## CLI
@@ -446,9 +446,9 @@ ssh cloud-mac roamrun devices add "$LINE"
 **デバイス自身に引き合わせてもらう。** デバイスの近くに RoamRun の入った Mac がないとき（そばにあるのが Windows や Linux のマシンだけ、など）は、デバイス上のアプリが代わりを務めます。[`iOS/`](iOS/README.ja.md) にある RoamRun Introducer です。Xcode でビルドして入れます（iOS 27 以降）。App Store にはありません。離れた Mac では、もう 1 台の Mac を名指しする場所に、デバイスを名指しします。
 
 <p align="center">
-  <img src="docs/introducer-home.png" width="200" alt="RoamRun Introducer: 離れた Mac の名前と Introduce">
-  <img src="docs/introducer-pairing.png" width="200" alt="引き合わせの途中: 設定でペアリングする">
-  <img src="docs/introducer-done.png" width="200" alt="終わり: 離れた Mac がこの iPhone を保存した">
+  <img src="docs/images/introducer-home.png" width="200" alt="RoamRun Introducer: 離れた Mac の名前と Introduce">
+  <img src="docs/images/introducer-pairing.png" width="200" alt="引き合わせの途中: 設定でペアリングする">
+  <img src="docs/images/introducer-done.png" width="200" alt="終わり: 離れた Mac がこの iPhone を保存した">
 </p>
 
 ```sh
