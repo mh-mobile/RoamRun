@@ -588,12 +588,13 @@ Device control is built on [idevice](https://github.com/jkcoxson/idevice) (Jacks
 
 ## Related projects
 
-Projects tackling the same problem (reaching an iPhone on another network from Xcode):
+Projects tackling the same problem (reaching an iPhone on another network from Xcode), or the same ground with other tools:
 
 - [Viaaaron/iphone-tailnet-bridge](https://github.com/Viaaaron/iphone-tailnet-bridge) — Bonjour plus a socat relay, as shell scripts
 - [ahmadtawakol/iphone-tailnet-bridge](https://github.com/ahmadtawakol/iphone-tailnet-bridge) — a fork of the above that adds a native macOS app and Go tools
 - [CodeEagle/remote-ios-deploy-skill](https://github.com/CodeEagle/remote-ios-deploy-skill) — the same approach (Bonjour proxy + TCP/UDP relay) as an agent skill (SKILL.md)
 - [lyo-eos/ios-ota](https://github.com/lyo-eos/ios-ota) — installs signed apps over Tailscale (and keeps going when switching from Wi-Fi to 5G). Focused on installing rather than Xcode's Run or the debugger
+- [joshuaswarren/omarchy-apple-dev](https://github.com/joshuaswarren/omarchy-apple-dev) — builds iOS apps on Linux and puts them on a device, with no Xcode and no Mac; it also records how to reach an iPhone over Tailscale ([OVER-TAILNET.md](https://github.com/joshuaswarren/omarchy-apple-dev/blob/main/docs/OVER-TAILNET.md)). Other tools and another aim than RoamRun, which carries Xcode's own Run and debugger
 
 ## License
 

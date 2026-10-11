@@ -573,12 +573,13 @@ RoamRun は、mh-mobile の指揮のもと、Claude Code（Claude Opus 5.5）が
 
 ## 関連プロジェクト
 
-同じ課題（別ネットワークの iPhone に Xcode から届かせる）に取り組んでいるプロジェクトです。
+同じ課題（別ネットワークの iPhone に Xcode から届かせる）に取り組んでいるプロジェクトと、同じ場所を別の道具で扱っているプロジェクトです。
 
 - [Viaaaron/iphone-tailnet-bridge](https://github.com/Viaaaron/iphone-tailnet-bridge) — Bonjour と socat による中継をシェルスクリプトで実装
 - [ahmadtawakol/iphone-tailnet-bridge](https://github.com/ahmadtawakol/iphone-tailnet-bridge) — 上記のフォーク。ネイティブ macOS アプリと Go 製ツールを追加
 - [CodeEagle/remote-ios-deploy-skill](https://github.com/CodeEagle/remote-ios-deploy-skill) — 同じ手法（Bonjour プロキシ + TCP/UDP 中継）をエージェント用スキル（SKILL.md）にしたもの
 - [lyo-eos/ios-ota](https://github.com/lyo-eos/ios-ota) — Tailscale 越しに署名済みアプリをインストール（Wi-Fi から 5G への切り替え後も継続）。Xcode の Run やデバッガではなく、インストールに特化
+- [joshuaswarren/omarchy-apple-dev](https://github.com/joshuaswarren/omarchy-apple-dev) — Linux から、Xcode も Mac も使わずに iOS アプリをビルドして実機に入れる。Tailscale 越しに iPhone へ届く手順の記録もある（[OVER-TAILNET.md](https://github.com/joshuaswarren/omarchy-apple-dev/blob/main/docs/OVER-TAILNET.md)）。Xcode の Run やデバッガを通す RoamRun とは、使う道具も目的も別
 
 ## ライセンス
 
