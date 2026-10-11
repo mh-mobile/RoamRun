@@ -238,7 +238,7 @@ roamrun tap iPhone 295 640                # a point in the pixels of that image
 roamrun look iPhone /tmp/now.png          # again before the next action: each look serves one
 roamrun swipe iPhone 295 900 295 450      # drag from one point to another
 roamrun type iPhone "hello"               # US keys, at most about 16 a second; right only while the device's keyboard is an English one (under a Japanese one even a space converts)
-roamrun paste iPhone "café, 100 €"        # any text, by the device's pasteboard (iOS asks "Allow Paste")
+roamrun paste iPhone "Hello, world!"      # any text, by the device's pasteboard (iOS asks "Allow Paste")
 roamrun press iPhone home                 # home, lock, volume-up, volume-down
 roamrun elements iPhone                   # what accessibility says is on the screen (no positions)
 ```
