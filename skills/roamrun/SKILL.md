@@ -147,7 +147,8 @@ introduced; you can run the commands, they do the rest.
   UDID is kept, so another device goes under a name of its own — with the RoamRun app quit and
   that device's bridge down — it says so and stops if the app is running). Then
   `roamrun up <name>`: Ready means the pairing was made. None of this needs the
-  RoamRun app open on that Mac; when it is next opened, it lists the device.
+  RoamRun app open on that Mac; it lists the device when it is next opened, or within
+  seconds if it is open.
 - lldb from that Mac needs the device's OS symbols there; without them an attach
   waits for minutes. `devicectl`, `roamrun run` and `roamrun logs` don't. Tell the
   user (the README says how they are copied over) rather than wait.

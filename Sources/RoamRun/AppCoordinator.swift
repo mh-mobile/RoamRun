@@ -226,6 +226,7 @@ final class AppCoordinator: ObservableObject {
     private func refreshExternalBridges() {
         let now = StatusFile.read().filter { $0.value.pid != getpid() }
         if now != externalBridges { externalBridges = now }   // detail changes too (Probing…, errors)
+        listSaved()
         // Nothing else tells the user: over the mesh VPN everything still works,
         // so a blocked local network only shows up as the device looking away.
         if LocalNetwork.denied, launchWarning == nil, !warnedLocalNetwork {
@@ -233,6 +234,29 @@ final class AppCoordinator: ObservableObject {
             launchWarning = LocalNetwork.advice
             logStore.log(LocalNetwork.advice)
         }
+    }
+
+    private var listWritten: Date?
+
+    /// Lists a device the CLI saved while the app runs (`roamrun devices add`, `pair xcode --with`),
+    /// off. Only one never seen here: a device the app has keeps what it has, and its bridge
+    /// runs on undisturbed — what the CLI changed in it is taken at the next save, as before.
+    private func listSaved() {
+        guard Snapshot.fakeProfiles == nil else { return }
+        let written = store.written
+        guard written != listWritten else { return }
+        listWritten = written
+        let new = store.savedElsewhere(base: savedProfiles, mine: profiles)
+        guard !new.isEmpty else { return }
+        // In the list it was read from too: removed here later, it is this process's to drop.
+        savedProfiles += new
+        profiles = new + profiles   // where the next save puts them
+        for p in new {
+            capture.ownedHosts.insert(install(newBridge(p)).spoofHost)
+            logStore.log("listed \"\(p.displayName)\", saved from the command line", device: p.id)
+        }
+        syncDeviceControl()
+        learnDeviceTypes()
     }
 
     // MARK: - Over the air

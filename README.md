@@ -288,7 +288,7 @@ roamrun devices add <line>                                   # the device, saved
 roamrun up iPhone                                            # Ready: Xcode there has the device
 ```
 
-None of it needs the RoamRun app open on the far Mac; the commands are enough, and the app lists the device when it is next opened.
+None of it needs the RoamRun app open on the far Mac; the commands are enough, and the app lists the device when it is next opened — or within seconds, if it is open.
 
 When both Macs are on one tailnet they pass those two lines between themselves: each names the other, and nothing is carried.
 

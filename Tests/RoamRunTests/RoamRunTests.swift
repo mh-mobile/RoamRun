@@ -1109,6 +1109,30 @@ extension TimingSensitive.RelayOnLocalhost {
     #expect(Array(status.keys) == [good])
 }
 
+/// The app lists what the CLI saved while it runs: a device it never saw — not one it has,
+/// not one it removed, and not one it added again itself meanwhile.
+@Test func aDeviceSavedByAnotherProcessIsTheOnlyOneTakenIn() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let app = ProfileStore(directory: dir), cli = ProfileStore(directory: dir)
+    #expect(app.written == nil)
+    var kept = profile("iPad"), removed = profile("Old"); kept.providerIP = "100.64.0.1"; removed.providerIP = "100.64.0.2"
+    let read = try #require(app.save(base: [], wanted: [kept, removed]))
+    let first = try #require(app.written)
+    #expect(app.savedElsewhere(base: read, mine: [kept]).isEmpty)   // removed here, still on disk: not taken back
+    var new = profile("iPhone"); new.providerIP = "100.64.0.3"
+    var moved = kept; moved.remotePairingPort = 50001
+    #expect(cli.update { $0 = [moved, removed, new] })
+    #expect(try #require(app.written) >= first)
+    #expect(app.savedElsewhere(base: read, mine: [kept]) == [new])   // …and what it has keeps what it has
+    var again = profile("iPhone"); again.providerIP = "100.64.0.3"
+    #expect(app.savedElsewhere(base: read, mine: [kept, again]).isEmpty)   // added here too meanwhile: that one stands
+    try Data("{".utf8).write(to: dir.appendingPathComponent("profiles.json"))
+    #expect(app.savedElsewhere(base: [], mine: []).isEmpty)
+    try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: dir.appendingPathComponent("profiles.json").path)
+    #expect(app.savedElsewhere(base: [], mine: []).isEmpty)   // unreadable: nothing is taken for the list
+}
+
 /// A name is taken by a device the CLI saved since the app read its list, too.
 @Test func aNameSavedByAnotherProcessMeanwhileIsTaken() {
     let dir = scratchDir()
