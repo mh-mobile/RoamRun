@@ -373,7 +373,7 @@ have the user add the MCP tools, which run outside it.
   has switched Auto-Correction off (Settings › General › Keyboard). It is typed at the device's own pace,
   at most about 16 characters a second (500 take half a minute or more), and
   has all arrived when the command returns:
-  for anything long, `paste` (the MCP tool takes 500 characters at most). `roamrun paste iPhone "任意の文字列"` puts any
+  for anything long, `paste` (the MCP tool takes 500 characters at most). `roamrun paste iPhone "café, 100 €"` puts any
   text in by the device's pasteboard — it replaces the pasteboard, and iOS asks
   "Allow Paste" each time: look, and tap it only if the user wants that.
 - `roamrun press iPhone home|lock|volume-up|volume-down`. `lock` can't be
