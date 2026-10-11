@@ -645,7 +645,7 @@ import ServiceManagement
 @Test func aPairableDevicesLineIsReadOnlyAsWhatItIs() {
     let txt = ["identifier": "6BF40D22-D414-41D0-BE80-7567AE75B2BC", "authTag": "BsVby0td", "model": "RealityDevice14,1",
                "name": "Apple Vision Pro", "ver": "26", "minVer": "17"]
-    let pairable = Introduction.Pairable(peer: "vision.tailnet.ts.net", instance: "Apple Vision Pro", port: 60346, txt: txt)
+    let pairable = Introduction.Pairable(instance: "Apple Vision Pro", port: 60346, txt: txt)
     let line = Introduction.line(pairable)
     #expect(line.hasPrefix("rr-pairable-v1:") && !line.contains(" ") && !line.contains("="))
     #expect(try! Introduction.pairable(from: " \(line)\n").get() == pairable)
@@ -660,19 +660,23 @@ import ServiceManagement
         return false
     }
     #expect(bad { $0.port = 80 } && bad { $0.txt["flags"] = "1" } && bad { $0.txt["name"] = nil })
-    #expect(bad { $0.peer = "" } && bad { $0.instance = "a=b" } && bad { $0.instance = String(repeating: "n", count: 64) } && bad { $0.peer = "a\u{202E}b" })
+    #expect(bad { $0.instance = "" } && bad { $0.instance = "a=b" } && bad { $0.instance = String(repeating: "n", count: 64) } && bad { $0.instance = "a\u{202E}b" })
+    // Which device it is isn't in the line: nothing in it names a host.
+    #expect(!String(decoding: Data(base64Encoded: String(line.dropFirst("rr-pairable-v1:".count)).replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/") + "==") ?? Data(), as: UTF8.self).contains("peer"))
     // From what was seen on the network: only the keys of its kind go into the line.
     let seen = CapturedService(instanceName: "Apple Vision Pro", serviceType: Introduction.pairableService, domain: "local", port: 60346,
                                host: "vision.local", hostIPs: [], txt: txt.merging(["extra": "x"]) { a, _ in a }, lastSeen: Date())
-    #expect(Introduction.pairable(seen, peer: "vision.tailnet.ts.net") == pairable)
+    #expect(Introduction.pairable(seen) == pairable)
     var short = seen; short.txt["authTag"] = nil
-    #expect(Introduction.pairable(short, peer: "vision.tailnet.ts.net") == nil)
+    #expect(Introduction.pairable(short) == nil)
 }
 
 /// A name as dns-sd prints it is read back as it is: a device that waits announces under a name with spaces.
 @MainActor @Test func aNameWithSpacesIsReadFromWhatDnsSdPrints() {
     #expect(BonjourCapture.unescaped("Apple\\032Vision\\032Pro") == "Apple Vision Pro")
     #expect(BonjourCapture.unescaped("a\\.b\\\\c") == "a.b\\c" && BonjourCapture.unescaped("6BF40D22-D414") == "6BF40D22-D414" && BonjourCapture.unescaped("x\\") == "x\\")
+    // Three digits and nothing else are a byte; bytes above 127 come so, and make their character again.
+    #expect(BonjourCapture.unescaped("a\\+12b") == "a+12b" && BonjourCapture.unescaped("caf\\195\\169") == "café")
     let c = BonjourCapture()
     c.reads(Introduction.pairableService)
     for line in [
@@ -682,7 +686,7 @@ import ServiceManagement
     ] { c.parse(line: line) }
     let seen = Array(c.services.values)
     #expect(seen.map(\.instanceName) == ["Apple Vision Pro"])
-    let read = seen.first.flatMap { Introduction.pairable($0, peer: "vision.tailnet.ts.net") }
+    let read = seen.first.flatMap { Introduction.pairable($0) }
     #expect(read?.instance == "Apple Vision Pro" && read?.port == 60346 && read?.txt["name"] == "Apple Vision Pro")
 }
 
@@ -957,6 +961,19 @@ extension TimingSensitive.RelayOnLocalhost {
         #expect(announced.type == "_remotepairing-manual-pairing._tcp" && announced.instance == "Apple Vision Pro" && announced.txt == txt)
         await other.end(.stopped)
         #expect(record.stopped == 1)
+    }
+    // Such a stand-in isn't ended by a connection that carried bytes and closed: Device Hub may make more than one.
+    do {
+        var waits = plan(far); waits.service = Introduction.pairableService; waits.endsWhenCarried = false
+        let said = Said(), record = FakeRecord(), other = Introducer(waits, record: record, addressNow: { "127.0.0.1" }) { [said] in said.events.append($0) }
+        try await other.start()
+        let port = try #require(record.standIn).port
+        #expect(await roundTrip(port: port, payload: Data("pair".utf8)) == Data("pair".utf8))
+        #expect(await eventuallyOnMain { said.events.contains(.connected(from: "127.0.0.1")) })
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(ended(said) == nil && !other.ended)
+        await other.end(.stopped)
+        #expect(ended(said) == .ended(.stopped, clean: true))
     }
     #expect(announced.host.hasSuffix(".roamrun.local") && announced.ip == "127.0.0.1" && announced.port != far)   // far's port is taken here: the next
     #expect(said.events == [.announced(interface: "lo0", name: "far-mac", port: announced.port)])
@@ -7114,41 +7131,74 @@ extension TimingSensitive {
     }
 
     /// A device that waits to be picked: the other Mac sends what it announces, is asked for the device,
-    /// and the device is saved here once this Mac has stood in — or not at all, with the reason said.
+    /// and the device is saved here once this Mac has stood in for that same device — or not at all, with the reason said.
     @Test func aDeviceThatWaitsIsStoodInForHereThenSaved() async throws {
         var listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
-        let saved = Counted<String>(), stoodIn = Counted<String>()
+        let saved = Counted<String>(), stoodIn = Counted<String>(), read = Counted<Int>()
         var far = farMac(saved: saved)
-        far.standIn = { stoodIn.add($0); return nil }
+        far.standIn = { stoodIn.add($0 + " for " + $1); return nil }
         var end = started(far, listener)
         var home = homeMac(listener.port); home.device = "device-1"
-        #expect(await home.hand(pairable: "waits-1", resultWindow: 5) == .saved)
-        #expect(await end.value == .saved && stoodIn.all == ["waits-1"] && saved.all == ["device-1"])
+        // What the device announces is read once that Mac has answered, not before.
+        #expect(await home.hand(pairable: { read.add(1); return "waits-1" }, resultWindow: 5) == .saved)
+        #expect(await end.value == .saved && stoodIn.all == ["waits-1 for device-1"] && saved.all == ["device-1"] && read.all.count == 1)
+
+        // Stood in, and not kept: said as that.
+        listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
+        var forgetful = farMac(saves: false); forgetful.standIn = { _, _ in nil }
+        end = started(forgetful, listener)
+        home = homeMac(listener.port); home.device = "device-1"
+        #expect(await home.hand(pairable: { "waits-1" }, resultWindow: 5) == .unsaved)
+        #expect(await end.value == .unsaved)
 
         // Not stood in: the reason goes back, and nothing is saved.
         listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
-        far.standIn = { _ in .unreachable }
+        far.standIn = { _, _ in .unreachable }
         end = started(far, listener)
         home = homeMac(listener.port); home.device = "device-1"
-        #expect(await home.hand(pairable: "waits-1", resultWindow: 5) == .ended(.unreachable))
+        #expect(await home.hand(pairable: { "waits-1" }, resultWindow: 5) == .ended(.unreachable))
         #expect(await end.value == .ended(.unreachable) && saved.all == ["device-1"])
 
-        // A Mac that doesn't stand in (a RoamRun from before, or a device named with --with) hangs up: said, not waited out.
+        // A Mac that doesn't stand in as it runs (a device named with --with) says so, and goes on waiting.
         listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
         far.standIn = nil
-        far.connectWindow = 3
+        far.connectWindow = 2
         end = started(far, listener)
         home = homeMac(listener.port); home.device = "device-1"
-        #expect(await home.hand(pairable: "waits-1", resultWindow: 5) == .tooOld)
-        _ = await end.value
+        #expect(await home.hand(pairable: { "waits-1" }, resultWindow: 5) == .ended(.failed))
+        #expect(await end.value == .noOne)
+
+        // One that hangs up without a word, twice, is taken for a RoamRun from before.
+        listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
+        let old = Task.detached { [listener] in
+            for _ in 0..<2 { if let (link, _) = listener.accept(within: 3) { _ = link.read(within: 1); link.close() } }
+        }
+        home = homeMac(listener.port); home.device = "device-1"
+        #expect(await home.hand(pairable: { "waits-1" }, resultWindow: 5) == .tooOld)
+        await old.value
+
+        // The device stopped waiting by the time that Mac answered: nothing is sent.
+        listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
+        far.standIn = { stoodIn.add($0 + " for " + $1); return nil }
+        far.connectWindow = 2
+        end = started(far, listener)
+        home = homeMac(listener.port); home.device = "device-1"
+        #expect(await home.hand(pairable: { nil }, resultWindow: 5) == .notWaiting)
 
         // Without a device to hand over, nothing is stood in for.
-        listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
-        far.standIn = { stoodIn.add($0); return nil }
-        end = started(far, listener)
-        #expect(await homeMac(listener.port).hand(pairable: "waits-2", resultWindow: 5) == .garbled)
+        #expect(await homeMac(listener.port).hand(pairable: { "waits-2" }, resultWindow: 5) == .garbled)
         _ = await end.value
-        #expect(stoodIn.all == ["waits-1"])
+        #expect(stoodIn.all == ["waits-1 for device-1"])
+
+        // That Mac took the device and went away: said as that, not as a mix-up of versions.
+        listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
+        let gone = Task.detached { [listener] in
+            guard let (link, _) = listener.accept(within: 3) else { return }
+            _ = link.read(within: 1); link.send(.wantDevice); _ = link.read(within: 1); link.close()
+        }
+        home = homeMac(listener.port); home.device = "device-1"
+        #expect(await home.hand(pairable: { "waits-1" }, resultWindow: 5) == .wentAway)
+        await gone.value
     }
 
     /// A device that introduces this Mac itself is told its Tailscale name before the offer; a Mac isn't.

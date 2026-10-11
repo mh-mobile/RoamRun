@@ -201,7 +201,8 @@ final class BonjourCapture: ObservableObject {
     static func unescaped(_ name: String) -> String {
         var out: [UInt8] = [], bytes = Array(name.utf8), i = 0
         while i < bytes.count {
-            if bytes[i] == 0x5C, i + 3 < bytes.count, let code = UInt8(String(decoding: bytes[(i + 1)...(i + 3)], as: UTF8.self)) {
+            if bytes[i] == 0x5C, i + 3 < bytes.count, bytes[(i + 1)...(i + 3)].allSatisfy({ (0x30...0x39).contains($0) }),
+               let code = UInt8(String(decoding: bytes[(i + 1)...(i + 3)], as: UTF8.self)) {
                 out.append(code); i += 4
             } else if bytes[i] == 0x5C, i + 1 < bytes.count {
                 out.append(bytes[i + 1]); i += 2

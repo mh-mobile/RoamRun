@@ -30,11 +30,10 @@ enum Introduction {
     }
 
     /// A device that waits to be picked by a Mac (Apple Vision Pro, with Remote Devices open): what
-    /// it announces, and the name Tailscale knows it by. The reverse of an offer: the Mac far from it
-    /// announces this in the device's place.
+    /// it announces. The reverse of an offer: the Mac far from it announces this in the device's place.
+    /// Which device it is isn't in it: that is the device handed over beside it.
     struct Pairable: Codable, Equatable {
         var v = 1
-        var peer: String
         var instance: String
         var port: UInt16
         var txt: [String: String]
@@ -53,18 +52,16 @@ enum Introduction {
             return .failure(.notOne)
         }
         if let problem = portProblem(read.port) ?? txtProblem(read.txt, keys: Pairable.keys) { return .failure(.refused(problem)) }
-        for (what, text, most) in [("the device's Tailscale name", read.peer, 253), ("the name it announces under", read.instance, 63)] {
-            guard !text.isEmpty, text.utf8.count <= most, shows(text), !text.contains("="), !text.contains("\\") else {
-                return .failure(.refused("\(what) can't be used as it is"))
-            }
+        guard !read.instance.isEmpty, read.instance.utf8.count <= 63, shows(read.instance), !read.instance.contains("="), !read.instance.contains("\\") else {
+            return .failure(.refused("the name it announces under can't be used as it is"))
         }
         return .success(read)
     }
 
     /// What a device announces while it waits, as a line; nil when it isn't whole.
-    static func pairable(_ service: CapturedService, peer: String) -> Pairable? {
+    static func pairable(_ service: CapturedService) -> Pairable? {
         let txt = service.txt.filter { Pairable.keys.contains($0.key) }
-        let made = Pairable(peer: peer, instance: service.instanceName, port: service.port, txt: txt)
+        let made = Pairable(instance: service.instanceName, port: service.port, txt: txt)
         if case .success(let read) = pairable(from: line(made)) { return read }
         return nil
     }
@@ -370,6 +367,8 @@ final class Introducer {
         /// What is announced, and under which name: a Mac's offer under its identifier, unless said.
         var service = Introduction.hostService
         var instance: String?
+        /// Whether a connection that carried bytes both ways and closed ends it: so for a Mac's offer.
+        var endsWhenCarried = true
     }
 
     private let plan: Plan
@@ -440,7 +439,7 @@ final class Introducer {
         switch event {
         case .opened(let from): onEvent(.connected(from: from))
         case .closed(_, let up, let down, let why):
-            if up > 0, down > 0 { Task { await end(.carried) } }
+            if up > 0, down > 0, plan.endsWhenCarried { Task { await end(.carried) } }
             else if let why { onEvent(.farDidNotAnswer(why)) }
         }
     }

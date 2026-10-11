@@ -274,14 +274,17 @@ tunnel and Xcode has to run again.
     (Settings › General › Remote Devices), that screen left open, the device saved in RoamRun
     on a Mac on its Wi‑Fi. On the far Mac: `roamrun pair xcode --with <that Mac>`. On that Mac:
     `roamrun pair introduce --mac <the far Mac> --to <device>` → it says the device waits to be
-    picked; the far Mac says whose device it is and that it is announced. In Device Hub on the
-    far Mac: + › Pair Nearby Device › Apple Vision Pro lists it; picked, the device shows a code;
-    typed in Device Hub → paired. Ctrl-C in the far Mac's command → it says nothing is announced
-    or listening (`lsof -nP -iTCP -sTCP:LISTEN | grep RoamRun`, `pgrep -fl "dns-sd -i"`) and that
-    the device is saved; the other Mac says so too. `roamrun up <device>` on the far Mac → Ready,
-    `devicectl … process launch`. Once with Remote Devices closed: `pair introduce` says the
-    device isn't waiting, exit 1, and the far Mac goes on waiting. Once with Ctrl-C on the far
-    Mac before anything connected: nothing is saved on it.
+    picked; the far Mac says whose device it is, and only then that it is announced. In Device
+    Hub on the far Mac: + › Pair Nearby Device › Apple Vision Pro lists it; picked, the device
+    shows a code; typed in Device Hub → paired, and the far Mac's command goes on. Ctrl-C in it →
+    it says nothing is announced or listening (`lsof -nP -iTCP -sTCP:LISTEN | grep RoamRun`,
+    `pgrep -fl "dns-sd -i"`) and saves the device; the other Mac says so too. `roamrun up
+    <device>` on the far Mac → Ready, `devicectl … process launch`. Once with Remote Devices
+    closed: for a device RoamRun's app shows as an Apple Vision Pro, `pair introduce` says it
+    isn't waiting, exit 1; for one saved without its kind (`roamrun devices --json`: no
+    `deviceType`) it waits as for an iPhone and says what to do if it is one. Once with Ctrl-C
+    on the far Mac before it connected: it says nothing was saved. Once with the far Mac running
+    `pair control --with`: the other Mac says that Mac doesn't stand in as it runs.
 
 ## Debug logs worth a look after an iOS or Xcode update
 

@@ -316,7 +316,8 @@ enum PairByName {
         var rescan: @Sendable () async -> Void
         var save: @Sendable (String) async -> Bool
         /// For a device that waits to be picked: stands in for it here until a pairing was tried (nil), or says why not.
-        var standIn: (@Sendable (String) async -> PairWire.Reason?)?
+        /// Given what the device announces, and the device as it will be saved.
+        var standIn: (@Sendable (String, String) async -> PairWire.Reason?)?
         var stopped: @Sendable () -> Bool = { false }
         var say: @Sendable (Event) -> Void = { _ in }
         /// How long a connection may still begin.
@@ -343,10 +344,12 @@ enum PairByName {
                 guard holder == peer.id else { say(.refused(from: from)); continue }
                 say(.connected)
                 let first = link.read(within: lineWait, stop: stopped)
-                if case .pairable(let waits)? = first.message, let standIn {
-                    // The device first: without it a pairing could be made here and nothing saved.
+                if case .pairable(let waits)? = first.message {
+                    // Said, so the other Mac doesn't take this one for a RoamRun that doesn't know the word.
+                    guard let standIn else { link.send(.ended(.failed)); continue }
+                    // The device first: it is the one stood in for, and without it nothing could be saved.
                     guard link.send(.wantDevice), case .device(let device)? = link.read(within: lineWait, stop: stopped).message else { continue }
-                    if let why = await standIn(waits) { link.send(.ended(why)); return .ended(why) }
+                    if let why = await standIn(waits, device) { link.send(.ended(why)); return .ended(why) }
                     let ok = await save(device)
                     link.send(ok ? .saved : .unsaved)
                     return ok ? .saved : .unsaved
@@ -467,14 +470,18 @@ enum PairByName {
             case notThatMac
             /// It hung up on what was sent, twice: a RoamRun from before this was known.
             case tooOld
+            /// The device no longer waits, now that the other Mac answers.
+            case notWaiting
+            /// It took the device, and said nothing of what came of it.
+            case wentAway
             case garbled
             case noOne
             case stopped
         }
 
-        /// For a device that waits to be picked: hands that Mac what the device announces, and the
-        /// device; then waits while it stands in (its five minutes, and the keeping).
-        func hand(pairable line: String, resultWindow: TimeInterval = 420) async -> Handed {
+        /// For a device that waits to be picked: hands that Mac what the device announces — read once that
+        /// Mac answers — and the device; then waits while it stands in (its five minutes, and the keeping).
+        func hand(pairable: @Sendable () async -> String?, resultWindow: TimeInterval = 420) async -> Handed {
             let until = Date().addingTimeInterval(window)
             var told = false, hungUp = 0
             while true {
@@ -488,6 +495,7 @@ enum PairByName {
                 defer { link.close() }
                 guard owner(peer.ip) == peer.id else { return .notThatMac }
                 say(.connected)
+                guard let line = await pairable() else { return .notWaiting }
                 guard link.send(.pairable(line)) else { continue }
                 switch link.read(within: lineWait, stop: stopped) {
                 case .line(let answer):
@@ -498,7 +506,8 @@ enum PairByName {
                         case .saved: return .saved
                         case .unsaved: return .unsaved
                         case .ended(let why): return .ended(why)
-                        default: return stopped() ? .stopped : .garbled
+                        case nil: return stopped() ? .stopped : .wentAway
+                        default: return .garbled
                         }
                     case .ended(let why): return .ended(why)
                     default: return .garbled
@@ -587,7 +596,9 @@ enum PairByName {
                 guard let holder = owner(from) else { say(.unsure(from: from)); continue }
                 guard holder == peer.id else { say(.refused(from: from)); continue }
                 say(.connected)
-                guard link.read(within: lineWait, stop: stopped).message == .wantOffer, link.send(.wantDevice),
+                let first = link.read(within: lineWait, stop: stopped).message
+                if case .pairable? = first { link.send(.ended(.failed)); continue }
+                guard first == .wantOffer, link.send(.wantDevice),
                       case .device(let device) = link.read(within: lineWait, stop: stopped).message else { continue }
                 // Begun: whatever happens to this connection from here, it isn't taken up again.
                 let attempt: String

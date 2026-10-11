@@ -43,16 +43,23 @@ bounded.
     service type.
   - For an Apple Vision Pro, which a Mac picks, it is the far Mac that stands in,
     for the device: the Mac named with `--with` (and no other) sends what the
-    device announces and the device's Tailscale name. The far Mac says whose
-    device Tailscale has under that name before it announces anything, takes
-    only an iPhone-kind device of its own tailnet for it, and carries only its
-    own connections, to that device's Tailscale address on the port sent (1024
-    or above). What it announces — the device's name, model and announced
-    identifier — is seen by its whole network for as long as it stands. The Mac
-    that sends can't prove the announcement it read is that device's: a host on
-    its Wi‑Fi that announces as one that waits could have its values sent
-    instead. The connection still goes to the device named, and the code is
-    shown by the device and typed on the far Mac.
+    device announces, and the device as it is saved afterwards. The device the
+    far Mac connects to is the one that is saved — found once, by its Tailscale
+    name, as `devices add` finds one — and it says whose Tailscale has it as
+    before it asks anything of the device or announces anything. The kind of
+    device (iPhone, iPad, Apple Vision Pro) is what Tailscale's client on it
+    says: that turns a wrong name away and proves nothing, and a device shared
+    in from another tailnet is taken like any other, under whose it is said to
+    be. The far Mac carries only its own connections, to that device's
+    Tailscale address on the port sent (1024 or above). What it announces — the
+    device's name, model, announced identifier and tag, its versions, and the
+    far Mac's own address and a port there — is seen by its whole network for
+    as long as it stands (five minutes at most). The Mac that sends picks,
+    among what waits on its Wi‑Fi, the one at the address Tailscale has for the
+    device there; a host on that Wi‑Fi can claim that address in what it
+    announces, and have its values sent instead. The far Mac's connection still
+    goes to the device named, and the code is shown by the device and typed on
+    the far Mac.
   - It takes connections from the device's address on that LAN alone, two at once
     at most. It has that address from Tailscale (pinging the device when Tailscale
     hasn't talked to it lately), and doesn't start when Tailscale reaches the
