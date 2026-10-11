@@ -178,7 +178,11 @@ final class Session {
     }
 
     /// Back to the first screen.
-    func dismiss() { outcome = nil }
+    func dismiss() {
+        outcome = nil
+        // An offer carried by hand is spent once a pairing was tried with it: the far Mac's sheet is over.
+        if byLine, carried { byLine = false; offerLine = "" }
+    }
 
     private func live(_ run: Int) -> Bool { running && run == self.run }
     private func note(_ text: String) { log.append(text) }
