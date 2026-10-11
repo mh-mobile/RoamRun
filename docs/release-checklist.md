@@ -276,15 +276,14 @@ tunnel and Xcode has to run again.
     `roamrun pair introduce --mac <the far Mac> --to <device>` → it says the device waits to be
     picked; the far Mac says whose device it is, and only then that it is announced. In Device
     Hub on the far Mac: + › Pair Nearby Device › Apple Vision Pro lists it; picked, the device
-    shows a code; typed in Device Hub → paired; within a few seconds the far Mac's command says this Mac is
-    paired with it, that nothing is announced or listening (`lsof -nP -iTCP -sTCP:LISTEN | grep RoamRun`,
+    shows a code; typed in Device Hub → paired, and the far Mac's command goes on. Ctrl-C in it →
+    it says nothing is announced or listening (`lsof -nP -iTCP -sTCP:LISTEN | grep RoamRun`,
     `pgrep -fl "dns-sd -i"`) and saves the device; the other Mac says so too. `roamrun up
     <device>` on the far Mac → Ready, `devicectl … process launch`. Once with Remote Devices
     closed: for a device RoamRun's app shows as an Apple Vision Pro, `pair introduce` says it
     isn't waiting, exit 1; for one saved without its kind (`roamrun devices --json`: no
     `deviceType`) it waits as for an iPhone and says what to do if it is one. Once with Ctrl-C
-    on the far Mac before it connected: it says nothing was saved. Once more after removing the far
-    Mac under Remote Devices on the device only: whether the command still ends by itself (else Ctrl-C). Once with the far Mac running
+    on the far Mac before it connected: it says nothing was saved. Once with the far Mac running
     `pair control --with`: the other Mac says that Mac doesn't stand in as it runs.
 
 ## Debug logs worth a look after an iOS or Xcode update

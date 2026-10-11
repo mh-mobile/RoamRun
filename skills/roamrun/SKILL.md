@@ -134,9 +134,8 @@ introduced; you can run the commands, they do the rest.
   `roamrun pair xcode --with <mac>` on the far Mac, `roamrun pair introduce --mac <mac>
   --to <name>` on a Mac on its Wi‑Fi that has it saved. The far Mac then announces the
   device itself and says so: the user picks it in Device Hub there (+ › Pair Nearby
-  Device › Apple Vision Pro), types the code **the device** shows; the command ends by
-  itself once that Mac lists the device as paired (Ctrl-C if it doesn't, once Device
-  Hub says it is paired) — the device is saved if that Mac
+  Device › Apple Vision Pro), types the code **the device** shows, and presses Ctrl-C
+  in that command once Device Hub says it is paired — the device is saved if that Mac
   had connected to it by then, and not otherwise (run it where the user can do that: it
   waits for them, five minutes at most). Then `roamrun up`. With Remote Devices closed,
   `pair introduce` says the device isn't waiting when RoamRun knows it is an Apple Vision

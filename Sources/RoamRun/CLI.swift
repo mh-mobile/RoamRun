@@ -623,7 +623,7 @@ enum CLI {
         capture.stop()
         switch end {
         case .saved:
-            if !stoodIn.withLock({ $0 }) { note("Whether the pairing was made isn't known yet: `roamrun up` shows.") }
+            note("Whether the pairing was made isn't known yet: `roamrun up` shows.")
             exit(0)
         case .unsaved: exit(1)
         // This Mac's own stand-in, said above as it happened: not the other Mac's doing.
@@ -752,8 +752,6 @@ enum CLI {
         var done: CheckedContinuation<Introducer.End, Never>?
         var early: Introducer.End?
         var connected = false
-        // What this Mac had as paired before: one more is the pairing made.
-        let before = await Blocking.run { Proc.devicectl(["--timeout", "10", "list", "devices"], timeout: 15).map(pairedVisions) }
         // Not ended by a connection closing: Device Hub may make more than one, and the one that paired stays open.
         let plan = Introducer.Plan(offer: .init(port: read.port, txt: read.txt), farIP: ip, localIP: local, interface: interface,
                                    accept: .ownAddress, service: Introduction.pairableService, instance: read.instance, endsWhenCarried: false)
@@ -763,7 +761,7 @@ enum CLI {
                 note("""
                 Announced on \(interface) (seen by that network); only this Mac's connections are carried to \(device.dnsName).
                   Here, in Device Hub: + › Pair Nearby Device › Apple Vision Pro, pick “\(shown)”, Next, and type the code the device shows.
-                  \(before == nil ? "When Device Hub says it is paired, press Ctrl-C here." : "This ends by itself once it is paired (Ctrl-C: give up).") 5 minutes at most.
+                  When Device Hub says it is paired, press Ctrl-C here. 5 minutes at most.
                 """)
             case .connected:
                 if !connected { note("This Mac connected to \(device.dnsName).") }
@@ -774,25 +772,12 @@ enum CLI {
                 if let done { done.resume(returning: why) } else { early = why }
             }
         }
+        // ponytail: Ctrl-C says "done": this can't tell that a pairing was made. Ask devicectl whether the device is paired, if that is wanted.
         let watch = Task { @MainActor in
             while !Task.isCancelled, !halted() { try? await Task.sleep(for: .milliseconds(300)) }
             if !Task.isCancelled { await introducer.end(.stopped) }
         }
-        var paired = false
-        // ponytail: a device this Mac already lists as paired (a pairing removed on the device only) is one more of nothing: Ctrl-C then.
-        let listed = Task { @MainActor in
-            guard let before else { return }
-            while !Task.isCancelled, !introducer.ended {
-                try? await Task.sleep(for: .seconds(3))
-                guard connected, !Task.isCancelled else { continue }
-                let now = await Blocking.run { Proc.devicectl(["--timeout", "10", "list", "devices"], timeout: 15).map(pairedVisions) }
-                guard let now, !now.subtracting(before).isEmpty, !introducer.ended else { continue }
-                paired = true
-                note("This Mac is paired with it.")
-                await introducer.end(.carried)
-            }
-        }
-        defer { watch.cancel(); listed.cancel() }
+        defer { watch.cancel() }
         do { try await introducer.start() } catch where !introducer.ended {
             note("Couldn't announce it: \(error.localizedDescription)")
             return .failed
@@ -800,7 +785,6 @@ enum CLI {
         let why = await withCheckedContinuation { c in
             if let early { c.resume(returning: early) } else { done = c }
         }
-        if connected, !paired, before != nil { note("This Mac doesn't list a new pairing: if Device Hub showed none, run both commands again.") }
         switch why {
         case .carried: return nil
         case .stopped, .deadline: return connected ? nil : (why == .deadline ? .deadline : .stopped)
@@ -1546,15 +1530,6 @@ enum CLI {
         guard let deadline else { return 10 }
         // Clamped as a Double first: --wait only has to be finite, and Int(1e19) traps.
         return Int(max(5, min(10, deadline.timeIntervalSince(now))).rounded(.up))
-    }
-
-    /// The Apple Vision Pros `devicectl list devices` has as paired, by its identifier for each.
-    nonisolated static func pairedVisions(in result: [String: Any]) -> Set<String> {
-        Set((result["devices"] as? [[String: Any]] ?? []).compactMap { device in
-            guard (device["hardwareProperties"] as? [String: Any])?["deviceType"] as? String == "realityDevice",
-                  (device["connectionProperties"] as? [String: Any])?["pairingState"] as? String == "paired" else { return nil }
-            return device["identifier"] as? String
-        })
     }
 
     /// From `devicectl list devices` JSON's result; UDIDs compared in any case.
