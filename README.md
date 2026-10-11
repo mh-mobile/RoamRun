@@ -371,11 +371,11 @@ roamrun pair xcode --with home-mac            # home-mac: the Tailscale name of 
 # on that Mac, with the device saved in RoamRun there:
 roamrun pair introduce --mac cloud-mac --to vision-pro
 # on the far Mac, when its command says so: Device Hub › + › Pair Nearby Device › Apple Vision Pro,
-# pick the device, Next, type the code the device shows; then Ctrl-C in the command
+# pick the device, Next, type the code the device shows; the command ends once this Mac is paired
 roamrun up vision-pro
 ```
 
-The Mac beside the device finds, among what waits to be picked on its Wi‑Fi, the one at the address Tailscale has for the device there (so Tailscale has to reach the device directly on that Wi‑Fi, over IPv4), and sends what it announces to the far Mac. The far Mac says whose device Tailscale has under that name, then announces it on its own network and carries its own connections to that device over Tailscale. The announcement is seen by the other machines on the far Mac's network for as long as it stands; connections are taken from the far Mac itself only. It ends with Ctrl-C or after five minutes, and the device is saved if the far Mac had connected to it by then: the command can't tell by itself that the pairing was made, so Ctrl-C is for when Device Hub says so.
+The Mac beside the device finds, among what waits to be picked on its Wi‑Fi, the one at the address Tailscale has for the device there (so Tailscale has to reach the device directly on that Wi‑Fi, over IPv4), and sends what it announces to the far Mac. The far Mac says whose device Tailscale has under that name, then announces it on its own network and carries its own connections to that device over Tailscale. The announcement is seen by the other machines on the far Mac's network for as long as it stands; connections are taken from the far Mac itself only. It ends once the far Mac lists one more Apple Vision Pro as paired than before (`devicectl list devices`), with Ctrl-C, or after five minutes; the device is saved if the far Mac had connected to it by then. A device that Mac still lists as paired from before (its pairing removed on the device only) is not one more: Ctrl-C then, when Device Hub says it is paired.
 
 Tried by hand before these commands did it, once, with one Apple Vision Pro on visionOS 27.0 at home and a far Mac on Xcode 27.0: the pairing, then the bridge Ready and an app launched from the far Mac. Not tried: the commands themselves from end to end on a device, breakpoints, the device away from home, a far Mac with an older RoamRun (the other Mac says so; an older one beside the device asks for an offer as for an iPhone, and waits), Apple TV. The device itself and `roamrunctl` don't introduce an Apple Vision Pro.
 

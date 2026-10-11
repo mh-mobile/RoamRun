@@ -1121,6 +1121,19 @@ extension TimingSensitive.RelayOnLocalhost {
     #expect(TailscaleClient.devices(fromStatusJSON: "not json") == nil)
 }
 
+@Test func aPairingMadeIsOneMoreVisionProListedAsPaired() {
+    func entry(_ id: String, _ type: String, _ state: String) -> [String: Any] {
+        ["identifier": id, "hardwareProperties": ["deviceType": type], "connectionProperties": ["pairingState": state]]
+    }
+    let before = CLI.pairedVisions(in: ["devices": [entry("a", "realityDevice", "paired"), entry("b", "realityDevice", "unpaired"), entry("c", "iPhone", "paired")]])
+    #expect(before == ["a"])
+    // One listed before, now paired; and one that is new. An iPhone paired meanwhile isn't it.
+    let after = CLI.pairedVisions(in: ["devices": [entry("a", "realityDevice", "paired"), entry("b", "realityDevice", "paired"),
+                                                   entry("d", "realityDevice", "paired"), entry("e", "iPhone", "paired")]])
+    #expect(after.subtracting(before) == ["b", "d"])
+    #expect(CLI.pairedVisions(in: [:]).isEmpty)
+}
+
 @Test func tunnelStateMatchesUDIDInAnyCase() {
     let result: [String: Any] = ["devices": [["hardwareProperties": ["udid": phoneA],
                                               "connectionProperties": ["tunnelState": "connected"]]]]
