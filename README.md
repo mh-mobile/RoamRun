@@ -360,6 +360,23 @@ roamrun up iphone-15-pro
 
 Tried with an iPhone 15 Pro on iOS 27 and Xcode 27, with these commands and a virtual Mac as the far one, reached from the introducing Mac only through Tailscale's relay servers: pairing, `devices add`, the bridge Ready, `devicectl` launch and `lldb` at a breakpoint — with the device on a direct path from the far Mac and on a relayed one — and both Macs using the device at the same moment. An introducing Mac that wasn't itself paired with the device did the same, and what it had saved brought the far Mac's bridge to Ready. The same steps done by hand before the commands existed, also from a cloud Mac: pairing, the bridge Ready, the device as a run destination in Xcode and `devicectl` launch. Not tried: an iPad, a far Mac that isn't virtual, a far Mac of another Tailscale user or a tagged one, an introducing Mac with its firewall on.
 
+### Apple Vision Pro
+
+An Apple Vision Pro is paired the other way round: it waits, and the Mac picks it. So nothing is offered by the far Mac; what the device announces is carried to it instead.
+
+```sh
+# on the device: Settings › General › Remote Devices, left open
+# on a Mac on the device's Wi‑Fi:
+roamrun pair vision --to vision-pro          # the device's Tailscale name; prints a line
+# on the far Mac, within a minute or two (the device changes its port every few minutes):
+roamrun pair vision rr-pairable-v1:…         # announces the device there, for that Mac alone, and carries its connection
+# on the far Mac, in Device Hub: + › Pair Nearby Device › Apple Vision Pro, pick it, Next, and type the code the device shows
+```
+
+Afterwards the far Mac lists the device as unavailable until a bridge runs: `roamrun devices export <device>` on a Mac that has it saved, and `roamrun devices add <line>` and `roamrun up <device>` on the far Mac. The device needs Tailscale running, and lists the far Mac under Remote Devices.
+
+Tried once, by hand before the command was written, with one Apple Vision Pro on visionOS 27.0 at home and a far Mac on Xcode 27.0: the pairing, the bridge Ready, the apps listed and one launched from the far Mac. Not tried: this command from end to end on a device, breakpoints, the device away from home, Apple TV (which Device Hub pairs from the same sheet).
+
 ## Installing without the bridge: over the air
 
 The bridge needs the device on Wi-Fi — `remotepairingd` only listens there — and

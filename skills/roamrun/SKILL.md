@@ -129,6 +129,13 @@ introduced; you can run the commands, they do the rest.
   prints the code to type: as with `pair introduce`, **the user runs it
   themselves, and you never ask for or pass on that code.** On that machine
   the `roamrunctl` skill (in this repository's `skills/roamrunctl`) says the rest.
+- An Apple Vision Pro pairs the other way round (it waits, the Mac picks it), so it has its
+  own pair of commands: with Settings › General › Remote Devices open on it,
+  `roamrun pair vision --to <name>` (its Tailscale name) on a Mac on its Wi‑Fi prints a
+  line, and `roamrun pair vision <line>` on the far Mac, within a minute or two (the
+  device's port changes), announces it there while the user picks it in Device Hub
+  (+ › Pair Nearby Device › Apple Vision Pro) and types the code **the device** shows.
+  Then `devices export` / `devices add` / `up` as for any device.
 - The user picks the entry on the device and types the code Device Hub shows on the
   far Mac. **Never pass a code on, in either direction**: the user reads it there.
 - `pair introduce` ends by itself (five minutes at most) and, when a pairing was

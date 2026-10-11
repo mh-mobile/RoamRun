@@ -490,6 +490,23 @@ roamrun up iphone-15-pro
 
 確かめた範囲: iPhone 15 Pro（iOS 27）、Xcode 27。これらのコマンドで、離れた Mac を仮想の Mac にし、引き合わせる Mac からは Tailscale の中継サーバー経由でしか届かない状態で、ペアリング、`devices add`、ブリッジの Ready、`devicectl` での起動、`lldb` でのブレークポイントまで（離れた Mac からデバイスへは、直結の経路と中継経由の両方）。2 台の Mac から同時にデバイスを使えました。デバイスとペアリングしていない Mac を引き合わせ役にしても同じように通り、その Mac が保存していた内容で、離れた Mac のブリッジが Ready になりました。コマンドができる前に同じ手順を手作業で行ったときは、クラウドの Mac でも、ペアリング、ブリッジの Ready、Xcode の実行先に出ること、`devicectl` での起動まで確かめています。未確認: iPad、仮想ではない離れた Mac、ほかの Tailscale 利用者の Mac やタグ付きの Mac、ファイアウォールがオンの引き合わせ側の Mac。
 
+### Apple Vision Pro
+
+Apple Vision Pro は、ペアリングの向きが逆です。デバイスが待ち、Mac がデバイスを選びます。そのため、離れた Mac が申し出るのではなく、デバイスが名乗っている内容を離れた Mac へ運びます。
+
+```sh
+# デバイスで: 設定 › 一般 › リモートデバイス を開いたままにする
+# デバイスと同じ Wi‑Fi にいる Mac で:
+roamrun pair vision --to vision-pro          # デバイスの Tailscale 上の名前。行を表示する
+# 離れた Mac で、1〜2 分のうちに（デバイスは数分ごとにポートを変えます）:
+roamrun pair vision rr-pairable-v1:…         # その Mac だけに向けてデバイスを名乗り、接続を取り次ぐ
+# 離れた Mac の Device Hub で: + › Pair Nearby Device › Apple Vision Pro でデバイスを選び、Next。デバイスに出るコードを入力する
+```
+
+ペアリングのあと、離れた Mac はブリッジを始めるまでデバイスを「使えない」と表示します。デバイスを保存している Mac で `roamrun devices export <device>`、離れた Mac で `roamrun devices add <line>` と `roamrun up <device>` を実行します。デバイスでは Tailscale が動いている必要があります。デバイスの「リモートデバイス」には、離れた Mac が並びます。
+
+試したのは 1 回で、このコマンドを書く前に手で行いました。家にある visionOS 27.0 の Apple Vision Pro 1 台と、Xcode 27.0 の離れた Mac で、ペアリング、ブリッジの準備完了、離れた Mac からのアプリの一覧と起動までです。試していないこと: このコマンドでの実機の通し、ブレークポイント、デバイスが外出先にいる場合、Apple TV（Device Hub の同じシートからペアリングします）。
+
 ## Mac に作るもの・アンインストール
 
 RoamRun が書き込むのは次の場所だけです（システム設定や他のアプリには触れません。`roamrun ota` を使う場合は、これに加えて `tailscale serve` にポートが 1 つ登録されます。下記参照）。

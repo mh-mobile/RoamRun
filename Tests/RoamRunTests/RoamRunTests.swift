@@ -640,6 +640,35 @@ import ServiceManagement
     #expect(args(["bridge100": "198.19.249.3"]) == record)   // no interface holds it: as before
 }
 
+/// The line for a device that a Mac picks: read back as written, not taken for the other lines
+/// (nor they for it), and nothing in it that isn't plainly a value of its kind.
+@Test func aPairableDevicesLineIsReadOnlyAsWhatItIs() {
+    let txt = ["identifier": "6BF40D22-D414-41D0-BE80-7567AE75B2BC", "authTag": "BsVby0td", "model": "RealityDevice14,1",
+               "name": "Apple Vision Pro", "ver": "26", "minVer": "17"]
+    let pairable = Introduction.Pairable(peer: "vision.tailnet.ts.net", instance: "Apple Vision Pro", port: 60346, txt: txt)
+    let line = Introduction.line(pairable)
+    #expect(line.hasPrefix("rr-pairable-v1:") && !line.contains(" ") && !line.contains("="))
+    #expect(try! Introduction.pairable(from: " \(line)\n").get() == pairable)
+    func refused<T>(_ r: Result<T, Introduction.Unreadable>) -> Introduction.Unreadable? { if case .failure(let e) = r { return e }; return nil }
+    let offer = Introduction.line(Introduction.Offer(port: 53050, txt: txt.merging(["flags": "1"]) { a, _ in a }))
+    if case .another = refused(Introduction.pairable(from: offer)) {} else { Issue.record("an offer read as a device that waits") }
+    #expect(refused(Introduction.offer(from: line)) == .notOne && refused(Introduction.device(from: line)) == .notOne)
+    #expect(refused(Introduction.pairable(from: String(line.dropLast(9)))) == .notOne)
+    func bad(_ change: (inout Introduction.Pairable) -> Void) -> Bool {
+        var p = pairable; change(&p)
+        if case .refused = refused(Introduction.pairable(from: Introduction.line(p))) { return true }
+        return false
+    }
+    #expect(bad { $0.port = 80 } && bad { $0.txt["flags"] = "1" } && bad { $0.txt["name"] = nil })
+    #expect(bad { $0.peer = "" } && bad { $0.instance = "a=b" } && bad { $0.instance = String(repeating: "n", count: 64) } && bad { $0.peer = "a\u{202E}b" })
+    // From what was seen on the network: only the keys of its kind go into the line.
+    let seen = CapturedService(instanceName: "Apple Vision Pro", serviceType: Introduction.pairableService, domain: "local", port: 60346,
+                               host: "vision.local", hostIPs: [], txt: txt.merging(["extra": "x"]) { a, _ in a }, lastSeen: Date())
+    #expect(Introduction.pairable(seen, peer: "vision.tailnet.ts.net") == pairable)
+    var short = seen; short.txt["authTag"] = nil
+    #expect(Introduction.pairable(short, peer: "vision.tailnet.ts.net") == nil)
+}
+
 /// The two lines one Mac hands another: each read back as written, neither taken for the
 /// other, and nothing in them that isn't plainly a value of its kind.
 @Test func introductionLinesAreReadOnlyAsWhatTheyAre() {
@@ -902,6 +931,16 @@ extension TimingSensitive.RelayOnLocalhost {
     try await standIn.start()
     let announced = try #require(record.standIn)
     #expect(announced.type == "_remotepairing-pairable-host._tcp" && announced.instance == txt["identifier"] && announced.txt == txt)
+    // For a device that waits to be picked: its own kind of record, under the name it announces itself.
+    do {
+        var waits = plan(far); waits.service = Introduction.pairableService; waits.instance = "Apple Vision Pro"
+        let record = FakeRecord(), other = Introducer(waits, record: record, addressNow: { "127.0.0.1" }) { _ in }
+        try await other.start()
+        let announced = try #require(record.standIn)
+        #expect(announced.type == "_remotepairing-manual-pairing._tcp" && announced.instance == "Apple Vision Pro" && announced.txt == txt)
+        await other.end(.stopped)
+        #expect(record.stopped == 1)
+    }
     #expect(announced.host.hasSuffix(".roamrun.local") && announced.ip == "127.0.0.1" && announced.port != far)   // far's port is taken here: the next
     #expect(said.events == [.announced(interface: "lo0", name: "far-mac", port: announced.port)])
     // One that carries nothing says a device connected, and ends nothing.

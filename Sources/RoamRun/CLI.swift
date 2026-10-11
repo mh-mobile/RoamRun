@@ -91,6 +91,12 @@ enum CLI {
                                      for `devices add` there. That Mac will use the device as a developer.
                                      Without <offer>: ask that Mac for it (it runs `pair xcode --with`
                                      naming this Mac) and hand it the device afterwards
+      pair vision --to <Tailscale name> | pair vision <line>
+                                     Apple Vision Pro, which a Mac picks (the reverse of the above). --to, on a
+                                     Mac on its Wi‑Fi with Settings › General › Remote Devices open on it:
+                                     print what it announces, as a line. With that line, on the Mac to pair
+                                     it with: announce it there and carry that Mac's connection to it (5
+                                     minutes at most) while Device Hub pairs. The line is good for a minute or two
       up <name> [-v] [-d]            Bridge a device until Ctrl-C (-v: activity log; -d: run in the background —
                                      waits up to 60s for Ready or On this Wi-Fi (exit 0); otherwise exits 1
                                      and keeps trying, unless the bridge itself quit: then exit 1 at once
@@ -701,6 +707,97 @@ enum CLI {
         exit(0)
     }
 
+    /// `pair vision --to`: on the device's Wi‑Fi, what the device announces while it waits to be picked, as a line.
+    private static func printPairable(to name: String) async -> Never {
+        let (_, device, _) = mac(named: name)
+        let capture = BonjourCapture()
+        capture.start(serviceType: Introduction.pairableService)
+        try? await Task.sleep(for: .seconds(3))
+        let seen = capture.services.values.filter { $0.serviceType == Introduction.pairableService }.sorted { $0.instanceName < $1.instanceName }
+        capture.stop()
+        guard let one = seen.first else {
+            stop("no device is waiting to be paired on this network. On the Apple Vision Pro: Settings › General › Remote Devices, left open; then run this again")
+        }
+        guard seen.count == 1 else {
+            stop("more than one device is waiting to be paired here (\(seen.map(\.instanceName).joined(separator: ", "))): leave Remote Devices open on one only")
+        }
+        // Where Tailscale reaches the device directly here, the one that waits has to be at that address.
+        if let direct = device.curAddr.split(separator: ":").first.map(String.init), direct.contains("."), !one.hostIPs.isEmpty, !one.hostIPs.contains(direct) {
+            stop("the device waiting here (“\(one.instanceName)”) isn't at the address Tailscale has for \(device.dnsName) on this network: is --to the right name?")
+        }
+        guard let pairable = Introduction.pairable(one, peer: device.dnsName) else {
+            stop("what “\(one.instanceName)” announces couldn't be read yet: run this again. If it stays so, it announces in a way this RoamRun doesn't know — please report it, with the device's OS version")
+        }
+        print(Introduction.line(pairable))
+        note("""
+        On the Mac to pair it with, within a minute or two (the device changes its port every few minutes, and this line is then no good):
+          roamrun pair vision <that line>
+        Keep Remote Devices open on the device meanwhile.
+        """)
+        exit(0)
+    }
+
+    /// `pair vision <line>`: announces the device here in its place, and carries this Mac's connection to it, until a pairing was tried.
+    private static func standIn(forPairable line: String) async -> Never {
+        let read: Introduction.Pairable
+        switch Introduction.pairable(from: line) {
+        case .success(let p): read = p
+        case .failure(.another(let what)): fail("that is \(what), not a line from `roamrun pair vision --to`")
+        case .failure(.notOne): fail("that isn't a line from `roamrun pair vision --to`")
+        case .failure(.refused(let why)): fail("not taken: \(why)")
+        }
+        let (_, device, ip) = mac(named: read.peer)
+        let interface = InterfaceMonitor.lanInterface
+        guard let local = InterfaceMonitor.currentIPv4(on: interface) else {
+            stop("this Mac has no address on \(interface): Xcode looks for the device on a network of this Mac's (Settings › Network picks the interface)")
+        }
+        guard await ReachabilityProbe.checkTCP(host: ip, port: read.port) else {
+            stop("\(device.dnsName) isn't waiting on port \(read.port) any more (or can't be reached): with Remote Devices open on it, run `roamrun pair vision --to` again for a new line")
+        }
+        let shown = read.txt["name"] ?? read.instance
+        var done: CheckedContinuation<(Introducer.End, Bool), Never>?
+        var early: (Introducer.End, Bool)?
+        let plan = Introducer.Plan(offer: .init(port: read.port, txt: read.txt), farIP: ip, localIP: local, interface: interface,
+                                   accept: .ownAddress, service: Introduction.pairableService, instance: read.instance)
+        let introducer = Introducer(plan, record: DNSServiceProxy(), addressNow: { InterfaceMonitor.currentIPv4(on: interface) }) { event in
+            switch event {
+            case .announced(let interface, _, _):
+                note("Announced on \(interface) as “\(shown)”, for this Mac only. In Xcode's Device Hub: + › Pair Nearby Device › Apple Vision Pro, pick “\(shown)”, Next, and type the code the device shows. 5 minutes at most.")
+            case .connected: note("This Mac connected to it. (A wrong code keeps this open: type it again.)")
+            case .farDidNotAnswer(let why): note("\(device.dnsName) didn't take it (\(why)): its port may have changed — make a new line and run this again.")
+            case .ended(let why, let clean):
+                if let done { done.resume(returning: (why, clean)) } else { early = (why, clean) }
+            }
+        }
+        keepAlive.append(introducer)
+        for sig in [SIGINT, SIGTERM, SIGHUP] {
+            signal(sig, SIG_IGN)
+            let src = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+            src.setEventHandler { Task { @MainActor in await introducer.end(.stopped) } }
+            src.resume()
+            keepAlive.append(src as AnyObject)
+        }
+        do { try await introducer.start() } catch where !introducer.ended { stop("couldn't stand in: \(error.localizedDescription)") } catch {}
+        let (why, clean) = await withCheckedContinuation { c in
+            if let early { c.resume(returning: early) } else { done = c }
+        }
+        note(clean ? "Stopped: nothing is announced or listening here any more." : "Stopped, but the announcement's helper may still be running: `roamrun doctor` says.")
+        switch why {
+        case .carried:
+            note("""
+            A pairing was tried; Device Hub says whether it was made. It shows the device as unavailable until a bridge runs:
+              on a Mac that has the device saved in RoamRun: roamrun devices export <device>
+              here: roamrun devices add <that line>, then roamrun up <device>
+            """)
+            exit(0)
+        case .deadline: note("Nothing was paired in 5 minutes. Make a new line and run this again when the device is at hand.")
+        case .stopped: note("Stopped before a pairing was tried.")
+        case .addressLost: note("This Mac's address on \(interface) changed, so it stopped rather than announce elsewhere.")
+        case .announcementLost: note("The announcement or its listener failed.")
+        }
+        exit(1)
+    }
+
     /// `pair introduce`: stands in for the Mac named, until the device has tried to pair with it.
     /// `link`: the Mac named, when its offer came from it directly; it is told what came of this.
     private static func introduce(offer line: String, mac: String, to profile: DeviceProfile,
@@ -973,6 +1070,15 @@ enum CLI {
                     let qr = parsed.flags.contains("--qr")
                     if let home = parsed.values["--with"] { Task { await offerXcodePairing(with: home, qr: qr) } }
                     else { Task { await offerXcodePairing(qr: qr) } }
+                case ("vision", 1), ("vision", 2):
+                    if let extra = Set(parsed.values.keys).union(parsed.flags).subtracting(["--to"]).sorted().first {
+                        fail("`roamrun pair vision` doesn't take \(extra): --to <the device's Tailscale name> on its Wi‑Fi, or the line that prints on the Mac to pair it with")
+                    }
+                    switch (parsed.values["--to"], words.count) {
+                    case (let to?, 1): Task { await printPairable(to: to) }
+                    case (nil, 2): Task { await standIn(forPairable: words[1]) }
+                    default: fail("usage: roamrun pair vision --to <the device's Tailscale name> | roamrun pair vision <line>")
+                    }
                 case ("introduce", 1), ("introduce", 2):
                     if parsed.values["--with"] != nil { fail("`roamrun pair introduce` doesn't take --with: the Mac to introduce is --mac <its Tailscale name>") }
                     if let extra = Set(parsed.values.keys).union(parsed.flags).subtracting(["--mac", "--to"]).sorted().first {
@@ -984,7 +1090,7 @@ enum CLI {
                     guard let p = find(to, in: profiles) else { fail("no device named \(shellName(to)). " + names(profiles)) }
                     if words.count == 2 { Task { await introduce(offer: words[1], mac: mac, to: p) } } else { Task { await introduceByName(mac: mac, to: p) } }
                 default:
-                    fail("usage: roamrun pair xcode [--with <Tailscale name>] [--qr] | roamrun pair control --with <Tailscale name> | roamrun pair introduce [<offer>] --mac <the other Mac's Tailscale name> --to <device> — see roamrun --help")
+                    fail("usage: roamrun pair xcode [--with <Tailscale name>] [--qr] | roamrun pair control --with <Tailscale name> | roamrun pair introduce [<offer>] --mac <the other Mac's Tailscale name> --to <device> | roamrun pair vision --to <Tailscale name> | roamrun pair vision <line> — see roamrun --help")
                 }
             case "status":
                 noteStaleSkills()

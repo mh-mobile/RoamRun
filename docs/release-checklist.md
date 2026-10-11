@@ -269,6 +269,17 @@ tunnel and Xcode has to run again.
     it. After the release: each install command of roamrunctl's README — Linux, Windows, `brew
     install mh-mobile/tap/roamrunctl`, `cargo install` — then `roamrunctl --version`.
 
+31. An Apple Vision Pro and a far Mac (when `pair vision`, the stand-in, Xcode or visionOS changed).
+    The far Mac's entry removed on the device first (Settings › General › Remote Devices), and
+    that screen left open. On a Mac on its Wi‑Fi: `roamrun pair vision --to <its Tailscale name>`
+    prints a line (with the screen closed: it says no device is waiting, exit 1). On the far Mac:
+    `roamrun pair vision <line>` → Device Hub › + › Pair Nearby Device › Apple Vision Pro lists
+    it; picked, the device shows a code; typed there → paired, the command says a pairing was
+    tried and that nothing is announced or listening (`lsof -nP -iTCP -sTCP:LISTEN | grep RoamRun`,
+    `pgrep -fl "dns-sd -i"`). Then `devices export` here, `devices add` and `up` there → Ready,
+    `devicectl … process launch`. Once with a line some minutes old: it says the device isn't
+    waiting on that port any more, and announces nothing.
+
 ## Debug logs worth a look after an iOS or Xcode update
 
 - What a bridge did and when (kept by the system, no `--level debug`): `log show` with
