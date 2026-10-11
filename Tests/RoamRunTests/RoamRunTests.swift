@@ -669,6 +669,23 @@ import ServiceManagement
     #expect(Introduction.pairable(short, peer: "vision.tailnet.ts.net") == nil)
 }
 
+/// A name as dns-sd prints it is read back as it is: a device that waits announces under a name with spaces.
+@MainActor @Test func aNameWithSpacesIsReadFromWhatDnsSdPrints() {
+    #expect(BonjourCapture.unescaped("Apple\\032Vision\\032Pro") == "Apple Vision Pro")
+    #expect(BonjourCapture.unescaped("a\\.b\\\\c") == "a.b\\c" && BonjourCapture.unescaped("6BF40D22-D414") == "6BF40D22-D414" && BonjourCapture.unescaped("x\\") == "x\\")
+    let c = BonjourCapture()
+    c.reads(Introduction.pairableService)
+    for line in [
+        "_remotepairing-manual-pairing._tcp PTR Apple\\032Vision\\032Pro._remotepairing-manual-pairing._tcp",
+        "Apple\\032Vision\\032Pro._remotepairing-manual-pairing._tcp SRV 0 0 60346 vision.local. ; Replace with unicast FQDN of target host",
+        "Apple\\032Vision\\032Pro._remotepairing-manual-pairing._tcp TXT \"identifier=6BF40D22-D414-41D0-BE80-7567AE75B2BC\" \"authTag=BsVby0td\" \"model=RealityDevice14,1\" \"name=Apple Vision Pro\" \"ver=26\" \"minVer=17\"",
+    ] { c.parse(line: line) }
+    let seen = Array(c.services.values)
+    #expect(seen.map(\.instanceName) == ["Apple Vision Pro"])
+    let read = seen.first.flatMap { Introduction.pairable($0, peer: "vision.tailnet.ts.net") }
+    #expect(read?.instance == "Apple Vision Pro" && read?.port == 60346 && read?.txt["name"] == "Apple Vision Pro")
+}
+
 /// The two lines one Mac hands another: each read back as written, neither taken for the
 /// other, and nothing in them that isn't plainly a value of its kind.
 @Test func introductionLinesAreReadOnlyAsWhatTheyAre() {
@@ -7010,7 +7027,8 @@ func anInputIsInterruptedWhenItsAskerLeavesOrItsDeviceIsSwitchedOff(_ op: String
 // MARK: - Two Macs that name each other (no line carried)
 
 @Test func whatTwoMacsSayIsReadBackAndNothingElseIs() {
-    let all: [PairWire.Message] = [.wantOffer, .offer("rr-xcode-offer-v1:abc"), .tried("rr-device-v1:abc"), .saved, .unsaved, .you("iphone.t.ts.net")]
+    let all: [PairWire.Message] = [.wantOffer, .offer("rr-xcode-offer-v1:abc"), .tried("rr-device-v1:abc"), .saved, .unsaved, .you("iphone.t.ts.net"),
+                                   .pairable("rr-pairable-v1:abc")]
         + PairWire.Reason.allCases.map(PairWire.Message.ended)
     for m in all { #expect(PairWire.message(from: PairWire.line(m)) == m) }
     // roamrunctl writes these words itself: each one it can end with is one this Mac reads.
@@ -7093,6 +7111,44 @@ extension TimingSensitive {
         #expect(await end.value == .saved)
         #expect(saved.all == ["device-1"])
         #expect(events.all == [.connected, .waitingForOffer, .offerSent])
+    }
+
+    /// A device that waits to be picked: the other Mac sends what it announces, is asked for the device,
+    /// and the device is saved here once this Mac has stood in — or not at all, with the reason said.
+    @Test func aDeviceThatWaitsIsStoodInForHereThenSaved() async throws {
+        var listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
+        let saved = Counted<String>(), stoodIn = Counted<String>()
+        var far = farMac(saved: saved)
+        far.standIn = { stoodIn.add($0); return nil }
+        var end = started(far, listener)
+        var home = homeMac(listener.port); home.device = "device-1"
+        #expect(await home.hand(pairable: "waits-1", resultWindow: 5) == .saved)
+        #expect(await end.value == .saved && stoodIn.all == ["waits-1"] && saved.all == ["device-1"])
+
+        // Not stood in: the reason goes back, and nothing is saved.
+        listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
+        far.standIn = { _ in .unreachable }
+        end = started(far, listener)
+        home = homeMac(listener.port); home.device = "device-1"
+        #expect(await home.hand(pairable: "waits-1", resultWindow: 5) == .ended(.unreachable))
+        #expect(await end.value == .ended(.unreachable) && saved.all == ["device-1"])
+
+        // A Mac that doesn't stand in (a RoamRun from before, or a device named with --with) hangs up: said, not waited out.
+        listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
+        far.standIn = nil
+        far.connectWindow = 3
+        end = started(far, listener)
+        home = homeMac(listener.port); home.device = "device-1"
+        #expect(await home.hand(pairable: "waits-1", resultWindow: 5) == .tooOld)
+        _ = await end.value
+
+        // Without a device to hand over, nothing is stood in for.
+        listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
+        far.standIn = { stoodIn.add($0); return nil }
+        end = started(far, listener)
+        #expect(await homeMac(listener.port).hand(pairable: "waits-2", resultWindow: 5) == .garbled)
+        _ = await end.value
+        #expect(stoodIn.all == ["waits-1"])
     }
 
     /// A device that introduces this Mac itself is told its Tailscale name before the offer; a Mac isn't.

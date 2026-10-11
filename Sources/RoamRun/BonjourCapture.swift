@@ -31,7 +31,9 @@ final class BonjourCapture: ObservableObject {
     private var seen: [String: Date] = [:]
     private var hostSeen: [String: Date] = [:]
     private var launchFailing = false
-    private var serviceType = "_remotepairing._tcp"
+    private(set) var serviceType = "_remotepairing._tcp"
+    /// For tests: the kind of record to read, without browsing for it.
+    func reads(_ type: String) { serviceType = type }
     private var domain = "local"
 
     func start(serviceType: String = "_remotepairing._tcp", domain: String = "local") {
@@ -195,13 +197,28 @@ final class BonjourCapture: ObservableObject {
         seen[record] = .now
     }
 
+    /// A name as dns-sd prints it, read back: `\032` is a space, `\.` a dot.
+    static func unescaped(_ name: String) -> String {
+        var out: [UInt8] = [], bytes = Array(name.utf8), i = 0
+        while i < bytes.count {
+            if bytes[i] == 0x5C, i + 3 < bytes.count, let code = UInt8(String(decoding: bytes[(i + 1)...(i + 3)], as: UTF8.self)) {
+                out.append(code); i += 4
+            } else if bytes[i] == 0x5C, i + 1 < bytes.count {
+                out.append(bytes[i + 1]); i += 2
+            } else {
+                out.append(bytes[i]); i += 1
+            }
+        }
+        return String(decoding: out, as: UTF8.self)
+    }
+
     private func emit(recordName: String) {
         guard ptrs.contains(recordName) || recordName.hasSuffix(".\(serviceType)") else { return }
         let instance = String(recordName.dropLast(recordName.hasSuffix(".\(serviceType)") ? serviceType.count + 1 : 0))
         guard let srv = srvByRecord[recordName] else { return }
         if ownedHosts.contains(srv.host) { return }
         services[recordName] = CapturedService(
-            instanceName: instance,
+            instanceName: Self.unescaped(instance),
             serviceType: serviceType,
             domain: domain,
             port: srv.port,

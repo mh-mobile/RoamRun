@@ -269,16 +269,19 @@ tunnel and Xcode has to run again.
     it. After the release: each install command of roamrunctl's README — Linux, Windows, `brew
     install mh-mobile/tap/roamrunctl`, `cargo install` — then `roamrunctl --version`.
 
-31. An Apple Vision Pro and a far Mac (when `pair vision`, the stand-in, Xcode or visionOS changed).
-    The far Mac's entry removed on the device first (Settings › General › Remote Devices), and
-    that screen left open. On a Mac on its Wi‑Fi: `roamrun pair vision --to <its Tailscale name>`
-    prints a line (with the screen closed: it says no device is waiting, exit 1). On the far Mac:
-    `roamrun pair vision <line>` → Device Hub › + › Pair Nearby Device › Apple Vision Pro lists
-    it; picked, the device shows a code; typed there → paired, the command says a pairing was
-    tried and that nothing is announced or listening (`lsof -nP -iTCP -sTCP:LISTEN | grep RoamRun`,
-    `pgrep -fl "dns-sd -i"`). Then `devices export` here, `devices add` and `up` there → Ready,
-    `devicectl … process launch`. Once with a line some minutes old: it says the device isn't
-    waiting on that port any more, and announces nothing.
+31. An Apple Vision Pro and a far Mac (when `pair xcode --with`, `pair introduce`, the stand-in,
+    the wire, Xcode or visionOS changed). The far Mac's entry removed on the device first
+    (Settings › General › Remote Devices), that screen left open, the device saved in RoamRun
+    on a Mac on its Wi‑Fi. On the far Mac: `roamrun pair xcode --with <that Mac>`. On that Mac:
+    `roamrun pair introduce --mac <the far Mac> --to <device>` → it says the device waits to be
+    picked; the far Mac says whose device it is and that it is announced. In Device Hub on the
+    far Mac: + › Pair Nearby Device › Apple Vision Pro lists it; picked, the device shows a code;
+    typed in Device Hub → paired. Ctrl-C in the far Mac's command → it says nothing is announced
+    or listening (`lsof -nP -iTCP -sTCP:LISTEN | grep RoamRun`, `pgrep -fl "dns-sd -i"`) and that
+    the device is saved; the other Mac says so too. `roamrun up <device>` on the far Mac → Ready,
+    `devicectl … process launch`. Once with Remote Devices closed: `pair introduce` says the
+    device isn't waiting, exit 1, and the far Mac goes on waiting. Once with Ctrl-C on the far
+    Mac before anything connected: nothing is saved on it.
 
 ## Debug logs worth a look after an iOS or Xcode update
 

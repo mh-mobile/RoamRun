@@ -330,7 +330,7 @@ roamrun pair xcode --with iphone-15-pro --qr   # iphone-15-pro: the device's Tai
 roamrun up iphone-15-pro
 ```
 
-`--qr` draws the far Mac's Tailscale name as a code in the terminal for the app to read; the app keeps the name, so later the code isn't needed. The far Mac answers that device alone, as it answers a Mac, and saves it under its Tailscale name. `roamrun pair control --with iphone-15-pro` pairs for device control the same way, and the code to type then shows on the device, in a notification. Without `--with`, `roamrun pair xcode --qr` draws its offer too (a larger code: a window of about 55 by 30), to carry by hand, and the app shows the line for `devices add` afterwards. The app announces and relays only during an introduction, and neither its question nor the pairing goes to an address that isn't Tailscale's. A device's name given where a Mac's was meant isn't told apart: the command waits its ten minutes for an app that isn't there. Tried with an iPhone 15 Pro on iOS 27 and a virtual Mac as the far one: Xcode's pairing by name and by hand with the bridge Ready afterwards, and device control's with `roamrun look` afterwards. Not tried: an iPad. An Apple Vision Pro pairs another way — the Mac picks it, with Settings › General › Remote Devices open on it — which this doesn't do.
+`--qr` draws the far Mac's Tailscale name as a code in the terminal for the app to read; the app keeps the name, so later the code isn't needed. The far Mac answers that device alone, as it answers a Mac, and saves it under its Tailscale name. `roamrun pair control --with iphone-15-pro` pairs for device control the same way, and the code to type then shows on the device, in a notification. Without `--with`, `roamrun pair xcode --qr` draws its offer too (a larger code: a window of about 55 by 30), to carry by hand, and the app shows the line for `devices add` afterwards. The app announces and relays only during an introduction, and neither its question nor the pairing goes to an address that isn't Tailscale's. A device's name given where a Mac's was meant isn't told apart: the command waits its ten minutes for an app that isn't there. Tried with an iPhone 15 Pro on iOS 27 and a virtual Mac as the far one: Xcode's pairing by name and by hand with the bridge Ready afterwards, and device control's with `roamrun look` afterwards. Not tried: an iPad. An Apple Vision Pro pairs another way — the Mac picks it, with Settings › General › Remote Devices open on it — which the app doesn't do: a Mac beside it does ([Apple Vision Pro](#apple-vision-pro)).
 
 **From a Windows or Linux machine.** Or the machine beside the device introduces: `roamrunctl` is `pair introduce` for one that has no RoamRun. It is one file, in an archive with each release — how to get it on Linux, Windows or a Mac: [Rust/roamrunctl](Rust/roamrunctl/README.md#install). The machine needs Tailscale, signed in to the tailnet the far Mac and the device are on.
 
@@ -362,20 +362,22 @@ Tried with an iPhone 15 Pro on iOS 27 and Xcode 27, with these commands and a vi
 
 ### Apple Vision Pro
 
-An Apple Vision Pro is paired the other way round: it waits, and the Mac picks it. So nothing is offered by the far Mac; what the device announces is carried to it instead.
+An Apple Vision Pro is paired the other way round: it waits, and the Mac picks it. The two commands are the same as for an iPhone; what they carry goes the other way.
 
 ```sh
 # on the device: Settings › General › Remote Devices, left open
-# on a Mac on the device's Wi‑Fi:
-roamrun pair vision --to vision-pro          # the device's Tailscale name; prints a line
-# on the far Mac, within a minute or two (the device changes its port every few minutes):
-roamrun pair vision rr-pairable-v1:…         # announces the device there, for that Mac alone, and carries its connection
-# on the far Mac, in Device Hub: + › Pair Nearby Device › Apple Vision Pro, pick it, Next, and type the code the device shows
+# on the far Mac:
+roamrun pair xcode --with home-mac            # home-mac: the Tailscale name of a Mac on the device's Wi‑Fi
+# on that Mac, with the device saved in RoamRun there:
+roamrun pair introduce --mac cloud-mac --to vision-pro
+# on the far Mac, when its command says so: Device Hub › + › Pair Nearby Device › Apple Vision Pro,
+# pick the device, Next, type the code the device shows; then Ctrl-C in the command
+roamrun up vision-pro
 ```
 
-Afterwards the far Mac lists the device as unavailable until a bridge runs: `roamrun devices export <device>` on a Mac that has it saved, and `roamrun devices add <line>` and `roamrun up <device>` on the far Mac. The device needs Tailscale running, and lists the far Mac under Remote Devices.
+The Mac beside the device reads what it announces while Remote Devices is open and sends it to the far Mac. The far Mac says whose device Tailscale has under that name, announces it on its own network, and carries its own connections to the device over Tailscale. That announcement is seen by the other machines on the far Mac's network for as long as it stands (five minutes at most); connections are taken from the far Mac itself only. Ctrl-C there, once Device Hub says the device is paired, ends it and saves the device: the command can't tell by itself that the pairing was made.
 
-Tried once, by hand before the command was written, with one Apple Vision Pro on visionOS 27.0 at home and a far Mac on Xcode 27.0: the pairing, the bridge Ready, the apps listed and one launched from the far Mac. Not tried: this command from end to end on a device, breakpoints, the device away from home, Apple TV (which Device Hub pairs from the same sheet).
+Tried by hand before these commands did it, once, with one Apple Vision Pro on visionOS 27.0 at home and a far Mac on Xcode 27.0: the pairing, then the bridge Ready and an app launched from the far Mac. Not tried: the commands themselves from end to end on a device, breakpoints, the device away from home, a Mac with an older RoamRun on either side (it is told to update), Apple TV. The device itself and `roamrunctl` don't introduce an Apple Vision Pro.
 
 ## Installing without the bridge: over the air
 

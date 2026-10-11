@@ -460,7 +460,7 @@ roamrun pair xcode --with iphone-15-pro --qr   # iphone-15-pro: デバイスの 
 roamrun up iphone-15-pro
 ```
 
-`--qr` は、離れた Mac の Tailscale 上の名前を、ターミナルにコードとして描きます。アプリがそれを読み取ります。アプリは名前を覚えるので、次からコードは要りません。離れた Mac は、Mac を相手にするときと同じく、名指ししたデバイスにだけ答え、そのデバイスを Tailscale 上の名前で保存します。`roamrun pair control --with iphone-15-pro` なら、同じ流れでデバイス操作のペアリングができます。このとき入力するコードは、デバイスに通知で表示されます。`--with` を付けない `roamrun pair xcode --qr` は、申し出もコードに含めます（コードが大きくなるので、ウインドウは 55 桁 × 30 行ほど要ります）。手で運ぶ形で、ペアリングのあと、アプリが `devices add` に渡す 1 行を表示します。アプリが名乗りと取り次ぎをするのは、引き合わせている間だけです。問い合わせもペアリングも、Tailscale のものではないアドレスへは送りません。Mac の名前を書くべきところにデバイスの名前を書いても、この使い方と区別できません。コマンドは、存在しないアプリを 10 分待ちます。iOS 27 の iPhone 15 Pro と、離れた Mac 役の仮想 Mac で確かめました。Xcode のペアリング（名指しする形と、手で運ぶ形）とその後のブリッジの Ready、デバイス操作のペアリングとその後の `roamrun look` です。iPad では試していません。Apple Vision Pro はペアリングの向きが違い（Vision Pro で 設定 › 一般 › リモートデバイス を開き、Mac の側が Vision Pro を選びます）、この方法では扱えません。
+`--qr` は、離れた Mac の Tailscale 上の名前を、ターミナルにコードとして描きます。アプリがそれを読み取ります。アプリは名前を覚えるので、次からコードは要りません。離れた Mac は、Mac を相手にするときと同じく、名指ししたデバイスにだけ答え、そのデバイスを Tailscale 上の名前で保存します。`roamrun pair control --with iphone-15-pro` なら、同じ流れでデバイス操作のペアリングができます。このとき入力するコードは、デバイスに通知で表示されます。`--with` を付けない `roamrun pair xcode --qr` は、申し出もコードに含めます（コードが大きくなるので、ウインドウは 55 桁 × 30 行ほど要ります）。手で運ぶ形で、ペアリングのあと、アプリが `devices add` に渡す 1 行を表示します。アプリが名乗りと取り次ぎをするのは、引き合わせている間だけです。問い合わせもペアリングも、Tailscale のものではないアドレスへは送りません。Mac の名前を書くべきところにデバイスの名前を書いても、この使い方と区別できません。コマンドは、存在しないアプリを 10 分待ちます。iOS 27 の iPhone 15 Pro と、離れた Mac 役の仮想 Mac で確かめました。Xcode のペアリング（名指しする形と、手で運ぶ形）とその後のブリッジの Ready、デバイス操作のペアリングとその後の `roamrun look` です。iPad では試していません。Apple Vision Pro はペアリングの向きが違い（Vision Pro で 設定 › 一般 › リモートデバイス を開き、Mac の側が Vision Pro を選びます）、アプリでは扱えません。そばの Mac が引き合わせます（[Apple Vision Pro](#apple-vision-pro)）。
 
 **Windows や Linux のマシンに引き合わせてもらう。** デバイスのそばにあるマシンが引き合わせることもできます。`roamrunctl` は、RoamRun の入っていないマシンのための `pair introduce` です。実行ファイル 1 つで、リリースごとにアーカイブとして添付します。Linux、Windows、Mac それぞれの入れ方は [Rust/roamrunctl](Rust/roamrunctl/README.md#install) にあります。そのマシンには Tailscale が要ります。離れた Mac とデバイスがいる tailnet にサインインしておきます。
 
@@ -492,20 +492,22 @@ roamrun up iphone-15-pro
 
 ### Apple Vision Pro
 
-Apple Vision Pro は、ペアリングの向きが逆です。デバイスが待ち、Mac がデバイスを選びます。そのため、離れた Mac が申し出るのではなく、デバイスが名乗っている内容を離れた Mac へ運びます。
+Apple Vision Pro は、ペアリングの向きが逆です。デバイスが待ち、Mac がデバイスを選びます。使うコマンドは iPhone のときと同じ 2 つで、運ぶものの向きだけが逆になります。
 
 ```sh
 # デバイスで: 設定 › 一般 › リモートデバイス を開いたままにする
-# デバイスと同じ Wi‑Fi にいる Mac で:
-roamrun pair vision --to vision-pro          # デバイスの Tailscale 上の名前。行を表示する
-# 離れた Mac で、1〜2 分のうちに（デバイスは数分ごとにポートを変えます）:
-roamrun pair vision rr-pairable-v1:…         # その Mac だけに向けてデバイスを名乗り、接続を取り次ぐ
-# 離れた Mac の Device Hub で: + › Pair Nearby Device › Apple Vision Pro でデバイスを選び、Next。デバイスに出るコードを入力する
+# 離れた Mac で:
+roamrun pair xcode --with home-mac            # home-mac: デバイスと同じ Wi‑Fi にいる Mac の Tailscale 上の名前
+# その Mac で（デバイスを RoamRun に保存してあること）:
+roamrun pair introduce --mac cloud-mac --to vision-pro
+# 離れた Mac で、コマンドの案内が出たら: Device Hub › + › Pair Nearby Device › Apple Vision Pro で
+# デバイスを選び、Next。デバイスに出るコードを入力し、コマンドを Ctrl-C で終える
+roamrun up vision-pro
 ```
 
-ペアリングのあと、離れた Mac はブリッジを始めるまでデバイスを「使えない」と表示します。デバイスを保存している Mac で `roamrun devices export <device>`、離れた Mac で `roamrun devices add <line>` と `roamrun up <device>` を実行します。デバイスでは Tailscale が動いている必要があります。デバイスの「リモートデバイス」には、離れた Mac が並びます。
+デバイスのそばの Mac が、「リモートデバイス」を開いている間のデバイスの名乗りを読み取り、離れた Mac に送ります。離れた Mac は、その名前のデバイスが Tailscale 上で誰のものかを表示してから、自分のネットワークでデバイスを名乗り、自分からの接続を Tailscale 越しにデバイスへ取り次ぎます。この名乗りは、出ている間（最長 5 分）、離れた Mac と同じネットワークのほかのマシンからも見えます。接続を受け付けるのは、離れた Mac 自身からだけです。Device Hub がペアリング済みと表示したら、離れた Mac のコマンドを Ctrl-C で終えます。そこでデバイスが保存されます。ペアリングができたかどうかを、コマンド自身は判断できません。
 
-試したのは 1 回で、このコマンドを書く前に手で行いました。家にある visionOS 27.0 の Apple Vision Pro 1 台と、Xcode 27.0 の離れた Mac で、ペアリング、ブリッジの準備完了、離れた Mac からのアプリの一覧と起動までです。試していないこと: このコマンドでの実機の通し、ブレークポイント、デバイスが外出先にいる場合、Apple TV（Device Hub の同じシートからペアリングします）。
+試したのは 1 回で、このコマンドができる前に手で行いました。家にある visionOS 27.0 の Apple Vision Pro 1 台と、Xcode 27.0 の離れた Mac で、ペアリング、ブリッジの準備完了、離れた Mac からのアプリの起動までです。試していないこと: このコマンドでの実機の通し、ブレークポイント、デバイスが外出先にいる場合、どちらかの Mac の RoamRun が古い場合（更新するよう表示します）、Apple TV。デバイス自身のアプリと `roamrunctl` は、Apple Vision Pro を引き合わせません。
 
 ## Mac に作るもの・アンインストール
 

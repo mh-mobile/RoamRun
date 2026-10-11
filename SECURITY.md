@@ -41,6 +41,18 @@ bounded.
     The Mac it relays to is the one Tailscale has under that name: the line it is
     given carries a port and what to announce, never an address, a host or a
     service type.
+  - For an Apple Vision Pro, which a Mac picks, it is the far Mac that stands in,
+    for the device: the Mac named with `--with` (and no other) sends what the
+    device announces and the device's Tailscale name. The far Mac says whose
+    device Tailscale has under that name before it announces anything, takes
+    only an iPhone-kind device of its own tailnet for it, and carries only its
+    own connections, to that device's Tailscale address on the port sent (1024
+    or above). What it announces — the device's name, model and announced
+    identifier — is seen by its whole network for as long as it stands. The Mac
+    that sends can't prove the announcement it read is that device's: a host on
+    its Wi‑Fi that announces as one that waits could have its values sent
+    instead. The connection still goes to the device named, and the code is
+    shown by the device and typed on the far Mac.
   - It takes connections from the device's address on that LAN alone, two at once
     at most. It has that address from Tailscale (pinging the device when Tailscale
     hasn't talked to it lately), and doesn't start when Tailscale reaches the
@@ -314,7 +326,8 @@ bounded.
   check; there is no code in RoamRun that talks to a server of ours or anyone
   else's. It does open connections of its own — to your device (and, for `pair
   introduce`, one to the pairing port of the Mac you named, to see that it is
-  waiting, before anything is announced): a TCP probe to see
+  waiting, before anything is announced; for an Apple Vision Pro, one from the far
+  Mac to the port the device waits on): a TCP probe to see
   whether it answers, the RemotePairing handshake to confirm the answer really
   comes from it, and a scan for its RemotePairing port when that has changed; with
   device control set up, also its own tunnel to the device, kept open. It
