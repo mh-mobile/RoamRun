@@ -160,7 +160,7 @@ icon:
 	xcrun swift scripts/make-icon.swift .build/AppIcon.iconset
 	iconutil -c icns .build/AppIcon.iconset -o Resources/AppIcon.icns
 	mkdir -p docs
-	cp .build/AppIcon.iconset/icon_256x256@2x.png docs/icon.png
+	cp .build/AppIcon.iconset/icon_256x256@2x.png docs/images/icon.png
 
 clean:
 	rm -rf .build $(BUNDLE) dmg-root $(APP_NAME)-*.dmg $(APP_NAME)-notarize.zip

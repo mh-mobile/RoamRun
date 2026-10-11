@@ -8,9 +8,9 @@ carries it to the far Mac over the Tailscale VPN already on the device. No Mac n
 needed. How it is used from the far Mac: the main README, "From the device itself".
 
 <p align="center">
-  <img src="../docs/introducer-home.png" width="200" alt="The first screen: the far Mac's name, and Introduce">
-  <img src="../docs/introducer-pairing.png" width="200" alt="An introduction under way: pair in Settings">
-  <img src="../docs/introducer-done.png" width="200" alt="The end: the far Mac has saved this iPhone">
+  <img src="../docs/images/introducer-home.png" width="200" alt="The first screen: the far Mac's name, and Introduce">
+  <img src="../docs/images/introducer-pairing.png" width="200" alt="An introduction under way: pair in Settings">
+  <img src="../docs/images/introducer-done.png" width="200" alt="The end: the far Mac has saved this iPhone">
 </p>
 
 It isn't part of `make app`, and isn't on the App Store: build it here. On the Home Screen and in Settings it is “RoamRun”: the whole name doesn't fit under an icon. `Sources/Introduction.swift`
@@ -52,8 +52,8 @@ answer says which pairing it is. The code is made on the far Mac and shown here,
 shows the app's background task, over Settings.
 
 <p align="center">
-  <img src="../docs/introducer-code.png" width="200" alt="Device control's pairing: the code shows on this iPhone">
-  <img src="../docs/introducer-byhand.png" width="200" alt="By hand: the line for roamrun devices add">
+  <img src="../docs/images/introducer-code.png" width="200" alt="Device control's pairing: the code shows on this iPhone">
+  <img src="../docs/images/introducer-byhand.png" width="200" alt="By hand: the line for roamrun devices add">
 </p>
 
 **Carry the lines by hand** is the way without `--with` (the `rr-xcode-offer-v1:` line from `roamrun pair xcode`, pasted —
