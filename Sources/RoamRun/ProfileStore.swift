@@ -115,12 +115,7 @@ final class ProfileStore {
         // A device this process never saw (not in `base`) isn't its to drop: the list
         // it started from was unreadable, or someone else added it. Deleting one here
         // means it was in `base`, so that still sticks.
-        let wantedIDs = Set(wanted.map(\.id))
-        // …unless it was added here again meanwhile (the list looked empty): that one wins.
-        let unseen = disk.filter { d in
-            was[d.id] == nil && !wantedIDs.contains(d.id) && !wanted.contains { Self.sameDevice($0, d) }
-        }
-        return unseen + wanted.map { mine in
+        return unseen(base: base, wanted: wanted, disk: disk) + wanted.map { mine in
             guard let old = was[mine.id], let theirs = onDisk[mine.id] else { return mine }
             var out = mine
             if mine.providerIP == old.providerIP { out.providerIP = theirs.providerIP }
@@ -133,6 +128,25 @@ final class ProfileStore {
             if mine.udid == old.udid, let learned = theirs.udid { out.udid = learned }
             return out
         }
+    }
+
+    /// What is on disk that this process never saw: neither in the list it read (`base`) nor in
+    /// the one it has (`wanted`) — unless it was added here again meanwhile (the list looked
+    /// empty): that one wins.
+    static func unseen(base: [DeviceProfile], wanted: [DeviceProfile], disk: [DeviceProfile]) -> [DeviceProfile] {
+        let was = Set(base.map(\.id)), wantedIDs = Set(wanted.map(\.id))
+        return disk.filter { d in
+            !was.contains(d.id) && !wantedIDs.contains(d.id) && !wanted.contains { Self.sameDevice($0, d) }
+        }
+    }
+
+    /// When profiles.json was last written, nil where there is none: a change says another process saved.
+    var written: Date? { (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date }
+
+    /// The devices another process saved since `base` was read, which `mine` doesn't have; none while the file can't be read.
+    func savedElsewhere(base: [DeviceProfile], mine: [DeviceProfile]) -> [DeviceProfile] {
+        let disk = load()
+        return unreadable ? [] : Self.unseen(base: base, wanted: mine, disk: disk)
     }
 
     /// The checks Add Device refuses a second profile on: same address, advert or UDID.

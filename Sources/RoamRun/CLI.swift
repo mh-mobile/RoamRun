@@ -248,7 +248,7 @@ enum CLI {
         print(replacing != nil
               ? "\(called) now has that announcement and address; its UDID is as it was (this is for the same device: another one is added under a name of its own). Next: roamrun up \(shellName(called))"
               : "\(called) is saved, without a UDID: the bridge learns it from this Mac's own pairing. Next: roamrun up \(shellName(called))")
-        note("(no need to open the RoamRun app for this; when it is next opened it lists \(called))")
+        note("(no need to open the RoamRun app for this; it lists \(called) when it is next opened, or in a moment if it is open)")
     }
 
     /// The offers to pair this Mac makes right now: announced by it, and listened for here.
