@@ -761,7 +761,8 @@ enum CLI {
                 note("""
                 Announced on \(interface) (seen by that network); only this Mac's connections are carried to \(device.dnsName).
                   Here, in Device Hub: + › Pair Nearby Device › Apple Vision Pro, pick “\(shown)”, Next, and type the code the device shows.
-                  This ends once Device Hub has paired, with Ctrl-C, or after 5 minutes; the device is saved if this Mac connected to it.
+                  This ends once Device Hub has paired (if it doesn't: Ctrl-C when Device Hub says it is paired), or after 5 minutes;
+                  the device is saved if this Mac connected to it.
                 """)
             case .connected:
                 if !connected { note("This Mac connected to \(device.dnsName).") }
@@ -779,7 +780,8 @@ enum CLI {
         // An iPhone's pairing ends this by closing its connection; this one's stays open, so Device Hub's own log line ends it
         // (`devicectl list devices` can't: a device just paired isn't listed until it was reached). Without the line — its words
         // changed, or no admin to read the log — Ctrl-C or the deadline does. Saved either way, and said as for an iPhone.
-        // ponytail: the line names no device: another one paired in Device Hub meanwhile reads as this one.
+        // ponytail: the line names no device, and any process can write one like it (Device Hub has no fixed place to pin it to):
+        // another device paired in Device Hub meanwhile reads as this one, and a forged line ends this as Ctrl-C would.
         let log = Proc.tied("/usr/bin/log", ["stream", "--style", "ndjson", "--predicate", pairingLog])
         let lines = Pipe()
         log.standardOutput = lines

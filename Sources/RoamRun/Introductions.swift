@@ -342,8 +342,8 @@ extension Introduction {
 @MainActor
 final class Introducer {
     enum End: Equatable {
-        /// A connection that carried bytes both ways has closed: a pairing was tried. Whether it
-        /// was made, only the other Mac knows.
+        /// A connection that carried bytes both ways has closed (or, for a device that is picked, Device Hub
+        /// said it paired): a pairing was tried. Whether it was made, only the other Mac knows.
         case carried
         case deadline
         case stopped

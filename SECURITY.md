@@ -116,6 +116,12 @@ bounded.
     shown is this Mac's own.
   - The device is saved only when the other Mac says a pairing was tried. That
     isn't proof one was made: `roamrun up` shows it.
+  - The far Mac's stand-in for an Apple Vision Pro also ends on the line Device
+    Hub writes to the system log for a pairing made (read with `log stream`,
+    which takes an administrator's account). The line names no device, and any
+    process on the Mac can write one like it: once this Mac has connected, that
+    ends the stand-in early, as Ctrl-C does. It pairs nothing and saves nothing
+    Ctrl-C wouldn't.
   - The Mac that introduces listens for nothing more than before. If the
     connection to the other Mac ends while it stands in, it stops standing in.
     A Mac that goes away without closing it (asleep, off the tailnet) isn't
