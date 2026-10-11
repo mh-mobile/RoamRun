@@ -669,6 +669,12 @@ enum CLI {
         return out
     }
 
+    /// Which of the devices waiting is at `at`. Its host is looked up where what was heard doesn't hold that
+    /// address: an IPv6 one may have come alone.
+    nonisolated static func waiting(_ seen: [CapturedService], at: String, resolve: (String) -> [String]) -> CapturedService? {
+        seen.first { $0.hostIPs.contains(at) } ?? seen.first { resolve($0.host).contains(at) }
+    }
+
     /// What `profile` announces while it waits to be picked by a Mac, as a line; nil for a device that
     /// picks the Mac itself (an iPhone, an iPad). Which of the devices waiting on this Wi‑Fi it is, is told
     /// by its address here, as Tailscale has it. Stops where it is known to be an Apple Vision Pro and isn't found waiting.
@@ -697,12 +703,7 @@ enum CLI {
             stop("Tailscale doesn't reach \(profile.displayName) directly over IPv4 on this Wi‑Fi (through a relay, over IPv6, or not at all), so which of the devices waiting here it is couldn't be told. See that it is on this Mac's Wi‑Fi and connected in Tailscale; then run this again")
         }
         let at = String(parts[0])
-        var its: CapturedService?
-        for service in seen {
-            let host = service.host
-            let ips = service.hostIPs.isEmpty ? await Blocking.run { addresses(of: host) } : service.hostIPs
-            if ips.contains(at) { its = service; break }
-        }
+        let its = await Blocking.run { waiting(seen, at: at, resolve: addresses(of:)) }
         guard let its else {
             if known == nil { return nil }
             stop("\(profile.displayName) isn't waiting to be paired (\(seen.count == 1 ? "another device is" : "\(seen.count) other devices are"): \(seen.map(\.instanceName).joined(separator: ", "))). On it: Settings › General › Remote Devices, left open; then run this again")
@@ -780,8 +781,8 @@ enum CLI {
         // An iPhone's pairing ends this by closing its connection; this one's stays open, so Device Hub's own log line ends it
         // (`devicectl list devices` can't: a device just paired isn't listed until it was reached). Without the line — its words
         // changed, or no admin to read the log — Ctrl-C or the deadline does. Saved either way, and said as for an iPhone.
-        // ponytail: the line names no device, and any process can write one like it (Device Hub has no fixed place to pin it to):
-        // another device paired in Device Hub meanwhile reads as this one, and a forged line ends this as Ctrl-C would.
+        // Counted only once this Mac has connected: a pairing made before isn't this one.
+        // ponytail: the line names no device: another one paired in Device Hub meanwhile reads as this one.
         let log = Proc.tied("/usr/bin/log", ["stream", "--style", "ndjson", "--predicate", pairingLog])
         let lines = Pipe()
         log.standardOutput = lines
@@ -1549,7 +1550,8 @@ enum CLI {
     }
 
     /// Device Hub's line for a pairing it tried, as `log stream` is asked for it.
-    nonisolated static let pairingLog = #"subsystem == "com.apple.dt.coredevice" AND category == "pairing" AND eventMessage BEGINSWITH "Pairing attempt completed with error ""#
+    /// Written by CoreDevice's own framework, where Xcode installs it (not a user's to write): by name alone any process could.
+    nonisolated static let pairingLog = #"subsystem == "com.apple.dt.coredevice" AND category == "pairing" AND senderImagePath BEGINSWITH "/Library/Developer/PrivateFrameworks/CoreDevice.framework/" AND eventMessage BEGINSWITH "Pairing attempt completed with error ""#
     /// From that line: true when the pairing was made, false when it wasn't; nil for any other line.
     nonisolated static func pairingEnded(_ message: String) -> Bool? {
         guard message.hasPrefix("Pairing attempt completed with error ") else { return nil }

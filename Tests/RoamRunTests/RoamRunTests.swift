@@ -1121,7 +1121,20 @@ extension TimingSensitive.RelayOnLocalhost {
     #expect(TailscaleClient.devices(fromStatusJSON: "not json") == nil)
 }
 
+@Test func theDeviceWaitingIsFoundByItsAddressEvenWhenOnlyAnIPv6OneWasHeard() {
+    func service(_ name: String, _ host: String, _ ips: [String]) -> CapturedService {
+        CapturedService(instanceName: name, serviceType: Introduction.pairableService, domain: "local", port: 1, host: host, hostIPs: ips, txt: [:], lastSeen: .now)
+    }
+    let other = service("other", "other.local", ["192.168.0.9"]), mine = service("mine", "mine.local", ["fe80::1"])
+    let names = ["mine.local": ["192.168.0.20"]]
+    #expect(CLI.waiting([other, mine], at: "192.168.0.20") { names[$0] ?? [] }?.instanceName == "mine")
+    // Heard with the address: nothing is looked up.
+    #expect(CLI.waiting([other, mine], at: "192.168.0.9") { _ in Issue.record("looked up"); return [] }?.instanceName == "other")
+    #expect(CLI.waiting([other, mine], at: "192.168.0.30") { names[$0] ?? [] } == nil)
+}
+
 @Test func aPairingMadeIsReadFromDeviceHubsLine() {
+    #expect(CLI.pairingLog.contains(#"senderImagePath BEGINSWITH "/Library/Developer/PrivateFrameworks/CoreDevice.framework/""#))
     #expect(CLI.pairingEnded("Pairing attempt completed with error nil") == true)
     #expect(CLI.pairingEnded("Pairing attempt completed with error Optional(Error Domain=com.apple.dt.CoreDeviceError Code=2)") == false)
     // Not that line, or more than it: not taken for a pairing.
@@ -7151,6 +7164,14 @@ extension TimingSensitive {
         #expect(await home.hand(pairable: { read.add(1); return "waits-1" }, resultWindow: 5) == .saved)
         #expect(await end.value == .saved && stoodIn.all == ["waits-1 for device-1"] && saved.all == ["device-1"] && read.all.count == 1)
 
+        // Looking again at what the device announces takes longer than a line is waited for: still heard.
+        listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
+        far.standIn = { _, _ in nil }
+        end = started(far, listener)
+        home = homeMac(listener.port); home.device = "device-1"
+        #expect(await home.hand(pairable: { try? await Task.sleep(for: .milliseconds(1500)); return "waits-1" }, resultWindow: 5) == .saved)
+        #expect(await end.value == .saved)
+
         // Stood in, and not kept: said as that.
         listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
         var forgetful = farMac(saves: false); forgetful.standIn = { _, _ in nil }
@@ -7165,7 +7186,7 @@ extension TimingSensitive {
         end = started(far, listener)
         home = homeMac(listener.port); home.device = "device-1"
         #expect(await home.hand(pairable: { "waits-1" }, resultWindow: 5) == .ended(.unreachable))
-        #expect(await end.value == .ended(.unreachable) && saved.all == ["device-1"])
+        #expect(await end.value == .ended(.unreachable) && saved.all == ["device-1", "device-1"])
 
         // A Mac that doesn't stand in as it runs (a device named with --with) says so, and goes on waiting.
         listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
@@ -7265,7 +7286,7 @@ extension TimingSensitive {
         long.send(.offer(String(repeating: "x", count: PairWire.maxLine + 100)))
         #expect(long.read(within: 3) == .closed)
         let slow = try #require(PairLink.connect(to: "127.0.0.1", port: listener.port, interface: nil))
-        #expect(slow.read(within: 3) == .closed)   // lineWait, not for ever
+        #expect(slow.read(within: 6) == .closed)   // three lineWaits for a first line, not for ever
         let other = try #require(PairLink.connect(to: "127.0.0.1", port: listener.port, interface: nil))
         other.send(.saved)
         #expect(other.read(within: 3) == .closed)

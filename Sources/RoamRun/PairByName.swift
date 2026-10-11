@@ -343,7 +343,8 @@ enum PairByName {
                 guard let holder = owner(from) else { say(.unsure(from: from)); continue }
                 guard holder == peer.id else { say(.refused(from: from)); continue }
                 say(.connected)
-                let first = link.read(within: lineWait, stop: stopped)
+                // Longer for the first line: before it, the other Mac looks once more at what the device announces.
+                let first = link.read(within: lineWait * 3, stop: stopped)
                 if case .pairable(let waits)? = first.message {
                     // Said, so the other Mac doesn't take this one for a RoamRun that doesn't know the word.
                     guard let standIn else { link.send(.ended(.failed)); continue }
