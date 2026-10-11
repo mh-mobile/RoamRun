@@ -1121,6 +1121,14 @@ extension TimingSensitive.RelayOnLocalhost {
     #expect(TailscaleClient.devices(fromStatusJSON: "not json") == nil)
 }
 
+@Test func aPairingMadeIsReadFromDeviceHubsLine() {
+    #expect(CLI.pairingEnded("Pairing attempt completed with error nil") == true)
+    #expect(CLI.pairingEnded("Pairing attempt completed with error Optional(Error Domain=com.apple.dt.CoreDeviceError Code=2)") == false)
+    // Not that line, or more than it: not taken for a pairing.
+    #expect(CLI.pairingEnded("Pairing attempt completed with error nil, or so") == false)
+    #expect(CLI.pairingEnded("Pairing attempt started") == nil && CLI.pairingEnded("") == nil)
+}
+
 @Test func tunnelStateMatchesUDIDInAnyCase() {
     let result: [String: Any] = ["devices": [["hardwareProperties": ["udid": phoneA],
                                               "connectionProperties": ["tunnelState": "connected"]]]]

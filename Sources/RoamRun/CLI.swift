@@ -761,7 +761,7 @@ enum CLI {
                 note("""
                 Announced on \(interface) (seen by that network); only this Mac's connections are carried to \(device.dnsName).
                   Here, in Device Hub: + › Pair Nearby Device › Apple Vision Pro, pick “\(shown)”, Next, and type the code the device shows.
-                  When Device Hub says it is paired, press Ctrl-C here. 5 minutes at most.
+                  This ends once Device Hub has paired, with Ctrl-C, or after 5 minutes; the device is saved if this Mac connected to it.
                 """)
             case .connected:
                 if !connected { note("This Mac connected to \(device.dnsName).") }
@@ -772,12 +772,26 @@ enum CLI {
                 if let done { done.resume(returning: why) } else { early = why }
             }
         }
-        // ponytail: Ctrl-C says "done": this can't tell that a pairing was made. Ask devicectl whether the device is paired, if that is wanted.
         let watch = Task { @MainActor in
             while !Task.isCancelled, !halted() { try? await Task.sleep(for: .milliseconds(300)) }
             if !Task.isCancelled { await introducer.end(.stopped) }
         }
-        defer { watch.cancel() }
+        // An iPhone's pairing ends this by closing its connection; this one's stays open, so Device Hub's own log line ends it
+        // (`devicectl list devices` can't: a device just paired isn't listed until it was reached). Without the line — its words
+        // changed, or no admin to read the log — Ctrl-C or the deadline does. Saved either way, and said as for an iPhone.
+        // ponytail: the line names no device: another one paired in Device Hub meanwhile reads as this one.
+        let log = Proc.tied("/usr/bin/log", ["stream", "--style", "ndjson", "--predicate", pairingLog])
+        let lines = Pipe()
+        log.standardOutput = lines
+        log.standardError = FileHandle.nullDevice
+        let reader = LineReader(lines) { line in
+            guard TunnelPortWatcher.message(inJSON: line).flatMap(pairingEnded) == true else { return }
+            Task { @MainActor in
+                if connected, !introducer.ended { await introducer.end(.carried) }
+            }
+        }
+        try? log.run()
+        defer { watch.cancel(); if log.isRunning { log.terminate() }; _ = reader }
         do { try await introducer.start() } catch where !introducer.ended {
             note("Couldn't announce it: \(error.localizedDescription)")
             return .failed
@@ -1530,6 +1544,14 @@ enum CLI {
         guard let deadline else { return 10 }
         // Clamped as a Double first: --wait only has to be finite, and Int(1e19) traps.
         return Int(max(5, min(10, deadline.timeIntervalSince(now))).rounded(.up))
+    }
+
+    /// Device Hub's line for a pairing it tried, as `log stream` is asked for it.
+    nonisolated static let pairingLog = #"subsystem == "com.apple.dt.coredevice" AND category == "pairing" AND eventMessage BEGINSWITH "Pairing attempt completed with error ""#
+    /// From that line: true when the pairing was made, false when it wasn't; nil for any other line.
+    nonisolated static func pairingEnded(_ message: String) -> Bool? {
+        guard message.hasPrefix("Pairing attempt completed with error ") else { return nil }
+        return message == "Pairing attempt completed with error nil"
     }
 
     /// From `devicectl list devices` JSON's result; UDIDs compared in any case.
