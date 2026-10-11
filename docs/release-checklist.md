@@ -269,6 +269,23 @@ tunnel and Xcode has to run again.
     it. After the release: each install command of roamrunctl's README — Linux, Windows, `brew
     install mh-mobile/tap/roamrunctl`, `cargo install` — then `roamrunctl --version`.
 
+31. An Apple Vision Pro and a far Mac (when `pair xcode --with`, `pair introduce`, the stand-in,
+    the wire, Xcode or visionOS changed). The far Mac's entry removed on the device first
+    (Settings › General › Remote Devices), that screen left open, the device saved in RoamRun
+    on a Mac on its Wi‑Fi. On the far Mac: `roamrun pair xcode --with <that Mac>`. On that Mac:
+    `roamrun pair introduce --mac <the far Mac> --to <device>` → it says the device waits to be
+    picked; the far Mac says whose device it is, and only then that it is announced. In Device
+    Hub on the far Mac: + › Pair Nearby Device › Apple Vision Pro lists it; picked, the device
+    shows a code; typed in Device Hub → paired, and the far Mac's command ends by itself: it says
+    nothing is announced or listening (`lsof -nP -iTCP -sTCP:LISTEN | grep RoamRun`,
+    `pgrep -fl "dns-sd -i"`, `pgrep -fl "log stream"`) and saves the device; the other Mac says so too. `roamrun up
+    <device>` on the far Mac → Ready, `devicectl … process launch`. Once with Remote Devices
+    closed: for a device RoamRun's app shows as an Apple Vision Pro, `pair introduce` says it
+    isn't waiting, exit 1; for one saved without its kind (`roamrun devices --json`: no
+    `deviceType`) it waits as for an iPhone and says what to do if it is one. Once with Ctrl-C
+    on the far Mac before it connected: it says nothing was saved. Once with the far Mac running
+    `pair control --with`: the other Mac says that Mac doesn't stand in as it runs.
+
 ## Debug logs worth a look after an iOS or Xcode update
 
 - What a bridge did and when (kept by the system, no `--level debug`): `log show` with

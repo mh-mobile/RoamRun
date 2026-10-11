@@ -41,6 +41,25 @@ bounded.
     The Mac it relays to is the one Tailscale has under that name: the line it is
     given carries a port and what to announce, never an address, a host or a
     service type.
+  - For an Apple Vision Pro, which a Mac picks, it is the far Mac that stands in,
+    for the device: the Mac named with `--with` (and no other) sends what the
+    device announces, and the device as it is saved afterwards. The device the
+    far Mac connects to is the one that is saved — found once, by its Tailscale
+    name, as `devices add` finds one — and it says whose Tailscale has it as
+    before it asks anything of the device or announces anything. The kind of
+    device (iPhone, iPad, Apple Vision Pro) is what Tailscale's client on it
+    says: that turns a wrong name away and proves nothing, and a device shared
+    in from another tailnet is taken like any other, under whose it is said to
+    be. The far Mac carries only its own connections, to that device's
+    Tailscale address on the port sent (1024 or above). What it announces — the
+    device's name, model, announced identifier and tag, its versions, and the
+    far Mac's own address and a port there — is seen by its whole network for
+    as long as it stands (five minutes at most). The Mac that sends picks,
+    among what waits on its Wi‑Fi, the one at the address Tailscale has for the
+    device there; a host on that Wi‑Fi can claim that address in what it
+    announces, and have its values sent instead. The far Mac's connection still
+    goes to the device named, and the code is shown by the device and typed on
+    the far Mac.
   - It takes connections from the device's address on that LAN alone, two at once
     at most. It has that address from Tailscale (pinging the device when Tailscale
     hasn't talked to it lately), and doesn't start when Tailscale reaches the
@@ -97,6 +116,13 @@ bounded.
     shown is this Mac's own.
   - The device is saved only when the other Mac says a pairing was tried. That
     isn't proof one was made: `roamrun up` shows it.
+  - The far Mac's stand-in for an Apple Vision Pro also ends on the line Device
+    Hub writes to the system log for a pairing made (read with `log stream`,
+    which takes an administrator's account). Only a line from CoreDevice's own
+    framework, where Xcode installs it (`/Library/Developer/PrivateFrameworks`),
+    is taken, and only once this Mac has connected. The line names no device:
+    another one paired in Device Hub meanwhile ends the stand-in early, as
+    Ctrl-C does. It pairs nothing and saves nothing Ctrl-C wouldn't.
   - The Mac that introduces listens for nothing more than before. If the
     connection to the other Mac ends while it stands in, it stops standing in.
     A Mac that goes away without closing it (asleep, off the tailnet) isn't
@@ -314,7 +340,8 @@ bounded.
   check; there is no code in RoamRun that talks to a server of ours or anyone
   else's. It does open connections of its own — to your device (and, for `pair
   introduce`, one to the pairing port of the Mac you named, to see that it is
-  waiting, before anything is announced): a TCP probe to see
+  waiting, before anything is announced; for an Apple Vision Pro, one from the far
+  Mac to the port the device waits on): a TCP probe to see
   whether it answers, the RemotePairing handshake to confirm the answer really
   comes from it, and a scan for its RemotePairing port when that has changed; with
   device control set up, also its own tunnel to the device, kept open. It

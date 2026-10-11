@@ -460,7 +460,7 @@ roamrun pair xcode --with iphone-15-pro --qr   # iphone-15-pro: デバイスの 
 roamrun up iphone-15-pro
 ```
 
-`--qr` は、離れた Mac の Tailscale 上の名前を、ターミナルにコードとして描きます。アプリがそれを読み取ります。アプリは名前を覚えるので、次からコードは要りません。離れた Mac は、Mac を相手にするときと同じく、名指ししたデバイスにだけ答え、そのデバイスを Tailscale 上の名前で保存します。`roamrun pair control --with iphone-15-pro` なら、同じ流れでデバイス操作のペアリングができます。このとき入力するコードは、デバイスに通知で表示されます。`--with` を付けない `roamrun pair xcode --qr` は、申し出もコードに含めます（コードが大きくなるので、ウインドウは 55 桁 × 30 行ほど要ります）。手で運ぶ形で、ペアリングのあと、アプリが `devices add` に渡す 1 行を表示します。アプリが名乗りと取り次ぎをするのは、引き合わせている間だけです。問い合わせもペアリングも、Tailscale のものではないアドレスへは送りません。Mac の名前を書くべきところにデバイスの名前を書いても、この使い方と区別できません。コマンドは、存在しないアプリを 10 分待ちます。iOS 27 の iPhone 15 Pro と、離れた Mac 役の仮想 Mac で確かめました。Xcode のペアリング（名指しする形と、手で運ぶ形）とその後のブリッジの Ready、デバイス操作のペアリングとその後の `roamrun look` です。iPad では試していません。Apple Vision Pro はペアリングの向きが違い（Vision Pro で 設定 › 一般 › リモートデバイス を開き、Mac の側が Vision Pro を選びます）、この方法では扱えません。
+`--qr` は、離れた Mac の Tailscale 上の名前を、ターミナルにコードとして描きます。アプリがそれを読み取ります。アプリは名前を覚えるので、次からコードは要りません。離れた Mac は、Mac を相手にするときと同じく、名指ししたデバイスにだけ答え、そのデバイスを Tailscale 上の名前で保存します。`roamrun pair control --with iphone-15-pro` なら、同じ流れでデバイス操作のペアリングができます。このとき入力するコードは、デバイスに通知で表示されます。`--with` を付けない `roamrun pair xcode --qr` は、申し出もコードに含めます（コードが大きくなるので、ウインドウは 55 桁 × 30 行ほど要ります）。手で運ぶ形で、ペアリングのあと、アプリが `devices add` に渡す 1 行を表示します。アプリが名乗りと取り次ぎをするのは、引き合わせている間だけです。問い合わせもペアリングも、Tailscale のものではないアドレスへは送りません。Mac の名前を書くべきところにデバイスの名前を書いても、この使い方と区別できません。コマンドは、存在しないアプリを 10 分待ちます。iOS 27 の iPhone 15 Pro と、離れた Mac 役の仮想 Mac で確かめました。Xcode のペアリング（名指しする形と、手で運ぶ形）とその後のブリッジの Ready、デバイス操作のペアリングとその後の `roamrun look` です。iPad では試していません。Apple Vision Pro はペアリングの向きが違い（Vision Pro で 設定 › 一般 › リモートデバイス を開き、Mac の側が Vision Pro を選びます）、アプリでは扱えません。そばの Mac が引き合わせます（[Apple Vision Pro](#apple-vision-pro)）。
 
 **Windows や Linux のマシンに引き合わせてもらう。** デバイスのそばにあるマシンが引き合わせることもできます。`roamrunctl` は、RoamRun の入っていないマシンのための `pair introduce` です。実行ファイル 1 つで、リリースごとにアーカイブとして添付します。Linux、Windows、Mac それぞれの入れ方は [Rust/roamrunctl](Rust/roamrunctl/README.md#install) にあります。そのマシンには Tailscale が要ります。離れた Mac とデバイスがいる tailnet にサインインしておきます。
 
@@ -489,6 +489,25 @@ roamrun up iphone-15-pro
 - 離れた Mac が保存しているデバイスの情報は、この Mac のものの写しです。この Mac のものが合わなくなったら（「制限・既知の課題」を参照）、ここでデバイスを追加し直してから `roamrun devices export <name>`、離れた Mac で `roamrun devices add <line>` を実行します。同じ場所に保存済みなら、その 1 行の名乗りに入れ替わります（アドレス、ポート、Tailscale 上の名前も変わっているときは、アプリとそのデバイスのブリッジを止めたうえで `--replace <name>`）。
 
 確かめた範囲: iPhone 15 Pro（iOS 27）、Xcode 27。これらのコマンドで、離れた Mac を仮想の Mac にし、引き合わせる Mac からは Tailscale の中継サーバー経由でしか届かない状態で、ペアリング、`devices add`、ブリッジの Ready、`devicectl` での起動、`lldb` でのブレークポイントまで（離れた Mac からデバイスへは、直結の経路と中継経由の両方）。2 台の Mac から同時にデバイスを使えました。デバイスとペアリングしていない Mac を引き合わせ役にしても同じように通り、その Mac が保存していた内容で、離れた Mac のブリッジが Ready になりました。コマンドができる前に同じ手順を手作業で行ったときは、クラウドの Mac でも、ペアリング、ブリッジの Ready、Xcode の実行先に出ること、`devicectl` での起動まで確かめています。未確認: iPad、仮想ではない離れた Mac、ほかの Tailscale 利用者の Mac やタグ付きの Mac、ファイアウォールがオンの引き合わせ側の Mac。
+
+### Apple Vision Pro
+
+Apple Vision Pro は、ペアリングの向きが逆です。デバイスが待ち、Mac がデバイスを選びます。使うコマンドは iPhone のときと同じ 2 つで、運ぶものの向きだけが逆になります。
+
+```sh
+# デバイスで: 設定 › 一般 › リモートデバイス を開いたままにする
+# 離れた Mac で:
+roamrun pair xcode --with home-mac            # home-mac: デバイスと同じ Wi‑Fi にいる Mac の Tailscale 上の名前
+# その Mac で（デバイスを RoamRun に保存してあること）:
+roamrun pair introduce --mac cloud-mac --to vision-pro
+# 離れた Mac で、コマンドの案内が出たら: Device Hub › + › Pair Nearby Device › Apple Vision Pro で
+# デバイスを選び、Next。デバイスに出るコードを入力。Device Hub がペアリングすると、コマンドは終わる
+roamrun up vision-pro
+```
+
+デバイスのそばの Mac は、同じ Wi‑Fi で選ばれるのを待っているもののうち、Tailscale がそのデバイスについて知っているアドレスにいるものを探し、その名乗りを離れた Mac に送ります（そのため、その Wi‑Fi で Tailscale がデバイスに IPv4 で直接届いている必要があります）。離れた Mac は、その名前のデバイスが Tailscale 上で誰のものかを表示してから、自分のネットワークでデバイスを名乗り、自分からの接続を Tailscale 越しにそのデバイスへ取り次ぎます。この名乗りは、出ている間、離れた Mac と同じネットワークのほかのマシンからも見えます。接続を受け付けるのは、離れた Mac 自身からだけです。名乗りは、Device Hub がペアリングしたとき、Ctrl-C、または 5 分で終わります。それまでに離れた Mac がデバイスへつながっていれば、デバイスが保存されます。ペアリングしたことは、Device Hub がシステムログに書く行から読みます（管理者のアカウントが必要です）。その行にはデバイスの名前がないので、その間は Device Hub でほかのデバイスをペアリングしないでください。そのあと Device Hub にデバイスが 1 台も出ないときは、Available と Unavailable の見出しがたたまれているかもしれません。見出しにポインタを乗せ、出てくる矢印をクリックしてください。
+
+試したのは 1 回で、このコマンドができる前に手で行いました。家にある visionOS 27.0 の Apple Vision Pro 1 台と、Xcode 27.0 の離れた Mac で、ペアリング、ブリッジの準備完了、離れた Mac からのアプリの起動までです。試していないこと: このコマンドでの実機の通し、ブレークポイント、デバイスが外出先にいる場合、離れた Mac の RoamRun が古い場合（もう一方の Mac がそう表示します。デバイスのそばの Mac が古い場合は、iPhone のときと同じく申し出を求めて待ちます）、Apple TV。デバイス自身のアプリと `roamrunctl` は、Apple Vision Pro を引き合わせません。
 
 ## Mac に作るもの・アンインストール
 
