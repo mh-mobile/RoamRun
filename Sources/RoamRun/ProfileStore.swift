@@ -143,10 +143,9 @@ final class ProfileStore {
     /// When profiles.json was last written, nil where there is none: a change says another process saved.
     var written: Date? { (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date }
 
-    /// The devices another process saved since `base` was read, which `mine` doesn't have; none while the file can't be read.
+    /// The devices another process saved since `base` was read, which `mine` doesn't have (none from a file that can't be read).
     func savedElsewhere(base: [DeviceProfile], mine: [DeviceProfile]) -> [DeviceProfile] {
-        let disk = load()
-        return unreadable ? [] : Self.unseen(base: base, wanted: mine, disk: disk)
+        Self.unseen(base: base, wanted: mine, disk: load())
     }
 
     /// The checks Add Device refuses a second profile on: same address, advert or UDID.
