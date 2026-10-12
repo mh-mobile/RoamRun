@@ -142,8 +142,8 @@ machine's own name, the key under another user), where "the one machine named" i
 
 - A pairing of its own: `roamrunctl pair control --with` ran on a Linux VM on the tailnet, introduced by this
   crate's `pair introduce --host` on a Mac beside the device; the iPhone listed the VM, paired, and the VM
-  looked at its screen. The key on another machine: export, add and a look with `roamrunctl sign` running, and
-  the refusal once it was stopped — both ends on one Mac; two machines weren't tried.
+  looked at its screen. The key on another machine: `roamrunctl sign` on a Mac, `devices add` and a look on
+  the Linux VM, which held no key; once `sign` was stopped the VM's next connection was refused.
 - Holding a device: built on macOS and on Linux (musl, static); tried from an unprivileged Linux container
   against an iPhone 15 Pro on iOS 27.0 — connect, look, tap, type, a button, install, launch; taps through
   `roamrunctl mcp` with the device upright and on either side. The container reached the tailnet through its
