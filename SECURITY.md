@@ -257,8 +257,7 @@ bounded.
   - Not tried with a Mac shared in from another tailnet.
 - **roamrunctl can hold a pairing of its own.** `roamrunctl pair control --to` or
   `--with` (or `key import`) keeps the pairing in `~/.config/roamrunctl/devices`
-  (`%APPDATA%\roamrunctl\devices` on Windows, which a roaming profile copies to other
-  machines), a file only its owner can read; one that others can read is refused
+  (`%LOCALAPPDATA%\roamrunctl\devices` on Windows), a file only its owner can read; one that others can read is refused
   (on Windows the folder is the user's by what it inherits, and nothing more is checked).
   A program running as the same user — an agent that can run `roamrunctl` — uses the
   device as roamrunctl does. There is no switch per device there: holding the pairing
@@ -271,6 +270,11 @@ bounded.
   the device's own screenshot and sends inputs with no screen stream, so the device
   shows no screen-sharing session meanwhile. Its MCP tools hold only `tap` and `swipe`
   to a look just taken; `type`, `paste` and `press` go to whatever is on the screen.
+  A call taken back before its turn, or whose turn comes after the client went, isn't
+  made. A device it has open is held to the saved file it was opened from: removed, or
+  another saved under the name, it isn't operated under that name any more. Where the
+  device doesn't say which way up it is and its picture is upright, a point is pressed
+  as it is — on a device held upside down that would be the opposite point (not tried).
 - **roamrunctl can use a pairing whose key is on another machine.** `roamrunctl sign
   <devices> --for <machine>` runs where the keys are and listens on that machine's
   tailnet address (port 41831) for the one machine named, held to its address and to
@@ -282,8 +286,8 @@ bounded.
   making a new pairing signs (that ends in the pairing's own public key), so the key
   isn't lent to pair another device as this machine. It says each time it signs, and
   signs no more for a device removed on its machine meanwhile, or saved anew under its
-  name (the file it read is compared, byte for byte, at each request), until it is run
-  again. It answers one request at a time: the machine named can make it wait.
+  name (the file it read is compared, byte for byte, at each request; once it differed
+  the device stays refused, though the same file came back), until it is run again. It answers one request at a time: the machine named can make it wait.
   The machine that uses the device asks its own user's other machines on the tailnet
   (not a tagged one, not another user's; or the one `ROAMRUNCTL_SIGNER` names) which
   signs for it. The first time it opens a device it saves which machine that was and

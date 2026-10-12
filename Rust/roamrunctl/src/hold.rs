@@ -34,20 +34,19 @@ const MODEL: &str = "Mac17,7";
 /// What tells this machine from another, whatever either is named: the same each time, so that
 /// pairing again replaces the device's record of it.
 fn host_id() -> Result<String, String> {
-    use std::io::Write;
     let path = device::folder()?.with_file_name("host-id");
     if let Ok(id) = std::fs::read_to_string(&path) {
         if lines::is_uuid(id.trim()) { return Ok(id.trim().to_string()); }
     }
     let id = uuid()?;
-    match device::own_file(&path).and_then(|mut file| file.write_all(id.as_bytes())) {
+    match device::own_whole(&path, id.as_bytes()) {
         Ok(()) => Ok(id),
-        // Another command made it just now: its id is this machine's. What isn't one is made anew.
+        // Another command made it just now, whole: its id is this machine's. What isn't one is made anew.
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => match std::fs::read_to_string(&path) {
             Ok(theirs) if lines::is_uuid(theirs.trim()) => Ok(theirs.trim().to_string()),
             _ => {
                 let _ = std::fs::remove_file(&path);
-                device::own_file(&path).and_then(|mut file| file.write_all(id.as_bytes())).map(|()| id).map_err(|e| format!("{}: {e}", path.display()))
+                device::own_whole(&path, id.as_bytes()).map(|()| id).map_err(|e| format!("{}: {e}", path.display()))
             }
         },
         Err(e) => Err(format!("{}: {e}", path.display())),
@@ -74,6 +73,18 @@ pub fn filed(name: &str) -> String {
     // Not led by what a command reads as an option, or hides as a file.
     let filed = filed.trim_start_matches(['-', '.']);
     if filed.is_empty() { "device".into() } else { filed.into() }
+}
+
+/// The other machine's word for why it ended, as a sentence.
+fn why_ended(word: &str) -> &'static str {
+    match word {
+        "deadline" => "the device wasn't paired in its time",
+        "unreachable" => "it couldn't reach this machine's pairing port (Tailscale's rules, or a firewall here)",
+        "offer-refused" => "it couldn't take this machine's offer",
+        "address-lost" => "it lost its address on the device's network",
+        "stopped" => "it was stopped there",
+        _ => "its own terminal says why",
+    }
 }
 
 /// What the Introducer app sends for the device's Tailscale name, which it can't learn: the device is the one asking.
@@ -171,8 +182,10 @@ fn paired(mut link: Wire, with: &str, me: &str, own: Ipv4Addr, only: Ipv4Addr, l
     };
     // The app sends the name its owner gave the device; a file here is named as Tailscale names it.
     let name = name.unwrap_or_else(|| if sent.peer == ITSELF { filed(short(&there.dns)) } else { filed(&sent.name) });
-    if let Err(why) = device::free(&name) { return refuse(&mut link, "exists", why); }
+    // "exists" where the name is taken; a name that can't be one here isn't that.
+    if let Err(why) = device::free(&name) { return refuse(&mut link, if why.contains("saved here already") { "exists" } else { "failed" }, why); }
     let socket = TcpListener::bind((own, 0)).map_err(|e| Stopped::For(format!("can't listen on {own}: {e}")))?;
+    let port = socket.local_addr().map(|at| at.port()).unwrap_or(0);
     let (pairing, advert) = match Pairing::listen_on(shown, MODEL, host, socket, &only.to_string()) {
         Ok(listening) => listening,
         Err(why) => return refuse(&mut link, "failed", format!("couldn't listen for the device: {why}")),
@@ -180,7 +193,7 @@ fn paired(mut link: Wire, with: &str, me: &str, own: Ipv4Addr, only: Ipv4Addr, l
     let offer = match offer(&advert) { Ok(offer) => offer, Err(why) => return refuse(&mut link, "failed", why) };
     let attempt = uuid().map_err(Stopped::For)?;
     link.send(&format!("offer {offer}")).and_then(|()| link.send(&format!("attempt {attempt}"))).map_err(Stopped::For)?;
-    note!("{with} has this machine's offer. On the device: Settings › Privacy & Security › Developer Mode › “{shown}”, and type the code that shows here (and there). 7 minutes at most.");
+    note!("{with} has this machine's offer, and carries the device's connection to TCP port {port} here (another each time: {with} has to be let in on it). On the device: Settings › Privacy & Security › Developer Mode › “{shown}”, and type the code that shows here (and there). {with}'s command gives it 5 minutes.");
     let pairing = Arc::new(pairing);
     let (tell, told) = mpsc::channel::<Result<String, String>>();
     let waits = {
@@ -201,7 +214,7 @@ fn paired(mut link: Wire, with: &str, me: &str, own: Ipv4Addr, only: Ipv4Addr, l
         }
         if Instant::now() >= until { break Err("no pairing was made in 7 minutes".to_string()) }
         match link.read(Duration::from_millis(100)) {
-            Ok(said) if said.starts_with("ended ") => break Err(format!("{with} ended it ({})", &said[6..])),
+            Ok(said) if said.starts_with("ended ") => break Err(format!("{with} ended it: {}", why_ended(&said[6..]))),
             Err(why) if why == wire::CLOSED => break Err(format!("{with} went away")),
             _ => {}
         }
@@ -216,11 +229,12 @@ fn paired(mut link: Wire, with: &str, me: &str, own: Ipv4Addr, only: Ipv4Addr, l
         Ok(made) => made,
         Err(why) => {
             let _ = link.send("result failed not-paired");
-            return Err(Stopped::Again(format!("The device didn't pair ({why}): nothing was kept.")));
+            return Err(Stopped::Again(format!("The device didn't pair ({why}): nothing was kept. If “{shown}” is in the device's list all the same, remove it there.")));
         }
     };
     let Some(key) = made["pairing"].as_str() else { return refuse(&mut link, "failed", "the pairing came without its key".into()) };
     // Tried before it is kept, over the tailnet as it will be used: one that doesn't open the device isn't kept.
+    note!("The device paired. Trying it over the tailnet before it is kept: leave this running.");
     match device::keep(&name, there.ip, sent.port, key, passphrase) {
         Ok(kept) => {
             let _ = link.send("result done on");
@@ -294,9 +308,10 @@ pub fn here(to: &str, name: Option<String>, sealed: bool) -> Result<String, Stri
         .map_err(|why| if why.starts_with("no pairing") {
             format!("{why}: nothing was kept. If the device showed “{shown}” and nothing came of picking it: this machine's firewall may keep the device ({lan}) from TCP port {} here", read.port)
         } else { format!("{why}: nothing was kept") })?;
-    let made = device::said(answer).map_err(|why| format!("the device didn't pair ({why}): nothing was kept. Run this again"))?;
+    let made = device::said(answer).map_err(|why| format!("the device didn't pair ({why}): nothing was kept. If “{shown}” is in the device's list all the same, remove it there. Run this again"))?;
     let key = made["pairing"].as_str().ok_or("the pairing came without its key")?;
     // Tried before it is kept, over the tailnet as it will be used.
+    say("The device paired. Trying it over the tailnet before it is kept: leave this running.");
     match device::keep(&name, device.ip, 49152, key, passphrase.as_deref()) {
         Ok(kept) => Ok(format!("Paired with {} as “{shown}”, and it connects. {kept}\nTo withdraw it: `roamrunctl devices remove {name}`, and remove “{shown}” on the device, in that list.", device.dns)),
         Err(why) => Err(format!("paired, but not kept here ({why}): remove “{shown}” on the device, in that list, and run this again (this machine is {me})")),

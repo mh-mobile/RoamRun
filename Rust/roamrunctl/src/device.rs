@@ -71,6 +71,16 @@ pub fn own_file(path: &Path) -> std::io::Result<std::fs::File> {
     open.open(path)
 }
 
+/// A new file with all of `bytes` in it, the user's own; one that is there already is an error. Never there
+/// half written: it is written beside itself and put in place whole.
+pub fn own_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let beside = path.with_extension(format!("{}.tmp", std::process::id()));
+    let _ = std::fs::remove_file(&beside);
+    let put = own_file(&beside).and_then(|mut file| file.write_all(bytes)).and_then(|()| std::fs::hard_link(&beside, path));
+    let _ = std::fs::remove_file(&beside);
+    put
+}
+
 /// The mode of a file that others can read, where the system has modes.
 fn open_to_others(meta: &std::fs::Metadata) -> Option<u32> {
     #[cfg(unix)]
@@ -84,7 +94,8 @@ pub fn folder() -> Result<PathBuf, String> {
     let base = if cfg!(test) {
         Some(std::env::temp_dir().join("roamrunctl-test-devices"))
     } else if cfg!(windows) {
-        std::env::var_os("APPDATA").map(PathBuf::from)
+        // Not the folder a roaming profile copies to other machines: a key, and this machine's own id.
+        std::env::var_os("LOCALAPPDATA").or_else(|| std::env::var_os("APPDATA")).map(PathBuf::from)
     } else {
         std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).filter(|p| p.is_absolute())
             .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
@@ -101,9 +112,12 @@ fn named(name: &str) -> Result<&str, String> {
     let reserved = ["CON", "PRN", "AUX", "NUL"].contains(&stem.as_str())
         || stem.len() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && stem.ends_with(|c: char| c.is_ascii_digit());
     // Not led by what a command reads as an option, or hides as a file.
-    let fits = !name.is_empty() && name.len() <= 63 && !name.starts_with(['.', '-']) && !reserved
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
-    fits.then_some(name).ok_or_else(|| format!("“{name}” can't be a device's name here: letters, digits, - _ . only"))
+    let why = if reserved { "it is a name Windows keeps for itself" }
+        else if name.len() > 63 { "63 characters at most" }
+        else if name.is_empty() || name.starts_with(['.', '-']) { "it begins with a letter or a digit" }
+        else if !name.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)) { "letters, digits, - _ . only" }
+        else { return Ok(name) };
+    Err(format!("“{name}” can't be a device's name here ({why}): give another with --as"))
 }
 
 /// Where a device is kept: under a passphrase (.age), or as it is (.json).
@@ -132,7 +146,7 @@ fn read(name: &str, path: &Path, sealed: bool) -> Result<(Saved, Vec<u8>), Strin
     let file = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let opened;
     let bytes = if sealed { opened = crate::secret::opened(&file, &crate::secret::passphrase(name, false)?).map_err(|why| format!("{name}: {why}"))?; &opened } else { &file };
-    Ok((serde_json::from_slice(bytes).map_err(|e| format!("{}: {e}", path.display()))?, file))
+    Ok((serde_json::from_slice(bytes).map_err(|e| format!("{} isn't a saved device ({e}): `roamrunctl devices remove {name}` forgets it", path.display()))?, file))
 }
 
 /// How a machine that keeps a key comes to sign for this one, and how this one finds it.
@@ -151,10 +165,15 @@ fn save(saved: &Saved, passphrase: Option<&str>) -> Result<PathBuf, String> {
         Some(passphrase) => (crate::secret::sealed(&text, passphrase)?, "age"),
         None => (text, "json"),
     };
-    let path = folder()?.join(format!("{}.{ending}", saved.name));
-    let mut file = own_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    // Half written, it would stand for a saved device and be none.
-    file.write_all(&bytes).and_then(|()| file.sync_all()).map_err(|e| { let _ = std::fs::remove_file(&path); format!("{}: {e}", path.display()) })?;
+    let folder = folder()?;
+    let path = folder.join(format!("{}.{ending}", saved.name));
+    own_whole(&path, &bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    // Saved at the same moment the other way (under a passphrase, or not): one name, one file.
+    let other = folder.join(format!("{}.{}", saved.name, if ending == "age" { "json" } else { "age" }));
+    if other.exists() {
+        let _ = std::fs::remove_file(&path);
+        return Err(format!("a device “{}” was saved here just now by another command: nothing was kept by this one", saved.name));
+    }
     Ok(path)
 }
 
@@ -214,7 +233,9 @@ fn open(saved: &Saved) -> Result<Device, String> {
     }
     // Whatever answered there wasn't the pairing, or nothing did: the others, and whatever answers on one needn't be it either.
     let others: Vec<u16> = std::thread::scope(|all| PORTS.filter(|p| *p != saved.port).map(|p| all.spawn(move || answers(p, 1500).then_some(p))).collect::<Vec<_>>().into_iter().filter_map(|one| one.join().ok().flatten()).collect());
-    for port in others {
+    // ponytail: three of them at most — each that answers and says nothing costs the library's 20 s. Fewer,
+    // or a shorter wait there, once it is known what a device has open in that range.
+    for port in others.into_iter().take(3) {
         match open_at(saved, port) {
             Ok(device) => return Ok(device),
             Err(why) if why.contains(REFUSED) => return Err(why),
@@ -301,7 +322,7 @@ fn offered() -> Result<Vec<Saved>, String> {
 }
 
 /// A saved device's file as it is now: what tells it from another saved under its name since.
-fn mark(name: &str) -> Option<Vec<u8>> {
+pub fn mark(name: &str) -> Option<Vec<u8>> {
     std::fs::read(kept(name).ok()??.0).ok()
 }
 
@@ -400,20 +421,18 @@ fn look(name: &str, file: Option<PathBuf>) -> Result<String, String> {
     Ok(format!("{}\n{width} x {height}", path.display()))
 }
 
-fn list() -> Result<String, String> {
-    let (names, offered) = (names_here()?, offered()?);
-    if names.is_empty() && offered.is_empty() {
-        return Ok(format!("No device is saved here, and no machine was found that signs for this one.\nTo pair with one: roamrunctl pair control --to <device> (on its Wi‑Fi), or --with <a machine on its Wi‑Fi>.\nTo use one whose key another machine keeps:\n{}", sign_how("<device>")));
-    }
-    Ok(lines(&names, &offered))
-}
-
-/// The same for an agent: what there is, and nothing it is to run. What is saved here is listed whoever signs.
-pub fn listed() -> Result<String, String> {
+/// What this machine can use. What is saved here is listed whoever is named to sign.
+/// `agent`: for one — where there is none, nothing it is to run.
+pub fn listed(agent: bool) -> Result<String, String> {
     let names = names_here()?;
     let (offered, wrong) = match offered() { Ok(offered) => (offered, None), Err(why) => (Vec::new(), Some(why)) };
     if names.is_empty() && offered.is_empty() {
-        return Ok(format!("No device this machine can use{}. Coming by one is the user's: `roamrunctl devices`, at a terminal of theirs, says how.", wrong.map(|why| format!(" ({why})")).unwrap_or_default()));
+        let wrong = wrong.map(|why| format!(" ({why})")).unwrap_or_default();
+        return Ok(if agent {
+            format!("No device this machine can use{wrong}. Coming by one is the user's: `roamrunctl devices`, at a terminal of theirs, says how.")
+        } else {
+            format!("No device is saved here, and no machine was found that signs for this one{wrong}.\nTo pair with one: roamrunctl pair control --to <device> (on its Wi‑Fi), or --with <a machine on its Wi‑Fi>.\nTo use one whose key another machine keeps:\n{}", sign_how("<device>"))
+        });
     }
     Ok(lines(&names, &offered) + &wrong.map(|why| format!("\n({why}: no machine is asked what it signs for)")).unwrap_or_default())
 }
@@ -431,7 +450,7 @@ fn lines(names: &[String], offered: &[Saved]) -> String {
 
 pub fn run(command: Command) -> i32 {
     let done = match command {
-        Command::Devices { command: None } => list(),
+        Command::Devices { command: None } => listed(false),
         Command::Devices { command: Some(Devices::Remove { name }) } => named(&name).and_then(|name| {
             let signer = signer_of(name);
             if kept(name)?.is_none() {
@@ -457,15 +476,22 @@ pub fn run(command: Command) -> i32 {
         Command::Mcp => return crate::mcp::Server::default().serve(),
         Command::Sign { names, machine } => keys(&names).and_then(|(keys, told, marks)| {
             // The file it was read from, still: not another saved under the name since.
-            let held = |name: &str| marks.get(name).is_some_and(|was| mark(name).as_ref() == Some(was));
+            // Once seen changed, not signed for again until this is run again — though the same file came back.
+            let gone = std::cell::RefCell::new(std::collections::HashSet::new());
+            let held = |name: &str| {
+                if gone.borrow().contains(name) { return false }
+                let same = marks.get(name).is_some_and(|was| mark(name).as_ref() == Some(was));
+                if !same { gone.borrow_mut().insert(name.to_string()); }
+                same
+            };
             let list = |held: crate::sign::Held| serde_json::to_string(&told.iter().filter(|saved| held(&saved.name)).collect::<Vec<_>>()).unwrap_or_else(|_| "[]".into());
             crate::sign::serve(&machine, keys, &list, &held)
         }),
         Command::Pair { .. } => unreachable!("handled by main"),
     };
     match done {
-        Ok(text) => { println!("{text}"); 0 }
-        Err(why) => { eprintln!("roamrunctl: {why}"); 1 }
+        Ok(text) => { let _ = writeln!(std::io::stdout(), "{text}"); 0 }
+        Err(why) => { note!("roamrunctl: {why}"); 1 }
     }
 }
 
@@ -494,6 +520,28 @@ mod tests {
         assert!(named("iPhone-2").is_ok() && named("a.b_c").is_ok());
         for bad in ["", "../x", ".hidden", "a/b", "a b", "é", "-x", "---iPhone", "con", "NUL.x", "com1", "LPT9"] { assert!(named(bad).is_err(), "{bad}"); }
         assert!(named("console").is_ok() && named("com10").is_ok());
+        assert!(named("con").unwrap_err().contains("Windows") && named(&"a".repeat(64)).unwrap_err().contains("63") && named("-x").unwrap_err().contains("--as"));
+    }
+
+    #[test]
+    fn a_file_is_put_in_place_whole_and_never_over_another() {
+        let path = folder().unwrap().join(format!("whole-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        own_whole(&path, b"first").unwrap();
+        assert_eq!(own_whole(&path, b"second").unwrap_err().kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(&path).unwrap(), b"first");
+        // Nothing of the writing is left beside it.
+        assert!(!path.with_extension(format!("{}.tmp", std::process::id())).exists());
+        std::fs::remove_file(&path).unwrap();
+        // One name, one file: saved under a passphrase's ending and not, the second isn't kept.
+        let name = format!("both-{}", std::process::id());
+        let age = folder().unwrap().join(format!("{name}.age"));
+        std::fs::write(&age, b"x").unwrap();
+        // (As if both had found none saved: `kept` is looked at before, and the other file after.)
+        let json = folder().unwrap().join(format!("{name}.json"));
+        own_whole(&json, b"{}").unwrap();
+        assert!(age.exists() && json.exists());
+        for file in [age, json] { std::fs::remove_file(file).unwrap(); }
     }
 
     #[test]

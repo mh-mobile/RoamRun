@@ -62,8 +62,9 @@ as a developer: install and run apps, debug them, read their data.
 **And only for Xcode's pairing.** The same command answers a host that waits to pair
 for device control, and then prints the pairing code — which is the user's alone to
 read. You can't know before it runs which it will be, so: run it only where the user
-said the host waits in `roamrun pair xcode --with <this machine>`; ask if they didn't
-say; never where the host isn't a Mac (`tailscale status` says what it is). And if its
+said the host waits in `roamrun pair xcode --with <this machine>`, or gave you its
+offer's line for `--offer` (that way asks the host nothing, and is Xcode's only); ask if
+they didn't say; never where the host isn't a Mac (`tailscale status` says what it is). And if its
 output says "pairs for device control", stop it at once — the code isn't made until the
 device picks the host — and hand the command to the user (sections 4 and 5).
 
@@ -83,9 +84,12 @@ device picks the host — and hand the command to the user (sections 4 and 5).
    code on, in either direction**: the user reads it there.
 4. It ends by itself. Either may be started first, and the button pressed after.
 
-It waits for a person: run it in the background or with a timeout of twenty minutes
-(ten for the offer, five for the pairing, and what the far Mac takes to answer).
-A command cut short and started again makes the far Mac wait anew.
+It waits for a person: run it in the background and read what it prints every few
+seconds — not in the foreground with a timeout, where its output shows only once it has
+ended and "pairs for device control" can't be acted on. Twenty minutes at most (ten for
+the offer, five for the pairing, and what the far Mac takes to answer). A command cut
+short and started again makes the far Mac wait anew: stopped for "pairs for device
+control", the user runs both commands again themselves.
 
 How it ends:
 
@@ -197,6 +201,12 @@ machine "signs for <name> no more", the device was removed or paired again there
 the one that keeps the key isn't answering or signs for no such device, say so and stop:
 starting `roamrunctl sign` is the user's, on their machine.
 
+If the user's `pair control --with` ends with the other machine not having come in ten
+minutes, or the other machine says nobody waits, the usual reason is that this machine
+doesn't let the other in (Tailscale's rules, a firewall): on port 41830, and on a port
+that is another each time. B needs this machine able to write its own
+`~/.config/roamrunctl/devices`.
+
 What B does and doesn't: the key isn't on this machine to be copied, and when the user ends
 `sign`, or removes the device on the key's machine, no new connection is made. While `sign` answers, any program on this machine
 connects as often as it asks; and a connection already open — a running `roamrunctl mcp`
@@ -210,7 +220,8 @@ believed the first time it is used — use it only if the user named it.
 - `roamrunctl look <name> [file.png]` — the screen now, its longer side 1280 at most;
   prints the path, then its size. The file is whatever was on the screen: the user's.
 - `roamrunctl install <name> <app.ipa or .app>` — an app already built and signed for
-  that device (xtool's `dev build --ipa`, or Xcode's). It doesn't build or sign.
+  that device (xtool's `dev build --ipa`, or Xcode's). It doesn't build or sign. One
+  install of an app to a device at a time; five minutes at most.
 - `roamrunctl launch <name> <bundle id>` — one already running is ended first.
 - `roamrunctl mcp` — for an agent's MCP config (the command `roamrunctl`, the argument
   `mcp`): `devices`, `look`, `tap`, `swipe`, `elements`, `type`, `paste`, `press`,
@@ -218,6 +229,7 @@ believed the first time it is used — use it only if the user named it.
   minute, and points are pixels of the image it returned. `type`, `paste` and `press`
   aren't held to a look and go to whatever is on the screen: look before them too. A
   call that fails may or may not have reached the device — look before doing it again.
+  A call you take back before its turn isn't made.
   These press what is really there — don't tap what spends money, posts, sends, deletes
   or signs in unless the user asked for exactly that.
 
@@ -232,7 +244,7 @@ Tried against a device, on Linux and macOS, in an earlier form of each: `pair co
 --with`, a key from a Mac, look, tap, type, a button, install, launch, `mcp`'s look and
 tap, and B. Not yet: `pair control --to`, `sign` as it is now and `ROAMRUNCTL_SIGNER`,
 `--passphrase`, the Introducer app or a Mac introducing this machine, the other `mcp`
-tools, and anything on Windows (it builds there). One install to a device at a time. If one of those fails, say what it
+tools, and anything on Windows (it builds there). If one of those fails, say what it
 said; don't work around it.
 
 ## 6. What it doesn't do

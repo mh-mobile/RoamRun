@@ -485,8 +485,17 @@ fn app(device: &RRDevice, what: App) -> String {
             // An install sends the whole app: longer than a call's deadline.
             tokio::time::timeout(Duration::from_secs(300), async {
                 match what {
-                    App::Install(path) => idevice::utils::installation::install_package_rsd(&mut link.handle, &mut link.handshake, path, None)
-                        .await.map(|()| String::new()).map_err(|e| format!("install: {e:?}")),
+                    App::Install(path) => {
+                        // An app folder is laid over what an earlier, cut-short install of that name left where
+                        // the device keeps them: cleared first, or the app taken in is the two mixed.
+                        if let Some(name) = std::path::Path::new(path).file_name().and_then(|n| n.to_str()).filter(|_| std::path::Path::new(path).is_dir()) {
+                            if let Ok(mut files) = idevice::afc::AfcClient::connect_rsd(&mut link.handle, &mut link.handshake).await {
+                                let _ = files.remove_all(format!("PublicStaging/{name}")).await;
+                            }
+                        }
+                        idevice::utils::installation::install_package_rsd(&mut link.handle, &mut link.handshake, path, None)
+                            .await.map(|()| String::new()).map_err(|e| format!("install: {e:?}"))
+                    }
                     App::Launch(bundle) => {
                         let mut apps = idevice::core_device::AppServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)
                             .await.map_err(|e| format!("app service: {e:?}"))?;

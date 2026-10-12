@@ -277,7 +277,8 @@ tunnel and Xcode has to run again.
     elsewhere on the tailnet, under another name each time (`--as`): `pair control --with <near
     machine>`, introduced once by roamrunctl and once by a Mac's `roamrun pair introduce --host`
     (the device saved in RoamRun there); `pair control --with <the device>` with the Introducer
-    app → paired each time; a wrong code → nothing kept. Then there: `install` and `launch`
+    app → paired each time (each pairing takes the place of the one before on the device: the
+    name of the last is the one used below); a wrong code → nothing kept. Then there: `install` and `launch`
     of an app built for the device; `roamrunctl mcp` under an agent: look, tap, swipe, type, paste,
     press, elements, with music playing on the device → it goes on sounding, and no screen-sharing
     session is listed. `--passphrase` once: `look` asks for it; `mcp` takes it from
@@ -287,8 +288,8 @@ tunnel and Xcode has to run again.
     second>` on the key's machine → the using machine lists it no more. `devices remove <the
     first>` there → the using machine still lists it, and its look says the key's machine signs
     for it no more; paired again under the same name, `sign` still running → the same, and
-    `sign` says to run it again; `sign` run again → the look works. Ctrl-C in `sign` → the next
-    look is refused, a running `mcp` still looks. With a tagged
+    `sign` says to run it again; `sign <the first>` run again → the look works. Ctrl-C in `sign` → the next
+    look is refused, an `mcp` that had the device open still looks. With a tagged
     machine as `--for`: `sign` says to set `ROAMRUNCTL_SIGNER` there, and nothing is listed
     there until it is; a mistyped name there is said. On Windows: `pair control --with`, introduced by a Mac; `look`;
     `sign` for a Linux machine. `roamrunctl pair introduce --mac x --to y` → says `--host`.

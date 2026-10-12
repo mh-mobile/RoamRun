@@ -1,8 +1,8 @@
 //! `roamrunctl mcp`: the device's commands as MCP tools over stdin/stdout (one JSON-RPC message a
 //! line), as `roamrun mcp` gives them on a Mac. This process holds the connections: a device is
 //! opened at its first call and kept. Points are pixels of the image the last look returned.
-//! One call at a time, in the order asked; a call taken back (notifications/cancelled)
-//! still runs out. Take calls back between two of them when a client is seen to need it.
+//! One call at a time, in the order asked. A call taken back (notifications/cancelled) before its turn isn't
+//! made, nor one whose turn comes after the client went; one that runs already runs out.
 
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
@@ -54,7 +54,8 @@ pub fn upright(way: u8, sideways: bool, (x, y): (f64, f64)) -> Option<(f64, f64)
 
 #[derive(Default)]
 pub struct Server {
-    open: HashMap<String, Device>,
+    /// Each with its saved file as it was when it was opened: a name saved anew since isn't this device.
+    open: HashMap<String, (Device, Option<Vec<u8>>)>,
     shown: HashMap<String, Shown>,
     acted: HashMap<String, Instant>,
 }
@@ -75,7 +76,7 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
 fn tools() -> Value {
     let point = json!({ "type": "number", "description": "Pixels of the image the last look returned" });
     json!([
-        tool("devices", "The devices this machine can use, one a line: its name, a tab, and how it is kept. One \"not used here yet\" is offered by another machine and not yet believed: use it only if the user named it.", json!({}), &[]),
+        tool("devices", "The devices this machine can use, one a line: its name, a tab, and how it is kept (one sentence where there is none). One \"not used here yet\" is offered by another machine and believed the first time it is used: use it only if the user named it.", json!({}), &[]),
         tool("look", "The device's screen now, as an image. Do this before every tap or swipe: it serves one action.", json!({}), &[]),
         tool("tap", "Tap a point of the last look. Operates the device: whatever is there gets pressed.", json!({ "x": point, "y": point }), &["x", "y"]),
         tool("swipe", "Drag from one point of the last look to another (to scroll, or move something). Operates the device.",
@@ -99,9 +100,15 @@ fn tools() -> Value {
 /// Whether the call `line` asks for was taken back by a message that came after it (notifications/cancelled):
 /// it then isn't made, and isn't answered. One that runs already runs out.
 fn taken_back<'a>(line: &str, later: impl Iterator<Item = &'a String>) -> bool {
+    if !is_call(line) { return false }
     let Some(id) = serde_json::from_str::<Value>(line).ok().and_then(|call| call.get("id").cloned()).filter(|id| !id.is_null()) else { return false };
     later.filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .any(|said| said["method"] == "notifications/cancelled" && said["params"]["requestId"] == id)
+}
+
+/// Whether a message asks for a tool: the only kind that is taken back, or dropped once the client went.
+fn is_call(line: &str) -> bool {
+    serde_json::from_str::<Value>(line).is_ok_and(|said| said["method"] == "tools/call")
 }
 
 impl Server {
@@ -109,7 +116,10 @@ impl Server {
     pub fn serve(&mut self) -> i32 {
         let stdout = std::io::stdout();
         // Read as it comes, while a call runs: what is taken back meanwhile is known before its turn.
-        let (tell, told) = std::sync::mpsc::channel::<String>();
+        // No more than these wait at once: a client that sends on regardless waits itself.
+        let (tell, told) = std::sync::mpsc::sync_channel::<String>(256);
+        let gone = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let went = gone.clone();
         std::thread::spawn(move || {
             for line in std::io::stdin().lock().lines() {
                 match line {
@@ -119,12 +129,15 @@ impl Server {
                     Err(_) => break,
                 }
             }
+            went.store(true, std::sync::atomic::Ordering::SeqCst);
         });
         let mut waiting = std::collections::VecDeque::new();
-        loop {
+        while let Some(line) = waiting.pop_front().or_else(|| told.recv().ok()) {
+            // All that came meanwhile, this call's own taking back among it.
             waiting.extend(told.try_iter());
-            let Some(line) = waiting.pop_front().or_else(|| told.recv().ok()) else { break };
             if line.trim().is_empty() || taken_back(&line, waiting.iter()) { continue }
+            // The client went: what it had asked of the device and wasn't begun, isn't.
+            if gone.load(std::sync::atomic::Ordering::SeqCst) && is_call(&line) { continue }
             if let Some(answer) = self.handle(&line) {
                 let mut out = stdout.lock();
                 if writeln!(out, "{answer}").and_then(|()| out.flush()).is_err() { break }
@@ -161,10 +174,13 @@ impl Server {
 
     /// The device, opened if it isn't.
     fn device(&mut self, name: &str) -> Result<&Device, String> {
+        // Removed since, or another saved under the name: the one that is open isn't the one named any more.
+        if self.open.get(name).is_some_and(|(_, was)| device::mark(name) != *was) { self.open.remove(name); }
         if !self.open.contains_key(name) {
-            self.open.insert(name.to_string(), device::opened(name)?);
+            let device = device::opened(name)?;
+            self.open.insert(name.to_string(), (device, device::mark(name)));
         }
-        Ok(&self.open[name])
+        Ok(&self.open[name].0)
     }
 
     /// Asks the device, once: the library sends again by itself where nothing had reached the device, and
@@ -179,12 +195,12 @@ impl Server {
     }
 
     fn call(&mut self, tool: &str, arguments: &Value) -> Result<Vec<Value>, String> {
-        if tool == "devices" { return device::listed().map(text) }
+        if tool == "devices" { return device::listed(true).map(text) }
         let name = arguments["device"].as_str().ok_or("device is missing")?.to_string();
         // One that is open is known: asking again what there is would ask every machine that might sign.
         if !self.open.contains_key(&name) {
             let names = device::names()?;
-            if !names.contains(&name) { return Err(format!("no such device; there are: {}", names.join(", "))); }
+            if !names.contains(&name) { return Err(format!("no such device “{name}”: `devices` lists what there is, and says where a machine that should sign isn't found")); }
         }
         let number = |key: &str| arguments[key].as_f64().ok_or(format!("{key} is missing"));
         let word = |key: &str| arguments[key].as_str().map(str::to_string).ok_or("nothing to send".to_string());
@@ -196,7 +212,8 @@ impl Server {
                 if let Some(wait) = self.acted.get(&name).and_then(|at| SETTLE.checked_sub(at.elapsed())) { std::thread::sleep(wait); }
                 let device = self.device(&name)?;
                 let (png, way) = match device.screenshot() {
-                    Ok(png) => (png, device.way()),
+                    // Not said the first time, it is asked once more: a point is turned by it.
+                    Ok(png) => (png, match device.way() { 0 => device.way(), way => way }),
                     Err(_) => {
                         // Let go of meanwhile: once more, on a new connection.
                         self.open.remove(&name);
@@ -318,6 +335,8 @@ mod tests {
         let (call, cancel) = (r#"{"jsonrpc":"2.0","id":7,"method":"tools/call"}"#.to_string(), r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":7}}"#.to_string());
         assert!(taken_back(&call, [&cancel].into_iter()));
         assert!(!taken_back(&call.replace("7", "8"), [&cancel].into_iter()) && !taken_back(&call, [].into_iter()) && !taken_back(&cancel, [&cancel].into_iter()));
+        // Only a tool's call: what says what the server is, is answered whatever follows.
+        assert!(!taken_back(&call.replace("tools/call", "initialize"), [&cancel].into_iter()) && is_call(&call) && !is_call(&cancel));
         let batch: Value = serde_json::from_str(&server.handle(r#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#).unwrap()).unwrap();
         assert_eq!(batch["error"]["code"], -32600);
         let unknown: Value = serde_json::from_str(&server.handle(r#"{"jsonrpc":"2.0","id":7,"method":"nope"}"#).unwrap()).unwrap();

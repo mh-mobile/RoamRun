@@ -144,7 +144,7 @@ fn main() {
         // The old name isn't taken; whoever was shown it by an earlier RoamRun is told the new one.
         let old = std::env::args_os().take_while(|a| a != "--").any(|a| a.to_str().is_some_and(|a| a == "--mac" || a.starts_with("--mac=")));
         if old && refused.kind() == clap::error::ErrorKind::UnknownArgument {
-            eprintln!("roamrunctl: --mac is --host since 0.7.0: roamrunctl pair introduce --host <the machine that will hold the pairing> --to <device>");
+            note!("roamrunctl: --mac is --host since 0.7.0: roamrunctl pair introduce --host <the machine that will hold the pairing> --to <device>");
             std::process::exit(2);
         }
         refused.exit()
@@ -156,8 +156,8 @@ fn main() {
             (None, Some(with)) => hold::run(&with, name, passphrase),
             (None, None) => Err("which device: --to <its Tailscale name> for one on this Wi‑Fi, or --with <the machine beside it>".into()),
         } {
-            Ok(said) => { println!("{said}"); return }
-            Err(why) => { eprintln!("roamrunctl: {why}"); std::process::exit(1) }
+            Ok(said) => { let _ = writeln!(std::io::stdout(), "{said}"); return }
+            Err(why) => { note!("roamrunctl: {why}"); std::process::exit(1) }
         },
         other => std::process::exit(device::run(other)),
     };

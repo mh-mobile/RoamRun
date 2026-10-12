@@ -52,7 +52,173 @@ A firewall on the machine has to let the device in: it connects over TCP to the 
 on, from the address it says the device has. With ufw on Ubuntu (which lets mDNS in as it comes) that is
 `sudo ufw allow proto tcp from <the device's address>`; on Windows, the question it asks is enough.
 
-## Use
+## Using a device from a machine without Xcode
+
+Since 0.7.0. A machine with a pairing of its own reaches the device over Tailscale by itself, with no Xcode on it.
+Three machines are spoken of below, and one machine can be two of them:
+
+- **the near machine**: on the device's Wi‑Fi. Pairing needs one, once.
+- **the using machine**: where `look`, `install`, `launch` and `mcp` run — an agent's, perhaps in a cloud.
+- **the key's machine**: where the pairing's key is kept. In A it is the using machine; in B it is another, of
+  yours — the one that signs (`ROAMRUNCTL_SIGNER` names it).
+
+A where the key may lie on the machine the agent runs on; B where it shouldn't. Neither limits what an agent
+there does with the device.
+
+| | What is run, and where |
+|---|---|
+| **A**, using machine on the device's Wi‑Fi | using machine: `pair control --to <device>` |
+| **A**, using machine elsewhere | using machine: `pair control --with <near machine>` · near machine: `pair introduce --host <using machine> --to <device>` |
+| **B** | key's machine, on the device's Wi‑Fi: `pair control --to <device>`, then `sign <name> --for <using machine>` left running · using machine: nothing — unless it is tagged or another user's (a cloud machine often is): then `ROAMRUNCTL_SIGNER=<key's machine>` there, for `mcp` in the agent's MCP config |
+
+Each `pair` command shows the pairing code, which is the owner's consent: run it yourself, in a terminal of your own.
+
+Before starting:
+
+- The device on Wi‑Fi (on cellular alone it refuses), unlocked once since it started, and connected in Tailscale.
+- Tailscale's rules let the using machine reach the device, and — in B — the key's machine on TCP port 41831.
+  In B the key's machine reaches the device over the tailnet too: a pairing is tried that way before it is kept.
+- A machine that waits is let in, by Tailscale's rules and its own firewall: with `pair control --to`, the
+  device, on the port the command says; with `pair control --with`, the near machine — on port 41830, and on a
+  port that is another each time (the command says which once it has it), so let that machine in on any TCP
+  port. A wait that isn't let in reads as nobody waiting.
+- For `pair control --with`: a device that has been paired with something before (see below).
+- In B, the using machine can write to its own `~/.config/roamrunctl/devices`: what it holds a device to is saved
+  there, and without that it doesn't use the device.
+
+### A. The using machine holds the key
+
+On the device's own Wi‑Fi, it pairs there and then:
+
+```sh
+roamrunctl pair control --to <the device's Tailscale name> --as phone
+# on the device: Settings › Privacy & Security › Developer Mode › this machine's name, and the code
+```
+
+The device connects to this machine for that: a firewall here has to let it in. The command says the port it
+announced and the device's address on the Wi‑Fi (with ufw: `sudo ufw allow proto tcp from <that address>`).
+
+Elsewhere — a machine in a cloud — the near machine introduces it, once:
+
+```sh
+# on the using machine
+roamrunctl pair control --with <the near machine> --as phone
+# on the near machine (`roamrun pair introduce` on a Mac does the same)
+roamrunctl pair introduce --host <the using machine> --to <the device's Tailscale name>
+# on the device: Settings › Privacy & Security › Developer Mode › the using machine's name, and the code
+```
+
+The code shows on both machines. What the near machine prints calls the using machine "the host". The near
+machine gives the pairing five minutes.
+
+With the Introducer app on the device (built from `iOS/` with Xcode) there is no near machine: the using machine
+names the device itself, `roamrunctl pair control --with <the device's Tailscale name>`, and in the app the using
+machine's Tailscale name goes where it asks for the far Mac's. A Mac's `roamrun pair introduce` needs the device
+saved in RoamRun there.
+
+`--with` is for a device that has been paired with something before: one that never was announces nothing the
+near machine could pass on, and `pair introduce` says so. Pair it once first, with a Mac's Xcode or with
+`pair control --to` on the near machine — which then holds a key too: `roamrunctl devices remove` it there if it
+isn't to. (Whether the latter alone is enough wasn't tried.)
+
+From then on, on the using machine:
+
+```sh
+roamrunctl look phone shot.png        # the device's own screenshot, 1280 at most on its longer side
+roamrunctl install phone App.ipa      # an app built and signed for the device already
+roamrunctl launch phone com.example.App
+roamrunctl mcp                        # the same, and tap / swipe / type / paste / press / elements, as MCP tools
+```
+
+For an agent, its MCP config names the command `roamrunctl` with the argument `mcp`.
+
+A Mac with RoamRun can make the pairing and hand it over instead: `roamrun key create <device> device.key`
+there, `roamrunctl key import device.key` here.
+
+The saved pairing is a key: whoever can read it and reach the device can see and operate it. It is
+`~/.config/roamrunctl/devices/<name>.json` (under `$XDG_CONFIG_HOME` where that is set;
+`%LOCALAPPDATA%\roamrunctl\devices` on Windows). On Linux and macOS it is made for its owner alone, and one that
+others can read is refused; on Windows nothing is checked — it is the user's by what the profile folder gives it.
+So **any program running as that user, an agent among them, can use the device**: that is what this way is.
+
+`--passphrase` (on `pair control` and `key import`) keeps it in age's passphrase format instead. It keeps the
+file from being a key on its own, in a backup or a copied home folder. It doesn't keep the device from a program
+that runs as the same user and can read the passphrase where you put it. The passphrase is never taken from the
+command line. It comes from `ROAMRUNCTL_PASSPHRASE_FILE`, else `ROAMRUNCTL_PASSPHRASE_COMMAND` (run by `sh -c`,
+or `cmd /C`), else `ROAMRUNCTL_PASSPHRASE`, else it is typed:
+
+| Command | The passphrase |
+|---|---|
+| `pair control --passphrase`, `key import --passphrase` | typed twice — or, where one of the three is set, taken from it |
+| `look`, `install`, `launch` | each time: every command is a new process |
+| `mcp` | from one of the three only: its input is the agent's, and nothing can be typed there |
+| `sign` | once for each device named that is kept under one, when it starts |
+| `devices`, `devices remove` | not asked |
+
+### B. Another machine keeps the key, and signs
+
+For when the key shouldn't lie on the machine an agent runs on.
+
+```sh
+# on the key's machine, on the device's Wi‑Fi: pair there
+roamrunctl pair control --to <the device's Tailscale name> --as phone --passphrase
+# and leave this running: it names the devices, and the one machine it signs for
+roamrunctl sign phone --for <the using machine>
+
+# on the using machine: nothing to set up (tagged, or another user's: ROAMRUNCTL_SIGNER=<the key's machine>)
+roamrunctl devices          # phone   its key is kept by <the key's machine>, which signs for this machine (not used here yet)
+roamrunctl look phone       # the first time: "phone is used for the first time here: <the key's machine> signs for it, and that is held to from now on"
+roamrunctl mcp              # look, install, launch: as in A
+```
+
+A connection to the device has one thing signed with the pairing's key. The using machine asks the key's machine
+for that signature (TCP port 41831, on the tailnet), and does everything else itself — it reaches the device
+directly, as in A. The key's machine has to let it in on that port (Tailscale's rules, and its own firewall).
+
+**What this gives:** the key isn't on the using machine to be copied from; ending `sign` (Ctrl-C), or removing the
+device on the key's machine, ends new connections; and `sign` says each connection it signs. `sign` holds each
+device to the file it read when it started: after pairing one again under its name, end `sign` and run it again
+(both sides say so once the using machine has used the device; before that it only goes from what is listed there). (Not tried: whether a
+connection, once made, can add a pairing of its own on the device. If it can, this keeps no key from that machine.)
+**What it doesn't:** while `sign` answers, the using machine connects as often as it asks, any program on it can
+ask, and a connection does everything. One already open — a running `roamrunctl mcp` — goes on after `sign` ends,
+until it is closed. B is about where the key lies and when it can be used, not about what an agent may do.
+
+How each finds the other, and what is trusted:
+
+- `sign` answers the one machine named, held to its tailnet address and Tailscale's id for it. It signs for the
+  devices named, and only what has the shape of a connection's check — not what making a new pairing signs. It
+  answers one request at a time: that machine can make it wait, and no other.
+- The using machine asks its user's other machines on the tailnet which signs for it. A tagged machine (CI) is
+  nobody's and asks none, and another user's asks that user's, not yours: there, set
+  `ROAMRUNCTL_SIGNER=<the key's machine>`. `sign` says so when it starts. A name there that isn't on the tailnet
+  is said; devices saved on that machine itself are used all the same.
+- The first time the using machine uses a device, it saves which machine signs for it and which device that is
+  (no key), and holds to that from then on; where that can't be saved, the device isn't used. Until then it believes any of its user's machines that offers the
+  name (of two, the one whose Tailscale name sorts first): on a tailnet where one of those may be someone else's
+  to run, set `ROAMRUNCTL_SIGNER` from the start.
+  `roamrunctl devices remove <name>` there forgets it.
+- The using machine knows a device by the name its key's machine saved it under. Two key's machines that sign
+  for one device (home and office) have to have saved it under different names.
+
+To not type the passphrase when `sign` starts, hand it by a command that reads your keychain — on a Mac, once it
+is stored there: `ROAMRUNCTL_PASSPHRASE_COMMAND='security find-generic-password -a "$USER" -s roamrunctl -w'`.
+
+### What an agent's looks and inputs show on the device
+
+A look is the device's own screenshot, and inputs are sent without a screen stream: the device lists no
+screen-sharing session, and what plays goes on sounding (listened to with Apple Music on iOS 27.0, with looks,
+taps, keys and buttons). Not looked into: swipes and paste that way, and the microphone. `paste` makes the device
+ask "Allow Paste". Only `tap` and `swipe` are held to a look just taken; `type`, `paste` and `press` go to
+whatever is on the screen. A call the agent takes back before its turn isn't made, nor one whose turn comes after
+the agent went; one that runs already runs out. While `roamrunctl mcp` runs, a device removed, or another saved
+under its name, isn't the one it had open: it is opened anew, or said to be gone.
+
+`install` puts an app on the device under its own name before it is taken in, as every `roamrunctl install` of that
+name does: one install of an app to a device at a time. What an install that was cut short left there is cleared
+before an .app folder is sent again (not tried against a device). An install is given five minutes.
+
+## Introducing a far Mac (`pair introduce`)
 
 ```
 roamrunctl pair introduce --host <far Mac's Tailscale name> --to <device's Tailscale name> [--offer <line>] [--as <name>] [--deadline <secs>] [--on <address>]
@@ -97,168 +263,13 @@ The check uses a test service type (`_rrtest._tcp`), a fake far Mac on 127.0.0.1
 device sees anything. It confirms the record resolves through mDNSResponder, a stranger is refused, the carried connection
 ends the run, the device line is made, and the goodbye reaches a browser within a few seconds.
 
-## Using a device from a machine without Xcode
-
-Since 0.7.0. A machine with a pairing of its own reaches the device over Tailscale by itself, with no Xcode on it.
-Three machines are spoken of below, and one machine can be two of them:
-
-- **the near machine**: on the device's Wi‑Fi. Pairing needs one, once.
-- **the using machine**: where `look`, `install`, `launch` and `mcp` run — an agent's, perhaps in a cloud.
-- **the key's machine**: where the pairing's key is kept. In A it is the using machine; in B it is another, of
-  yours — the one that signs (`ROAMRUNCTL_SIGNER` names it).
-
-A where the key may lie on the machine the agent runs on; B where it shouldn't. Neither limits what an agent
-there does with the device.
-
-| | What is run, and where |
-|---|---|
-| **A**, using machine on the device's Wi‑Fi | using machine: `pair control --to <device>` |
-| **A**, using machine elsewhere | using machine: `pair control --with <near machine>` · near machine: `pair introduce --host <using machine> --to <device>` |
-| **B** | key's machine, on the device's Wi‑Fi: `pair control --to <device>`, then `sign <name> --for <using machine>` left running · using machine: nothing — unless it is tagged or another user's (a cloud machine often is): then `ROAMRUNCTL_SIGNER=<key's machine>` there, for `mcp` in the agent's MCP config |
-
-Each `pair` command shows the pairing code, which is the owner's consent: run it yourself, in a terminal of your own.
-
-Before starting:
-
-- The device on Wi‑Fi (on cellular alone it refuses), unlocked once since it started, and connected in Tailscale.
-- Tailscale's rules let the using machine reach the device, and — in B — the key's machine on TCP port 41831.
-- A machine that waits is let in on what it waits on, by Tailscale's rules and its own firewall: with `pair control
-  --to`, the device, on the port the command says; with `pair control --with`, the near machine, on port 41830
-  and the port it then offers. A wait that isn't let in reads as nobody waiting.
-
-### A. The using machine holds the key
-
-On the device's own Wi‑Fi, it pairs there and then:
-
-```sh
-roamrunctl pair control --to <the device's Tailscale name> --as phone
-# on the device: Settings › Privacy & Security › Developer Mode › this machine's name, and the code
-```
-
-The device connects to this machine for that: a firewall here has to let it in. The command says the port it
-announced and the device's address on the Wi‑Fi (with ufw: `sudo ufw allow proto tcp from <that address>`).
-
-Elsewhere — a machine in a cloud — the near machine introduces it, once:
-
-```sh
-# on the using machine
-roamrunctl pair control --with <the near machine> --as phone
-# on the near machine (`roamrun pair introduce` on a Mac does the same)
-roamrunctl pair introduce --host <the using machine> --to <the device's Tailscale name>
-# on the device: Settings › Privacy & Security › Developer Mode › the using machine's name, and the code
-```
-
-With the Introducer app on the device (built from `iOS/` with Xcode) there is no near machine: the using machine
-names the device itself, `roamrunctl pair control --with <the device's Tailscale name>`, and in the app the using
-machine's Tailscale name goes where it asks for the far Mac's. A Mac's `roamrun pair introduce` needs the device
-saved in RoamRun there.
-
-`--with` is for a device that has been paired with something before: one that never was announces nothing the
-near machine could pass on, and `pair introduce` says so. Pair it once first, with a Mac's Xcode or with
-`pair control --to` on the near machine — which then holds a key too: `roamrunctl devices remove` it there if it
-isn't to. (Whether the latter alone is enough wasn't tried.)
-
-From then on, on the using machine:
-
-```sh
-roamrunctl look phone shot.png        # the device's own screenshot, 1280 at most on its longer side
-roamrunctl install phone App.ipa      # an app built and signed for the device already
-roamrunctl launch phone com.example.App
-roamrunctl mcp                        # the same, and tap / swipe / type / paste / press / elements, as MCP tools
-```
-
-For an agent, its MCP config names the command `roamrunctl` with the argument `mcp`.
-
-A Mac with RoamRun can make the pairing and hand it over instead: `roamrun key create <device> device.key`
-there, `roamrunctl key import device.key` here.
-
-The saved pairing is a key: whoever can read it and reach the device can see and operate it. It is
-`~/.config/roamrunctl/devices/<name>.json` (under `$XDG_CONFIG_HOME` where that is set;
-`%APPDATA%\roamrunctl\devices` on Windows). On Linux and macOS it is made for its owner alone, and one that
-others can read is refused; on Windows nothing is checked — it is the user's by what the profile folder gives it.
-So **any program running as that user, an agent among them, can use the device**: that is what this way is.
-
-`--passphrase` (on `pair control` and `key import`) keeps it in age's passphrase format instead. It keeps the
-file from being a key on its own, in a backup or a copied home folder. It doesn't keep the device from a program
-that runs as the same user and can read the passphrase where you put it. The passphrase is never taken from the
-command line. It comes from `ROAMRUNCTL_PASSPHRASE_FILE`, else `ROAMRUNCTL_PASSPHRASE_COMMAND` (run by `sh -c`,
-or `cmd /C`), else `ROAMRUNCTL_PASSPHRASE`, else it is typed:
-
-| Command | The passphrase |
-|---|---|
-| `pair control --passphrase`, `key import --passphrase` | typed twice — or, where one of the three is set, taken from it |
-| `look`, `install`, `launch` | each time: every command is a new process |
-| `mcp` | from one of the three only: its input is the agent's, and nothing can be typed there |
-| `sign` | once for each device named that is kept under one, when it starts |
-| `devices`, `devices remove` | not asked |
-
-### B. Another machine keeps the key, and signs
-
-For when the key shouldn't lie on the machine an agent runs on.
-
-```sh
-# on the key's machine, on the device's Wi‑Fi: pair there
-roamrunctl pair control --to <the device's Tailscale name> --as phone --passphrase
-# and leave this running: it names the devices, and the one machine it signs for
-roamrunctl sign phone --for <the using machine>
-
-# on the using machine: nothing to set up (tagged, or another user's: ROAMRUNCTL_SIGNER=<the key's machine>)
-roamrunctl devices          # phone   its key is kept by <the key's machine>, which signs for this machine (not used here yet)
-roamrunctl look phone       # the first time: "phone is used for the first time here: <the key's machine> signs for it, and that is held to from now on"
-roamrunctl mcp              # look, install, launch: as in A
-```
-
-A connection to the device has one thing signed with the pairing's key. The using machine asks the key's machine
-for that signature (TCP port 41831, on the tailnet), and does everything else itself — it reaches the device
-directly, as in A. The key's machine has to let it in on that port (Tailscale's rules, and its own firewall).
-
-**What this gives:** the key isn't on the using machine to be copied from; ending `sign` (Ctrl-C), or removing the
-device on the key's machine, ends new connections; and `sign` says each connection it signs. `sign` holds each
-device to the file it read when it started: after pairing one again under its name, end `sign` and run it again
-(both sides say so). (Not tried: whether a
-connection, once made, can add a pairing of its own on the device. If it can, this keeps no key from that machine.)
-**What it doesn't:** while `sign` answers, the using machine connects as often as it asks, any program on it can
-ask, and a connection does everything. One already open — a running `roamrunctl mcp` — goes on after `sign` ends,
-until it is closed. B is about where the key lies and when it can be used, not about what an agent may do.
-
-How each finds the other, and what is trusted:
-
-- `sign` answers the one machine named, held to its tailnet address and Tailscale's id for it. It signs for the
-  devices named, and only what has the shape of a connection's check — not what making a new pairing signs. It
-  answers one request at a time: that machine can make it wait, and no other.
-- The using machine asks its user's other machines on the tailnet which signs for it. A tagged machine (CI) is
-  nobody's and asks none, and another user's asks that user's, not yours: there, set
-  `ROAMRUNCTL_SIGNER=<the key's machine>`. `sign` says so when it starts. A name there that isn't on the tailnet
-  is said; devices saved on that machine itself are used all the same.
-- The first time the using machine uses a device, it saves which machine signs for it and which device that is
-  (no key), and holds to that from then on; where that can't be saved, the device isn't used. Until then it believes any of its user's machines that offers the
-  name (of two, the one whose Tailscale name sorts first): on a tailnet where one of those may be someone else's
-  to run, set `ROAMRUNCTL_SIGNER` from the start.
-  `roamrunctl devices remove <name>` there forgets it.
-- The using machine knows a device by the name its key's machine saved it under. Two key's machines that sign
-  for one device (home and office) have to have saved it under different names.
-
-To not type the passphrase when `sign` starts, hand it by a command that reads your keychain — on a Mac, once it
-is stored there: `ROAMRUNCTL_PASSPHRASE_COMMAND='security find-generic-password -a "$USER" -s roamrunctl -w'`.
-
-### What an agent's looks and inputs show on the device
-
-A look is the device's own screenshot, and inputs are sent without a screen stream: the device lists no
-screen-sharing session, and what plays goes on sounding (listened to with Apple Music on iOS 27.0, with looks,
-taps, keys and buttons). Not looked into: swipes and paste that way, and the microphone. `paste` makes the device
-ask "Allow Paste". Only `tap` and `swipe` are held to a look just taken; `type`, `paste` and `press` go to
-whatever is on the screen. A call the agent takes back before its turn isn't made; one that runs already runs out.
-
-`install` puts the app where every install to that device puts it before it is taken in: one install to a device
-at a time, and after one that was cut short, another build of an .app folder may keep files of the first.
-
 ## Where it stands
 
 ### Holding and using a device (0.7.0)
 
 Tried against a device (iPhone 15 Pro, iOS 27.0), from Linux and macOS — each before the reviews that then
-changed how a saved device's port is looked for, how `pair control --with` learns which device it is, and when
-`mcp` presses a point or sends again; none was run again since:
+changed how a saved device's port is looked for, how `pair control --with` learns which device it is, when `mcp`
+presses a point or sends again and how it reads its calls, and how files are written; none was run again since:
 
 - `pair control --with` on a Linux VM on the tailnet, introduced by this crate's `pair introduce --host` on a Mac
   beside the device; a wrong code kept nothing; the VM then looked at its screen.
