@@ -288,7 +288,7 @@ Ubuntu VM on the tailnet) as the using machine and a Mac beside the device, once
   at once ("doesn't accept this pairing"): pairing again replaces it.
 - `pair control --with <the device's Tailscale name>` on the VM and the Introducer app on the device (far Mac: the
   VM's name), with no machine beside it: the app said the VM pairs for device control, the code showed on the VM, and
-  the pairing was kept and looked with. (The app's last screen says to try `roamrun look` there: it is `roamrunctl look`.)
+  the pairing was kept and looked with. (The app's last screen then said to try `roamrun look` there; it names `roamrunctl look` too since.)
 - On Windows 11 (ARM, a virtual machine bridged onto the device's Wi‑Fi, the build CI made, PowerShell run as
   administrator): `pair control --to … --passphrase` with the passphrase given by `ROAMRUNCTL_PASSPHRASE_COMMAND`
   (a command with double quotes in it), kept under `%LOCALAPPDATA%`; `look`, and again with the same passphrase

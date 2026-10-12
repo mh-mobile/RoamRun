@@ -277,7 +277,7 @@ final class Session {
             UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "introducer.code", content: content, trigger: nil))
         case .done(let on):
             finish(.init(tone: .success, title: "\(name) can operate this iPhone",
-                         detail: on ? "Device control is paired and switched on there. Try, on \(name): roamrun look"
+                         detail: on ? "Device control is paired there, and on. Try, on \(name): roamrun look — or, where it has roamrunctl and no RoamRun, roamrunctl devices and roamrunctl look <the name it lists>"
                                     : "Device control is paired, and switched off there: switch it on in the RoamRun app on \(name)."))
         case .failed(let why): finish(.init(tone: .failure, title: "Not paired for device control", detail: "\(name) \(Wire.sentence(failed: why))"))
         case .ended(let why): finish(.init(tone: .failure, title: "\(name) stopped", detail: "\(name) \(Wire.sentence(ended: why))"))
