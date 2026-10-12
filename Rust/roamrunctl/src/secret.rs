@@ -7,7 +7,7 @@ use age::secrecy::SecretString;
 
 /// A file holding the passphrase alone (a trailing newline isn't part of it).
 pub const FILE: &str = "ROAMRUNCTL_PASSPHRASE_FILE";
-/// A command, run by `sh -c`, that prints it: a password manager's, a keychain's.
+/// A command, run by `sh -c` (`cmd /C` on Windows), that prints it: a password manager's, a keychain's.
 pub const COMMAND: &str = "ROAMRUNCTL_PASSPHRASE_COMMAND";
 /// The passphrase itself. The weakest of the three: any process of this user can read it, and children inherit it.
 pub const ITSELF: &str = "ROAMRUNCTL_PASSPHRASE";
@@ -23,7 +23,8 @@ pub fn given(get: impl Fn(&str) -> Option<String>) -> Result<Option<String>, Str
         return whole(std::fs::read_to_string(&path).map_err(|e| format!("{FILE} ({path}): {e}"))?, FILE).map(Some);
     }
     if let Some(command) = get(COMMAND) {
-        let ran = std::process::Command::new("sh").arg("-c").arg(&command).stderr(std::process::Stdio::inherit()).output()
+        let (shell, flag) = if cfg!(windows) { ("cmd", "/C") } else { ("sh", "-c") };
+        let ran = std::process::Command::new(shell).arg(flag).arg(&command).stderr(std::process::Stdio::inherit()).output()
             .map_err(|e| format!("{COMMAND}: {e}"))?;
         if !ran.status.success() { return Err(format!("{COMMAND} failed ({})", ran.status)); }
         return whole(String::from_utf8(ran.stdout).map_err(|_| format!("{COMMAND} printed what isn't text"))?, COMMAND).map(Some);
@@ -81,7 +82,7 @@ mod tests {
         let path = file.to_string_lossy().to_string();
         let env = |pairs: &[(&str, &str)]| { let pairs: Vec<(String, String)> = pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(); move |name: &str| pairs.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone()) };
         assert_eq!(given(env(&[(FILE, &path), (COMMAND, "echo no"), (ITSELF, "no")])).unwrap().as_deref(), Some("from the file"));
-        assert_eq!(given(env(&[(COMMAND, "printf 'from the command\\n'"), (ITSELF, "no")])).unwrap().as_deref(), Some("from the command"));
+        assert_eq!(given(env(&[(COMMAND, "echo from the command"), (ITSELF, "no")])).unwrap().as_deref(), Some("from the command"));
         assert_eq!(given(env(&[(ITSELF, "itself")])).unwrap().as_deref(), Some("itself"));
         assert_eq!(given(env(&[])).unwrap(), None);
         // One that fails, or gives nothing, is said: not passed over for the next.

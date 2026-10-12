@@ -20,8 +20,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "signal", "sync"] }
 
-# Holding a pairing and using the device: not on Windows, where this only introduces.
-[target.'cfg(not(windows))'.dependencies]
+# Holding a pairing and using the device.
 roamrun-device = { path = "../RoamRunDevice" }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 # Pinned: before 1.0, and what a saved pairing is read back with.
@@ -30,6 +29,7 @@ rpassword = "7"
 # For the machine that keeps a pairing's key and signs with it: both are idevice's own already.
 ed25519-dalek = "2"
 plist = "1"
+getrandom = "0.3"
 
 [profile.release]
 opt-level = "s"

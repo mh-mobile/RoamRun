@@ -1,7 +1,7 @@
 //! `roamrunctl pair control --with <machine>`: this machine comes to hold a pairing of its own with a
 //! device it isn't near. The machine named sits on the device's Wi‑Fi and introduces it (`roamrunctl pair
 //! introduce --host <this one>`, `roamrun pair introduce`, or the Introducer app); what the two say is
-//! what a Mac's `roamrun pair control --with` says. Not built for Windows.
+//! what a Mac's `roamrun pair control --with` says.
 
 use std::net::{Ipv4Addr, TcpListener};
 use std::sync::{mpsc, Arc};
@@ -35,22 +35,20 @@ const MODEL: &str = "Mac17,7";
 /// pairing again replaces the device's record of it.
 fn host_id() -> Result<String, String> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let path = device::folder()?.join("../host-id");
+    let path = device::folder()?.with_file_name("host-id");
     if let Ok(id) = std::fs::read_to_string(&path) {
         if lines::is_uuid(id.trim()) { return Ok(id.trim().to_string()); }
     }
     let id = uuid()?;
     let _ = std::fs::remove_file(&path);
-    std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)
+    device::own_file(&path)
         .and_then(|mut file| file.write_all(id.as_bytes())).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(id)
 }
 
 pub fn random<const N: usize>() -> Result<[u8; N], String> {
-    use std::io::Read;
     let mut b = [0u8; N];
-    std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b)).map_err(|e| format!("no random source: {e}"))?;
+    getrandom::fill(&mut b).map_err(|e| format!("no random source: {e}"))?;
     Ok(b)
 }
 
@@ -143,7 +141,7 @@ fn paired(mut link: Wire, with: &str, me: &str, own: Ipv4Addr, only: Ipv4Addr, l
     let name = name.unwrap_or_else(|| filed(&sent.name));
     if let Err(why) = device::free(&name) { return refuse(&mut link, "exists", why); }
     let socket = TcpListener::bind((own, 0)).map_err(|e| Stopped::For(format!("can't listen on {own}: {e}")))?;
-    let (pairing, advert) = match Pairing::listen_on(shown, MODEL, host, socket.into(), &only.to_string()) {
+    let (pairing, advert) = match Pairing::listen_on(shown, MODEL, host, socket, &only.to_string()) {
         Ok(listening) => listening,
         Err(why) => return refuse(&mut link, "failed", format!("couldn't listen for the device: {why}")),
     };

@@ -2,15 +2,10 @@
 #![forbid(unsafe_code)]
 
 mod announce;
-#[cfg(not(windows))]
 mod device;
-#[cfg(not(windows))]
 mod hold;
-#[cfg(not(windows))]
 mod mcp;
-#[cfg(not(windows))]
 mod secret;
-#[cfg(not(windows))]
 mod sign;
 mod lines;
 mod relay;
@@ -47,31 +42,24 @@ enum Command {
         command: Pair,
     },
     /// Devices this machine holds a pairing with
-    #[cfg(not(windows))]
     Devices {
         #[command(subcommand)]
         command: Option<device::Devices>,
     },
     /// A pairing made on another machine
-    #[cfg(not(windows))]
     Key {
         #[command(subcommand)]
         command: device::Key,
     },
     /// Save the device's screen now as PNG, its longer side 1280 at most; prints the path, then its size
-    #[cfg(not(windows))]
     Look { name: String, file: Option<std::path::PathBuf> },
     /// Install an app built and signed for the device: an .ipa, or an .app folder
-    #[cfg(not(windows))]
     Install { name: String, path: std::path::PathBuf },
     /// Launch an app on the device (one already running is ended first)
-    #[cfg(not(windows))]
     Launch { name: String, bundle: String },
     /// The device's commands as MCP tools, over stdin/stdout (for an agent's MCP config)
-    #[cfg(not(windows))]
     Mcp,
     /// Keep the pairings saved here to yourself and sign with them for another machine, which then uses the devices without having their keys; until Ctrl-C
-    #[cfg(not(windows))]
     Sign {
         /// The Tailscale name of the one machine that is answered
         #[arg(long = "for")]
@@ -84,7 +72,6 @@ enum Pair {
     /// Stand in on this LAN for a far Mac's offer to pair — with Xcode, or for device control, as that Mac asks — and carry the device's connection to it
     Introduce(Introduce),
     /// Have this machine hold a pairing of its own with a device it isn't near: the machine named, on the device's Wi‑Fi, introduces it
-    #[cfg(not(windows))]
     Control {
         /// The Tailscale name of the machine that introduces (or of the device itself, with the Introducer app)
         #[arg(long)]
@@ -132,12 +119,10 @@ macro_rules! say { ($($t:tt)*) => {{ let _ = writeln!(std::io::stderr(), "roamru
 fn main() {
     let args = match Cli::parse().command {
         Command::Pair { command: Pair::Introduce(args) } => args,
-        #[cfg(not(windows))]
         Command::Pair { command: Pair::Control { with, name, plain } } => match hold::run(&with, name, plain) {
             Ok(said) => { println!("{said}"); return }
             Err(why) => { eprintln!("roamrunctl: {why}"); std::process::exit(1) }
         },
-        #[cfg(not(windows))]
         other => std::process::exit(device::run(other)),
     };
     match introduce(args) {

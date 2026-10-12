@@ -97,7 +97,6 @@ pub fn state_problem(state: &str) -> Option<String> {
 
 /// As `peer`, and this machine itself where it is the one named: a key kept here under another user is
 /// asked for over this machine's own tailnet address.
-#[cfg_attr(windows, allow(dead_code))]
 pub fn machine(status: &Status, name: &str) -> Result<Peer, String> {
     let want = name.trim_end_matches('.').to_lowercase();
     let own = status.this.dns_name.trim_end_matches('.').to_lowercase();

@@ -161,15 +161,12 @@ unsafe impl Send for Pairing {}
 unsafe impl Sync for Pairing {}
 
 impl Pairing {
-    /// Listens on `socket` (a listening TCP socket, this call's from here on) for connections from `only` alone.
+    /// Listens on `listener` (this call's from here on) for connections from `only` alone.
     /// The second value is what to offer: JSON {"port":…,"identifier":…,"txt":{…}}.
-    pub fn listen_on(name: &str, model: &str, host: &str, socket: std::os::fd::OwnedFd, only: &str) -> Result<(Pairing, String), String> {
-        use std::os::fd::IntoRawFd;
-        let (name, model, host, only) = (c(name)?, c(model)?, c(host)?, c(only)?);
-        let (mut advert, mut error) = (std::ptr::null_mut(), std::ptr::null_mut());
-        let pairing = unsafe { rr_pairing_listen_on(name.as_ptr(), model.as_ptr(), host.as_ptr(), socket.into_raw_fd(), only.as_ptr(), &mut advert, &mut error) };
-        if pairing.is_null() { return Err(take(error)); }
-        Ok((Pairing(pairing), take(advert)))
+    pub fn listen_on(name: &str, model: &str, host: &str, listener: std::net::TcpListener, only: &str) -> Result<(Pairing, String), String> {
+        let only = only.parse::<std::net::IpAddr>().map_err(|_| "the address to take connections from isn't one".to_string())?;
+        let (pairing, advert) = crate::listening(name, model, host, Some(listener), Some(only))?;
+        Ok((Pairing(Box::into_raw(Box::new(pairing))), advert))
     }
 
     /// Waits for a device to pair; `code` is given the six digits to show. The answer is JSON: {"ok":true,"udid":…,

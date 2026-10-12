@@ -1377,10 +1377,13 @@ pub unsafe extern "C" fn rr_pairing_listen(name: *const c_char, model: *const c_
 /// function's whatever it returns; `only` is null or a NUL-terminated address.
 #[no_mangle]
 pub unsafe extern "C" fn rr_pairing_listen_on(name: *const c_char, model: *const c_char, host: *const c_char, socket: std::ffi::c_int, only: *const c_char, advert: *mut *mut c_char, error: *mut *mut c_char) -> *mut RRPairing {
-    use std::os::fd::FromRawFd;
     let arg = |p: *const c_char| (!p.is_null()).then(|| unsafe { CStr::from_ptr(p) }.to_str().ok()).flatten();
     // Taken first: every way out from here closes it.
-    let given = (socket >= 0).then(|| unsafe { std::net::TcpListener::from_raw_fd(socket) });
+    #[cfg(unix)]
+    let given = (socket >= 0).then(|| unsafe { <std::net::TcpListener as std::os::fd::FromRawFd>::from_raw_fd(socket) });
+    // A socket isn't an int there: one of the caller's making comes by `safe::Pairing::listen_on`.
+    #[cfg(not(unix))]
+    let given: Option<std::net::TcpListener> = { let _ = socket; None };
     let only = match arg(only).map(|a| a.parse::<std::net::IpAddr>()) {
         None if only.is_null() => None,
         Some(Ok(address)) => Some(address),
@@ -1390,29 +1393,7 @@ pub unsafe extern "C" fn rr_pairing_listen_on(name: *const c_char, model: *const
         }
     };
     let listening = match (arg(name), arg(model), arg(host)) {
-        (Some(name), Some(model), Some(host)) => tokio::runtime::Builder::new_multi_thread().worker_threads(1).thread_stack_size(STACK).enable_all().build()
-            .map_err(|e| format!("no runtime: {e}"))
-            .and_then(|runtime| {
-                let listener = match given {
-                    Some(given) => {
-                        given.set_nonblocking(true).map_err(|e| format!("can't listen: {e}"))?;
-                        let _in = runtime.enter();
-                        TcpListener::from_std(given).map_err(|e| format!("can't listen: {e}"))?
-                    }
-                    // Both families: the device reaches this Mac by whichever address its name resolves to.
-                    None => runtime.block_on(TcpListener::bind("[::]:0")).map_err(|e| format!("can't listen: {e}"))?,
-                };
-                let port = listener.local_addr().map_err(|e| format!("no port: {e}"))?.port();
-                // One identity per `host`, whatever it is named: pairing again replaces the
-                // device's record of it, and another Mac of the same name doesn't.
-                let file = RpPairingFile::generate(&format!("{LABEL} {host}"));
-                let mut info = PairableHostInfo::generate(name, model);
-                (info.serial_number, info.mac) = own_hardware(file.identifier());
-                let txt = info.mdns_txt_records(file.identifier()).iter()
-                    .map(|(k, v)| format!("{}:{}", quoted(k), quoted(v))).collect::<Vec<_>>().join(",");
-                let said = format!("{{\"port\":{port},\"identifier\":{},\"txt\":{{{txt}}}}}", quoted(file.identifier()));
-                Ok((RRPairing { runtime, listener, info, file: Mutex::new(file), cancelled: AtomicBool::new(false), only }, said))
-            }),
+        (Some(name), Some(model), Some(host)) => listening(name, model, host, given, only),
         _ => Err("bad arguments".into()),
     };
     match listening {
@@ -1425,6 +1406,30 @@ pub unsafe extern "C" fn rr_pairing_listen_on(name: *const c_char, model: *const
             std::ptr::null_mut()
         }
     }
+}
+
+/// A pairing that listens — on `given`, or on a port of its own — and what to announce for it.
+pub(crate) fn listening(name: &str, model: &str, host: &str, given: Option<std::net::TcpListener>, only: Option<std::net::IpAddr>) -> Result<(RRPairing, String), String> {
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(1).thread_stack_size(STACK).enable_all().build().map_err(|e| format!("no runtime: {e}"))?;
+    let listener = match given {
+        Some(given) => {
+            given.set_nonblocking(true).map_err(|e| format!("can't listen: {e}"))?;
+            let _in = runtime.enter();
+            TcpListener::from_std(given).map_err(|e| format!("can't listen: {e}"))?
+        }
+        // Both families: the device reaches this Mac by whichever address its name resolves to.
+        None => runtime.block_on(TcpListener::bind("[::]:0")).map_err(|e| format!("can't listen: {e}"))?,
+    };
+    let port = listener.local_addr().map_err(|e| format!("no port: {e}"))?.port();
+    // One identity per `host`, whatever it is named: pairing again replaces the
+    // device's record of it, and another Mac of the same name doesn't.
+    let file = RpPairingFile::generate(&format!("{LABEL} {host}"));
+    let mut info = PairableHostInfo::generate(name, model);
+    (info.serial_number, info.mac) = own_hardware(file.identifier());
+    let txt = info.mdns_txt_records(file.identifier()).iter()
+        .map(|(k, v)| format!("{}:{}", quoted(k), quoted(v))).collect::<Vec<_>>().join(",");
+    let said = format!("{{\"port\":{port},\"identifier\":{},\"txt\":{{{txt}}}}}", quoted(file.identifier()));
+    Ok((RRPairing { runtime, listener, info, file: Mutex::new(file), cancelled: AtomicBool::new(false), only }, said))
 }
 
 /// # Safety

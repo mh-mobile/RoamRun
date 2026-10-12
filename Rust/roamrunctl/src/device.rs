@@ -1,9 +1,7 @@
 //! Holding a pairing with a device and using it: what is saved here, and the commands on it.
-//! Not built for Windows.
 
 use std::io::Write;
 use std::net::{SocketAddr, TcpStream};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -65,12 +63,42 @@ const LONGER: u32 = 1280;
 /// Where the device's pairing port has been found: it isn't announced across a tailnet.
 const PORTS: std::ops::Range<u16> = 49152..49168;
 
+/// The user's own, as far as the system has a word for that: on Unix a mode; on Windows a folder under the
+/// user's profile is the user's by what it inherits, and nothing is set here.
+fn own_folder(folder: &Path) -> std::io::Result<()> {
+    let mut make = std::fs::DirBuilder::new();
+    make.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut make, 0o700);
+    make.create(folder)
+}
+
+/// A new file, the user's own (see `own_folder`); one that is there already is an error.
+pub fn own_file(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut open = std::fs::OpenOptions::new();
+    open.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut open, 0o600);
+    open.open(path)
+}
+
+/// The mode of a file that others can read, where the system has modes.
+fn open_to_others(meta: &std::fs::Metadata) -> Option<u32> {
+    #[cfg(unix)]
+    { let mode = std::os::unix::fs::PermissionsExt::mode(&meta.permissions()); (mode & 0o077 != 0).then_some(mode & 0o777) }
+    #[cfg(not(unix))]
+    { let _ = meta; None }
+}
+
 pub fn folder() -> Result<PathBuf, String> {
-    let base = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).filter(|p| p.is_absolute())
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
-        .ok_or("no home folder to keep devices in")?;
+    let base = if cfg!(windows) {
+        std::env::var_os("APPDATA").map(PathBuf::from)
+    } else {
+        std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).filter(|p| p.is_absolute())
+            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+    }.ok_or("no home folder to keep devices in")?;
     let folder = base.join("roamrunctl").join("devices");
-    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+    own_folder(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
     Ok(folder)
 }
 
@@ -92,8 +120,8 @@ fn load(name: &str) -> Result<Saved, String> {
     let (path, sealed) = kept(name)?.ok_or_else(|| format!("no device “{name}” here: `roamrunctl devices` lists them"))?;
     let meta = std::fs::metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     // The file is a key: as ssh does, one that others can read isn't used.
-    if meta.permissions().mode() & 0o077 != 0 {
-        return Err(format!("{} can be read by others (mode {:o}): `chmod 600` it, or pair again", path.display(), meta.permissions().mode() & 0o777));
+    if let Some(mode) = open_to_others(&meta) {
+        return Err(format!("{} can be read by others (mode {mode:o}): `chmod 600` it, or pair again", path.display()));
     }
     let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let bytes = if sealed { crate::secret::opened(&bytes, &crate::secret::passphrase(name, false)?).map_err(|why| format!("{name}: {why}"))? } else { bytes };
@@ -111,7 +139,7 @@ fn save(saved: &Saved, passphrase: Option<&str>) -> Result<PathBuf, String> {
         None => (text, "json"),
     };
     let path = folder()?.join(format!("{}.{ending}", saved.name));
-    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut file = own_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     file.write_all(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(path)
 }
@@ -293,7 +321,7 @@ fn look(name: &str, file: Option<PathBuf>) -> Result<String, String> {
     let path = file.unwrap_or_else(|| std::env::temp_dir().join(format!("roamrunctl-{}-{}.png", named(name).unwrap_or("device"), std::process::id())));
     // Whatever is on the screen is in it: the owner's only.
     let _ = std::fs::remove_file(&path);
-    let mut out = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut out = own_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     out.write_all(&png).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(format!("{}\n{width} x {height}", path.display()))
 }
