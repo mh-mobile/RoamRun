@@ -622,6 +622,7 @@ dependencies = [
 [[package]]
 name = "idevice"
 version = "0.1.68"
+source = "git+https://github.com/mh-mobile/idevice?rev=89cdb2409643deabab99999286b4c4d091c7c068#89cdb2409643deabab99999286b4c4d091c7c068"
 dependencies = [
  "aes",
  "async-stream",

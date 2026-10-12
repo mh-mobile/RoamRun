@@ -36,4 +36,4 @@ opt-level = "s"
 
 # The same pin as Rust/RoamRunDevice's: a patch counts only in the manifest that is built.
 [patch.crates-io]
-idevice = { path = "../../../idevice-fork/idevice" }   # TEMPORARY: the local clone, until the signer's commit is in the fork
+idevice = { git = "https://github.com/mh-mobile/idevice", rev = "89cdb2409643deabab99999286b4c4d091c7c068" }

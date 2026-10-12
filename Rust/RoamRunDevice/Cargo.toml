@@ -24,7 +24,8 @@ uuid = { version = "1", features = ["v4"] }
 opt-level = "s"
 
 # idevice with the host's serial number and address settable (a pairing lists on the device by
-# them), and with the device verified at every connection by the key it gave when it paired:
-# its 0.1.68 and five commits. Gone when a release of idevice has both.
+# them), with the device verified at every connection by the key it gave when it paired, and with
+# pair-verify signed by whoever keeps the private key: its 0.1.68 and six commits. Gone when a
+# release of idevice has them.
 [patch.crates-io]
-idevice = { path = "../../../idevice-fork/idevice" }   # TEMPORARY: the local clone, until the signer's commit is in the fork
+idevice = { git = "https://github.com/mh-mobile/idevice", rev = "89cdb2409643deabab99999286b4c4d091c7c068" }
