@@ -86,11 +86,13 @@ enum CLI {
                                      then shows on the device, or on that machine.
                                      `pair control --attempt <id>` (or --last): what came of one
       pair introduce [<offer>] --host <Tailscale name> --to <device>
-                                     On a Mac on the device's Wi‑Fi: stand in for that Mac until the
-                                     device has paired with it (5 minutes at most), then print the line
-                                     for `devices add` there. That Mac will use the device as a developer.
-                                     Without <offer>: ask that Mac for it (it runs `pair xcode --with`
-                                     naming this Mac) and hand it the device afterwards.
+                                     On a Mac on the device's Wi‑Fi: stand in for the Mac --host names
+                                     until the device has paired with it (5 minutes at most), then print
+                                     the line for `devices add` there. It will use the device as a developer.
+                                     Without <offer>: ask it for the offer (it runs `pair xcode --with`
+                                     naming this Mac) and hand it the device afterwards. --host may also
+                                     name a machine that waits with `pair control --with` (RoamRun's, or
+                                     roamrunctl's on Linux or Windows): it then pairs for device control.
                                      An Apple Vision Pro waits to be picked instead (Settings › General ›
                                      Remote Devices, open): without <offer>, what it announces goes to
                                      that Mac, which announces it there for its own Device Hub to pick
@@ -866,8 +868,11 @@ enum CLI {
         case .refused(let why): stop(sentence(why, other: far.dnsName, device: profile.displayName))
         case .ended(let why): stop(sentence(why, other: far.dnsName))
         case .notThatMac: stop("the address this Mac had for \(far.dnsName) isn't that Mac's any more (or Tailscale couldn't say whose it is): nothing was asked of it. Run this again")
+        // A machine that isn't a Mac has roamrunctl, which waits for device control alone.
+        case .garbled where far.os.lowercased() != "macos": stop("\(far.dnsName) answered with something this RoamRun doesn't know: is roamrunctl there the same version as RoamRun here?")
+        case .noOne where far.os.lowercased() != "macos": stop("\(far.dnsName) gave no offer in 10 minutes. Is `roamrunctl pair control --with \(me)` running there, and do Tailscale's rules and that machine's firewall let this Mac reach port \(PairWire.port) there?")
         case .garbled: stop("\(far.dnsName) answered with something this RoamRun doesn't know: is RoamRun the same version on both? Carrying the lines still works: `roamrun pair xcode` there, alone")
-        case .noOne: stop("\(far.dnsName) gave no offer in 10 minutes. Is `roamrun pair xcode --with \(me)` running there, was Pair Nearby Device pressed, and do Tailscale's rules and that Mac's firewall let this Mac reach port \(PairWire.port) there? (If only that port is shut, carrying the lines works: `roamrun pair xcode` there, alone)")
+        case .noOne: stop("\(far.dnsName) gave no offer in 10 minutes. Is `roamrun pair xcode --with \(me)` (or `pair control --with \(me)`) running there, was Pair Nearby Device pressed for Xcode, and do Tailscale's rules and that Mac's firewall let this Mac reach port \(PairWire.port) there? (If only that port is shut, carrying the lines works: `roamrun pair xcode` there, alone)")
         case .stopped: stop("stopped")
         }
     }
@@ -964,7 +969,7 @@ enum CLI {
         }
         note(control == nil
              ? "Introducing \(far.dnsName) (\(who)) to \(profile.displayName). It will be able to use \(profile.displayName) as a developer; to withdraw that, remove “\(listedAs)” on the device (Settings › Privacy & Security › Developer Mode: once paired it is listed under the name that Mac gives itself)."
-             : "Introducing \(far.dnsName) (\(who)) to \(profile.displayName), for device control: programs on that Mac will be able to see \(profile.displayName)'s screen and operate it. To withdraw that, remove “\(listedAs)” on the device (Settings › Privacy & Security › Developer Mode), or switch it off in RoamRun on that Mac.")
+             : "Introducing \(far.dnsName) (\(who)) to \(profile.displayName), for device control: programs on that machine will be able to see \(profile.displayName)'s screen and operate it. To withdraw that, remove “\(listedAs)” on the device (Settings › Privacy & Security › Developer Mode), or there: \(far.os.lowercased() == "macos" ? "switch it off in RoamRun (or `roamrunctl devices remove`)" : "`roamrunctl devices remove`").")
 
         var done: CheckedContinuation<(Introducer.End, Bool), Never>?
         var early: (Introducer.End, Bool)?
@@ -1180,17 +1185,17 @@ enum CLI {
                     if let home = parsed.values["--with"] { Task { await offerXcodePairing(with: home, qr: qr) } }
                     else { Task { await offerXcodePairing(qr: qr) } }
                 case ("introduce", 1), ("introduce", 2):
-                    if parsed.values["--with"] != nil { fail("`roamrun pair introduce` doesn't take --with: the Mac to introduce is --host <its Tailscale name>") }
+                    if parsed.values["--with"] != nil { fail("`roamrun pair introduce` doesn't take --with: the machine to introduce is --host <its Tailscale name>") }
                     if let extra = Set(parsed.values.keys).union(parsed.flags).subtracting(["--host", "--to"]).sorted().first {
                         fail("`roamrun pair introduce` doesn't take \(extra) — see roamrun --help")
                     }
                     guard let mac = parsed.values["--host"], let to = parsed.values["--to"] else {
-                        fail("usage: roamrun pair introduce [<offer>] --host <the other Mac's Tailscale name> --to <device>")
+                        fail("usage: roamrun pair introduce [<offer>] --host <the other machine's Tailscale name> --to <device>")
                     }
                     guard let p = find(to, in: profiles) else { fail("no device named \(shellName(to)). " + names(profiles)) }
                     if words.count == 2 { Task { await introduce(offer: words[1], mac: mac, to: p) } } else { Task { await introduceByName(mac: mac, to: p) } }
                 default:
-                    fail("usage: roamrun pair xcode [--with <Tailscale name>] [--qr] | roamrun pair control --with <Tailscale name> | roamrun pair introduce [<offer>] --host <the other Mac's Tailscale name> --to <device> — see roamrun --help")
+                    fail("usage: roamrun pair xcode [--with <Tailscale name>] [--qr] | roamrun pair control --with <Tailscale name> | roamrun pair introduce [<offer>] --host <the other machine's Tailscale name> --to <device> — see roamrun --help")
                 }
             case "status":
                 noteStaleSkills()

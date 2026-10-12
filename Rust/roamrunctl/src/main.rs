@@ -102,7 +102,7 @@ enum Pair {
         /// The name to save the device under here
         #[arg(long = "as")]
         name: Option<String>,
-        /// Keep the pairing under a passphrase (typed here, or given as the README says), not as a file only its owner can read
+        /// Keep the pairing under a passphrase (typed here, or given as the README says), not as a file of this user's
         #[arg(long)]
         passphrase: bool,
     },

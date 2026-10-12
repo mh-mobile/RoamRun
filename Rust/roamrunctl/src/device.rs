@@ -26,7 +26,7 @@ pub enum Key {
         /// The name to save it under here
         #[arg(long = "as")]
         name: Option<String>,
-        /// Keep it under a passphrase (typed here, or given as the README says), not as a file only its owner can read
+        /// Keep it under a passphrase (typed here, or given as the README says), not as a file of this user's
         #[arg(long)]
         passphrase: bool,
     },

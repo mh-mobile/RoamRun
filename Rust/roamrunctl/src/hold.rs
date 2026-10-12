@@ -131,7 +131,7 @@ pub fn run(with: &str, name: Option<String>, sealed: bool) -> Result<String, Str
         "something on this machine already waits for a pairing (RoamRun's app, or another roamrunctl): end that first".to_string()
     } else { format!("can't listen on {own}: {e}") })?;
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
-    note!("Waiting for {with}, 10 minutes at most; only it is answered.\n  There, on the device's Wi‑Fi:  roamrunctl pair introduce --host {me} --to <the device's Tailscale name>\n  (or `roamrun pair introduce --host {me} --to <device>` on a Mac, or the RoamRun Introducer app)");
+    note!("Waiting for {with}, 10 minutes at most; only it is answered.\n  Where {with} is a machine on the device's Wi‑Fi, there:  roamrunctl pair introduce --host {me} --to <the device's Tailscale name>\n    (a Mac with RoamRun:  roamrun pair introduce --host {me} --to <device>)\n  Where {with} is the device itself, on it:  the RoamRun Introducer app, far Mac “{me}”, Introduce");
     let mut until = Instant::now() + CONNECT;
     let mut tried = 0;
     loop {
@@ -193,7 +193,7 @@ fn paired(mut link: Wire, with: &str, me: &str, own: Ipv4Addr, only: Ipv4Addr, l
     let offer = match offer(&advert) { Ok(offer) => offer, Err(why) => return refuse(&mut link, "failed", why) };
     let attempt = uuid().map_err(Stopped::For)?;
     link.send(&format!("offer {offer}")).and_then(|()| link.send(&format!("attempt {attempt}"))).map_err(Stopped::For)?;
-    note!("{with} has this machine's offer, and carries the device's connection to TCP port {port} here (another each time: {with} has to be let in on it). On the device: Settings › Privacy & Security › Developer Mode › “{shown}”, and type the code that shows here (and there). {with}'s command gives it 5 minutes.");
+    note!("{with} has this machine's offer, and carries the device's connection to TCP port {port} here (another each time: {with} has to be let in on it). On the device: Settings › Privacy & Security › Developer Mode › “{shown}”, and type the code that shows here (and there). It is given 5 minutes there.");
     let pairing = Arc::new(pairing);
     let (tell, told) = mpsc::channel::<Result<String, String>>();
     let waits = {
