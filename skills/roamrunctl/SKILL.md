@@ -221,7 +221,9 @@ believed the first time it is used — use it only if the user named it.
   prints the path, then its size. The file is whatever was on the screen: the user's.
 - `roamrunctl install <name> <app.ipa or .app>` — an app already built and signed for
   that device (xtool's `dev build --ipa`, or Xcode's). It doesn't build or sign. One
-  install of an app to a device at a time; five minutes at most.
+  install to a device at a time. It says how much it sends, then nothing until the app is
+  in: a megabyte takes three to four seconds on the device's Wi‑Fi (a large app, minutes),
+  and it is given five minutes and six seconds a megabyte — run it where it can wait.
 - `roamrunctl launch <name> <bundle id>` — one already running is ended first.
 - `roamrunctl mcp` — for an agent's MCP config (the command `roamrunctl`, the argument
   `mcp`): `devices`, `look`, `tap`, `swipe`, `elements`, `type`, `paste`, `press`,

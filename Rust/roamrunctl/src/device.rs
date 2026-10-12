@@ -479,12 +479,14 @@ pub fn run(command: Command) -> i32 {
             }
             Ok(match signer {
                 Some(signer) => format!("Forgot {name} here. Its key is kept by {signer}: it is asked again the next time {name} is used, for as long as `roamrunctl sign` there names it."),
-                None => format!("Removed {name} and its pairing here: a `roamrunctl sign` running here signs for it no more. On the device, remove this machine in its list too (Settings › Privacy & Security › Developer Mode)."),
+                None => format!("Removed {name} and its pairing here: a `roamrunctl sign` running here signs for it no more. On the device, remove this machine in its list too (Settings › Privacy & Security › Developer Mode) — unless another pairing with that device is saved here: the entry there is that one's too."),
             })
         }),
         Command::Key { command: Key::Import { file, name, passphrase } } => import(&file, name, passphrase),
         Command::Look { name, file } => look(&name, file),
         Command::Install { name, path } => opened(&name).and_then(|device| {
+            let (megabytes, given) = roamrun_device::install_given(&path.to_string_lossy());
+            note!("Sending {} ({megabytes} MB) to {name}: nothing more is said until it is in, {} minutes at most. A megabyte took three to four seconds on the device's own Wi‑Fi.", path.display(), given.as_secs().div_ceil(60));
             said(device.install(&path.to_string_lossy())).map(|_| format!("Installed {} on {name}.", path.display()))
         }),
         Command::Launch { name, bundle } => opened(&name).and_then(|device| {

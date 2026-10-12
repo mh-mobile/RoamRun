@@ -92,7 +92,7 @@ fn tools() -> Value {
              json!({ "text": { "type": "string" } }), &["text"]),
         tool("press", "Press a hardware button. `lock` can't be undone from here: the user has to unlock.",
              json!({ "button": { "type": "string", "enum": ["home", "lock", "volume-up", "volume-down"] } }), &["button"]),
-        tool("install", "Install an app built and signed for this device: the path, on this machine, of an .ipa or an .app folder.",
+        tool("install", "Install an app built and signed for this device: the path, on this machine, of an .ipa or an .app folder. It answers once the app is in: a megabyte takes a few seconds, a large app minutes.",
              json!({ "path": { "type": "string" } }), &["path"]),
         tool("launch", "Launch an app on the device by its bundle identifier (one already running is ended first).",
              json!({ "bundle": { "type": "string" } }), &["bundle"]),

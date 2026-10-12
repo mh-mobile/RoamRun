@@ -473,6 +473,19 @@ async fn interface_way(link: &mut Link) -> Option<u8> {
     })
 }
 
+/// What is at `path`, in megabytes, and how long an install of it is given: five minutes, and six seconds a
+/// megabyte. One took three to four on the device's own Wi‑Fi (iPhone 15 Pro, iOS 27.0: 3 MB in 25 s, 37 MB in 150 s).
+pub fn install_given(path: &str) -> (u64, Duration) {
+    fn size(path: &std::path::Path) -> u64 {
+        match std::fs::read_dir(path) {
+            Ok(inside) => inside.flatten().map(|entry| size(&entry.path())).sum(),
+            Err(_) => std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0),
+        }
+    }
+    let megabytes = size(std::path::Path::new(path)) >> 20;
+    (megabytes, Duration::from_secs(300 + 6 * megabytes))
+}
+
 /// What `rr_device_install` and `rr_device_launch` share: one thing asked of the device's app services.
 enum App<'a> { Install(&'a str), Launch(&'a str) }
 
@@ -482,8 +495,9 @@ fn app(device: &RRDevice, what: App) -> String {
         if link.stop.raised() { return Err(STOPPED.into()); }
         let link = &mut *link;
         device.runtime.block_on(async {
-            // An install sends the whole app: longer than a call's deadline.
-            tokio::time::timeout(Duration::from_secs(300), async {
+            // An install sends the whole app: longer than a call's deadline, and longer the more there is of it.
+            let given = match what { App::Install(path) => install_given(path).1, App::Launch(_) => Duration::from_secs(300) };
+            tokio::time::timeout(given, async {
                 match what {
                     App::Install(path) => {
                         // An app folder is laid over what an earlier, cut-short install of that name left where
@@ -1594,6 +1608,18 @@ async fn accept_pairing(pairing: &RRPairing, show: &(impl Fn(&str) + Sync)) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_install_is_given_longer_the_more_there_is_to_send() {
+        let folder = std::env::temp_dir().join(format!("rr-install-given-{}.app", std::process::id()));
+        std::fs::create_dir_all(folder.join("inside")).unwrap();
+        std::fs::write(folder.join("inside/binary"), vec![0u8; 3 << 20]).unwrap();
+        std::fs::write(folder.join("Info.plist"), b"<plist/>").unwrap();
+        assert_eq!(install_given(folder.to_str().unwrap()), (3, Duration::from_secs(318)));
+        assert_eq!(install_given(folder.join("inside/binary").to_str().unwrap()).0, 3);
+        assert_eq!(install_given("/nowhere/at/all.ipa"), (0, Duration::from_secs(300)));
+        std::fs::remove_dir_all(folder).unwrap();
+    }
 
     fn io(kind: std::io::ErrorKind) -> idevice::IdeviceError { idevice::IdeviceError::Socket(std::io::Error::from(kind)) }
 

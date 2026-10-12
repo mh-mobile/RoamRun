@@ -217,7 +217,9 @@ under its name, isn't the one it had open: it is opened anew, or said to be gone
 
 `install` puts an app on the device under its own name before it is taken in, as every `roamrunctl install` of that
 name does, and an .ipa under one name whatever it is: one install to a device at a time. What an install that was
-cut short left there is cleared before an .app folder is sent again, where it can be (an install cut short and run again took the app in, once). An install is given five minutes.
+cut short left there is cleared before an .app folder is sent again, where it can be (an install cut short and run again took the app in, once). An install says how much it sends and then nothing until the app is in:
+a megabyte took three to four seconds on the device's own Wi‑Fi (3 MB in 25 s, 37 MB in two and a half minutes), and it
+is given five minutes and six seconds a megabyte.
 
 ## Introducing a far Mac (`pair introduce`)
 
@@ -286,7 +288,7 @@ Ubuntu VM on the tailnet) as the using machine and a Mac beside the device, once
   at once ("doesn't accept this pairing"): pairing again replaces it.
 - Taps through `mcp` with the device on either side (a key of the calculator, the one aimed at both times).
 - `install` of an .app folder (3 MB) and `launch`; a larger one (37 MB) cut short with Ctrl-C a few seconds in,
-  installed again (two to three minutes, with nothing printed meanwhile) and launched.
+  installed again (two and a half minutes) and launched.
 
 Earlier, before the reviews: from an unprivileged Linux container, with a key made on a Mac — connect, look, tap,
 type, a button, install, launch, and launching again after the device restarted; a wrong code at `pair control
