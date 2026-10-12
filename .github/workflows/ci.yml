@@ -51,6 +51,11 @@ jobs:
         run: |
           version=$(sed -n '/CFBundleShortVersionString/{n;s/.*<string>\(.*\)<\/string>.*/\1/p;}' ../../Info.plist)
           rustup target add ${{ matrix.target }}
+          # The device library's cryptography is C: a musl target wants musl's compiler for it.
+          case "${{ matrix.target }}" in *-linux-musl)
+            sudo apt-get install -y -qq musl-tools
+            export "CC_$(echo ${{ matrix.target }} | tr - _)=musl-gcc" ;;
+          esac
           cargo build --locked --release --target ${{ matrix.target }}
           # Named without the version: the newest release's is then always at one address.
           dir=roamrunctl-${{ matrix.name }}
