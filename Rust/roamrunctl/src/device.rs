@@ -21,12 +21,15 @@ pub enum Devices {
 
 #[derive(Subcommand)]
 pub enum Key {
-    /// Save the device and the pairing of a file `roamrun key create` wrote; the file is removed
+    /// Save the device and the pairing of a file `roamrun key create` wrote, under a passphrase; the file is removed
     Import {
         file: PathBuf,
         /// The name to save it under here
         #[arg(long = "as")]
         name: Option<String>,
+        /// Keep it without a passphrase: a file only its owner can read, and no more
+        #[arg(long)]
+        plain: bool,
     },
 }
 
@@ -62,22 +65,38 @@ fn named(name: &str) -> Result<&str, String> {
     fits.then_some(name).ok_or_else(|| format!("“{name}” can't be a device's name here: letters, digits, - _ . only"))
 }
 
+/// Where a device is kept: under a passphrase (.age), or as it is (.json).
+fn kept(name: &str) -> Result<Option<(PathBuf, bool)>, String> {
+    let folder = folder()?;
+    let name = named(name)?;
+    Ok([("age", true), ("json", false)].into_iter().map(|(ending, sealed)| (folder.join(format!("{name}.{ending}")), sealed)).find(|(path, _)| path.exists()))
+}
+
 fn load(name: &str) -> Result<Saved, String> {
-    let path = folder()?.join(format!("{}.json", named(name)?));
-    let meta = std::fs::metadata(&path).map_err(|_| format!("no device “{name}” here: `roamrunctl devices` lists them"))?;
+    let (path, sealed) = kept(name)?.ok_or_else(|| format!("no device “{name}” here: `roamrunctl devices` lists them"))?;
+    let meta = std::fs::metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     // The file is a key: as ssh does, one that others can read isn't used.
     if meta.permissions().mode() & 0o077 != 0 {
         return Err(format!("{} can be read by others (mode {:o}): `chmod 600` it, or pair again", path.display(), meta.permissions().mode() & 0o777));
     }
-    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))
+    let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let bytes = if sealed { crate::secret::opened(&bytes, &crate::secret::passphrase(name, false)?).map_err(|why| format!("{name}: {why}"))? } else { bytes };
+    serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-fn save(saved: &Saved) -> Result<PathBuf, String> {
-    let path = folder()?.join(format!("{}.json", named(&saved.name)?));
-    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)
-        .map_err(|e| if e.kind() == std::io::ErrorKind::AlreadyExists { format!("a device “{}” is saved here already: `roamrunctl devices remove {}` first, or --as another name", saved.name, saved.name) } else { format!("{}: {e}", path.display()) })?;
-    file.write_all(serde_json::to_string_pretty(saved).map_err(|e| e.to_string())?.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))?;
+/// `passphrase`: kept under it; None: as it is.
+fn save(saved: &Saved, passphrase: Option<&str>) -> Result<PathBuf, String> {
+    if kept(&saved.name)?.is_some() {
+        return Err(format!("a device “{}” is saved here already: `roamrunctl devices remove {}` first, or --as another name", saved.name, saved.name));
+    }
+    let text = serde_json::to_vec_pretty(saved).map_err(|e| e.to_string())?;
+    let (bytes, ending) = match passphrase {
+        Some(passphrase) => (crate::secret::sealed(&text, passphrase)?, "age"),
+        None => (text, "json"),
+    };
+    let path = folder()?.join(format!("{}.{ending}", saved.name));
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    file.write_all(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(path)
 }
 
@@ -100,7 +119,7 @@ struct SharedDevice {
     port: Option<u16>,
 }
 
-fn import(file: &Path, name: Option<String>) -> Result<String, String> {
+fn import(file: &Path, name: Option<String>, plain: bool) -> Result<String, String> {
     let text = std::fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?;
     let shared: Shared = serde_json::from_str(&text).map_err(|_| format!("{} isn't a file `roamrun key create` wrote", file.display()))?;
     if shared.version != 1 || shared.pairing.is_empty() || shared.device.ip.parse::<std::net::Ipv4Addr>().is_err() {
@@ -108,24 +127,32 @@ fn import(file: &Path, name: Option<String>) -> Result<String, String> {
     }
     let name = name.unwrap_or_else(|| shared.device.name.chars().map(|c| if c.is_ascii_alphanumeric() || "-_.".contains(c) { c } else { '-' }).collect());
     let saved = Saved { v: 1, name, ip: shared.device.ip, port: shared.device.port.unwrap_or(PORTS.start), pairing: shared.pairing };
+    named(&saved.name)?;
+    if kept(&saved.name)?.is_some() {
+        return Err(format!("a device “{}” is saved here already: `roamrunctl devices remove {}` first, or --as another name", saved.name, saved.name));
+    }
     // Tried before it is kept, and the file goes only once it is: a key that doesn't open the device isn't one.
     open(&saved)?;
-    let path = save(&saved)?;
+    let passphrase = if plain { None } else { Some(crate::secret::passphrase(&saved.name, true)?) };
+    let path = save(&saved, passphrase.as_deref())?;
     std::fs::remove_file(file).map_err(|e| format!("saved, but {} couldn't be removed ({e}): remove it yourself, it is a key", file.display()))?;
-    Ok(format!("Saved {} ({}), and it connects. The key is {}: whoever can read it and reach the device can see and operate it.", saved.name, saved.ip, path.display()))
+    Ok(match passphrase {
+        Some(_) => format!("Saved {} ({}), and it connects. Its pairing is kept under the passphrase, in {}: that keeps the file from being a key on its own, not from whoever has both.", saved.name, saved.ip, path.display()),
+        None => format!("Saved {} ({}), and it connects. The key is {}, as it is: whoever can read it and reach the device can see and operate it.", saved.name, saved.ip, path.display()),
+    })
 }
 
 fn open(saved: &Saved) -> Result<Device, String> {
     let answers = |port: u16| format!("{}:{port}", saved.ip).parse::<SocketAddr>().is_ok_and(|at| TcpStream::connect_timeout(&at, Duration::from_millis(700)).is_ok());
     let port = Some(saved.port).filter(|p| answers(*p)).or_else(|| PORTS.clone().find(|p| answers(*p)))
         .ok_or_else(|| format!("{} ({}) doesn't answer: is it on Wi‑Fi, unlocked once since it started, and connected in Tailscale? (on cellular alone it refuses)", saved.name, saved.ip))?;
-    Device::open(&saved.ip, port, saved.pairing.as_bytes()).map_err(|why| format!("{}: {why}", saved.name))
+    Device::open(&saved.ip, port, saved.pairing.as_bytes()).map_err(|why| format!("{}: {}", saved.name, roamrun_device::safe::readable(&why)))
 }
 
 /// Whether an answer of the library's says it went well; its words otherwise.
 pub fn said(answer: String) -> Result<serde_json::Value, String> {
     let value: serde_json::Value = serde_json::from_str(&answer).map_err(|_| answer.clone())?;
-    if value["ok"] == true { Ok(value) } else { Err(value["error"].as_str().unwrap_or(&answer).to_string()) }
+    if value["ok"] == true { Ok(value) } else { Err(roamrun_device::safe::readable(value["error"].as_str().unwrap_or(&answer))) }
 }
 
 /// The device's picture, its longer side LONGER at most, as `format`; and its size.
@@ -147,8 +174,9 @@ pub fn opened(name: &str) -> Result<Device, String> {
 /// The names of the devices saved here.
 pub fn names() -> Result<Vec<String>, String> {
     let mut names: Vec<String> = std::fs::read_dir(folder()?).map_err(|e| e.to_string())?
-        .filter_map(|entry| entry.ok()?.file_name().to_str()?.strip_suffix(".json").map(str::to_string)).collect();
+        .filter_map(|entry| { let name = entry.ok()?.file_name(); let name = name.to_str()?; name.strip_suffix(".age").or(name.strip_suffix(".json")).map(str::to_string) }).collect();
     names.sort();
+    names.dedup();
     Ok(names)
 }
 
@@ -166,9 +194,10 @@ fn look(name: &str, file: Option<PathBuf>) -> Result<String, String> {
 fn list() -> Result<String, String> {
     let names = names()?;
     if names.is_empty() { return Ok("No device is saved here. `roamrunctl key import <file>` saves one from a file `roamrun key create` wrote.".into()); }
-    Ok(names.iter().map(|name| match load(name) {
-        Ok(saved) => format!("{name}\t{}", saved.ip),
-        Err(why) => format!("{name}\t({why})"),
+    // Named only: what else is saved of one may be under a passphrase, which a list doesn't ask for.
+    Ok(names.iter().map(|name| match kept(name) {
+        Ok(Some((_, true))) => format!("{name}\tunder a passphrase"),
+        _ => format!("{name}\tas it is"),
     }).collect::<Vec<_>>().join("\n"))
 }
 
@@ -176,11 +205,11 @@ pub fn run(command: Command) -> i32 {
     let done = match command {
         Command::Devices { command: None } => list(),
         Command::Devices { command: Some(Devices::Remove { name }) } => named(&name).and_then(|name| {
-            let path = folder()?.join(format!("{name}.json"));
-            std::fs::remove_file(&path).map_err(|_| format!("no device “{name}” here"))?;
+            let (path, _) = kept(name)?.ok_or_else(|| format!("no device “{name}” here"))?;
+            std::fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
             Ok(format!("Removed {name} and its pairing here. On the device, remove this machine in its list too (Settings › Privacy & Security › Developer Mode)."))
         }),
-        Command::Key { command: Key::Import { file, name } } => import(&file, name),
+        Command::Key { command: Key::Import { file, name, plain } } => import(&file, name, plain),
         Command::Look { name, file } => look(&name, file),
         Command::Install { name, path } => load(&name).and_then(|saved| open(&saved)).and_then(|device| {
             said(device.install(&path.to_string_lossy())).map(|_| format!("Installed {} on {name}.", path.display()))

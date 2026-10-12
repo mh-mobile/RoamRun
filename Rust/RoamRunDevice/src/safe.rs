@@ -74,3 +74,60 @@ impl Drop for Device {
         unsafe { rr_device_close(self.0) };
     }
 }
+
+/// What a device's refusal says, where the library gives it as the device sent it: an archived dictionary's
+/// bytes (`Data([98, 112, …])`), or a dictionary with a description in it. Anything else comes back as it is.
+pub fn readable(error: &str) -> String {
+    // A description given in words already.
+    for key in ["NSLocalizedDescription", "NSDebugDescription"] {
+        if let Some(at) = error.find(&format!("\"{key}\": String(\"")) {
+            let rest = &error[at + key.len() + 12..];
+            if let Some(end) = rest.find("\")") { return with_what(error, &rest[..end].replace("\\\"", "\"")); }
+        }
+    }
+    // An archive: its strings are in `$objects`; the sentence is the one that isn't a key or a class's name.
+    let Some(start) = error.find("Data([") else { return error.to_string() };
+    let Some(end) = error[start..].find("])") else { return error.to_string() };
+    let bytes: Vec<u8> = error[start + 6..start + end].split(',').filter_map(|n| n.trim().parse().ok()).collect();
+    let Ok(archive) = plist::Value::from_reader(std::io::Cursor::new(bytes)) else { return error.to_string() };
+    let said = archive.as_dictionary().and_then(|d| d.get("$objects")).and_then(|o| o.as_array()).and_then(|objects| {
+        objects.iter().filter_map(|o| o.as_string()).filter(|s| !s.starts_with("NS") && !s.starts_with('$') && s.contains(' ')).max_by_key(|s| s.len())
+    });
+    match said {
+        Some(said) => with_what(error, said),
+        None => error.to_string(),
+    }
+}
+
+/// "launch: CoreDevice(…" keeps its "launch: ".
+fn with_what(error: &str, said: &str) -> String {
+    match error.split_once(": ") {
+        Some((what, _)) if what.len() <= 24 && !what.contains('(') => format!("{what}: {said}"),
+        _ => said.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::readable;
+
+    #[test]
+    fn a_refusal_is_said_in_its_own_words() {
+        // As the screenshot service refused a format.
+        let dictionary = r#"screenshot: CoreDevice(DeviceError("Dictionary({\"code\": Integer(4864), \"userInfo\": Dictionary({\"NSDebugDescription\": String(\"Cannot initialize ScreenshotImageFormat from invalid String value jpeg\"), \"NSCodingPath\": String(\"x\")})})"))"#;
+        assert_eq!(readable(&dictionary.replace("\\\"", "\"")), "screenshot: Cannot initialize ScreenshotImageFormat from invalid String value jpeg");
+        // As the display service refused a stream during a call: an archive of a dictionary.
+        let mut archive = plist::Dictionary::new();
+        archive.insert("$objects".into(), plist::Value::Array(vec![
+            "$null".into(), "NSLocalizedDescription".into(), "A phone or VoIP call is currently in progress on the device.".into(), "NSDictionary".into(), "NSObject".into(),
+        ]));
+        let mut bytes = Vec::new();
+        plist::Value::Dictionary(archive).to_writer_binary(&mut bytes).unwrap();
+        let numbers: Vec<String> = bytes.iter().map(u8::to_string).collect();
+        let refused = format!("audio start: CoreDevice(DeviceError(\"Dictionary({{\\\"userInfoWithNSSecureCoding\\\": Data([{}])}})\"))", numbers.join(", "));
+        assert_eq!(readable(&refused), "audio start: A phone or VoIP call is currently in progress on the device.");
+        // What isn't either comes back as it is.
+        assert_eq!(readable("timed out"), "timed out");
+        assert_eq!(readable("x: Data([1, 2, 3])"), "x: Data([1, 2, 3])");
+    }
+}

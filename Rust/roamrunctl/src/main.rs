@@ -6,6 +6,8 @@ mod announce;
 mod device;
 #[cfg(not(windows))]
 mod mcp;
+#[cfg(not(windows))]
+mod secret;
 mod lines;
 mod relay;
 mod tailscale;
