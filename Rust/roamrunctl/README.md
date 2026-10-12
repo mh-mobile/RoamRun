@@ -309,7 +309,9 @@ Not yet run against a device:
 - A machine whose Tailscale runs in userspace mode (the container borrowed its host's): it has no address to
   listen on or connect from, and `sign` and `pair control --with` are expected to stop there.
 - The device's pairing port after it moved far: a saved device is looked for on the port it was saved with and
-  the sixteen from 49152. One not found there after it restarted is paired again.
+  the sixteen from 49152. One not found there after it restarted is paired again. (Restarted twice, and taken
+  off the network and back once, the device announced 49152 each time and was looked at as before: when it moves
+  wasn't seen.)
 
 ### `pair introduce` (since 0.5.0)
 
