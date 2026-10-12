@@ -286,6 +286,9 @@ Ubuntu VM on the tailnet) as the using machine and a Mac beside the device, once
   the Mac: paired and kept under the passphrase. Without one given, `look` was refused; typed, it looked; given by
   `ROAMRUNCTL_PASSPHRASE_FILE`, `mcp` ran. The VM's earlier pairing with the device was then refused by the device
   at once ("doesn't accept this pairing"): pairing again replaces it.
+- `pair control --with <the device's Tailscale name>` on the VM and the Introducer app on the device (far Mac: the
+  VM's name), with no machine beside it: the app said the VM pairs for device control, the code showed on the VM, and
+  the pairing was kept and looked with. (The app's last screen says to try `roamrun look` there: it is `roamrunctl look`.)
 - Taps through `mcp` with the device on either side (a key of the calculator, the one aimed at both times).
 - `install` of an .app folder (3 MB) and `launch`; a larger one (37 MB) cut short with Ctrl-C a few seconds in,
   installed again (two and a half minutes) and launched.
@@ -297,7 +300,7 @@ type, a button, install, launch, and launching again after the device restarted;
 Not yet run against a device:
 
 - `sign` with more than one device, and `ROAMRUNCTL_SIGNER`.
-- The Introducer app, and a Mac's `roamrun pair introduce`, introducing a machine with roamrunctl.
+- A Mac's `roamrun pair introduce` (RoamRun's own), introducing a machine with roamrunctl.
 - `mcp`'s swipe, type, paste, install and launch (each was sent by the library directly, or by the command).
 - An iPad, and a device held upside down.
 - Anything on Windows: both targets build and pass their tests there, and that is all.
