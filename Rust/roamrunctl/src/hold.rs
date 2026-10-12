@@ -47,10 +47,15 @@ fn host_id() -> Result<String, String> {
     Ok(id)
 }
 
-fn uuid() -> Result<String, String> {
+pub fn random<const N: usize>() -> Result<[u8; N], String> {
     use std::io::Read;
-    let mut b = [0u8; 16];
+    let mut b = [0u8; N];
     std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b)).map_err(|e| format!("no random source: {e}"))?;
+    Ok(b)
+}
+
+fn uuid() -> Result<String, String> {
+    let mut b: [u8; 16] = random()?;
     b[6] = b[6] & 0x0f | 0x40;
     b[8] = b[8] & 0x3f | 0x80;
     let hex: String = b.iter().map(|x| format!("{x:02X}")).collect();

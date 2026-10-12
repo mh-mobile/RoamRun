@@ -192,6 +192,34 @@ fn quoted(s: &str) -> String {
 /// (the pairing itself, never a path: it isn't kept on disk as it is); `error` is null or writable.
 #[no_mangle]
 pub unsafe extern "C" fn rr_device_open(ip: *const c_char, port: u16, pairing: *const u8, pairing_len: usize, error: *mut *mut c_char) -> *mut RRDevice {
+    unsafe { open_with(ip, port, pairing, pairing_len, None, error) }
+}
+
+/// As rr_device_open, for a pairing whose private key is kept elsewhere: `pairing` is the pairing with any
+/// key in the private key's place, and `sign` is asked for the one signature a connection takes — given what
+/// is to be signed, it writes the 64 bytes of the signature and returns true, or returns false. Called on
+/// another thread, before this returns.
+/// # Safety
+/// As rr_device_open; `sign` and `context` are good until this returns.
+#[no_mangle]
+pub unsafe extern "C" fn rr_device_open_signed(
+    ip: *const c_char, port: u16, pairing: *const u8, pairing_len: usize,
+    sign: Option<unsafe extern "C" fn(*const u8, usize, *mut u8, *mut std::ffi::c_void) -> bool>, context: *mut std::ffi::c_void,
+    error: *mut *mut c_char,
+) -> *mut RRDevice {
+    let Some(sign) = sign else {
+        unsafe { set_error(error, "bad arguments".into()) };
+        return std::ptr::null_mut();
+    };
+    let context = context as usize;   // an address, carried to the thread that verifies
+    let signer: Signer = Arc::new(move |what: &[u8]| {
+        let mut signature = [0u8; 64];
+        if unsafe { sign(what.as_ptr(), what.len(), signature.as_mut_ptr(), context as *mut std::ffi::c_void) } { Ok(signature) } else { Err("the key's holder didn't sign".into()) }
+    });
+    unsafe { open_with(ip, port, pairing, pairing_len, Some(signer), error) }
+}
+
+unsafe fn open_with(ip: *const c_char, port: u16, pairing: *const u8, pairing_len: usize, signer: Option<Signer>, error: *mut *mut c_char) -> *mut RRDevice {
     let ip = (!ip.is_null()).then(|| unsafe { CStr::from_ptr(ip) }.to_str().ok()).flatten();
     let file = (!pairing.is_null()).then(|| unsafe { std::slice::from_raw_parts(pairing, pairing_len) });
     let opened = match (ip, file) {
@@ -199,7 +227,7 @@ pub unsafe extern "C" fn rr_device_open(ip: *const c_char, port: u16, pairing: *
             .map_err(|e| format!("no runtime: {e}"))
             .and_then(|runtime| {
                 let link = with_room(|| runtime.block_on(async {
-                    tokio::time::timeout(DEADLINE, connect(ip, port, file)).await.unwrap_or_else(|_| Err("timed out".into()))
+                    tokio::time::timeout(DEADLINE, connect(ip, port, file, signer.clone())).await.unwrap_or_else(|_| Err("timed out".into()))
                 }))?;
                 let held = Arc::new(Held { runtime, link: Mutex::new(link) });
                 watch_idle_stream(&held);
@@ -777,10 +805,14 @@ fn verify_words(e: &idevice::IdeviceError, ip: &str, port: u16) -> String {
 /// The words the header gives for a pairing without the device's key: only pairing again helps.
 const UNCHECKED: &str = "this pairing doesn't hold the device's key (it was made before RoamRun checked who answers): pair again";
 
-async fn connect(ip: &str, port: u16, file: &[u8]) -> Result<Link, String> {
+/// Signs what pair-verify signs, where the private key is kept elsewhere.
+type Signer = idevice::remote_pairing::PairVerifySigner;
+
+async fn connect(ip: &str, port: u16, file: &[u8], signer: Option<Signer>) -> Result<Link, String> {
     let started = Instant::now();
     // Unreadable is for good, like one without the device's key: said in the same words.
     let mut pairing = RpPairingFile::from_bytes(file).map_err(|e| format!("this pairing doesn't hold the device's key in a form RoamRun reads ({e:?}): pair again"))?;
+    pairing.signer = signer;
     // The device proves itself at every connection, by the key it gave when the pairing was
     // made: a pairing without that key would take whatever answers for the device.
     if pairing.peer_public_key.is_none() { return Err(UNCHECKED.into()); }

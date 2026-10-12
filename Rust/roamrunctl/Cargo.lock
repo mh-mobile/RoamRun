@@ -1016,7 +1016,6 @@ dependencies = [
 [[package]]
 name = "idevice"
 version = "0.1.68"
-source = "git+https://github.com/mh-mobile/idevice?rev=b747c25ce7c6a920ba4438369c17375f0ac95e72#b747c25ce7c6a920ba4438369c17375f0ac95e72"
 dependencies = [
  "aes",
  "async-stream",
@@ -1780,9 +1779,11 @@ dependencies = [
  "age",
  "base64 0.22.1",
  "clap",
+ "ed25519-dalek",
  "if-addrs",
  "image",
  "mdns-sd",
+ "plist",
  "roamrun-device",
  "rpassword",
  "serde",

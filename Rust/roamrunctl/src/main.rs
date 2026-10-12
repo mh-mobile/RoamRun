@@ -10,6 +10,8 @@ mod hold;
 mod mcp;
 #[cfg(not(windows))]
 mod secret;
+#[cfg(not(windows))]
+mod sign;
 mod lines;
 mod relay;
 mod tailscale;
@@ -68,6 +70,13 @@ enum Command {
     /// The device's commands as MCP tools, over stdin/stdout (for an agent's MCP config)
     #[cfg(not(windows))]
     Mcp,
+    /// Keep the pairings saved here to yourself and sign with them for another machine, which then uses the devices without having their keys; until Ctrl-C
+    #[cfg(not(windows))]
+    Sign {
+        /// The Tailscale name of the one machine that is answered
+        #[arg(long = "for")]
+        machine: String,
+    },
 }
 
 #[derive(Subcommand)]

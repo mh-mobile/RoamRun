@@ -35,6 +35,27 @@ impl Device {
         Ok(Device(device))
     }
 
+    /// As `open`, for a pairing whose private key is kept elsewhere: `sign` is asked for the one signature a
+    /// connection takes (None: it wasn't given), and `pairing` holds any key in the private key's place.
+    pub fn open_signed(ip: &str, port: u16, pairing: &[u8], sign: impl Fn(&[u8]) -> Option<[u8; 64]> + Send + Sync) -> Result<Device, String> {
+        unsafe extern "C" fn asked<F: Fn(&[u8]) -> Option<[u8; 64]>>(what: *const u8, length: usize, signature: *mut u8, context: *mut std::ffi::c_void) -> bool {
+            let sign = unsafe { &*(context as *const F) };
+            match sign(unsafe { std::slice::from_raw_parts(what, length) }) {
+                Some(made) => { unsafe { std::ptr::copy_nonoverlapping(made.as_ptr(), signature, 64) }; true }
+                None => false,
+            }
+        }
+        fn with<F: Fn(&[u8]) -> Option<[u8; 64]>>(ip: &CString, port: u16, pairing: &[u8], sign: &F, error: &mut *mut c_char) -> *mut RRDevice {
+            unsafe { rr_device_open_signed(ip.as_ptr(), port, pairing.as_ptr(), pairing.len(), Some(asked::<F>), sign as *const F as *mut std::ffi::c_void, error) }
+        }
+        let ip = c(ip)?;
+        let mut error = std::ptr::null_mut();
+        let device = with(&ip, port, pairing, &sign, &mut error);
+        if device.is_null() { return Err(take(error)); }
+        unsafe { rr_device_bare_inputs(device, true) };
+        Ok(Device(device))
+    }
+
     /// Each of these answers as the C function does: JSON with "ok", and "error" when it isn't.
     pub fn info(&self) -> String { take(unsafe { rr_device_info(self.0) }) }
     pub fn screen(&self) -> String { take(unsafe { rr_device_screen(self.0) }) }

@@ -27,10 +27,13 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 # Pinned: before 1.0, and what a saved pairing is read back with.
 age = { version = "=0.11.5", default-features = false }
 rpassword = "7"
+# For the machine that keeps a pairing's key and signs with it: both are idevice's own already.
+ed25519-dalek = "2"
+plist = "1"
 
 [profile.release]
 opt-level = "s"
 
 # The same pin as Rust/RoamRunDevice's: a patch counts only in the manifest that is built.
 [patch.crates-io]
-idevice = { git = "https://github.com/mh-mobile/idevice", rev = "b747c25ce7c6a920ba4438369c17375f0ac95e72" }
+idevice = { path = "../../../idevice-fork/idevice" }   # TEMPORARY: the local clone, until the signer's commit is in the fork
