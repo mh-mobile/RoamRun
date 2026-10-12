@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 use tailscale::{short, Peer, Status};
 use tokio::sync::{mpsc, watch};
 
-const HOST_SERVICE: &str = "_remotepairing-pairable-host._tcp";
+pub(crate) const HOST_SERVICE: &str = "_remotepairing-pairable-host._tcp";
 
 #[derive(Parser)]
 #[command(name = "roamrunctl", version = env!("ROAMRUN_VERSION"), about = "Introduces a device to the machine that will hold its pairing; and holds one itself and uses the device")]
@@ -71,11 +71,14 @@ enum Command {
 enum Pair {
     /// Stand in on this LAN for a far Mac's offer to pair — with Xcode, or for device control, as that Mac asks — and carry the device's connection to it
     Introduce(Introduce),
-    /// Have this machine hold a pairing of its own with a device it isn't near: the machine named, on the device's Wi‑Fi, introduces it
+    /// Have this machine hold a pairing of its own with a device: one on this Wi‑Fi (--to), or one it isn't near, which the machine named with --with introduces
     Control {
-        /// The Tailscale name of the machine that introduces (or of the device itself, with the Introducer app)
+        /// A device on this machine's Wi‑Fi, by its Tailscale name: paired here and now
+        #[arg(long, conflicts_with = "with", required_unless_present = "with")]
+        to: Option<String>,
+        /// The Tailscale name of the machine that introduces a device this one isn't near (or of the device itself, with the Introducer app)
         #[arg(long)]
-        with: String,
+        with: Option<String>,
         /// The name to save the device under here
         #[arg(long = "as")]
         name: Option<String>,
@@ -119,7 +122,11 @@ macro_rules! say { ($($t:tt)*) => {{ let _ = writeln!(std::io::stderr(), "roamru
 fn main() {
     let args = match Cli::parse().command {
         Command::Pair { command: Pair::Introduce(args) } => args,
-        Command::Pair { command: Pair::Control { with, name, passphrase } } => match hold::run(&with, name, passphrase) {
+        Command::Pair { command: Pair::Control { to, with, name, passphrase } } => match match (to, with) {
+            (Some(to), _) => hold::here(&to, name, passphrase),
+            (None, Some(with)) => hold::run(&with, name, passphrase),
+            (None, None) => Err("which device: --to <its Tailscale name> for one on this Wi‑Fi, or --with <the machine beside it>".into()),
+        } {
             Ok(said) => { println!("{said}"); return }
             Err(why) => { eprintln!("roamrunctl: {why}"); std::process::exit(1) }
         },
@@ -388,7 +395,7 @@ fn place(device: &Peer, on: Option<Ipv4Addr>) -> Result<(Ipv4Addr, Ipv4Addr, Vec
 }
 
 /// Why this machine has no address on a device's LAN.
-enum Elsewhere {
+pub(crate) enum Elsewhere {
     None,
     /// `--on` names one it hasn't there: the sentence.
     NotOn(String),
@@ -398,7 +405,7 @@ enum Elsewhere {
 /// network holds that address. Not what the routing table would pick (a route Tailscale took
 /// in may lead there another way), and from the prefix length each system gives as it is (the
 /// netmask is worked out differently on each, and on Windows by a guess).
-fn lan_ip(toward: Ipv4Addr, on: Option<Ipv4Addr>) -> Result<(Ipv4Addr, Vec<Ipv4Addr>), Elsewhere> {
+pub(crate) fn lan_ip(toward: Ipv4Addr, on: Option<Ipv4Addr>) -> Result<(Ipv4Addr, Vec<Ipv4Addr>), Elsewhere> {
     let interfaces: Vec<(Ipv4Addr, u8, bool)> = if_addrs::get_if_addrs()
         .map_err(|_| Elsewhere::None)?
         .iter()

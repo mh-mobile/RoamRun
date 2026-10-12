@@ -135,7 +135,11 @@ with Ctrl-C once the code was typed ends the same way: the far Mac's app goes on
 Two ways, and the user chooses which: the difference is where the pairing's key is.
 
 **A. This machine holds the key.** The simple one. This machine pairs by itself, with
-no Mac and no Xcode; another machine on the device's Wi‑Fi introduces it, once:
+no Mac and no Xcode. Where it is on the device's own Wi‑Fi — **the user runs it, at a
+terminal of their own** (it shows the pairing code): `roamrunctl pair control --to <the
+device's Tailscale name> [--as <name>]`, then on the device Settings › Privacy & Security
+› Developer Mode › this machine's name, and the code. Where it isn't, another machine on
+the device's Wi‑Fi introduces it, once:
 
 - here — **the user runs it, at a terminal of their own** (it shows the pairing code):
   `roamrunctl pair control --with <the machine beside the device> [--as <name>]`;
@@ -158,7 +162,8 @@ none is given, say so and stop.
 
 **B. Another machine keeps the key, and signs for this one.** For when the key
 shouldn't be on the machine an agent runs on. The user does A on a machine of their
-own, and leaves `roamrunctl sign --for <this machine>` running there; it prints, for
+own (`pair control --to`, if it is on the device's Wi‑Fi), and leaves `roamrunctl sign
+--for <this machine>` running there; it prints, for
 each device, a line to run here: `roamrunctl devices add <line> --as <name>` (the line
 holds no key). From then on this machine asks that one at each new connection. If a
 command fails saying the machine that keeps the key didn't sign or isn't answering,

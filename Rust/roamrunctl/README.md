@@ -100,6 +100,16 @@ Windows build has the same commands — it builds, and its tests pass there — 
 
 ### A. The machine that uses the device holds the key
 
+Where that machine is on the device's own Wi‑Fi, it pairs there and then (it shows the pairing code: run it
+yourself):
+
+```sh
+roamrunctl pair control --to <the device's Tailscale name> --as phone
+# on the device: Settings › Privacy & Security › Developer Mode › this machine's name, and the code
+```
+
+Where it isn't — a machine in a cloud — one that is on the device's Wi‑Fi introduces it, once:
+
 ```sh
 # on the machine that will use the device (it shows the pairing code: run it yourself)
 roamrunctl pair control --with <the machine beside the device> --as phone
@@ -131,7 +141,8 @@ that runs as the same user and can read the passphrase where you put it.
 
 ### B. Another machine keeps the key, and signs
 
-For when the key shouldn't be on the machine an agent runs on. Do A on a machine of your own; then:
+For when the key shouldn't be on the machine an agent runs on. Do A on a machine of your own (`pair control
+--to`, if it is on the device's Wi‑Fi); then:
 
 ```sh
 # on your machine, which keeps the key — leave it running

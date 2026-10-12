@@ -222,3 +222,77 @@ mod tests {
         assert_eq!(filed("Taro's iPhone 15"), "Taro-s-iPhone-15");
     }
 }
+
+/// `roamrunctl pair control --to <device>`: a device on this machine's own Wi‑Fi, paired here and now. This
+/// machine announces itself there, the device is picked on its own screen, and the code shows here.
+pub fn here(to: &str, name: Option<String>, sealed: bool) -> Result<String, String> {
+    let status = tailscale::status()?;
+    let device = tailscale::peer(&status, to)?;
+    let me = short(&status.this.dns_name).to_string();
+    // The device finds this machine by what is announced on the Wi‑Fi both are on, and is known there by its address.
+    let lan = device.lan.ok_or_else(|| format!("Tailscale doesn't reach {} directly on a network this machine is on (relayed, or over IPv6): to pair here the device has to be on this machine's Wi‑Fi. From elsewhere: roamrunctl pair control --with <a machine on its Wi‑Fi>", device.dns))?;
+    let local = match crate::lan_ip(lan, None) {
+        Ok((local, _)) => local,
+        Err(_) => return Err(format!("this machine has no address on {}'s network: to pair here it has to be on the device's Wi‑Fi. From elsewhere: roamrunctl pair control --with <a machine on its Wi‑Fi>", device.dns)),
+    };
+    let name = name.unwrap_or_else(|| filed(short(&device.dns)));
+    device::free(&name)?;
+    // Before the device is asked anything: a pairing made and then not kept would leave it paired with nothing here.
+    let passphrase = if sealed { Some(secret::passphrase("the pairing", true)?) } else { None };
+    let host = host_id()?;
+    let shown = lines::announced_name(&status.this.dns_name).ok_or("this machine's Tailscale name can't be shown on a device: rename it there")?;
+    let socket = TcpListener::bind((local, 0)).map_err(|e| format!("can't listen on {local}: {e}"))?;
+    let (pairing, advert) = Pairing::listen_on(&shown, MODEL, &host, socket, &lan.to_string()).map_err(|why| format!("couldn't listen for the device: {why}"))?;
+    let read = lines::offer(&offer(&advert)?)?;
+    let identifier = read.txt.get("identifier").cloned().ok_or("the pairing announces no identifier")?;
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+    let announcement = crate::announce::start(&format!("{}.local.", crate::HOST_SERVICE), &identifier, local, read.port, &read.txt)?;
+    eprintln!("Announced “{shown}” on {local}; only {} is taken. On the device: Settings › Privacy & Security › Developer Mode › “{shown}”, and type the code that shows here. 7 minutes at most; Ctrl-C gives up.", device.dns);
+    let pairing = Arc::new(pairing);
+    let (tell, told) = mpsc::channel::<Result<String, String>>();
+    let waits = {
+        let (pairing, tell) = (pairing.clone(), tell.clone());
+        std::thread::spawn(move || {
+            let code = tell.clone();
+            let answer = pairing.accept(move |digits| { let _ = code.send(Err(digits.to_string())); });
+            let _ = tell.send(Ok(answer));
+        })
+    };
+    let until = Instant::now() + PAIRING;
+    let answer = runtime.block_on(async {
+        let stopped = tokio::signal::ctrl_c();
+        tokio::pin!(stopped);
+        let answer = loop {
+            match told.try_recv() {
+                Ok(Err(digits)) => eprintln!("Code: {digits}"),
+                Ok(Ok(answer)) => break Ok(answer),
+                Err(_) => {}
+            }
+            if Instant::now() >= until { break Err("no pairing was made in 7 minutes".to_string()) }
+            tokio::select! {
+                _ = &mut stopped => break Err("stopped".to_string()),
+                _ = tokio::time::sleep(Duration::from_millis(200)) => {}
+            }
+        };
+        // Taken off the Wi‑Fi however it ended: left there, the device would go on offering to pair with it.
+        if !announcement.unregister().await { eprintln!("The announcement may linger on this network for a while."); }
+        announcement.shutdown().await;
+        answer
+    });
+    let answer = match answer {
+        Ok(answer) => answer,
+        Err(why) => {
+            pairing.cancel();
+            let _ = waits.join();
+            return Err(format!("{why}: nothing was kept"));
+        }
+    };
+    let _ = waits.join();
+    let made = device::said(answer).map_err(|why| format!("the device didn't pair ({why}): nothing was kept. Run this again"))?;
+    let key = made["pairing"].as_str().ok_or("the pairing came without its key")?;
+    // Tried before it is kept, over the tailnet as it will be used.
+    match device::keep(&name, device.ip, 49152, key, passphrase.as_deref()) {
+        Ok(kept) => Ok(format!("Paired with {} as “{shown}”, and it connects. {kept}\nTo withdraw it: `roamrunctl devices remove {name}`, and remove “{shown}” on the device, in that list.", device.dns)),
+        Err(why) => Err(format!("paired, but not kept here ({why}): remove “{shown}” on the device, in that list, and run this again (this machine is {me})")),
+    }
+}
