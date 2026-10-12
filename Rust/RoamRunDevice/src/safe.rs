@@ -131,3 +131,45 @@ mod tests {
         assert_eq!(readable("x: Data([1, 2, 3])"), "x: Data([1, 2, 3])");
     }
 }
+
+/// A pairing a device comes to make: this side listens, shows a code, and keeps the key that comes of it.
+pub struct Pairing(*mut RRPairing);
+
+// As the C side has it: accept on one thread, cancel from any.
+unsafe impl Send for Pairing {}
+unsafe impl Sync for Pairing {}
+
+impl Pairing {
+    /// Listens on `socket` (a listening TCP socket, this call's from here on) for connections from `only` alone.
+    /// The second value is what to offer: JSON {"port":…,"identifier":…,"txt":{…}}.
+    pub fn listen_on(name: &str, model: &str, host: &str, socket: std::os::fd::OwnedFd, only: &str) -> Result<(Pairing, String), String> {
+        use std::os::fd::IntoRawFd;
+        let (name, model, host, only) = (c(name)?, c(model)?, c(host)?, c(only)?);
+        let (mut advert, mut error) = (std::ptr::null_mut(), std::ptr::null_mut());
+        let pairing = unsafe { rr_pairing_listen_on(name.as_ptr(), model.as_ptr(), host.as_ptr(), socket.into_raw_fd(), only.as_ptr(), &mut advert, &mut error) };
+        if pairing.is_null() { return Err(take(error)); }
+        Ok((Pairing(pairing), take(advert)))
+    }
+
+    /// Waits for a device to pair; `code` is given the six digits to show. The answer is JSON: {"ok":true,"udid":…,
+    /// "name":…,"model":…,"pairing":…} (the pairing holds this side's private key), or {"ok":false,"error":…}.
+    pub fn accept(&self, mut code: impl FnMut(&str) + Send) -> String {
+        unsafe extern "C" fn shown<F: FnMut(&str)>(digits: *const c_char, context: *mut std::ffi::c_void) {
+            let show = unsafe { &mut *(context as *mut F) };
+            show(&unsafe { CStr::from_ptr(digits) }.to_string_lossy());
+        }
+        fn with<F: FnMut(&str)>(pairing: *mut RRPairing, code: &mut F) -> *mut c_char {
+            unsafe { rr_pairing_accept(pairing, Some(shown::<F>), code as *mut F as *mut std::ffi::c_void) }
+        }
+        take(with(self.0, &mut code))
+    }
+
+    /// Makes a running `accept` return. Any thread.
+    pub fn cancel(&self) { unsafe { rr_pairing_cancel(self.0) } }
+}
+
+impl Drop for Pairing {
+    fn drop(&mut self) {
+        unsafe { rr_pairing_free(self.0) };
+    }
+}

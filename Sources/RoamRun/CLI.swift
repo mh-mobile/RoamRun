@@ -278,10 +278,12 @@ enum CLI {
     /// `also`: what else than a Mac may be the one named, by the OS Tailscale gives for it — the device
     /// itself (the app on it introduces this Mac), a Windows or Linux machine (roamrunctl does). That only
     /// turns a wrong name away sooner: whose the connection is, is held to the id and address below.
-    private static func byName(_ mesh: TailscaleClient.Mesh, _ other: MeshDevice, _ ip: String, also: Set<String> = []) -> (PairByName.Peer, own: String, interface: String) {
+    /// `holds`: the one named is to hold the pairing (this Mac introduces), which a Linux machine with roamrunctl can too.
+    private static func byName(_ mesh: TailscaleClient.Mesh, _ other: MeshDevice, _ ip: String, also: Set<String> = [], holds: Bool = false) -> (PairByName.Peer, own: String, interface: String) {
         guard other.os.lowercased() == "macos" || also.contains(other.os.lowercased()) else {
             fail("\(other.dnsName) is a \(other.os.isEmpty ? "device of another kind" : other.os) device, "
-                 + (also.isEmpty ? "not a Mac" : "not one that introduces here (a Mac, the device itself\(also.contains("linux") ? ", or a Windows or Linux machine with roamrunctl" : ""))"))
+                 + (holds ? "not one that can hold a pairing (a Mac, or a Linux machine with roamrunctl)"
+                    : also.isEmpty ? "not a Mac" : "not one that introduces here (a Mac, the device itself\(also.contains("linux") ? ", or a Windows or Linux machine with roamrunctl" : ""))"))
         }
         guard let id = other.stableID else { stop("Tailscale gives no lasting id for \(other.dnsName), so it can't be held to being that one: carry the lines instead (`roamrun pair xcode` alone prints the first)") }
         guard let own = mesh.ownIPs.first(where: { $0.contains(".") }),
@@ -814,7 +816,7 @@ enum CLI {
     private static func introduceByName(mac name: String, to profile: DeviceProfile) async -> Never {
         let device = Introduction.line(handover(of: profile))
         let (mesh, far, ip) = mac(named: name)
-        let (peer, _, interface) = byName(mesh, far, ip)
+        let (peer, _, interface) = byName(mesh, far, ip, also: ["linux"], holds: true)
         let me = (try? TailscaleClient.fromSettings().selfDNSName()).flatMap { $0 }?.split(separator: ".").first.map(String.init) ?? "<this Mac's Tailscale name>"
         let client = TailscaleClient.fromSettings()
         let waits = await pairable(profile)

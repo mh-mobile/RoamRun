@@ -49,7 +49,7 @@ const LONGER: u32 = 1280;
 /// Where the device's pairing port has been found: it isn't announced across a tailnet.
 const PORTS: std::ops::Range<u16> = 49152..49168;
 
-fn folder() -> Result<PathBuf, String> {
+pub fn folder() -> Result<PathBuf, String> {
     let base = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).filter(|p| p.is_absolute())
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
         .ok_or("no home folder to keep devices in")?;
@@ -164,6 +164,26 @@ pub fn fitted(png: &[u8], format: image::ImageFormat) -> Result<(Vec<u8>, u32, u
     // No alpha in a JPEG.
     image::DynamicImage::ImageRgb8(image.to_rgb8()).write_to(&mut out, format).map_err(|e| e.to_string())?;
     Ok((out.into_inner(), image.width(), image.height()))
+}
+
+/// Whether `name` can be a device's here, and none is saved under it.
+pub fn free(name: &str) -> Result<(), String> {
+    named(name)?;
+    if kept(name)?.is_some() {
+        return Err(format!("a device “{name}” is saved here already: `roamrunctl devices remove {name}` first, or --as another name"));
+    }
+    Ok(())
+}
+
+/// Tries a pairing just made over the tailnet and saves it; says where it is kept and how.
+pub fn keep(name: &str, ip: std::net::Ipv4Addr, port: u16, pairing: &str, passphrase: Option<&str>) -> Result<String, String> {
+    let saved = Saved { v: 1, name: name.to_string(), ip: ip.to_string(), port, pairing: pairing.to_string() };
+    open(&saved)?;
+    let path = save(&saved, passphrase)?;
+    Ok(match passphrase {
+        Some(_) => format!("Its pairing is kept under the passphrase, in {}.", path.display()),
+        None => format!("The key is {}, as it is: whoever can read it and reach the device can see and operate it.", path.display()),
+    })
 }
 
 /// The device saved under `name`, opened.

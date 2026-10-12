@@ -28,7 +28,7 @@ pub struct Device {
     pub v: i64,
 }
 
-#[cfg(test)]
+#[cfg_attr(windows, allow(dead_code))]
 pub fn offer_line(offer: &Offer) -> String {
     format!("{OFFER_PREFIX}{}", packed(offer))
 }

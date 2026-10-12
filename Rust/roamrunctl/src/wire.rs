@@ -66,7 +66,8 @@ impl Wire {
         }
     }
 
-    fn over(stream: TcpStream) -> Option<Wire> {
+    #[cfg_attr(windows, allow(dead_code))]
+    pub fn over(stream: TcpStream) -> Option<Wire> {
         let reader = Arc::new(Mutex::new(BufReader::new(stream.try_clone().ok()?)));
         Some(Wire { stream, reader })
     }

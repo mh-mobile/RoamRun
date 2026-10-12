@@ -5,6 +5,8 @@ mod announce;
 #[cfg(not(windows))]
 mod device;
 #[cfg(not(windows))]
+mod hold;
+#[cfg(not(windows))]
 mod mcp;
 #[cfg(not(windows))]
 mod secret;
@@ -72,6 +74,19 @@ enum Command {
 enum Pair {
     /// Stand in on this LAN for a far Mac's offer to pair — with Xcode, or for device control, as that Mac asks — and carry the device's connection to it
     Introduce(Introduce),
+    /// Have this machine hold a pairing of its own with a device it isn't near: the machine named, on the device's Wi‑Fi, introduces it
+    #[cfg(not(windows))]
+    Control {
+        /// The Tailscale name of the machine that introduces (or of the device itself, with the Introducer app)
+        #[arg(long)]
+        with: String,
+        /// The name to save the device under here
+        #[arg(long = "as")]
+        name: Option<String>,
+        /// Keep the pairing without a passphrase: a file only its owner can read, and no more
+        #[arg(long)]
+        plain: bool,
+    },
 }
 
 #[derive(Args)]
@@ -108,6 +123,11 @@ macro_rules! say { ($($t:tt)*) => {{ let _ = writeln!(std::io::stderr(), "roamru
 fn main() {
     let args = match Cli::parse().command {
         Command::Pair { command: Pair::Introduce(args) } => args,
+        #[cfg(not(windows))]
+        Command::Pair { command: Pair::Control { with, name, plain } } => match hold::run(&with, name, plain) {
+            Ok(said) => { println!("{said}"); return }
+            Err(why) => { eprintln!("roamrunctl: {why}"); std::process::exit(1) }
+        },
         #[cfg(not(windows))]
         other => std::process::exit(device::run(other)),
     };
