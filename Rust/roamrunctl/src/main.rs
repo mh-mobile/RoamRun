@@ -28,7 +28,7 @@ use tokio::sync::{mpsc, watch};
 const HOST_SERVICE: &str = "_remotepairing-pairable-host._tcp";
 
 #[derive(Parser)]
-#[command(name = "roamrunctl", version = env!("ROAMRUN_VERSION"), about = "Introduces a device to the machine that will hold its pairing; on Linux and macOS, holds one itself and uses the device")]
+#[command(name = "roamrunctl", version = env!("ROAMRUN_VERSION"), about = "Introduces a device to the machine that will hold its pairing; and holds one itself and uses the device")]
 struct Cli {
     #[command(subcommand)]
     command: Command,

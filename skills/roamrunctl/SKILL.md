@@ -6,8 +6,8 @@ description: Introduce a far Mac (one with Xcode and RoamRun, reached over Tails
 # roamrunctl
 
 `roamrunctl` does two things. On the Wi‑Fi the device is on, it stands in for a far
-Mac while the device pairs with it (sections 1 to 4, on Windows, Linux or a Mac). And,
-on Linux or a Mac, it can hold a pairing of its own and use the device from there: see
+Mac while the device pairs with it (sections 1 to 4). And it can hold a pairing of
+its own and use the device from there, or keep a pairing's key for another machine: see
 it, operate it, install and launch an app (section 5).
 
 For the first, three machines are involved:
@@ -130,7 +130,10 @@ Xcode first, as above). "what the far Mac kept couldn't be learned": there,
 `roamrun pair control --attempt <id>` says, with the id it printed (stopping it
 with Ctrl-C once the code was typed ends the same way: the far Mac's app goes on).
 
-## 5. Holding a device here (Linux or a Mac; not Windows)
+## 5. Holding a device here
+
+(Tried against a device on Linux and macOS. On Windows the same commands are there
+and weren't: the usual use of a Windows machine is to keep the key and sign, below.)
 
 A machine that has a pairing of its own reaches the device over Tailscale by itself:
 no Mac, no Xcode. Today the pairing is made on a Mac and brought over:

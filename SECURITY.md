@@ -255,10 +255,11 @@ bounded.
     without a pairing (as any device added and not set up), or a pairing switched
     off. Nothing is cleaned up at the next start, so nothing kept is removed by it.
   - Not tried with a Mac shared in from another tailnet.
-- **roamrunctl can hold a pairing of its own (Linux and macOS).** `roamrunctl key import`
+- **roamrunctl can hold a pairing of its own.** `roamrunctl key import`
   takes such a file and keeps the pairing in `~/.config/roamrunctl/devices`, in age's
   passphrase format unless `--plain` (then a file only its owner can read; one that
-  others can read is refused). The passphrase is taken from a file, a command or the
+  others can read is refused — on Windows it is under `%APPDATA%\roamrunctl`, the user's
+  by what that folder inherits, and nothing more is checked). The passphrase is taken from a file, a command or the
   environment, or typed at a terminal — not from the command line. What that buys: the
   file alone, in a backup or a copied folder, opens nothing. What it doesn't: a program
   running as the same user — an agent that can run `roamrunctl` and read its environment

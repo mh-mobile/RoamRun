@@ -92,9 +92,11 @@ The check uses a test service type (`_rrtest._tcp`), a fake far Mac on 127.0.0.1
 device sees anything. It confirms the record resolves through mDNSResponder, a stranger is refused, the carried connection
 ends the run, the device line is made, and the goodbye reaches a browser within a few seconds.
 
-## Holding a device (Linux and macOS)
+## Holding a device
 
-Not on Windows, where roamrunctl only introduces. With a pairing of its own, a machine reaches the device over
+On Linux and macOS, where it was tried against a device; the Windows build has the same commands (it builds and
+its tests pass there), and wasn't run against one. Files there go under `%APPDATA%\roamrunctl`, the user's by
+what that folder inherits, and a passphrase's command is run by `cmd /C`. With a pairing of its own, a machine reaches the device over
 Tailscale by itself — no Mac, no Xcode:
 
 ```sh
