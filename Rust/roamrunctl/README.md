@@ -289,6 +289,11 @@ Ubuntu VM on the tailnet) as the using machine and a Mac beside the device, once
 - `pair control --with <the device's Tailscale name>` on the VM and the Introducer app on the device (far Mac: the
   VM's name), with no machine beside it: the app said the VM pairs for device control, the code showed on the VM, and
   the pairing was kept and looked with. (The app's last screen says to try `roamrun look` there: it is `roamrunctl look`.)
+- On Windows 11 (ARM, a virtual machine bridged onto the device's Wi‑Fi, the build CI made, PowerShell run as
+  administrator): `pair control --to … --passphrase` with the passphrase given by `ROAMRUNCTL_PASSPHRASE_COMMAND`
+  (a command with double quotes in it), kept under `%LOCALAPPDATA%`; `look`, and again with the same passphrase
+  given itself; `sign` for the Linux VM, which listed the device, looked at it with no key, and was refused once
+  `sign` ended. Windows' firewall asked nothing in that session; from a console that isn't an administrator's it wasn't run.
 - Taps through `mcp` with the device on either side (a key of the calculator, the one aimed at both times).
 - `install` of an .app folder (3 MB) and `launch`; a larger one (37 MB) cut short with Ctrl-C a few seconds in,
   installed again (two and a half minutes) and launched.
@@ -303,7 +308,7 @@ Not yet run against a device:
 - A Mac's `roamrun pair introduce` (RoamRun's own), introducing a machine with roamrunctl.
 - `mcp`'s swipe, type, paste, install and launch (each was sent by the library directly, or by the command).
 - An iPad, and a device held upside down.
-- Anything on Windows: both targets build and pass their tests there, and that is all.
+- On Windows: `pair control --with`, `mcp`, `install` and `launch`, and the x86_64 build.
 - A device no Xcode ever prepared (launching may need what Xcode leaves on it), and one nothing was paired with
   before (`pair control --with`).
 - A machine whose Tailscale runs in userspace mode (the container borrowed its host's): it has no address to
