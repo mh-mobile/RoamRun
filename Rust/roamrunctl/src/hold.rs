@@ -76,14 +76,14 @@ pub fn offer(advert: &str) -> Result<String, String> {
     lines::offer(&line).map(|_| line).map_err(|why| format!("this machine's own offer doesn't read as one ({why})"))
 }
 
-pub fn run(with: &str, name: Option<String>, plain: bool) -> Result<String, String> {
+pub fn run(with: &str, name: Option<String>, sealed: bool) -> Result<String, String> {
     let status = tailscale::status()?;
     let own: Ipv4Addr = status.this.ips.iter().find_map(|a| a.parse().ok()).ok_or("this machine has no IPv4 address on the tailnet")?;
     let me = short(&status.this.dns_name).to_string();
     let other = tailscale::peer(&status, with)?;
     if let Some(name) = &name { device::free(name)?; }
     // Before the device is asked anything: a pairing made and then not kept would leave it paired with nothing here.
-    let passphrase = if plain { None } else { Some(secret::passphrase("the pairing", true)?) };
+    let passphrase = if sealed { Some(secret::passphrase("the pairing", true)?) } else { None };
     let host = host_id()?;
     let shown = lines::announced_name(&status.this.dns_name).ok_or("this machine's Tailscale name can't be shown on a device: rename it there")?;
     let listener = TcpListener::bind((own, wire::PORT)).map_err(|e| if e.kind() == std::io::ErrorKind::AddrInUse {

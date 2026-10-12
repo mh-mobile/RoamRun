@@ -95,18 +95,6 @@ pub fn state_problem(state: &str) -> Option<String> {
     }
 }
 
-/// As `peer`, and this machine itself where it is the one named: a key kept here under another user is
-/// asked for over this machine's own tailnet address.
-pub fn machine(status: &Status, name: &str) -> Result<Peer, String> {
-    let want = name.trim_end_matches('.').to_lowercase();
-    let own = status.this.dns_name.trim_end_matches('.').to_lowercase();
-    if !own.is_empty() && (want == own || want == short(&own)) {
-        let ip = status.this.ips.iter().find_map(|a| a.parse::<Ipv4Addr>().ok()).ok_or("this machine has no IPv4 address on the tailnet")?;
-        return Ok(Peer { id: status.this.id.clone(), ip, dns: own, lan: None });
-    }
-    peer(status, name)
-}
-
 /// The peer a person means by `name`: its whole Tailscale name, or the first label of one in this
 /// tailnet. Never the name a device gives itself, and never a guess between two (as RoamRun does).
 pub fn peer(status: &Status, name: &str) -> Result<Peer, String> {

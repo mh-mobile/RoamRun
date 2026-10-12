@@ -15,9 +15,7 @@ use crate::Command;
 pub enum Devices {
     /// Forget a device and its pairing here (remove this machine on the device too, in its list)
     Remove { name: String },
-    /// A saved device as a line for another machine, without its key: that machine asks this one to sign (`roamrunctl sign`)
-    Export { name: String },
-    /// Save the device of such a line: its key stays on the machine that made the line
+    /// Save the device of a line `roamrunctl sign` printed on the machine that keeps its key
     Add {
         line: String,
         /// The name to save it under here
@@ -28,15 +26,15 @@ pub enum Devices {
 
 #[derive(Subcommand)]
 pub enum Key {
-    /// Save the device and the pairing of a file `roamrun key create` wrote, under a passphrase; the file is removed
+    /// Save the device and the pairing of a file `roamrun key create` wrote; the file is removed
     Import {
         file: PathBuf,
         /// The name to save it under here
         #[arg(long = "as")]
         name: Option<String>,
-        /// Keep it without a passphrase: a file only its owner can read, and no more
+        /// Keep it under a passphrase (typed here, or given as the README says), not as a file only its owner can read
         #[arg(long)]
-        plain: bool,
+        passphrase: bool,
     },
 }
 
@@ -163,7 +161,7 @@ struct SharedDevice {
     port: Option<u16>,
 }
 
-fn import(file: &Path, name: Option<String>, plain: bool) -> Result<String, String> {
+fn import(file: &Path, name: Option<String>, sealed: bool) -> Result<String, String> {
     let text = std::fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?;
     let shared: Shared = serde_json::from_str(&text).map_err(|_| format!("{} isn't a file `roamrun key create` wrote", file.display()))?;
     if shared.version != 1 || shared.pairing.is_empty() || shared.device.ip.parse::<std::net::Ipv4Addr>().is_err() {
@@ -177,7 +175,7 @@ fn import(file: &Path, name: Option<String>, plain: bool) -> Result<String, Stri
     }
     // Tried before it is kept, and the file goes only once it is: a key that doesn't open the device isn't one.
     open(&saved)?;
-    let passphrase = if plain { None } else { Some(crate::secret::passphrase(&saved.name, true)?) };
+    let passphrase = if sealed { Some(crate::secret::passphrase(&saved.name, true)?) } else { None };
     let path = save(&saved, passphrase.as_deref())?;
     std::fs::remove_file(file).map_err(|e| format!("saved, but {} couldn't be removed ({e}): remove it yourself, it is a key", file.display()))?;
     Ok(match passphrase {
@@ -248,14 +246,10 @@ pub fn keep(name: &str, ip: std::net::Ipv4Addr, port: u16, pairing: &str, passph
 pub const HELD_PREFIX: &str = "rr-held-v1:";
 
 /// A saved device as a line for a machine that is to use it without its key.
-fn export(name: &str) -> Result<String, String> {
-    let mut saved = load(name)?;
-    if saved.signer.is_some() { return Err(format!("{name}'s key isn't kept here: export it on the machine that keeps it")); }
+fn exported(mut saved: Saved, me: &str) -> Result<String, String> {
     let (bare, identifier) = crate::sign::without_key(&saved.pairing)?;
-    let me = crate::tailscale::status()?.this.dns_name.trim_end_matches('.').to_string();
-    if me.is_empty() { return Err("Tailscale gives this machine no name to be asked by".into()); }
     saved.pairing = bare;
-    saved.signer = Some(me);
+    saved.signer = Some(me.to_string());
     saved.identifier = Some(identifier);
     let json = serde_json::to_vec(&saved).map_err(|e| e.to_string())?;
     use base64::Engine;
@@ -265,7 +259,7 @@ fn export(name: &str) -> Result<String, String> {
 /// The device a line holds, as it would be saved: what a line may say is checked, and no key is taken from one.
 pub fn held(line: &str, name: Option<String>) -> Result<Saved, String> {
     use base64::Engine;
-    let not = || "that isn't a line `roamrunctl devices export` printed".to_string();
+    let not = || "that isn't a line `roamrunctl sign` printed".to_string();
     let json = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(line.trim().strip_prefix(HELD_PREFIX).ok_or_else(not)?).map_err(|_| not())?;
     let mut saved: Saved = serde_json::from_slice(&json).map_err(|_| not())?;
     let fits = saved.v == 1 && saved.ip.parse::<std::net::Ipv4Addr>().is_ok() && !saved.pairing.is_empty()
@@ -288,17 +282,26 @@ fn add(line: &str, name: Option<String>) -> Result<String, String> {
     Ok(format!("Saved {} ({}), and it connects. Its key stays on {signer}, which is asked at each connection: {} holds none.", saved.name, saved.ip, path.display()))
 }
 
-/// The pairings saved here with their keys, by their identifiers: what `roamrunctl sign` signs with.
-pub fn keys() -> Result<std::collections::HashMap<String, (String, ed25519_dalek::SigningKey)>, String> {
-    let mut keys = std::collections::HashMap::new();
+/// The pairings saved here with their keys, by their identifiers (what `roamrunctl sign` signs with), and for
+/// each the line another machine saves it by.
+#[allow(clippy::type_complexity)]
+pub fn keys() -> Result<(std::collections::HashMap<String, (String, ed25519_dalek::SigningKey)>, Vec<(String, String)>), String> {
+    let me = crate::tailscale::status()?.this.dns_name.trim_end_matches('.').to_string();
+    if me.is_empty() { return Err("Tailscale gives this machine no name to be asked by".into()); }
+    let (mut keys, mut lines) = (std::collections::HashMap::new(), Vec::new());
     for name in names()? {
         match load(&name) {
-            Ok(saved) if saved.signer.is_none() => { if let Some((identifier, key)) = crate::sign::key(&saved.pairing) { keys.insert(identifier, (name, key)); } }
+            Ok(saved) if saved.signer.is_none() => {
+                if let Some((identifier, key)) = crate::sign::key(&saved.pairing) {
+                    keys.insert(identifier, (name.clone(), key));
+                    lines.push((name, exported(saved, &me)?));
+                }
+            }
             Ok(_) => {}
             Err(why) => eprintln!("{name} is left out: {why}"),
         }
     }
-    Ok(keys)
+    Ok((keys, lines))
 }
 
 /// The device saved under `name`, opened.
@@ -348,7 +351,7 @@ pub fn run(command: Command) -> i32 {
             std::fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
             Ok(format!("Removed {name} and its pairing here. On the device, remove this machine in its list too (Settings › Privacy & Security › Developer Mode)."))
         }),
-        Command::Key { command: Key::Import { file, name, plain } } => import(&file, name, plain),
+        Command::Key { command: Key::Import { file, name, passphrase } } => import(&file, name, passphrase),
         Command::Look { name, file } => look(&name, file),
         Command::Install { name, path } => load(&name).and_then(|saved| open(&saved)).and_then(|device| {
             said(device.install(&path.to_string_lossy())).map(|_| format!("Installed {} on {name}.", path.display()))
@@ -357,8 +360,7 @@ pub fn run(command: Command) -> i32 {
             said(device.launch(&bundle)).map(|value| format!("Launched {bundle} on {name} (pid {}).", value["pid"]))
         }),
         Command::Mcp => return crate::mcp::Server::default().serve(),
-        Command::Sign { machine } => keys().and_then(|keys| crate::sign::serve(&machine, keys)),
-        Command::Devices { command: Some(Devices::Export { name }) } => export(&name),
+        Command::Sign { machine } => keys().and_then(|(keys, lines)| crate::sign::serve(&machine, keys, lines)),
         Command::Devices { command: Some(Devices::Add { line, name }) } => add(&line, name),
         Command::Pair { .. } => unreachable!("handled by main"),
     };

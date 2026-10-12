@@ -39,7 +39,7 @@ pub fn passphrase(what: &str, new: bool) -> Result<String, String> {
         return Err(format!("{what} is kept under a passphrase, and none is given: set {FILE}, {COMMAND} or {ITSELF} (the weakest), or run this at a terminal"));
     }
     let typed = rpassword::prompt_password(format!("Passphrase for {what}: ")).map_err(|e| e.to_string())?;
-    if typed.is_empty() { return Err("an empty passphrase: nothing was done (`--plain` keeps a pairing without one)".into()); }
+    if typed.is_empty() { return Err("an empty passphrase: nothing was done (without --passphrase a pairing is kept as a file only you can read)".into()); }
     if new && rpassword::prompt_password("Once more: ").map_err(|e| e.to_string())? != typed { return Err("the two don't match: nothing was done".into()); }
     Ok(typed)
 }

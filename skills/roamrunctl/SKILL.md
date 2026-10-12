@@ -130,28 +130,43 @@ Xcode first, as above). "what the far Mac kept couldn't be learned": there,
 `roamrun pair control --attempt <id>` says, with the id it printed (stopping it
 with Ctrl-C once the code was typed ends the same way: the far Mac's app goes on).
 
-## 5. Holding a device here
+## 5. Using a device from here
 
-(Tried against a device on Linux and macOS. On Windows the same commands are there
-and weren't: the usual use of a Windows machine is to keep the key and sign, below.)
+Two ways, and the user chooses which: the difference is where the pairing's key is.
 
-A machine that has a pairing of its own reaches the device over Tailscale by itself:
-no Mac, no Xcode. Today the pairing is made on a Mac and brought over:
+**A. This machine holds the key.** The simple one. This machine pairs by itself, with
+no Mac and no Xcode; another machine on the device's Wi‑Fi introduces it, once:
 
-- On a Mac with RoamRun, on the device's Wi‑Fi — **the user runs this, at a terminal
-  of their own** (it shows a pairing code): `roamrun key create <device> <file>`.
-- Here: `roamrunctl key import <file> [--as <name>]`. It tries the pairing, saves it,
-  and removes the file. `roamrunctl devices` lists what is saved; `roamrunctl devices
-  remove <name>` forgets one (the user removes this machine on the device too).
+- here — **the user runs it, at a terminal of their own** (it shows the pairing code):
+  `roamrunctl pair control --with <the machine beside the device> [--as <name>]`;
+- on that machine: `roamrunctl pair introduce --host <this machine> --to <the device's
+  Tailscale name>` (or `roamrun pair introduce --host …` on a Mac, or the Introducer app);
+- on the device: Settings › Privacy & Security › Developer Mode › this machine's name,
+  and the code.
 
-**The saved pairing is a key to the device.** It is kept under a passphrase unless
-`--plain`: the passphrase comes from `ROAMRUNCTL_PASSPHRASE_FILE` (a file holding it),
-else `ROAMRUNCTL_PASSPHRASE_COMMAND` (a command that prints it), else
-`ROAMRUNCTL_PASSPHRASE` (the weakest), else it is typed at a terminal — never on the
-command line. Don't ask the user for the passphrase and don't print it. If a command
-fails saying none is given, say so and stop: setting one is the user's.
+(A Mac with RoamRun can make the pairing instead and hand it over: `roamrun key create
+<device> <file>` there, `roamrunctl key import <file>` here.)
 
-What it then does:
+The saved pairing is then a key to the device, in a file only this user can read:
+**any program running as this user — you among them — can see and operate the device**
+until `roamrunctl devices remove <name>`. With `--passphrase` it is kept encrypted
+instead, and every command then needs the passphrase (from
+`ROAMRUNCTL_PASSPHRASE_FILE`, `ROAMRUNCTL_PASSPHRASE_COMMAND` or `ROAMRUNCTL_PASSPHRASE`,
+else typed at a terminal): that protects a copy of the file, not the device from this
+machine. Don't ask the user for a passphrase and don't print one; if a command says
+none is given, say so and stop.
+
+**B. Another machine keeps the key, and signs for this one.** For when the key
+shouldn't be on the machine an agent runs on. The user does A on a machine of their
+own, and leaves `roamrunctl sign --for <this machine>` running there; it prints, for
+each device, a line to run here: `roamrunctl devices add <line> --as <name>` (the line
+holds no key). From then on this machine asks that one at each new connection. If a
+command fails saying the machine that keeps the key didn't sign or isn't answering,
+say so and stop: starting `roamrunctl sign` is the user's, on their machine. This
+keeps the key from being copied off this machine. It doesn't keep this machine from
+using the device while the other one answers.
+
+Either way, what this machine then does (`roamrunctl devices` lists what is saved):
 
 - `roamrunctl look <name> [file.png]` — the screen now, its longer side 1280 at most;
   prints the path, then its size. The file is whatever was on the screen: the user's.
@@ -164,26 +179,12 @@ What it then does:
   returned. These press what is really there — don't tap what spends money, posts,
   sends, deletes or signs in unless the user asked for exactly that.
 
-**The key can stay on another machine.** Where the machine that uses the device
-shouldn't hold its key (an agent runs there), the user keeps the pairing on a machine of
-their own and that one signs for this one:
-
-- there, the user runs `roamrunctl sign --for <this machine>` and leaves it running
-  (it prints each connection it signs; Ctrl-C ends it, and no new connection can then
-  be made), and `roamrunctl devices export <name>`, which prints a line with no key in it;
-- here, `roamrunctl devices add <that line> [--as <name>]`.
-
-From then on every command above works as before, asking that machine at each new
-connection. If one fails saying the machine that keeps the key didn't sign or isn't
-answering, say so and stop: starting `roamrunctl sign` is the user's, on their machine.
-This keeps the key from being copied off this machine. It doesn't keep this machine
-from using the device while the other one answers.
-
 A look here is a picture the device makes; nothing shows on the device and its sound
 and microphone are left alone. The device has to be on Wi‑Fi (on cellular alone it
 refuses), unlocked once since it started, and connected in Tailscale. Launching needs
 the device to have been used with Xcode once before (that is where its developer
-services come from); a device no Xcode ever met wasn't tried.
+services come from); a device no Xcode ever met wasn't tried. All of this was tried
+against a device on Linux and macOS; the Windows build has the same commands and wasn't.
 
 ## 6. What it doesn't do
 

@@ -255,26 +255,28 @@ bounded.
     without a pairing (as any device added and not set up), or a pairing switched
     off. Nothing is cleaned up at the next start, so nothing kept is removed by it.
   - Not tried with a Mac shared in from another tailnet.
-- **roamrunctl can hold a pairing of its own.** `roamrunctl key import`
-  takes such a file and keeps the pairing in `~/.config/roamrunctl/devices`, in age's
-  passphrase format unless `--plain` (then a file only its owner can read; one that
-  others can read is refused — on Windows it is under `%APPDATA%\roamrunctl`, the user's
-  by what that folder inherits, and nothing more is checked). The passphrase is taken from a file, a command or the
-  environment, or typed at a terminal — not from the command line. What that buys: the
-  file alone, in a backup or a copied folder, opens nothing. What it doesn't: a program
-  running as the same user — an agent that can run `roamrunctl` and read its environment
-  — uses the device as roamrunctl does. There is no switch per device there: holding the
-  pairing is being able to use it, until it is removed (`roamrunctl devices remove`, and
-  the machine's row on the device). It looks by the device's own screenshot and sends
-  inputs with no screen stream, so the device shows no screen-sharing session meanwhile.
+- **roamrunctl can hold a pairing of its own.** `roamrunctl pair control --with` (or
+  `key import`) keeps the pairing in `~/.config/roamrunctl/devices` (`%APPDATA%\roamrunctl`
+  on Windows), a file only its owner can read; one that others can read is refused
+  (on Windows the folder is the user's by what it inherits, and nothing more is checked).
+  A program running as the same user — an agent that can run `roamrunctl` — uses the
+  device as roamrunctl does. There is no switch per device there: holding the pairing
+  is being able to use it, until it is removed (`roamrunctl devices remove`, and the
+  machine's row on the device). With `--passphrase` the file is in age's passphrase
+  format, the passphrase taken from a file, a command or the environment, or typed at
+  a terminal, not from the command line: the file alone, in a backup or a copied
+  folder, then opens nothing — and a program that runs as the user and can read the
+  passphrase where it is kept is no further from the device than before. It looks by
+  the device's own screenshot and sends inputs with no screen stream, so the device
+  shows no screen-sharing session meanwhile.
 - **roamrunctl can use a pairing whose key is on another machine.** `roamrunctl sign
   --for <machine>` runs where the key is and listens on that machine's tailnet address
   (port 41831) for the one machine named, held to its address and to Tailscale's id for
   it. It signs what a connection to the device has signed (pair-verify: two ephemeral
   keys and the pairing's identifier, and only what has that shape) and nothing else,
   and says each time it does. The machine that uses the device keeps the pairing
-  without its key (`devices export` writes any key in its place) and asks at each
-  connection. What that buys: the key isn't on the machine an agent runs on, can't be
+  without its key (the line `sign` prints for it holds any key in its place) and asks
+  at each connection. What that buys: the key isn't on the machine an agent runs on, can't be
   copied from it, and ending `sign` ends new connections. What it doesn't: the machine
   named — any program on it — can connect for as long as `sign` answers; a connection
   already open stays open; and a signature, once given, completes that one connection

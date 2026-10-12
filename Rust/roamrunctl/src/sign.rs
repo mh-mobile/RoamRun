@@ -48,21 +48,26 @@ fn read_line(stream: &TcpStream) -> Option<String> {
 }
 
 /// `roamrunctl sign --for <machine>`: until Ctrl-C.
-pub fn serve(machine: &str, keys: HashMap<String, (String, SigningKey)>) -> Result<String, String> {
+/// `lines`: for each pairing held, the line the other machine saves it by (no key in it).
+pub fn serve(machine: &str, keys: HashMap<String, (String, SigningKey)>, lines: Vec<(String, String)>) -> Result<String, String> {
     let status = tailscale::status()?;
     let own: Ipv4Addr = status.this.ips.iter().find_map(|a| a.parse().ok()).ok_or("this machine has no IPv4 address on the tailnet")?;
-    let other = tailscale::machine(&status, machine)?;
+    let other = tailscale::peer(&status, machine)?;
     if keys.is_empty() { return Err("no pairing with its key is saved here to sign with: `roamrunctl devices` lists what is".into()); }
     let listener = TcpListener::bind((own, PORT)).map_err(|e| if e.kind() == std::io::ErrorKind::AddrInUse { "another `roamrunctl sign` runs on this machine already".to_string() } else { format!("can't listen on {own}: {e}") })?;
     let mut names: Vec<&str> = keys.values().map(|(name, _)| name.as_str()).collect();
     names.sort();
     eprintln!("Signing for {machine}, and for it alone, with the pairing of: {}. Ctrl-C ends it: {machine} can then make no new connection to them.", names.join(", "));
+    eprintln!("On {machine}, once for each device (the line holds no key):");
+    for (name, line) in &lines {
+        eprintln!("  roamrunctl devices add {line} --as {name}");
+    }
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
         let Ok(from) = stream.peer_addr() else { continue };
         // Whoever asks is held to being the machine named, by address and by Tailscale's own id for it.
         if from.ip() != std::net::IpAddr::V4(other.ip) { eprintln!("Turned away {}: it isn't {machine}.", from.ip()); continue }
-        if !tailscale::status().and_then(|now| tailscale::machine(&now, machine)).is_ok_and(|now| now.is(&other)) {
+        if !tailscale::status().and_then(|now| tailscale::peer(&now, machine)).is_ok_and(|now| now.is(&other)) {
             eprintln!("Turned away a request: Tailscale couldn't say just then that it is {machine}.");
             continue;
         }
@@ -79,7 +84,7 @@ pub fn serve(machine: &str, keys: HashMap<String, (String, SigningKey)>) -> Resu
 
 /// Asks the machine that keeps the key for the signature a connection takes.
 pub fn ask(signer: &str, identifier: &str, what: &[u8]) -> Result<[u8; 64], String> {
-    let there = tailscale::status().and_then(|status| tailscale::machine(&status, signer))?;
+    let there = tailscale::status().and_then(|status| tailscale::peer(&status, signer))?;
     let mut stream = TcpStream::connect_timeout(&SocketAddr::from((there.ip, PORT)), LINE)
         .map_err(|_| "it isn't answering (there: roamrunctl sign --for <this machine>)".to_string())?;
     stream.write_all(format!("{PREFIX}sign {identifier} {}\n", URL_SAFE_NO_PAD.encode(what)).as_bytes()).map_err(|e| e.to_string())?;

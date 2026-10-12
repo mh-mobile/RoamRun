@@ -79,9 +79,9 @@ enum Pair {
         /// The name to save the device under here
         #[arg(long = "as")]
         name: Option<String>,
-        /// Keep the pairing without a passphrase: a file only its owner can read, and no more
+        /// Keep the pairing under a passphrase (typed here, or given as the README says), not as a file only its owner can read
         #[arg(long)]
-        plain: bool,
+        passphrase: bool,
     },
 }
 
@@ -119,7 +119,7 @@ macro_rules! say { ($($t:tt)*) => {{ let _ = writeln!(std::io::stderr(), "roamru
 fn main() {
     let args = match Cli::parse().command {
         Command::Pair { command: Pair::Introduce(args) } => args,
-        Command::Pair { command: Pair::Control { with, name, plain } } => match hold::run(&with, name, plain) {
+        Command::Pair { command: Pair::Control { with, name, passphrase } } => match hold::run(&with, name, passphrase) {
             Ok(said) => { println!("{said}"); return }
             Err(why) => { eprintln!("roamrunctl: {why}"); std::process::exit(1) }
         },
