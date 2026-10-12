@@ -235,10 +235,11 @@ final class DeviceMCP: @unchecked Sendable {
     action, and points are pixels of the image the last look returned. These press what is really \
     there — don't tap what spends money, posts, sends, deletes or signs in unless the user asked \
     for exactly that. A look shows whatever is on the screen (notifications, messages); don't pass \
-    the image on. The device lists this as screen sharing, where its user can see it, and its \
-    sound goes into that session: until about five seconds after the last look or action its \
-    speaker is silent and voice input on it doesn't hear. Asked to keep watching a screen, tell \
-    the user that first.
+    the image on. The device lists this as screen sharing, where its user can see it: until about \
+    five seconds after the last look or action, voice input on it doesn't hear, and some apps go \
+    silent (Apple Music, Apple TV) or stop (Prime Video). Asked to keep watching a screen, tell \
+    the user that first. A look that fails saying a call is in progress: an app on the device is \
+    in a voice conversation; say so and wait.
     """
 
     private static func tool(_ name: String, _ description: String, _ properties: [String: [String: Any]] = [:], required: [String] = []) -> [String: Any] {

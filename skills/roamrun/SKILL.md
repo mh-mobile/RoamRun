@@ -402,21 +402,30 @@ have the user add the MCP tools, which run outside it.
 - An action that fails says why and was not repeated; look before trying again
   (it may have gone through). The device lists each spell of this as a
   screen-sharing session under Settings, where the user can see it.
-- **Looking and acting take the device's sound.** While that session runs — and
-  it is kept about five seconds after the last look or action — the device's
-  speaker is silent (what was playing goes on playing, unheard, and is heard
-  again by itself after) and voice input
-  on it doesn't hear: dictation, a language app's speaking exercise, a voice
-  assistant. Looking again and again keeps it that way throughout. So when asked
-  to watch a screen or keep looking, **say this to the user first**, and ask
-  whether they need the device's sound or its microphone meanwhile; if they do,
+- **Looking and acting take the device's microphone, and some apps' sound.**
+  While that session runs — and it is kept about five seconds after the last
+  look or action — voice input on the device doesn't hear: dictation, a language
+  app's speaking exercise, a voice assistant. Apple Music and the Apple TV app go
+  on playing, unheard, and are heard again by themselves after; Prime Video stops
+  with a content-protection message; YouTube, Spotify and Netflix go on sounding
+  (Netflix's picture is black in a look; its controls show). Other apps weren't
+  tried. Looking again and again keeps it that way throughout. So when asked to
+  watch a screen or keep looking, **say this to the user first**, and ask whether
+  they need the device's microphone, or one of those apps, meanwhile; if they do,
   look only when they ask, or leave pauses of ten seconds or more between looks
-  so both come back in between.
+  so it comes back in between.
+- A look or an action that fails saying a phone or VoIP call is in progress on the
+  device: an app there holds a voice conversation, and the device lets no session
+  start meanwhile. Say so to the user and wait; don't keep trying.
+- A control that hides by itself after a few seconds (a video player's) is pressed
+  right after it is shown: look, tap to show it, look, tap it — with no pause
+  between, or the tap only shows it again.
   When the task is to make the device play something, the action that starts
   it is your last but one: look once to see that it plays (a pause button
-  where play was), then do nothing more — the sound is back some ten seconds
-  later, and you can't hear it: tell the user so. Silence while you still look
-  doesn't mean it failed; don't press play again.
+  where play was), then do nothing more — where the app is one that goes
+  silent while you look, the sound is back some ten seconds later; you can't hear
+  it either way: tell the user so. Silence while you still look doesn't mean it
+  failed; don't press play again.
 
 ## 7. App output
 
