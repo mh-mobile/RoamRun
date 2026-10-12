@@ -402,20 +402,22 @@ have the user add the MCP tools, which run outside it.
 - An action that fails says why and was not repeated; look before trying again
   (it may have gone through). The device lists each spell of this as a
   screen-sharing session under Settings, where the user can see it.
-- **Looking and acting take the device's sound.** While that session runs — and
-  it is kept about five seconds after the last look or action — the device's
-  speaker is silent (what was playing goes on playing, unheard, and is heard
-  again by itself after) and voice input
-  on it doesn't hear: dictation, a language app's speaking exercise, a voice
-  assistant. Looking again and again keeps it that way throughout. So when asked
+- **Looking and acting can take the device's sound and its microphone.** While
+  that session runs — and it is kept about five seconds after the last look or
+  action — voice input on the device may not hear (dictation didn't, where it
+  was tried), and what plays depends on the app: some go on sounding, some go on
+  playing unheard and are heard again by themselves after, some stop, saying the
+  content is protected. Protected video can be black in a look with its controls
+  showing: that isn't a failure. You can't hear the device, so don't say which of
+  these it is. Looking again and again keeps it that way throughout. So when asked
   to watch a screen or keep looking, **say this to the user first**, and ask
   whether they need the device's sound or its microphone meanwhile; if they do,
   look only when they ask, or leave pauses of ten seconds or more between looks
   so both come back in between.
   When the task is to make the device play something, the action that starts
   it is your last but one: look once to see that it plays (a pause button
-  where play was), then do nothing more — the sound is back some ten seconds
-  later, and you can't hear it: tell the user so. Silence while you still look
+  where play was), then do nothing more — sound an app lost is back some
+  ten seconds later, and you can't hear it: tell the user so. Silence while you still look
   doesn't mean it failed; don't press play again.
 
 ## 7. App output
