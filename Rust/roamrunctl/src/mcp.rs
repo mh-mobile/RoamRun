@@ -37,7 +37,7 @@ struct Shown {
 
 /// A point of a picture, as fractions of it, in the terms of the device held upright, where a touch is sent.
 /// None where the picture lies on its side and which way isn't known: the mirror of a point isn't pressed.
-/// ponytail: which of 3 and 4 is which is as the device reports it; not yet tried on a device held sideways.
+/// Tried on an iPhone held each way on its side (iOS 27.0): a point off the picture landed where it was.
 pub fn upright(way: u8, sideways: bool, (x, y): (f64, f64)) -> Option<(f64, f64)> {
     match way {
         1 => Some((x, y)),
