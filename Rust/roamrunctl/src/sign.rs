@@ -81,7 +81,7 @@ pub fn serve(machine: &str, keys: HashMap<String, (String, SigningKey)>) -> Resu
 pub fn ask(signer: &str, identifier: &str, what: &[u8]) -> Result<[u8; 64], String> {
     let there = tailscale::status().and_then(|status| tailscale::machine(&status, signer))?;
     let mut stream = TcpStream::connect_timeout(&SocketAddr::from((there.ip, PORT)), LINE)
-        .map_err(|_| format!("it isn't answering (there: roamrunctl sign --for <this machine>)"))?;
+        .map_err(|_| "it isn't answering (there: roamrunctl sign --for <this machine>)".to_string())?;
     stream.write_all(format!("{PREFIX}sign {identifier} {}\n", URL_SAFE_NO_PAD.encode(what)).as_bytes()).map_err(|e| e.to_string())?;
     let line = read_line(&stream).ok_or("it gave no answer")?;
     match line.strip_prefix(PREFIX).map(|words| words.split(' ').collect::<Vec<_>>()).as_deref() {
