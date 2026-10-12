@@ -217,7 +217,7 @@ under its name, isn't the one it had open: it is opened anew, or said to be gone
 
 `install` puts an app on the device under its own name before it is taken in, as every `roamrunctl install` of that
 name does, and an .ipa under one name whatever it is: one install to a device at a time. What an install that was
-cut short left there is cleared before an .app folder is sent again, where it can be (not tried against a device). An install is given five minutes.
+cut short left there is cleared before an .app folder is sent again, where it can be (an install cut short and run again took the app in, once). An install is given five minutes.
 
 ## Introducing a far Mac (`pair introduce`)
 
@@ -268,28 +268,39 @@ ends the run, the device line is made, and the goodbye reaches a browser within 
 
 ### Holding and using a device (0.7.0)
 
-Tried against a device (iPhone 15 Pro, iOS 27.0), from Linux and macOS — each before the reviews that then
-changed how a saved device's port is looked for, how `pair control --with` learns which device it is, when `mcp`
-presses a point or sends again and how it reads its calls, and how files are written; none was run again since:
+Tried against a device (iPhone 15 Pro, iOS 27.0) after the reviews, with the Linux build CI made (arm64, an
+Ubuntu VM on the tailnet) as the using machine and a Mac beside the device, once each:
 
-- `pair control --with` on a Linux VM on the tailnet, introduced by this crate's `pair introduce --host` on a Mac
-  beside the device; a wrong code kept nothing; the VM then looked at its screen.
-- From an unprivileged Linux container, with a key made on a Mac: connect, look, tap, type, a button, install,
-  launch; launching again after the device restarted. Taps through `roamrunctl mcp` with the device upright and on
-  either side.
-- B in an earlier form (the using machine was handed a line to save): a Mac signed, the Linux VM used the device
-  with no key on it, and was refused once `sign` stopped.
+- Pairings an earlier build had saved on the VM were listed and opened as they were.
+- A: `look`; and through `roamrunctl mcp`: devices, press, look, tap, look, elements. A tap before any look, and a
+  second tap on one look, were refused.
+- `pair control --to` on the Mac: announced, picked on the device, the code typed, tried over the tailnet and kept.
+- B as it is now: `sign <name> --for <the VM>` on the Mac; the VM, with nothing set up, listed the device, looked
+  at it with no key, and saved which machine signs for it on that first use; the same `mcp` calls went through. The
+  Mac said one signature for each connection. With `sign` ended the VM was refused at once and told what to run
+  there; with the device removed on the Mac while `sign` ran, the request was refused on both sides ("signs for …
+  no more").
+- `pair control --with <the Mac> --passphrase` on the VM, introduced by this crate's `pair introduce --host` on
+  the Mac: paired and kept under the passphrase. Without one given, `look` was refused; typed, it looked; given by
+  `ROAMRUNCTL_PASSPHRASE_FILE`, `mcp` ran. The VM's earlier pairing with the device was then refused by the device
+  at once ("doesn't accept this pairing"): pairing again replaces it.
+- Taps through `mcp` with the device on either side (a key of the calculator, the one aimed at both times).
+- `install` of an .app folder (3 MB) and `launch`; a larger one (37 MB) cut short with Ctrl-C a few seconds in,
+  installed again (two to three minutes, with nothing printed meanwhile) and launched.
+
+Earlier, before the reviews: from an unprivileged Linux container, with a key made on a Mac — connect, look, tap,
+type, a button, install, launch, and launching again after the device restarted; a wrong code at `pair control
+--with` kept nothing.
 
 Not yet run against a device:
 
-- `pair control --to`.
-- `sign <names> --for` as it is now (devices named, the using machine asking, the key's machine held to after first use),
-  with more than one device, and `ROAMRUNCTL_SIGNER`.
-- `--passphrase` as a flag (an earlier form of it was).
+- `sign` with more than one device, and `ROAMRUNCTL_SIGNER`.
 - The Introducer app, and a Mac's `roamrun pair introduce`, introducing a machine with roamrunctl.
-- `mcp`'s tools other than look and tap (each was sent by the library directly).
+- `mcp`'s swipe, type, paste, install and launch (each was sent by the library directly, or by the command).
+- An iPad, and a device held upside down.
 - Anything on Windows: both targets build and pass their tests there, and that is all.
-- A device no Xcode ever prepared (launching may need what Xcode leaves on it).
+- A device no Xcode ever prepared (launching may need what Xcode leaves on it), and one nothing was paired with
+  before (`pair control --with`).
 - A machine whose Tailscale runs in userspace mode (the container borrowed its host's): it has no address to
   listen on or connect from, and `sign` and `pair control --with` are expected to stop there.
 - The device's pairing port after it moved far: a saved device is looked for on the port it was saved with and
