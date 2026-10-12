@@ -1406,7 +1406,7 @@ enum CLI {
             }
             if a.hasPrefix("-") {
                 // The old name isn't taken; whoever was shown it by an earlier RoamRun is told the new one.
-                if a == "--mac" { return .failure(.init(message: "--mac is --host since 0.7.0: roamrun pair introduce --host <the machine that will hold the pairing> --to <device>")) }
+                if a == "--mac" || a.hasPrefix("--mac=") { return .failure(.init(message: "--mac is --host since 0.7.0: roamrun pair introduce --host <the machine that will hold the pairing> --to <device>")) }
                 guard !a.hasSuffix("="), spec.options.contains(a) else {
                     let hint = spec.words.upperBound > 0 ? " (a device name starting with “-”? use its id, see roamrun devices)" : ""
                     return .failure(.init(message: "\(args[0]) doesn't take \(a) — see roamrun --help\(hint)"))

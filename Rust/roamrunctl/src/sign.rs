@@ -33,13 +33,17 @@ pub fn fits(identifier: &str, own: &[u8; 32], what: &[u8]) -> bool {
 /// The pairings signed with, by the names their devices are saved under: pairings made on one machine
 /// share an identifier, and each has a key of its own.
 pub type Keys = HashMap<String, (String, SigningKey)>;
+/// Whether a device is still saved here as it was; and the devices signed for, those still held, as JSON.
+pub type Held<'a> = &'a dyn Fn(&str) -> bool;
+pub type Listed<'a> = &'a dyn Fn(Held) -> String;
 
 /// One request's answer: the line to send back, and the device's name where it was signed for.
-/// `list`: the devices signed for, each without its key, as the machine asking learns of them.
-/// `held`: whether a device is still saved here — one removed since this began is signed for no more.
-fn answer<'a>(line: &str, keys: &'a Keys, list: &str, held: &dyn Fn(&str) -> bool) -> (String, Option<&'a str>) {
+/// `list`: the devices signed for, each without its key, as the machine asking learns of them — those still held.
+/// `held`: whether a device is saved here as it was when this began — one removed since, or saved anew under
+/// its name, is signed for no more.
+fn answer<'a>(line: &str, keys: &'a Keys, list: Listed, held: Held) -> (String, Option<&'a str>) {
     let refused = |why: &str| (format!("{PREFIX}refused {why}"), None);
-    if line == format!("{PREFIX}devices?") { return (format!("{PREFIX}devices {list}"), None); }
+    if line == format!("{PREFIX}devices?") { return (format!("{PREFIX}devices {}", list(held)), None); }
     let Some(["sign", name, what]) = line.strip_prefix(PREFIX).map(|words| words.split(' ').collect::<Vec<_>>()).as_deref().map(|w| <[&str; 3]>::try_from(w).ok()).unwrap_or(None) else {
         return refused("not-a-request");
     };
@@ -66,7 +70,7 @@ fn read_line(mut stream: &TcpStream, most: usize, within: Duration) -> Option<St
 
 /// `roamrunctl sign <devices> --for <machine>`: until Ctrl-C.
 /// `list`: the devices signed for, each without its key (see `devices`).
-pub fn serve(machine: &str, keys: Keys, list: String, held: &dyn Fn(&str) -> bool) -> Result<String, String> {
+pub fn serve(machine: &str, keys: Keys, list: Listed, held: Held) -> Result<String, String> {
     let status = tailscale::status()?;
     let own: Ipv4Addr = status.this.ips.iter().find_map(|a| a.parse().ok()).ok_or("this machine has no IPv4 address on the tailnet")?;
     let other = tailscale::known(&status, machine)?;
@@ -94,7 +98,7 @@ pub fn serve(machine: &str, keys: Keys, list: String, held: &dyn Fn(&str) -> boo
             continue;
         }
         let Some(line) = read_line(&stream, MAX, LINE) else { continue };
-        let (said, name) = answer(&line, &keys, &list, held);
+        let (said, name) = answer(&line, &keys, list, held);
         let _ = stream.set_write_timeout(Some(LINE));
         let _ = stream.write_all(format!("{said}\n").as_bytes());
         match name {
@@ -136,7 +140,7 @@ fn asked(ip: Ipv4Addr) -> Option<String> {
 /// that answer so, asked together — or, where `ROAMRUNCTL_SIGNER` names one, that one alone.
 pub fn signers(status: &tailscale::Status, named: Option<String>) -> Result<Vec<(String, String)>, String> {
     let machines = match named {
-        Some(name) => { let peer = tailscale::peer(status, &name)?; vec![(peer.dns, peer.ip)] }
+        Some(name) => { let peer = tailscale::known(status, &name).map_err(|why| format!("{SIGNER}: {why}"))?; vec![(peer.dns, peer.ip)] }
         None => tailscale::own_machines(status),
     };
     let asking: Vec<_> = machines.into_iter().map(|(name, ip)| std::thread::spawn(move || asked(ip).map(|list| (name, list)))).collect();
@@ -190,7 +194,7 @@ mod tests {
         what.extend_from_slice(id.as_bytes());
         what.extend_from_slice(&[2u8; 32]);
         for (device, key) in [("phone", &key), ("pad", &other)] {
-            let (said, name) = answer(&format!("{PREFIX}sign {device} {}", URL_SAFE_NO_PAD.encode(&what)), &keys, "[]", &held);
+            let (said, name) = answer(&format!("{PREFIX}sign {device} {}", URL_SAFE_NO_PAD.encode(&what)), &keys, &|_| "[]".to_string(), &held);
             assert_eq!(name, Some(device));
             let signature: [u8; 64] = URL_SAFE_NO_PAD.decode(said.strip_prefix("rr-sign-v1 signed ").unwrap()).unwrap().try_into().unwrap();
             assert!(key.verifying_key().verify(&what, &ed25519_dalek::Signature::from_bytes(&signature)).is_ok(), "{device}");
@@ -211,13 +215,13 @@ mod tests {
             (format!("{PREFIX}give phone x"), "not-a-request"),
             ("rr-pair-v1 offer?".to_string(), "not-a-request"),
         ] {
-            assert_eq!(answer(&bad, &keys, "[]", &held), (format!("{PREFIX}refused {why}"), None), "{bad}");
+            assert_eq!(answer(&bad, &keys, &|_| "[]".to_string(), &held), (format!("{PREFIX}refused {why}"), None), "{bad}");
         }
         // A device removed here since: signed for no more.
         let gone: Keys = HashMap::from([("gone".to_string(), (id.to_string(), key.clone()))]);
-        assert_eq!(answer(&format!("{PREFIX}sign gone {}", URL_SAFE_NO_PAD.encode(&what)), &gone, "[]", &held).0, "rr-sign-v1 refused no-such-pairing");
+        assert_eq!(answer(&format!("{PREFIX}sign gone {}", URL_SAFE_NO_PAD.encode(&what)), &gone, &|_| "[]".to_string(), &held).0, "rr-sign-v1 refused no-such-pairing");
         // What it signs for is said as it was given, and no key with it.
-        assert_eq!(answer("rr-sign-v1 devices?", &keys, "[1]", &held), ("rr-sign-v1 devices [1]".to_string(), None));
+        assert_eq!(answer("rr-sign-v1 devices?", &keys, &|held| format!("[{}]", held("gone")), &held), ("rr-sign-v1 devices [false]".to_string(), None));
     }
 
     #[test]

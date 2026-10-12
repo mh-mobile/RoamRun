@@ -283,7 +283,9 @@ pub fn here(to: &str, name: Option<String>, sealed: bool) -> Result<String, Stri
     if answer.is_err() { pairing.cancel(); }
     let _ = waits.join();
     let answer = answer.or_else(|why| late(&told).ok_or(why))
-        .map_err(|why| format!("{why}: nothing was kept. If the device showed “{shown}” and nothing came of picking it: this machine's firewall may keep the device from port {} here", read.port))?;
+        .map_err(|why| if why.starts_with("no pairing") {
+            format!("{why}: nothing was kept. If the device showed “{shown}” and nothing came of picking it: this machine's firewall may keep the device ({lan}) from TCP port {} here", read.port)
+        } else { format!("{why}: nothing was kept") })?;
     let made = device::said(answer).map_err(|why| format!("the device didn't pair ({why}): nothing was kept. Run this again"))?;
     let key = made["pairing"].as_str().ok_or("the pairing came without its key")?;
     // Tried before it is kept, over the tailnet as it will be used.

@@ -274,18 +274,21 @@ tunnel and Xcode has to run again.
     `roamrunctl pair control --to <device> --as phone` → the device lists the machine, the code →
     "Paired … and it connects"; `roamrunctl look phone` → a picture of the screen; Ctrl-C while it
     waits, and the window closed while it waits → nothing left announced. On a Linux machine
-    elsewhere on the tailnet: `pair control --with <near machine>`, introduced once by roamrunctl,
-    once by a Mac's `roamrun pair introduce --host`, once by the Introducer app (`--with <the
-    device>`) → paired each time; a wrong code → nothing kept. Then there: `install` and `launch`
+    elsewhere on the tailnet, under another name each time (`--as`): `pair control --with <near
+    machine>`, introduced once by roamrunctl and once by a Mac's `roamrun pair introduce --host`
+    (the device saved in RoamRun there); `pair control --with <the device>` with the Introducer
+    app → paired each time; a wrong code → nothing kept. Then there: `install` and `launch`
     of an app built for the device; `roamrunctl mcp` under an agent: look, tap, swipe, type, paste,
     press, elements, with music playing on the device → it goes on sounding, and no screen-sharing
     session is listed. `--passphrase` once: `look` asks for it; `mcp` takes it from
     `ROAMRUNCTL_PASSPHRASE_FILE`. The key elsewhere: two devices paired on one machine, `roamrunctl
-    sign <both> --for <other>` → on the other, `roamrunctl devices` lists both, a look of each, and
-    the first says it is held to from now on; `devices remove <one>` on the signing machine → the
-    next look of that one is refused, the other still works; Ctrl-C in `sign` → the next look is
-    refused, a running `mcp` still looks. On a tagged machine: nothing listed until
-    `ROAMRUNCTL_SIGNER` is set. On Windows: `pair control --with`, introduced by a Mac; `look`;
+    sign <both> --for <using machine>` → on the using machine, `roamrunctl devices` lists both as
+    not used yet; the first look of each says it is held to from now on; `devices remove <one>` on
+    the key's machine → there it is listed no more and its next look is refused, the other still
+    works; that one paired again under the same name, `sign` still running → still refused;
+    Ctrl-C in `sign` → the next look is refused, a running `mcp` still looks. With a tagged
+    machine as `--for`: `sign` says to set `ROAMRUNCTL_SIGNER` there, and nothing is listed
+    there until it is; a mistyped name there is said. On Windows: `pair control --with`, introduced by a Mac; `look`;
     `sign` for a Linux machine. `roamrunctl pair introduce --mac x --to y` → says `--host`.
 
 31. An Apple Vision Pro and a far Mac (when `pair xcode --with`, `pair introduce`, the stand-in,

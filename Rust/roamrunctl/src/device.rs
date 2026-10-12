@@ -82,7 +82,7 @@ fn open_to_others(meta: &std::fs::Metadata) -> Option<u32> {
 pub fn folder() -> Result<PathBuf, String> {
     // Tests keep nothing among the user's own devices.
     let base = if cfg!(test) {
-        Some(std::env::temp_dir().join(format!("roamrunctl-test-devices-{}", std::process::id())))
+        Some(std::env::temp_dir().join("roamrunctl-test-devices"))
     } else if cfg!(windows) {
         std::env::var_os("APPDATA").map(PathBuf::from)
     } else {
@@ -112,7 +112,7 @@ fn kept(name: &str) -> Result<Option<(PathBuf, bool)>, String> {
 fn load(name: &str) -> Result<Saved, String> {
     let Some((path, sealed)) = kept(name)? else {
         // Not saved here: one another machine keeps the key of, and signs for this one.
-        return offered().into_iter().find(|saved| saved.name == name).ok_or_else(|| format!(
+        return offered()?.into_iter().find(|saved| saved.name == name).ok_or_else(|| format!(
             "no device “{name}” is saved here, and no machine was found that signs for this one with it.\n{}", sign_how(name)));
     };
     let meta = std::fs::metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -192,9 +192,19 @@ fn import(file: &Path, name: Option<String>, sealed: bool) -> Result<String, Str
 fn open(saved: &Saved) -> Result<Device, String> {
     let answers = |port: u16, within: u64| format!("{}:{port}", saved.ip).parse::<SocketAddr>().is_ok_and(|at| TcpStream::connect_timeout(&at, Duration::from_millis(within)).is_ok());
     // The port it was saved with is given the time a device that slept takes; the others are asked together.
-    let port = Some(saved.port).filter(|p| answers(*p, 2500))
-        .or_else(|| std::thread::scope(|all| PORTS.map(|p| all.spawn(move || answers(p, 1500).then_some(p))).collect::<Vec<_>>().into_iter().find_map(|one| one.join().ok().flatten())))
-        .ok_or_else(|| format!("{} ({}) doesn't answer: is it on Wi‑Fi, unlocked once since it started, and connected in Tailscale? (on cellular alone it refuses)", saved.name, saved.ip))?;
+    let ports: Vec<u16> = if answers(saved.port, 2500) { vec![saved.port] } else {
+        std::thread::scope(|all| PORTS.map(|p| all.spawn(move || answers(p, 1500).then_some(p))).collect::<Vec<_>>().into_iter().filter_map(|one| one.join().ok().flatten()).collect())
+    };
+    // Whatever answers on one of them needn't be the pairing: the next is tried.
+    let mut last = Err(format!("{} ({}) doesn't answer: is it on Wi‑Fi, unlocked once since it started, and connected in Tailscale? (on cellular alone it refuses) If it restarted since it was saved, its pairing port may have moved out of reach: pair again", saved.name, saved.ip));
+    for port in ports {
+        last = open_at(saved, port);
+        if last.is_ok() { break }
+    }
+    last
+}
+
+fn open_at(saved: &Saved, port: u16) -> Result<Device, String> {
     let opened = match &saved.signer {
         // The key is kept on another machine: it is asked for the one signature a connection takes.
         Some(signer) => {
@@ -258,12 +268,22 @@ fn bare(mut saved: Saved) -> Result<Saved, String> {
 
 /// The devices other machines say they keep the keys of and sign for this one. What is said isn't checked
 /// beyond its form: it is believed the first time a device is used, and held to from then on (see `opened`).
-fn offered() -> Vec<Saved> {
-    if cfg!(test) { return Vec::new() }
-    let Ok(status) = crate::tailscale::status() else { return Vec::new() };
+/// An error only where the machine `ROAMRUNCTL_SIGNER` names isn't one: said, not taken for none signing.
+fn offered() -> Result<Vec<Saved>, String> {
+    if cfg!(test) { return Ok(Vec::new()) }
+    let Ok(status) = crate::tailscale::status() else { return Ok(Vec::new()) };
     let on_tailnet: std::collections::HashSet<&str> = status.peers.values().flat_map(|p| p.ips.iter().map(String::as_str)).collect();
-    let said = crate::sign::signers(&status, std::env::var(crate::sign::SIGNER).ok().filter(|s| !s.is_empty())).unwrap_or_default();
-    taken(&said, &on_tailnet)
+    let said = crate::sign::signers(&status, std::env::var(crate::sign::SIGNER).ok().filter(|s| !s.is_empty()))?;
+    Ok(taken(&said, &on_tailnet))
+}
+
+/// What a saved device's file is, to tell it later from another saved under its name.
+type Mark = (PathBuf, std::time::SystemTime, u64);
+
+fn mark(name: &str) -> Option<Mark> {
+    let (path, _) = kept(name).ok()??;
+    let meta = std::fs::metadata(&path).ok()?;
+    Some((path, meta.modified().ok()?, meta.len()))
 }
 
 /// Of what each machine said it signs for (its name, its list), what is taken.
@@ -282,23 +302,28 @@ fn taken(said: &[(String, String)], on_tailnet: &std::collections::HashSet<&str>
     found
 }
 
-/// The pairings of `names` (what `roamrunctl sign` signs with), and those devices as the other machine is
-/// told of them: JSON, each without its key.
-pub fn keys(names: &[String]) -> Result<(crate::sign::Keys, String), String> {
+/// The pairings of `names` (what `roamrunctl sign` signs with), those devices as the other machine is told
+/// of them, each without its key, and what their files are now.
+type Signing = (crate::sign::Keys, Vec<Saved>, std::collections::HashMap<String, Mark>);
+
+fn keys(names: &[String]) -> Result<Signing, String> {
     if names.is_empty() {
         let saved: Vec<String> = self::names_here()?.into_iter().filter(|name| matches!(kept(name), Ok(Some(_)))).collect();
         return Err(format!("which devices: roamrunctl sign <name>… --for <machine>   (saved here: {})", if saved.is_empty() { "none".to_string() } else { saved.join(", ") }));
     }
-    let (mut keys, mut told) = (crate::sign::Keys::new(), Vec::new());
+    let (mut keys, mut told, mut marks) = (crate::sign::Keys::new(), Vec::new(), std::collections::HashMap::new());
     for name in names {
         if kept(name)?.is_none() { return Err(format!("no device “{name}” is saved here: `roamrunctl devices` lists them")); }
         let saved = load(name)?;
         let (identifier, key) = crate::sign::key(&saved.pairing).filter(|_| saved.signer.is_none())
             .ok_or_else(|| format!("{name}'s key isn't kept here: there is nothing to sign with"))?;
+        // The other machine asks by the name it is told: the file's, which is this one unless it was renamed by hand.
+        if saved.name != *name { return Err(format!("“{name}” is saved here as “{}”: name it so", saved.name)); }
+        marks.insert(name.clone(), mark(name).ok_or_else(|| format!("{name} went away just now"))?);
         keys.insert(name.clone(), (identifier, key));
         told.push(bare(saved)?);
     }
-    Ok((keys, serde_json::to_string(&told).map_err(|e| e.to_string())?))
+    Ok((keys, told, marks))
 }
 
 /// The device named, opened. One another machine signs for is saved here the first time it opens, without
@@ -308,8 +333,13 @@ pub fn opened(name: &str) -> Result<Device, String> {
     let saved = load(name)?;
     let device = open(&saved)?;
     if !here {
-        let path = save(&saved, None)?;
-        eprintln!("roamrunctl: {name} is used for the first time here: {} signs for it, and that is held to from now on ({}). `roamrunctl devices remove {name}` forgets it.", saved.signer.as_deref().unwrap_or("another machine"), path.display());
+        let said = match save(&saved, None) {
+            Ok(path) => format!("{name} is used for the first time here: {} signs for it, and that is held to from now on ({}). `roamrunctl devices remove {name}` forgets it.", saved.signer.as_deref().unwrap_or("another machine"), path.display()),
+            // Another command saved it meanwhile: held to all the same.
+            Err(_) if kept(name).is_ok_and(|kept| kept.is_some()) => return Ok(device),
+            Err(why) => format!("{name} is open, but which machine signs for it couldn't be saved ({why}): it is asked for anew next time"),
+        };
+        let _ = writeln!(std::io::stderr(), "roamrunctl: {said}");
     }
     Ok(device)
 }
@@ -324,7 +354,7 @@ fn signer_of(name: &str) -> Option<String> {
 /// The names of the devices this machine can use: those saved here, and those another machine signs for it with.
 pub fn names() -> Result<Vec<String>, String> {
     let mut names = names_here()?;
-    names.extend(offered().into_iter().map(|saved| saved.name));
+    names.extend(offered()?.into_iter().map(|saved| saved.name));
     names.sort();
     names.dedup();
     Ok(names)
@@ -350,8 +380,8 @@ fn look(name: &str, file: Option<PathBuf>) -> Result<String, String> {
     Ok(format!("{}\n{width} x {height}", path.display()))
 }
 
-fn list() -> Result<String, String> {
-    let (names, offered) = (names_here()?, offered());
+pub fn list() -> Result<String, String> {
+    let (names, offered) = (names_here()?, offered()?);
     if names.is_empty() && offered.is_empty() {
         return Ok(format!("No device is saved here, and no machine was found that signs for this one.\nTo pair with one: roamrunctl pair control --to <device> (on its Wi‑Fi), or --with <a machine on its Wi‑Fi>.\nTo use one whose key another machine keeps:\n{}", sign_how("<device>")));
     }
@@ -371,8 +401,8 @@ pub fn run(command: Command) -> i32 {
         Command::Devices { command: Some(Devices::Remove { name }) } => named(&name).and_then(|name| {
             let signer = signer_of(name);
             if kept(name)?.is_none() {
-                return Err(match offered().into_iter().find(|saved| saved.name == name) {
-                    Some(saved) => format!("{name} isn't saved here: {} offers it. It goes when `roamrunctl sign` ends there, or no longer names it", saved.signer.as_deref().unwrap_or("another machine")),
+                return Err(match offered().unwrap_or_default().into_iter().find(|saved| saved.name == name) {
+                    Some(saved) => format!("{name} isn't saved here: {} offers it. It goes when `roamrunctl sign` ends there, or the device is removed there", saved.signer.as_deref().unwrap_or("another machine")),
                     None => format!("no device “{name}” here"),
                 });
             }
@@ -391,7 +421,12 @@ pub fn run(command: Command) -> i32 {
             said(device.launch(&bundle)).map(|value| format!("Launched {bundle} on {name} (pid {}).", value["pid"]))
         }),
         Command::Mcp => return crate::mcp::Server::default().serve(),
-        Command::Sign { names, machine } => keys(&names).and_then(|(keys, list)| crate::sign::serve(&machine, keys, list, &|name| matches!(kept(name), Ok(Some(_))))),
+        Command::Sign { names, machine } => keys(&names).and_then(|(keys, told, marks)| {
+            // The file it was read from, still: not another saved under the name since.
+            let held = |name: &str| marks.get(name).is_some_and(|was| mark(name).as_ref() == Some(was));
+            let list = |held: crate::sign::Held| serde_json::to_string(&told.iter().filter(|saved| held(&saved.name)).collect::<Vec<_>>()).unwrap_or_else(|_| "[]".into());
+            crate::sign::serve(&machine, keys, &list, &held)
+        }),
         Command::Pair { .. } => unreachable!("handled by main"),
     };
     match done {
@@ -440,10 +475,9 @@ mod tests {
             let _ = std::fs::remove_file(folder().unwrap().join(format!("{name}.json")));
             save(&Saved { v: 1, name: name.into(), ip: "100.64.0.10".into(), port: 49152, pairing: pairing(key), signer: None }, None).unwrap();
         }
-        let (keys, told) = keys(&["keys-phone".to_string(), "keys-pad".to_string()]).unwrap();
+        let (keys, told, marks) = keys(&["keys-phone".to_string(), "keys-pad".to_string()]).unwrap();
         assert_eq!((keys["keys-phone"].1.to_bytes(), keys["keys-pad"].1.to_bytes()), ([1; 32], [2; 32]));
         // What the other machine is told has neither key in it.
-        let told: Vec<Saved> = serde_json::from_str(&told).unwrap();
         assert!(told.iter().all(|saved| crate::sign::key(&saved.pairing).is_some_and(|(_, key)| ![[1; 32], [2; 32]].contains(&key.to_bytes()))));
         // One whose key is elsewhere isn't signed with, and is listed as that.
         let _ = std::fs::remove_file(folder().unwrap().join("keys-far.json"));
@@ -451,6 +485,13 @@ mod tests {
         assert!(super::keys(&["keys-far".to_string()]).is_err());
         assert_eq!(signer_of("keys-far").as_deref(), Some("laptop"));
         assert_eq!(signer_of("keys-phone"), None);
+        // Removed, and another saved under its name: not the file that was read.
+        assert_eq!(mark("keys-phone").as_ref(), Some(&marks["keys-phone"]));
+        std::fs::remove_file(folder().unwrap().join("keys-phone.json")).unwrap();
+        assert_eq!(mark("keys-phone"), None);
+        std::thread::sleep(Duration::from_millis(20));
+        save(&Saved { v: 1, name: "keys-phone".into(), ip: "100.64.0.10".into(), port: 49152, pairing: pairing(9), signer: None }, None).unwrap();
+        assert_ne!(mark("keys-phone").as_ref(), Some(&marks["keys-phone"]));
     }
 
     #[test]

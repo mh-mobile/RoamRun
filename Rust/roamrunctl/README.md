@@ -104,13 +104,17 @@ Three machines are spoken of below, and one machine can be two of them:
 
 - **the near machine**: on the device's Wi‑Fi. Pairing needs one, once.
 - **the using machine**: where `look`, `install`, `launch` and `mcp` run — an agent's, perhaps in a cloud.
-- **the key's machine**: where the pairing's key is kept. In A it is the using machine; in B it is another, of yours.
+- **the key's machine**: where the pairing's key is kept. In A it is the using machine; in B it is another, of
+  yours — the one that signs (`ROAMRUNCTL_SIGNER` names it).
 
-| | Where the key is | On the near machine | On the using machine |
-|---|---|---|---|
-| **A**, both one machine | the using machine | `pair control --to <device>` | — |
-| **A**, using machine elsewhere | the using machine | `pair introduce --host <using machine> --to <device>` | `pair control --with <near machine>` first |
-| **B** | the near machine (or any of yours) | `pair control --to <device>`, then `sign <name> --for <using machine>` left running | nothing |
+A where the key may lie on the machine the agent runs on; B where it shouldn't. Neither limits what an agent
+there does with the device.
+
+| | What is run, and where |
+|---|---|
+| **A**, using machine on the device's Wi‑Fi | using machine: `pair control --to <device>` |
+| **A**, using machine elsewhere | using machine: `pair control --with <near machine>` · near machine: `pair introduce --host <using machine> --to <device>` |
+| **B** | key's machine, on the device's Wi‑Fi: `pair control --to <device>`, then `sign <name> --for <using machine>` left running · using machine: nothing — unless it is tagged or another user's (a cloud machine often is): then `ROAMRUNCTL_SIGNER=<key's machine>` there, for `mcp` in the agent's MCP config |
 
 Each `pair` command shows the pairing code, which is the owner's consent: run it yourself, in a terminal of your own.
 
@@ -123,15 +127,21 @@ roamrunctl pair control --to <the device's Tailscale name> --as phone
 # on the device: Settings › Privacy & Security › Developer Mode › this machine's name, and the code
 ```
 
+The device connects to this machine for that: a firewall here has to let it in on the TCP port the command says
+it announced (with ufw: `sudo ufw allow proto tcp from <the device's address on the Wi‑Fi>`).
+
 Elsewhere — a machine in a cloud — the near machine introduces it, once:
 
 ```sh
 # on the using machine
 roamrunctl pair control --with <the near machine> --as phone
-# on the near machine (`roamrun pair introduce` on a Mac does the same; so does the Introducer app, named with --with as the device itself)
+# on the near machine (`roamrun pair introduce` on a Mac does the same)
 roamrunctl pair introduce --host <the using machine> --to <the device's Tailscale name>
 # on the device: Settings › Privacy & Security › Developer Mode › the using machine's name, and the code
 ```
+
+With the Introducer app on the device there is no near machine: the using machine names the device itself,
+`roamrunctl pair control --with <the device's Tailscale name>`, and the app is opened on the device.
 
 `--with` is for a device that has been paired with something before: one that never was announces nothing the
 near machine could pass on, and `pair introduce` says so. Pair it once first, with a Mac's Xcode or with
@@ -181,17 +191,19 @@ roamrunctl pair control --to <the device's Tailscale name> --as phone --passphra
 # and leave this running: it names the devices, and the one machine it signs for
 roamrunctl sign phone --for <the using machine>
 
-# on the using machine: nothing to set up
-roamrunctl devices          # phone   its key is kept by <the key's machine>, which signs for this machine
+# on the using machine: nothing to set up (tagged, or another user's: ROAMRUNCTL_SIGNER=<the key's machine>)
+roamrunctl devices          # phone   its key is kept by <the key's machine>, which signs for this machine (not used here yet)
+roamrunctl look phone       # the first time: "phone is used for the first time here: <the key's machine> signs for it, and that is held to from now on"
 roamrunctl mcp              # look, install, launch: as in A
 ```
 
 A connection to the device has one thing signed with the pairing's key. The using machine asks the key's machine
 for that signature (TCP port 41831, on the tailnet), and does everything else itself — it reaches the device
-directly, as in A.
+directly, as in A. The key's machine has to let it in on that port (Tailscale's rules, and its own firewall).
 
-**What this gives:** the key can't be copied off the using machine; ending `sign` (Ctrl-C), or removing the device
-on the key's machine, ends new connections; and `sign` says each connection it signs.
+**What this gives:** the key isn't on the using machine to be copied from; ending `sign` (Ctrl-C), or removing the
+device on the key's machine, ends new connections; and `sign` says each connection it signs. (Not tried: whether a
+connection, once made, can add a pairing of its own on the device. If it can, this keeps no key from that machine.)
 **What it doesn't:** while `sign` answers, the using machine connects as often as it asks, any program on it can
 ask, and a connection does everything. One already open — a running `roamrunctl mcp` — goes on after `sign` ends,
 until it is closed. B is about where the key lies and when it can be used, not about what an agent may do.
@@ -199,13 +211,15 @@ until it is closed. B is about where the key lies and when it can be used, not a
 How each finds the other, and what is trusted:
 
 - `sign` answers the one machine named, held to its tailnet address and Tailscale's id for it. It signs for the
-  devices named, and only what has the shape of a connection's check — not what making a new pairing signs.
+  devices named, and only what has the shape of a connection's check — not what making a new pairing signs. It
+  answers one request at a time: that machine can make it wait, and no other.
 - The using machine asks its user's other machines on the tailnet which signs for it. A tagged machine (CI), or
   another user's, is nobody's and asks none: there, set `ROAMRUNCTL_SIGNER=<the key's machine>`. `sign` says so
   when it starts.
 - The first time the using machine uses a device, it saves which machine signs for it and which device that is
-  (no key), and holds to that from then on. Until then it believes whichever of its user's machines offers the
-  name: on a tailnet where one of those may be someone else's to run, set `ROAMRUNCTL_SIGNER` from the start.
+  (no key), and holds to that from then on. Until then it believes any of its user's machines that offers the
+  name (of two, the one whose Tailscale name sorts first): on a tailnet where one of those may be someone else's
+  to run, set `ROAMRUNCTL_SIGNER` from the start.
   `roamrunctl devices remove <name>` there forgets it.
 - The using machine knows a device by the name its key's machine saved it under. Two key's machines that sign
   for one device (home and office) have to have saved it under different names.
@@ -223,7 +237,11 @@ whatever is on the screen.
 
 ## Where it stands
 
-Tried against a device (iPhone 15 Pro, iOS 27.0), from Linux and macOS:
+### Holding and using a device (0.7.0)
+
+Tried against a device (iPhone 15 Pro, iOS 27.0), from Linux and macOS — each before the reviews that then
+changed how a saved device's port is looked for, how `pair control --with` learns which device it is, and when
+`mcp` presses a point or sends again; none was run again since:
 
 - `pair control --with` on a Linux VM on the tailnet, introduced by this crate's `pair introduce --host` on a Mac
   beside the device; a wrong code kept nothing; the VM then looked at its screen.
@@ -236,7 +254,7 @@ Tried against a device (iPhone 15 Pro, iOS 27.0), from Linux and macOS:
 Not yet run against a device:
 
 - `pair control --to`.
-- `sign <names> --for` as it is now (devices named, the using machine asking, the signer held to after first use),
+- `sign <names> --for` as it is now (devices named, the using machine asking, the key's machine held to after first use),
   with more than one device, and `ROAMRUNCTL_SIGNER`.
 - `--passphrase` as a flag (an earlier form of it was).
 - The Introducer app, and a Mac's `roamrun pair introduce`, introducing a machine with roamrunctl.
@@ -246,7 +264,9 @@ Not yet run against a device:
 - A machine whose Tailscale runs in userspace mode (the container borrowed its host's): it has no address to
   listen on or connect from, and `sign` and `pair control --with` are expected to stop there.
 - The device's pairing port after it moved far: a saved device is looked for on the port it was saved with and
-  the sixteen from 49152.
+  the sixteen from 49152. One not found there after it restarted is paired again.
+
+### `pair introduce` (since 0.5.0)
 
 - Built and tested (`cargo test`) on macOS; CI builds and tests it on Linux and Windows too.
 - `scripts/local-check.py` passes on macOS: the mechanics, against a fake far Mac and a fake device.

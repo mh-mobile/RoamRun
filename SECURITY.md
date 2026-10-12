@@ -281,7 +281,8 @@ bounded.
   that the bytes are a connection's; it refuses only what isn't of that shape, and what
   making a new pairing signs (that ends in the pairing's own public key), so the key
   isn't lent to pair another device as this machine. It says each time it signs, and
-  signs no more for a device removed on its machine meanwhile.
+  signs no more for a device removed on its machine meanwhile, or saved anew under its
+  name. It answers one request at a time: the machine named can make it wait.
   The machine that uses the device asks its own user's other machines on the tailnet
   (not a tagged one, not another user's; or the one `ROAMRUNCTL_SIGNER` names) which
   signs for it. The first time it opens a device it saves which machine that was and
@@ -292,10 +293,11 @@ bounded.
   - The machine named — any program on it — connects to the devices named for as long
     as `sign` answers, and a connection does everything. A connection already open (a
     running `roamrunctl mcp`) stays open after `sign` ends.
-  - Until a device was used once, the using machine believes whichever of its user's
-    machines offers the name. One of those run by someone else — or any local user on
-    one, where no `sign` holds the port — can answer first and name a device of its
-    own on the tailnet: what is then typed, pasted and installed goes there, and the
+  - Until a device was used once, the machine that uses it believes any of its user's
+    machines that offers the name — of two, the one whose Tailscale name sorts first,
+    whichever is the true one. One of those run by someone else — or any local user on
+    one, where no `sign` holds the port — can so name a device of its own on the
+    tailnet: what is then typed, pasted and installed goes there, and the
     looks are of that device. It gets no key by that. `ROAMRUNCTL_SIGNER` set from the
     start leaves only the machine named to be believed.
   - Whether a connection, once made, can add a pairing of its own on the device

@@ -100,8 +100,9 @@ introduced; you can run the commands, they do the rest.
   then saves the device itself — "is saved" there means a pairing was tried, not
   made; `roamrun up <name>` shows which. (`--host` also takes a Linux or Windows
   machine where `roamrunctl pair control --with <this Mac>` waits: it then holds a
-  pairing for device control itself, with no RoamRun — the `roamrunctl` skill has that
-  side. Before 0.7.0 `--host` was `--mac`.) **`--with` is held to the same rule as
+  pairing for device control itself, with no RoamRun — the user runs both commands, as
+  for any pairing for device control; the `roamrunctl` skill has that side. Before 0.7.0
+  `--host` was `--mac`.) **`--with` is held to the same rule as
   `--host`: only when the user asked, and the name only from their own words.** Each
   side says what happened and what to do if the other went away; don't loop. Exit 0
   on the far Mac: saved (or "saved already"). On the introducing Mac: the far Mac

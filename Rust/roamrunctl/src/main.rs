@@ -137,12 +137,15 @@ struct Introduce {
 macro_rules! say { ($($t:tt)*) => {{ let _ = writeln!(std::io::stderr(), "roamrunctl: {}", format!($($t)*)); }} }
 
 fn main() {
-    // The old name isn't taken; whoever was shown it by an earlier RoamRun is told the new one.
-    if std::env::args().any(|a| a == "--mac" || a.starts_with("--mac=")) {
-        eprintln!("roamrunctl: --mac is --host since 0.7.0: roamrunctl pair introduce --host <the machine that will hold the pairing> --to <device>");
-        std::process::exit(2);
-    }
-    let args = match Cli::parse().command {
+    let cli = Cli::try_parse().unwrap_or_else(|refused| {
+        // The old name isn't taken; whoever was shown it by an earlier RoamRun is told the new one.
+        if std::env::args_os().any(|a| a.to_str().is_some_and(|a| a == "--mac" || a.starts_with("--mac="))) {
+            eprintln!("roamrunctl: --mac is --host since 0.7.0: roamrunctl pair introduce --host <the machine that will hold the pairing> --to <device>");
+            std::process::exit(2);
+        }
+        refused.exit()
+    });
+    let args = match cli.command {
         Command::Pair { command: Pair::Introduce(args) } => args,
         Command::Pair { command: Pair::Control { to, with, name, passphrase } } => match match (to, with) {
             (Some(to), _) => hold::here(&to, name, passphrase),
@@ -220,7 +223,7 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
                         say!("{} pairs for device control: programs there will be able to see {}'s screen and operate it.", far.dns, device.dns);
                         // Nothing was begun there yet: closing without a word leaves it waiting.
                         let Some((_, port, txt)) = announce::find_device(local, lan, &DEVICE_KEYS, Duration::from_secs(7)) else {
-                            return Err(format!("{}'s own announcement wasn't seen on this LAN. It announces once it is paired with something: pair it once first — with Xcode there (roamrun pair xcode --with {own}), or with a machine on this Wi‑Fi (roamrunctl pair control --to {}) — then this", device.dns, short(&device.dns)));
+                            return Err(format!("{}'s own announcement wasn't seen on this LAN. It announces once it is paired with something: pair it once first — with a Mac's Xcode, or with a machine on this Wi‑Fi (roamrunctl pair control --to {}) — then this", device.dns, short(&device.dns)));
                         };
                         let named = Device { name: a.save_as.clone().unwrap_or_else(|| short(&device.dns).to_string()), peer: device.dns.to_lowercase(), port, txt, v: 1 };
                         let line = lines::device_line(&named);

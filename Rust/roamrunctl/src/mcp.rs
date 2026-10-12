@@ -74,7 +74,7 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
 fn tools() -> Value {
     let point = json!({ "type": "number", "description": "Pixels of the image the last look returned" });
     json!([
-        tool("devices", "The devices this machine can use, one name a line.", json!({}), &[]),
+        tool("devices", "The devices this machine can use, one a line: its name, a tab, and how it is kept. One \"not used here yet\" is offered by another machine and not yet believed: use it only if the user named it.", json!({}), &[]),
         tool("look", "The device's screen now, as an image. Do this before every tap or swipe: it serves one action.", json!({}), &[]),
         tool("tap", "Tap a point of the last look. Operates the device: whatever is there gets pressed.", json!({ "x": point, "y": point }), &["x", "y"]),
         tool("swipe", "Drag from one point of the last look to another (to scroll, or move something). Operates the device.",
@@ -119,6 +119,7 @@ impl Server {
     pub fn handle(&mut self, message: &str) -> Option<String> {
         let wrong = |id: Value, code: i32, what: &str| Some(json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": what } }).to_string());
         let Ok(object) = serde_json::from_str::<Value>(message) else { return wrong(Value::Null, -32700, "not JSON") };
+        if !object.is_object() { return wrong(Value::Null, -32600, "one request at a time, as an object") }
         let id = object.get("id")?.clone();
         let Some(method) = object["method"].as_str() else { return wrong(id, -32600, "no method") };
         let params = &object["params"];
@@ -151,23 +152,16 @@ impl Server {
     /// Asks the device, once: the library sends again by itself where nothing had reached the device, and
     /// what may have reached it isn't sent twice. After a failure the next call opens it anew.
     fn ask(&mut self, name: &str, call: impl Fn(&Device) -> String) -> Result<Value, String> {
-        let said = device::said(call(self.device(name)?));
+        let raw = call(self.device(name)?);
+        // Refused for what it says, before anything was sent: the connection is as it was.
+        if serde_json::from_str::<Value>(&raw).is_ok_and(|said| said["invalid"] == true) { return device::said(raw) }
+        let said = device::said(raw);
         if said.is_err() { self.open.remove(name); }
         said.map_err(|why| format!("{why}. It may or may not have reached the device: look before doing it again"))
     }
 
-    /// The same for what only reads: asked once more, on a new connection.
-    fn read(&mut self, name: &str, call: impl Fn(&Device) -> String) -> Result<Value, String> {
-        if let Ok(said) = device::said(call(self.device(name)?)) { return Ok(said) }
-        self.open.remove(name);
-        device::said(call(self.device(name)?))
-    }
-
     fn call(&mut self, tool: &str, arguments: &Value) -> Result<Vec<Value>, String> {
-        if tool == "devices" {
-            let names = device::names()?;
-            return Ok(text(if names.is_empty() { "No device this machine can use: `roamrunctl devices` in a terminal says how to come by one.".to_string() } else { names.join("\n") }));
-        }
+        if tool == "devices" { return device::list().map(text) }
         let name = arguments["device"].as_str().ok_or("device is missing")?.to_string();
         // One that is open is known: asking again what there is would ask every machine that might sign.
         if !self.open.contains_key(&name) && !device::names()?.contains(&name) {
@@ -204,8 +198,11 @@ impl Server {
                     if !(0.0..size.0).contains(&x) || !(0.0..size.1).contains(&y) {
                         return Err(format!("the point must be inside the image ({} x {})", size.0, size.1));
                     }
-                    upright(way, size.0 > size.1, (x / size.0, y / size.1))
-                        .ok_or_else(|| "the device is on its side and doesn't say which way: nothing was pressed. Ask the user to turn it upright".to_string())
+                    upright(way, size.0 > size.1, (x / size.0, y / size.1)).ok_or_else(|| if way == 0 {
+                        "the device is on its side and doesn't say which way: nothing was pressed. Ask the user to turn it upright".to_string()
+                    } else {
+                        "the device was turned as that look was taken: nothing was pressed. Look again".to_string()
+                    })
                 };
                 let done = if tool == "tap" {
                     let (x, y) = real(number("x")?, number("y")?)?;
@@ -226,7 +223,7 @@ impl Server {
             "elements" => {
                 self.shown.remove(&name);   // the walk can scroll the screen
                 let limit = arguments["limit"].as_u64().unwrap_or(40) as u32;
-                let said = self.read(&name, |d| d.elements(limit))?;
+                let said = self.ask(&name, |d| d.elements(limit))?;
                 let captions: Vec<&str> = said["elements"].as_array().map(|all| all.iter().filter_map(|e| e["caption"].as_str()).collect()).unwrap_or_default();
                 let more = if said["complete"] == true { String::new() } else { format!("\n({} elements; the walk was cut short, there may be more)", captions.len()) };
                 Ok(text(captions.join("\n") + &more))
@@ -296,6 +293,8 @@ mod tests {
         assert!(server.handle(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).is_none());
         let garbled: Value = serde_json::from_str(&server.handle("not json").unwrap()).unwrap();
         assert_eq!(garbled["error"]["code"], -32700);
+        let batch: Value = serde_json::from_str(&server.handle(r#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#).unwrap()).unwrap();
+        assert_eq!(batch["error"]["code"], -32600);
         let unknown: Value = serde_json::from_str(&server.handle(r#"{"jsonrpc":"2.0","id":7,"method":"nope"}"#).unwrap()).unwrap();
         assert_eq!((unknown["error"]["code"].as_i64(), unknown["id"].as_i64()), (Some(-32601), Some(7)));
     }
