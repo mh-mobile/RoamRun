@@ -204,7 +204,7 @@ tunnel and Xcode has to run again.
     that reaches the device only over the tailnet (a macOS VM will do; if it was cloned from an
     image another clone of which is paired, remove that one's entry on the device first), with no
     entry of its own on the device: Device Hub › Pair Nearby Device, `roamrun pair xcode` → one
-    line on stdout. Here, device on this Wi‑Fi: `roamrun pair introduce <line> --mac <its
+    line on stdout. Here, device on this Wi‑Fi: `roamrun pair introduce <line> --host <its
     Tailscale name> --to <name>` → it says whose Mac that is, that it takes connections "from
     <the device's address> only", and the device lists "Pair with <its Tailscale name>". A wrong
     code first: the command stays, the device lets the code be typed again. The right one: it
@@ -217,7 +217,7 @@ tunnel and Xcode has to run again.
     And with the device on cellular: it says Tailscale doesn't reach the device directly
     on this Wi‑Fi, and announces nothing.
     Then by name, the far Mac's entry removed on the device first: there
-    `roamrun pair xcode --with <this Mac's Tailscale name>`, here `roamrun pair introduce --mac
+    `roamrun pair xcode --with <this Mac's Tailscale name>`, here `roamrun pair introduce --host
     <its Tailscale name> --to <name>` with no line, and the button pressed after both wait → the
     far Mac says the device is saved, this Mac says that Mac saved it, `roamrun up <name>` there
     → Ready. Once more with the far Mac's command stopped (Ctrl-C) while this Mac stands in: this
@@ -228,7 +228,7 @@ tunnel and Xcode has to run again.
 28. Device control on a far Mac (when `pair control`, the app's pairing, or the pairing
     library changed). On the far Mac (item 27's will do), the RoamRun app open and no pairing
     for the device held: `roamrun pair control --with <this Mac's Tailscale name>`; here, in a
-    terminal of your own, `roamrun pair introduce --mac <its Tailscale name> --to <name>` → it
+    terminal of your own, `roamrun pair introduce --host <its Tailscale name> --to <name>` → it
     says "for device control", the device lists "Pair with <its Tailscale name>", and the code
     shows here and not there. Typed: here "is paired … switched on there", there exit 0, and
     `roamrun look <name>` there gives the screen. `lsof -nP -iTCP -sTCP:LISTEN | grep RoamRun`
@@ -255,7 +255,7 @@ tunnel and Xcode has to run again.
     wire changed). `Rust/roamrunctl/scripts/local-check.py` as its header says → every line ok. On
     a Linux machine on the device's Wi‑Fi, signed in to the tailnet, with the roamrunctl the pull
     request's CI built (its artifacts): the far Mac's `roamrun pair xcode --with <that machine>`, there `roamrunctl
-    pair introduce --mac <far Mac> --to <the device's Tailscale name>` → the device lists the far
+    pair introduce --host <far Mac> --to <the device's Tailscale name>` → the device lists the far
     Mac, the code from Device Hub → both say saved, `roamrun up <name>` on the far Mac → Ready,
     and nothing is left announced or listening on either (`pgrep roamrunctl`, `lsof -nP
     -iTCP:41830`; on Windows `Get-Process roamrunctl`, `netstat -an | findstr 41830`). The same with `--offer "$(ssh <far Mac> roamrun pair xcode)"` and no `--with`:
@@ -273,7 +273,7 @@ tunnel and Xcode has to run again.
     the wire, Xcode or visionOS changed). The far Mac's entry removed on the device first
     (Settings › General › Remote Devices), that screen left open, the device saved in RoamRun
     on a Mac on its Wi‑Fi. On the far Mac: `roamrun pair xcode --with <that Mac>`. On that Mac:
-    `roamrun pair introduce --mac <the far Mac> --to <device>` → it says the device waits to be
+    `roamrun pair introduce --host <the far Mac> --to <device>` → it says the device waits to be
     picked; the far Mac says whose device it is, and only then that it is announced. In Device
     Hub on the far Mac: + › Pair Nearby Device › Apple Vision Pro lists it; picked, the device
     shows a code; typed in Device Hub → paired, and the far Mac's command ends by itself: it says

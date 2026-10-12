@@ -76,9 +76,9 @@ enum Pair {
 
 #[derive(Args)]
 struct Introduce {
-    /// The far Mac's Tailscale name
+    /// The Tailscale name of the machine that will hold the pairing (the far Mac)
     #[arg(long)]
-    mac: String,
+    host: String,
     /// The device's Tailscale name
     #[arg(long)]
     to: String,
@@ -139,7 +139,7 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
         return Err("--deadline is 300 s at most when the far Mac is asked for its offer (as long as RoamRun's own `pair introduce` waits; that Mac waits little longer)".into());
     }
     let status = (a.far_ip.is_none() || a.device_ip.is_none()).then(tailscale::status).transpose()?;
-    let far = lookup(&status, &a.mac, a.far_ip, None)?;
+    let far = lookup(&status, &a.host, a.far_ip, None)?;
     let device = lookup(&status, &a.to, a.device_ip, a.device_ip)?;
     let own = status.as_ref().map_or("<this machine's Tailscale name>", |s| short(&s.this.dns_name)).to_string();
     let (mut lan, mut local, mut also) = place(&device, a.on)?;
@@ -207,7 +207,7 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
     // The wait for an offer may have been ten minutes: whose the far Mac's address is, and where
     // the device is, are asked again before anything is announced, as RoamRun does.
     if let (Some(w), Some(_)) = (wire.as_mut(), &status) {
-        let now = tailscale::status().and_then(|now| Ok((tailscale::peer(&now, &a.mac)?, tailscale::peer(&now, &a.to)?)));
+        let now = tailscale::status().and_then(|now| Ok((tailscale::peer(&now, &a.host)?, tailscale::peer(&now, &a.to)?)));
         let placed = now.and_then(|(far_now, device_now)| match (far_now.is(&far), device_now.is(&device)) {
             (true, true) => place(&device_now, a.on),
             (false, _) => Err(format!("{} isn't the machine it was when this began", far.dns)),

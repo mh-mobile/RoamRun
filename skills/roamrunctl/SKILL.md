@@ -62,7 +62,7 @@ as a developer: install and run apps, debug them, read their data.
 2. Here:
 
    ```sh
-   roamrunctl pair introduce --mac <far Mac's Tailscale name> --to <device's Tailscale name>
+   roamrunctl pair introduce --host <far Mac's Tailscale name> --to <device's Tailscale name>
    ```
 
    It asks the far Mac for its offer (trying for ten minutes), announces it on this
@@ -96,7 +96,7 @@ How it ends:
 
 With a far Mac that can't be asked (an older RoamRun, or that port shut), the offer is
 carried: `roamrun pair xcode` there prints it, and here
-`roamrunctl pair introduce --mac <far Mac> --to <device> --offer <that line>`. No Mac
+`roamrunctl pair introduce --host <far Mac> --to <device> --offer <that line>`. No Mac
 is asked then: on a tried pairing it exits 0 with the device's line, which always goes
 to `roamrun devices add <line>` on the far Mac.
 
@@ -107,7 +107,7 @@ Tailscale name).
 
 Device control (`roamrun look`, `tap`, `type` on the far Mac) has a pairing of its own.
 On the far Mac, with the RoamRun app open, `roamrun pair control --with <machine>`
-waits; the same `roamrunctl pair introduce --mac <far Mac> --to <device>` here
+waits; the same `roamrunctl pair introduce --host <far Mac> --to <device>` here
 answers it — the far Mac's answer says which pairing it is.
 
 **Don't run that `roamrunctl` yourself, and never ask for or pass on its code.** For

@@ -85,7 +85,7 @@ enum CLI {
                                      Windows or Linux machine, as for `pair xcode`: the code to type
                                      then shows on the device, or on that machine.
                                      `pair control --attempt <id>` (or --last): what came of one
-      pair introduce [<offer>] --mac <Tailscale name> --to <device>
+      pair introduce [<offer>] --host <Tailscale name> --to <device>
                                      On a Mac on the device's Wi‑Fi: stand in for that Mac until the
                                      device has paired with it (5 minutes at most), then print the line
                                      for `devices add` there. That Mac will use the device as a developer.
@@ -420,10 +420,10 @@ enum CLI {
         let whole = (try? TailscaleClient.fromSettings().selfDNSName()).flatMap { $0 }
         let me = whole?.split(separator: ".").first.map(String.init) ?? "<this Mac's Tailscale name>"
         // What the one named runs: a Mac has RoamRun, another machine roamrunctl, which knows the device by its Tailscale name.
-        let introduce = other.os.lowercased() == "macos" ? "roamrun pair introduce --mac \(me) --to <device>"
-            : "roamrunctl pair introduce --mac \(me) --to <the device's Tailscale name>"
+        let introduce = other.os.lowercased() == "macos" ? "roamrun pair introduce --host \(me) --to <device>"
+            : "roamrunctl pair introduce --host \(me) --to <the device's Tailscale name>"
         // A Mac may have roamrunctl alone: Tailscale doesn't tell.
-        let without = other.os.lowercased() == "macos" && !itself ? "\n    (a Mac without RoamRun:  roamrunctl pair introduce --mac \(me) --to <the device's Tailscale name>)" : ""
+        let without = other.os.lowercased() == "macos" && !itself ? "\n    (a Mac without RoamRun:  roamrunctl pair introduce --host \(me) --to <the device's Tailscale name>)" : ""
         // Each try is an attempt of the app's own; the one under way, or last made, is what is asked about.
         let current = OSAllocatedUnfairLock(initialState: UUID())
         note("""
@@ -553,10 +553,10 @@ enum CLI {
         let whole = (try? TailscaleClient.fromSettings().selfDNSName()).flatMap { $0 }
         let me = whole?.split(separator: ".").first.map(String.init) ?? "<this Mac's Tailscale name>"
         // What the one named runs: a Mac has RoamRun, another machine roamrunctl, which knows the device by its Tailscale name.
-        let introduce = other.os.lowercased() == "macos" ? "roamrun pair introduce --mac \(me) --to <device>"
-            : "roamrunctl pair introduce --mac \(me) --to <the device's Tailscale name>"
+        let introduce = other.os.lowercased() == "macos" ? "roamrun pair introduce --host \(me) --to <device>"
+            : "roamrunctl pair introduce --host \(me) --to <the device's Tailscale name>"
         // A Mac may have roamrunctl alone: Tailscale doesn't tell.
-        let without = other.os.lowercased() == "macos" && !itself ? "\n    (a Mac without RoamRun:  roamrunctl pair introduce --mac \(me) --to <the device's Tailscale name>)" : ""
+        let without = other.os.lowercased() == "macos" && !itself ? "\n    (a Mac without RoamRun:  roamrunctl pair introduce --host \(me) --to <the device's Tailscale name>)" : ""
         note("""
         Waiting for \(other.dnsName), 10 minutes at most; only \(itself ? "it" : other.os.lowercased() == "macos" ? "that Mac" : "that machine") is answered.
           There\(itself ? ":  the RoamRun Introducer app, far Mac “\(me)”, Introduce" : " (on the device's Wi‑Fi):  \(introduce)\(without)")
@@ -897,7 +897,7 @@ enum CLI {
         let me = (try? TailscaleClient.fromSettings().selfDNSName()).flatMap { $0 }?.split(separator: ".").first.map(String.init) ?? "<this Mac's Tailscale name>"
         note("""
         On a Mac on the device's Wi‑Fi, with the device saved in RoamRun there:
-          roamrun pair introduce <that line> --mac \(me) --to <device>
+          roamrun pair introduce <that line> --host \(me) --to <device>
         Keep “Waiting to pair.” open: pressing the button again makes a new offer, and this line is then no good.
         The code to type on the device is the one Device Hub shows here.
         Afterwards, here: roamrun devices add <the line that prints>, then roamrun up <device>. The RoamRun app needn't be open on this Mac for any of it.
@@ -1178,17 +1178,17 @@ enum CLI {
                     if let home = parsed.values["--with"] { Task { await offerXcodePairing(with: home, qr: qr) } }
                     else { Task { await offerXcodePairing(qr: qr) } }
                 case ("introduce", 1), ("introduce", 2):
-                    if parsed.values["--with"] != nil { fail("`roamrun pair introduce` doesn't take --with: the Mac to introduce is --mac <its Tailscale name>") }
-                    if let extra = Set(parsed.values.keys).union(parsed.flags).subtracting(["--mac", "--to"]).sorted().first {
+                    if parsed.values["--with"] != nil { fail("`roamrun pair introduce` doesn't take --with: the Mac to introduce is --host <its Tailscale name>") }
+                    if let extra = Set(parsed.values.keys).union(parsed.flags).subtracting(["--host", "--to"]).sorted().first {
                         fail("`roamrun pair introduce` doesn't take \(extra) — see roamrun --help")
                     }
-                    guard let mac = parsed.values["--mac"], let to = parsed.values["--to"] else {
-                        fail("usage: roamrun pair introduce [<offer>] --mac <the other Mac's Tailscale name> --to <device>")
+                    guard let mac = parsed.values["--host"], let to = parsed.values["--to"] else {
+                        fail("usage: roamrun pair introduce [<offer>] --host <the other Mac's Tailscale name> --to <device>")
                     }
                     guard let p = find(to, in: profiles) else { fail("no device named \(shellName(to)). " + names(profiles)) }
                     if words.count == 2 { Task { await introduce(offer: words[1], mac: mac, to: p) } } else { Task { await introduceByName(mac: mac, to: p) } }
                 default:
-                    fail("usage: roamrun pair xcode [--with <Tailscale name>] [--qr] | roamrun pair control --with <Tailscale name> | roamrun pair introduce [<offer>] --mac <the other Mac's Tailscale name> --to <device> — see roamrun --help")
+                    fail("usage: roamrun pair xcode [--with <Tailscale name>] [--qr] | roamrun pair control --with <Tailscale name> | roamrun pair introduce [<offer>] --host <the other Mac's Tailscale name> --to <device> — see roamrun --help")
                 }
             case "status":
                 noteStaleSkills()
@@ -1306,7 +1306,7 @@ enum CLI {
 
     nonisolated private static let baseSpecs: [String: (options: Set<String>, words: ClosedRange<Int>)] = [
         "devices": (["--json", "--as=", "--replace=", "--peer="], 0...2),
-        "pair": (["--mac=", "--to=", "--with=", "--attempt=", "--last", "--peer=", "--qr"], 0...2),
+        "pair": (["--host=", "--to=", "--with=", "--attempt=", "--last", "--peer=", "--qr"], 0...2),
         "status": (["--json", "--wait="], 0...1),
         "doctor": (["--json"], 0...1),
         "down": ([], 0...1),

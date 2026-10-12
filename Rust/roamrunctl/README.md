@@ -50,7 +50,7 @@ on, from the address it says the device has. With ufw on Ubuntu (which lets mDNS
 ## Use
 
 ```
-roamrunctl pair introduce --mac <far Mac's Tailscale name> --to <device's Tailscale name> [--offer <line>] [--as <name>] [--deadline <secs>] [--on <address>]
+roamrunctl pair introduce --host <far Mac's Tailscale name> --to <device's Tailscale name> [--offer <line>] [--as <name>] [--deadline <secs>] [--on <address>]
 ```
 
 Both names are Tailscale's, as `tailscale status` lists them — the first label, or the whole name for a machine of
