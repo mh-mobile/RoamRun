@@ -219,7 +219,7 @@ under its name, isn't the one it had open: it is opened anew, or said to be gone
 name does, and an .ipa under one name whatever it is: one install to a device at a time. What an install that was
 cut short left there is cleared before an .app folder is sent again, where it can be (an install cut short and run again took the app in, once). An install says how much it sends and then nothing until the app is in:
 a megabyte took three to four seconds on the device's own Wi‑Fi (3 MB in 25 s, 37 MB in two and a half minutes), and it
-is given five minutes and six seconds a megabyte.
+is given five minutes and fifteen seconds a megabyte, some four times that.
 
 ## Introducing a far Mac (`pair introduce`)
 

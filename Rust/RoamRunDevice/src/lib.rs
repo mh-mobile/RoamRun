@@ -473,8 +473,9 @@ async fn interface_way(link: &mut Link) -> Option<u8> {
     })
 }
 
-/// What is at `path`, in megabytes, and how long an install of it is given: five minutes, and six seconds a
-/// megabyte. One took three to four on the device's own Wi‑Fi (iPhone 15 Pro, iOS 27.0: 3 MB in 25 s, 37 MB in 150 s).
+/// What is at `path`, in megabytes, and how long an install of it is given: five minutes, and fifteen seconds a
+/// megabyte. One took three to four on the device's own Wi‑Fi (iPhone 15 Pro, iOS 27.0: 3 MB in 25 s, 37 MB in 150 s):
+/// some four times that, for a slower way there. It is there to end what hangs, not what is slow.
 pub fn install_given(path: &str) -> (u64, Duration) {
     fn size(path: &std::path::Path) -> u64 {
         match std::fs::read_dir(path) {
@@ -483,7 +484,7 @@ pub fn install_given(path: &str) -> (u64, Duration) {
         }
     }
     let megabytes = size(std::path::Path::new(path)) >> 20;
-    (megabytes, Duration::from_secs(300 + 6 * megabytes))
+    (megabytes, Duration::from_secs(300 + 15 * megabytes))
 }
 
 /// What `rr_device_install` and `rr_device_launch` share: one thing asked of the device's app services.
@@ -1615,7 +1616,7 @@ mod tests {
         std::fs::create_dir_all(folder.join("inside")).unwrap();
         std::fs::write(folder.join("inside/binary"), vec![0u8; 3 << 20]).unwrap();
         std::fs::write(folder.join("Info.plist"), b"<plist/>").unwrap();
-        assert_eq!(install_given(folder.to_str().unwrap()), (3, Duration::from_secs(318)));
+        assert_eq!(install_given(folder.to_str().unwrap()), (3, Duration::from_secs(345)));
         assert_eq!(install_given(folder.join("inside/binary").to_str().unwrap()).0, 3);
         assert_eq!(install_given("/nowhere/at/all.ipa"), (0, Duration::from_secs(300)));
         std::fs::remove_dir_all(folder).unwrap();
