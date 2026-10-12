@@ -18,6 +18,15 @@ use crate::{device, secret};
 const CONNECT: Duration = Duration::from_secs(600);
 const PAIRING: Duration = Duration::from_secs(420);
 const LINE: Duration = Duration::from_secs(30);
+/// How often the device may come and not pair (a wrong code) before this gives up.
+const TRIES: u32 = 5;
+
+/// How a try at pairing ended, where it didn't pair.
+enum Stopped {
+    /// The device came and didn't pair, and nothing was kept: the other machine's command ends on that and is run again.
+    Again(String),
+    For(String),
+}
 /// What the device is told this machine is: one it lists a pairing under.
 // ponytail: a Mac's model, as the library's own calls give; a device shows the name, not this.
 const MODEL: &str = "Mac17,7";
@@ -79,7 +88,8 @@ pub fn run(with: &str, name: Option<String>, plain: bool) -> Result<String, Stri
     } else { format!("can't listen on {own}: {e}") })?;
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     eprintln!("Waiting for {with}, 10 minutes at most; only it is answered.\n  There, on the device's Wi‑Fi:  roamrunctl pair introduce --host {me} --to <the device's Tailscale name>\n  (or `roamrun pair introduce --host {me} --to <device>` on a Mac, or the RoamRun Introducer app)");
-    let until = Instant::now() + CONNECT;
+    let mut until = Instant::now() + CONNECT;
+    let mut tried = 0;
     loop {
         if Instant::now() >= until { return Err(format!("{with} didn't come in 10 minutes: nothing was paired")); }
         let (stream, from) = match listener.accept() {
@@ -104,14 +114,21 @@ pub fn run(with: &str, name: Option<String>, plain: bool) -> Result<String, Stri
         if link.send("device?").is_err() { continue }
         let Ok(said) = link.read(LINE) else { continue };
         let Some(line) = said.strip_prefix("device ") else { continue };
-        // Begun: whatever happens from here, this run ends with it.
-        return paired(link, with, &me, own, other.ip, line, name, passphrase.as_deref(), &host, &shown);
+        match paired(link, with, &me, own, other.ip, line, name.clone(), passphrase.as_deref(), &host, &shown) {
+            Ok(said) => return Ok(said),
+            Err(Stopped::Again(why)) if tried + 1 < TRIES => {
+                tried += 1;
+                until = Instant::now() + CONNECT;
+                eprintln!("{why}\nStill waiting for {with}: run its command again (10 minutes at most).");
+            }
+            Err(Stopped::Again(why)) | Err(Stopped::For(why)) => return Err(why),
+        }
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn paired(mut link: Wire, with: &str, me: &str, own: Ipv4Addr, only: Ipv4Addr, line: &str, name: Option<String>, passphrase: Option<&str>, host: &str, shown: &str) -> Result<String, String> {
-    let refuse = |link: &mut Wire, how: &str, why: String| -> Result<String, String> { let _ = link.send(&format!("result failed {how}")); Err(why) };
+fn paired(mut link: Wire, with: &str, me: &str, own: Ipv4Addr, only: Ipv4Addr, line: &str, name: Option<String>, passphrase: Option<&str>, host: &str, shown: &str) -> Result<String, Stopped> {
+    let refuse = |link: &mut Wire, how: &str, why: String| -> Result<String, Stopped> { let _ = link.send(&format!("result failed {how}")); Err(Stopped::For(why)) };
     let Ok(sent) = lines::device(line) else { return refuse(&mut link, "failed", format!("{with} sent something that isn't a device")) };
     // The device is the one Tailscale has under that name on this machine's tailnet, not an address that was sent.
     let there = match tailscale::status().and_then(|now| tailscale::peer(&now, &sent.peer)) {
@@ -120,14 +137,14 @@ fn paired(mut link: Wire, with: &str, me: &str, own: Ipv4Addr, only: Ipv4Addr, l
     };
     let name = name.unwrap_or_else(|| filed(&sent.name));
     if let Err(why) = device::free(&name) { return refuse(&mut link, "exists", why); }
-    let socket = TcpListener::bind((own, 0)).map_err(|e| format!("can't listen on {own}: {e}"))?;
+    let socket = TcpListener::bind((own, 0)).map_err(|e| Stopped::For(format!("can't listen on {own}: {e}")))?;
     let (pairing, advert) = match Pairing::listen_on(shown, MODEL, host, socket.into(), &only.to_string()) {
         Ok(listening) => listening,
         Err(why) => return refuse(&mut link, "failed", format!("couldn't listen for the device: {why}")),
     };
     let offer = match offer(&advert) { Ok(offer) => offer, Err(why) => return refuse(&mut link, "failed", why) };
-    let attempt = uuid()?;
-    link.send(&format!("offer {offer}")).and_then(|()| link.send(&format!("attempt {attempt}")))?;
+    let attempt = uuid().map_err(Stopped::For)?;
+    link.send(&format!("offer {offer}")).and_then(|()| link.send(&format!("attempt {attempt}"))).map_err(Stopped::For)?;
     eprintln!("{with} has this machine's offer. On the device: Settings › Privacy & Security › Developer Mode › “{shown}”, and type the code that shows here (and there). 7 minutes at most.");
     let pairing = Arc::new(pairing);
     let (tell, told) = mpsc::channel::<Result<String, String>>();
@@ -165,7 +182,10 @@ fn paired(mut link: Wire, with: &str, me: &str, own: Ipv4Addr, only: Ipv4Addr, l
     let _ = waits.join();
     let made = match device::said(answer) {
         Ok(made) => made,
-        Err(why) => return refuse(&mut link, "not-paired", format!("the device didn't pair ({why}): nothing was kept. Run both commands again")),
+        Err(why) => {
+            let _ = link.send("result failed not-paired");
+            return Err(Stopped::Again(format!("The device didn't pair ({why}): nothing was kept.")));
+        }
     };
     let Some(key) = made["pairing"].as_str() else { return refuse(&mut link, "failed", "the pairing came without its key".into()) };
     // Tried before it is kept, over the tailnet as it will be used: one that doesn't open the device isn't kept.
