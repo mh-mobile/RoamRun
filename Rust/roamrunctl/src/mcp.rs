@@ -106,6 +106,7 @@ impl Server {
                 Err(e) if e.kind() == std::io::ErrorKind::InvalidData => continue,
                 Err(_) => break,
             };
+            if line.trim().is_empty() { continue }
             if let Some(answer) = self.handle(&line) {
                 let mut out = stdout.lock();
                 if writeln!(out, "{answer}").and_then(|()| out.flush()).is_err() { break }
@@ -153,6 +154,13 @@ impl Server {
         let said = device::said(call(self.device(name)?));
         if said.is_err() { self.open.remove(name); }
         said.map_err(|why| format!("{why}. It may or may not have reached the device: look before doing it again"))
+    }
+
+    /// The same for what only reads: asked once more, on a new connection.
+    fn read(&mut self, name: &str, call: impl Fn(&Device) -> String) -> Result<Value, String> {
+        if let Ok(said) = device::said(call(self.device(name)?)) { return Ok(said) }
+        self.open.remove(name);
+        device::said(call(self.device(name)?))
     }
 
     fn call(&mut self, tool: &str, arguments: &Value) -> Result<Vec<Value>, String> {
@@ -218,7 +226,7 @@ impl Server {
             "elements" => {
                 self.shown.remove(&name);   // the walk can scroll the screen
                 let limit = arguments["limit"].as_u64().unwrap_or(40) as u32;
-                let said = self.ask(&name, |d| d.elements(limit))?;
+                let said = self.read(&name, |d| d.elements(limit))?;
                 let captions: Vec<&str> = said["elements"].as_array().map(|all| all.iter().filter_map(|e| e["caption"].as_str()).collect()).unwrap_or_default();
                 let more = if said["complete"] == true { String::new() } else { format!("\n({} elements; the walk was cut short, there may be more)", captions.len()) };
                 Ok(text(captions.join("\n") + &more))
