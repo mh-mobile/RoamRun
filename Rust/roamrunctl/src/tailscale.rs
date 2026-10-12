@@ -32,6 +32,27 @@ pub struct Node {
     pub ips: Vec<String>,
     #[serde(rename = "CurAddr", default)]
     pub cur_addr: String,
+    /// Whose it is, as Tailscale numbers its users; a tagged machine is nobody's.
+    #[serde(rename = "UserID", default)]
+    pub user: i64,
+    #[serde(rename = "Tags", default)]
+    pub tags: Option<Vec<String>>,
+    #[serde(rename = "Online", default)]
+    pub online: bool,
+}
+
+/// This machine's user's other machines that are online, by name and address: the ones a key of that user's
+/// may be kept on. None of them where this machine is tagged (it is then nobody's).
+pub fn own_machines(status: &Status) -> Vec<(String, Ipv4Addr)> {
+    let tagged = |node: &Node| node.tags.as_ref().is_some_and(|tags| !tags.is_empty());
+    if status.this.user == 0 || tagged(&status.this) { return Vec::new(); }
+    let mut found: Vec<(String, Ipv4Addr)> = status.peers.values()
+        .filter(|p| p.online && p.user == status.this.user && !tagged(p))
+        .filter_map(|p| Some((p.dns_name.trim_end_matches('.').to_string(), p.ips.iter().find_map(|a| a.parse().ok())?)))
+        .filter(|(name, _)| !name.is_empty())
+        .collect();
+    found.sort();
+    found
 }
 
 /// A peer by its Tailscale name.
@@ -154,6 +175,18 @@ pub fn pinged(output: &str) -> Option<Ipv4Addr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_this_users_own_machines_that_are_online_are_asked() {
+        let status = |me: &str| -> Status { serde_json::from_str(&format!(r#"{{"Self":{{"ID":"me","DNSName":"box.tail.ts.net.","TailscaleIPs":["100.64.0.1"],"UserID":7{me}}},"Peer":{{
+            "a":{{"ID":"a","DNSName":"laptop.tail.ts.net.","TailscaleIPs":["100.64.0.2","fd7a::2"],"UserID":7,"Online":true}},
+            "b":{{"ID":"b","DNSName":"asleep.tail.ts.net.","TailscaleIPs":["100.64.0.3"],"UserID":7,"Online":false}},
+            "c":{{"ID":"c","DNSName":"theirs.tail.ts.net.","TailscaleIPs":["100.64.0.4"],"UserID":8,"Online":true}},
+            "d":{{"ID":"d","DNSName":"ci.tail.ts.net.","TailscaleIPs":["100.64.0.5"],"UserID":7,"Online":true,"Tags":["tag:ci"]}}}}}}"#)).unwrap() };
+        assert_eq!(own_machines(&status("")), [("laptop.tail.ts.net".to_string(), Ipv4Addr::new(100, 64, 0, 2))]);
+        // A tagged machine is nobody's: it asks none (one is named for it instead).
+        assert!(own_machines(&status(r#","Tags":["tag:ci"]"#)).is_empty());
+    }
 
     #[test]
     fn ping_output() {

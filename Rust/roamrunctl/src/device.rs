@@ -15,13 +15,7 @@ use crate::Command;
 pub enum Devices {
     /// Forget a device and its pairing here (remove this machine on the device too, in its list)
     Remove { name: String },
-    /// Save the device of a line `roamrunctl sign` printed on the machine that keeps its key
-    Add {
-        line: String,
-        /// The name to save it under here
-        #[arg(long = "as")]
-        name: Option<String>,
-    },
+
 }
 
 #[derive(Subcommand)]
@@ -115,7 +109,11 @@ fn kept(name: &str) -> Result<Option<(PathBuf, bool)>, String> {
 }
 
 fn load(name: &str) -> Result<Saved, String> {
-    let (path, sealed) = kept(name)?.ok_or_else(|| format!("no device “{name}” here: `roamrunctl devices` lists them"))?;
+    let Some((path, sealed)) = kept(name)? else {
+        // Not saved here: one another machine keeps the key of, and signs for this one.
+        return offered().into_iter().find(|saved| saved.name == name).ok_or_else(|| format!(
+            "no device “{name}” is saved here, and no machine of yours signs for this one with it.\nOn the machine that keeps its key: roamrunctl sign {name} --for <this machine>"));
+    };
     let meta = std::fs::metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     // The file is a key: as ssh does, one that others can read isn't used.
     if let Some(mode) = open_to_others(&meta) {
@@ -243,65 +241,59 @@ pub fn keep(name: &str, ip: std::net::Ipv4Addr, port: u16, pairing: &str, passph
     })
 }
 
-pub const HELD_PREFIX: &str = "rr-held-v1:";
-
-/// A saved device as a line for a machine that is to use it without its key.
-fn exported(mut saved: Saved, me: &str) -> Result<String, String> {
-    let (bare, identifier) = crate::sign::without_key(&saved.pairing)?;
-    saved.pairing = bare;
-    saved.signer = Some(me.to_string());
+/// A saved device as another machine is told of it: without its key (any key stands in its place).
+fn bare(mut saved: Saved) -> Result<Saved, String> {
+    let (pairing, identifier) = crate::sign::without_key(&saved.pairing)?;
+    saved.pairing = pairing;
     saved.identifier = Some(identifier);
-    let json = serde_json::to_vec(&saved).map_err(|e| e.to_string())?;
-    use base64::Engine;
-    Ok(format!("{HELD_PREFIX}{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json)))
-}
-
-/// The device a line holds, as it would be saved: what a line may say is checked, and no key is taken from one.
-pub fn held(line: &str, name: Option<String>) -> Result<Saved, String> {
-    use base64::Engine;
-    let not = || "that isn't a line `roamrunctl sign` printed".to_string();
-    let json = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(line.trim().strip_prefix(HELD_PREFIX).ok_or_else(not)?).map_err(|_| not())?;
-    let mut saved: Saved = serde_json::from_slice(&json).map_err(|_| not())?;
-    let fits = saved.v == 1 && saved.ip.parse::<std::net::Ipv4Addr>().is_ok() && !saved.pairing.is_empty()
-        && saved.signer.as_deref().is_some_and(|s| !s.is_empty() && s.len() <= 253 && s.chars().all(|c| c.is_ascii_alphanumeric() || "-.".contains(c)))
-        && saved.identifier.as_deref().is_some_and(crate::lines::is_uuid);
-    if !fits { return Err(not()); }
-    if let Some(name) = name { saved.name = name; }
-    named(&saved.name)?;
     Ok(saved)
 }
 
-fn add(line: &str, name: Option<String>) -> Result<String, String> {
-    let saved = held(line, name)?;
-    free(&saved.name)?;
-    let signer = saved.signer.clone().unwrap_or_default();
-    // Tried before it is kept: which asks the machine that keeps the key, so that one has to be signing.
-    open(&saved).map_err(|why| format!("{why}\nNothing was saved. On {signer}: roamrunctl sign --for <this machine>; then run this again"))?;
-    // No key in it: kept as it is.
-    let path = save(&saved, None)?;
-    Ok(format!("Saved {} ({}), and it connects. Its key stays on {signer}, which is asked at each connection: {} holds none.", saved.name, saved.ip, path.display()))
+/// The devices other machines keep the keys of and sign for this one, as they say them and as far as that
+/// can be what it says: a name that is one here, a pairing with its identifier, and a device that is on this
+/// machine's own tailnet — not an address that was sent. Whose key it is, is the machine that was asked.
+fn offered() -> Vec<Saved> {
+    let Ok(status) = crate::tailscale::status() else { return Vec::new() };
+    let on_tailnet: std::collections::HashSet<&str> = status.peers.values().flat_map(|p| p.ips.iter().map(String::as_str)).collect();
+    let said = crate::sign::signers(&status, std::env::var(crate::sign::SIGNER).ok().filter(|s| !s.is_empty())).unwrap_or_default();
+    taken(&said, &on_tailnet)
 }
 
-/// The pairings saved here with their keys, by their identifiers (what `roamrunctl sign` signs with), and for
-/// each the line another machine saves it by.
-#[allow(clippy::type_complexity)]
-pub fn keys() -> Result<(std::collections::HashMap<String, (String, ed25519_dalek::SigningKey)>, Vec<(String, String)>), String> {
-    let me = crate::tailscale::status()?.this.dns_name.trim_end_matches('.').to_string();
-    if me.is_empty() { return Err("Tailscale gives this machine no name to be asked by".into()); }
-    let (mut keys, mut lines) = (std::collections::HashMap::new(), Vec::new());
-    for name in names()? {
-        match load(&name) {
-            Ok(saved) if saved.signer.is_none() => {
-                if let Some((identifier, key)) = crate::sign::key(&saved.pairing) {
-                    keys.insert(identifier, (name.clone(), key));
-                    lines.push((name, exported(saved, &me)?));
-                }
+/// Of what each machine said it signs for (its name, its list), what is taken.
+fn taken(said: &[(String, String)], on_tailnet: &std::collections::HashSet<&str>) -> Vec<Saved> {
+    let mut found: Vec<Saved> = Vec::new();
+    for (signer, list) in said {
+        for mut saved in serde_json::from_str::<Vec<Saved>>(list).unwrap_or_default() {
+            let fits = saved.v == 1 && named(&saved.name).is_ok() && on_tailnet.contains(saved.ip.as_str()) && !saved.pairing.is_empty()
+                && saved.identifier.as_deref().is_some_and(crate::lines::is_uuid);
+            // Two that offer one name: the first asked is the one, and the list says whose.
+            if fits && !found.iter().any(|have| have.name == saved.name) {
+                saved.signer = Some(signer.clone());
+                found.push(saved);
             }
-            Ok(_) => {}
-            Err(why) => eprintln!("{name} is left out: {why}"),
         }
     }
-    Ok((keys, lines))
+    found
+}
+
+/// The pairings of `names`, by their identifiers (what `roamrunctl sign` signs with), and those devices as
+/// the other machine is told of them: JSON, each without its key.
+#[allow(clippy::type_complexity)]
+pub fn keys(names: &[String]) -> Result<(std::collections::HashMap<String, (String, ed25519_dalek::SigningKey)>, String), String> {
+    if names.is_empty() {
+        let saved: Vec<String> = self::names_here()?.into_iter().filter(|name| matches!(kept(name), Ok(Some(_)))).collect();
+        return Err(format!("which devices: roamrunctl sign <name>… --for <machine>   (saved here: {})", if saved.is_empty() { "none".to_string() } else { saved.join(", ") }));
+    }
+    let (mut keys, mut told) = (std::collections::HashMap::new(), Vec::new());
+    for name in names {
+        if kept(name)?.is_none() { return Err(format!("no device “{name}” is saved here: `roamrunctl devices` lists them")); }
+        let saved = load(name)?;
+        let (identifier, key) = crate::sign::key(&saved.pairing).filter(|_| saved.signer.is_none())
+            .ok_or_else(|| format!("{name}'s key isn't kept here: there is nothing to sign with"))?;
+        keys.insert(identifier, (name.clone(), key));
+        told.push(bare(saved)?);
+    }
+    Ok((keys, serde_json::to_string(&told).map_err(|e| e.to_string())?))
 }
 
 /// The device saved under `name`, opened.
@@ -309,8 +301,17 @@ pub fn opened(name: &str) -> Result<Device, String> {
     open(&load(name)?)
 }
 
-/// The names of the devices saved here.
+/// The names of the devices this machine can use: those saved here, and those another machine signs for it with.
 pub fn names() -> Result<Vec<String>, String> {
+    let mut names = names_here()?;
+    names.extend(offered().into_iter().map(|saved| saved.name));
+    names.sort();
+    names.dedup();
+    Ok(names)
+}
+
+/// The names of the devices saved here.
+fn names_here() -> Result<Vec<String>, String> {
     let mut names: Vec<String> = std::fs::read_dir(folder()?).map_err(|e| e.to_string())?
         .filter_map(|entry| { let name = entry.ok()?.file_name(); let name = name.to_str()?; name.strip_suffix(".age").or(name.strip_suffix(".json")).map(str::to_string) }).collect();
     names.sort();
@@ -330,17 +331,15 @@ fn look(name: &str, file: Option<PathBuf>) -> Result<String, String> {
 }
 
 fn list() -> Result<String, String> {
-    let names = names()?;
-    if names.is_empty() { return Ok("No device is saved here. `roamrunctl key import <file>` saves one from a file `roamrun key create` wrote.".into()); }
+    let (names, offered) = (names_here()?, offered());
+    if names.is_empty() && offered.is_empty() { return Ok("No device is saved here, and no machine of yours signs for this one. `roamrunctl pair control --to <device>` pairs with one on this Wi‑Fi.".into()); }
     // Named only: what else is saved of one may be under a passphrase, which a list doesn't ask for.
     Ok(names.iter().map(|name| match kept(name) {
         Ok(Some((_, true))) => format!("{name}\tunder a passphrase"),
-        // Read to say which: a file without a key in it says so itself.
-        _ => match load(name) {
-            Ok(Saved { signer: Some(signer), .. }) => format!("{name}\tits key is kept by {signer}"),
-            _ => format!("{name}\tas it is"),
-        },
-    }).collect::<Vec<_>>().join("\n"))
+        _ => format!("{name}\tas it is"),
+    }).chain(offered.iter().filter(|saved| !names.contains(&saved.name)).map(|saved| {
+        format!("{}\tits key is kept by {}, which signs for this machine", saved.name, saved.signer.as_deref().unwrap_or("another machine"))
+    })).collect::<Vec<_>>().join("\n"))
 }
 
 pub fn run(command: Command) -> i32 {
@@ -360,8 +359,7 @@ pub fn run(command: Command) -> i32 {
             said(device.launch(&bundle)).map(|value| format!("Launched {bundle} on {name} (pid {}).", value["pid"]))
         }),
         Command::Mcp => return crate::mcp::Server::default().serve(),
-        Command::Sign { machine } => keys().and_then(|(keys, lines)| crate::sign::serve(&machine, keys, lines)),
-        Command::Devices { command: Some(Devices::Add { line, name }) } => add(&line, name),
+        Command::Sign { names, machine } => keys(&names).and_then(|(keys, list)| crate::sign::serve(&machine, keys, list)),
         Command::Pair { .. } => unreachable!("handled by main"),
     };
     match done {
@@ -373,6 +371,22 @@ pub fn run(command: Command) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_a_machine_says_it_signs_for_is_taken_only_as_far_as_it_can_be_that() {
+        let device = |name: &str, ip: &str, signer: &str| format!(r#"{{"v":1,"name":"{name}","ip":"{ip}","port":49152,"pairing":"<plist/>","signer":"{signer}","identifier":"0F0E0D0C-0B0A-4908-8706-050403020100"}}"#);
+        let on_tailnet = std::collections::HashSet::from(["100.64.0.10"]);
+        let said = vec![
+            ("laptop.tail.ts.net".to_string(), format!("[{},{},{}]", device("phone", "100.64.0.10", "someone-else"), device("../etc", "100.64.0.10", "x"), device("elsewhere", "203.0.113.5", "x"))),
+            ("other.tail.ts.net".to_string(), format!("[{}]", device("phone", "100.64.0.10", "other"))),
+            ("broken.tail.ts.net".to_string(), "not a list".to_string()),
+        ];
+        let found = taken(&said, &on_tailnet);
+        // The one whose name is a name and whose device is on this tailnet; from the first that offered it;
+        // and the key's keeper is the machine that was asked, whatever the record says.
+        assert_eq!(found.iter().map(|s| (s.name.as_str(), s.signer.as_deref())).collect::<Vec<_>>(), [("phone", Some("laptop.tail.ts.net"))]);
+        assert!(taken(&[], &on_tailnet).is_empty());
+    }
 
     #[test]
     fn a_name_is_a_files_name_and_nothing_else() {

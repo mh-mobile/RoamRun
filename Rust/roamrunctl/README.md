@@ -141,24 +141,34 @@ that runs as the same user and can read the passphrase where you put it.
 
 ### B. Another machine keeps the key, and signs
 
-For when the key shouldn't be on the machine an agent runs on. Do A on a machine of your own (`pair control
---to`, if it is on the device's Wi‑Fi); then:
+For when the key shouldn't be on the machine an agent runs on.
 
 ```sh
-# on your machine, which keeps the key — leave it running
-roamrunctl sign --for <the machine that uses the device>
-#   it prints, for each device:  roamrunctl devices add rr-held-v1:… --as phone
-# on the machine that uses the device, once
-roamrunctl devices add rr-held-v1:… --as phone
-# then look, install, launch and mcp there, as in A
+# on your machine, on the device's Wi‑Fi: pair there (it shows the code)
+roamrunctl pair control --to <the device's Tailscale name> --as phone --passphrase
+# and leave this running: it names the devices, and the one machine it signs for
+roamrunctl sign phone --for <the machine that uses the device>
+# on the machine that uses the device: nothing to set up
+roamrunctl devices          # phone   its key is kept by <your machine>, which signs for this machine
+roamrunctl mcp              # look, install, launch: as in A
 ```
 
-A connection to the device has one thing signed with the pairing's key. `roamrunctl sign` signs that, for the
-one machine named (held to its tailnet address and Tailscale's id for it) and for nothing that isn't shaped as
-that check, and says each connection it signs; the other machine does everything else, and saves the pairing
-with any key in the private key's place. So the key can't be copied off the machine that uses the device, and
-Ctrl-C in `sign` ends its making new connections (one already open goes on until it closes). What it doesn't
-do: keep that machine, or an agent on it, from using the device while `sign` answers.
+A connection to the device has one thing signed with the pairing's key. `roamrunctl sign` signs that — for the
+devices named, for the one machine named (held to its tailnet address and Tailscale's id for it), and for
+nothing that isn't shaped as that check — and says each connection it signs. The machine that uses the device
+saves nothing: at each command it asks its user's other machines on the tailnet which of them signs for it, is
+told the devices without their keys, and does everything else itself. So the key can't be copied off the
+machine that uses the device, and Ctrl-C in `sign` ends its making new connections (one already open goes on
+until it closes). What it doesn't do: keep that machine, or an agent on it, from using those devices while
+`sign` answers.
+
+`--passphrase` earns its keep here: it is typed once, when `sign` starts, and kept nowhere. To not type it,
+hand it by a command that reads your keychain — on a Mac:
+`ROAMRUNCTL_PASSPHRASE_COMMAND='security find-generic-password -a "$USER" -s roamrunctl -w'`.
+
+Only machines of the same Tailscale user are asked, and what one answers is taken only for a device that is on
+this tailnet. A tagged machine (CI) is nobody's and asks none: name the signer there,
+`ROAMRUNCTL_SIGNER=<its Tailscale name>`.
 
 ## Where it stands
 
@@ -166,7 +176,8 @@ do: keep that machine, or an agent on it, from using the device while `sign` ans
   crate's `pair introduce --host` on a Mac beside the device; the iPhone listed the VM, paired, and the VM
   looked at its screen. The key on another machine: `roamrunctl sign` on a Mac, `devices add` and a look on
   the Linux VM, which held no key; once `sign` was stopped the VM's next connection was refused. (Since then
-  `sign` prints the line itself, and a passphrase is asked for only with `--passphrase`: neither run on a device.)
+  a passphrase is asked for only with `--passphrase`, `sign` names its devices, and the other machine finds it
+  by asking instead of being given a line: see the pull request for what was run again.)
 - Holding a device: built on macOS and on Linux (musl, static); tried from an unprivileged Linux container
   against an iPhone 15 Pro on iOS 27.0 — connect, look, tap, type, a button, install, launch; taps through
   `roamrunctl mcp` with the device upright and on either side. The container reached the tailnet through its

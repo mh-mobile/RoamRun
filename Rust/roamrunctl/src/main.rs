@@ -61,6 +61,8 @@ enum Command {
     Mcp,
     /// Keep the pairings saved here to yourself and sign with them for another machine, which then uses the devices without having their keys; until Ctrl-C
     Sign {
+        /// The devices, as they are saved here, that the other machine may use
+        names: Vec<String>,
         /// The Tailscale name of the one machine that is answered
         #[arg(long = "for")]
         machine: String,

@@ -161,15 +161,16 @@ machine. Don't ask the user for a passphrase and don't print one; if a command s
 none is given, say so and stop.
 
 **B. Another machine keeps the key, and signs for this one.** For when the key
-shouldn't be on the machine an agent runs on. The user does A on a machine of their
-own (`pair control --to`, if it is on the device's Wi‑Fi), and leaves `roamrunctl sign
---for <this machine>` running there; it prints, for
-each device, a line to run here: `roamrunctl devices add <line> --as <name>` (the line
-holds no key). From then on this machine asks that one at each new connection. If a
-command fails saying the machine that keeps the key didn't sign or isn't answering,
-say so and stop: starting `roamrunctl sign` is the user's, on their machine. This
-keeps the key from being copied off this machine. It doesn't keep this machine from
-using the device while the other one answers.
+shouldn't be on the machine an agent runs on. The user pairs on a machine of their own
+(`pair control --to`, if it is on the device's Wi‑Fi), and leaves `roamrunctl sign
+<name> --for <this machine>` running there. Nothing is done here: `roamrunctl devices`
+lists the device as one whose key that machine keeps, and every command below asks it
+at each new connection — found among this user's own machines on the tailnet (a tagged
+machine, which is nobody's, names it instead: `ROAMRUNCTL_SIGNER=<its Tailscale name>`).
+If a command says no machine of the user's signs for this one, or that the one that
+keeps the key isn't answering, say so and stop: starting `roamrunctl sign` is the
+user's, on their machine. This keeps the key from being copied off this machine. It
+doesn't keep this machine from using the device while the other one answers.
 
 Either way, what this machine then does (`roamrunctl devices` lists what is saved):
 

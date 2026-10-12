@@ -157,7 +157,8 @@ impl Server {
             return Ok(text(if names.is_empty() { "No devices saved on this machine.".to_string() } else { names.join("\n") }));
         }
         let name = arguments["device"].as_str().ok_or("device is missing")?.to_string();
-        if !device::names()?.contains(&name) {
+        // One that is open is known: asking again what there is would ask every machine that might sign.
+        if !self.open.contains_key(&name) && !device::names()?.contains(&name) {
             return Err(format!("no such device; saved: {}", device::names()?.join(", ")));
         }
         let number = |key: &str| arguments[key].as_f64().ok_or(format!("{key} is missing"));

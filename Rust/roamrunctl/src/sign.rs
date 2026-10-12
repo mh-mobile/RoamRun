@@ -18,8 +18,13 @@ use crate::tailscale;
 pub const PORT: u16 = 41831;
 const PREFIX: &str = "rr-sign-v1 ";
 const LINE: Duration = Duration::from_secs(10);
-/// A line of ours at most: the prefix, an identifier, and what pair-verify signs.
+/// A request at most: the prefix, an identifier, and what pair-verify signs.
 const MAX: usize = 512;
+/// An answer at most: the devices signed for, each without its key.
+const MAX_ANSWER: usize = 256 * 1024;
+/// Set to a machine's Tailscale name, only that machine is asked whether it signs for this one: for a
+/// tagged machine, which has no user whose other machines could be asked.
+pub const SIGNER: &str = "ROAMRUNCTL_SIGNER";
 
 /// What pair-verify signs for the pairing `identifier`: a 32-byte key, the identifier, a 32-byte key.
 /// Nothing else is signed: the key isn't lent for whatever is sent.
@@ -28,8 +33,10 @@ pub fn fits(identifier: &str, what: &[u8]) -> bool {
 }
 
 /// One request's answer: the line to send back, and the device's name where it was signed for.
-fn answer<'a>(line: &str, keys: &'a HashMap<String, (String, SigningKey)>) -> (String, Option<&'a str>) {
+/// `list`: the devices signed for, each without its key, as the machine asking learns of them.
+fn answer<'a>(line: &str, keys: &'a HashMap<String, (String, SigningKey)>, list: &str) -> (String, Option<&'a str>) {
     let refused = |why: &str| (format!("{PREFIX}refused {why}"), None);
+    if line == format!("{PREFIX}devices?") { return (format!("{PREFIX}devices {list}"), None); }
     let Some(["sign", identifier, what]) = line.strip_prefix(PREFIX).map(|words| words.split(' ').collect::<Vec<_>>()).as_deref().map(|w| <[&str; 3]>::try_from(w).ok()).unwrap_or(None) else {
         return refused("not-a-request");
     };
@@ -39,17 +46,17 @@ fn answer<'a>(line: &str, keys: &'a HashMap<String, (String, SigningKey)>) -> (S
     (format!("{PREFIX}signed {}", URL_SAFE_NO_PAD.encode(key.sign(&what).to_bytes())), Some(name))
 }
 
-fn read_line(stream: &TcpStream) -> Option<String> {
-    stream.set_read_timeout(Some(LINE)).ok()?;
+fn read_line(stream: &TcpStream, most: usize, within: Duration) -> Option<String> {
+    stream.set_read_timeout(Some(within)).ok()?;
     let mut line = String::new();
     // No more than a line of ours is read: what sends more isn't one of ours.
-    BufReader::new(std::io::Read::take(stream, MAX as u64)).read_line(&mut line).ok()?;
+    BufReader::new(std::io::Read::take(stream, most as u64)).read_line(&mut line).ok()?;
     line.ends_with('\n').then(|| line.trim_end().to_string())
 }
 
 /// `roamrunctl sign --for <machine>`: until Ctrl-C.
-/// `lines`: for each pairing held, the line the other machine saves it by (no key in it).
-pub fn serve(machine: &str, keys: HashMap<String, (String, SigningKey)>, lines: Vec<(String, String)>) -> Result<String, String> {
+/// `list`: the devices signed for, each without its key (see `devices`).
+pub fn serve(machine: &str, keys: HashMap<String, (String, SigningKey)>, list: String) -> Result<String, String> {
     let status = tailscale::status()?;
     let own: Ipv4Addr = status.this.ips.iter().find_map(|a| a.parse().ok()).ok_or("this machine has no IPv4 address on the tailnet")?;
     let other = tailscale::peer(&status, machine)?;
@@ -58,10 +65,7 @@ pub fn serve(machine: &str, keys: HashMap<String, (String, SigningKey)>, lines: 
     let mut names: Vec<&str> = keys.values().map(|(name, _)| name.as_str()).collect();
     names.sort();
     eprintln!("Signing for {machine}, and for it alone, with the pairing of: {}. Ctrl-C ends it: {machine} can then make no new connection to them.", names.join(", "));
-    eprintln!("On {machine}, once for each device (the line holds no key):");
-    for (name, line) in &lines {
-        eprintln!("  roamrunctl devices add {line} --as {name}");
-    }
+    eprintln!("Nothing is to be done on {machine}: `roamrunctl devices` there lists them, and its commands ask here.");
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
         let Ok(from) = stream.peer_addr() else { continue };
@@ -71,11 +75,12 @@ pub fn serve(machine: &str, keys: HashMap<String, (String, SigningKey)>, lines: 
             eprintln!("Turned away a request: Tailscale couldn't say just then that it is {machine}.");
             continue;
         }
-        let Some(line) = read_line(&stream) else { continue };
-        let (said, name) = answer(&line, &keys);
+        let Some(line) = read_line(&stream, MAX, LINE) else { continue };
+        let (said, name) = answer(&line, &keys, &list);
         let _ = stream.write_all(format!("{said}\n").as_bytes());
         match name {
             Some(name) => eprintln!("Signed one connection to {name} for {machine}."),
+            None if said.starts_with(&format!("{PREFIX}devices ")) => {}
             None => eprintln!("Refused a request of {machine}'s ({}).", said.trim_start_matches(PREFIX)),
         }
     }
@@ -88,13 +93,31 @@ pub fn ask(signer: &str, identifier: &str, what: &[u8]) -> Result<[u8; 64], Stri
     let mut stream = TcpStream::connect_timeout(&SocketAddr::from((there.ip, PORT)), LINE)
         .map_err(|_| "it isn't answering (there: roamrunctl sign --for <this machine>)".to_string())?;
     stream.write_all(format!("{PREFIX}sign {identifier} {}\n", URL_SAFE_NO_PAD.encode(what)).as_bytes()).map_err(|e| e.to_string())?;
-    let line = read_line(&stream).ok_or("it gave no answer")?;
+    let line = read_line(&stream, MAX, LINE).ok_or("it gave no answer")?;
     match line.strip_prefix(PREFIX).map(|words| words.split(' ').collect::<Vec<_>>()).as_deref() {
         Some(["signed", signature]) => URL_SAFE_NO_PAD.decode(signature).ok().and_then(|bytes| bytes.try_into().ok()).ok_or("what it sent isn't a signature".to_string()),
         Some(["refused", "no-such-pairing"]) => Err("it has no such pairing (removed there?)".into()),
         Some(["refused", why]) => Err(format!("it refused ({why})")),
         _ => Err("it said something else".into()),
     }
+}
+
+/// What the machine at `ip` signs for this one, as it says it: None where it doesn't answer as one that does.
+fn asked(ip: Ipv4Addr) -> Option<String> {
+    let mut stream = TcpStream::connect_timeout(&SocketAddr::from((ip, PORT)), Duration::from_millis(800)).ok()?;
+    stream.write_all(format!("{PREFIX}devices?\n").as_bytes()).ok()?;
+    read_line(&stream, MAX_ANSWER, Duration::from_secs(3))?.strip_prefix(&format!("{PREFIX}devices ")).map(str::to_string)
+}
+
+/// The machines that sign for this one, each with what it says it signs for: this user's other machines
+/// that answer so, asked together — or, where `ROAMRUNCTL_SIGNER` names one, that one alone.
+pub fn signers(status: &tailscale::Status, named: Option<String>) -> Result<Vec<(String, String)>, String> {
+    let machines = match named {
+        Some(name) => { let peer = tailscale::peer(status, &name)?; vec![(peer.dns, peer.ip)] }
+        None => tailscale::own_machines(status),
+    };
+    let asking: Vec<_> = machines.into_iter().map(|(name, ip)| std::thread::spawn(move || asked(ip).map(|list| (name, list)))).collect();
+    Ok(asking.into_iter().filter_map(|answer| answer.join().ok().flatten()).collect())
 }
 
 /// A pairing's own identifier and its private key, from the property list a pairing is kept as.
@@ -140,7 +163,7 @@ mod tests {
         let mut what = vec![1u8; 32];
         what.extend_from_slice(id.as_bytes());
         what.extend_from_slice(&[2u8; 32]);
-        let (said, name) = answer(&format!("{PREFIX}sign {id} {}", URL_SAFE_NO_PAD.encode(&what)), &keys);
+        let (said, name) = answer(&format!("{PREFIX}sign {id} {}", URL_SAFE_NO_PAD.encode(&what)), &keys, "[]");
         assert_eq!(name, Some("phone"));
         let signature: [u8; 64] = URL_SAFE_NO_PAD.decode(said.strip_prefix("rr-sign-v1 signed ").unwrap()).unwrap().try_into().unwrap();
         assert!(key.verifying_key().verify(&what, &ed25519_dalek::Signature::from_bytes(&signature)).is_ok());
@@ -156,8 +179,10 @@ mod tests {
             (format!("{PREFIX}give {id} x"), "not-a-request"),
             ("rr-pair-v1 offer?".to_string(), "not-a-request"),
         ] {
-            assert_eq!(answer(&bad, &keys), (format!("{PREFIX}refused {why}"), None), "{bad}");
+            assert_eq!(answer(&bad, &keys, "[]"), (format!("{PREFIX}refused {why}"), None), "{bad}");
         }
+        // What it signs for is said as it was given, and no key with it.
+        assert_eq!(answer("rr-sign-v1 devices?", &keys, "[1]"), ("rr-sign-v1 devices [1]".to_string(), None));
     }
 
     #[test]
