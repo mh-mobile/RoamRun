@@ -228,6 +228,8 @@ impl Server {
                 Ok(content)
             }
             "tap" | "swipe" => {
+                // Before the look is read: one of another device that was under this name goes with it.
+                self.device(&name)?;
                 // The look is spent by what reaches the device: a call refused for what it says leaves it.
                 let shown = self.shown.get(&name).ok_or("look first: a point is given in the pixels of the image a look returns")?;
                 if shown.at.elapsed() > LOOK_STANDS { self.shown.remove(&name); return Err("that look is more than a minute old: look again".into()); }
