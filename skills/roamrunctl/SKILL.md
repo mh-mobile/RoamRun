@@ -5,14 +5,18 @@ description: Introduce a far Mac (one with Xcode and RoamRun, reached over Tails
 
 # roamrunctl
 
-`roamrunctl` does one thing: on the Wi‑Fi the device is on, it stands in for a far
-Mac while the device pairs with it. Three machines are involved:
+`roamrunctl` does two things. On the Wi‑Fi the device is on, it stands in for a far
+Mac while the device pairs with it (sections 1 to 4, on Windows, Linux or a Mac). And,
+on Linux or a Mac, it can hold a pairing of its own and use the device from there: see
+it, operate it, install and launch an app (section 5).
+
+For the first, three machines are involved:
 
 - **the far Mac** — has Xcode and RoamRun, and is somewhere else (a cloud Mac, a Mac
   at the office). The pairing is made with it, and everything afterwards happens on it.
 - **this machine** — Windows, Linux, or a Mac without RoamRun, on the same Wi‑Fi as
-  the device. `roamrunctl` runs here. It only carries the device's connection; it gets
-  no key and no access to the device.
+  the device. `roamrunctl` runs here. While introducing, it only carries the device's
+  connection; it gets no key and no access to the device.
 - **the device** — an iPhone or iPad, with Tailscale connected.
 
 After a pairing, this machine is done. Bridging, building, launching and debugging are
@@ -126,8 +130,44 @@ Xcode first, as above). "what the far Mac kept couldn't be learned": there,
 `roamrun pair control --attempt <id>` says, with the id it printed (stopping it
 with Ctrl-C once the code was typed ends the same way: the far Mac's app goes on).
 
-## 5. What it doesn't do
+## 5. Holding a device here (Linux or a Mac; not Windows)
 
-It doesn't bridge, build, install or debug, and it holds nothing afterwards: no key,
-no saved device. A device moved to another network needs nothing from this machine
-again — the far Mac's bridge reaches it over Tailscale.
+A machine that has a pairing of its own reaches the device over Tailscale by itself:
+no Mac, no Xcode. Today the pairing is made on a Mac and brought over:
+
+- On a Mac with RoamRun, on the device's Wi‑Fi — **the user runs this, at a terminal
+  of their own** (it shows a pairing code): `roamrun key create <device> <file>`.
+- Here: `roamrunctl key import <file> [--as <name>]`. It tries the pairing, saves it,
+  and removes the file. `roamrunctl devices` lists what is saved; `roamrunctl devices
+  remove <name>` forgets one (the user removes this machine on the device too).
+
+**The saved pairing is a key to the device.** It is kept under a passphrase unless
+`--plain`: the passphrase comes from `ROAMRUNCTL_PASSPHRASE_FILE` (a file holding it),
+else `ROAMRUNCTL_PASSPHRASE_COMMAND` (a command that prints it), else
+`ROAMRUNCTL_PASSPHRASE` (the weakest), else it is typed at a terminal — never on the
+command line. Don't ask the user for the passphrase and don't print it. If a command
+fails saying none is given, say so and stop: setting one is the user's.
+
+What it then does:
+
+- `roamrunctl look <name> [file.png]` — the screen now, its longer side 1280 at most;
+  prints the path, then its size. The file is whatever was on the screen: the user's.
+- `roamrunctl install <name> <app.ipa or .app>` — an app already built and signed for
+  that device (xtool's `dev build --ipa`, or Xcode's). It doesn't build or sign.
+- `roamrunctl launch <name> <bundle id>` — one already running is ended first.
+- `roamrunctl mcp` — for an agent's MCP config: `devices`, `look`, `tap`, `swipe`,
+  `elements`, `type`, `paste`, `press`, `install`, `launch`. Look, act, look again:
+  a look serves one action, within a minute, and points are pixels of the image it
+  returned. These press what is really there — don't tap what spends money, posts,
+  sends, deletes or signs in unless the user asked for exactly that.
+
+A look here is a picture the device makes; nothing shows on the device and its sound
+and microphone are left alone. The device has to be on Wi‑Fi (on cellular alone it
+refuses), unlocked once since it started, and connected in Tailscale. Launching needs
+the device to have been used with Xcode once before (that is where its developer
+services come from); a device no Xcode ever met wasn't tried.
+
+## 6. What it doesn't do
+
+It doesn't bridge to Xcode, build, sign or debug. Where it only introduced (sections
+3 and 4), it holds nothing afterwards: no key, no saved device.

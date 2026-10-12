@@ -92,7 +92,38 @@ The check uses a test service type (`_rrtest._tcp`), a fake far Mac on 127.0.0.1
 device sees anything. It confirms the record resolves through mDNSResponder, a stranger is refused, the carried connection
 ends the run, the device line is made, and the goodbye reaches a browser within a few seconds.
 
+## Holding a device (Linux and macOS)
+
+Not on Windows, where roamrunctl only introduces. With a pairing of its own, a machine reaches the device over
+Tailscale by itself — no Mac, no Xcode:
+
+```sh
+# on a Mac with RoamRun, on the device's Wi‑Fi (it shows a pairing code: run it yourself)
+roamrun key create <device> device.key
+# here
+roamrunctl key import device.key --as phone     # tries it, saves it under a passphrase, removes the file
+roamrunctl devices
+roamrunctl look phone shot.png                  # the device's own screenshot, 1280 at most on its longer side
+roamrunctl install phone App.ipa                # an app built and signed for the device already
+roamrunctl launch phone com.example.App
+roamrunctl mcp                                  # the same, and tap / swipe / type / press, as MCP tools
+```
+
+The saved pairing is a key: whoever can read it and reach the device can see and operate it. It is kept in
+age's passphrase format (`~/.config/roamrunctl/devices/<name>.age`) unless `--plain` (a file only its owner
+can read, which is refused if others can). The passphrase comes from `ROAMRUNCTL_PASSPHRASE_FILE`, else
+`ROAMRUNCTL_PASSPHRASE_COMMAND` (run by `sh -c`), else `ROAMRUNCTL_PASSPHRASE`, else it is typed at a terminal;
+never from the command line. That keeps the file from being a key on its own — in a backup, an image, a
+copied home folder. It doesn't keep the device from a program running as the same user, an agent among them:
+what can run `roamrunctl` and read its environment can use the device.
+
 ## Where it stands
+
+- Holding a device: built on macOS and on Linux (musl, static); tried from an unprivileged Linux container
+  against an iPhone 15 Pro on iOS 27.0 — connect, look, tap, type, a button, install, launch; taps through
+  `roamrunctl mcp` with the device upright and on either side. The container reached the tailnet through its
+  host's Tailscale: a machine with Tailscale of its own in userspace mode wasn't tried. A device that no Xcode
+  ever prepared wasn't tried either (launching may need it).
 
 - Built and tested (`cargo test`) on macOS; CI builds and tests it on Linux and Windows too.
 - `scripts/local-check.py` passes on macOS: the mechanics, against a fake far Mac and a fake device.
