@@ -5,7 +5,8 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 publish = false
-description = "Stands in for `roamrun pair introduce` on a machine that has no RoamRun: Windows, Linux, or a Mac"
+description = "For a machine that has no RoamRun (Windows, Linux, or a Mac): stands in for `roamrun pair introduce`, and holds a pairing with an iPhone or iPad to use it with no Xcode"
+rust-version = "1.89"
 
 [[bin]]
 name = "roamrunctl"

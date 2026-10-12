@@ -55,6 +55,13 @@ pub fn own_machines(status: &Status) -> Vec<(String, Ipv4Addr)> {
     found
 }
 
+/// Whether `peer` asks this machine by itself which devices it signs for: it does where both are one user's, untagged.
+pub fn asks_by_itself(status: &Status, peer: &Peer) -> bool {
+    let tagged = |node: &Node| node.tags.as_ref().is_some_and(|tags| !tags.is_empty());
+    status.this.user != 0 && !tagged(&status.this)
+        && status.peers.values().any(|node| node.id == peer.id && node.user == status.this.user && !tagged(node))
+}
+
 /// A peer by its Tailscale name.
 pub struct Peer {
     /// Tailscale's lasting id for it; empty when it was given by address.
@@ -91,7 +98,8 @@ fn exe() -> std::path::PathBuf {
 }
 
 fn run(args: &[&str]) -> Result<String, String> {
-    let out = Command::new(exe()).args(args).output().map_err(|e| format!("tailscale isn't installed here ({e})"))?;
+    // Not handed what opens a pairing: it has no use for it.
+    let out = Command::new(exe()).args(args).env_remove("ROAMRUNCTL_PASSPHRASE").output().map_err(|e| format!("tailscale isn't installed here ({e})"))?;
     if !out.status.success() {
         return Err(format!("tailscale {}: {}", args[0], String::from_utf8_lossy(&out.stderr).trim()));
     }
@@ -119,6 +127,23 @@ pub fn state_problem(state: &str) -> Option<String> {
 /// The peer a person means by `name`: its whole Tailscale name, or the first label of one in this
 /// tailnet. Never the name a device gives itself, and never a guess between two (as RoamRun does).
 pub fn peer(status: &Status, name: &str) -> Result<Peer, String> {
+    let (node, mut peer) = found(status, name)?;
+    peer.lan = if node.cur_addr.is_empty() {
+        // Nothing talked to it lately: a ping says which way packets go.
+        let pong = run(&["ping", "-c", "3", "--timeout", "3s", "--until-direct=false", &peer.ip.to_string()]).unwrap_or_default();
+        pinged(&pong)
+    } else {
+        direct(&node.cur_addr)
+    };
+    Ok(peer)
+}
+
+/// The same, where only who it is matters: nothing is asked of the network for where it is.
+pub fn known(status: &Status, name: &str) -> Result<Peer, String> {
+    found(status, name).map(|(_, peer)| peer)
+}
+
+fn found<'a>(status: &'a Status, name: &str) -> Result<(&'a Node, Peer), String> {
     let want = name.trim_end_matches('.').to_lowercase();
     // An older Tailscale doesn't say its tailnet's suffix: this machine's own name has it.
     let own = status.this.dns_name.trim_end_matches('.').split_once('.').map_or("", |(_, rest)| rest);
@@ -146,14 +171,7 @@ pub fn peer(status: &Status, name: &str) -> Result<Peer, String> {
         .find_map(|a| a.parse::<Ipv4Addr>().ok())
         .ok_or(format!("{name} has no IPv4 address on the tailnet"))?;
     let dns = node.dns_name.trim_end_matches('.').to_string();
-    let lan = if node.cur_addr.is_empty() {
-        // Nothing talked to it lately: a ping says which way packets go.
-        let pong = run(&["ping", "-c", "3", "--timeout", "3s", "--until-direct=false", &ip.to_string()]).unwrap_or_default();
-        pinged(&pong)
-    } else {
-        direct(&node.cur_addr)
-    };
-    Ok(Peer { id: node.id.clone(), ip, dns, lan })
+    Ok((node, Peer { id: node.id.clone(), ip, dns, lan: None }))
 }
 
 /// The host of a direct "ip:port" endpoint; None for IPv6.

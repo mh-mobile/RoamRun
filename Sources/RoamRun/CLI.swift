@@ -278,11 +278,11 @@ enum CLI {
     /// `also`: what else than a Mac may be the one named, by the OS Tailscale gives for it — the device
     /// itself (the app on it introduces this Mac), a Windows or Linux machine (roamrunctl does). That only
     /// turns a wrong name away sooner: whose the connection is, is held to the id and address below.
-    /// `holds`: the one named is to hold the pairing (this Mac introduces), which a Linux machine with roamrunctl can too.
+    /// `holds`: the one named is to hold the pairing (this Mac introduces), which a Linux or Windows machine with roamrunctl can too.
     private static func byName(_ mesh: TailscaleClient.Mesh, _ other: MeshDevice, _ ip: String, also: Set<String> = [], holds: Bool = false) -> (PairByName.Peer, own: String, interface: String) {
         guard other.os.lowercased() == "macos" || also.contains(other.os.lowercased()) else {
             fail("\(other.dnsName) is a \(other.os.isEmpty ? "device of another kind" : other.os) device, "
-                 + (holds ? "not one that can hold a pairing (a Mac, or a Linux machine with roamrunctl)"
+                 + (holds ? "not one that can hold a pairing (a Mac, or a Linux or Windows machine with roamrunctl)"
                     : also.isEmpty ? "not a Mac" : "not one that introduces here (a Mac, the device itself\(also.contains("linux") ? ", or a Windows or Linux machine with roamrunctl" : ""))"))
         }
         guard let id = other.stableID else { stop("Tailscale gives no lasting id for \(other.dnsName), so it can't be held to being that one: carry the lines instead (`roamrun pair xcode` alone prints the first)") }
@@ -816,7 +816,7 @@ enum CLI {
     private static func introduceByName(mac name: String, to profile: DeviceProfile) async -> Never {
         let device = Introduction.line(handover(of: profile))
         let (mesh, far, ip) = mac(named: name)
-        let (peer, _, interface) = byName(mesh, far, ip, also: ["linux"], holds: true)
+        let (peer, _, interface) = byName(mesh, far, ip, also: ["linux", "windows"], holds: true)
         let me = (try? TailscaleClient.fromSettings().selfDNSName()).flatMap { $0 }?.split(separator: ".").first.map(String.init) ?? "<this Mac's Tailscale name>"
         let client = TailscaleClient.fromSettings()
         let waits = await pairable(profile)
@@ -827,7 +827,7 @@ enum CLI {
             device: device,
             say: { event in
                 switch event {
-                case .waiting: note("Waiting for \(far.dnsName), 10 minutes at most. There: roamrun pair xcode --with \(me)" + (waits == nil ? "   (or, for device control: roamrun pair control --with \(me))" : "")
+                case .waiting: note("Waiting for \(far.dnsName), 10 minutes at most. There: roamrun pair xcode --with \(me)" + (waits == nil ? "   (or, for device control: roamrun pair control --with \(me) — roamrunctl pair control --with \(me) where it has no RoamRun)" : "")
                                     // Saved without its kind, and nothing waited: taken for a device that picks the Mac itself.
                                     + (waits == nil && profile.deviceType == nil ? "\nIf \(profile.displayName) is an Apple Vision Pro: open Settings › General › Remote Devices on it, and run this again." : ""))
                 case .connected: note(waits == nil ? "\(far.dnsName) answered; waiting for its offer." : "\(far.dnsName) answered.")
@@ -1405,6 +1405,8 @@ enum CLI {
                 continue
             }
             if a.hasPrefix("-") {
+                // The old name isn't taken; whoever was shown it by an earlier RoamRun is told the new one.
+                if a == "--mac" { return .failure(.init(message: "--mac is --host since 0.7.0: roamrun pair introduce --host <the machine that will hold the pairing> --to <device>")) }
                 guard !a.hasSuffix("="), spec.options.contains(a) else {
                     let hint = spec.words.upperBound > 0 ? " (a device name starting with “-”? use its id, see roamrun devices)" : ""
                     return .failure(.init(message: "\(args[0]) doesn't take \(a) — see roamrun --help\(hint)"))

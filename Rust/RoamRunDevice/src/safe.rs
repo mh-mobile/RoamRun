@@ -1,5 +1,5 @@
 //! The same calls as the C ABI, for Rust that keeps `unsafe` out of itself (roamrunctl).
-//! ponytail: a wrapper over the C functions, not the other way round: the Mac's path stays as it is.
+//! A wrapper over the C functions, not the other way round: the Mac's path stays as it is.
 //! Turn it over (C over this) when a second caller needs more than these.
 
 use std::ffi::{c_char, CStr, CString};

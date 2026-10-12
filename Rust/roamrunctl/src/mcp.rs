@@ -1,7 +1,7 @@
 //! `roamrunctl mcp`: the device's commands as MCP tools over stdin/stdout (one JSON-RPC message a
 //! line), as `roamrun mcp` gives them on a Mac. This process holds the connections: a device is
 //! opened at its first call and kept. Points are pixels of the image the last look returned.
-//! ponytail: one call at a time, in the order asked; a call taken back (notifications/cancelled)
+//! One call at a time, in the order asked; a call taken back (notifications/cancelled)
 //! still runs out. Take calls back between two of them when a client is seen to need it.
 
 use std::collections::HashMap;
@@ -24,7 +24,7 @@ const LONGEST_TYPED: usize = 500;
 const INSTRUCTIONS: &str = "Operates a real iPhone or iPad from this machine. Look, act, look again: each look serves one \
 action, and points are pixels of the image the last look returned. These press what is really there — don't tap what spends \
 money, posts, sends, deletes or signs in unless the user asked for exactly that. A look shows whatever is on the screen \
-(notifications, messages); don't pass the image on. Nothing shows on the device while it is looked at or operated.";
+(notifications, messages); don't pass the image on. The device shows no screen-sharing session for this; what an action itself brings up (paste's \"Allow Paste\") shows there. Only tap and swipe are held to a look: type, paste and press go to whatever is on the screen, so look before them too.";
 
 /// A look that was given out and not yet used.
 struct Shown {
@@ -40,6 +40,9 @@ struct Shown {
 /// Tried on an iPhone held each way on its side (iOS 27.0): a point off the picture landed where it was.
 pub fn upright(way: u8, sideways: bool, (x, y): (f64, f64)) -> Option<(f64, f64)> {
     match way {
+        // Turned between the picture and the asking: the two don't go together, and nothing is pressed.
+        1 | 2 if sideways => None,
+        3 | 4 if !sideways => None,
         1 => Some((x, y)),
         2 => Some((1.0 - x, 1.0 - y)),
         3 => Some((1.0 - y, x)),
@@ -71,7 +74,7 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
 fn tools() -> Value {
     let point = json!({ "type": "number", "description": "Pixels of the image the last look returned" });
     json!([
-        tool("devices", "The devices saved on this machine, one name a line.", json!({}), &[]),
+        tool("devices", "The devices this machine can use, one name a line.", json!({}), &[]),
         tool("look", "The device's screen now, as an image. Do this before every tap or swipe: it serves one action.", json!({}), &[]),
         tool("tap", "Tap a point of the last look. Operates the device: whatever is there gets pressed.", json!({ "x": point, "y": point }), &["x", "y"]),
         tool("swipe", "Drag from one point of the last look to another (to scroll, or move something). Operates the device.",
@@ -97,7 +100,12 @@ impl Server {
     pub fn serve(&mut self) -> i32 {
         let stdout = std::io::stdout();
         for line in std::io::stdin().lock().lines() {
-            let Ok(line) = line else { break };
+            let line = match line {
+                Ok(line) => line,
+                // Not text: not a message, and not the end of them.
+                Err(e) if e.kind() == std::io::ErrorKind::InvalidData => continue,
+                Err(_) => break,
+            };
             if let Some(answer) = self.handle(&line) {
                 let mut out = stdout.lock();
                 if writeln!(out, "{answer}").and_then(|()| out.flush()).is_err() { break }
@@ -106,11 +114,12 @@ impl Server {
         0
     }
 
-    /// One message in, its answer out; None for a notification (and for what isn't JSON-RPC).
+    /// One message in, its answer out; None for a notification.
     pub fn handle(&mut self, message: &str) -> Option<String> {
-        let object: Value = serde_json::from_str(message).ok()?;
-        let method = object["method"].as_str()?;
+        let wrong = |id: Value, code: i32, what: &str| Some(json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": what } }).to_string());
+        let Ok(object) = serde_json::from_str::<Value>(message) else { return wrong(Value::Null, -32700, "not JSON") };
         let id = object.get("id")?.clone();
+        let Some(method) = object["method"].as_str() else { return wrong(id, -32600, "no method") };
         let params = &object["params"];
         let result = match method {
             "initialize" => json!({
@@ -138,28 +147,23 @@ impl Server {
         Ok(&self.open[name])
     }
 
-    /// Asks the device; one that was let go of meanwhile is opened once more and asked again
-    /// (only where nothing reached the device: an input that may have gone isn't sent twice).
+    /// Asks the device, once: the library sends again by itself where nothing had reached the device, and
+    /// what may have reached it isn't sent twice. After a failure the next call opens it anew.
     fn ask(&mut self, name: &str, call: impl Fn(&Device) -> String) -> Result<Value, String> {
-        let first = device::said(call(self.device(name)?));
-        match first {
-            Err(why) if why.starts_with("tunnel") || why.contains("not connected") => {
-                self.open.remove(name);
-                device::said(call(self.device(name)?))
-            }
-            other => other,
-        }
+        let said = device::said(call(self.device(name)?));
+        if said.is_err() { self.open.remove(name); }
+        said.map_err(|why| format!("{why}. It may or may not have reached the device: look before doing it again"))
     }
 
     fn call(&mut self, tool: &str, arguments: &Value) -> Result<Vec<Value>, String> {
         if tool == "devices" {
             let names = device::names()?;
-            return Ok(text(if names.is_empty() { "No devices saved on this machine.".to_string() } else { names.join("\n") }));
+            return Ok(text(if names.is_empty() { "No device this machine can use: `roamrunctl devices` in a terminal says how to come by one.".to_string() } else { names.join("\n") }));
         }
         let name = arguments["device"].as_str().ok_or("device is missing")?.to_string();
         // One that is open is known: asking again what there is would ask every machine that might sign.
         if !self.open.contains_key(&name) && !device::names()?.contains(&name) {
-            return Err(format!("no such device; saved: {}", device::names()?.join(", ")));
+            return Err(format!("no such device; there are: {}", device::names()?.join(", ")));
         }
         let number = |key: &str| arguments[key].as_f64().ok_or(format!("{key} is missing"));
         let word = |key: &str| arguments[key].as_str().map(str::to_string).ok_or("nothing to send".to_string());
@@ -201,7 +205,10 @@ impl Server {
                     self.ask(&name, |d| d.tap(x, y)).map(|_| "tapped; look to see what it did")
                 } else {
                     let (from, to) = (real(number("x1")?, number("y1")?)?, real(number("x2")?, number("y2")?)?);
-                    let ms = arguments["milliseconds"].as_u64().unwrap_or(300) as u32;
+                    let ms = match &arguments["milliseconds"] {
+                        Value::Null => 300,
+                        given => given.as_u64().filter(|ms| (50..=5000).contains(ms)).ok_or("milliseconds is a whole number, 50...5000")? as u32,
+                    };
                     self.shown.remove(&name);
                     self.ask(&name, |d| d.swipe(from, to, ms)).map(|_| "swiped; look to see what it did")
                 };
@@ -259,6 +266,8 @@ mod tests {
         // Not said, and upright by its shape: taken as it is. On its side: not pressed.
         assert_eq!(upright(0, false, (0.25, 0.1)), Some((0.25, 0.1)));
         assert_eq!(upright(0, true, (0.25, 0.1)), None);
+        // Said one way and shaped the other (turned in between): not pressed.
+        assert_eq!((upright(1, true, (0.25, 0.1)), upright(3, false, (0.25, 0.1))), (None, None));
     }
 
     #[test]
@@ -277,7 +286,8 @@ mod tests {
         }
         // A notification gets no answer; an unknown method gets an error with its id.
         assert!(server.handle(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).is_none());
-        assert!(server.handle("not json").is_none());
+        let garbled: Value = serde_json::from_str(&server.handle("not json").unwrap()).unwrap();
+        assert_eq!(garbled["error"]["code"], -32700);
         let unknown: Value = serde_json::from_str(&server.handle(r#"{"jsonrpc":"2.0","id":7,"method":"nope"}"#).unwrap()).unwrap();
         assert_eq!((unknown["error"]["code"].as_i64(), unknown["id"].as_i64()), (Some(-32601), Some(7)));
     }

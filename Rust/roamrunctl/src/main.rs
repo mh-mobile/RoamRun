@@ -36,12 +36,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Pair a device with a Mac
+    /// Pair a device: with a far Mac's Xcode, or with a machine that then uses it itself
     Pair {
         #[command(subcommand)]
         command: Pair,
     },
-    /// Devices this machine holds a pairing with
+    /// Devices this machine can use: those it holds a pairing with, and those another machine signs for it with
     Devices {
         #[command(subcommand)]
         command: Option<device::Devices>,
@@ -52,11 +52,26 @@ enum Command {
         command: device::Key,
     },
     /// Save the device's screen now as PNG, its longer side 1280 at most; prints the path, then its size
-    Look { name: String, file: Option<std::path::PathBuf> },
+    Look {
+        /// The device, as `roamrunctl devices` names it
+        name: String,
+        /// Where to save it (else a new file in the temporary folder)
+        file: Option<std::path::PathBuf>,
+    },
     /// Install an app built and signed for the device: an .ipa, or an .app folder
-    Install { name: String, path: std::path::PathBuf },
+    Install {
+        /// The device, as `roamrunctl devices` names it
+        name: String,
+        /// The .ipa or .app folder, on this machine
+        path: std::path::PathBuf,
+    },
     /// Launch an app on the device (one already running is ended first)
-    Launch { name: String, bundle: String },
+    Launch {
+        /// The device, as `roamrunctl devices` names it
+        name: String,
+        /// The app's bundle identifier
+        bundle: String,
+    },
     /// The device's commands as MCP tools, over stdin/stdout (for an agent's MCP config)
     Mcp,
     /// Keep the pairings saved here to yourself and sign with them for another machine, which then uses the devices without having their keys; until Ctrl-C
@@ -71,12 +86,12 @@ enum Command {
 
 #[derive(Subcommand)]
 enum Pair {
-    /// Stand in on this LAN for a far Mac's offer to pair — with Xcode, or for device control, as that Mac asks — and carry the device's connection to it
+    /// Stand in on this LAN for the offer to pair of a machine elsewhere (the host: a far Mac, or a machine with roamrunctl) — with Xcode, or for device control, as it asks — and carry the device's connection to it
     Introduce(Introduce),
     /// Have this machine hold a pairing of its own with a device: one on this Wi‑Fi (--to), or one it isn't near, which the machine named with --with introduces
     Control {
         /// A device on this machine's Wi‑Fi, by its Tailscale name: paired here and now
-        #[arg(long, conflicts_with = "with", required_unless_present = "with")]
+        #[arg(long, conflicts_with = "with")]
         to: Option<String>,
         /// The Tailscale name of the machine that introduces a device this one isn't near (or of the device itself, with the Introducer app)
         #[arg(long)]
@@ -92,22 +107,22 @@ enum Pair {
 
 #[derive(Args)]
 struct Introduce {
-    /// The Tailscale name of the machine that will hold the pairing (the far Mac)
+    /// The Tailscale name of the machine that will hold the pairing (the host)
     #[arg(long)]
     host: String,
     /// The device's Tailscale name
     #[arg(long)]
     to: String,
-    /// The far Mac's offer, from `roamrun pair xcode` there (else asked of it: `roamrun pair xcode --with <this machine>`)
+    /// The host's offer, from `roamrun pair xcode` there (else asked of it: `roamrun pair xcode --with <this machine>`)
     #[arg(long)]
     offer: Option<String>,
-    /// The name the far Mac saves the device under
+    /// The name the host saves the device under
     #[arg(long = "as", value_parser = name)]
     save_as: Option<String>,
     /// Seconds to wait for the pairing
     #[arg(long, default_value_t = 300)]
     deadline: u64,
-    /// This machine's address on the device's LAN, when it has more than one there and the device doesn't list the far Mac
+    /// This machine's address on the device's LAN, when it has more than one there and the device doesn't list the host
     #[arg(long)]
     on: Option<Ipv4Addr>,
     #[arg(long, hide = true, default_value = HOST_SERVICE)]
@@ -122,6 +137,11 @@ struct Introduce {
 macro_rules! say { ($($t:tt)*) => {{ let _ = writeln!(std::io::stderr(), "roamrunctl: {}", format!($($t)*)); }} }
 
 fn main() {
+    // The old name isn't taken; whoever was shown it by an earlier RoamRun is told the new one.
+    if std::env::args().any(|a| a == "--mac" || a.starts_with("--mac=")) {
+        eprintln!("roamrunctl: --mac is --host since 0.7.0: roamrunctl pair introduce --host <the machine that will hold the pairing> --to <device>");
+        std::process::exit(2);
+    }
     let args = match Cli::parse().command {
         Command::Pair { command: Pair::Introduce(args) } => args,
         Command::Pair { command: Pair::Control { to, with, name, passphrase } } => match match (to, with) {
@@ -174,7 +194,7 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
     let offer_line = match a.offer.clone() {
         Some(line) => line,
         None => {
-            say!("asking {} for its offer (there: roamrun pair xcode --with {own}, or pair control --with {own} for device control)", far.dns);
+            say!("asking {} for its offer (there: roamrun pair xcode --with {own}, or pair control --with {own} for device control — `roamrunctl pair control --with {own}` where it has no RoamRun)", far.dns);
             let until = Instant::now() + Duration::from_secs(600);
             loop {
                 let left = until.saturating_duration_since(Instant::now()).max(Duration::from_secs(1));
@@ -200,7 +220,7 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
                         say!("{} pairs for device control: programs there will be able to see {}'s screen and operate it.", far.dns, device.dns);
                         // Nothing was begun there yet: closing without a word leaves it waiting.
                         let Some((_, port, txt)) = announce::find_device(local, lan, &DEVICE_KEYS, Duration::from_secs(7)) else {
-                            return Err(format!("{}'s own announcement wasn't seen on this LAN. It announces once it is paired with a Mac: pair Xcode first (there: roamrun pair xcode --with {own}), then this", device.dns));
+                            return Err(format!("{}'s own announcement wasn't seen on this LAN. It announces once it is paired with something: pair it once first — with Xcode there (roamrun pair xcode --with {own}), or with a machine on this Wi‑Fi (roamrunctl pair control --to {}) — then this", device.dns, short(&device.dns)));
                         };
                         let named = Device { name: a.save_as.clone().unwrap_or_else(|| short(&device.dns).to_string()), peer: device.dns.to_lowercase(), port, txt, v: 1 };
                         let line = lines::device_line(&named);
@@ -275,7 +295,7 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
         return Err(if wire.is_none() {
             format!("{} isn't waiting to pair on port {} any more (or can't be reached): there, press Pair Nearby Device again and run `roamrun pair xcode` for a new line", far.dns, offer.port)
         } else {
-            format!("{} answers, but its pairing port {} can't be reached from here: there, press Pair Nearby Device again; if it stays so, Tailscale's rules don't let this machine in on that port", far.dns, offer.port)
+            format!("{} answers, but its pairing port {} can't be reached from here: Tailscale's rules or that machine's firewall don't let this machine in on that port (with Xcode there: press Pair Nearby Device again first)", far.dns, offer.port)
         });
     }
 
@@ -303,7 +323,7 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
         }
         Ok(Ended::KeptNothing(why)) => return Err(format!("the host: {}", kept_nothing(&why))),
         Ok(Ended::NotSaid) => {
-            return Err(format!("what the host kept couldn't be learned. There: roamrun pair control --attempt {}", attempt.unwrap_or_else(|| "<its attempt's id>".into())))
+            return Err(format!("what the host kept couldn't be learned. Its own terminal says; with RoamRun there: roamrun pair control --attempt {}", attempt.unwrap_or_else(|| "<its attempt's id>".into())))
         }
         Ok(Ended::Tried(found)) => found,
     };
@@ -373,7 +393,7 @@ fn ended(reason: &str) -> String {
 /// The far Mac's word for why its app kept no pairing for device control, as a sentence.
 fn kept_nothing(reason: &str) -> String {
     match reason {
-        "exists" => "it already holds a pairing for that device: remove it there first (the RoamRun app, on the device's page), then run both again",
+        "exists" => "it already has that device, or one of that name, saved: remove it there first (the RoamRun app, on the device's page; `roamrunctl devices remove` where it has no RoamRun, or --as another name there), then run both again",
         "not-paired" => "the pairing wasn't completed on the device (a wrong code, refused there, or not in time); nothing was kept. Run this again: that machine goes on waiting for it",
         "another-device" => "the device that paired isn't the one it has saved under that name; nothing was kept there. Remove the pairing just made on the device (Settings › Privacy & Security › Developer Mode)",
         "not-kept" => "the device paired, but that machine couldn't keep the pairing (it says why). Remove the pairing just made on the device (Settings › Privacy & Security › Developer Mode)",

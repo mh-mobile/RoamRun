@@ -255,9 +255,10 @@ bounded.
     without a pairing (as any device added and not set up), or a pairing switched
     off. Nothing is cleaned up at the next start, so nothing kept is removed by it.
   - Not tried with a Mac shared in from another tailnet.
-- **roamrunctl can hold a pairing of its own.** `roamrunctl pair control --with` (or
-  `key import`) keeps the pairing in `~/.config/roamrunctl/devices` (`%APPDATA%\roamrunctl`
-  on Windows), a file only its owner can read; one that others can read is refused
+- **roamrunctl can hold a pairing of its own.** `roamrunctl pair control --to` or
+  `--with` (or `key import`) keeps the pairing in `~/.config/roamrunctl/devices`
+  (`%APPDATA%\roamrunctl\devices` on Windows, which a roaming profile copies to other
+  machines), a file only its owner can read; one that others can read is refused
   (on Windows the folder is the user's by what it inherits, and nothing more is checked).
   A program running as the same user — an agent that can run `roamrunctl` — uses the
   device as roamrunctl does. There is no switch per device there: holding the pairing
@@ -268,25 +269,38 @@ bounded.
   folder, then opens nothing — and a program that runs as the user and can read the
   passphrase where it is kept is no further from the device than before. It looks by
   the device's own screenshot and sends inputs with no screen stream, so the device
-  shows no screen-sharing session meanwhile.
+  shows no screen-sharing session meanwhile. Its MCP tools hold only `tap` and `swipe`
+  to a look just taken; `type`, `paste` and `press` go to whatever is on the screen.
 - **roamrunctl can use a pairing whose key is on another machine.** `roamrunctl sign
   <devices> --for <machine>` runs where the keys are and listens on that machine's
   tailnet address (port 41831) for the one machine named, held to its address and to
-  Tailscale's id for it. To that machine it says which devices it signs for (their
-  pairings without the private keys) and signs what a connection to one of them has
-  signed (pair-verify: two ephemeral keys and the pairing's identifier, and only what
-  has that shape); it says each time it signs. The machine that uses the device saves
-  nothing: it asks its own user's other machines on the tailnet (not a tagged one, not
-  another user's; or the one `ROAMRUNCTL_SIGNER` names) which signs for it, takes what
-  is answered only for a device that is on its own tailnet, and holds the machine that
-  answered as the key's keeper whatever the answer says. What that buys: the key isn't
-  on the machine an agent runs on and can't be copied from it, and ending `sign` ends
-  new connections. What it doesn't: the machine named — any program on it — can connect
-  to the devices named for as long as `sign` answers; a connection already open stays
-  open; a signature, once given, completes that one connection only (the ephemeral
-  keys in it are that connection's). And a machine of the same user that is itself
-  taken over can answer as a signer, and so point the other at a device of its
-  choosing on the tailnet: it gets no key and no device by that.
+  Tailscale's id for it — not to a user or a program on it: whoever can open a
+  connection from that machine is answered. To it, it says which devices it signs for
+  (their pairings without the private keys) and signs what a connection to one of them
+  has signed (pair-verify: 32 bytes, the pairing's identifier, 32 bytes). It can't tell
+  that the bytes are a connection's; it refuses only what isn't of that shape, and what
+  making a new pairing signs (that ends in the pairing's own public key), so the key
+  isn't lent to pair another device as this machine. It says each time it signs, and
+  signs no more for a device removed on its machine meanwhile.
+  The machine that uses the device asks its own user's other machines on the tailnet
+  (not a tagged one, not another user's; or the one `ROAMRUNCTL_SIGNER` names) which
+  signs for it. The first time it opens a device it saves which machine that was and
+  what it said the device is — address, and the device's public key, no private key —
+  and from then on asks only that machine and takes only that device for the name.
+  What that buys: the key isn't on the machine an agent runs on and can't be copied
+  from it, and ending `sign` ends new connections. What it doesn't:
+  - The machine named — any program on it — connects to the devices named for as long
+    as `sign` answers, and a connection does everything. A connection already open (a
+    running `roamrunctl mcp`) stays open after `sign` ends.
+  - Until a device was used once, the using machine believes whichever of its user's
+    machines offers the name. One of those run by someone else — or any local user on
+    one, where no `sign` holds the port — can answer first and name a device of its
+    own on the tailnet: what is then typed, pasted and installed goes there, and the
+    looks are of that device. It gets no key by that. `ROAMRUNCTL_SIGNER` set from the
+    start leaves only the machine named to be believed.
+  - Whether a connection, once made, can add a pairing of its own on the device
+    without its owner's consent wasn't tried. If it can, this keeps no key from the
+    machine that uses the device.
 - **A pairing made for another Mac is a key in a file.** `roamrun key create`
   pairs once more, under an identity of its own, and writes that pairing to a
   file (yours only, not sealed: the Mac it is for has another key). Nothing of it

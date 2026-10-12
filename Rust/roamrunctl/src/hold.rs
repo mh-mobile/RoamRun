@@ -28,7 +28,7 @@ enum Stopped {
     For(String),
 }
 /// What the device is told this machine is: one it lists a pairing under.
-// ponytail: a Mac's model, as the library's own calls give; a device shows the name, not this.
+// A Mac's model, as the library's own calls give; a device shows the name, not this.
 const MODEL: &str = "Mac17,7";
 
 /// What tells this machine from another, whatever either is named: the same each time, so that
@@ -62,7 +62,29 @@ fn uuid() -> Result<String, String> {
 
 /// A device's name as a file's here.
 pub fn filed(name: &str) -> String {
-    name.chars().map(|c| if c.is_ascii_alphanumeric() || "-_.".contains(c) { c } else { '-' }).collect()
+    let filed: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || "-_.".contains(c) { c } else { '-' }).collect();
+    // Not led by what a command reads as an option, or hides as a file.
+    let filed = filed.trim_start_matches(['-', '.']);
+    if filed.is_empty() { "device".into() } else { filed.into() }
+}
+
+/// What the Introducer app sends for the device's Tailscale name, which it can't learn: the device is the one asking.
+const ITSELF: &str = "this-device.invalid";
+
+/// The Tailscale name of the device a line names, sent by the machine named `with`.
+fn device_named<'a>(peer: &'a str, with: &'a str) -> &'a str {
+    if peer == ITSELF { with } else { peer }
+}
+
+/// What the device answered, where it did just as this was given up: a pairing it made isn't dropped.
+fn late(told: &mpsc::Receiver<Result<String, String>>) -> Option<String> {
+    told.try_iter().filter_map(Result::ok).find(|answer| device::said(answer.clone()).is_ok())
+}
+
+// Not eprintln!: it panics once the terminal is gone, and what is announced must still be taken back.
+fn say(line: &str) {
+    use std::io::Write;
+    let _ = writeln!(std::io::stderr(), "{line}");
 }
 
 /// What the library says it listens with, as the offer the other machine announces.
@@ -80,7 +102,7 @@ pub fn run(with: &str, name: Option<String>, sealed: bool) -> Result<String, Str
     let status = tailscale::status()?;
     let own: Ipv4Addr = status.this.ips.iter().find_map(|a| a.parse().ok()).ok_or("this machine has no IPv4 address on the tailnet")?;
     let me = short(&status.this.dns_name).to_string();
-    let other = tailscale::peer(&status, with)?;
+    let other = tailscale::known(&status, with)?;
     if let Some(name) = &name { device::free(name)?; }
     // Before the device is asked anything: a pairing made and then not kept would leave it paired with nothing here.
     let passphrase = if sealed { Some(secret::passphrase("the pairing", true)?) } else { None };
@@ -102,7 +124,7 @@ pub fn run(with: &str, name: Option<String>, sealed: bool) -> Result<String, Str
         };
         // Whoever connects is held to being the machine named, by address and by Tailscale's own id for it.
         if from.ip() != std::net::IpAddr::V4(other.ip) { eprintln!("Turned away a connection from {}: it isn't {with}.", from.ip()); continue }
-        if !tailscale::status().and_then(|now| tailscale::peer(&now, with)).is_ok_and(|now| now.is(&other)) {
+        if !tailscale::status().and_then(|now| tailscale::known(&now, with)).is_ok_and(|now| now.is(&other)) {
             eprintln!("Turned away a connection: Tailscale couldn't say just then that it is {with}.");
             continue;
         }
@@ -134,11 +156,13 @@ fn paired(mut link: Wire, with: &str, me: &str, own: Ipv4Addr, only: Ipv4Addr, l
     let refuse = |link: &mut Wire, how: &str, why: String| -> Result<String, Stopped> { let _ = link.send(&format!("result failed {how}")); Err(Stopped::For(why)) };
     let Ok(sent) = lines::device(line) else { return refuse(&mut link, "failed", format!("{with} sent something that isn't a device")) };
     // The device is the one Tailscale has under that name on this machine's tailnet, not an address that was sent.
-    let there = match tailscale::status().and_then(|now| tailscale::peer(&now, &sent.peer)) {
+    let asked = device_named(&sent.peer, with);
+    let there = match tailscale::status().and_then(|now| tailscale::known(&now, asked)) {
         Ok(there) => there,
-        Err(why) => return refuse(&mut link, "another-device", format!("the device {with} names ({}) isn't on this machine's tailnet: {why}", sent.peer)),
+        Err(why) => return refuse(&mut link, "failed", format!("the device {with} names ({asked}) isn't on this machine's tailnet: {why}")),
     };
-    let name = name.unwrap_or_else(|| filed(&sent.name));
+    // The app sends the name its owner gave the device; a file here is named as Tailscale names it.
+    let name = name.unwrap_or_else(|| if sent.peer == ITSELF { filed(short(&there.dns)) } else { filed(&sent.name) });
     if let Err(why) = device::free(&name) { return refuse(&mut link, "exists", why); }
     let socket = TcpListener::bind((own, 0)).map_err(|e| Stopped::For(format!("can't listen on {own}: {e}")))?;
     let (pairing, advert) = match Pairing::listen_on(shown, MODEL, host, socket, &only.to_string()) {
@@ -174,15 +198,12 @@ fn paired(mut link: Wire, with: &str, me: &str, own: Ipv4Addr, only: Ipv4Addr, l
             _ => {}
         }
     };
-    let answer = match answer {
-        Ok(answer) => answer,
-        Err(why) => {
-            pairing.cancel();
-            let _ = waits.join();
-            return refuse(&mut link, "failed", format!("{why}: nothing was kept. Run both commands again"));
-        }
-    };
+    if answer.is_err() { pairing.cancel(); }
     let _ = waits.join();
+    let answer = match answer.or_else(|why| late(&told).ok_or(why)) {
+        Ok(answer) => answer,
+        Err(why) => return refuse(&mut link, "failed", format!("{why}: nothing was kept. Run both commands again")),
+    };
     let made = match device::said(answer) {
         Ok(made) => made,
         Err(why) => {
@@ -198,28 +219,6 @@ fn paired(mut link: Wire, with: &str, me: &str, own: Ipv4Addr, only: Ipv4Addr, l
             Ok(format!("Paired with {} as “{shown}”, and it connects. {kept}\nTo withdraw it: `roamrunctl devices remove {name}`, and remove “{shown}” on the device, in that list.", sent.name))
         }
         Err(why) => refuse(&mut link, "not-kept", format!("paired, but not kept here ({why}): remove “{shown}” on the device, in that list, and run both commands again (this machine is {me})")),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn what_is_listened_with_reads_as_an_offer() {
-        let advert = r#"{"port":50123,"identifier":"0F0E0D0C-0B0A-4908-8706-050403020100","txt":{"identifier":"0F0E0D0C-0B0A-4908-8706-050403020100","authTag":"dGFn","model":"Mac17,7","name":"box","flags":"1","ver":"24","minVer":"17"}}"#;
-        let line = offer(advert).unwrap();
-        let read = lines::offer(&line).unwrap();
-        assert_eq!((read.port, read.txt["name"].as_str()), (50123, "box"));
-        assert!(offer("{}").is_err() && offer("not json").is_err());
-        assert!(offer(r#"{"port":1,"txt":{"name":"only"}}"#).is_err());
-    }
-
-    #[test]
-    fn an_id_is_one_and_a_name_is_a_files() {
-        let id = uuid().unwrap();
-        assert!(lines::is_uuid(&id) && id != uuid().unwrap());
-        assert_eq!(filed("Taro's iPhone 15"), "Taro-s-iPhone-15");
     }
 }
 
@@ -247,7 +246,7 @@ pub fn here(to: &str, name: Option<String>, sealed: bool) -> Result<String, Stri
     let identifier = read.txt.get("identifier").cloned().ok_or("the pairing announces no identifier")?;
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
     let announcement = crate::announce::start(&format!("{}.local.", crate::HOST_SERVICE), &identifier, local, read.port, &read.txt)?;
-    eprintln!("Announced “{shown}” on {local}; only {} is taken. On the device: Settings › Privacy & Security › Developer Mode › “{shown}”, and type the code that shows here. 7 minutes at most; Ctrl-C gives up.", device.dns);
+    say(&format!("Announced “{shown}” on {local} (port {}); only {} is taken. On the device: Settings › Privacy & Security › Developer Mode › “{shown}”, and type the code that shows here. 7 minutes at most; Ctrl-C gives up.", read.port, device.dns));
     let pairing = Arc::new(pairing);
     let (tell, told) = mpsc::channel::<Result<String, String>>();
     let waits = {
@@ -260,39 +259,66 @@ pub fn here(to: &str, name: Option<String>, sealed: bool) -> Result<String, Stri
     };
     let until = Instant::now() + PAIRING;
     let answer = runtime.block_on(async {
-        let stopped = tokio::signal::ctrl_c();
-        tokio::pin!(stopped);
-        let answer = loop {
-            match told.try_recv() {
-                Ok(Err(digits)) => eprintln!("Code: {digits}"),
-                Ok(Ok(answer)) => break Ok(answer),
-                Err(_) => {}
-            }
-            if Instant::now() >= until { break Err("no pairing was made in 7 minutes".to_string()) }
-            tokio::select! {
-                _ = &mut stopped => break Err("stopped".to_string()),
-                _ = tokio::time::sleep(Duration::from_millis(200)) => {}
-            }
+        // Ctrl-C, and a closed terminal or a dropped ssh session too.
+        let answer = match crate::stops() {
+            Err(why) => Err(why),
+            Ok(mut stopped) => loop {
+                match told.try_recv() {
+                    Ok(Err(digits)) => say(&format!("Code: {digits}")),
+                    Ok(Ok(answer)) => break Ok(answer),
+                    Err(_) => {}
+                }
+                if Instant::now() >= until { break Err("no pairing was made in 7 minutes".to_string()) }
+                tokio::select! {
+                    _ = stopped.changed() => break Err("stopped".to_string()),
+                    _ = tokio::time::sleep(Duration::from_millis(200)) => {}
+                }
+            },
         };
         // Taken off the Wi‑Fi however it ended: left there, the device would go on offering to pair with it.
-        if !announcement.unregister().await { eprintln!("The announcement may linger on this network for a while."); }
+        if !announcement.unregister().await { say("The announcement may linger on this network for a while."); }
         announcement.shutdown().await;
         answer
     });
-    let answer = match answer {
-        Ok(answer) => answer,
-        Err(why) => {
-            pairing.cancel();
-            let _ = waits.join();
-            return Err(format!("{why}: nothing was kept"));
-        }
-    };
+    if answer.is_err() { pairing.cancel(); }
     let _ = waits.join();
+    let answer = answer.or_else(|why| late(&told).ok_or(why))
+        .map_err(|why| format!("{why}: nothing was kept. If the device showed “{shown}” and nothing came of picking it: this machine's firewall may keep the device from port {} here", read.port))?;
     let made = device::said(answer).map_err(|why| format!("the device didn't pair ({why}): nothing was kept. Run this again"))?;
     let key = made["pairing"].as_str().ok_or("the pairing came without its key")?;
     // Tried before it is kept, over the tailnet as it will be used.
     match device::keep(&name, device.ip, 49152, key, passphrase.as_deref()) {
         Ok(kept) => Ok(format!("Paired with {} as “{shown}”, and it connects. {kept}\nTo withdraw it: `roamrunctl devices remove {name}`, and remove “{shown}” on the device, in that list.", device.dns)),
         Err(why) => Err(format!("paired, but not kept here ({why}): remove “{shown}” on the device, in that list, and run this again (this machine is {me})")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn what_is_listened_with_reads_as_an_offer() {
+        let advert = r#"{"port":50123,"identifier":"0F0E0D0C-0B0A-4908-8706-050403020100","txt":{"identifier":"0F0E0D0C-0B0A-4908-8706-050403020100","authTag":"dGFn","model":"Mac17,7","name":"box","flags":"1","ver":"24","minVer":"17"}}"#;
+        let line = offer(advert).unwrap();
+        let read = lines::offer(&line).unwrap();
+        assert_eq!((read.port, read.txt["name"].as_str()), (50123, "box"));
+        assert!(offer("{}").is_err() && offer("not json").is_err());
+        assert!(offer(r#"{"port":1,"txt":{"name":"only"}}"#).is_err());
+    }
+
+    #[test]
+    fn an_id_is_one_and_a_name_is_a_files() {
+        let id = uuid().unwrap();
+        assert!(lines::is_uuid(&id) && id != uuid().unwrap());
+        assert_eq!(filed("Taro's iPhone 15"), "Taro-s-iPhone-15");
+        // Not a name a command would read as an option.
+        assert_eq!((filed("太郎のiPhone"), filed("太郎")), ("iPhone".to_string(), "device".to_string()));
+    }
+
+    #[test]
+    fn the_app_on_the_device_is_the_device() {
+        assert_eq!(device_named("this-device.invalid", "my-iphone"), "my-iphone");
+        assert_eq!(device_named("my-ipad.tail.ts.net", "my-pc"), "my-ipad.tail.ts.net");
     }
 }

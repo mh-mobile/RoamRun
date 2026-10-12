@@ -269,6 +269,25 @@ tunnel and Xcode has to run again.
     it. After the release: each install command of roamrunctl's README — Linux, Windows, `brew
     install mh-mobile/tap/roamrunctl`, `cargo install` — then `roamrunctl --version`.
 
+30a. roamrunctl holding a device (when `Rust/roamrunctl` or `Rust/RoamRunDevice` changed). Pairing
+    commands run by yourself, in a terminal of your own. On a Linux machine on the device's Wi‑Fi:
+    `roamrunctl pair control --to <device> --as phone` → the device lists the machine, the code →
+    "Paired … and it connects"; `roamrunctl look phone` → a picture of the screen; Ctrl-C while it
+    waits, and the window closed while it waits → nothing left announced. On a Linux machine
+    elsewhere on the tailnet: `pair control --with <near machine>`, introduced once by roamrunctl,
+    once by a Mac's `roamrun pair introduce --host`, once by the Introducer app (`--with <the
+    device>`) → paired each time; a wrong code → nothing kept. Then there: `install` and `launch`
+    of an app built for the device; `roamrunctl mcp` under an agent: look, tap, swipe, type, paste,
+    press, elements, with music playing on the device → it goes on sounding, and no screen-sharing
+    session is listed. `--passphrase` once: `look` asks for it; `mcp` takes it from
+    `ROAMRUNCTL_PASSPHRASE_FILE`. The key elsewhere: two devices paired on one machine, `roamrunctl
+    sign <both> --for <other>` → on the other, `roamrunctl devices` lists both, a look of each, and
+    the first says it is held to from now on; `devices remove <one>` on the signing machine → the
+    next look of that one is refused, the other still works; Ctrl-C in `sign` → the next look is
+    refused, a running `mcp` still looks. On a tagged machine: nothing listed until
+    `ROAMRUNCTL_SIGNER` is set. On Windows: `pair control --with`, introduced by a Mac; `look`;
+    `sign` for a Linux machine. `roamrunctl pair introduce --mac x --to y` → says `--host`.
+
 31. An Apple Vision Pro and a far Mac (when `pair xcode --with`, `pair introduce`, the stand-in,
     the wire, Xcode or visionOS changed). The far Mac's entry removed on the device first
     (Settings › General › Remote Devices), that screen left open, the device saved in RoamRun

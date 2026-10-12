@@ -7,7 +7,7 @@ publish = false
 description = "RoamRun's C ABI over the idevice protocol stack"
 
 [lib]
-# rlib: for the trial under examples/ (and, later, roamrunctl).
+# rlib: for roamrunctl.
 crate-type = ["staticlib", "rlib"]
 name = "roamrun_device"
 
