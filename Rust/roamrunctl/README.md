@@ -117,8 +117,33 @@ never from the command line. That keeps the file from being a key on its own —
 copied home folder. It doesn't keep the device from a program running as the same user, an agent among them:
 what can run `roamrunctl` and read its environment can use the device.
 
+### The key on another machine
+
+A machine that uses the device needn't hold its key. Keep the pairing on a machine of your own, and let that
+one sign for the other:
+
+```sh
+# on the machine that keeps the key
+roamrunctl devices export phone                 # a line without the key
+roamrunctl sign --for <the machine that uses the device>   # until Ctrl-C; says each connection it signs
+# on the machine that uses the device
+roamrunctl devices add <that line>              # then look, install, launch, mcp as above
+```
+
+A connection to the device has one thing signed with the pairing's key. `roamrunctl sign` signs that, for the
+one machine named (held to its tailnet address and Tailscale's id for it) and for nothing that isn't shaped as
+that check; the other machine does everything else, and saves the pairing with any key in the private key's
+place. So the key can't be copied off the machine that uses the device, and ending `roamrunctl sign` ends its
+making new connections (one already open goes on until it closes). What it doesn't do: keep that machine —
+or an agent on it — from using the device while `sign` answers. Both on one machine works too (`--for` this
+machine's own name, the key under another user), where "the one machine named" is then every user of it.
+
 ## Where it stands
 
+- A pairing of its own: `roamrunctl pair control --with` ran on a Linux VM on the tailnet, introduced by this
+  crate's `pair introduce --host` on a Mac beside the device; the iPhone listed the VM, paired, and the VM
+  looked at its screen. The key on another machine: export, add and a look with `roamrunctl sign` running, and
+  the refusal once it was stopped — both ends on one Mac; two machines weren't tried.
 - Holding a device: built on macOS and on Linux (musl, static); tried from an unprivileged Linux container
   against an iPhone 15 Pro on iOS 27.0 — connect, look, tap, type, a button, install, launch; taps through
   `roamrunctl mcp` with the device upright and on either side. The container reached the tailnet through its

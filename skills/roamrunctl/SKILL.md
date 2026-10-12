@@ -161,6 +161,21 @@ What it then does:
   returned. These press what is really there — don't tap what spends money, posts,
   sends, deletes or signs in unless the user asked for exactly that.
 
+**The key can stay on another machine.** Where the machine that uses the device
+shouldn't hold its key (an agent runs there), the user keeps the pairing on a machine of
+their own and that one signs for this one:
+
+- there, the user runs `roamrunctl sign --for <this machine>` and leaves it running
+  (it prints each connection it signs; Ctrl-C ends it, and no new connection can then
+  be made), and `roamrunctl devices export <name>`, which prints a line with no key in it;
+- here, `roamrunctl devices add <that line> [--as <name>]`.
+
+From then on every command above works as before, asking that machine at each new
+connection. If one fails saying the machine that keeps the key didn't sign or isn't
+answering, say so and stop: starting `roamrunctl sign` is the user's, on their machine.
+This keeps the key from being copied off this machine. It doesn't keep this machine
+from using the device while the other one answers.
+
 A look here is a picture the device makes; nothing shows on the device and its sound
 and microphone are left alone. The device has to be on Wi‑Fi (on cellular alone it
 refuses), unlocked once since it started, and connected in Tailscale. Launching needs

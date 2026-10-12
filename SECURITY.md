@@ -266,6 +266,18 @@ bounded.
   pairing is being able to use it, until it is removed (`roamrunctl devices remove`, and
   the machine's row on the device). It looks by the device's own screenshot and sends
   inputs with no screen stream, so the device shows no screen-sharing session meanwhile.
+- **roamrunctl can use a pairing whose key is on another machine.** `roamrunctl sign
+  --for <machine>` runs where the key is and listens on that machine's tailnet address
+  (port 41831) for the one machine named, held to its address and to Tailscale's id for
+  it. It signs what a connection to the device has signed (pair-verify: two ephemeral
+  keys and the pairing's identifier, and only what has that shape) and nothing else,
+  and says each time it does. The machine that uses the device keeps the pairing
+  without its key (`devices export` writes any key in its place) and asks at each
+  connection. What that buys: the key isn't on the machine an agent runs on, can't be
+  copied from it, and ending `sign` ends new connections. What it doesn't: the machine
+  named — any program on it — can connect for as long as `sign` answers; a connection
+  already open stays open; and a signature, once given, completes that one connection
+  only (the ephemeral keys in it are that connection's).
 - **A pairing made for another Mac is a key in a file.** `roamrun key create`
   pairs once more, under an identity of its own, and writes that pairing to a
   file (yours only, not sealed: the Mac it is for has another key). Nothing of it
