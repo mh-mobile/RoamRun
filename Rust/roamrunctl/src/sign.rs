@@ -214,6 +214,7 @@ mod tests {
         for (bad, why) in [
             (format!("{PREFIX}sign phone {}", URL_SAFE_NO_PAD.encode(&changed)), "not-a-pairing-check"),
             (format!("{PREFIX}sign phone {}", URL_SAFE_NO_PAD.encode(&what[1..])), "not-a-pairing-check"),
+            (format!("{PREFIX}sign phone {}", URL_SAFE_NO_PAD.encode([&what[..], &[3]].concat())), "not-a-pairing-check"),
             (format!("{PREFIX}sign phone {}", URL_SAFE_NO_PAD.encode(b"sign this message for me, as it is")), "not-a-pairing-check"),
             (format!("{PREFIX}sign phone {}", URL_SAFE_NO_PAD.encode(&making)), "not-a-pairing-check"),
             (format!("{PREFIX}sign watch {}", URL_SAFE_NO_PAD.encode(&what)), "no-such-pairing"),

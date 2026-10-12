@@ -34,6 +34,8 @@ struct Shown {
     /// Which way up the interface was: see `upright`.
     way: u8,
     at: Instant,
+    /// The saved file of the device it was of (see `device::mark`): another saved under the name isn't it.
+    of: Option<Vec<u8>>,
 }
 
 /// A point of a picture, as fractions of it, in the terms of the device held upright, where a touch is sent.
@@ -210,7 +212,9 @@ impl Server {
                 self.shown.remove(&name);
                 // An input just made: the screen is given a moment to settle.
                 if let Some(wait) = self.acted.get(&name).and_then(|at| SETTLE.checked_sub(at.elapsed())) { std::thread::sleep(wait); }
-                let device = self.device(&name)?;
+                self.device(&name)?;
+                let of = self.open[&name].1.clone();
+                let device = &self.open[&name].0;
                 let (png, way) = match device.screenshot() {
                     // Not said the first time, it is asked once more: a point is turned by it.
                     Ok(png) => (png, match device.way() { 0 => device.way(), way => way }),
@@ -222,17 +226,16 @@ impl Server {
                     }
                 };
                 let (jpeg, width, height) = device::fitted(&png, image::ImageFormat::Jpeg)?;
-                self.shown.insert(name, Shown { size: (width as f64, height as f64), way, at: Instant::now() });
+                self.shown.insert(name, Shown { size: (width as f64, height as f64), way, at: Instant::now(), of });
                 let mut content = vec![json!({ "type": "image", "data": base64::engine::general_purpose::STANDARD.encode(jpeg), "mimeType": "image/jpeg" })];
                 content.extend(text(format!("{width} x {height}. Points for tap and swipe are pixels of this image. It serves one action, within a minute: look again after it.")));
                 Ok(content)
             }
             "tap" | "swipe" => {
-                // Before the look is read: one of another device that was under this name goes with it.
-                self.device(&name)?;
                 // The look is spent by what reaches the device: a call refused for what it says leaves it.
                 let shown = self.shown.get(&name).ok_or("look first: a point is given in the pixels of the image a look returns")?;
                 if shown.at.elapsed() > LOOK_STANDS { self.shown.remove(&name); return Err("that look is more than a minute old: look again".into()); }
+                if device::mark(&name) != shown.of { self.shown.remove(&name); return Err("the device saved under that name isn't the one that look was of: look again".into()); }
                 let (size, way) = (shown.size, shown.way);
                 let real = |x: f64, y: f64| -> Result<(f64, f64), String> {
                     if !(0.0..size.0).contains(&x) || !(0.0..size.1).contains(&y) {
@@ -357,5 +360,49 @@ mod tests {
         let none = call(&mut server, "look", json!({ "device": "not-saved-anywhere-7f3a" }));
         assert_eq!(none["isError"], true);
         assert!(none["content"][0]["text"].as_str().unwrap().starts_with("no such device"));
+        let headless: Value = serde_json::from_str(&server.handle(r#"{"id":1}"#).unwrap()).unwrap();
+        assert_eq!(headless["error"]["code"], -32600);
+    }
+
+    #[test]
+    fn a_point_is_pressed_only_by_a_look_of_that_device_still_good() {
+        // A device saved with no address: nothing is connected to, and what gets as far as asking it fails there.
+        let name = format!("mcp-{}", std::process::id());
+        device::stub(&name, 49152);
+        let mut server = Server::default();
+        let call = |server: &mut Server, tool: &str, mut arguments: Value| -> String {
+            arguments["device"] = json!(name);
+            server.call(tool, &arguments).err().unwrap_or_else(|| "done".into())
+        };
+        let look = |server: &mut Server, size, way, at| { server.shown.insert(name.clone(), Shown { size, way, at, of: device::mark(&name) }); };
+        let (upright, now) = ((100.0, 200.0), Instant::now);
+        assert!(call(&mut server, "tap", json!({ "x": 1, "y": 1 })).starts_with("look first"));
+        // Refused for what it says, the look stands: outside the image, a swipe too short, too much to type.
+        look(&mut server, upright, 1, now());
+        assert!(call(&mut server, "tap", json!({ "x": 100, "y": 1 })).contains("inside the image"));
+        assert!(call(&mut server, "swipe", json!({ "x1": 1, "y1": 1, "x2": 2, "y2": 2, "milliseconds": 10 })).contains("50...5000"));
+        assert!(call(&mut server, "type", json!({ "text": "a".repeat(501) })).starts_with("too long"));
+        assert!(server.shown.contains_key(&name));
+        // Sent, it is spent — though the device didn't answer.
+        assert!(call(&mut server, "tap", json!({ "x": 1, "y": 1 })).contains("doesn't answer"));
+        assert!(call(&mut server, "tap", json!({ "x": 1, "y": 1 })).starts_with("look first"));
+        // And by whatever else is sent in between.
+        for (tool, arguments) in [("type", json!({ "text": "a" })), ("paste", json!({ "text": "a" })), ("press", json!({ "button": "home" })), ("elements", json!({})), ("launch", json!({ "bundle": "a.b" }))] {
+            look(&mut server, upright, 1, now());
+            assert!(call(&mut server, tool, arguments).contains("doesn't answer"), "{tool}");
+            assert!(call(&mut server, "tap", json!({ "x": 1, "y": 1 })).starts_with("look first"), "{tool}");
+        }
+        // Turned since, or a minute old: not pressed.
+        look(&mut server, (200.0, 100.0), 1, now());
+        assert!(call(&mut server, "tap", json!({ "x": 1, "y": 1 })).contains("was turned"));
+        look(&mut server, upright, 1, now().checked_sub(LOOK_STANDS + std::time::Duration::from_secs(1)).unwrap());
+        assert!(call(&mut server, "tap", json!({ "x": 1, "y": 1 })).contains("more than a minute"));
+        // Another device saved under the name since the look: its look isn't this one's.
+        look(&mut server, upright, 1, now());
+        device::unstub(&name);
+        device::stub(&name, 49153);
+        assert!(call(&mut server, "tap", json!({ "x": 1, "y": 1 })).contains("isn't the one that look was of"));
+        assert!(call(&mut server, "tap", json!({ "x": 1, "y": 1 })).starts_with("look first"));
+        device::unstub(&name);
     }
 }

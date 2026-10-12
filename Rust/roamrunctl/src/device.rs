@@ -512,6 +512,16 @@ pub fn run(command: Command) -> i32 {
     }
 }
 
+/// For other modules' tests: a device saved with an address nothing is at, and its removal.
+#[cfg(test)]
+pub fn stub(name: &str, port: u16) {
+    save(&Saved { v: 1, name: name.into(), ip: "nowhere".into(), port, pairing: "<plist/>".into(), signer: None }, None).unwrap();
+}
+#[cfg(test)]
+pub fn unstub(name: &str) {
+    std::fs::remove_file(folder().unwrap().join(format!("{name}.json"))).unwrap();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -550,15 +560,24 @@ mod tests {
         // Nothing of the writing is left beside it.
         assert!(!path.with_extension(format!("{}.tmp", std::process::id())).exists());
         std::fs::remove_file(&path).unwrap();
-        // One name, one file: saved under a passphrase's ending and not, the second isn't kept.
+    }
+
+    #[test]
+    fn one_name_is_one_file_and_under_a_passphrase_it_is_sealed() {
         let name = format!("both-{}", std::process::id());
-        let age = folder().unwrap().join(format!("{name}.age"));
-        std::fs::write(&age, b"x").unwrap();
-        // (As if both had found none saved: `kept` is looked at before, and the other file after.)
-        let json = folder().unwrap().join(format!("{name}.json"));
-        own_whole(&json, b"{}").unwrap();
-        assert!(age.exists() && json.exists());
-        for file in [age, json] { std::fs::remove_file(file).unwrap(); }
+        let saved = Saved { v: 1, name: name.clone(), ip: "100.64.0.10".into(), port: 49152, pairing: "<plist>a key</plist>".into(), signer: None };
+        let sealed = save(&saved, Some("correct horse")).unwrap();
+        assert!(sealed.extension().is_some_and(|e| e == "age"));
+        let file = std::fs::read(&sealed).unwrap();
+        assert!(file.starts_with(b"age-encryption.org") && !file.windows(5).any(|w| w == b"a key"));
+        assert_eq!(crate::secret::opened(&file, "correct horse").unwrap(), serde_json::to_vec_pretty(&saved).unwrap());
+        // Saved already, either way: not saved again, and what is there stays.
+        for passphrase in [None, Some("another")] { assert!(save(&saved, passphrase).err().unwrap().contains("saved here already")); }
+        assert_eq!(std::fs::read(&sealed).unwrap(), file);
+        assert!(!sealed.with_extension("json").exists());
+        std::fs::remove_file(&sealed).unwrap();
+        // A name as long as a name can be is one.
+        assert!(named(&"a".repeat(63)).is_ok());
     }
 
     #[test]
@@ -586,6 +605,14 @@ mod tests {
         assert!(super::keys(std::slice::from_ref(&far)).is_err());
         assert_eq!(signer_of(&far).as_deref(), Some("laptop"));
         assert_eq!(signer_of(&phone), None);
+        // A key others can read isn't used.
+        #[cfg(unix)]
+        {
+            let file = folder().unwrap().join(format!("{pad}.json"));
+            std::fs::set_permissions(&file, std::os::unix::fs::PermissionsExt::from_mode(0o644)).unwrap();
+            assert!(super::keys(std::slice::from_ref(&pad)).err().unwrap().contains("read by others"));
+            std::fs::set_permissions(&file, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
+        }
         // A file under another name than its own (renamed, or found by a name that differs by case) isn't that device.
         let renamed = format!("{phone}-renamed");
         std::fs::copy(folder().unwrap().join(format!("{phone}.json")), folder().unwrap().join(format!("{renamed}.json"))).unwrap();

@@ -339,6 +339,11 @@ mod tests {
         assert_eq!(filed("Taro's iPhone 15"), "Taro-s-iPhone-15");
         // Not a name a command would read as an option.
         assert_eq!((filed("太郎のiPhone"), filed("太郎")), ("iPhone".to_string(), "device".to_string()));
+        // Nor one a folder hides.
+        assert_eq!((filed(".hidden"), filed("..")), ("hidden".to_string(), "device".to_string()));
+        // This machine's id is made once, and is that from then on.
+        let id = host_id().unwrap();
+        assert!(lines::is_uuid(&id) && host_id().unwrap() == id);
     }
 
     #[test]
