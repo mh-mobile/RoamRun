@@ -2,6 +2,8 @@
 #![forbid(unsafe_code)]
 
 mod announce;
+#[cfg(not(windows))]
+mod device;
 mod lines;
 mod relay;
 mod tailscale;
@@ -36,6 +38,27 @@ enum Command {
         #[command(subcommand)]
         command: Pair,
     },
+    /// Devices this machine holds a pairing with
+    #[cfg(not(windows))]
+    Devices {
+        #[command(subcommand)]
+        command: Option<device::Devices>,
+    },
+    /// A pairing made on another machine
+    #[cfg(not(windows))]
+    Key {
+        #[command(subcommand)]
+        command: device::Key,
+    },
+    /// Save the device's screen now as PNG, its longer side 1280 at most; prints the path, then its size
+    #[cfg(not(windows))]
+    Look { name: String, file: Option<std::path::PathBuf> },
+    /// Install an app built and signed for the device: an .ipa, or an .app folder
+    #[cfg(not(windows))]
+    Install { name: String, path: std::path::PathBuf },
+    /// Launch an app on the device (one already running is ended first)
+    #[cfg(not(windows))]
+    Launch { name: String, bundle: String },
 }
 
 #[derive(Subcommand)]
@@ -76,7 +99,11 @@ struct Introduce {
 macro_rules! say { ($($t:tt)*) => {{ let _ = writeln!(std::io::stderr(), "roamrunctl: {}", format!($($t)*)); }} }
 
 fn main() {
-    let Cli { command: Command::Pair { command: Pair::Introduce(args) } } = Cli::parse();
+    let args = match Cli::parse().command {
+        Command::Pair { command: Pair::Introduce(args) } => args,
+        #[cfg(not(windows))]
+        other => std::process::exit(device::run(other)),
+    };
     match introduce(args) {
         Ok((line, saved)) => {
             if let Some(line) = line {

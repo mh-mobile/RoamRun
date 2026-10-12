@@ -7,12 +7,13 @@ publish = false
 description = "RoamRun's C ABI over the idevice protocol stack"
 
 [lib]
-crate-type = ["staticlib"]
+# rlib: for the trial under examples/ (and, later, roamrunctl).
+crate-type = ["staticlib", "rlib"]
 name = "roamrun_device"
 
 [dependencies]
 # Pinned: a newer idevice comes in only when this line and Cargo.lock are changed here.
-idevice = { version = "=0.1.68", features = ["rsd", "remote_pairing", "tunnel_tcp_stack", "core_device", "display_stream", "dvt"] }
+idevice = { version = "=0.1.68", features = ["rsd", "remote_pairing", "tunnel_tcp_stack", "core_device", "display_stream", "dvt", "afc", "installation_proxy"] }
 # What idevice itself uses, for the accessibility service's archives.
 ns-keyed-archive = "=0.1.5"
 plist = "1"

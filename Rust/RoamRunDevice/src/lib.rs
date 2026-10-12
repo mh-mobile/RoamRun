@@ -1,6 +1,8 @@
 //! RoamRun's C ABI over idevice. rr_device_tap, _swipe, _type, _paste and
 //! _button operate the device; rr_device_elements can scroll it.
 
+pub mod safe;
+
 use std::ffi::{c_char, CStr, CString};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -13,8 +15,8 @@ use idevice::dvt::message::AuxValue;
 use idevice::dvt::remote_server::RemoteServerClient;
 use idevice::core_device::{
     build_keyframe_request, build_screen_audio_offer, build_screen_video_offer, build_start_audio_parameters,
-    build_start_video_parameters, is_rtcp, CallInfoBlob, DisplayServiceClient, HevcDepacketizer, PasteboardServiceClient, RtpPacket,
-    GENERAL_PASTEBOARD,
+    build_start_video_parameters, is_rtcp, CallInfoBlob, DisplayServiceClient, HevcDepacketizer, ImageFormat, PasteboardServiceClient, RtpPacket,
+    ScreenCaptureServiceClient, GENERAL_PASTEBOARD,
 };
 use idevice::remote_pairing::{
     connect_tls_psk_tunnel_native, PairableHost, PairableHostInfo, RemotePairingClient, RpPairingFile, RpPairingSocket,
@@ -58,6 +60,8 @@ struct Link {
     keyframes_answered: u32,
     /// Inputs sent on a new connection because the kept one was found gone.
     resent: u32,
+    /// Inputs go with no screen stream started for them.
+    bare_inputs: bool,
     /// Raised by the caller from another thread when the device is to be let go of: a long
     /// input stops between two keys. The caller's, and outlives this.
     stop: Stop,
@@ -221,6 +225,15 @@ pub unsafe extern "C" fn rr_device_stop_at(device: *mut RRDevice, flag: *const u
     device.link.lock().unwrap_or_else(|e| e.into_inner()).stop = Stop(flag.cast());
 }
 
+/// Inputs from here on are sent with no screen stream started for them (or with one, as at first).
+/// # Safety
+/// `device` came from rr_device_open and wasn't closed.
+#[no_mangle]
+pub unsafe extern "C" fn rr_device_bare_inputs(device: *mut RRDevice, bare: bool) {
+    let device = unsafe { &*device };
+    device.link.lock().unwrap_or_else(|e| e.into_inner()).bare_inputs = bare;
+}
+
 /// # Safety
 /// `flag` is the byte given to rr_device_stop_at. Any thread.
 #[no_mangle]
@@ -362,6 +375,95 @@ pub unsafe extern "C" fn rr_device_keyframe(device: *mut RRDevice, length: *mut 
             unsafe { set_error(error, why) };
             std::ptr::null_mut()
         }
+    }
+}
+
+/// The screen as a PNG the device makes itself: no stream is started for it.
+/// # Safety
+/// `device` came from rr_device_open and wasn't closed; `length` and `error` are null or writable.
+#[no_mangle]
+pub unsafe extern "C" fn rr_device_screenshot(device: *mut RRDevice, length: *mut usize, error: *mut *mut c_char) -> *mut u8 {
+    let (Some(device), false) = (unsafe { device.as_ref() }, length.is_null()) else {
+        unsafe { set_error(error, "bad arguments".into()) };
+        return std::ptr::null_mut();
+    };
+    let result = with_room(|| {
+        let mut link = device.link.lock().unwrap_or_else(|e| e.into_inner());
+        if link.stop.raised() { return Err(STOPPED.into()); }
+        let link = &mut *link;
+        device.runtime.block_on(async {
+            tokio::time::timeout(DEADLINE, async {
+                let mut capture = ScreenCaptureServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)
+                    .await.map_err(|e| format!("screenshot service: {e:?}"))?;
+                capture.take_screenshot(None, ImageFormat::Png).await.map_err(|e| format!("screenshot: {e:?}"))
+            }).await.unwrap_or_else(|_| Err("timed out".into()))
+        })
+    });
+    match result {
+        Ok(image) => {
+            let boxed = image.into_boxed_slice();
+            unsafe { *length = boxed.len() };
+            Box::into_raw(boxed) as *mut u8
+        }
+        Err(why) => {
+            unsafe { set_error(error, why) };
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// What `rr_device_install` and `rr_device_launch` share: one thing asked of the device's app services.
+enum App<'a> { Install(&'a str), Launch(&'a str) }
+
+fn app(device: &RRDevice, what: App) -> String {
+    let result = with_room(|| {
+        let mut link = device.link.lock().unwrap_or_else(|e| e.into_inner());
+        if link.stop.raised() { return Err(STOPPED.into()); }
+        let link = &mut *link;
+        device.runtime.block_on(async {
+            // An install sends the whole app: longer than a call's deadline.
+            tokio::time::timeout(Duration::from_secs(300), async {
+                match what {
+                    App::Install(path) => idevice::utils::installation::install_package_rsd(&mut link.handle, &mut link.handshake, path, None)
+                        .await.map(|()| String::new()).map_err(|e| format!("install: {e:?}")),
+                    App::Launch(bundle) => {
+                        let mut apps = idevice::core_device::AppServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)
+                            .await.map_err(|e| format!("app service: {e:?}"))?;
+                        // One already running is ended: the one that answers is the one just started.
+                        apps.launch_application(bundle, &[], true, false, None, None, None)
+                            .await.map(|said| format!(",\"pid\":{}", said.pid)).map_err(|e| format!("launch: {e:?}"))
+                    }
+                }
+            }).await.unwrap_or_else(|_| Err("timed out".into()))
+        })
+    });
+    match result {
+        Ok(more) => format!("{{\"ok\":true{more}}}"),
+        Err(why) => failure(&why),
+    }
+}
+
+/// Installs the app at `path`, an .ipa or an .app folder on this machine, signed for the device already.
+/// # Safety
+/// `device` came from rr_device_open and wasn't closed; `path` is null or a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn rr_device_install(device: *mut RRDevice, path: *const c_char) -> *mut c_char {
+    let path = (!path.is_null()).then(|| unsafe { CStr::from_ptr(path) }.to_str().ok()).flatten();
+    match (unsafe { device.as_ref() }, path) {
+        (Some(device), Some(path)) => c_string(app(device, App::Install(path))),
+        _ => c_string(failure("bad arguments")),
+    }
+}
+
+/// Launches the app with that bundle identifier: JSON {"ok":true,"pid":…}.
+/// # Safety
+/// `device` came from rr_device_open and wasn't closed; `bundle` is null or a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn rr_device_launch(device: *mut RRDevice, bundle: *const c_char) -> *mut c_char {
+    let bundle = (!bundle.is_null()).then(|| unsafe { CStr::from_ptr(bundle) }.to_str().ok()).flatten();
+    match (unsafe { device.as_ref() }, bundle) {
+        (Some(device), Some(bundle)) => c_string(app(device, App::Launch(bundle))),
+        _ => c_string(failure("bad arguments")),
     }
 }
 
@@ -669,7 +771,7 @@ async fn connect(ip: &str, port: u16, file: &[u8]) -> Result<Link, String> {
 
     let rsd = handle.connect(info.server_rsd_port).await.map_err(|e| format!("RSD: {e:?}"))?;
     let handshake = RsdHandshake::new(rsd).await.map_err(|e| format!("RSD handshake: {e:?}"))?;
-    Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_stopped: None, stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, resent: 0, stop: Stop(std::ptr::null()), held: None, finger: None, verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
+    Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_stopped: None, stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, resent: 0, bare_inputs: false, stop: Stop(std::ptr::null()), held: None, finger: None, verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
 }
 
 /// The most that is typed in one call: beyond it, a slip in the middle is too costly, and paste does it in one.
@@ -712,7 +814,11 @@ fn input_time(input: &Input) -> Duration {
 /// the deadline every call has; the input then gets the time its own length needs, so that the
 /// deadline doesn't fall in the middle of it.
 async fn perform(link: &mut Link, input: Input) -> Result<(), String> {
-    tokio::time::timeout(DEADLINE, stream_for_input(link)).await.unwrap_or_else(|_| Err("timed out".into()))?;
+    // Without one where the caller said so (rr_device_bare_inputs): taps, keys and buttons were taken that way
+    // on iOS 27.0, and no screen-sharing session then shows on the device or takes its sound.
+    if !link.bare_inputs {
+        tokio::time::timeout(DEADLINE, stream_for_input(link)).await.unwrap_or_else(|_| Err("timed out".into()))?;
+    }
     // Told to stop while the stream was got ready (that can take seconds): nothing is sent.
     if link.stop.raised() { return Err(STOPPED.into()); }
     let done = match tokio::time::timeout(input_time(&input), send(link, &input)).await {
