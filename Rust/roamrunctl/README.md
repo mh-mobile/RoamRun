@@ -69,7 +69,7 @@ there does with the device.
 |---|---|
 | **A**, using machine on the device's Wi‑Fi | using machine: `pair control --to <device>` |
 | **A**, using machine elsewhere | using machine: `pair control --with <near machine>` · near machine: `pair introduce --host <using machine> --to <device>` |
-| **B** | key's machine, on the device's Wi‑Fi: `pair control --to <device>`, then `sign <name> --for <using machine>` left running · using machine: nothing — unless it is tagged or another user's (a cloud machine often is): then `ROAMRUNCTL_SIGNER=<key's machine>` there, for `mcp` in the agent's MCP config |
+| **B** | key's machine, on the device's Wi‑Fi: `pair control --to <device>`, then `sign <name> --for <using machine>` left running · using machine: nothing — unless either machine is tagged, or the two are different users' (a cloud machine often is tagged): then `ROAMRUNCTL_SIGNER=<key's machine>` there, for `mcp` in the agent's MCP config |
 
 Each `pair` command shows the pairing code, which is the owner's consent: run it yourself, in a terminal of your own.
 
@@ -83,7 +83,8 @@ Before starting:
   port that is another each time (the command says which once it has it), so let that machine in on any TCP
   port. A wait that isn't let in reads as nobody waiting.
 - For `pair control --with`: a device that has been paired with something before (see below).
-- In B, the using machine can write to its own `~/.config/roamrunctl/devices`: what it holds a device to is saved
+- In B, the using machine can write to its own devices folder (`~/.config/roamrunctl/devices`; on Windows
+  `%LOCALAPPDATA%\roamrunctl\devices`): what it holds a device to is saved
   there, and without that it doesn't use the device.
 
 ### A. The using machine holds the key
@@ -215,8 +216,8 @@ the agent went; one that runs already runs out. While `roamrunctl mcp` runs, a d
 under its name, isn't the one it had open: it is opened anew, or said to be gone.
 
 `install` puts an app on the device under its own name before it is taken in, as every `roamrunctl install` of that
-name does: one install of an app to a device at a time. What an install that was cut short left there is cleared
-before an .app folder is sent again (not tried against a device). An install is given five minutes.
+name does, and an .ipa under one name whatever it is: one install to a device at a time. What an install that was
+cut short left there is cleared before an .app folder is sent again, where it can be (not tried against a device). An install is given five minutes.
 
 ## Introducing a far Mac (`pair introduce`)
 

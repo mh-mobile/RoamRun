@@ -90,7 +90,7 @@ pub fn serve(machine: &str, keys: Keys, list: Listed, held: Held) -> Result<Stri
     if tailscale::asks_by_itself(&status, &other) {
         note!("Nothing is to be done on {machine}: `roamrunctl devices` there lists them, and its commands ask here (TCP port {PORT}).");
     } else {
-        note!("{machine} is tagged, or another user's: it doesn't ask by itself. There, set ROAMRUNCTL_SIGNER={} — then `roamrunctl devices` lists them, and its commands ask here (TCP port {PORT}).", tailscale::short(&status.this.dns_name));
+        note!("{machine} or this machine is tagged, or they are different users': {machine} doesn't ask by itself. There, set ROAMRUNCTL_SIGNER={} — then `roamrunctl devices` lists them, and its commands ask here (TCP port {PORT}).", tailscale::short(&status.this.dns_name));
     }
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };

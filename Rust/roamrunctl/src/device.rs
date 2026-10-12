@@ -78,7 +78,11 @@ pub fn own_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let _ = std::fs::remove_file(&beside);
     let put = own_file(&beside).and_then(|mut file| file.write_all(bytes)).and_then(|()| std::fs::hard_link(&beside, path));
     let _ = std::fs::remove_file(&beside);
-    put
+    match put {
+        // Where files can't be put in place so (FAT, some network folders): written where it goes.
+        Err(why) if why.kind() != std::io::ErrorKind::AlreadyExists => own_file(path).and_then(|mut file| file.write_all(bytes).inspect_err(|_| { let _ = std::fs::remove_file(path); })),
+        put => put,
+    }
 }
 
 /// The mode of a file that others can read, where the system has modes.
@@ -127,13 +131,14 @@ fn kept(name: &str) -> Result<Option<(PathBuf, bool)>, String> {
     Ok([("age", true), ("json", false)].into_iter().map(|(ending, sealed)| (folder.join(format!("{name}.{ending}")), sealed)).find(|(path, _)| path.exists()))
 }
 
-fn load(name: &str) -> Result<Saved, String> {
+/// The device named, and its file as it was read where it is saved here.
+fn load(name: &str) -> Result<(Saved, Option<Vec<u8>>), String> {
     let Some((path, sealed)) = kept(name)? else {
         // Not saved here: one another machine keeps the key of, and signs for this one.
-        return offered()?.into_iter().find(|saved| saved.name == name).ok_or_else(|| format!(
+        return offered()?.into_iter().find(|saved| saved.name == name).map(|saved| (saved, None)).ok_or_else(|| format!(
             "no device “{name}” is saved here, and no machine was found that signs for this one with it.\n{}", sign_how(name)));
     };
-    read(name, &path, sealed).map(|(saved, _)| saved)
+    read(name, &path, sealed).map(|(saved, file)| (saved, Some(file)))
 }
 
 /// A device saved here, and its file as it was read: what tells it later from another saved under its name.
@@ -146,13 +151,16 @@ fn read(name: &str, path: &Path, sealed: bool) -> Result<(Saved, Vec<u8>), Strin
     let file = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let opened;
     let bytes = if sealed { opened = crate::secret::opened(&file, &crate::secret::passphrase(name, false)?).map_err(|why| format!("{name}: {why}"))?; &opened } else { &file };
-    Ok((serde_json::from_slice(bytes).map_err(|e| format!("{} isn't a saved device ({e}): `roamrunctl devices remove {name}` forgets it", path.display()))?, file))
+    let saved: Saved = serde_json::from_slice(bytes).map_err(|e| format!("{} isn't a saved device ({e}): `roamrunctl devices remove {name}` forgets it", path.display()))?;
+    // Another's file, found where names differ only by case, or renamed by hand.
+    if saved.name != name { return Err(format!("“{name}” is saved here as “{}”: name it so", saved.name)); }
+    Ok((saved, file))
 }
 
 /// How a machine that keeps a key comes to sign for this one, and how this one finds it.
 fn sign_how(name: &str) -> String {
     let me = crate::tailscale::status().map(|status| crate::tailscale::short(&status.this.dns_name).to_string()).unwrap_or_else(|_| "<this machine>".into());
-    format!("On the machine that keeps its key: roamrunctl sign {name} --for {me}\nIt is found where it is this user's own, online, and lets this machine in on TCP port {}; where this machine is tagged or another user's, set {}=<its Tailscale name> here.", crate::sign::PORT, crate::sign::SIGNER)
+    format!("On the machine that keeps its key: roamrunctl sign {name} --for {me}\nIt is found where it is this user's own, online, and lets this machine in on TCP port {}; where either machine is tagged, or the two are different users', set {}=<its Tailscale name> here.", crate::sign::PORT, crate::sign::SIGNER)
 }
 
 /// `passphrase`: kept under it; None: as it is.
@@ -233,9 +241,11 @@ fn open(saved: &Saved) -> Result<Device, String> {
     }
     // Whatever answered there wasn't the pairing, or nothing did: the others, and whatever answers on one needn't be it either.
     let others: Vec<u16> = std::thread::scope(|all| PORTS.filter(|p| *p != saved.port).map(|p| all.spawn(move || answers(p, 1500).then_some(p))).collect::<Vec<_>>().into_iter().filter_map(|one| one.join().ok().flatten()).collect());
-    // ponytail: three of them at most — each that answers and says nothing costs the library's 20 s. Fewer,
-    // or a shorter wait there, once it is known what a device has open in that range.
-    for port in others.into_iter().take(3) {
+    // ponytail: for a minute at most — each that answers and says nothing costs the library's 20 s. A shorter
+    // wait there, once it is known what a device has open in that range.
+    let began = std::time::Instant::now();
+    for port in others {
+        if began.elapsed() > Duration::from_secs(60) { break }
         match open_at(saved, port) {
             Ok(device) => return Ok(device),
             Err(why) if why.contains(REFUSED) => return Err(why),
@@ -358,8 +368,6 @@ fn keys(names: &[String]) -> Result<Signing, String> {
         let (saved, file) = read(name, &path, sealed)?;
         let (identifier, key) = crate::sign::key(&saved.pairing).filter(|_| saved.signer.is_none())
             .ok_or_else(|| format!("{name}'s key isn't kept here: there is nothing to sign with"))?;
-        // The other machine asks by the name it is told: the file's, which is this one unless it was renamed by hand.
-        if saved.name != *name { return Err(format!("“{name}” is saved here as “{}”: name it so", saved.name)); }
         marks.insert(name.clone(), file);
         keys.insert(name.clone(), (identifier, key));
         told.push(bare(saved)?);
@@ -367,22 +375,26 @@ fn keys(names: &[String]) -> Result<Signing, String> {
     Ok((keys, told, marks))
 }
 
-/// The device named, opened. One another machine signs for is saved here the first time it opens, without
-/// its key: from then on only that machine is asked, and only that device is taken for it.
 pub fn opened(name: &str) -> Result<Device, String> {
-    let here = kept(name)?.is_some();
-    let saved = load(name)?;
+    held(name).map(|(device, _)| device)
+}
+
+/// The device named, opened, and the file it was opened from (see `mark`). One another machine signs for is
+/// saved here the first time it opens, without its key: from then on only that machine is asked, and only
+/// that device is taken for it.
+pub fn held(name: &str) -> Result<(Device, Option<Vec<u8>>), String> {
+    let (saved, mut file) = load(name)?;
     let device = open(&saved)?;
-    if !here {
+    if file.is_none() {
         match save(&saved, None) {
-            Ok(path) => note!("roamrunctl: {name} is used for the first time here: {} signs for it, and that is held to from now on ({}). `roamrunctl devices remove {name}` forgets it.", saved.signer.as_deref().unwrap_or("another machine"), path.display()),
+            Ok(path) => { file = std::fs::read(&path).ok(); note!("roamrunctl: {name} is used for the first time here: {} signs for it, and that is held to from now on ({}). `roamrunctl devices remove {name}` forgets it.", saved.signer.as_deref().unwrap_or("another machine"), path.display()) }
             // Another command saved it meanwhile: what it saved is what is held to, and what is opened.
-            Err(_) if kept(name).is_ok_and(|kept| kept.is_some()) => { drop(device); return open(&load(name)?) }
+            Err(_) if kept(name).is_ok_and(|kept| kept.is_some()) => { drop(device); let (saved, file) = load(name)?; return Ok((open(&saved)?, file)) }
             // Not held to, it isn't used: the next command would believe whichever machine offered the name.
             Err(why) => return Err(format!("{name} opened, but which machine signs for it couldn't be saved here, and without that it isn't used: {why}")),
         }
     }
-    Ok(device)
+    Ok((device, file))
 }
 
 /// The machine that signs for a device saved here without its key; None where its key is here.
@@ -460,6 +472,11 @@ pub fn run(command: Command) -> i32 {
                 });
             }
             while let Some((path, _)) = kept(name)? { std::fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))?; }
+            // What a save that was cut short left beside it (see `own_whole`) is a copy of it.
+            for left in std::fs::read_dir(folder()?).into_iter().flatten().flatten().map(|entry| entry.path()) {
+                let file = left.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if file.strip_prefix(name).and_then(|rest| rest.strip_prefix('.')).and_then(|rest| rest.strip_suffix(".tmp")).is_some_and(|pid| pid.bytes().all(|b| b.is_ascii_digit())) { let _ = std::fs::remove_file(&left); }
+            }
             Ok(match signer {
                 Some(signer) => format!("Forgot {name} here. Its key is kept by {signer}: it is asked again the next time {name} is used, for as long as `roamrunctl sign` there names it."),
                 None => format!("Removed {name} and its pairing here: a `roamrunctl sign` running here signs for it no more. On the device, remove this machine in its list too (Settings › Privacy & Security › Developer Mode)."),
@@ -569,6 +586,11 @@ mod tests {
         assert!(super::keys(std::slice::from_ref(&far)).is_err());
         assert_eq!(signer_of(&far).as_deref(), Some("laptop"));
         assert_eq!(signer_of(&phone), None);
+        // A file under another name than its own (renamed, or found by a name that differs by case) isn't that device.
+        let renamed = format!("{phone}-renamed");
+        std::fs::copy(folder().unwrap().join(format!("{phone}.json")), folder().unwrap().join(format!("{renamed}.json"))).unwrap();
+        assert!(load(&renamed).err().unwrap().contains("is saved here as"));
+        std::fs::remove_file(folder().unwrap().join(format!("{renamed}.json"))).unwrap();
         // Removed, and another saved under its name — as long, and at the same moment for all a clock says: not the file that was read.
         assert_eq!(mark(&phone).as_ref(), Some(&marks[&phone]));
         let file = folder().unwrap().join(format!("{phone}.json"));

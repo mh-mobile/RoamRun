@@ -175,11 +175,11 @@ impl Server {
     /// The device, opened if it isn't.
     fn device(&mut self, name: &str) -> Result<&Device, String> {
         // Removed since, or another saved under the name: the one that is open isn't the one named any more.
-        if self.open.get(name).is_some_and(|(_, was)| device::mark(name) != *was) { self.open.remove(name); }
-        if !self.open.contains_key(name) {
-            let device = device::opened(name)?;
-            self.open.insert(name.to_string(), (device, device::mark(name)));
+        if self.open.get(name).is_some_and(|(_, was)| device::mark(name) != *was) {
+            // What was seen of the other isn't this one's screen.
+            self.open.remove(name); self.shown.remove(name); self.acted.remove(name);
         }
+        if !self.open.contains_key(name) { self.open.insert(name.to_string(), device::held(name)?); }
         Ok(&self.open[name].0)
     }
 

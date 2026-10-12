@@ -155,7 +155,7 @@ ways; the difference is where the key is.
 |---|---|
 | A, using machine on the device's Wi‑Fi | using machine: `pair control --to <device>` |
 | A, using machine elsewhere | using machine: `pair control --with <near machine>` · near machine: `pair introduce --host <using machine> --to <device>` |
-| B | key's machine, on the device's Wi‑Fi: `pair control --to <device>`, then `sign <name> --for <using machine>` left running · using machine: nothing — unless it is tagged or another user's: then `ROAMRUNCTL_SIGNER=<key's machine>` on it (for `mcp`, in the agent's MCP config) |
+| B | key's machine, on the device's Wi‑Fi: `pair control --to <device>`, then `sign <name> --for <using machine>` left running · using machine: nothing — unless either machine is tagged, or the two are different users': then `ROAMRUNCTL_SIGNER=<key's machine>` on it (for `mcp`, in the agent's MCP config) |
 
 **Every `pair` command in this section shows the pairing code, on whichever machine it
 runs on: the user runs it, at a terminal of their own.** Don't run one, and never ask for a code, read one
@@ -172,7 +172,7 @@ control --with <the device's Tailscale name>` here, and in the app this machine'
 Tailscale name where it asks for the far Mac's. `--with` needs a device that was paired
 with something before: `pair introduce` says "…'s own announcement wasn't seen on this
 LAN" otherwise, and the device is then paired once first, with Xcode or with `pair control
---to` on the near machine. (A Mac with RoamRun can make the pairing instead and hand it
+--to` on the near machine (whether the latter alone is enough wasn't tried). (A Mac with RoamRun can make the pairing instead and hand it
 over: `roamrun key create <device> <file>` there, `roamrunctl key import <file>` here.)
 
 The saved pairing is then a key to the device, in a file of this user's (on Linux and
@@ -204,8 +204,8 @@ starting `roamrunctl sign` is the user's, on their machine.
 If the user's `pair control --with` ends with the other machine not having come in ten
 minutes, or the other machine says nobody waits, the usual reason is that this machine
 doesn't let the other in (Tailscale's rules, a firewall): on port 41830, and on a port
-that is another each time. B needs this machine able to write its own
-`~/.config/roamrunctl/devices`.
+that is another each time. B needs this machine able to write its own devices folder
+(`~/.config/roamrunctl/devices`; on Windows `%LOCALAPPDATA%\roamrunctl\devices`).
 
 What B does and doesn't: the key isn't on this machine to be copied, and when the user ends
 `sign`, or removes the device on the key's machine, no new connection is made. While `sign` answers, any program on this machine

@@ -20,11 +20,16 @@ fn whole(text: String, from: &str) -> Result<String, String> {
 /// The passphrase as the environment gives it: by file, else by command, else itself. None when it gives none.
 pub fn given(get: impl Fn(&str) -> Option<String>) -> Result<Option<String>, String> {
     if let Some(path) = get(FILE) {
-        return whole(std::fs::read_to_string(&path).map_err(|e| format!("{FILE} ({path}): {e}"))?, FILE).map(Some);
+        // Without the mark some editors on Windows put first, which nobody could type.
+        return whole(std::fs::read_to_string(&path).map_err(|e| format!("{FILE} ({path}): {e}"))?.trim_start_matches('\u{feff}').to_string(), FILE).map(Some);
     }
     if let Some(command) = get(COMMAND) {
-        let (shell, flag) = if cfg!(windows) { ("cmd", "/C") } else { ("sh", "-c") };
-        let ran = std::process::Command::new(shell).arg(flag).arg(&command).stderr(std::process::Stdio::inherit()).output()
+        #[cfg(not(windows))]
+        let mut shell = { let mut sh = std::process::Command::new("sh"); sh.arg("-c").arg(&command); sh };
+        // As it is, inside one pair of quotes that /S takes off: quoted the usual way, cmd wouldn't read its own.
+        #[cfg(windows)]
+        let mut shell = { let mut cmd = std::process::Command::new("cmd"); std::os::windows::process::CommandExt::raw_arg(cmd.args(["/S", "/C"]), format!("\"{command}\"")); cmd };
+        let ran = shell.stderr(std::process::Stdio::inherit()).output()
             .map_err(|e| format!("{COMMAND}: {e}"))?;
         if !ran.status.success() { return Err(format!("{COMMAND} failed ({})", ran.status)); }
         return whole(String::from_utf8(ran.stdout).map_err(|_| format!("{COMMAND} printed what isn't text"))?, COMMAND).map(Some);
