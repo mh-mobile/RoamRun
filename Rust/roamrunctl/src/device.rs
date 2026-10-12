@@ -123,24 +123,38 @@ fn open(saved: &Saved) -> Result<Device, String> {
 }
 
 /// Whether an answer of the library's says it went well; its words otherwise.
-fn said(answer: String) -> Result<serde_json::Value, String> {
+pub fn said(answer: String) -> Result<serde_json::Value, String> {
     let value: serde_json::Value = serde_json::from_str(&answer).map_err(|_| answer.clone())?;
     if value["ok"] == true { Ok(value) } else { Err(value["error"].as_str().unwrap_or(&answer).to_string()) }
 }
 
-/// The device's picture, its longer side LONGER at most, as PNG; and its size.
-fn fitted(png: &[u8]) -> Result<(Vec<u8>, u32, u32), String> {
+/// The device's picture, its longer side LONGER at most, as `format`; and its size.
+pub fn fitted(png: &[u8], format: image::ImageFormat) -> Result<(Vec<u8>, u32, u32), String> {
     let image = image::load_from_memory_with_format(png, image::ImageFormat::Png).map_err(|e| format!("the device's picture couldn't be read: {e}"))?;
     let longer = image.width().max(image.height());
     let image = if longer > LONGER { image.resize(LONGER, LONGER, image::imageops::FilterType::Triangle) } else { image };
     let mut out = std::io::Cursor::new(Vec::new());
-    image.write_to(&mut out, image::ImageFormat::Png).map_err(|e| e.to_string())?;
+    // No alpha in a JPEG.
+    image::DynamicImage::ImageRgb8(image.to_rgb8()).write_to(&mut out, format).map_err(|e| e.to_string())?;
     Ok((out.into_inner(), image.width(), image.height()))
+}
+
+/// The device saved under `name`, opened.
+pub fn opened(name: &str) -> Result<Device, String> {
+    open(&load(name)?)
+}
+
+/// The names of the devices saved here.
+pub fn names() -> Result<Vec<String>, String> {
+    let mut names: Vec<String> = std::fs::read_dir(folder()?).map_err(|e| e.to_string())?
+        .filter_map(|entry| entry.ok()?.file_name().to_str()?.strip_suffix(".json").map(str::to_string)).collect();
+    names.sort();
+    Ok(names)
 }
 
 fn look(name: &str, file: Option<PathBuf>) -> Result<String, String> {
     let device = open(&load(name)?)?;
-    let (png, width, height) = fitted(&device.screenshot()?)?;
+    let (png, width, height) = fitted(&device.screenshot()?, image::ImageFormat::Png)?;
     let path = file.unwrap_or_else(|| std::env::temp_dir().join(format!("roamrunctl-{}-{}.png", named(name).unwrap_or("device"), std::process::id())));
     // Whatever is on the screen is in it: the owner's only.
     let _ = std::fs::remove_file(&path);
@@ -150,9 +164,7 @@ fn look(name: &str, file: Option<PathBuf>) -> Result<String, String> {
 }
 
 fn list() -> Result<String, String> {
-    let mut names: Vec<String> = std::fs::read_dir(folder()?).map_err(|e| e.to_string())?
-        .filter_map(|entry| entry.ok()?.file_name().to_str()?.strip_suffix(".json").map(str::to_string)).collect();
-    names.sort();
+    let names = names()?;
     if names.is_empty() { return Ok("No device is saved here. `roamrunctl key import <file>` saves one from a file `roamrun key create` wrote.".into()); }
     Ok(names.iter().map(|name| match load(name) {
         Ok(saved) => format!("{name}\t{}", saved.ip),
@@ -176,6 +188,7 @@ pub fn run(command: Command) -> i32 {
         Command::Launch { name, bundle } => load(&name).and_then(|saved| open(&saved)).and_then(|device| {
             said(device.launch(&bundle)).map(|value| format!("Launched {bundle} on {name} (pid {}).", value["pid"]))
         }),
+        Command::Mcp => return crate::mcp::Server::default().serve(),
         Command::Pair { .. } => unreachable!("handled by main"),
     };
     match done {
@@ -197,13 +210,13 @@ mod tests {
     #[test]
     fn a_picture_is_fitted_to_the_longer_side_and_a_small_one_left() {
         let png = |w, h| { let mut out = std::io::Cursor::new(Vec::new()); image::DynamicImage::new_rgb8(w, h).write_to(&mut out, image::ImageFormat::Png).unwrap(); out.into_inner() };
-        let (_, w, h) = fitted(&png(1179, 2556)).unwrap();
+        let (_, w, h) = fitted(&png(1179, 2556), image::ImageFormat::Png).unwrap();
         assert_eq!((w, h), (590, 1280));
-        let (_, w, h) = fitted(&png(2556, 1179)).unwrap();
+        let (_, w, h) = fitted(&png(2556, 1179), image::ImageFormat::Jpeg).unwrap();
         assert_eq!((w, h), (1280, 590));
-        let (_, w, h) = fitted(&png(300, 200)).unwrap();
+        let (_, w, h) = fitted(&png(300, 200), image::ImageFormat::Png).unwrap();
         assert_eq!((w, h), (300, 200));
-        assert!(fitted(b"not a picture").is_err());
+        assert!(fitted(b"not a picture", image::ImageFormat::Png).is_err());
     }
 
     #[test]

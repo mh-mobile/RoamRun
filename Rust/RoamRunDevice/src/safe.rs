@@ -47,6 +47,8 @@ impl Device {
     pub fn button(&self, name: &str) -> String { self.with(name, |d, t| unsafe { rr_device_button(d, t) }) }
     pub fn elements(&self, limit: u32) -> String { take(unsafe { rr_device_elements(self.0, limit) }) }
     pub fn install(&self, path: &str) -> String { self.with(path, |d, t| unsafe { rr_device_install(d, t) }) }
+    /// Which way up the interface is: see rr_device_way.
+    pub fn way(&self) -> u8 { unsafe { rr_device_way(self.0) } }
     pub fn launch(&self, bundle: &str) -> String { self.with(bundle, |d, t| unsafe { rr_device_launch(d, t) }) }
 
     /// The screen as the PNG the device makes: its own size, turned as its interface is.

@@ -4,6 +4,8 @@
 mod announce;
 #[cfg(not(windows))]
 mod device;
+#[cfg(not(windows))]
+mod mcp;
 mod lines;
 mod relay;
 mod tailscale;
@@ -59,6 +61,9 @@ enum Command {
     /// Launch an app on the device (one already running is ended first)
     #[cfg(not(windows))]
     Launch { name: String, bundle: String },
+    /// The device's commands as MCP tools, over stdin/stdout (for an agent's MCP config)
+    #[cfg(not(windows))]
+    Mcp,
 }
 
 #[derive(Subcommand)]

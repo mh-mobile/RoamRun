@@ -412,6 +412,39 @@ pub unsafe extern "C" fn rr_device_screenshot(device: *mut RRDevice, length: *mu
     }
 }
 
+/// Which way up the device's interface is: 1 portrait, 2 upside down, 3 on its side with the home
+/// indicator at the right, 4 with it at the left; 0 when the device doesn't say. A screenshot comes
+/// turned as the interface is, and a touch is sent in the device's own upright terms.
+/// # Safety
+/// `device` came from rr_device_open and wasn't closed.
+#[no_mangle]
+pub unsafe extern "C" fn rr_device_way(device: *mut RRDevice) -> u8 {
+    let Some(device) = (unsafe { device.as_ref() }) else { return 0 };
+    with_room(|| {
+        let mut link = device.link.lock().unwrap_or_else(|e| e.into_inner());
+        let link = &mut *link;
+        Ok(device.runtime.block_on(async {
+            tokio::time::timeout(SCREEN_WAIT, interface_way(link)).await.ok().flatten().unwrap_or(0)
+        }))
+    }).unwrap_or(0)
+}
+
+async fn interface_way(link: &mut Link) -> Option<u8> {
+    use idevice::springboardservices::{InterfaceOrientation, SpringBoardServicesClient};
+    let port = link.handshake.services.get("com.apple.springboardservices.shim.remote")?.port;
+    let stream = link.handle.connect_to_service_port(port).await.ok()?;
+    // A lockdown service bridged onto RSD: it wants a check-in before its own protocol.
+    let mut plain = idevice::Idevice::new(Box::new(stream), LABEL);
+    plain.rsd_checkin().await.ok()?;
+    Some(match SpringBoardServicesClient::new(plain).get_interface_orientation().await.ok()? {
+        InterfaceOrientation::Portrait => 1,
+        InterfaceOrientation::PortraitUpsideDown => 2,
+        InterfaceOrientation::LandscapeRight => 3,
+        InterfaceOrientation::LandscapeLeft => 4,
+        _ => 0,
+    })
+}
+
 /// What `rr_device_install` and `rr_device_launch` share: one thing asked of the device's app services.
 enum App<'a> { Install(&'a str), Launch(&'a str) }
 
