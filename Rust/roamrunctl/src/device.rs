@@ -96,8 +96,12 @@ pub fn folder() -> Result<PathBuf, String> {
 
 /// A name that is a file's name and nothing else.
 fn named(name: &str) -> Result<&str, String> {
+    // What Windows keeps for its own devices, whatever follows a dot.
+    let stem = name.split('.').next().unwrap_or("").to_ascii_uppercase();
+    let reserved = ["CON", "PRN", "AUX", "NUL"].contains(&stem.as_str())
+        || stem.len() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && stem.ends_with(|c: char| c.is_ascii_digit());
     // Not led by what a command reads as an option, or hides as a file.
-    let fits = !name.is_empty() && name.len() <= 63 && !name.starts_with(['.', '-'])
+    let fits = !name.is_empty() && name.len() <= 63 && !name.starts_with(['.', '-']) && !reserved
         && name.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
     fits.then_some(name).ok_or_else(|| format!("“{name}” can't be a device's name here: letters, digits, - _ . only"))
 }
@@ -115,14 +119,20 @@ fn load(name: &str) -> Result<Saved, String> {
         return offered()?.into_iter().find(|saved| saved.name == name).ok_or_else(|| format!(
             "no device “{name}” is saved here, and no machine was found that signs for this one with it.\n{}", sign_how(name)));
     };
-    let meta = std::fs::metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    read(name, &path, sealed).map(|(saved, _)| saved)
+}
+
+/// A device saved here, and its file as it was read: what tells it later from another saved under its name.
+fn read(name: &str, path: &Path, sealed: bool) -> Result<(Saved, Vec<u8>), String> {
+    let meta = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
     // The file is a key: as ssh does, one that others can read isn't used.
     if let Some(mode) = open_to_others(&meta) {
         return Err(format!("{} can be read by others (mode {mode:o}): `chmod 600` it, or pair again", path.display()));
     }
-    let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let bytes = if sealed { crate::secret::opened(&bytes, &crate::secret::passphrase(name, false)?).map_err(|why| format!("{name}: {why}"))? } else { bytes };
-    serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()))
+    let file = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let opened;
+    let bytes = if sealed { opened = crate::secret::opened(&file, &crate::secret::passphrase(name, false)?).map_err(|why| format!("{name}: {why}"))?; &opened } else { &file };
+    Ok((serde_json::from_slice(bytes).map_err(|e| format!("{}: {e}", path.display()))?, file))
 }
 
 /// How a machine that keeps a key comes to sign for this one, and how this one finds it.
@@ -143,7 +153,8 @@ fn save(saved: &Saved, passphrase: Option<&str>) -> Result<PathBuf, String> {
     };
     let path = folder()?.join(format!("{}.{ending}", saved.name));
     let mut file = own_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    file.write_all(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    // Half written, it would stand for a saved device and be none.
+    file.write_all(&bytes).and_then(|()| file.sync_all()).map_err(|e| { let _ = std::fs::remove_file(&path); format!("{}: {e}", path.display()) })?;
     Ok(path)
 }
 
@@ -192,17 +203,29 @@ fn import(file: &Path, name: Option<String>, sealed: bool) -> Result<String, Str
 fn open(saved: &Saved) -> Result<Device, String> {
     let answers = |port: u16, within: u64| format!("{}:{port}", saved.ip).parse::<SocketAddr>().is_ok_and(|at| TcpStream::connect_timeout(&at, Duration::from_millis(within)).is_ok());
     // The port it was saved with is given the time a device that slept takes; the others are asked together.
-    let ports: Vec<u16> = if answers(saved.port, 2500) { vec![saved.port] } else {
-        std::thread::scope(|all| PORTS.map(|p| all.spawn(move || answers(p, 1500).then_some(p))).collect::<Vec<_>>().into_iter().filter_map(|one| one.join().ok().flatten()).collect())
-    };
-    // Whatever answers on one of them needn't be the pairing: the next is tried.
-    let mut last = Err(format!("{} ({}) doesn't answer: is it on Wi‑Fi, unlocked once since it started, and connected in Tailscale? (on cellular alone it refuses) If it restarted since it was saved, its pairing port may have moved out of reach: pair again", saved.name, saved.ip));
-    for port in ports {
-        last = open_at(saved, port);
-        if last.is_ok() { break }
+    let mut first = None;
+    if answers(saved.port, 2500) {
+        match open_at(saved, saved.port) {
+            Ok(device) => return Ok(device),
+            // The pairing answered there and its key's keeper refused: no other port would do better.
+            Err(why) if why.contains(REFUSED) => return Err(why),
+            Err(why) => first = Some(why),
+        }
     }
-    last
+    // Whatever answered there wasn't the pairing, or nothing did: the others, and whatever answers on one needn't be it either.
+    let others: Vec<u16> = std::thread::scope(|all| PORTS.filter(|p| *p != saved.port).map(|p| all.spawn(move || answers(p, 1500).then_some(p))).collect::<Vec<_>>().into_iter().filter_map(|one| one.join().ok().flatten()).collect());
+    for port in others {
+        match open_at(saved, port) {
+            Ok(device) => return Ok(device),
+            Err(why) if why.contains(REFUSED) => return Err(why),
+            Err(why) => { first.get_or_insert(why); }
+        }
+    }
+    Err(first.unwrap_or_else(|| format!("{} ({}) doesn't answer: is it on Wi‑Fi, unlocked once since it started, and connected in Tailscale? (on cellular alone it refuses) If it restarted since it was saved, its pairing port may have moved out of reach: pair again", saved.name, saved.ip)))
 }
+
+/// In what is said where the machine that keeps a key didn't sign.
+const REFUSED: &str = "which keeps its key, didn't sign";
 
 fn open_at(saved: &Saved, port: u16) -> Result<Device, String> {
     let opened = match &saved.signer {
@@ -214,7 +237,7 @@ fn open_at(saved: &Saved, port: u16) -> Result<Device, String> {
             });
             // Why it wasn't signed, in the signer's words, where that is why it didn't open.
             match refused.into_inner().unwrap_or_else(|e| e.into_inner()) {
-                Some(why) => Err(format!("{signer}, which keeps its key, didn't sign: {why}")),
+                Some(why) => Err(format!("{signer}, {REFUSED}: {why}")),
                 None => opened,
             }
         }
@@ -277,13 +300,9 @@ fn offered() -> Result<Vec<Saved>, String> {
     Ok(taken(&said, &on_tailnet))
 }
 
-/// What a saved device's file is, to tell it later from another saved under its name.
-type Mark = (PathBuf, std::time::SystemTime, u64);
-
-fn mark(name: &str) -> Option<Mark> {
-    let (path, _) = kept(name).ok()??;
-    let meta = std::fs::metadata(&path).ok()?;
-    Some((path, meta.modified().ok()?, meta.len()))
+/// A saved device's file as it is now: what tells it from another saved under its name since.
+fn mark(name: &str) -> Option<Vec<u8>> {
+    std::fs::read(kept(name).ok()??.0).ok()
 }
 
 /// Of what each machine said it signs for (its name, its list), what is taken.
@@ -304,7 +323,7 @@ fn taken(said: &[(String, String)], on_tailnet: &std::collections::HashSet<&str>
 
 /// The pairings of `names` (what `roamrunctl sign` signs with), those devices as the other machine is told
 /// of them, each without its key, and what their files are now.
-type Signing = (crate::sign::Keys, Vec<Saved>, std::collections::HashMap<String, Mark>);
+type Signing = (crate::sign::Keys, Vec<Saved>, std::collections::HashMap<String, Vec<u8>>);
 
 fn keys(names: &[String]) -> Result<Signing, String> {
     if names.is_empty() {
@@ -313,13 +332,14 @@ fn keys(names: &[String]) -> Result<Signing, String> {
     }
     let (mut keys, mut told, mut marks) = (crate::sign::Keys::new(), Vec::new(), std::collections::HashMap::new());
     for name in names {
-        if kept(name)?.is_none() { return Err(format!("no device “{name}” is saved here: `roamrunctl devices` lists them")); }
-        let saved = load(name)?;
+        let Some((path, sealed)) = kept(name)? else { return Err(format!("no device “{name}” is saved here: `roamrunctl devices` lists them")) };
+        // The file the key was read from, as it was read: not one that took its place while a passphrase was typed.
+        let (saved, file) = read(name, &path, sealed)?;
         let (identifier, key) = crate::sign::key(&saved.pairing).filter(|_| saved.signer.is_none())
             .ok_or_else(|| format!("{name}'s key isn't kept here: there is nothing to sign with"))?;
         // The other machine asks by the name it is told: the file's, which is this one unless it was renamed by hand.
         if saved.name != *name { return Err(format!("“{name}” is saved here as “{}”: name it so", saved.name)); }
-        marks.insert(name.clone(), mark(name).ok_or_else(|| format!("{name} went away just now"))?);
+        marks.insert(name.clone(), file);
         keys.insert(name.clone(), (identifier, key));
         told.push(bare(saved)?);
     }
@@ -333,13 +353,13 @@ pub fn opened(name: &str) -> Result<Device, String> {
     let saved = load(name)?;
     let device = open(&saved)?;
     if !here {
-        let said = match save(&saved, None) {
-            Ok(path) => format!("{name} is used for the first time here: {} signs for it, and that is held to from now on ({}). `roamrunctl devices remove {name}` forgets it.", saved.signer.as_deref().unwrap_or("another machine"), path.display()),
-            // Another command saved it meanwhile: held to all the same.
-            Err(_) if kept(name).is_ok_and(|kept| kept.is_some()) => return Ok(device),
-            Err(why) => format!("{name} is open, but which machine signs for it couldn't be saved ({why}): it is asked for anew next time"),
-        };
-        let _ = writeln!(std::io::stderr(), "roamrunctl: {said}");
+        match save(&saved, None) {
+            Ok(path) => note!("roamrunctl: {name} is used for the first time here: {} signs for it, and that is held to from now on ({}). `roamrunctl devices remove {name}` forgets it.", saved.signer.as_deref().unwrap_or("another machine"), path.display()),
+            // Another command saved it meanwhile: what it saved is what is held to, and what is opened.
+            Err(_) if kept(name).is_ok_and(|kept| kept.is_some()) => { drop(device); return open(&load(name)?) }
+            // Not held to, it isn't used: the next command would believe whichever machine offered the name.
+            Err(why) => return Err(format!("{name} opened, but which machine signs for it couldn't be saved here, and without that it isn't used: {why}")),
+        }
     }
     Ok(device)
 }
@@ -354,7 +374,7 @@ fn signer_of(name: &str) -> Option<String> {
 /// The names of the devices this machine can use: those saved here, and those another machine signs for it with.
 pub fn names() -> Result<Vec<String>, String> {
     let mut names = names_here()?;
-    names.extend(offered()?.into_iter().map(|saved| saved.name));
+    names.extend(offered().unwrap_or_default().into_iter().map(|saved| saved.name));
     names.sort();
     names.dedup();
     Ok(names)
@@ -380,19 +400,33 @@ fn look(name: &str, file: Option<PathBuf>) -> Result<String, String> {
     Ok(format!("{}\n{width} x {height}", path.display()))
 }
 
-pub fn list() -> Result<String, String> {
+fn list() -> Result<String, String> {
     let (names, offered) = (names_here()?, offered()?);
     if names.is_empty() && offered.is_empty() {
         return Ok(format!("No device is saved here, and no machine was found that signs for this one.\nTo pair with one: roamrunctl pair control --to <device> (on its Wi‑Fi), or --with <a machine on its Wi‑Fi>.\nTo use one whose key another machine keeps:\n{}", sign_how("<device>")));
     }
+    Ok(lines(&names, &offered))
+}
+
+/// The same for an agent: what there is, and nothing it is to run. What is saved here is listed whoever signs.
+pub fn listed() -> Result<String, String> {
+    let names = names_here()?;
+    let (offered, wrong) = match offered() { Ok(offered) => (offered, None), Err(why) => (Vec::new(), Some(why)) };
+    if names.is_empty() && offered.is_empty() {
+        return Ok(format!("No device this machine can use{}. Coming by one is the user's: `roamrunctl devices`, at a terminal of theirs, says how.", wrong.map(|why| format!(" ({why})")).unwrap_or_default()));
+    }
+    Ok(lines(&names, &offered) + &wrong.map(|why| format!("\n({why}: no machine is asked what it signs for)")).unwrap_or_default())
+}
+
+fn lines(names: &[String], offered: &[Saved]) -> String {
     // Named only: what else is saved of one may be under a passphrase, which a list doesn't ask for.
-    Ok(names.iter().map(|name| match (kept(name), signer_of(name)) {
+    names.iter().map(|name| match (kept(name), signer_of(name)) {
         (_, Some(signer)) => format!("{name}\tits key is kept by {signer}, which signs for this machine"),
         (Ok(Some((_, true))), _) => format!("{name}\tunder a passphrase"),
         _ => format!("{name}\tas it is"),
     }).chain(offered.iter().filter(|saved| !names.contains(&saved.name)).map(|saved| {
         format!("{}\tits key is kept by {}, which signs for this machine (not used here yet)", saved.name, saved.signer.as_deref().unwrap_or("another machine"))
-    })).collect::<Vec<_>>().join("\n"))
+    })).collect::<Vec<_>>().join("\n")
 }
 
 pub fn run(command: Command) -> i32 {
@@ -458,7 +492,8 @@ mod tests {
     #[test]
     fn a_name_is_a_files_name_and_nothing_else() {
         assert!(named("iPhone-2").is_ok() && named("a.b_c").is_ok());
-        for bad in ["", "../x", ".hidden", "a/b", "a b", "é", "-x", "---iPhone"] { assert!(named(bad).is_err(), "{bad}"); }
+        for bad in ["", "../x", ".hidden", "a/b", "a b", "é", "-x", "---iPhone", "con", "NUL.x", "com1", "LPT9"] { assert!(named(bad).is_err(), "{bad}"); }
+        assert!(named("console").is_ok() && named("com10").is_ok());
     }
 
     #[test]
@@ -471,27 +506,30 @@ mod tests {
             plist::Value::Dictionary(list).to_writer_xml(&mut out).unwrap();
             String::from_utf8(out).unwrap()
         };
-        for (name, key) in [("keys-phone", 1), ("keys-pad", 2)] {
-            let _ = std::fs::remove_file(folder().unwrap().join(format!("{name}.json")));
+        // Names of this run's own: the folder is every run's.
+        let (phone, pad, far) = (format!("keys-phone-{}", std::process::id()), format!("keys-pad-{}", std::process::id()), format!("keys-far-{}", std::process::id()));
+        for (name, key) in [(&phone, 1), (&pad, 2)] {
             save(&Saved { v: 1, name: name.into(), ip: "100.64.0.10".into(), port: 49152, pairing: pairing(key), signer: None }, None).unwrap();
         }
-        let (keys, told, marks) = keys(&["keys-phone".to_string(), "keys-pad".to_string()]).unwrap();
-        assert_eq!((keys["keys-phone"].1.to_bytes(), keys["keys-pad"].1.to_bytes()), ([1; 32], [2; 32]));
+        let (keys, told, marks) = keys(&[phone.clone(), pad.clone()]).unwrap();
+        assert_eq!((keys[&phone].1.to_bytes(), keys[&pad].1.to_bytes()), ([1; 32], [2; 32]));
+        assert!(super::keys(&[phone.to_uppercase()]).is_err());
         // What the other machine is told has neither key in it.
         assert!(told.iter().all(|saved| crate::sign::key(&saved.pairing).is_some_and(|(_, key)| ![[1; 32], [2; 32]].contains(&key.to_bytes()))));
         // One whose key is elsewhere isn't signed with, and is listed as that.
-        let _ = std::fs::remove_file(folder().unwrap().join("keys-far.json"));
-        save(&Saved { v: 1, name: "keys-far".into(), ip: "100.64.0.10".into(), port: 49152, pairing: pairing(3), signer: Some("laptop".into()) }, None).unwrap();
-        assert!(super::keys(&["keys-far".to_string()]).is_err());
-        assert_eq!(signer_of("keys-far").as_deref(), Some("laptop"));
-        assert_eq!(signer_of("keys-phone"), None);
-        // Removed, and another saved under its name: not the file that was read.
-        assert_eq!(mark("keys-phone").as_ref(), Some(&marks["keys-phone"]));
-        std::fs::remove_file(folder().unwrap().join("keys-phone.json")).unwrap();
-        assert_eq!(mark("keys-phone"), None);
-        std::thread::sleep(Duration::from_millis(20));
-        save(&Saved { v: 1, name: "keys-phone".into(), ip: "100.64.0.10".into(), port: 49152, pairing: pairing(9), signer: None }, None).unwrap();
-        assert_ne!(mark("keys-phone").as_ref(), Some(&marks["keys-phone"]));
+        save(&Saved { v: 1, name: far.clone(), ip: "100.64.0.10".into(), port: 49152, pairing: pairing(3), signer: Some("laptop".into()) }, None).unwrap();
+        assert!(super::keys(std::slice::from_ref(&far)).is_err());
+        assert_eq!(signer_of(&far).as_deref(), Some("laptop"));
+        assert_eq!(signer_of(&phone), None);
+        // Removed, and another saved under its name — as long, and at the same moment for all a clock says: not the file that was read.
+        assert_eq!(mark(&phone).as_ref(), Some(&marks[&phone]));
+        let file = folder().unwrap().join(format!("{phone}.json"));
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!(mark(&phone), None);
+        save(&Saved { v: 1, name: phone.clone(), ip: "100.64.0.10".into(), port: 49152, pairing: pairing(9), signer: None }, None).unwrap();
+        assert_eq!(std::fs::metadata(&file).unwrap().len() as usize, marks[&phone].len());
+        assert_ne!(mark(&phone).as_ref(), Some(&marks[&phone]));
+        for name in [&phone, &pad, &far] { std::fs::remove_file(folder().unwrap().join(format!("{name}.json"))).unwrap(); }
     }
 
     #[test]

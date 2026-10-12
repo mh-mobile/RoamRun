@@ -1,6 +1,9 @@
 //! `roamrunctl`: RoamRun's `pair introduce` from a machine that has no RoamRun.
 #![forbid(unsafe_code)]
 
+// Not eprintln!: it panics once nothing reads stderr any more, and what runs on has to run on.
+macro_rules! note { ($($t:tt)*) => {{ let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("{}\n", format_args!($($t)*))); }} }
+
 mod announce;
 mod device;
 mod hold;
@@ -139,7 +142,8 @@ macro_rules! say { ($($t:tt)*) => {{ let _ = writeln!(std::io::stderr(), "roamru
 fn main() {
     let cli = Cli::try_parse().unwrap_or_else(|refused| {
         // The old name isn't taken; whoever was shown it by an earlier RoamRun is told the new one.
-        if std::env::args_os().any(|a| a.to_str().is_some_and(|a| a == "--mac" || a.starts_with("--mac="))) {
+        let old = std::env::args_os().take_while(|a| a != "--").any(|a| a.to_str().is_some_and(|a| a == "--mac" || a.starts_with("--mac=")));
+        if old && refused.kind() == clap::error::ErrorKind::UnknownArgument {
             eprintln!("roamrunctl: --mac is --host since 0.7.0: roamrunctl pair introduce --host <the machine that will hold the pairing> --to <device>");
             std::process::exit(2);
         }

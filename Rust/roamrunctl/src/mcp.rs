@@ -22,7 +22,8 @@ const SETTLE: Duration = Duration::from_secs(1);
 const LONGEST_TYPED: usize = 500;
 
 const INSTRUCTIONS: &str = "Operates a real iPhone or iPad from this machine. Look, act, look again: each look serves one \
-action, and points are pixels of the image the last look returned. These press what is really there — don't tap what spends \
+action, and points are pixels of the image the last look returned. Pairing with a device and signing for one \
+(`roamrunctl pair`, `roamrunctl sign`) are the user's to run, never yours. These press what is really there — don't tap what spends \
 money, posts, sends, deletes or signs in unless the user asked for exactly that. A look shows whatever is on the screen \
 (notifications, messages); don't pass the image on. The device shows no screen-sharing session for this; what an action itself brings up (paste's \"Allow Paste\") shows there. Only tap and swipe are held to a look: type, paste and press go to whatever is on the screen, so look before them too.";
 
@@ -95,18 +96,35 @@ fn tools() -> Value {
     ])
 }
 
+/// Whether the call `line` asks for was taken back by a message that came after it (notifications/cancelled):
+/// it then isn't made, and isn't answered. One that runs already runs out.
+fn taken_back<'a>(line: &str, later: impl Iterator<Item = &'a String>) -> bool {
+    let Some(id) = serde_json::from_str::<Value>(line).ok().and_then(|call| call.get("id").cloned()).filter(|id| !id.is_null()) else { return false };
+    later.filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .any(|said| said["method"] == "notifications/cancelled" && said["params"]["requestId"] == id)
+}
+
 impl Server {
     /// Serves until stdin closes.
     pub fn serve(&mut self) -> i32 {
         let stdout = std::io::stdout();
-        for line in std::io::stdin().lock().lines() {
-            let line = match line {
-                Ok(line) => line,
-                // Not text: not a message, and not the end of them.
-                Err(e) if e.kind() == std::io::ErrorKind::InvalidData => continue,
-                Err(_) => break,
-            };
-            if line.trim().is_empty() { continue }
+        // Read as it comes, while a call runs: what is taken back meanwhile is known before its turn.
+        let (tell, told) = std::sync::mpsc::channel::<String>();
+        std::thread::spawn(move || {
+            for line in std::io::stdin().lock().lines() {
+                match line {
+                    Ok(line) => if tell.send(line).is_err() { break },
+                    // Not text: not a message, and not the end of them.
+                    Err(e) if e.kind() == std::io::ErrorKind::InvalidData => continue,
+                    Err(_) => break,
+                }
+            }
+        });
+        let mut waiting = std::collections::VecDeque::new();
+        loop {
+            waiting.extend(told.try_iter());
+            let Some(line) = waiting.pop_front().or_else(|| told.recv().ok()) else { break };
+            if line.trim().is_empty() || taken_back(&line, waiting.iter()) { continue }
             if let Some(answer) = self.handle(&line) {
                 let mut out = stdout.lock();
                 if writeln!(out, "{answer}").and_then(|()| out.flush()).is_err() { break }
@@ -161,16 +179,19 @@ impl Server {
     }
 
     fn call(&mut self, tool: &str, arguments: &Value) -> Result<Vec<Value>, String> {
-        if tool == "devices" { return device::list().map(text) }
+        if tool == "devices" { return device::listed().map(text) }
         let name = arguments["device"].as_str().ok_or("device is missing")?.to_string();
         // One that is open is known: asking again what there is would ask every machine that might sign.
-        if !self.open.contains_key(&name) && !device::names()?.contains(&name) {
-            return Err(format!("no such device; there are: {}", device::names()?.join(", ")));
+        if !self.open.contains_key(&name) {
+            let names = device::names()?;
+            if !names.contains(&name) { return Err(format!("no such device; there are: {}", names.join(", "))); }
         }
         let number = |key: &str| arguments[key].as_f64().ok_or(format!("{key} is missing"));
         let word = |key: &str| arguments[key].as_str().map(str::to_string).ok_or("nothing to send".to_string());
         match tool {
             "look" => {
+                // A look that fails leaves none to press by.
+                self.shown.remove(&name);
                 // An input just made: the screen is given a moment to settle.
                 if let Some(wait) = self.acted.get(&name).and_then(|at| SETTLE.checked_sub(at.elapsed())) { std::thread::sleep(wait); }
                 let device = self.device(&name)?;
@@ -293,6 +314,10 @@ mod tests {
         assert!(server.handle(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).is_none());
         let garbled: Value = serde_json::from_str(&server.handle("not json").unwrap()).unwrap();
         assert_eq!(garbled["error"]["code"], -32700);
+        // A call taken back before its turn isn't made; another's being taken back doesn't touch it.
+        let (call, cancel) = (r#"{"jsonrpc":"2.0","id":7,"method":"tools/call"}"#.to_string(), r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":7}}"#.to_string());
+        assert!(taken_back(&call, [&cancel].into_iter()));
+        assert!(!taken_back(&call.replace("7", "8"), [&cancel].into_iter()) && !taken_back(&call, [].into_iter()) && !taken_back(&cancel, [&cancel].into_iter()));
         let batch: Value = serde_json::from_str(&server.handle(r#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#).unwrap()).unwrap();
         assert_eq!(batch["error"]["code"], -32600);
         let unknown: Value = serde_json::from_str(&server.handle(r#"{"jsonrpc":"2.0","id":7,"method":"nope"}"#).unwrap()).unwrap();

@@ -233,7 +233,7 @@ mod tests {
             "Peer":{"shared":{"DNSName":"iphone-15.other.ts.net.","HostName":"iPhone 15","TailscaleIPs":["100.64.0.7"]},
                 "same":{"ID":"n2","DNSName":"iphone-15-1.tail.ts.net.","HostName":"iPhone 15","TailscaleIPs":["100.64.0.8"]},"k":{"ID":"n1","DNSName":"iPhone-15.tail.ts.net.","HostName":"iPhone 15","TailscaleIPs":["fd7a::1","100.64.0.9"],"CurAddr":"192.168.0.19:41641"}}}"#;
         let st: Status = serde_json::from_str(json).unwrap();
-        // `known` wherever where it is on the LAN isn't asked: `peer` would ping the ones nothing talked to.
+        // `known`, but for the one whose LAN address is looked at: `peer` pings those nothing talked to lately.
         let peer = known;
         for name in ["iphone-15", "iPhone-15.tail.ts.net", "iphone-15.tail.ts.net."] {
             let p = super::peer(&st, name).unwrap();

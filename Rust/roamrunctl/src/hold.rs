@@ -40,10 +40,18 @@ fn host_id() -> Result<String, String> {
         if lines::is_uuid(id.trim()) { return Ok(id.trim().to_string()); }
     }
     let id = uuid()?;
-    let _ = std::fs::remove_file(&path);
-    device::own_file(&path)
-        .and_then(|mut file| file.write_all(id.as_bytes())).map_err(|e| format!("{}: {e}", path.display()))?;
-    Ok(id)
+    match device::own_file(&path).and_then(|mut file| file.write_all(id.as_bytes())) {
+        Ok(()) => Ok(id),
+        // Another command made it just now: its id is this machine's. What isn't one is made anew.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => match std::fs::read_to_string(&path) {
+            Ok(theirs) if lines::is_uuid(theirs.trim()) => Ok(theirs.trim().to_string()),
+            _ => {
+                let _ = std::fs::remove_file(&path);
+                device::own_file(&path).and_then(|mut file| file.write_all(id.as_bytes())).map(|()| id).map_err(|e| format!("{}: {e}", path.display()))
+            }
+        },
+        Err(e) => Err(format!("{}: {e}", path.display())),
+    }
 }
 
 pub fn random<const N: usize>() -> Result<[u8; N], String> {
@@ -112,7 +120,7 @@ pub fn run(with: &str, name: Option<String>, sealed: bool) -> Result<String, Str
         "something on this machine already waits for a pairing (RoamRun's app, or another roamrunctl): end that first".to_string()
     } else { format!("can't listen on {own}: {e}") })?;
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
-    eprintln!("Waiting for {with}, 10 minutes at most; only it is answered.\n  There, on the device's Wi‑Fi:  roamrunctl pair introduce --host {me} --to <the device's Tailscale name>\n  (or `roamrun pair introduce --host {me} --to <device>` on a Mac, or the RoamRun Introducer app)");
+    note!("Waiting for {with}, 10 minutes at most; only it is answered.\n  There, on the device's Wi‑Fi:  roamrunctl pair introduce --host {me} --to <the device's Tailscale name>\n  (or `roamrun pair introduce --host {me} --to <device>` on a Mac, or the RoamRun Introducer app)");
     let mut until = Instant::now() + CONNECT;
     let mut tried = 0;
     loop {
@@ -123,9 +131,9 @@ pub fn run(with: &str, name: Option<String>, sealed: bool) -> Result<String, Str
             Err(e) => return Err(format!("can't take a connection: {e}")),
         };
         // Whoever connects is held to being the machine named, by address and by Tailscale's own id for it.
-        if from.ip() != std::net::IpAddr::V4(other.ip) { eprintln!("Turned away a connection from {}: it isn't {with}.", from.ip()); continue }
+        if from.ip() != std::net::IpAddr::V4(other.ip) { note!("Turned away a connection from {}: it isn't {with}.", from.ip()); continue }
         if !tailscale::status().and_then(|now| tailscale::known(&now, with)).is_ok_and(|now| now.is(&other)) {
-            eprintln!("Turned away a connection: Tailscale couldn't say just then that it is {with}.");
+            note!("Turned away a connection: Tailscale couldn't say just then that it is {with}.");
             continue;
         }
         stream.set_nonblocking(false).map_err(|e| e.to_string())?;
@@ -144,7 +152,7 @@ pub fn run(with: &str, name: Option<String>, sealed: bool) -> Result<String, Str
             Err(Stopped::Again(why)) if tried + 1 < TRIES => {
                 tried += 1;
                 until = Instant::now() + CONNECT;
-                eprintln!("{why}\nStill waiting for {with}: run its command again (10 minutes at most).");
+                note!("{why}\nStill waiting for {with}: run its command again (10 minutes at most).");
             }
             Err(Stopped::Again(why)) | Err(Stopped::For(why)) => return Err(why),
         }
@@ -172,7 +180,7 @@ fn paired(mut link: Wire, with: &str, me: &str, own: Ipv4Addr, only: Ipv4Addr, l
     let offer = match offer(&advert) { Ok(offer) => offer, Err(why) => return refuse(&mut link, "failed", why) };
     let attempt = uuid().map_err(Stopped::For)?;
     link.send(&format!("offer {offer}")).and_then(|()| link.send(&format!("attempt {attempt}"))).map_err(Stopped::For)?;
-    eprintln!("{with} has this machine's offer. On the device: Settings › Privacy & Security › Developer Mode › “{shown}”, and type the code that shows here (and there). 7 minutes at most.");
+    note!("{with} has this machine's offer. On the device: Settings › Privacy & Security › Developer Mode › “{shown}”, and type the code that shows here (and there). 7 minutes at most.");
     let pairing = Arc::new(pairing);
     let (tell, told) = mpsc::channel::<Result<String, String>>();
     let waits = {
@@ -187,7 +195,7 @@ fn paired(mut link: Wire, with: &str, me: &str, own: Ipv4Addr, only: Ipv4Addr, l
     let answer = loop {
         match told.recv_timeout(Duration::from_millis(200)) {
             // The code: shown here, and sent to where the device is.
-            Ok(Err(digits)) => { eprintln!("Code: {digits}"); let _ = link.send(&format!("code {digits}")); }
+            Ok(Err(digits)) => { note!("Code: {digits}"); let _ = link.send(&format!("code {digits}")); }
             Ok(Ok(answer)) => break Ok(answer),
             Err(_) => {}
         }
@@ -246,7 +254,7 @@ pub fn here(to: &str, name: Option<String>, sealed: bool) -> Result<String, Stri
     let identifier = read.txt.get("identifier").cloned().ok_or("the pairing announces no identifier")?;
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
     let announcement = crate::announce::start(&format!("{}.local.", crate::HOST_SERVICE), &identifier, local, read.port, &read.txt)?;
-    say(&format!("Announced “{shown}” on {local} (port {}); only {} is taken. On the device: Settings › Privacy & Security › Developer Mode › “{shown}”, and type the code that shows here. 7 minutes at most; Ctrl-C gives up.", read.port, device.dns));
+    say(&format!("Announced “{shown}” on {local} (TCP port {}, which {lan} has to be let in on); only {} is taken. On the device: Settings › Privacy & Security › Developer Mode › “{shown}”, and type the code that shows here. 7 minutes at most; Ctrl-C gives up.", read.port, device.dns));
     let pairing = Arc::new(pairing);
     let (tell, told) = mpsc::channel::<Result<String, String>>();
     let waits = {

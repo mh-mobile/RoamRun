@@ -283,10 +283,12 @@ tunnel and Xcode has to run again.
     session is listed. `--passphrase` once: `look` asks for it; `mcp` takes it from
     `ROAMRUNCTL_PASSPHRASE_FILE`. The key elsewhere: two devices paired on one machine, `roamrunctl
     sign <both> --for <using machine>` → on the using machine, `roamrunctl devices` lists both as
-    not used yet; the first look of each says it is held to from now on; `devices remove <one>` on
-    the key's machine → there it is listed no more and its next look is refused, the other still
-    works; that one paired again under the same name, `sign` still running → still refused;
-    Ctrl-C in `sign` → the next look is refused, a running `mcp` still looks. With a tagged
+    not used yet; a look of the first says it is held to from now on. `devices remove <the
+    second>` on the key's machine → the using machine lists it no more. `devices remove <the
+    first>` there → the using machine still lists it, and its look says the key's machine signs
+    for it no more; paired again under the same name, `sign` still running → the same, and
+    `sign` says to run it again; `sign` run again → the look works. Ctrl-C in `sign` → the next
+    look is refused, a running `mcp` still looks. With a tagged
     machine as `--for`: `sign` says to set `ROAMRUNCTL_SIGNER` there, and nothing is listed
     there until it is; a mistyped name there is said. On Windows: `pair control --with`, introduced by a Mac; `look`;
     `sign` for a Linux machine. `roamrunctl pair introduce --mac x --to y` → says `--host`.

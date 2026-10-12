@@ -282,12 +282,14 @@ bounded.
   making a new pairing signs (that ends in the pairing's own public key), so the key
   isn't lent to pair another device as this machine. It says each time it signs, and
   signs no more for a device removed on its machine meanwhile, or saved anew under its
-  name. It answers one request at a time: the machine named can make it wait.
+  name (the file it read is compared, byte for byte, at each request), until it is run
+  again. It answers one request at a time: the machine named can make it wait.
   The machine that uses the device asks its own user's other machines on the tailnet
   (not a tagged one, not another user's; or the one `ROAMRUNCTL_SIGNER` names) which
   signs for it. The first time it opens a device it saves which machine that was and
   what it said the device is — address, and the device's public key, no private key —
-  and from then on asks only that machine and takes only that device for the name.
+  and from then on asks only the machine of that name and takes only that device for the
+  name. Where it can't save that, it doesn't use the device.
   What that buys: the key isn't on the machine an agent runs on and can't be copied
   from it, and ending `sign` ends new connections. What it doesn't:
   - The machine named — any program on it — connects to the devices named for as long

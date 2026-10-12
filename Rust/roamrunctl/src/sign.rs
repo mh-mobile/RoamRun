@@ -33,6 +33,9 @@ pub fn fits(identifier: &str, own: &[u8; 32], what: &[u8]) -> bool {
 /// The pairings signed with, by the names their devices are saved under: pairings made on one machine
 /// share an identifier, and each has a key of its own.
 pub type Keys = HashMap<String, (String, SigningKey)>;
+/// Said of a device that was signed for and isn't any more: removed here, or saved anew, since this began.
+const CHANGED: &str = "changed";
+
 /// Whether a device is still saved here as it was; and the devices signed for, those still held, as JSON.
 pub type Held<'a> = &'a dyn Fn(&str) -> bool;
 pub type Listed<'a> = &'a dyn Fn(Held) -> String;
@@ -47,7 +50,8 @@ fn answer<'a>(line: &str, keys: &'a Keys, list: Listed, held: Held) -> (String, 
     let Some(["sign", name, what]) = line.strip_prefix(PREFIX).map(|words| words.split(' ').collect::<Vec<_>>()).as_deref().map(|w| <[&str; 3]>::try_from(w).ok()).unwrap_or(None) else {
         return refused("not-a-request");
     };
-    let Some((name, (identifier, key))) = keys.get_key_value(name).filter(|(name, _)| held(name)) else { return refused("no-such-pairing") };
+    let Some((name, (identifier, key))) = keys.get_key_value(name) else { return refused("no-such-pairing") };
+    if !held(name) { return refused(CHANGED) }
     let Ok(what) = URL_SAFE_NO_PAD.decode(what) else { return refused("not-a-request") };
     if !fits(identifier, &key.verifying_key().to_bytes(), &what) { return refused("not-a-pairing-check"); }
     (format!("{PREFIX}signed {}", URL_SAFE_NO_PAD.encode(key.sign(&what).to_bytes())), Some(name))
@@ -82,19 +86,19 @@ pub fn serve(machine: &str, keys: Keys, list: Listed, held: Held) -> Result<Stri
     })?;
     let mut names: Vec<&str> = keys.keys().map(String::as_str).collect();
     names.sort();
-    eprintln!("Signing for {machine}, and for it alone, with the pairing of: {}. Ctrl-C ends it: {machine} can then make no new connection to them — one it has open (a `roamrunctl mcp` running there) goes on until that ends.", names.join(", "));
+    note!("Signing for {machine}, and for it alone, with the pairing of: {}. Ctrl-C ends it: {machine} can then make no new connection to them — one it has open (a `roamrunctl mcp` running there) goes on until that ends.", names.join(", "));
     if tailscale::asks_by_itself(&status, &other) {
-        eprintln!("Nothing is to be done on {machine}: `roamrunctl devices` there lists them, and its commands ask here (TCP port {PORT}).");
+        note!("Nothing is to be done on {machine}: `roamrunctl devices` there lists them, and its commands ask here (TCP port {PORT}).");
     } else {
-        eprintln!("{machine} is tagged, or another user's: it doesn't ask by itself. There, set ROAMRUNCTL_SIGNER={} — then `roamrunctl devices` lists them, and its commands ask here (TCP port {PORT}).", tailscale::short(&status.this.dns_name));
+        note!("{machine} is tagged, or another user's: it doesn't ask by itself. There, set ROAMRUNCTL_SIGNER={} — then `roamrunctl devices` lists them, and its commands ask here (TCP port {PORT}).", tailscale::short(&status.this.dns_name));
     }
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
         let Ok(from) = stream.peer_addr() else { continue };
         // Whoever asks is held to being the machine named, by address and by Tailscale's own id for it.
-        if from.ip() != std::net::IpAddr::V4(other.ip) { eprintln!("Turned away {}: it isn't {machine}.", from.ip()); continue }
+        if from.ip() != std::net::IpAddr::V4(other.ip) { note!("Turned away {}: it isn't {machine}.", from.ip()); continue }
         if !tailscale::status().and_then(|now| tailscale::known(&now, machine)).is_ok_and(|now| now.is(&other)) {
-            eprintln!("Turned away a request: Tailscale couldn't say just then that it is {machine}.");
+            note!("Turned away a request: Tailscale couldn't say just then that it is {machine}.");
             continue;
         }
         let Some(line) = read_line(&stream, MAX, LINE) else { continue };
@@ -102,9 +106,10 @@ pub fn serve(machine: &str, keys: Keys, list: Listed, held: Held) -> Result<Stri
         let _ = stream.set_write_timeout(Some(LINE));
         let _ = stream.write_all(format!("{said}\n").as_bytes());
         match name {
-            Some(name) => eprintln!("Signed one connection to {name} for {machine}."),
+            Some(name) => note!("Signed one connection to {name} for {machine}."),
             None if said.starts_with(&format!("{PREFIX}devices ")) => {}
-            None => eprintln!("Refused a request of {machine}'s ({}).", said.trim_start_matches(PREFIX)),
+            None if said.ends_with(CHANGED) => note!("Refused a request of {machine}'s: that device was removed here, or saved anew, since this began. To sign for it again, end this and run it again."),
+            None => note!("Refused a request of {machine}'s ({}).", said.trim_start_matches(PREFIX)),
         }
     }
     Ok(String::new())
@@ -121,6 +126,7 @@ pub fn ask(signer: &str, name: &str, what: &[u8]) -> Result<[u8; 64], String> {
     let line = read_line(&stream, MAX, LINE).ok_or("it gave no answer")?;
     match line.strip_prefix(PREFIX).map(|words| words.split(' ').collect::<Vec<_>>()).as_deref() {
         Some(["signed", signature]) => URL_SAFE_NO_PAD.decode(signature).ok().and_then(|bytes| bytes.try_into().ok()).ok_or("what it sent isn't a signature".to_string()),
+        Some(["refused", CHANGED]) => Err(format!("it signs for {name} no more: it was removed there, or paired again, since its `roamrunctl sign` began. To use it again, that is ended and run again there")),
         Some(["refused", "no-such-pairing"]) => Err("it signs for no such device (removed there, or not named to its `roamrunctl sign`?)".into()),
         // Its word only where it is one of ours: what is shown here isn't whatever it sends.
         Some(["refused", why]) if ["not-a-request", "not-a-pairing-check"].contains(why) => Err(format!("it refused ({why})")),
@@ -219,7 +225,7 @@ mod tests {
         }
         // A device removed here since: signed for no more.
         let gone: Keys = HashMap::from([("gone".to_string(), (id.to_string(), key.clone()))]);
-        assert_eq!(answer(&format!("{PREFIX}sign gone {}", URL_SAFE_NO_PAD.encode(&what)), &gone, &|_| "[]".to_string(), &held).0, "rr-sign-v1 refused no-such-pairing");
+        assert_eq!(answer(&format!("{PREFIX}sign gone {}", URL_SAFE_NO_PAD.encode(&what)), &gone, &|_| "[]".to_string(), &held).0, "rr-sign-v1 refused changed");
         // What it signs for is said as it was given, and no key with it.
         assert_eq!(answer("rr-sign-v1 devices?", &keys, &|held| format!("[{}]", held("gone")), &held), ("rr-sign-v1 devices [false]".to_string(), None));
     }
