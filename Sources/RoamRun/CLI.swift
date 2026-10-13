@@ -852,7 +852,7 @@ enum CLI {
             case .ended: stop("\(far.dnsName) stopped standing in before it connected to \(profile.displayName): what it printed says why")
             case .wentAway: stop("\(far.dnsName) went away (its command stopped, or the connection dropped) while it stood in: what it printed says whether \(profile.displayName) was saved")
             case .notThatMac: stop("the address this Mac had for \(far.dnsName) isn't that Mac's any more (or Tailscale couldn't say whose it is): nothing was sent to it. Run this again")
-            case .tooOld: stop("\(far.dnsName) hung up on it without a word: its RoamRun is likely from before an Apple Vision Pro could be introduced (0.6.0). Update RoamRun there")
+            case .tooOld: stop("\(far.dnsName) hung up on it without a word: its RoamRun is likely from before an Apple Vision Pro could be introduced (0.7.0). Update RoamRun there")
             case .garbled: stop("\(far.dnsName) answered with something this RoamRun doesn't know: is RoamRun the same version on both?")
             case .noOne: stop("\(far.dnsName) wasn't waiting in 10 minutes. Is `roamrun pair xcode --with \(me)` running there, and do Tailscale's rules let this Mac reach port \(PairWire.port) there?")
             case .stopped: stop("stopped")
