@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/icon.png" width="128" height="128" alt="RoamRun icon">
+  <img src="docs/images/icon.png" width="128" height="128" alt="RoamRun icon">
 </p>
 
 <h1 align="center">RoamRun</h1>
@@ -14,7 +14,7 @@
 
 <p align="center"><a href="https://mh-mobile.github.io/RoamRun/">Web サイト</a> · <a href="README.md">English</a> | 日本語</p>
 
-<p align="center"><img src="docs/main.png" width="800" alt="RoamRun のメイン画面"></p>
+<p align="center"><img src="docs/images/main.png" width="800" alt="RoamRun のメイン画面"></p>
 
 Xcode のワイヤレスデバッグを、Tailscale などの mesh VPN 越しに使えるようにする macOS メニューバーアプリ。
 
@@ -73,7 +73,7 @@ sequenceDiagram
 
 ### 同じことを逆向きに: デバイスのそばにいたことのない Mac
 
-ブリッジには、デバイスとペアリング済みの Mac が要ります。そしてペアリングは、1 つの Wi‑Fi の上で行われます。デバイスが、その Wi‑Fi で Mac を Bonjour で見つけて、つなぎに行くからです。離れた場所の Mac は、見つけてもらえません。そこで、デバイスの Wi‑Fi に**いる** Mac が、代わりに名乗ります（Mac が無ければ、デバイス自身のアプリや、Windows・Linux の機械でもできます。下の「デバイス自身に引き合わせてもらう」「Windows や Linux のマシンに引き合わせてもらう」）。ブリッジの仕掛けを、逆向きにしたものです。**デバイスには「離れた Mac が同じ Wi‑Fi にいる」と思わせ、通信は実際には Tailscale を通します。**
+ブリッジには、デバイスとペアリング済みの Mac が要ります。そしてペアリングは、1 つの Wi‑Fi の上で行われます。デバイスが、その Wi‑Fi で Mac を Bonjour で見つけて、つなぎに行くからです。離れた場所の Mac は、見つけてもらえません。そこで、デバイスの Wi‑Fi に**いる** Mac が、代わりに名乗ります（Mac が無ければ、デバイス自身のアプリや、Windows・Linux のマシンでもできます。下の「デバイス自身に引き合わせてもらう」「Windows や Linux のマシンに引き合わせてもらう」）。ブリッジの仕掛けを、逆向きにしたものです。**デバイスには「離れた Mac が同じ Wi‑Fi にいる」と思わせ、通信は実際には Tailscale を通します。**
 
 ```mermaid
 flowchart RL
@@ -153,8 +153,8 @@ dmg は `make dmg` で作れます（`SIGN_ID` / `NOTARY_PROFILE` を渡すと D
 Mac の IP が変わるとブリッジは自動再起動します。
 
 <p align="center">
-  <img src="docs/add-device.png" width="520" alt="デバイスの追加">
-  <img src="docs/menu.png" width="260" alt="メニューバーのメニュー">
+  <img src="docs/images/add-device.png" width="520" alt="デバイスの追加">
+  <img src="docs/images/menu.png" width="260" alt="メニューバーのメニュー">
 </p>
 
 ## CLI
@@ -446,9 +446,9 @@ ssh cloud-mac roamrun devices add "$LINE"
 **デバイス自身に引き合わせてもらう。** デバイスの近くに RoamRun の入った Mac がないとき（そばにあるのが Windows や Linux のマシンだけ、など）は、デバイス上のアプリが代わりを務めます。[`iOS/`](iOS/README.ja.md) にある RoamRun Introducer です。Xcode でビルドして入れます（iOS 27 以降）。App Store にはありません。離れた Mac では、もう 1 台の Mac を名指しする場所に、デバイスを名指しします。
 
 <p align="center">
-  <img src="docs/introducer-home.png" width="200" alt="RoamRun Introducer: 離れた Mac の名前と Introduce">
-  <img src="docs/introducer-pairing.png" width="200" alt="引き合わせの途中: 設定でペアリングする">
-  <img src="docs/introducer-done.png" width="200" alt="終わり: 離れた Mac がこの iPhone を保存した">
+  <img src="docs/images/introducer-home.png" width="200" alt="RoamRun Introducer: 離れた Mac の名前と Introduce">
+  <img src="docs/images/introducer-pairing.png" width="200" alt="引き合わせの途中: 設定でペアリングする">
+  <img src="docs/images/introducer-done.png" width="200" alt="終わり: 離れた Mac がこの iPhone を保存した">
 </p>
 
 ```sh
@@ -594,12 +594,13 @@ RoamRun は、mh-mobile の指揮のもと、Claude Code（Claude Opus 5.5）が
 
 ## 関連プロジェクト
 
-同じ課題（別ネットワークの iPhone に Xcode から届かせる）に取り組んでいるプロジェクトです。
+同じ課題（別ネットワークの iPhone に Xcode から届かせる）に取り組んでいるプロジェクトと、同じ場所を別の道具で扱っているプロジェクトです。
 
 - [Viaaaron/iphone-tailnet-bridge](https://github.com/Viaaaron/iphone-tailnet-bridge) — Bonjour と socat による中継をシェルスクリプトで実装
 - [ahmadtawakol/iphone-tailnet-bridge](https://github.com/ahmadtawakol/iphone-tailnet-bridge) — 上記のフォーク。ネイティブ macOS アプリと Go 製ツールを追加
 - [CodeEagle/remote-ios-deploy-skill](https://github.com/CodeEagle/remote-ios-deploy-skill) — 同じ手法（Bonjour プロキシ + TCP/UDP 中継）をエージェント用スキル（SKILL.md）にしたもの
 - [lyo-eos/ios-ota](https://github.com/lyo-eos/ios-ota) — Tailscale 越しに署名済みアプリをインストール（Wi-Fi から 5G への切り替え後も継続）。Xcode の Run やデバッガではなく、インストールに特化
+- [joshuaswarren/omarchy-apple-dev](https://github.com/joshuaswarren/omarchy-apple-dev) — Linux から、Xcode も Mac も使わずに iOS アプリをビルドして実機に入れる。Tailscale 越しに iPhone へ届く手順の記録もある（[OVER-TAILNET.md](https://github.com/joshuaswarren/omarchy-apple-dev/blob/main/docs/OVER-TAILNET.md)）。Xcode の Run やデバッガを通す RoamRun とは、使う道具も目的も別
 
 ## ライセンス
 

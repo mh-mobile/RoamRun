@@ -4,13 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RoamRun</title>
-<meta name="description" content="Run your iOS apps wherever your device is. Xcode wireless debugging for iPhone, iPad and Apple Vision Pro on another network, over Tailscale.">
+<meta name="description" content="Run your iOS apps wherever your device is. Xcode wireless debugging for iPhone, iPad and Apple Vision Pro on another network, over Tailscale — and the device's screen and input for you and your agent.">
 <meta property="og:title" content="RoamRun">
 <meta property="og:description" content="Run your iOS apps wherever your device is — Xcode wireless debugging over Tailscale.">
-<meta property="og:image" content="https://mh-mobile.github.io/RoamRun/main.png">
+<meta property="og:image" content="https://mh-mobile.github.io/RoamRun/images/main.png">
 <meta property="og:url" content="https://mh-mobile.github.io/RoamRun/">
 <meta name="twitter:card" content="summary_large_image">
-<link rel="icon" href="icon.png">
+<link rel="icon" href="images/icon.png">
 <script>
   // Before the page renders, so Japanese readers don't see English first.
   (function () {
@@ -74,7 +74,7 @@
 </div>
 <main>
   <header>
-    <img class="icon" src="icon.png" alt="" width="112" height="112">
+    <img class="icon" src="images/icon.png" alt="" width="112" height="112">
     <h1>RoamRun</h1>
     <p class="tagline" data-l="en">Run your iOS apps wherever your device is.</p>
     <p class="tagline" data-l="ja">デバイスがどこにあっても、iOS アプリを実機で。</p>
@@ -86,7 +86,7 @@
     </div>
   </header>
 
-  <img class="shot" src="main.png" width="1600" height="1002" alt="RoamRun main window: an iPad ready for Xcode over Tailscale">
+  <img class="shot" src="images/main.png" width="1600" height="1002" alt="RoamRun main window: an iPad ready for Xcode over Tailscale">
 
   <h2 data-l="en">What you get</h2>
   <h2 data-l="ja">できること</h2>
@@ -98,8 +98,23 @@
     </div>
     <div class="card">
       <h3 data-l="en">A CLI for you and your agent</h3><h3 data-l="ja">人にも AI エージェントにも CLI</h3>
-      <p data-l="en"><code>roamrun up</code>, <code>status</code>, <code>run</code>, <code>screenshot</code> — over SSH too. An agent skill teaches Claude Code, Codex and others how to use it.</p>
-      <p data-l="ja"><code>roamrun up</code>・<code>status</code>・<code>run</code>・<code>screenshot</code> を SSH 越しでも。Claude Code や Codex などに使い方を教えるスキルも入れられます。</p>
+      <p data-l="en"><code>roamrun up</code>, <code>status</code>, <code>run</code>, <code>logs</code>, <code>doctor</code> — over SSH too. An agent skill teaches Claude Code, Codex and others how to use it.</p>
+      <p data-l="ja"><code>roamrun up</code>・<code>status</code>・<code>run</code>・<code>logs</code>・<code>doctor</code> を SSH 越しでも。Claude Code や Codex などに使い方を教えるスキルも入れられます。</p>
+    </div>
+    <div class="card">
+      <h3 data-l="en">See and operate the device</h3><h3 data-l="ja">実機を見て、操作する</h3>
+      <p data-l="en"><code>roamrun look</code>, <code>tap</code>, <code>swipe</code>, <code>type</code>, <code>press</code> — the real device's screen and input, from the command line or as MCP tools for an agent. iOS 27 or later; it needs neither the bridge nor Xcode. <a href="https://github.com/mh-mobile/RoamRun#seeing-and-operating-the-device">More</a></p>
+      <p data-l="ja"><code>roamrun look</code>・<code>tap</code>・<code>swipe</code>・<code>type</code>・<code>press</code> で、実機の画面を見て操作できます。コマンドからでも、AI エージェント向けの MCP ツールとしても。iOS 27 以降が必要で、ブリッジも Xcode も要りません。<a href="https://github.com/mh-mobile/RoamRun/blob/main/README.ja.md#実機を見る操作するデバイス操作">詳しく</a></p>
+    </div>
+    <div class="card">
+      <h3 data-l="en">A Mac the device was never near</h3><h3 data-l="ja">デバイスのそばにいたことのない Mac でも</h3>
+      <p data-l="en">Pair a Mac in a data centre, or an agent's, with your device without ever bringing them together: another Mac, a Windows or Linux machine, or the device itself introduces them over Tailscale. iOS 27 and Xcode 27. <a href="https://github.com/mh-mobile/RoamRun#a-mac-the-device-was-never-near">More</a></p>
+      <p data-l="ja">データセンターの Mac や AI エージェントの Mac を、一度も近づけずにデバイスとペアリングできます。引き合わせるのは、別の Mac、Windows や Linux のマシン、またはデバイス自身で、Tailscale 越しに行います。iOS 27 と Xcode 27 が必要です。<a href="https://github.com/mh-mobile/RoamRun/blob/main/README.ja.md#デバイスと同じ場所にいたことのない-mac">詳しく</a></p>
+    </div>
+    <div class="card">
+      <h3 data-l="en">Install over the air</h3><h3 data-l="ja">OTA でインストール</h3>
+      <p data-l="en"><code>roamrun ota</code> puts a build on a page the device opens in Safari. No bridge, no pairing, and cellular will do — it installs, and doesn't debug. <a href="https://github.com/mh-mobile/RoamRun#installing-without-the-bridge-over-the-air">More</a></p>
+      <p data-l="ja"><code>roamrun ota</code> で、ビルドをデバイスの Safari から入れられます。ブリッジもペアリングも要らず、モバイル回線でも使えます。できるのはインストールだけで、デバッグはできません。<a href="https://github.com/mh-mobile/RoamRun/blob/main/README.ja.md#ブリッジを通さず入れる-ota">詳しく</a></p>
     </div>
     <div class="card">
       <h3 data-l="en">Hands off your traffic</h3><h3 data-l="ja">通信の中身には触れません</h3>
@@ -126,21 +141,23 @@
   <h2 data-l="ja">インストール</h2>
   <pre><code>brew install --cask mh-mobile/tap/roamrun</code><button class="copy" type="button"><span data-l="en">Copy</span><span data-l="ja">コピー</span></button></pre>
   <p class="note" data-l="en">Or download the dmg from <a href="https://github.com/mh-mobile/RoamRun/releases/latest">GitHub Releases</a>. Then add your device once in the app, while it's on the Mac's Wi‑Fi (or USB), and start a bridge. Full guide: <a href="https://github.com/mh-mobile/RoamRun#readme">README</a>.</p>
+  <p class="note" data-l="en">On a Windows or Linux machine (or a Mac without RoamRun) that is to introduce a device to a far Mac: <a href="https://github.com/mh-mobile/RoamRun/tree/main/Rust/roamrunctl#readme"><code>roamrunctl</code></a>, with each release.</p>
   <p class="note" data-l="ja"><a href="https://github.com/mh-mobile/RoamRun/releases/latest">GitHub Releases</a> から dmg をダウンロードしても構いません。インストール後、デバイスを Mac と同じ Wi‑Fi（または USB）につないだ状態でアプリから一度登録し、ブリッジを開始します。詳しくは <a href="https://github.com/mh-mobile/RoamRun/blob/main/README.ja.md">README</a> をどうぞ。</p>
+  <p class="note" data-l="ja">デバイスを離れた Mac に引き合わせる側が Windows や Linux のマシン（または RoamRun のない Mac）なら、<a href="https://github.com/mh-mobile/RoamRun/tree/main/Rust/roamrunctl#readme"><code>roamrunctl</code></a> を使います。リリースごとに配布しています。</p>
 
   <h2 data-l="en">Requirements</h2>
   <h2 data-l="ja">必要なもの</h2>
   <ul class="req" data-l="en">
     <li>macOS 13 or later on Apple Silicon, with an administrator account</li>
     <li>Xcode, and Tailscale on both the Mac and the device</li>
-    <li>iOS 17.4 or later; the device paired with the Mac once, with Developer Mode on</li>
-    <li>While away, the device on some Wi‑Fi with internet access (another device's hotspot is fine; cellular alone isn't). <code>roamrun ota</code> installs a build without the bridge — over cellular too, and on unpaired devices — but only installs: no debugging</li>
+    <li>iOS 17.4 or later; the device paired with the Mac once, with Developer Mode on — over USB or on the same Wi‑Fi, or, with iOS 27 and Xcode 27, from afar</li>
+    <li>While away, the device on some Wi‑Fi with internet access (another device's hotspot is fine; cellular alone isn't — once Xcode has its session, a setting lets it go on when the device moves to cellular). <code>roamrun ota</code> installs a build without the bridge — over cellular too, and on unpaired devices — but only installs: no debugging</li>
   </ul>
   <ul class="req" data-l="ja">
     <li>Apple シリコンの Mac（macOS 13 以降）と管理者アカウント</li>
     <li>Xcode、Mac とデバイスの両方で Tailscale</li>
-    <li>iOS 17.4 以降。デバイスを一度 Mac とペアリングし、デベロッパモードをオンに</li>
-    <li>外出先では、インターネットにつながった Wi‑Fi にデバイスを接続（別の端末のテザリング可。モバイル回線だけは不可）。<code>roamrun ota</code> はブリッジを通さずインストールでき（モバイル回線でも、未ペアリング端末でも）、できるのはインストールだけです</li>
+    <li>iOS 17.4 以降。デバイスを一度 Mac とペアリングし、デベロッパモードをオンに（USB か同じ Wi‑Fi で。iOS 27 と Xcode 27 なら、離れたままでも）</li>
+    <li>外出先では、インターネットにつながった Wi‑Fi にデバイスを接続（別の端末のテザリング可。モバイル回線だけは不可。Xcode がつながったあとなら、設定をオンにしておくと、モバイル回線に移っても続けられます）。<code>roamrun ota</code> はブリッジを通さずインストールでき（モバイル回線でも、未ペアリング端末でも）、できるのはインストールだけです</li>
   </ul>
 
   <footer>

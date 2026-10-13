@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/icon.png" width="128" height="128" alt="RoamRun icon">
+  <img src="docs/images/icon.png" width="128" height="128" alt="RoamRun icon">
 </p>
 
 <h1 align="center">RoamRun</h1>
@@ -14,7 +14,7 @@
 
 <p align="center"><a href="https://mh-mobile.github.io/RoamRun/">Website</a> · English | <a href="README.ja.md">日本語</a></p>
 
-<p align="center"><img src="docs/main.png" width="800" alt="RoamRun main window: iPadPro ready for Xcode over Tailscale"></p>
+<p align="center"><img src="docs/images/main.png" width="800" alt="RoamRun main window: iPadPro ready for Xcode over Tailscale"></p>
 
 A macOS menu bar app that makes Xcode's wireless debugging work over Tailscale or another mesh VPN.
 
@@ -153,8 +153,8 @@ Release notes: <https://github.com/mh-mobile/RoamRun/releases>. There's no auto-
 When the Mac's IP changes, the bridge restarts automatically.
 
 <p align="center">
-  <img src="docs/add-device.png" width="520" alt="Add Device sheet">
-  <img src="docs/menu.png" width="260" alt="Menu bar menu">
+  <img src="docs/images/add-device.png" width="520" alt="Add Device sheet">
+  <img src="docs/images/menu.png" width="260" alt="Menu bar menu">
 </p>
 
 ## CLI
@@ -316,9 +316,9 @@ ssh cloud-mac roamrun devices add "$LINE"
 **From the device itself.** Where no Mac with RoamRun is near the device — the machine beside it is Windows or Linux, say — an app on the device stands in instead: RoamRun Introducer, in [`iOS/`](iOS/). It is built and installed with Xcode, for iOS 27 or later; it isn't on the App Store. The far Mac names the device where it would name the other Mac:
 
 <p align="center">
-  <img src="docs/introducer-home.png" width="200" alt="RoamRun Introducer: the far Mac's name, and Introduce">
-  <img src="docs/introducer-pairing.png" width="200" alt="An introduction under way: pair in Settings">
-  <img src="docs/introducer-done.png" width="200" alt="The end: the far Mac has saved this iPhone">
+  <img src="docs/images/introducer-home.png" width="200" alt="RoamRun Introducer: the far Mac's name, and Introduce">
+  <img src="docs/images/introducer-pairing.png" width="200" alt="An introduction under way: pair in Settings">
+  <img src="docs/images/introducer-done.png" width="200" alt="The end: the far Mac has saved this iPhone">
 </p>
 
 ```sh
@@ -609,12 +609,13 @@ Device control is built on [idevice](https://github.com/jkcoxson/idevice) (Jacks
 
 ## Related projects
 
-Projects tackling the same problem (reaching an iPhone on another network from Xcode):
+Projects tackling the same problem (reaching an iPhone on another network from Xcode), or the same ground with other tools:
 
 - [Viaaaron/iphone-tailnet-bridge](https://github.com/Viaaaron/iphone-tailnet-bridge) — Bonjour plus a socat relay, as shell scripts
 - [ahmadtawakol/iphone-tailnet-bridge](https://github.com/ahmadtawakol/iphone-tailnet-bridge) — a fork of the above that adds a native macOS app and Go tools
 - [CodeEagle/remote-ios-deploy-skill](https://github.com/CodeEagle/remote-ios-deploy-skill) — the same approach (Bonjour proxy + TCP/UDP relay) as an agent skill (SKILL.md)
 - [lyo-eos/ios-ota](https://github.com/lyo-eos/ios-ota) — installs signed apps over Tailscale (and keeps going when switching from Wi-Fi to 5G). Focused on installing rather than Xcode's Run or the debugger
+- [joshuaswarren/omarchy-apple-dev](https://github.com/joshuaswarren/omarchy-apple-dev) — builds iOS apps on Linux and puts them on a device, with no Xcode and no Mac; it also records how to reach an iPhone over Tailscale ([OVER-TAILNET.md](https://github.com/joshuaswarren/omarchy-apple-dev/blob/main/docs/OVER-TAILNET.md)). Other tools and another aim than RoamRun, which carries Xcode's own Run and debugger
 
 ## License
 

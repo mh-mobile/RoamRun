@@ -5,9 +5,9 @@
 デバイス自身の上で `roamrun pair introduce` の代わりをする iOS アプリです。離れた Mac のペアリングの申し出を、デバイスがいる Wi‑Fi で名乗り、「設定」からの 1 本の接続を受けて、デバイスにすでに入っている Tailscale の VPN 越しに、離れた Mac へ取り次ぎます。デバイスのそばに Mac は要りません。離れた Mac の側からの使い方は、メインの README の「[デバイス自身に引き合わせてもらう](../README.ja.md#デバイスと同じ場所にいたことのない-mac)」にあります。
 
 <p align="center">
-  <img src="../docs/introducer-home.png" width="200" alt="最初の画面: 離れた Mac の名前と Introduce">
-  <img src="../docs/introducer-pairing.png" width="200" alt="引き合わせの途中: 設定でペアリングする">
-  <img src="../docs/introducer-done.png" width="200" alt="終わり: 離れた Mac がこの iPhone を保存した">
+  <img src="../docs/images/introducer-home.png" width="200" alt="最初の画面: 離れた Mac の名前と Introduce">
+  <img src="../docs/images/introducer-pairing.png" width="200" alt="引き合わせの途中: 設定でペアリングする">
+  <img src="../docs/images/introducer-done.png" width="200" alt="終わり: 離れた Mac がこの iPhone を保存した">
 </p>
 
 `make app` には含まれず、App Store にもありません。ここでビルドします。ホーム画面と「設定」では「RoamRun」と表示されます（アイコンの下に、名前の全体は収まりません）。`Sources/Introduction.swift` は `Sources/RoamRun/Introductions.swift`（行の形式とその決まり）の写しです。同じ内容に保ってください。
@@ -40,8 +40,8 @@ Xcode 27 の入った Mac と [XcodeGen](https://github.com/yonaskolb/XcodeGen)�
 デバイス操作（`look`、`tap` など）のペアリングも、同じ流れです。離れた Mac で RoamRun のアプリを開いたまま、`roamrun pair control --with <この iPhone の Tailscale 上の名前>` を実行します（アプリがまだ名前を覚えていない Mac には、ここでも `--qr` が使えます）。アプリ側に、ほかの設定は要りません。どちらのペアリングかは、離れた Mac の返事で決まります。コードは離れた Mac が決め、この iPhone に表示されます。通知と、iOS がアプリのバックグラウンド作業を表示する場所（「設定」の上）に出ます。
 
 <p align="center">
-  <img src="../docs/introducer-code.png" width="200" alt="デバイス操作のペアリング: コードがこの iPhone に出る">
-  <img src="../docs/introducer-byhand.png" width="200" alt="手で運ぶ形: roamrun devices add に渡す行">
+  <img src="../docs/images/introducer-code.png" width="200" alt="デバイス操作のペアリング: コードがこの iPhone に出る">
+  <img src="../docs/images/introducer-byhand.png" width="200" alt="手で運ぶ形: roamrun devices add に渡す行">
 </p>
 
 **Carry the lines by hand**（行を手で運ぶ）は、`--with` を使わない形です。`roamrun pair xcode` が出す `rr-xcode-offer-v1:` の行を貼り付けるか、`roamrun pair xcode --qr` が描くコードから、離れた Mac の名前と一緒に読み取ります。アプリが表示する `rr-device-v1:` の行を、`roamrun devices add` に渡します。問い合わせのできない離れた Mac のための形です。離れた Mac が保存したかどうかを答えなかったときも、アプリはこの行を表示します。
