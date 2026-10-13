@@ -49,7 +49,7 @@ Expand-Archive -Force roamrunctl.zip .
 ```
 
 On Windows on ARM, replace `x86_64` with `aarch64` in both the download name and the executable
-path. The binaries are unsigned, so SmartScreen may warn on first launch. For the commands
+path. The binaries are not code-signed. For the commands
 below, use this executable path or add its folder to your `PATH` so that `roamrunctl` works
 by name.
 
@@ -126,8 +126,8 @@ allow that port from that address; see
 Suppose the using machine (`cloud-pc`) is elsewhere. A near machine (`home-pc`) on the
 device's Wi-Fi can introduce it once.
 
-**Initial-pairing requirement:** For this `pair control --with` + `pair introduce` flow, the
-device must already have paired with something (such as a Mac running Xcode). That makes
+**Initial-pairing requirement:** For this `pair control --with` + `pair introduce` flow, and
+for the Introducer app below, the device must already have paired with something (such as a Mac running Xcode). That makes
 the device advertise the pairing service the near machine needs. If it has never paired,
 pair it once on its own Wi-Fi first.
 
@@ -208,7 +208,8 @@ The tools are `devices`, `look`, `tap`, `swipe`,
 `elements`, `type`, `paste`, `press`, `install`, and `launch`.
 
 For `tap` and `swipe`, the agent must first call `look`. Each look permits one tap or swipe
-within 60 seconds. Any other tool call spends it, and a tap or swipe is refused if the device
+within 60 seconds. `type`, `paste`, `press`, `elements`, `install` or `launch` on that device
+spends it, and a tap or swipe is refused if the device
 reports that it was turned since the look. The server uses the device's screenshots and input
 commands, not a continuous screen-sharing stream.
 
@@ -219,7 +220,7 @@ register or start the MCP server.
 ### The key file (A)
 
 In A, the key is saved in `~/.config/roamrunctl/devices/phone.json` on Linux/macOS
-(or under `$XDG_CONFIG_HOME` when set), and in `%LOCALAPPDATA%\roamrunctl\devices` on Windows.
+(or under `$XDG_CONFIG_HOME` when that is an absolute path), and in `%LOCALAPPDATA%\roamrunctl\devices` on Windows.
 Unix files are created readable only by their owner. **Any program running as that user,
 including an agent, can nevertheless use an unencrypted key** to operate the device.
 
@@ -299,10 +300,9 @@ What the host runs decides whose pairing it is:
 
 For the two device-control rows, the near machine's command prints the pairing code; a
 `roamrunctl` host prints it too. For Xcode, use the code shown in
-**Device Hub > Pair Nearby Device** on the host; the near machine then prints a device record
-on standard output, and if it exits with 1, that record is added on the host with
-`roamrun devices add` (see the
-[reference](../../docs/roamrunctl-reference.md#pair-introduce-options-and-results)).
+**Device Hub > Pair Nearby Device** on the host. What the near machine then prints on standard
+output, and what each exit code asks of you, is in the
+[reference](../../docs/roamrunctl-reference.md#pair-introduce-options-and-results).
 Ctrl-C withdraws the near machine's local advertisement.
 
 ## Reference and security

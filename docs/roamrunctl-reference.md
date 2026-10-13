@@ -23,14 +23,15 @@ the using machine and the device, not through the key's machine.
   `~/.local/bin`, add that directory to your `PATH` or run `~/.local/bin/roamrunctl` directly.
 - The Windows archive extracts to a subdirectory. Run, for example,
   `.\roamrunctl-windows-x86_64\roamrunctl.exe`, or add that directory to `PATH`.
-  The binaries are unsigned; SmartScreen may warn. Windows Firewall may ask to allow incoming
-  connections when the program first advertises a pairing. Allow the appropriate network profile.
+  The binaries are not code-signed. In one run on Windows 11, Windows Firewall asked whether to
+  let it in the first time it advertised, and was allowed for private and public networks; in a
+  PowerShell run as administrator it asked nothing.
 - `cargo install --locked --git ...` requires Rust 1.89 or later and a C compiler. This is a
   source build, not the release's static Linux build. `roamrunctl` is not published on
   crates.io; the Homebrew formula is in `mh-mobile/tap`, not Homebrew core.
 - The reported version is RoamRun's version. Match versions between pairing participants.
-  Before 0.7.0, `pair introduce` used `--mac` instead of `--host`; old and new releases may
-  print incompatible commands.
+  Before 0.7.0, `pair introduce` used `--mac` instead of `--host`, and an older release names
+  `--mac` in the commands it tells you to run.
 
 ## Initial pairing and network prerequisites
 
@@ -75,19 +76,19 @@ the using machine and the device, not through the key's machine.
   TCP 41830 **and** the new port shown during the attempt, in both Tailscale's access policy
   and the using machine's firewall. The dynamic port changes between attempts. Port 41830
   being blocked looks like no host waiting; a blocked pairing port is reported separately.
-  Broadly opening every TCP port is unnecessary if you can update the rule for the printed port.
 - For `pair introduce`, the device must also be allowed into the near machine on its printed
   local TCP port. If an Xcode offer is supplied with `--offer`, asking the host on 41830 is
   not needed; the host's pairing port must still be reachable.
 - In B, allow incoming TCP 41831 **from the named using machine** to the key's machine.
   Signing does not proxy screenshots or input; device traffic travels directly between
   the using machine and the device.
-- macOS and Windows may prompt for incoming connections.
-- roamrunctl chooses its address on the Wi-Fi by looking at its interfaces' addresses, not at
-  the routing table. On one Windows machine, "Use Tailscale subnets" had routed its own LAN
+- macOS, with its firewall on, asked whether to let `roamrunctl` take incoming connections (seen
+  once, with a Linux machine standing in for the device).
+- roamrunctl chooses its address on the Wi-Fi by looking at its interfaces' addresses; the routing
+  table only chooses between several of them on that network. On one Windows machine, "Use Tailscale subnets" had routed its own LAN
   through Tailscale, and pairing went through all the same.
-- A userspace-networking-only Tailscale setup may have no local Tailscale address to bind.
-  `sign` and `pair control --with` are not expected to work in that configuration.
+- `sign` and `pair control --with` listen on this machine's Tailscale address. With Tailscale in
+  userspace-networking mode alone, neither was tried.
 
 ## Time limits
 
@@ -138,7 +139,7 @@ the using machine and the device, not through the key's machine.
 - Re-pairing a device under the same host identity replaces the earlier pairing on the device.
   An old record then fails to connect; remove it with `roamrunctl devices remove <name>`.
   Also remove the machine's pairing entry in the device's Developer Mode list when withdrawing it.
-- Connections try the saved port and the sixteen ports from 49152. A device restarted twice,
+- Connections try the saved port first, then the rest of 49152–49167. A device restarted twice,
   and taken off the network and back, announced 49152 each time; if a device cannot be
   reached on any of them, pair again.
 - A Mac with RoamRun can create a key for import:
@@ -204,8 +205,8 @@ needed to establish each new device connection.
 - Rotation is rejected when reported orientation or image-shape checks detect a mismatch;
   it is **not guaranteed** to be detected if the device reports no orientation.
   Tap/swipe coordinates are pixels in the image returned by the last `look`.
-- `type`, `paste`, and `press` act on the currently focused interface. `paste` may trigger
-  the device's “Allow Paste” prompt.
+- `type`, `paste`, and `press` act on the currently focused interface. `paste` makes the device
+  ask “Allow Paste” each time.
 - A queued call cancelled before it starts is not executed; a call already running may
   complete. MCP keeps connections open and reopens a device when its saved association
   changes or its connection fails.
@@ -237,8 +238,8 @@ roamrunctl pair introduce --host <host> --to <device> [--offer <line>] [--as <na
   running `roamrun pair introduce --host <host> --to <the device as RoamRun has it saved>`;
   a Mac introducing a host that runs `roamrunctl` was not tested at the time of these notes.
 - `--offer` supplies an Xcode offer manually rather than requesting it over TCP 41830:
-  `--offer "$(ssh <far-Mac> roamrun pair xcode)"`. This can help with an older RoamRun
-  or a blocked 41830 port. There is no equivalent `--offer` for device control.
+  `--offer "$(ssh <far-Mac> roamrun pair xcode)"`. It is for when port 41830
+  on the host is closed. There is no equivalent `--offer` for device control.
 - `--as` requests the device name saved by the host. The host can reject that name;
   for an Xcode pairing, the printed device record can then be added manually using
   `roamrun devices add <line> --as <different-name>`. A `roamrunctl` host gives its own
@@ -255,7 +256,7 @@ roamrunctl pair introduce --host <host> --to <device> [--offer <line>] [--as <na
 
 | Exit code | Meaning |
 |---|---|
-| 0 | The host reported saving the pairing, or an Xcode pairing using manual `--offer` was attempted and a device record was produced |
+| 0 | The host reported saving the pairing. With `--offer`: an Xcode pairing was attempted and the device record printed; the host was not told, so the record still has to be added there with `roamrun devices add` |
 | 1, with a device-record line | Xcode pairing was attempted but the host did not confirm saving it; add the record manually on the host |
 | 1, without a device-record line | No pairing completed, the device advertisement was unavailable, or device control was not saved; inspect stderr |
 | 2 | Command-line usage error, such as an unsupported `--mac` flag (a `--deadline` over 300 without `--offer` exits 1) |
@@ -267,7 +268,7 @@ advertisement before exiting (observed on macOS; on Windows for Ctrl-C and closi
 
 - **`roamrunctl` is not found:** on Linux, run `~/.local/bin/roamrunctl` or fix `PATH`.
   On Windows, run the executable inside its extracted directory or add that directory
-  to `PATH`. An MCP client may need an absolute executable path even when your shell works.
+  to `PATH`.
 - **Tailscale name is not found:** run `tailscale status` on the machine issuing the command.
   Use the peer's Tailscale DNS name, not the iPhone's local display name; check that all
   intended participants appear online in the expected tailnet.
@@ -287,10 +288,9 @@ advertisement before exiting (observed on macOS; on Windows for Ctrl-C and closi
 - **MCP cannot open an encrypted device:** `mcp` has no terminal prompt. Supply
   `ROAMRUNCTL_PASSPHRASE_FILE` or `ROAMRUNCTL_PASSPHRASE_COMMAND` in its MCP-server
   environment. The skill alone does not start the MCP server.
-- **A previously working pairing stops connecting:** a device pairing may have been
-  replaced, or its port may have changed. Try connecting again; if it still fails,
-  remove the stale record and pair again. Do not delete the device entry solely
-  because one screen request timed out.
+- **A previously working pairing stops connecting:** pairing this machine with the device again
+  replaces its earlier pairing there, and the device then refuses the old record. Remove the
+  old record with `roamrunctl devices remove <name>` and pair again.
 
 ## Building and checking
 
@@ -306,7 +306,8 @@ python3 scripts/local-check.py target/debug/roamrunctl "$(ipconfig getifaddr en0
 The local check pairs no real device. The offer goes out under a test-only Bonjour service
 (`_rrtest._tcp`); the fake device is announced under the real `_remotepairing._tcp` on the LAN
 while it runs. It checks discovery, refusal of unexpected peers, TCP relay, device-record
-creation, and advertisement cleanup, then the same for device control. Ports 41830 and 53050
+creation, and advertisement cleanup; then, for device control, the exchange with a fake host,
+its offer advertised, the relay, the code shown, and exit 0. Ports 41830 and 53050
 on this Mac must be free.
 
 Related Mac-side implementations include `Sources/RoamRun/Introductions.swift`,
@@ -321,8 +322,7 @@ against a real device at the time these notes were written:
 - iPad, Apple Vision Pro, and a device held upside down.
 - A fully Mac-free initial setup, a device never prepared by Xcode, or a device never
   paired with anything.
-- x86_64 machines, Linux without Avahi, and firewall configurations beyond ufw,
-  Windows Firewall, and macOS Firewall.
+- x86_64 machines, Linux without Avahi, and firewall tools other than ufw.
 - Signing multiple devices at once, and the `ROAMRUNCTL_SIGNER` override.
 - A Mac's `roamrun pair introduce` introducing a machine running `roamrunctl`.
 - Through MCP: swipe, type, paste, install, and launch (these had been tested outside MCP).
