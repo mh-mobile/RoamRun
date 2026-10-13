@@ -17,7 +17,7 @@
 
 ## インストール
 
-**Linux**（x86_64 / aarch64）。`~/.local/bin` に入ります。
+Linux（x86_64 / aarch64）では、次のコマンドで `~/.local/bin` に入ります。
 
 ```sh
 mkdir -p ~/.local/bin
@@ -28,7 +28,7 @@ curl -fsSL "https://github.com/mh-mobile/RoamRun/releases/latest/download/roamru
 
 `roamrunctl` だけで実行できない場合は、`~/.local/bin` を `PATH` に追加するか、以降のコマンドをフルパスで実行してください。
 
-**Windows**（PowerShell。x86_64 の例）
+Windows では、PowerShell で次のように実行します。x86_64 の例です。
 
 ```powershell
 irm https://github.com/mh-mobile/RoamRun/releases/latest/download/roamrunctl-windows-x86_64.zip -OutFile roamrunctl.zip
@@ -38,13 +38,13 @@ Expand-Archive -Force roamrunctl.zip .
 
 ARM 版の Windows では、ダウンロードするファイル名と実行ファイルのパスの `x86_64` を、どちらも `aarch64` に変えてください。バイナリにコード署名はありません。以降のコマンドは、この実行ファイルのパスで実行するか、フォルダを `PATH` に追加して実行します。
 
-**macOS**、または Homebrew を入れた Linux
+macOS と、Homebrew を入れた Linux では、Homebrew で入ります。
 
 ```sh
 brew install mh-mobile/tap/roamrunctl
 ```
 
-Rust 1.89 以降があれば、リリースのタグからビルドすることもできます。
+Rust 1.89 以降があれば、リリースのタグからビルドできます。
 
 ```sh
 cargo install --locked --git https://github.com/mh-mobile/RoamRun --tag vX.Y.Z roamrunctl
@@ -54,13 +54,15 @@ cargo install --locked --git https://github.com/mh-mobile/RoamRun --tag vX.Y.Z r
 
 ## Xcode のないマシンからデバイスを使う
 
-ペアリングすると、秘密鍵を含むペアリング情報が保存されます。この鍵を使えて、デバイスに接続できる環境にあれば、だれでも画面を見たり操作したりできます。鍵の置き場所は 2 通りあります。デバイスを操作するマシンに置くか（**A**）、別のマシンに置いて、接続のたびに署名だけしてもらうか（**B**）です。
+ペアリングすると、秘密鍵を含むペアリング情報が保存されます。この鍵を使えて、デバイスに接続できる環境なら、だれでも画面を見たり操作したりできます。鍵の置き場所は 2 通りあります。デバイスを操作するマシンに置くか（**A**）、別のマシンに置いて、接続のたびに署名だけしてもらうか（**B**）です。
 
 以降では、マシンを次のように呼びます。
 
-- **操作マシン**：`look`、`install`、`launch`、`mcp` を実行するマシン
-- **署名マシン**：秘密鍵を持ち、接続時の署名を代行するマシン（アプリのコード署名とは別の話です）。A では操作マシン自身が鍵を持つので、B でだけ登場します
-- **仲介マシン**：デバイスと同じ Wi-Fi にあり、離れた場所の操作マシンのペアリングを仲介するマシン
+| 呼び方 | 役割 |
+|---|---|
+| 操作マシン | `look`、`install`、`launch`、`mcp` を実行するマシン |
+| 署名マシン | 秘密鍵を持ち、接続時の署名を代行するマシン（アプリのコード署名とは別の話です）。A では操作マシン自身が鍵を持つので、B でだけ登場します |
+| 仲介マシン | デバイスと同じ Wi-Fi にあり、離れた場所の操作マシンのペアリングを仲介するマシン |
 
 ```mermaid
 flowchart LR
@@ -102,7 +104,7 @@ roamrunctl pair control --to my-iphone --as phone
 
 操作マシン（`cloud-pc`）がデバイスと別の場所にある場合は、デバイスと同じ Wi-Fi にある仲介マシン（`home-pc`）に、一度だけ仲介してもらいます。
 
-**前提条件：** この手順と、後述の Introducer アプリを使う手順では、デバイスが過去に一度は（Xcode を入れた Mac などと）ペアリングしている必要があります。一度ペアリングすると、デバイスは仲介に必要なサービスを Wi-Fi 上に公開するようになるためです。一度もペアリングしていないデバイスは、先にデバイスと同じ Wi-Fi にあるマシンで一度ペアリングしてください。
+**前提条件：** この手順と、後述の Introducer アプリを使う手順では、デバイスが過去に一度は（Xcode を入れた Mac などと）ペアリングしている必要があります。一度ペアリングしたデバイスは、仲介で使うサービスを Wi-Fi 上で公開し始めるためです。一度もペアリングしていないデバイスは、まずデバイスと同じ Wi-Fi にあるマシンで一度ペアリングしてください。
 
 ```sh
 # cloud-pc（離れた場所にある操作マシン）で
@@ -171,13 +173,13 @@ roamrunctl launch phone com.example.App
 
 ### 鍵のファイル（A）
 
-A では、鍵は Linux と macOS なら `~/.config/roamrunctl/devices/phone.json` に保存されます（`$XDG_CONFIG_HOME` が絶対パスで設定されていれば、その下）。Windows では `%LOCALAPPDATA%\roamrunctl\devices` です。Linux と macOS では、所有者だけが読めるファイルとして作られます。それでも、**そのユーザーの権限で動くプログラムなら、エージェントも含めて、暗号化していない鍵を使ってデバイスを操作できます。**
+A では、鍵は Linux と macOS なら `~/.config/roamrunctl/devices/phone.json` に保存されます。`$XDG_CONFIG_HOME` が絶対パスで設定されていれば、その下になります。Windows では `%LOCALAPPDATA%\roamrunctl\devices` です。Linux と macOS では、所有者だけが読めるファイルとして作られます。それでも、**そのユーザーの権限で動くプログラムなら、エージェントも含めて、暗号化していない鍵を使ってデバイスを操作できます。**
 
-`pair control` に `--passphrase` を付けると、age で暗号化した `phone.age` として保存されます。パスフレーズは、`ROAMRUNCTL_PASSPHRASE_FILE`、`ROAMRUNCTL_PASSPHRASE_COMMAND`、`ROAMRUNCTL_PASSPHRASE` のうち、この順で最初に設定されているものから取得します。どれも設定されていなければ、ターミナルで入力を求めます。`mcp` は入力を求められないので、いずれかの設定が必要です。ファイルを暗号化しても、パスフレーズ自体を読めるソフトウェアからは守れません。
+`pair control` に `--passphrase` を付けると、age で暗号化した `phone.age` として保存されます。パスフレーズは、次の 3 つの環境変数のうち、最初に設定されているものから取得します。順に `ROAMRUNCTL_PASSPHRASE_FILE`、`ROAMRUNCTL_PASSPHRASE_COMMAND`、`ROAMRUNCTL_PASSPHRASE` です。どれも設定されていなければ、ターミナルで入力を求めます。`mcp` は入力を求められないので、いずれかの設定が必要です。ファイルを暗号化しても、パスフレーズ自体を読めるソフトウェアからは守れません。
 
 ### B：鍵を別のマシンに置く
 
-B では、操作マシンは秘密鍵を持ちません。デバイスに接続するたびに必要になる署名を、署名マシンが代わりに行います。スクリーンショット、入力、インストールの通信は、A と同じく、操作マシンとデバイスの間で直接やり取りされます。
+B では、操作マシンは秘密鍵を持ちません。デバイスへの接続のたびに必要な署名は、署名マシンが代わりに行います。スクリーンショット、入力、インストールの通信は、A と同じく、操作マシンとデバイスの間で直接やり取りされます。
 
 ```sh
 # home-pc（署名マシン。ペアリングのときはデバイスと同じ Wi-Fi にある）で
@@ -204,7 +206,7 @@ sequenceDiagram
   Note over U,D: スクリーンショット、入力、インストールは直接やり取り
 ```
 
-署名マシンは、操作マシンからの TCP 41831 への接続を受け付ける必要があります。操作マシンが署名マシンを自動で見つけられるのは、両方がオンラインで、タグが付いておらず、同じ Tailscale ユーザーのものである場合だけです。それ以外の場合（クラウドの VM によくあるタグ付きのマシン、別のユーザーのマシン、別のマシンも同じデバイス名で `sign` を実行できる tailnet）は、最初に使う前に署名マシンを指定してください。操作マシンで `export ROAMRUNCTL_SIGNER=home-pc` を実行します（PowerShell では `$env:ROAMRUNCTL_SIGNER = 'home-pc'`、MCP では MCP サーバーの環境変数に設定）。自動で見つける方法は実機で動作を確かめていますが、`ROAMRUNCTL_SIGNER` で指定する方法はまだ実機で試していません。
+署名マシンは、操作マシンからの TCP 41831 への接続を受け付ける必要があります。操作マシンが署名マシンを自動で見つけられるのは、両方がオンラインで、タグが付いておらず、同じ Tailscale ユーザーのものである場合だけです。それ以外の場合は、初めて使う前に署名マシンを指定してください。タグ付きのマシン（クラウドの VM によくあります）、別のユーザーのマシン、別のマシンも同じデバイス名で `sign` を実行できる tailnet が、これにあたります。指定するには、操作マシンで `export ROAMRUNCTL_SIGNER=home-pc` を実行します。PowerShell では `$env:ROAMRUNCTL_SIGNER = 'home-pc'` です。MCP では、MCP サーバーの環境変数に設定します。自動で見つける方法は実機で動作を確かめていますが、`ROAMRUNCTL_SIGNER` で指定する方法はまだ実機で試していません。
 
 `sign` が動いている間は、操作マシン上のどのプログラムでもデバイスを操作できます。`sign` を止めると新しい接続には署名されなくなりますが、すでに開いている接続（動作中の MCP セッションなど）は切れません。開いている接続を使って別のペアリングを作れるかどうかは試していません。B なら防げる、とは言えません。詳しくは[リファレンスの「B：署名と信頼関係」](../../docs/roamrunctl-reference.ja.md#b署名と信頼関係)を参照してください。
 
@@ -231,4 +233,4 @@ roamrunctl pair introduce --host <相手のマシンの Tailscale 上の名前> 
 
 ## リファレンスとセキュリティ
 
-時間制限、ポートとファイアウォール、パスフレーズ、鍵の取り込み、各ツールの正確な動作、プラットフォームごとの制限、うまくいかないときの対処、試していない構成は、[リファレンス](../../docs/roamrunctl-reference.ja.md)にまとめてあります。セキュリティについては [SECURITY.md](https://github.com/mh-mobile/RoamRun/blob/main/SECURITY.md) も参照してください。
+細かい決まりは、[リファレンス](../../docs/roamrunctl-reference.ja.md)にまとめてあります。時間制限、ポートとファイアウォール、パスフレーズ、鍵の取り込み、各ツールの正確な動作などです。うまくいかないときの対処と、試していない構成も載せています。セキュリティについては [SECURITY.md](https://github.com/mh-mobile/RoamRun/blob/main/SECURITY.md) も参照してください。
