@@ -130,23 +130,8 @@ the using machine and the device, not through the key's machine.
 | `sign` | reads or prompts when starting for each encrypted record it serves |
 | `devices`, `devices remove` | no passphrase needed |
 
-- For an MCP client, configure the passphrase source in the MCP server's environment.
-  Installing the optional agent **skill** does not start or register `roamrunctl mcp`.
-  A client using `mcpServers` may register the command as:
-
-  ```json
-  {
-    "mcpServers": {
-      "roamrunctl": {
-        "command": "roamrunctl",
-        "args": ["mcp"]
-      }
-    }
-  }
-  ```
-
-  The exact configuration format varies by client; provide an absolute executable path
-  when necessary. Add the appropriate passphrase environment setting for encrypted records.
+- For an MCP client, configure the passphrase source in the MCP server's environment, beside the
+  command the README shows.
 - An example for `ROAMRUNCTL_PASSPHRASE_COMMAND` on macOS, **if a matching Keychain item
   already exists**, is `security find-generic-password -a "$USER" -s roamrunctl -w`.
 - Re-pairing a device under the same host identity replaces the earlier pairing on the device.
