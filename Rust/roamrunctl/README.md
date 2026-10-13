@@ -1,5 +1,7 @@
 # roamrunctl
 
+<p align="center">English | <a href="https://github.com/mh-mobile/RoamRun/blob/main/Rust/roamrunctl/README.ja.md">日本語</a></p>
+
 `roamrunctl` is a command-line tool from [RoamRun](https://github.com/mh-mobile/RoamRun) for Linux,
 Windows, and macOS. The machine running it needs neither RoamRun nor Xcode. It has two uses:
 
