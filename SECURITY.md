@@ -41,6 +41,25 @@ bounded.
     The Mac it relays to is the one Tailscale has under that name: the line it is
     given carries a port and what to announce, never an address, a host or a
     service type.
+  - For an Apple Vision Pro, which a Mac picks, it is the far Mac that stands in,
+    for the device: the Mac named with `--with` (and no other) sends what the
+    device announces, and the device as it is saved afterwards. The device the
+    far Mac connects to is the one that is saved — found once, by its Tailscale
+    name, as `devices add` finds one — and it says whose Tailscale has it as
+    before it asks anything of the device or announces anything. The kind of
+    device (iPhone, iPad, Apple Vision Pro) is what Tailscale's client on it
+    says: that turns a wrong name away and proves nothing, and a device shared
+    in from another tailnet is taken like any other, under whose it is said to
+    be. The far Mac carries only its own connections, to that device's
+    Tailscale address on the port sent (1024 or above). What it announces — the
+    device's name, model, announced identifier and tag, its versions, and the
+    far Mac's own address and a port there — is seen by its whole network for
+    as long as it stands (five minutes at most). The Mac that sends picks,
+    among what waits on its Wi‑Fi, the one at the address Tailscale has for the
+    device there; a host on that Wi‑Fi can claim that address in what it
+    announces, and have its values sent instead. The far Mac's connection still
+    goes to the device named, and the code is shown by the device and typed on
+    the far Mac.
   - It takes connections from the device's address on that LAN alone, two at once
     at most. It has that address from Tailscale (pinging the device when Tailscale
     hasn't talked to it lately), and doesn't start when Tailscale reaches the
@@ -97,6 +116,13 @@ bounded.
     shown is this Mac's own.
   - The device is saved only when the other Mac says a pairing was tried. That
     isn't proof one was made: `roamrun up` shows it.
+  - The far Mac's stand-in for an Apple Vision Pro also ends on the line Device
+    Hub writes to the system log for a pairing made (read with `log stream`,
+    which takes an administrator's account). Only a line from CoreDevice's own
+    framework, where Xcode installs it (`/Library/Developer/PrivateFrameworks`),
+    is taken, and only once this Mac has connected. The line names no device:
+    another one paired in Device Hub meanwhile ends the stand-in early, as
+    Ctrl-C does. It pairs nothing and saves nothing Ctrl-C wouldn't.
   - The Mac that introduces listens for nothing more than before. If the
     connection to the other Mac ends while it stands in, it stops standing in.
     A Mac that goes away without closing it (asleep, off the tailnet) isn't
@@ -229,6 +255,60 @@ bounded.
     without a pairing (as any device added and not set up), or a pairing switched
     off. Nothing is cleaned up at the next start, so nothing kept is removed by it.
   - Not tried with a Mac shared in from another tailnet.
+- **roamrunctl can hold a pairing of its own.** `roamrunctl pair control --to` or
+  `--with` (or `key import`) keeps the pairing in `~/.config/roamrunctl/devices`
+  (`%LOCALAPPDATA%\roamrunctl\devices` on Windows), a file only its owner can read; one that others can read is refused
+  (on Windows the folder is the user's by what it inherits, and nothing more is checked).
+  A program running as the same user — an agent that can run `roamrunctl` — uses the
+  device as roamrunctl does. There is no switch per device there: holding the pairing
+  is being able to use it, until it is removed (`roamrunctl devices remove`, and the
+  machine's row on the device). With `--passphrase` the file is in age's passphrase
+  format, the passphrase taken from a file, a command or the environment, or typed at
+  a terminal, not from the command line: the file alone, in a backup or a copied
+  folder, then opens nothing — and a program that runs as the user and can read the
+  passphrase where it is kept is no further from the device than before. It looks by
+  the device's own screenshot and sends inputs with no screen stream, so the device
+  shows no screen-sharing session meanwhile. Its MCP tools hold only `tap` and `swipe`
+  to a look just taken; `type`, `paste` and `press` go to whatever is on the screen.
+  A call taken back before its turn, or whose turn comes after the client went, isn't
+  made. A device it has open is held to the saved file it was opened from: removed, or
+  another saved under the name, it isn't operated under that name any more. Where the
+  device doesn't say which way up it is and its picture is upright, a point is pressed
+  as it is — on a device held upside down that would be the opposite point (not tried).
+- **roamrunctl can use a pairing whose key is on another machine.** `roamrunctl sign
+  <devices> --for <machine>` runs where the keys are and listens on that machine's
+  tailnet address (port 41831) for the one machine named, held to its address and to
+  Tailscale's id for it — not to a user or a program on it: whoever can open a
+  connection from that machine is answered. To it, it says which devices it signs for
+  (their pairings without the private keys) and signs what a connection to one of them
+  has signed (pair-verify: 32 bytes, the pairing's identifier, 32 bytes). It can't tell
+  that the bytes are a connection's; it refuses only what isn't of that shape, and what
+  making a new pairing signs (that ends in the pairing's own public key), so the key
+  isn't lent to pair another device as this machine. It says each time it signs, and
+  signs no more for a device removed on its machine meanwhile, or saved anew under its
+  name (the file it read is compared, byte for byte, at each request; once it differed
+  the device stays refused, though the same file came back), until it is run again. It answers one request at a time: the machine named can make it wait.
+  The machine that uses the device asks its own user's other machines on the tailnet
+  (not a tagged one, not another user's; or the one `ROAMRUNCTL_SIGNER` names) which
+  signs for it. The first time it opens a device it saves which machine that was and
+  what it said the device is — address, and the device's public key, no private key —
+  and from then on asks only the machine of that name and takes only that device for the
+  name. Where it can't save that, it doesn't use the device.
+  What that buys: the key isn't on the machine an agent runs on and can't be copied
+  from it, and ending `sign` ends new connections. What it doesn't:
+  - The machine named — any program on it — connects to the devices named for as long
+    as `sign` answers, and a connection does everything. A connection already open (a
+    running `roamrunctl mcp`) stays open after `sign` ends.
+  - Until a device was used once, the machine that uses it believes any of its user's
+    machines that offers the name — of two, the one whose Tailscale name sorts first,
+    whichever is the true one. One of those run by someone else — or any local user on
+    one, where no `sign` holds the port — can so name a device of its own on the
+    tailnet: what is then typed, pasted and installed goes there, and the
+    looks are of that device. It gets no key by that. `ROAMRUNCTL_SIGNER` set from the
+    start leaves only the machine named to be believed.
+  - Whether a connection, once made, can add a pairing of its own on the device
+    without its owner's consent wasn't tried. If it can, this keeps no key from the
+    machine that uses the device.
 - **A pairing made for another Mac is a key in a file.** `roamrun key create`
   pairs once more, under an identity of its own, and writes that pairing to a
   file (yours only, not sealed: the Mac it is for has another key). Nothing of it
@@ -314,7 +394,8 @@ bounded.
   check; there is no code in RoamRun that talks to a server of ours or anyone
   else's. It does open connections of its own — to your device (and, for `pair
   introduce`, one to the pairing port of the Mac you named, to see that it is
-  waiting, before anything is announced): a TCP probe to see
+  waiting, before anything is announced; for an Apple Vision Pro, one from the far
+  Mac to the port the device waits on): a TCP probe to see
   whether it answers, the RemotePairing handshake to confirm the answer really
   comes from it, and a scan for its RemotePairing port when that has changed; with
   device control set up, also its own tunnel to the device, kept open. It

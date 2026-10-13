@@ -29,6 +29,43 @@ enum Introduction {
         static let keys: Set<String> = ["identifier", "authTag", "flags", "ver", "minVer"]
     }
 
+    /// A device that waits to be picked by a Mac (Apple Vision Pro, with Remote Devices open): what
+    /// it announces. The reverse of an offer: the Mac far from it announces this in the device's place.
+    /// Which device it is isn't in it: that is the device handed over beside it.
+    struct Pairable: Codable, Equatable {
+        var v = 1
+        var instance: String
+        var port: UInt16
+        var txt: [String: String]
+
+        static let prefix = "rr-pairable-v1:"
+        static let keys: Set<String> = ["identifier", "authTag", "model", "name", "ver", "minVer"]
+    }
+
+    static func line(_ pairable: Pairable) -> String { Pairable.prefix + packed(pairable) }
+
+    static func pairable(from line: String) -> Result<Pairable, Unreadable> {
+        let line = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        if line.hasPrefix(Device.prefix) { return .failure(.another("a saved device (for `roamrun devices add`)")) }
+        if line.hasPrefix(Offer.prefix) { return .failure(.another("a Mac's offer to pair (for `roamrun pair introduce`)")) }
+        guard line.hasPrefix(Pairable.prefix), let read: Pairable = unpacked(line.dropFirst(Pairable.prefix.count)), read.v == 1 else {
+            return .failure(.notOne)
+        }
+        if let problem = portProblem(read.port) ?? txtProblem(read.txt, keys: Pairable.keys) { return .failure(.refused(problem)) }
+        guard !read.instance.isEmpty, read.instance.utf8.count <= 63, shows(read.instance), !read.instance.contains("="), !read.instance.contains("\\") else {
+            return .failure(.refused("the name it announces under can't be used as it is"))
+        }
+        return .success(read)
+    }
+
+    /// What a device announces while it waits, as a line; nil when it isn't whole.
+    static func pairable(_ service: CapturedService) -> Pairable? {
+        let txt = service.txt.filter { Pairable.keys.contains($0.key) }
+        let made = Pairable(instance: service.instanceName, port: service.port, txt: txt)
+        if case .success(let read) = pairable(from: line(made)) { return read }
+        return nil
+    }
+
     static func line(_ offer: Offer) -> String { Offer.prefix + packed(offer) }
     static func line(_ device: Device) -> String { Device.prefix + packed(device) }
 
@@ -153,6 +190,8 @@ extension Introduction {
     /// What a Mac announces while it waits to be paired with.
     static let hostService = "_remotepairing-pairable-host._tcp"
     static let deviceService = "_remotepairing._tcp"
+    /// What a device announces while it waits for a Mac to pick it.
+    static let pairableService = "_remotepairing-manual-pairing._tcp"
 
     /// A stand-in's host name: under `.roamrun.local`, which is how a leftover helper is known for ours.
     static func standInHost(_ identifier: String) -> String {
@@ -303,8 +342,8 @@ extension Introduction {
 @MainActor
 final class Introducer {
     enum End: Equatable {
-        /// A connection that carried bytes both ways has closed: a pairing was tried. Whether it
-        /// was made, only the other Mac knows.
+        /// A connection that carried bytes both ways has closed (or, for a device that is picked, Device Hub
+        /// said it paired): a pairing was tried. Whether it was made, only the other Mac knows.
         case carried
         case deadline
         case stopped
@@ -325,6 +364,11 @@ final class Introducer {
         var interface: String
         var accept: Relay.Accept
         var deadline: TimeInterval = 300
+        /// What is announced, and under which name: a Mac's offer under its identifier, unless said.
+        var service = Introduction.hostService
+        var instance: String?
+        /// Whether a connection that carried bytes both ways and closed ends it: so for a Mac's offer.
+        var endsWhenCarried = true
     }
 
     private let plan: Plan
@@ -364,7 +408,7 @@ final class Introducer {
             throw RelayError.bindFailed("no port of \(ports.lowerBound)–\(ports.upperBound) on \(plan.localIP) could be listened on (\(failure))")
         }
         do {
-            try record.registerOnItsInterface(instanceName: identifier, serviceType: Introduction.hostService, domain: "local",
+            try record.registerOnItsInterface(instanceName: plan.instance ?? identifier, serviceType: plan.service, domain: "local",
                                               port: relay.localPort, host: Introduction.standInHost(identifier),
                                               ip: plan.localIP, txt: plan.offer.txt)
         } catch {
@@ -395,7 +439,7 @@ final class Introducer {
         switch event {
         case .opened(let from): onEvent(.connected(from: from))
         case .closed(_, let up, let down, let why):
-            if up > 0, down > 0 { Task { await end(.carried) } }
+            if up > 0, down > 0, plan.endsWhenCarried { Task { await end(.carried) } }
             else if let why { onEvent(.farDidNotAnswer(why)) }
         }
     }

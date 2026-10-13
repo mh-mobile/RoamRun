@@ -390,13 +390,13 @@ roamrun key import ~/iphone-for-cloud.json                         # あちら�
 
   ```sh
   roamrun pair control --with macbook-pro              # あちら（RoamRun のアプリを開いたまま）: こちらの Mac を最長 10 分待つ
-  roamrun pair introduce --mac cloud-mac --to iPhone   # こちら（自分で流す）: デバイスで「cloud-mac」を選び、ここに出るコードを入れる
+  roamrun pair introduce --host cloud-mac --to iPhone   # こちら（自分で流す）: デバイスで「cloud-mac」を選び、ここに出るコードを入れる
   roamrun look iPhone                                  # あちら（ペアリングしたと出たら）
   ```
 
   名前は、どちらも Tailscale 上の名前です。離れた Mac のアプリは、自分の Tailscale のアドレスだけで、こちらの Mac からだけ、ペアリングを待ち受けます。何も名乗りません。こちらの Mac は、Xcode のペアリングのときと同じように（下の「デバイスと同じ場所にいたことのない Mac」）、デバイスのいる Wi‑Fi で代わりに名乗り、離れた Mac のアプリが決めたコードを表示します。`pair introduce` は、自分の端末で自分で流してください。エージェントが流すと、コードがエージェントの出力に入ります。コードを間違えると、このコマンドは終わりますが、離れた Mac のコマンドは待ち続けます。もう一度流せば、新しいコードが出ます。離れた Mac には、ログイン済みのセッションで RoamRun のアプリが開いていることが要ります（ペアリングは、そのログインの Keychain の鍵で封印して保存します）。Xcode も、デバイスの登録も要りません。その Mac がすでにペアリングを持っているデバイスには、始めません。先に、その Mac のデバイスのページで外してください。結果がこちらに届かなかったときは、離れた Mac で `roamrun pair control --attempt <id>` を流すと分かります。
 - **`roamrun key create` が書き出すファイルは鍵そのものです**（封印されていません）。パスワードと同じように運び、コピーを残さないでください。取り込んだ Mac では `key import` が封印して元のファイルを消し、そのデバイスはオンの状態になります。取り消すときは、デバイスの 設定 › プライバシーとセキュリティ › デベロッパモード でその項目を削除します。
-- **見ている間・操作している間は、デバイスの音が取られます。** 最後の look / 操作から約 5 秒間、スピーカーは無音になり（再生は続いていて聞こえないだけで、あとで自動的に聞こえるようになります）、音声入力（音声入力キーボード、聞き取るアプリ）は聞こえません。画面を見続けさせると、その間ずっと続きます。
+- **見ている間・操作している間、デバイスは画面共有の状態になり、音とマイクが変わることがあります。** この状態は、最後の look / 操作から約 5 秒間続きます。音声入力は、聞こえないことがあります。再生中の音は、アプリによります。鳴り続けるもの、再生は続くが聞こえなくなり、あとで自動的に聞こえるようになるもの、保護のために再生をやめるものがありました。アプリが音声で会話している間は、デバイスが look を断ります。画面を見続けさせると、その間ずっと続きます。アプリごとに聞いた内容と、試していないことは、[docs/sound-while-looking.md](docs/sound-while-looking.md)（英語）にあります。
 - **デバイス操作は、特定のエージェントやコマンドだけに許可する仕組みではありません。** オンにしている間は、この Mac であなたが実行するどのプログラム（ビルドスクリプト、パッケージのインストール処理、別のエージェント）でも、起動中の RoamRun を通じてデバイスを見て操作できます。デバイスのページの **Device control** のスイッチをオフにすると、すべて断ります。Set Up・Pair Again（オフにしていたデバイスでも）・`key import` の直後はオンなので、使っていないときはオフにしてください。**デバイスをロックしても止まりません。** ロック画面も見えて操作できます（ロックの解除には、これまでどおりパスコードか Face ID が要ります）。
 - 接続のたびに、Mac とデバイスは互いを確かめます（デバイスは、ペアリング時に渡した鍵で署名します）。デバイスのアドレスで別のものが応答しても、この Mac の身元も入力も送らずに断ります。詳しくは [SECURITY.md](SECURITY.md) を参照してください。
 
@@ -409,7 +409,7 @@ roamrun key import ~/iphone-for-cloud.json                         # あちら�
 roamrun pair xcode                                           # その Mac のペアリングの申し出を 1 行で出す
 
 # デバイスと同じ Wi‑Fi にいる Mac で（RoamRun にそのデバイスを保存済み）:
-roamrun pair introduce <offer> --mac cloud-mac --to iPhone   # cloud-mac: 離れた Mac の Tailscale 上の名前
+roamrun pair introduce <offer> --host cloud-mac --to iPhone   # cloud-mac: 離れた Mac の Tailscale 上の名前
 #   デバイスで: 設定 › プライバシーとセキュリティ › デベロッパモード › 「Pair with cloud-mac」、離れた Mac の Device Hub に出たコード
 #   自分で終わり、ペアリングが試みられたら、デバイスの登録を 1 行で出す
 
@@ -418,7 +418,7 @@ roamrun devices add <line>                                   # デバイスを�
 roamrun up iPhone                                            # Ready: その Mac の Xcode でデバイスが使える
 ```
 
-離れた Mac で RoamRun のアプリを開く必要はありません。コマンドだけで足ります。アプリには、次に開いたときにデバイスが出ます。
+離れた Mac で RoamRun のアプリを開く必要はありません。コマンドだけで足ります。アプリには、次に開いたときにデバイスが出ます（開いていれば、数秒で出ます）。
 
 2 台の Mac が同じ tailnet にいるなら、この 2 行は Mac どうしで渡せます。お互いに相手を名指しするだけで、何も運びません。
 
@@ -426,7 +426,7 @@ roamrun up iPhone                                            # Ready: その Mac
 # あちら: Device Hub › + › Pair Nearby Device（前でも後でも）を押して、
 roamrun pair xcode --with macbook-pro                # macbook-pro: こちらの Mac の Tailscale 上の名前。最長 10 分待つ
 # こちら:
-roamrun pair introduce --mac cloud-mac --to iPhone   # cloud-mac に申し出を求め、引き合わせて、デバイスを渡す
+roamrun pair introduce --host cloud-mac --to iPhone   # cloud-mac に申し出を求め、引き合わせて、デバイスを渡す
 # あちら（デバイスを保存したと出たら）:
 roamrun up iPhone
 ```
@@ -439,7 +439,7 @@ roamrun up iPhone
 
 ```sh
 OFFER=$(ssh cloud-mac roamrun pair xcode) &&
-LINE=$(roamrun pair introduce "$OFFER" --mac cloud-mac --to iPhone) &&
+LINE=$(roamrun pair introduce "$OFFER" --host cloud-mac --to iPhone) &&
 ssh cloud-mac roamrun devices add "$LINE"
 ```
 
@@ -460,7 +460,7 @@ roamrun pair xcode --with iphone-15-pro --qr   # iphone-15-pro: デバイスの 
 roamrun up iphone-15-pro
 ```
 
-`--qr` は、離れた Mac の Tailscale 上の名前を、ターミナルにコードとして描きます。アプリがそれを読み取ります。アプリは名前を覚えるので、次からコードは要りません。離れた Mac は、Mac を相手にするときと同じく、名指ししたデバイスにだけ答え、そのデバイスを Tailscale 上の名前で保存します。`roamrun pair control --with iphone-15-pro` なら、同じ流れでデバイス操作のペアリングができます。このとき入力するコードは、デバイスに通知で表示されます。`--with` を付けない `roamrun pair xcode --qr` は、申し出もコードに含めます（コードが大きくなるので、ウインドウは 55 桁 × 30 行ほど要ります）。手で運ぶ形で、ペアリングのあと、アプリが `devices add` に渡す 1 行を表示します。アプリが名乗りと取り次ぎをするのは、引き合わせている間だけです。問い合わせもペアリングも、Tailscale のものではないアドレスへは送りません。Mac の名前を書くべきところにデバイスの名前を書いても、この使い方と区別できません。コマンドは、存在しないアプリを 10 分待ちます。iOS 27 の iPhone 15 Pro と、離れた Mac 役の仮想 Mac で確かめました。Xcode のペアリング（名指しする形と、手で運ぶ形）とその後のブリッジの Ready、デバイス操作のペアリングとその後の `roamrun look` です。iPad では試していません。Apple Vision Pro はペアリングの向きが違い（Vision Pro で 設定 › 一般 › リモートデバイス を開き、Mac の側が Vision Pro を選びます）、この方法では扱えません。
+`--qr` は、離れた Mac の Tailscale 上の名前を、ターミナルにコードとして描きます。アプリがそれを読み取ります。アプリは名前を覚えるので、次からコードは要りません。離れた Mac は、Mac を相手にするときと同じく、名指ししたデバイスにだけ答え、そのデバイスを Tailscale 上の名前で保存します。`roamrun pair control --with iphone-15-pro` なら、同じ流れでデバイス操作のペアリングができます。このとき入力するコードは、デバイスに通知で表示されます。`--with` を付けない `roamrun pair xcode --qr` は、申し出もコードに含めます（コードが大きくなるので、ウインドウは 55 桁 × 30 行ほど要ります）。手で運ぶ形で、ペアリングのあと、アプリが `devices add` に渡す 1 行を表示します。アプリが名乗りと取り次ぎをするのは、引き合わせている間だけです。問い合わせもペアリングも、Tailscale のものではないアドレスへは送りません。Mac の名前を書くべきところにデバイスの名前を書いても、この使い方と区別できません。コマンドは、存在しないアプリを 10 分待ちます。iOS 27 の iPhone 15 Pro と、離れた Mac 役の仮想 Mac で確かめました。Xcode のペアリング（名指しする形と、手で運ぶ形）とその後のブリッジの Ready、デバイス操作のペアリングとその後の `roamrun look` です。iPad では試していません。Apple Vision Pro はペアリングの向きが違い（Vision Pro で 設定 › 一般 › リモートデバイス を開き、Mac の側が Vision Pro を選びます）、アプリでは扱えません。そばの Mac が引き合わせます（[Apple Vision Pro](#apple-vision-pro)）。
 
 **Windows や Linux のマシンに引き合わせてもらう。** デバイスのそばにあるマシンが引き合わせることもできます。`roamrunctl` は、RoamRun の入っていないマシンのための `pair introduce` です。実行ファイル 1 つで、リリースごとにアーカイブとして添付します。Linux、Windows、Mac それぞれの入れ方は [Rust/roamrunctl](Rust/roamrunctl/README.md#install) にあります。そのマシンには Tailscale が要ります。離れた Mac とデバイスがいる tailnet にサインインしておきます。
 
@@ -468,7 +468,7 @@ roamrun up iphone-15-pro
 # 離れた Mac で: Device Hub › + › Pair Nearby Device を押して、
 roamrun pair xcode --with my-pc                                # my-pc: そのマシンの Tailscale 上の名前
 # そのマシンで（デバイスと同じ Wi‑Fi）:
-roamrunctl pair introduce --mac cloud-mac --to iphone-15-pro   # 離れた Mac の Tailscale 上の名前と、デバイスの Tailscale 上の名前
+roamrunctl pair introduce --host cloud-mac --to iphone-15-pro   # 離れた Mac の Tailscale 上の名前と、デバイスの Tailscale 上の名前
 # デバイスで: 設定 › プライバシーとセキュリティ › デベロッパモード › 「Pair with cloud-mac」、離れた Mac の Device Hub に出たコード
 # 離れた Mac で（デバイスを保存したと出たら）:
 roamrun up iphone-15-pro
@@ -476,7 +476,9 @@ roamrun up iphone-15-pro
 
 離れた Mac で RoamRun のアプリを開いて `roamrun pair control --with my-pc` を実行すれば、同じ流れでデバイス操作のペアリングができます。このとき、入力するコードは `roamrunctl` が表示します。自分のターミナルで、自分で実行してください。Linux（Ubuntu 24.04）と iOS 27 の iPhone 15 Pro で確かめました。Xcode のペアリングとその後のブリッジの Ready、デバイス操作のペアリングです。Windows 11（ARM 版）でも、同じ 2 つを確かめました。Windows のファイアウォールが、通信を許可するかを一度尋ねます。
 
-**誰がデバイスを使えるようになるか。** 引き合わせた Mac は、それ以降、開発者としてそのデバイスを使えます（アプリのインストールと実行、デバッグ、アプリのデータの読み出し）。デバイスをその Mac に USB で挿して「信頼」を押すのと同じ重さです。`pair introduce` は、始める前に、その Mac が誰のものかを Tailscale の情報から表示します（自分の Mac、ほかの人の Mac、共有の（タグ付きの）マシン＝そこで Xcode を使える人）。引き合わせるのは、`--mac` で名指しした Mac だけです。運ぶ 1 行は、行き先を決めません。取り消すには、デバイスの 設定 › プライバシーとセキュリティ › デベロッパモード でその Mac を削除します。一覧には、Tailscale 上の名前ではなく、その Mac が自分で名乗る名前で並びます（`pair introduce` が、どの名前かを表示します）。Xcode のペアリングには、RoamRun の側のスイッチはありません。
+**デバイスを使うマシンに RoamRun も Xcode も無い場合。** 0.7.0 から、`roamrunctl` は自分でペアリングを持てます。対象は Linux、Windows、RoamRun の入っていない Mac で、そのマシンに Xcode が無くても、Tailscale 越しにデバイスを使えます（Windows ではビルドが通るところまでで、実際には動かしていません）。これまでに試した経路は、どれも途中で Mac を使っています（引き合わせ、鍵の作成、署名のいずれか）。Mac を一度も使わない経路は、まだ試していません（どれも `roamrunctl pair control --to` から始まります）。コマンドでできるのは、スクリーンショットと、ビルドと署名が済んだアプリのインストールと起動です。エージェント向けの MCP ツールでは、これらに加えて、タップ、スワイプ、文字入力ができます。ペアリングの鍵を自分の別のマシンに置いたままにして、デバイスを使うマシンには接続のたびに署名だけを渡す、という使い方もあります。`roamrun pair introduce` の `--host` には、こうしたマシンも Mac と同じように指定できます（選ばれるのを待つ Apple Vision Pro は別で、相手は Mac に限ります）。何を試して何を試していないか、それぞれのやり方がエージェントから何を守り、何を守らないかは、[roamrunctl の README](Rust/roamrunctl/README.md#using-a-device-from-a-machine-without-xcode)（英語）にあります。`pair introduce` は、0.7.0 より前はマシンを `--mac` で指定していました。いまは `roamrun` も `roamrunctl` も `--host` です。両方を同じバージョンにそろえてください。
+
+**誰がデバイスを使えるようになるか。** 引き合わせた Mac は、それ以降、開発者としてそのデバイスを使えます（アプリのインストールと実行、デバッグ、アプリのデータの読み出し）。デバイスをその Mac に USB で挿して「信頼」を押すのと同じ重さです。`pair introduce` は、始める前に、その Mac が誰のものかを Tailscale の情報から表示します（自分の Mac、ほかの人の Mac、共有の（タグ付きの）マシン＝そこで Xcode を使える人）。引き合わせるのは、`--host` で名指しした Mac だけです。運ぶ 1 行は、行き先を決めません。取り消すには、デバイスの 設定 › プライバシーとセキュリティ › デベロッパモード でその Mac を削除します。一覧には、Tailscale 上の名前ではなく、その Mac が自分で名乗る名前で並びます（`pair introduce` が、どの名前かを表示します）。Xcode のペアリングには、RoamRun の側のスイッチはありません。
 
 **必要なもの・できないこと。**
 - デバイスが、すでにどこかとペアリング済みで、引き合わせる Mac の RoamRun に保存されていること。ペアリングが 1 つも無いデバイスは、自分を名乗らないので、RoamRun には追加できません（デバイスのペアリングの画面には、名乗っている Mac が出ます）。先に、同じ Wi‑Fi にいるどれかの Mac と 1 度ペアリングしてください。引き合わせる Mac がその Mac である必要はなく、引き合わせる Mac 自身がデバイスとペアリングしている必要もありません。保存してあれば足ります。（デバイス自身のアプリや roamrunctl が引き合わせるときは、保存は要りません。デバイスの名乗りを、その場で見て渡します。）
@@ -489,6 +491,25 @@ roamrun up iphone-15-pro
 - 離れた Mac が保存しているデバイスの情報は、この Mac のものの写しです。この Mac のものが合わなくなったら（「制限・既知の課題」を参照）、ここでデバイスを追加し直してから `roamrun devices export <name>`、離れた Mac で `roamrun devices add <line>` を実行します。同じ場所に保存済みなら、その 1 行の名乗りに入れ替わります（アドレス、ポート、Tailscale 上の名前も変わっているときは、アプリとそのデバイスのブリッジを止めたうえで `--replace <name>`）。
 
 確かめた範囲: iPhone 15 Pro（iOS 27）、Xcode 27。これらのコマンドで、離れた Mac を仮想の Mac にし、引き合わせる Mac からは Tailscale の中継サーバー経由でしか届かない状態で、ペアリング、`devices add`、ブリッジの Ready、`devicectl` での起動、`lldb` でのブレークポイントまで（離れた Mac からデバイスへは、直結の経路と中継経由の両方）。2 台の Mac から同時にデバイスを使えました。デバイスとペアリングしていない Mac を引き合わせ役にしても同じように通り、その Mac が保存していた内容で、離れた Mac のブリッジが Ready になりました。コマンドができる前に同じ手順を手作業で行ったときは、クラウドの Mac でも、ペアリング、ブリッジの Ready、Xcode の実行先に出ること、`devicectl` での起動まで確かめています。未確認: iPad、仮想ではない離れた Mac、ほかの Tailscale 利用者の Mac やタグ付きの Mac、ファイアウォールがオンの引き合わせ側の Mac。
+
+### Apple Vision Pro
+
+Apple Vision Pro は、ペアリングの向きが逆です。デバイスが待ち、Mac がデバイスを選びます。使うコマンドは iPhone のときと同じ 2 つで、運ぶものの向きだけが逆になります。
+
+```sh
+# デバイスで: 設定 › 一般 › リモートデバイス を開いたままにする
+# 離れた Mac で:
+roamrun pair xcode --with home-mac            # home-mac: デバイスと同じ Wi‑Fi にいる Mac の Tailscale 上の名前
+# その Mac で（デバイスを RoamRun に保存してあること）:
+roamrun pair introduce --host cloud-mac --to vision-pro
+# 離れた Mac で、コマンドの案内が出たら: Device Hub › + › Pair Nearby Device › Apple Vision Pro で
+# デバイスを選び、Next。デバイスに出るコードを入力。Device Hub がペアリングすると、コマンドは終わる
+roamrun up vision-pro
+```
+
+デバイスのそばの Mac は、同じ Wi‑Fi で選ばれるのを待っているもののうち、Tailscale がそのデバイスについて知っているアドレスにいるものを探し、その名乗りを離れた Mac に送ります（そのため、その Wi‑Fi で Tailscale がデバイスに IPv4 で直接届いている必要があります）。離れた Mac は、その名前のデバイスが Tailscale 上で誰のものかを表示してから、自分のネットワークでデバイスを名乗り、自分からの接続を Tailscale 越しにそのデバイスへ取り次ぎます。この名乗りは、出ている間、離れた Mac と同じネットワークのほかのマシンからも見えます。接続を受け付けるのは、離れた Mac 自身からだけです。名乗りは、Device Hub がペアリングしたとき、Ctrl-C、または 5 分で終わります。それまでに離れた Mac がデバイスへつながっていれば、デバイスが保存されます。ペアリングしたことは、Device Hub がシステムログに書く行から読みます（管理者のアカウントが必要です）。その行にはデバイスの名前がないので、その間は Device Hub でほかのデバイスをペアリングしないでください。そのあと Device Hub にデバイスが 1 台も出ないときは、Available と Unavailable の見出しがたたまれているかもしれません。見出しにポインタを乗せ、出てくる矢印をクリックしてください。
+
+試したのは 1 回で、このコマンドができる前に手で行いました。家にある visionOS 27.0 の Apple Vision Pro 1 台と、Xcode 27.0 の離れた Mac で、ペアリング、ブリッジの準備完了、離れた Mac からのアプリの起動までです。試していないこと: このコマンドでの実機の通し、ブレークポイント、デバイスが外出先にいる場合、離れた Mac の RoamRun が古い場合（もう一方の Mac がそう表示します。デバイスのそばの Mac が古い場合は、iPhone のときと同じく申し出を求めて待ちます）、Apple TV。デバイス自身のアプリと `roamrunctl` は、Apple Vision Pro を引き合わせません。
 
 ## Mac に作るもの・アンインストール
 
@@ -541,7 +562,7 @@ security delete-generic-password -s io.github.mh-mobile.roamrun.device-control -
 - remotepairingd は約 42 秒ごとに制御チャネルを張り直します（Mac 自身の IP への ARP 確認が通らないため）。トンネルは約 0.4 秒で自動復旧し、デバッグセッションは継続します
 - Tailscale の中継サーバー（DERP）経由だと動作しますが遅くなります（`roamrun doctor` で経路を確認できます）
 - 外出先では、**デバッガ付きの実行（⌘R）に時間がかかります**。lldb の接続には数百回の往復が必要で、回線の遅延やパケットロスがそのまま効くためです。往復の回数は読み込むフレームワークの数とともに増え、インストールの時間はアプリのサイズにほぼ比例します（実測: 約 600KB のアプリ、テザリング経由、遅延 約 25〜60ms で、デバッガ付き約 1 分、デバッガなし約 4 秒。転送速度は 0.4〜0.9MB/秒）。ブレークポイントが不要なときは Edit Scheme › Run › Info の「Debug executable」をオフに、デバッガを使うときは Options の「Queue Debugging」と Diagnostics の「Main Thread Checker」「Thread Performance Checker」をオフにすると速くなります
-- **実機を見る・操作する間は、デバイスの音が一時的に取られます**: 最後の look や操作から約 5 秒間、スピーカーは無音になり、音声入力もできません（「実機を見る・操作する」を参照）。見続けている間は、その状態が続きます。
+- **実機を見る・操作する間は、デバイスのマイクと、アプリによっては音が、一時的に使えなくなることがあります**: 最後の look や操作から約 5 秒間です（「実機を見る・操作する」を参照）。見続けている間は、その状態が続きます。
 - iPhone 再起動後など、DDI の再ステージングで一度 USB 接続が必要な場合があります
 - TXT の authTag/identifier が変わった場合は、同じ Wi-Fi で iPhone を追加し直してください
 - **離れた Mac の引き合わせには iOS 27 と Xcode 27 が必要**で、それらのペアリングの動きに依存します。どちらかの更新で、RoamRun の更新が必要になることがあります。Xcode の申し出が知らない形のとき、`roamrun pair xcode` はそう表示します。

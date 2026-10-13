@@ -1,7 +1,15 @@
 //! `roamrunctl`: RoamRun's `pair introduce` from a machine that has no RoamRun.
 #![forbid(unsafe_code)]
 
+// Not eprintln!: it panics once nothing reads stderr any more, and what runs on has to run on.
+macro_rules! note { ($($t:tt)*) => {{ let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("{}\n", format_args!($($t)*))); }} }
+
 mod announce;
+mod device;
+mod hold;
+mod mcp;
+mod secret;
+mod sign;
 mod lines;
 mod relay;
 mod tailscale;
@@ -20,10 +28,10 @@ use std::time::{Duration, Instant};
 use tailscale::{short, Peer, Status};
 use tokio::sync::{mpsc, watch};
 
-const HOST_SERVICE: &str = "_remotepairing-pairable-host._tcp";
+pub(crate) const HOST_SERVICE: &str = "_remotepairing-pairable-host._tcp";
 
 #[derive(Parser)]
-#[command(name = "roamrunctl", version = env!("ROAMRUN_VERSION"), about = "Introduces a far Mac to a device, from a machine that has no RoamRun")]
+#[command(name = "roamrunctl", version = env!("ROAMRUN_VERSION"), about = "Introduces a device to the machine that will hold its pairing; and holds one itself and uses the device")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -31,37 +39,93 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Pair a device with a Mac
+    /// Pair a device: with a far Mac's Xcode, or with a machine that then uses it itself
     Pair {
         #[command(subcommand)]
         command: Pair,
+    },
+    /// Devices this machine can use: those it holds a pairing with, and those another machine signs for it with
+    Devices {
+        #[command(subcommand)]
+        command: Option<device::Devices>,
+    },
+    /// A pairing made on another machine
+    Key {
+        #[command(subcommand)]
+        command: device::Key,
+    },
+    /// Save the device's screen now as PNG, its longer side 1280 at most; prints the path, then its size
+    Look {
+        /// The device, as `roamrunctl devices` names it
+        name: String,
+        /// Where to save it (else a new file in the temporary folder)
+        file: Option<std::path::PathBuf>,
+    },
+    /// Install an app built and signed for the device: an .ipa, or an .app folder
+    Install {
+        /// The device, as `roamrunctl devices` names it
+        name: String,
+        /// The .ipa or .app folder, on this machine
+        path: std::path::PathBuf,
+    },
+    /// Launch an app on the device (one already running is ended first)
+    Launch {
+        /// The device, as `roamrunctl devices` names it
+        name: String,
+        /// The app's bundle identifier
+        bundle: String,
+    },
+    /// The device's commands as MCP tools, over stdin/stdout (for an agent's MCP config)
+    Mcp,
+    /// Keep the pairings saved here to yourself and sign with them for another machine, which then uses the devices without having their keys; until Ctrl-C
+    Sign {
+        /// The devices, as they are saved here, that the other machine may use
+        names: Vec<String>,
+        /// The Tailscale name of the one machine that is answered
+        #[arg(long = "for")]
+        machine: String,
     },
 }
 
 #[derive(Subcommand)]
 enum Pair {
-    /// Stand in on this LAN for a far Mac's offer to pair — with Xcode, or for device control, as that Mac asks — and carry the device's connection to it
+    /// Stand in on this LAN for the offer to pair of a machine elsewhere (the host: a far Mac, or a machine with roamrunctl) — with Xcode, or for device control, as it asks — and carry the device's connection to it
     Introduce(Introduce),
+    /// Have this machine hold a pairing of its own with a device: one on this Wi‑Fi (--to), or one it isn't near, which the machine named with --with introduces
+    Control {
+        /// A device on this machine's Wi‑Fi, by its Tailscale name: paired here and now
+        #[arg(long, conflicts_with = "with")]
+        to: Option<String>,
+        /// The Tailscale name of the machine that introduces a device this one isn't near (or of the device itself, with the Introducer app)
+        #[arg(long)]
+        with: Option<String>,
+        /// The name to save the device under here
+        #[arg(long = "as")]
+        name: Option<String>,
+        /// Keep the pairing under a passphrase (typed here, or given as the README says), not as a file of this user's
+        #[arg(long)]
+        passphrase: bool,
+    },
 }
 
 #[derive(Args)]
 struct Introduce {
-    /// The far Mac's Tailscale name
+    /// The Tailscale name of the machine that will hold the pairing (the host)
     #[arg(long)]
-    mac: String,
+    host: String,
     /// The device's Tailscale name
     #[arg(long)]
     to: String,
-    /// The far Mac's offer, from `roamrun pair xcode` there (else asked of it: `roamrun pair xcode --with <this machine>`)
+    /// The host's offer, from `roamrun pair xcode` there (else asked of it: `roamrun pair xcode --with <this machine>`)
     #[arg(long)]
     offer: Option<String>,
-    /// The name the far Mac saves the device under
+    /// The name the host saves the device under
     #[arg(long = "as", value_parser = name)]
     save_as: Option<String>,
     /// Seconds to wait for the pairing
     #[arg(long, default_value_t = 300)]
     deadline: u64,
-    /// This machine's address on the device's LAN, when it has more than one there and the device doesn't list the far Mac
+    /// This machine's address on the device's LAN, when it has more than one there and the device doesn't list the host
     #[arg(long)]
     on: Option<Ipv4Addr>,
     #[arg(long, hide = true, default_value = HOST_SERVICE)]
@@ -76,7 +140,27 @@ struct Introduce {
 macro_rules! say { ($($t:tt)*) => {{ let _ = writeln!(std::io::stderr(), "roamrunctl: {}", format!($($t)*)); }} }
 
 fn main() {
-    let Cli { command: Command::Pair { command: Pair::Introduce(args) } } = Cli::parse();
+    let cli = Cli::try_parse().unwrap_or_else(|refused| {
+        // The old name isn't taken; whoever was shown it by an earlier RoamRun is told the new one.
+        let old = std::env::args_os().take_while(|a| a != "--").any(|a| a.to_str().is_some_and(|a| a == "--mac" || a.starts_with("--mac=")));
+        if old && refused.kind() == clap::error::ErrorKind::UnknownArgument {
+            note!("roamrunctl: --mac is --host since 0.7.0: roamrunctl pair introduce --host <the machine that will hold the pairing> --to <device>");
+            std::process::exit(2);
+        }
+        refused.exit()
+    });
+    let args = match cli.command {
+        Command::Pair { command: Pair::Introduce(args) } => args,
+        Command::Pair { command: Pair::Control { to, with, name, passphrase } } => match match (to, with) {
+            (Some(to), _) => hold::here(&to, name, passphrase),
+            (None, Some(with)) => hold::run(&with, name, passphrase),
+            (None, None) => Err("which device: --to <its Tailscale name> for one on this Wi‑Fi, or --with <the machine beside it>".into()),
+        } {
+            Ok(said) => { let _ = writeln!(std::io::stdout(), "{said}"); return }
+            Err(why) => { note!("roamrunctl: {why}"); std::process::exit(1) }
+        },
+        other => std::process::exit(device::run(other)),
+    };
     match introduce(args) {
         Ok((line, saved)) => {
             if let Some(line) = line {
@@ -102,14 +186,14 @@ fn name(s: &str) -> Result<String, String> {
 fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
     // The far Mac waits 420 s after its offer, for a stand-in that takes RoamRun's own 300.
     if a.offer.is_none() && a.deadline > 300 {
-        return Err("--deadline is 300 s at most when the far Mac is asked for its offer (as long as RoamRun's own `pair introduce` waits; that Mac waits little longer)".into());
+        return Err("--deadline is 300 s at most when the host is asked for its offer (as long as RoamRun's own `pair introduce` waits; that machine waits little longer)".into());
     }
     let status = (a.far_ip.is_none() || a.device_ip.is_none()).then(tailscale::status).transpose()?;
-    let far = lookup(&status, &a.mac, a.far_ip, None)?;
+    let far = lookup(&status, &a.host, a.far_ip, None)?;
     let device = lookup(&status, &a.to, a.device_ip, a.device_ip)?;
     let own = status.as_ref().map_or("<this machine's Tailscale name>", |s| short(&s.this.dns_name)).to_string();
     let (mut lan, mut local, mut also) = place(&device, a.on)?;
-    say!("this machine {local}; device {} at {lan}; far Mac {} at {}", device.dns, far.dns, far.ip);
+    say!("this machine {local}; device {} at {lan}; the host {} at {}", device.dns, far.dns, far.ip);
 
     let mut wire = None;
     // Device control: which of the far Mac's attempts this is, to ask it about afterwards.
@@ -117,11 +201,11 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
     let offer_line = match a.offer.clone() {
         Some(line) => line,
         None => {
-            say!("asking {} for its offer (there: roamrun pair xcode --with {own}, or pair control --with {own} for device control)", far.dns);
+            say!("asking {} for its offer (there: roamrun pair xcode --with {own}, or pair control --with {own} for device control — `roamrunctl pair control --with {own}` where it has no RoamRun)", far.dns);
             let until = Instant::now() + Duration::from_secs(600);
             loop {
                 let left = until.saturating_duration_since(Instant::now()).max(Duration::from_secs(1));
-                let mut w = wire::Wire::connect(far.ip, left).ok_or("far Mac isn't waiting (port 41830)")?;
+                let mut w = wire::Wire::connect(far.ip, left).ok_or("the host isn't waiting (port 41830)")?;
                 // Gone before it was asked is gone before it answered: tried again, as RoamRun does.
                 let answer = match w.send("offer?").map_err(|_| wire::CLOSED.to_string()).and_then(|_| w.read(left)) {
                     Ok(answer) => answer,
@@ -137,13 +221,13 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
                         wire = Some(w);
                         break line.to_string();
                     }
-                    Some(("ended", why)) => return Err(format!("far Mac: {}", ended(why))),
+                    Some(("ended", why)) => return Err(format!("the host: {}", ended(why))),
                     // Asked which device this is, before any offer: it pairs for device control.
                     None if answer == "device?" => {
                         say!("{} pairs for device control: programs there will be able to see {}'s screen and operate it.", far.dns, device.dns);
                         // Nothing was begun there yet: closing without a word leaves it waiting.
                         let Some((_, port, txt)) = announce::find_device(local, lan, &DEVICE_KEYS, Duration::from_secs(7)) else {
-                            return Err(format!("{}'s own announcement wasn't seen on this LAN. It announces once it is paired with a Mac: pair Xcode first (there: roamrun pair xcode --with {own}), then this", device.dns));
+                            return Err(format!("{}'s own announcement wasn't seen on this LAN. It announces once it is paired with something: pair it once first — with a Mac's Xcode, or with a machine on this Wi‑Fi (roamrunctl pair control --to {}) — then this", device.dns, short(&device.dns)));
                         };
                         let named = Device { name: a.save_as.clone().unwrap_or_else(|| short(&device.dns).to_string()), peer: device.dns.to_lowercase(), port, txt, v: 1 };
                         let line = lines::device_line(&named);
@@ -154,18 +238,18 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
                             (Some(("offer", line)), _) => {
                                 // Its attempt's id follows at once; without it this isn't the pairing it asked about.
                                 let Ok(wire::Said::Attempt(id)) = w.read(Duration::from_secs(10)).map(|l| wire::said(&l)) else {
-                                    return Err("far Mac offered without saying which attempt it is; nothing was announced".into());
+                                    return Err("the host offered without saying which attempt it is; nothing was announced".into());
                                 };
                                 attempt = Some(id);
                                 wire = Some(w);
                                 break line.to_string();
                             }
-                            (_, wire::Said::Failed(why)) => return Err(format!("far Mac: {}", kept_nothing(&why))),
-                            (_, wire::Said::Ended(why)) => return Err(format!("far Mac: {}", ended(&why))),
-                            _ => return Err("far Mac said something else than an offer".into()),
+                            (_, wire::Said::Failed(why)) => return Err(format!("the host: {}", kept_nothing(&why))),
+                            (_, wire::Said::Ended(why)) => return Err(format!("the host: {}", ended(&why))),
+                            _ => return Err("the host said something else than an offer".into()),
                         }
                     }
-                    _ => return Err(format!("far Mac said something else: {answer:?}")),
+                    _ => return Err(format!("the host said something else: {answer:?}")),
                 }
             }
         }
@@ -173,7 +257,7 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
     // The wait for an offer may have been ten minutes: whose the far Mac's address is, and where
     // the device is, are asked again before anything is announced, as RoamRun does.
     if let (Some(w), Some(_)) = (wire.as_mut(), &status) {
-        let now = tailscale::status().and_then(|now| Ok((tailscale::peer(&now, &a.mac)?, tailscale::peer(&now, &a.to)?)));
+        let now = tailscale::status().and_then(|now| Ok((tailscale::peer(&now, &a.host)?, tailscale::peer(&now, &a.to)?)));
         let placed = now.and_then(|(far_now, device_now)| match (far_now.is(&far), device_now.is(&device)) {
             (true, true) => place(&device_now, a.on),
             (false, _) => Err(format!("{} isn't the machine it was when this began", far.dns)),
@@ -194,7 +278,7 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
     // Which of them the device is beyond can't be told from here when they aren't one network.
     let also = also.iter().map(Ipv4Addr::to_string).collect::<Vec<_>>().join(", ");
     if !also.is_empty() {
-        say!("this machine is also {also} on that network: if the device doesn't list the far Mac, run this again with --on <one of them>");
+        say!("this machine is also {also} on that network: if the device doesn't list the host, run this again with --on <one of them>");
     }
     let mut offer = match lines::offer(&offer_line) {
         Ok(offer) => offer,
@@ -218,7 +302,7 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
         return Err(if wire.is_none() {
             format!("{} isn't waiting to pair on port {} any more (or can't be reached): there, press Pair Nearby Device again and run `roamrun pair xcode` for a new line", far.dns, offer.port)
         } else {
-            format!("{} answers, but its pairing port {} can't be reached from here: there, press Pair Nearby Device again; if it stays so, Tailscale's rules don't let this machine in on that port", far.dns, offer.port)
+            format!("{} answers, but its pairing port {} can't be reached from here: Tailscale's rules or that machine's firewall don't let this machine in on that port (with Xcode there: press Pair Nearby Device again first)", far.dns, offer.port)
         });
     }
 
@@ -241,21 +325,21 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
         }
         Ok(Ended::Kept(on)) => {
             say!("{} is paired with {} for device control{}", far.dns, device.dns,
-                 if on { ", and it is switched on there." } else { ". It is switched off there: switch it on in the RoamRun app on that Mac; the pairing needn't be made again." });
+                 if on { ", and it is switched on there." } else { ". It is switched off there: switch it on in the RoamRun app on that machine; the pairing needn't be made again." });
             return Ok((None, true));
         }
-        Ok(Ended::KeptNothing(why)) => return Err(format!("far Mac: {}", kept_nothing(&why))),
+        Ok(Ended::KeptNothing(why)) => return Err(format!("the host: {}", kept_nothing(&why))),
         Ok(Ended::NotSaid) => {
-            return Err(format!("what the far Mac kept couldn't be learned. There: roamrun pair control --attempt {}", attempt.unwrap_or_else(|| "<its attempt's id>".into())))
+            return Err(format!("what the host kept couldn't be learned. Its own terminal says; with RoamRun there: roamrun pair control --attempt {}", attempt.unwrap_or_else(|| "<its attempt's id>".into())))
         }
         Ok(Ended::Tried(found)) => found,
     };
-    say!("A pairing was tried; whether it was made shows on the far Mac.");
+    say!("A pairing was tried; whether it was made shows on the host.");
     let Some(mut found) = found else {
         if let Some(w) = wire.as_mut() {
             let _ = w.send("ended no-line");
         }
-        return Err("the device's own announcement wasn't seen here: on the far Mac, run `roamrun devices add` by hand with a line from a Mac that has it".into());
+        return Err("the device's own announcement wasn't seen here: on the host, run `roamrun devices add` by hand with a line from a Mac that has it".into());
     };
     // Saved there under its Tailscale name unless another was asked for: what it announces itself as is "iPhone" for most.
     found.name = a.save_as.unwrap_or_else(|| short(&device.dns).to_string());
@@ -266,10 +350,10 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
         if let Some(w) = wire.as_mut() {
             let _ = w.send("ended no-line");
         }
-        return Err(format!("what the device announces can't be handed over ({why}): on the far Mac, run `roamrun devices add` by hand with a line from a Mac that has it"));
+        return Err(format!("what the device announces can't be handed over ({why}): on the host, run `roamrun devices add` by hand with a line from a Mac that has it"));
     }
     let Some(mut w) = wire else { return Ok((Some(line), true)) };
-    let unknown = "whether the far Mac saved it couldn't be learned: there, `roamrun devices` shows; if it isn't listed, `roamrun devices add` with the line below.";
+    let unknown = "whether the host saved it couldn't be learned: there, `roamrun devices` shows; if it isn't listed, `roamrun devices add` with the line below.";
     // Told before anything can stop this: a far Mac left without it would wait its ten minutes out.
     let told = w.send(&format!("tried {line}"));
     // Stopping is this program's to act on by now: without this it would wait out the read.
@@ -287,9 +371,9 @@ fn introduce(a: Introduce) -> Result<(Option<String>, bool), String> {
     let answer = rt.block_on(exchange).unwrap_or_else(|e| Err(e.to_string()));
     on_stop.abort();
     match answer.as_deref() {
-        Ok("saved") => say!("far Mac saved the device."),
-        Ok("unsaved") => say!("far Mac didn't save it: run `roamrun devices add` there with the line below."),
-        Ok(other) => say!("far Mac said something else: {other:?}; {unknown}"),
+        Ok("saved") => say!("the host saved the device."),
+        Ok("unsaved") => say!("the host didn't save it: run `roamrun devices add` there with the line below."),
+        Ok(other) => say!("the host said something else: {other:?}; {unknown}"),
         Err(why) => say!("{why}; {unknown}"),
     };
     Ok((Some(line), matches!(answer.as_deref(), Ok("saved"))))
@@ -316,10 +400,10 @@ fn ended(reason: &str) -> String {
 /// The far Mac's word for why its app kept no pairing for device control, as a sentence.
 fn kept_nothing(reason: &str) -> String {
     match reason {
-        "exists" => "it already holds a pairing for that device: remove it there first (the RoamRun app, on the device's page), then run both again",
-        "not-paired" => "the pairing wasn't completed on the device (a wrong code, refused there, or not in time); nothing was kept. Run this again: that Mac goes on waiting for it",
+        "exists" => "it already has that device, or one of that name, saved: remove it there first (the RoamRun app, on the device's page; `roamrunctl devices remove` where it has no RoamRun, or --as another name there), then run both again",
+        "not-paired" => "the pairing wasn't completed on the device (a wrong code, refused there, or not in time); nothing was kept. Run this again: that machine goes on waiting for it",
         "another-device" => "the device that paired isn't the one it has saved under that name; nothing was kept there. Remove the pairing just made on the device (Settings › Privacy & Security › Developer Mode)",
-        "not-kept" => "the device paired, but that Mac couldn't keep the pairing (it says why). Remove the pairing just made on the device (Settings › Privacy & Security › Developer Mode)",
+        "not-kept" => "the device paired, but that machine couldn't keep the pairing (it says why). Remove the pairing just made on the device (Settings › Privacy & Security › Developer Mode)",
         "no-app" => "the RoamRun app isn't running there: it makes and keeps the pairing. Open it there and run both again",
         "cancelled" => "it was stopped there; nothing was kept",
         _ => "it kept nothing; its terminal says why",
@@ -340,7 +424,7 @@ fn place(device: &Peer, on: Option<Ipv4Addr>) -> Result<(Ipv4Addr, Ipv4Addr, Vec
 }
 
 /// Why this machine has no address on a device's LAN.
-enum Elsewhere {
+pub(crate) enum Elsewhere {
     None,
     /// `--on` names one it hasn't there: the sentence.
     NotOn(String),
@@ -350,7 +434,7 @@ enum Elsewhere {
 /// network holds that address. Not what the routing table would pick (a route Tailscale took
 /// in may lead there another way), and from the prefix length each system gives as it is (the
 /// netmask is worked out differently on each, and on Windows by a guess).
-fn lan_ip(toward: Ipv4Addr, on: Option<Ipv4Addr>) -> Result<(Ipv4Addr, Vec<Ipv4Addr>), Elsewhere> {
+pub(crate) fn lan_ip(toward: Ipv4Addr, on: Option<Ipv4Addr>) -> Result<(Ipv4Addr, Vec<Ipv4Addr>), Elsewhere> {
     let interfaces: Vec<(Ipv4Addr, u8, bool)> = if_addrs::get_if_addrs()
         .map_err(|_| Elsewhere::None)?
         .iter()
@@ -499,7 +583,7 @@ async fn session(plan: Plan, far_link: Option<&wire::Wire>, mut stopped: watch::
     let name = &plan.offer.txt["name"];
     say!("announced “{name}” ({}) on {}:{port}; taking connections from {} only.", announcement.fullname(), plan.local, plan.lan);
     say!("On the device: Settings › Privacy & Security › Developer Mode › Pair with “{name}”; type the code {}. {}s at most.",
-         if plan.control { "that shows here once it is picked" } else { "the far Mac shows" }, plan.deadline);
+         if plan.control { "that shows here once it is picked" } else { "the host shows" }, plan.deadline);
     say!("Once paired the device lists it as “{}”.", plan.listed_as);
 
     let mut connected = false;
@@ -511,7 +595,7 @@ async fn session(plan: Plan, far_link: Option<&wire::Wire>, mut stopped: watch::
             }
             Some(Event::Refused(from)) => say!("refused connection from {from}"),
             Some(Event::Full(from)) => say!("two connections are carried already; one more from {from} wasn't taken"),
-            Some(Event::FarDidNotAnswer(why)) => say!("far Mac didn't take it ({why})"),
+            Some(Event::FarDidNotAnswer(why)) => say!("the host didn't take it ({why})"),
             Some(Event::Carried) => break Ok(None),
             // For device control the far Mac passes the code on and says what it kept; for Xcode's
             // pairing it says nothing while it waits, so a word from it means it has stopped.
@@ -519,10 +603,10 @@ async fn session(plan: Plan, far_link: Option<&wire::Wire>, mut stopped: watch::
                 wire::Said::Code(digits) => say!("Code to type on the device: {digits}"),
                 wire::Said::Done(on) => break Ok(Some(Ended::Kept(on))),
                 wire::Said::Failed(why) => break Ok(Some(Ended::KeptNothing(why))),
-                wire::Said::Ended(why) => break Err(("stopped", format!("far Mac: {}", ended(&why)))),
-                wire::Said::Other | wire::Said::Attempt(_) => break Err(("stopped", "the far Mac said something else, and was left".to_string())),
+                wire::Said::Ended(why) => break Err(("stopped", format!("the host: {}", ended(&why)))),
+                wire::Said::Other | wire::Said::Attempt(_) => break Err(("stopped", "the host said something else, and was left".to_string())),
             },
-            Some(Event::Far(_)) | Some(Event::NoResult) => break Err(("stopped", "the far Mac's command ended".to_string())),
+            Some(Event::Far(_)) | Some(Event::NoResult) => break Err(("stopped", "the host's command ended".to_string())),
             // Listed on the device and no connection here is what a firewall in between looks like.
             Some(Event::Deadline) => break Err((
                 "deadline",
@@ -530,7 +614,7 @@ async fn session(plan: Plan, far_link: Option<&wire::Wire>, mut stopped: watch::
                     "nothing was paired in time: the device connected, and its pairing didn't come to an end".to_string()
                 } else {
                     format!(
-                        "nothing was paired in time. If the device listed the far Mac and got no further, a firewall here keeps it out: let TCP from {} in on port {port}{}",
+                        "nothing was paired in time. If the device listed the host and got no further, a firewall here keeps it out: let TCP from {} in on port {port}{}",
                         plan.lan,
                         if plan.also.is_empty() { String::new() } else { format!(". If it didn't list it at all: run this again with --on <one of {}>", plan.also) }
                     )
@@ -538,7 +622,7 @@ async fn session(plan: Plan, far_link: Option<&wire::Wire>, mut stopped: watch::
             )),
             Some(Event::Stopped) => break Err(("stopped", "stopped".to_string())),
             Some(Event::AddressLost) => break Err(("address-lost", "this machine's address on the LAN changed".to_string())),
-            Some(Event::FarGone) => break Err(("stopped", "the far Mac's command ended".to_string())),
+            Some(Event::FarGone) => break Err(("stopped", "the host's command ended".to_string())),
             None => break Err(failed("the relay ended".into())),
         }
     };
@@ -551,7 +635,7 @@ async fn session(plan: Plan, far_link: Option<&wire::Wire>, mut stopped: watch::
         Ok(Some(kept)) => Ok(kept),
         // The device is done here: nothing is announced any more, and the far Mac says what it kept.
         Ok(None) if plan.control => {
-            say!("The device is done here; the far Mac says what it kept (90 seconds at most).");
+            say!("The device is done here; the host says what it kept (90 seconds at most).");
             let late = tx.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_secs(90)).await;

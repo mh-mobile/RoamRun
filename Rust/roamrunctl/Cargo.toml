@@ -5,7 +5,8 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 publish = false
-description = "Stands in for `roamrun pair introduce` on a machine that has no RoamRun: Windows, Linux, or a Mac"
+description = "For a machine that has no RoamRun (Windows, Linux, or a Mac): stands in for `roamrun pair introduce`, and holds a pairing with an iPhone or iPad to use it with no Xcode"
+rust-version = "1.89"
 
 [[bin]]
 name = "roamrunctl"
@@ -20,5 +21,20 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "signal", "sync"] }
 
+# Holding a pairing and using the device.
+roamrun-device = { path = "../RoamRunDevice" }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# Pinned: before 1.0, and what a saved pairing is read back with.
+age = { version = "=0.11.5", default-features = false }
+rpassword = "7"
+# For the machine that keeps a pairing's key and signs with it: both are idevice's own already.
+ed25519-dalek = "2"
+plist = "1"
+getrandom = "0.3"
+
 [profile.release]
 opt-level = "s"
+
+# The same pin as Rust/RoamRunDevice's: a patch counts only in the manifest that is built.
+[patch.crates-io]
+idevice = { git = "https://github.com/mh-mobile/idevice", rev = "89cdb2409643deabab99999286b4c4d091c7c068" }

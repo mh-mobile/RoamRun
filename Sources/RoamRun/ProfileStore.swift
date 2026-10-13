@@ -44,7 +44,8 @@ final class ProfileStore {
         if let profiles = try? JSONDecoder().decode([DeviceProfile].self, from: data) { return profiles }
         // One malformed entry shouldn't cost the others: keep what decodes (and a copy of the file below).
         let salvaged = ((try? JSONSerialization.jsonObject(with: data)) as? [Any])?.compactMap { item in
-            (try? JSONSerialization.data(withJSONObject: item)).flatMap { try? JSONDecoder().decode(DeviceProfile.self, from: $0) }
+            // Only an object: anything else there isn't an error to catch, it stops the process.
+            (item as? [String: Any]).flatMap { try? JSONSerialization.data(withJSONObject: $0) }.flatMap { try? JSONDecoder().decode(DeviceProfile.self, from: $0) }
         }
         // The next save would replace it with an empty list: keep a copy, once per distinct content.
         let fm = FileManager.default
@@ -56,6 +57,13 @@ final class ProfileStore {
             if (try? fm.copyItem(at: url, to: copy)) != nil { keptUnreadable = copy }
         }
         return salvaged ?? []
+    }
+
+    /// `mine`, and what another process saved since this one read the list: a name is taken
+    /// by any of them.
+    func known(with mine: [DeviceProfile]) -> [DeviceProfile] {
+        let ids = Set(mine.map(\.id))
+        return mine + load().filter { !ids.contains($0.id) }
     }
 
     /// Reads, changes and writes the list under the lock, so nothing another
@@ -107,12 +115,7 @@ final class ProfileStore {
         // A device this process never saw (not in `base`) isn't its to drop: the list
         // it started from was unreadable, or someone else added it. Deleting one here
         // means it was in `base`, so that still sticks.
-        let wantedIDs = Set(wanted.map(\.id))
-        // …unless it was added here again meanwhile (the list looked empty): that one wins.
-        let unseen = disk.filter { d in
-            was[d.id] == nil && !wantedIDs.contains(d.id) && !wanted.contains { Self.sameDevice($0, d) }
-        }
-        return unseen + wanted.map { mine in
+        return unseen(base: base, wanted: wanted, disk: disk) + wanted.map { mine in
             guard let old = was[mine.id], let theirs = onDisk[mine.id] else { return mine }
             var out = mine
             if mine.providerIP == old.providerIP { out.providerIP = theirs.providerIP }
@@ -125,6 +128,24 @@ final class ProfileStore {
             if mine.udid == old.udid, let learned = theirs.udid { out.udid = learned }
             return out
         }
+    }
+
+    /// What is on disk that this process never saw: neither in the list it read (`base`) nor in
+    /// the one it has (`wanted`) — unless it was added here again meanwhile (the list looked
+    /// empty): that one wins.
+    static func unseen(base: [DeviceProfile], wanted: [DeviceProfile], disk: [DeviceProfile]) -> [DeviceProfile] {
+        let was = Set(base.map(\.id)), wantedIDs = Set(wanted.map(\.id))
+        return disk.filter { d in
+            !was.contains(d.id) && !wantedIDs.contains(d.id) && !wanted.contains { Self.sameDevice($0, d) }
+        }
+    }
+
+    /// When profiles.json was last written, nil where there is none: a change says another process saved.
+    var written: Date? { (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date }
+
+    /// The devices another process saved since `base` was read, which `mine` doesn't have (none from a file that can't be read).
+    func savedElsewhere(base: [DeviceProfile], mine: [DeviceProfile]) -> [DeviceProfile] {
+        Self.unseen(base: base, wanted: mine, disk: load())
     }
 
     /// The checks Add Device refuses a second profile on: same address, advert or UDID.

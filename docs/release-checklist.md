@@ -164,7 +164,9 @@ tunnel and Xcode has to run again.
     switch the device off on its page; interrupt the command (Ctrl-C); **Remove…** the pairing —
     the typing stops within a moment, where it had got to and no further, and the command (where
     it still runs) says it was told to stop. Set it up again, then **Remove Device**: its
-    `.sealed` file is gone.
+    `.sealed` file is gone. (After **Remove…** in the middle of a text the device was seen, twice on
+    iOS 27.0, to show no keys for the pairing code: open a text field elsewhere on it first —
+    the Home Screen's search — and they are back. Why isn't known.)
 25. `roamrun key create <name> ~/k.json --as "RoamRun (check)"`, the code entered on the
     device: the file is written (0600) and the device lists "RoamRun (check)" beside this
     Mac's own entry. On another Mac that reaches the device (or a macOS VM on the tailnet):
@@ -204,7 +206,7 @@ tunnel and Xcode has to run again.
     that reaches the device only over the tailnet (a macOS VM will do; if it was cloned from an
     image another clone of which is paired, remove that one's entry on the device first), with no
     entry of its own on the device: Device Hub › Pair Nearby Device, `roamrun pair xcode` → one
-    line on stdout. Here, device on this Wi‑Fi: `roamrun pair introduce <line> --mac <its
+    line on stdout. Here, device on this Wi‑Fi: `roamrun pair introduce <line> --host <its
     Tailscale name> --to <name>` → it says whose Mac that is, that it takes connections "from
     <the device's address> only", and the device lists "Pair with <its Tailscale name>". A wrong
     code first: the command stays, the device lets the code be typed again. The right one: it
@@ -217,7 +219,7 @@ tunnel and Xcode has to run again.
     And with the device on cellular: it says Tailscale doesn't reach the device directly
     on this Wi‑Fi, and announces nothing.
     Then by name, the far Mac's entry removed on the device first: there
-    `roamrun pair xcode --with <this Mac's Tailscale name>`, here `roamrun pair introduce --mac
+    `roamrun pair xcode --with <this Mac's Tailscale name>`, here `roamrun pair introduce --host
     <its Tailscale name> --to <name>` with no line, and the button pressed after both wait → the
     far Mac says the device is saved, this Mac says that Mac saved it, `roamrun up <name>` there
     → Ready. Once more with the far Mac's command stopped (Ctrl-C) while this Mac stands in: this
@@ -228,7 +230,7 @@ tunnel and Xcode has to run again.
 28. Device control on a far Mac (when `pair control`, the app's pairing, or the pairing
     library changed). On the far Mac (item 27's will do), the RoamRun app open and no pairing
     for the device held: `roamrun pair control --with <this Mac's Tailscale name>`; here, in a
-    terminal of your own, `roamrun pair introduce --mac <its Tailscale name> --to <name>` → it
+    terminal of your own, `roamrun pair introduce --host <its Tailscale name> --to <name>` → it
     says "for device control", the device lists "Pair with <its Tailscale name>", and the code
     shows here and not there. Typed: here "is paired … switched on there", there exit 0, and
     `roamrun look <name>` there gives the screen. `lsof -nP -iTCP -sTCP:LISTEN | grep RoamRun`
@@ -255,7 +257,7 @@ tunnel and Xcode has to run again.
     wire changed). `Rust/roamrunctl/scripts/local-check.py` as its header says → every line ok. On
     a Linux machine on the device's Wi‑Fi, signed in to the tailnet, with the roamrunctl the pull
     request's CI built (its artifacts): the far Mac's `roamrun pair xcode --with <that machine>`, there `roamrunctl
-    pair introduce --mac <far Mac> --to <the device's Tailscale name>` → the device lists the far
+    pair introduce --host <far Mac> --to <the device's Tailscale name>` → the device lists the far
     Mac, the code from Device Hub → both say saved, `roamrun up <name>` on the far Mac → Ready,
     and nothing is left announced or listening on either (`pgrep roamrunctl`, `lsof -nP
     -iTCP:41830`; on Windows `Get-Process roamrunctl`, `netstat -an | findstr 41830`). The same with `--offer "$(ssh <far Mac> roamrun pair xcode)"` and no `--with`:
@@ -268,6 +270,48 @@ tunnel and Xcode has to run again.
     the device's network, if one is at hand: it says its other address, and `--on <that>` takes
     it. After the release: each install command of roamrunctl's README — Linux, Windows, `brew
     install mh-mobile/tap/roamrunctl`, `cargo install` — then `roamrunctl --version`.
+
+30a. roamrunctl holding a device (when `Rust/roamrunctl` or `Rust/RoamRunDevice` changed). Pairing
+    commands run by yourself, in a terminal of your own. On a Linux machine on the device's Wi‑Fi:
+    `roamrunctl pair control --to <device> --as phone` → the device lists the machine, the code →
+    "Paired … and it connects"; `roamrunctl look phone` → a picture of the screen; Ctrl-C while it
+    waits, and the window closed while it waits → nothing left announced. On a Linux machine
+    elsewhere on the tailnet, under another name each time (`--as`): `pair control --with <near
+    machine>`, introduced once by roamrunctl and once by a Mac's `roamrun pair introduce --host`
+    (the device saved in RoamRun there); `pair control --with <the device>` with the Introducer
+    app → paired each time (each pairing takes the place of the one before on the device: the
+    name of the last is the one used below); a wrong code → nothing kept. Then there: `install` and `launch`
+    of an app built for the device; `roamrunctl mcp` under an agent: look, tap, swipe, type, paste,
+    press, elements, with music playing on the device → it goes on sounding, and no screen-sharing
+    session is listed. `--passphrase` once: `look` asks for it; `mcp` takes it from
+    `ROAMRUNCTL_PASSPHRASE_FILE`. The key elsewhere: two devices paired on one machine, `roamrunctl
+    sign <both> --for <using machine>` → on the using machine, `roamrunctl devices` lists both as
+    not used yet; a look of the first says it is held to from now on. `devices remove <the
+    second>` on the key's machine → the using machine lists it no more. `devices remove <the
+    first>` there → the using machine still lists it, and its look says the key's machine signs
+    for it no more; paired again under the same name, `sign` still running → the same, and
+    `sign` says to run it again; `sign <the first>` run again → the look works. Ctrl-C in `sign` → the next
+    look is refused, an `mcp` that had the device open still looks. With a tagged
+    machine as `--for`: `sign` says to set `ROAMRUNCTL_SIGNER` there, and nothing is listed
+    there until it is; a mistyped name there is said. On Windows: `pair control --with`, introduced by a Mac; `look`;
+    `sign` for a Linux machine. `roamrunctl pair introduce --mac x --to y` → says `--host`.
+
+31. An Apple Vision Pro and a far Mac (when `pair xcode --with`, `pair introduce`, the stand-in,
+    the wire, Xcode or visionOS changed). The far Mac's entry removed on the device first
+    (Settings › General › Remote Devices), that screen left open, the device saved in RoamRun
+    on a Mac on its Wi‑Fi. On the far Mac: `roamrun pair xcode --with <that Mac>`. On that Mac:
+    `roamrun pair introduce --host <the far Mac> --to <device>` → it says the device waits to be
+    picked; the far Mac says whose device it is, and only then that it is announced. In Device
+    Hub on the far Mac: + › Pair Nearby Device › Apple Vision Pro lists it; picked, the device
+    shows a code; typed in Device Hub → paired, and the far Mac's command ends by itself: it says
+    nothing is announced or listening (`lsof -nP -iTCP -sTCP:LISTEN | grep RoamRun`,
+    `pgrep -fl "dns-sd -i"`, `pgrep -fl "log stream"`) and saves the device; the other Mac says so too. `roamrun up
+    <device>` on the far Mac → Ready, `devicectl … process launch`. Once with Remote Devices
+    closed: for a device RoamRun's app shows as an Apple Vision Pro, `pair introduce` says it
+    isn't waiting, exit 1; for one saved without its kind (`roamrun devices --json`: no
+    `deviceType`) it waits as for an iPhone and says what to do if it is one. Once with Ctrl-C
+    on the far Mac before it connected: it says nothing was saved. Once with the far Mac running
+    `pair control --with`: the other Mac says that Mac doesn't stand in as it runs.
 
 ## Debug logs worth a look after an iOS or Xcode update
 

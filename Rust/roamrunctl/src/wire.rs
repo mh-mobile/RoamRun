@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 pub const PORT: u16 = 41830;
 /// `read`'s error when the far Mac closed without a word: transient while an offer is awaited.
-pub const CLOSED: &str = "far Mac closed the connection";
+pub const CLOSED: &str = "the host closed the connection";
 const PREFIX: &str = "rr-pair-v1 ";
 const MAX_LINE: usize = 4096;
 
@@ -66,13 +66,13 @@ impl Wire {
         }
     }
 
-    fn over(stream: TcpStream) -> Option<Wire> {
+    pub fn over(stream: TcpStream) -> Option<Wire> {
         let reader = Arc::new(Mutex::new(BufReader::new(stream.try_clone().ok()?)));
         Some(Wire { stream, reader })
     }
 
     pub fn send(&mut self, text: &str) -> Result<(), String> {
-        self.stream.write_all(format!("{PREFIX}{text}\n").as_bytes()).and_then(|_| self.stream.flush()).map_err(|e| format!("far Mac went away ({e})"))
+        self.stream.write_all(format!("{PREFIX}{text}\n").as_bytes()).and_then(|_| self.stream.flush()).map_err(|e| format!("the host went away ({e})"))
     }
 
     /// The next line's words after the prefix, whole within `timeout`; the far Mac saying
@@ -83,7 +83,7 @@ impl Wire {
         let mut line = Vec::new();
         loop {
             let Some(left) = until.checked_duration_since(Instant::now()).filter(|d| !d.is_zero()) else {
-                return Err("no answer from the far Mac (in time)".into());
+                return Err("no answer from the host (in time)".into());
             };
             // On the reader's own handle: Windows doesn't carry a timeout over to a clone.
             reader.get_ref().set_read_timeout(Some(left)).map_err(|e| e.to_string())?;
@@ -93,11 +93,11 @@ impl Wire {
                 Err(e) if waiting(&e) => {}
                 // Windows says "aborted" of a connection the far side dropped.
                 Err(e) if matches!(e.kind(), ErrorKind::UnexpectedEof | ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted) => return Err(CLOSED.into()),
-                Err(e) if e.kind() == ErrorKind::InvalidData => return Err("far Mac sent a line too long to be one of ours".into()),
-                Err(e) => return Err(format!("no answer from the far Mac ({e})")),
+                Err(e) if e.kind() == ErrorKind::InvalidData => return Err("the host sent a line too long to be one of ours".into()),
+                Err(e) => return Err(format!("no answer from the host ({e})")),
             }
         }
-        words(&line).ok_or_else(|| format!("far Mac said something else: {:?}", String::from_utf8_lossy(&line)))
+        words(&line).ok_or_else(|| format!("the host said something else: {:?}", String::from_utf8_lossy(&line)))
     }
 
     /// Hands `said` each line the far Mac says (its words after the prefix), and `None` once when it

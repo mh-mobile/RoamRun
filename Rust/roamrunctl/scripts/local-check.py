@@ -48,7 +48,7 @@ try:
     offer = pack("rr-xcode-offer-v1:", {"v": 1, "port": FAR_PORT, "txt": {
         "identifier": IDENT, "authTag": "dGVzdA", "model": "Mac16,1", "name": "Fake Offer Name", "flags": "1", "ver": "2", "minVer": "1"}})
     procs.append(browser)
-    proc = subprocess.Popen([BIN, "pair", "introduce", "--mac", "fake-mac.tail.ts.net", "--to", "fake-iphone", "--offer", offer,
+    proc = subprocess.Popen([BIN, "pair", "introduce", "--host", "fake-mac.tail.ts.net", "--to", "fake-iphone", "--offer", offer,
                              "--service", SERVICE, "--far-ip", "127.0.0.1", "--device-ip", LAN, "--deadline", "60", "--as", "Fake iPhone"],
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     procs.append(proc)
@@ -109,7 +109,7 @@ try:
         connected.wait(30); tell("code 456640"); carried.wait(30); time.sleep(1); tell("result done on")
         said.append(f.readline().strip()); c.close()
     threading.Thread(target=far_wire, daemon=True).start()
-    proc = subprocess.Popen([BIN, "pair", "introduce", "--mac", "fake-mac.tail.ts.net", "--to", "fake-iphone",
+    proc = subprocess.Popen([BIN, "pair", "introduce", "--host", "fake-mac.tail.ts.net", "--to", "fake-iphone",
                              "--service", SERVICE, "--far-ip", "127.0.0.1", "--device-ip", LAN, "--deadline", "60"],
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     procs.append(proc)

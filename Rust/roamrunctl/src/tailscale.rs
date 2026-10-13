@@ -32,6 +32,34 @@ pub struct Node {
     pub ips: Vec<String>,
     #[serde(rename = "CurAddr", default)]
     pub cur_addr: String,
+    /// Whose it is, as Tailscale numbers its users; a tagged machine is nobody's.
+    #[serde(rename = "UserID", default)]
+    pub user: i64,
+    #[serde(rename = "Tags", default)]
+    pub tags: Option<Vec<String>>,
+    #[serde(rename = "Online", default)]
+    pub online: bool,
+}
+
+/// This machine's user's other machines that are online, by name and address: the ones a key of that user's
+/// may be kept on. None of them where this machine is tagged (it is then nobody's).
+pub fn own_machines(status: &Status) -> Vec<(String, Ipv4Addr)> {
+    let tagged = |node: &Node| node.tags.as_ref().is_some_and(|tags| !tags.is_empty());
+    if status.this.user == 0 || tagged(&status.this) { return Vec::new(); }
+    let mut found: Vec<(String, Ipv4Addr)> = status.peers.values()
+        .filter(|p| p.online && p.user == status.this.user && !tagged(p))
+        .filter_map(|p| Some((p.dns_name.trim_end_matches('.').to_string(), p.ips.iter().find_map(|a| a.parse().ok())?)))
+        .filter(|(name, _)| !name.is_empty())
+        .collect();
+    found.sort();
+    found
+}
+
+/// Whether `peer` asks this machine by itself which devices it signs for: it does where both are one user's, untagged.
+pub fn asks_by_itself(status: &Status, peer: &Peer) -> bool {
+    let tagged = |node: &Node| node.tags.as_ref().is_some_and(|tags| !tags.is_empty());
+    status.this.user != 0 && !tagged(&status.this)
+        && status.peers.values().any(|node| node.id == peer.id && node.user == status.this.user && !tagged(node))
 }
 
 /// A peer by its Tailscale name.
@@ -70,7 +98,8 @@ fn exe() -> std::path::PathBuf {
 }
 
 fn run(args: &[&str]) -> Result<String, String> {
-    let out = Command::new(exe()).args(args).output().map_err(|e| format!("tailscale isn't installed here ({e})"))?;
+    // Not handed what opens a pairing: it has no use for it.
+    let out = Command::new(exe()).args(args).env_remove("ROAMRUNCTL_PASSPHRASE").output().map_err(|e| format!("tailscale isn't installed here ({e})"))?;
     if !out.status.success() {
         return Err(format!("tailscale {}: {}", args[0], String::from_utf8_lossy(&out.stderr).trim()));
     }
@@ -98,6 +127,23 @@ pub fn state_problem(state: &str) -> Option<String> {
 /// The peer a person means by `name`: its whole Tailscale name, or the first label of one in this
 /// tailnet. Never the name a device gives itself, and never a guess between two (as RoamRun does).
 pub fn peer(status: &Status, name: &str) -> Result<Peer, String> {
+    let (node, mut peer) = found(status, name)?;
+    peer.lan = if node.cur_addr.is_empty() {
+        // Nothing talked to it lately: a ping says which way packets go.
+        let pong = run(&["ping", "-c", "3", "--timeout", "3s", "--until-direct=false", &peer.ip.to_string()]).unwrap_or_default();
+        pinged(&pong)
+    } else {
+        direct(&node.cur_addr)
+    };
+    Ok(peer)
+}
+
+/// The same, where only who it is matters: nothing is asked of the network for where it is.
+pub fn known(status: &Status, name: &str) -> Result<Peer, String> {
+    found(status, name).map(|(_, peer)| peer)
+}
+
+fn found<'a>(status: &'a Status, name: &str) -> Result<(&'a Node, Peer), String> {
     let want = name.trim_end_matches('.').to_lowercase();
     // An older Tailscale doesn't say its tailnet's suffix: this machine's own name has it.
     let own = status.this.dns_name.trim_end_matches('.').split_once('.').map_or("", |(_, rest)| rest);
@@ -125,14 +171,7 @@ pub fn peer(status: &Status, name: &str) -> Result<Peer, String> {
         .find_map(|a| a.parse::<Ipv4Addr>().ok())
         .ok_or(format!("{name} has no IPv4 address on the tailnet"))?;
     let dns = node.dns_name.trim_end_matches('.').to_string();
-    let lan = if node.cur_addr.is_empty() {
-        // Nothing talked to it lately: a ping says which way packets go.
-        let pong = run(&["ping", "-c", "3", "--timeout", "3s", "--until-direct=false", &ip.to_string()]).unwrap_or_default();
-        pinged(&pong)
-    } else {
-        direct(&node.cur_addr)
-    };
-    Ok(Peer { id: node.id.clone(), ip, dns, lan })
+    Ok((node, Peer { id: node.id.clone(), ip, dns, lan: None }))
 }
 
 /// The host of a direct "ip:port" endpoint; None for IPv6.
@@ -154,6 +193,18 @@ pub fn pinged(output: &str) -> Option<Ipv4Addr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_this_users_own_machines_that_are_online_are_asked() {
+        let status = |me: &str| -> Status { serde_json::from_str(&format!(r#"{{"Self":{{"ID":"me","DNSName":"box.tail.ts.net.","TailscaleIPs":["100.64.0.1"],"UserID":7{me}}},"Peer":{{
+            "a":{{"ID":"a","DNSName":"laptop.tail.ts.net.","TailscaleIPs":["100.64.0.2","fd7a::2"],"UserID":7,"Online":true}},
+            "b":{{"ID":"b","DNSName":"asleep.tail.ts.net.","TailscaleIPs":["100.64.0.3"],"UserID":7,"Online":false}},
+            "c":{{"ID":"c","DNSName":"theirs.tail.ts.net.","TailscaleIPs":["100.64.0.4"],"UserID":8,"Online":true}},
+            "d":{{"ID":"d","DNSName":"ci.tail.ts.net.","TailscaleIPs":["100.64.0.5"],"UserID":7,"Online":true,"Tags":["tag:ci"]}}}}}}"#)).unwrap() };
+        assert_eq!(own_machines(&status("")), [("laptop.tail.ts.net".to_string(), Ipv4Addr::new(100, 64, 0, 2))]);
+        // A tagged machine is nobody's: it asks none (one is named for it instead).
+        assert!(own_machines(&status(r#","Tags":["tag:ci"]"#)).is_empty());
+    }
 
     #[test]
     fn ping_output() {
@@ -182,8 +233,10 @@ mod tests {
             "Peer":{"shared":{"DNSName":"iphone-15.other.ts.net.","HostName":"iPhone 15","TailscaleIPs":["100.64.0.7"]},
                 "same":{"ID":"n2","DNSName":"iphone-15-1.tail.ts.net.","HostName":"iPhone 15","TailscaleIPs":["100.64.0.8"]},"k":{"ID":"n1","DNSName":"iPhone-15.tail.ts.net.","HostName":"iPhone 15","TailscaleIPs":["fd7a::1","100.64.0.9"],"CurAddr":"192.168.0.19:41641"}}}"#;
         let st: Status = serde_json::from_str(json).unwrap();
+        // `known`, but for the one whose LAN address is looked at: `peer` pings those nothing talked to lately.
+        let peer = known;
         for name in ["iphone-15", "iPhone-15.tail.ts.net", "iphone-15.tail.ts.net."] {
-            let p = peer(&st, name).unwrap();
+            let p = super::peer(&st, name).unwrap();
             assert_eq!((p.ip, p.dns.as_str(), p.lan), (Ipv4Addr::new(100, 64, 0, 9), "iPhone-15.tail.ts.net", Some(Ipv4Addr::new(192, 168, 0, 19))));
         }
         assert!(peer(&st, "nobody").is_err());

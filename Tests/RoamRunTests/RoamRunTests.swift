@@ -640,6 +640,56 @@ import ServiceManagement
     #expect(args(["bridge100": "198.19.249.3"]) == record)   // no interface holds it: as before
 }
 
+/// The line for a device that a Mac picks: read back as written, not taken for the other lines
+/// (nor they for it), and nothing in it that isn't plainly a value of its kind.
+@Test func aPairableDevicesLineIsReadOnlyAsWhatItIs() {
+    let txt = ["identifier": "6BF40D22-D414-41D0-BE80-7567AE75B2BC", "authTag": "BsVby0td", "model": "RealityDevice14,1",
+               "name": "Apple Vision Pro", "ver": "26", "minVer": "17"]
+    let pairable = Introduction.Pairable(instance: "Apple Vision Pro", port: 60346, txt: txt)
+    let line = Introduction.line(pairable)
+    #expect(line.hasPrefix("rr-pairable-v1:") && !line.contains(" ") && !line.contains("="))
+    #expect(try! Introduction.pairable(from: " \(line)\n").get() == pairable)
+    func refused<T>(_ r: Result<T, Introduction.Unreadable>) -> Introduction.Unreadable? { if case .failure(let e) = r { return e }; return nil }
+    let offer = Introduction.line(Introduction.Offer(port: 53050, txt: txt.merging(["flags": "1"]) { a, _ in a }))
+    if case .another = refused(Introduction.pairable(from: offer)) {} else { Issue.record("an offer read as a device that waits") }
+    #expect(refused(Introduction.offer(from: line)) == .notOne && refused(Introduction.device(from: line)) == .notOne)
+    #expect(refused(Introduction.pairable(from: String(line.dropLast(9)))) == .notOne)
+    func bad(_ change: (inout Introduction.Pairable) -> Void) -> Bool {
+        var p = pairable; change(&p)
+        if case .refused = refused(Introduction.pairable(from: Introduction.line(p))) { return true }
+        return false
+    }
+    #expect(bad { $0.port = 80 } && bad { $0.txt["flags"] = "1" } && bad { $0.txt["name"] = nil })
+    #expect(bad { $0.instance = "" } && bad { $0.instance = "a=b" } && bad { $0.instance = String(repeating: "n", count: 64) } && bad { $0.instance = "a\u{202E}b" })
+    // Which device it is isn't in the line: nothing in it names a host.
+    #expect(!String(decoding: Data(base64Encoded: String(line.dropFirst("rr-pairable-v1:".count)).replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/") + "==") ?? Data(), as: UTF8.self).contains("peer"))
+    // From what was seen on the network: only the keys of its kind go into the line.
+    let seen = CapturedService(instanceName: "Apple Vision Pro", serviceType: Introduction.pairableService, domain: "local", port: 60346,
+                               host: "vision.local", hostIPs: [], txt: txt.merging(["extra": "x"]) { a, _ in a }, lastSeen: Date())
+    #expect(Introduction.pairable(seen) == pairable)
+    var short = seen; short.txt["authTag"] = nil
+    #expect(Introduction.pairable(short) == nil)
+}
+
+/// A name as dns-sd prints it is read back as it is: a device that waits announces under a name with spaces.
+@MainActor @Test func aNameWithSpacesIsReadFromWhatDnsSdPrints() {
+    #expect(BonjourCapture.unescaped("Apple\\032Vision\\032Pro") == "Apple Vision Pro")
+    #expect(BonjourCapture.unescaped("a\\.b\\\\c") == "a.b\\c" && BonjourCapture.unescaped("6BF40D22-D414") == "6BF40D22-D414" && BonjourCapture.unescaped("x\\") == "x\\")
+    // Three digits and nothing else are a byte; bytes above 127 come so, and make their character again.
+    #expect(BonjourCapture.unescaped("a\\+12b") == "a+12b" && BonjourCapture.unescaped("caf\\195\\169") == "café")
+    let c = BonjourCapture()
+    c.reads(Introduction.pairableService)
+    for line in [
+        "_remotepairing-manual-pairing._tcp PTR Apple\\032Vision\\032Pro._remotepairing-manual-pairing._tcp",
+        "Apple\\032Vision\\032Pro._remotepairing-manual-pairing._tcp SRV 0 0 60346 vision.local. ; Replace with unicast FQDN of target host",
+        "Apple\\032Vision\\032Pro._remotepairing-manual-pairing._tcp TXT \"identifier=6BF40D22-D414-41D0-BE80-7567AE75B2BC\" \"authTag=BsVby0td\" \"model=RealityDevice14,1\" \"name=Apple Vision Pro\" \"ver=26\" \"minVer=17\"",
+    ] { c.parse(line: line) }
+    let seen = Array(c.services.values)
+    #expect(seen.map(\.instanceName) == ["Apple Vision Pro"])
+    let read = seen.first.flatMap { Introduction.pairable($0) }
+    #expect(read?.instance == "Apple Vision Pro" && read?.port == 60346 && read?.txt["name"] == "Apple Vision Pro")
+}
+
 /// The two lines one Mac hands another: each read back as written, neither taken for the
 /// other, and nothing in them that isn't plainly a value of its kind.
 @Test func introductionLinesAreReadOnlyAsWhatTheyAre() {
@@ -902,6 +952,29 @@ extension TimingSensitive.RelayOnLocalhost {
     try await standIn.start()
     let announced = try #require(record.standIn)
     #expect(announced.type == "_remotepairing-pairable-host._tcp" && announced.instance == txt["identifier"] && announced.txt == txt)
+    // For a device that waits to be picked: its own kind of record, under the name it announces itself.
+    do {
+        var waits = plan(far); waits.service = Introduction.pairableService; waits.instance = "Apple Vision Pro"
+        let record = FakeRecord(), other = Introducer(waits, record: record, addressNow: { "127.0.0.1" }) { _ in }
+        try await other.start()
+        let announced = try #require(record.standIn)
+        #expect(announced.type == "_remotepairing-manual-pairing._tcp" && announced.instance == "Apple Vision Pro" && announced.txt == txt)
+        await other.end(.stopped)
+        #expect(record.stopped == 1)
+    }
+    // Such a stand-in isn't ended by a connection that carried bytes and closed: Device Hub may make more than one.
+    do {
+        var waits = plan(far); waits.service = Introduction.pairableService; waits.endsWhenCarried = false
+        let said = Said(), record = FakeRecord(), other = Introducer(waits, record: record, addressNow: { "127.0.0.1" }) { [said] in said.events.append($0) }
+        try await other.start()
+        let port = try #require(record.standIn).port
+        #expect(await roundTrip(port: port, payload: Data("pair".utf8)) == Data("pair".utf8))
+        #expect(await eventuallyOnMain { said.events.contains(.connected(from: "127.0.0.1")) })
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(ended(said) == nil && !other.ended)
+        await other.end(.stopped)
+        #expect(ended(said) == .ended(.stopped, clean: true))
+    }
     #expect(announced.host.hasSuffix(".roamrun.local") && announced.ip == "127.0.0.1" && announced.port != far)   // far's port is taken here: the next
     #expect(said.events == [.announced(interface: "lo0", name: "far-mac", port: announced.port)])
     // One that carries nothing says a device connected, and ends nothing.
@@ -948,8 +1021,8 @@ extension TimingSensitive.RelayOnLocalhost {
 /// `pair` and `devices` take a word that says what to do, not a device's name first.
 @Test func pairAndDevicesCommandsParse() throws {
     let line = "rr-xcode-offer-v1:eyJ4IjoxfQ"
-    let introduce = try CLI.parse(["pair", "introduce", line, "--mac", "cloud-mac", "--to=iPhone"]).get()
-    #expect(introduce.words == ["introduce", line] && introduce.values["--mac"] == "cloud-mac" && introduce.values["--to"] == "iPhone")
+    let introduce = try CLI.parse(["pair", "introduce", line, "--host", "cloud-mac", "--to=iPhone"]).get()
+    #expect(introduce.words == ["introduce", line] && introduce.values["--host"] == "cloud-mac" && introduce.values["--to"] == "iPhone")
     #expect(try CLI.parse(["pair", "xcode"]).get().words == ["xcode"])
     let add = try CLI.parse(["devices", "add", "rr-device-v1:eyJ4IjoxfQ", "--replace", "iPhone", "--peer=iphone-15-pro"]).get()
     #expect(add.words.count == 2 && add.values["--replace"] == "iPhone" && add.values["--peer"] == "iphone-15-pro")
@@ -1048,6 +1121,27 @@ extension TimingSensitive.RelayOnLocalhost {
     #expect(TailscaleClient.devices(fromStatusJSON: "not json") == nil)
 }
 
+@Test func theDeviceWaitingIsFoundByItsAddressEvenWhenOnlyAnIPv6OneWasHeard() {
+    func service(_ name: String, _ host: String, _ ips: [String]) -> CapturedService {
+        CapturedService(instanceName: name, serviceType: Introduction.pairableService, domain: "local", port: 1, host: host, hostIPs: ips, txt: [:], lastSeen: .now)
+    }
+    let other = service("other", "other.local", ["192.168.0.9"]), mine = service("mine", "mine.local", ["fe80::1"])
+    let names = ["mine.local": ["192.168.0.20"]]
+    #expect(CLI.waiting([other, mine], at: "192.168.0.20") { names[$0] ?? [] }?.instanceName == "mine")
+    // Heard with the address: nothing is looked up.
+    #expect(CLI.waiting([other, mine], at: "192.168.0.9") { _ in Issue.record("looked up"); return [] }?.instanceName == "other")
+    #expect(CLI.waiting([other, mine], at: "192.168.0.30") { names[$0] ?? [] } == nil)
+}
+
+@Test func aPairingMadeIsReadFromDeviceHubsLine() {
+    #expect(CLI.pairingLog.contains(#"senderImagePath BEGINSWITH "/Library/Developer/PrivateFrameworks/CoreDevice.framework/""#))
+    #expect(CLI.pairingEnded("Pairing attempt completed with error nil") == true)
+    #expect(CLI.pairingEnded("Pairing attempt completed with error Optional(Error Domain=com.apple.dt.CoreDeviceError Code=2)") == false)
+    // Not that line, or more than it: not taken for a pairing.
+    #expect(CLI.pairingEnded("Pairing attempt completed with error nil, or so") == false)
+    #expect(CLI.pairingEnded("Pairing attempt started") == nil && CLI.pairingEnded("") == nil)
+}
+
 @Test func tunnelStateMatchesUDIDInAnyCase() {
     let result: [String: Any] = ["devices": [["hardwareProperties": ["udid": phoneA],
                                               "connectionProperties": ["tunnelState": "connected"]]]]
@@ -1082,6 +1176,69 @@ extension TimingSensitive.RelayOnLocalhost {
     #expect(s?.instanceName == "6E44" && s?.port == 49152 && s?.host == "my-iphone.local")
     #expect(s?.txt["authTag"] == "k=v=w" && s?.txt["flag"] == "" && s?.hostIPs == ["192.168.1.42"])
     #expect(c.services["FAKE._remotepairing._tcp"] == nil)
+}
+
+/// A host's address heard again makes none of its records newer: Add Device takes the newest.
+@MainActor @Test func anAddressHeardAgainDoesntMakeARecordNewer() {
+    let c = BonjourCapture()
+    c.parse(line: "OLD._remotepairing._tcp SRV 0 0 49152 my-iphone.local.")
+    let heard = c.services["OLD._remotepairing._tcp"]?.lastSeen
+    Thread.sleep(forTimeInterval: 0.01)
+    c.parse(line: "my-iphone.local. A 192.168.1.9")
+    #expect(heard != nil && c.services["OLD._remotepairing._tcp"]?.lastSeen == heard)
+    #expect(c.services["OLD._remotepairing._tcp"]?.hostIPs == ["192.168.1.9"])
+}
+
+/// What isn't a device at all, among the saved ones, costs neither the others nor the process.
+@Test func aListWithSomethingElseInItKeepsItsDevices() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let one = String(decoding: try JSONEncoder().encode(profile("iPhone")), as: UTF8.self)
+    try Data(#"[null, "x", 3, [], \#(one)]"#.utf8).write(to: dir.appendingPathComponent("profiles.json"))
+    #expect(ProfileStore(directory: dir).load().map(\.displayName) == ["iPhone"])
+
+    let entry = String(decoding: try JSONEncoder().encode(StatusFile.Entry(pid: 1, status: "Ready", detail: "", ready: true, tunnelPorts: [], updated: Date(timeIntervalSince1970: 0))), as: UTF8.self)
+    let (bad, good) = (UUID(), UUID())
+    let status = StatusFile.decode(Data(#"["\#(bad)", null, "\#(UUID())", "x", "\#(good)", \#(entry)]"#.utf8))
+    #expect(Array(status.keys) == [good])
+}
+
+/// The app lists what the CLI saved while it runs: a device it never saw — not one it has,
+/// not one it removed, and not one it added again itself meanwhile.
+@Test func aDeviceSavedByAnotherProcessIsTheOnlyOneTakenIn() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let app = ProfileStore(directory: dir), cli = ProfileStore(directory: dir)
+    #expect(app.written == nil)
+    var kept = profile("iPad"), removed = profile("Old"); kept.providerIP = "100.64.0.1"; removed.providerIP = "100.64.0.2"
+    let read = try #require(app.save(base: [], wanted: [kept, removed]))
+    let first = try #require(app.written)
+    #expect(app.savedElsewhere(base: read, mine: [kept]).isEmpty)   // removed here, still on disk: not taken back
+    var new = profile("iPhone"); new.providerIP = "100.64.0.3"
+    var moved = kept; moved.remotePairingPort = 50001
+    #expect(cli.update { $0 = [moved, removed, new] })
+    #expect(try #require(app.written) >= first)
+    #expect(app.savedElsewhere(base: read, mine: [kept]) == [new])   // …and what it has keeps what it has
+    var again = profile("iPhone"); again.providerIP = "100.64.0.3"
+    #expect(app.savedElsewhere(base: read, mine: [kept, again]).isEmpty)   // added here too meanwhile: that one stands
+    try Data("{".utf8).write(to: dir.appendingPathComponent("profiles.json"))
+    #expect(app.savedElsewhere(base: [], mine: []).isEmpty)
+    try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: dir.appendingPathComponent("profiles.json").path)
+    #expect(app.savedElsewhere(base: [], mine: []).isEmpty)   // unreadable: nothing is taken for the list
+}
+
+/// A name is taken by a device the CLI saved since the app read its list, too.
+@Test func aNameSavedByAnotherProcessMeanwhileIsTaken() {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let app = ProfileStore(directory: dir), cli = ProfileStore(directory: dir)
+    let mine = profile("iPad")
+    #expect(app.save(base: [], wanted: [mine]) != nil)
+    #expect(cli.update { $0.append(profile("iPhone")) })
+    let known = app.known(with: [mine])   // the app's list, as it read it before
+    #expect(known.count == 2 && known.nameProblem("iphone") != nil)
+    #expect([mine].nameProblem("iphone") == nil)
+    #expect(known.nameProblem("iPad", except: mine.id) == nil && known.uniqueName("iPhone") == "iPhone 2")
 }
 
 @MainActor @Test func aFloodingPeerCantGrowTheTablesOrLockOutARealDevice() {
@@ -4855,7 +5012,7 @@ private final class StandInDevice: ControlledDevice, @unchecked Sendable {
     var pairing: (@Sendable () throws -> Data)?
     private(set) var gated: (@Sendable () -> Bool)?
     func gate(_ mayBegin: @escaping @Sendable () -> Bool) { gated = mayBegin }
-    /// A text waits here when set, until it is interrupted.
+    /// An input waits here when set, until it is interrupted.
     var typeHold: DispatchSemaphore?
     let typeBegan = DispatchSemaphore(value: 0)
     func interrupt() {
@@ -4876,15 +5033,16 @@ private final class StandInDevice: ControlledDevice, @unchecked Sendable {
     /// Where the last tap went, as fractions of the screen.
     var tapped: (x: Double, y: Double)?
     func elements(limit: Int) throws -> (captions: [String], complete: Bool) { count("elements"); return ([], true) }
-    func tap(x: Double, y: Double) throws { count("tap"); lock.withLock { tapped = (x, y) }; Thread.sleep(forTimeInterval: 0.01) }
-    func swipe(from: (x: Double, y: Double), to: (x: Double, y: Double), milliseconds: Int) throws { count("swipe") }
-    func type(_ text: String) throws {
-        count("type")
+    func tap(x: Double, y: Double) throws { input("tap"); lock.withLock { tapped = (x, y) }; Thread.sleep(forTimeInterval: 0.01) }
+    func swipe(from: (x: Double, y: Double), to: (x: Double, y: Double), milliseconds: Int) throws { input("swipe") }
+    func type(_ text: String) throws { input("type") }
+    func paste(_ text: String) throws { input("paste") }
+    func press(_ button: String) throws { input("press") }
+    private func input(_ call: String) {
+        count(call)
         typeBegan.signal()
         held(typeHold)
     }
-    func paste(_ text: String) throws { count("paste") }
-    func press(_ button: String) throws { count("press") }
 }
 
 /// A hub over stand-ins, one made for each session the hub opens.
@@ -6680,9 +6838,10 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     #expect(hub.answer(.init(op: "press", device: id, text: "home")).error == DeviceControlHub.switchedOff)
 }
 
-/// A text stops where it is when whoever asked for it leaves, and when its device is switched
-/// off: neither waits for it to be typed out.
-@Test func aTextIsInterruptedWhenItsAskerLeavesOrItsDeviceIsSwitchedOff() throws {
+/// An input stops where it is when whoever asked for it leaves, and when its device is switched
+/// off: neither waits for it — a text to be typed out, or any of them for its connection.
+@Test(arguments: ["type", "paste", "press", "tap", "swipe"])
+func anInputIsInterruptedWhenItsAskerLeavesOrItsDeviceIsSwitchedOff(_ op: String) throws {
     for leaving in [true, false] {
         let dir = scratchDir()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -6694,9 +6853,10 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
         let device = try #require(made().last)
         let there = OSAllocatedUnfairLock(initialState: true), on = OSAllocatedUnfairLock(initialState: true)
         hub.allowedKnown = { _ in on.withLock { $0 } }
+        #expect(hub.answer(.init(op: "look", device: id, path: lookFile(in: dir))).ok)   // a point is read off one
         let answered = DispatchSemaphore(value: 0)
         Thread.detachNewThread {
-            _ = hub.answer(.init(op: "type", device: id, text: "a long text"), wanted: { there.withLock { $0 } })
+            _ = hub.answer(.init(op: op, device: id, x: 10, y: 10, x2: 20, y2: 20, text: "home"), wanted: { there.withLock { $0 } })
             answered.signal()
         }
         #expect(soon(device.typeBegan))
@@ -6914,7 +7074,8 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
 // MARK: - Two Macs that name each other (no line carried)
 
 @Test func whatTwoMacsSayIsReadBackAndNothingElseIs() {
-    let all: [PairWire.Message] = [.wantOffer, .offer("rr-xcode-offer-v1:abc"), .tried("rr-device-v1:abc"), .saved, .unsaved, .you("iphone.t.ts.net")]
+    let all: [PairWire.Message] = [.wantOffer, .offer("rr-xcode-offer-v1:abc"), .tried("rr-device-v1:abc"), .saved, .unsaved, .you("iphone.t.ts.net"),
+                                   .pairable("rr-pairable-v1:abc")]
         + PairWire.Reason.allCases.map(PairWire.Message.ended)
     for m in all { #expect(PairWire.message(from: PairWire.line(m)) == m) }
     // roamrunctl writes these words itself: each one it can end with is one this Mac reads.
@@ -6999,6 +7160,85 @@ extension TimingSensitive {
         #expect(events.all == [.connected, .waitingForOffer, .offerSent])
     }
 
+    /// A device that waits to be picked: the other Mac sends what it announces, is asked for the device,
+    /// and the device is saved here once this Mac has stood in for that same device — or not at all, with the reason said.
+    @Test func aDeviceThatWaitsIsStoodInForHereThenSaved() async throws {
+        var listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
+        let saved = Counted<String>(), stoodIn = Counted<String>(), read = Counted<Int>()
+        var far = farMac(saved: saved)
+        far.standIn = { stoodIn.add($0 + " for " + $1); return nil }
+        var end = started(far, listener)
+        var home = homeMac(listener.port); home.device = "device-1"
+        // What the device announces is read once that Mac has answered, not before.
+        #expect(await home.hand(pairable: { read.add(1); return "waits-1" }, resultWindow: 5) == .saved)
+        #expect(await end.value == .saved && stoodIn.all == ["waits-1 for device-1"] && saved.all == ["device-1"] && read.all.count == 1)
+
+        // Looking again at what the device announces takes longer than a line is waited for: still heard.
+        listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
+        far.standIn = { _, _ in nil }
+        end = started(far, listener)
+        home = homeMac(listener.port); home.device = "device-1"
+        #expect(await home.hand(pairable: { try? await Task.sleep(for: .milliseconds(1500)); return "waits-1" }, resultWindow: 5) == .saved)
+        #expect(await end.value == .saved)
+
+        // Stood in, and not kept: said as that.
+        listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
+        var forgetful = farMac(saves: false); forgetful.standIn = { _, _ in nil }
+        end = started(forgetful, listener)
+        home = homeMac(listener.port); home.device = "device-1"
+        #expect(await home.hand(pairable: { "waits-1" }, resultWindow: 5) == .unsaved)
+        #expect(await end.value == .unsaved)
+
+        // Not stood in: the reason goes back, and nothing is saved.
+        listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
+        far.standIn = { _, _ in .unreachable }
+        end = started(far, listener)
+        home = homeMac(listener.port); home.device = "device-1"
+        #expect(await home.hand(pairable: { "waits-1" }, resultWindow: 5) == .ended(.unreachable))
+        #expect(await end.value == .ended(.unreachable) && saved.all == ["device-1", "device-1"])
+
+        // A Mac that doesn't stand in as it runs (a device named with --with) says so, and goes on waiting.
+        listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
+        far.standIn = nil
+        far.connectWindow = 2
+        end = started(far, listener)
+        home = homeMac(listener.port); home.device = "device-1"
+        #expect(await home.hand(pairable: { "waits-1" }, resultWindow: 5) == .ended(.failed))
+        #expect(await end.value == .noOne)
+
+        // One that hangs up without a word, twice, is taken for a RoamRun from before.
+        listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
+        let old = Task.detached { [listener] in
+            for _ in 0..<2 { if let (link, _) = listener.accept(within: 10) { _ = link.read(within: 10); link.close() } }
+        }
+        home = homeMac(listener.port); home.device = "device-1"
+        #expect(await home.hand(pairable: { "waits-1" }, resultWindow: 5) == .tooOld)
+        await old.value
+
+        // The device stopped waiting by the time that Mac answered: nothing is sent.
+        listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
+        far.standIn = { stoodIn.add($0 + " for " + $1); return nil }
+        far.connectWindow = 2
+        end = started(far, listener)
+        home = homeMac(listener.port); home.device = "device-1"
+        #expect(await home.hand(pairable: { nil }, resultWindow: 5) == .notWaiting)
+
+        // Without a device to hand over, nothing is stood in for.
+        #expect(await homeMac(listener.port).hand(pairable: { "waits-2" }, resultWindow: 5) == .garbled)
+        _ = await end.value
+        #expect(stoodIn.all == ["waits-1 for device-1"])
+
+        // That Mac took the device and went away: said as that, not as a mix-up of versions.
+        listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
+        let gone = Task.detached { [listener] in
+            guard let (link, _) = listener.accept(within: 10) else { return }
+            _ = link.read(within: 10); link.send(.wantDevice); _ = link.read(within: 10); link.close()
+        }
+        home = homeMac(listener.port); home.device = "device-1"
+        #expect(await home.hand(pairable: { "waits-1" }, resultWindow: 5) == .wentAway)
+        await gone.value
+    }
+
     /// A device that introduces this Mac itself is told its Tailscale name before the offer; a Mac isn't.
     @Test func aDeviceIsToldItsNameBeforeTheOffer() async throws {
         let listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
@@ -7055,7 +7295,7 @@ extension TimingSensitive {
         long.send(.offer(String(repeating: "x", count: PairWire.maxLine + 100)))
         #expect(long.read(within: 10) == .closed)
         let slow = try #require(PairLink.connect(to: "127.0.0.1", port: listener.port, interface: nil))
-        #expect(slow.read(within: 10) == .closed)   // lineWait, not for ever
+        #expect(slow.read(within: 10) == .closed)   // three lineWaits for a first line, not for ever
         let other = try #require(PairLink.connect(to: "127.0.0.1", port: listener.port, interface: nil))
         other.send(.saved)
         #expect(other.read(within: 10) == .closed)
@@ -7287,7 +7527,7 @@ extension TimingSensitive.RelayOnLocalhost {
     #expect(CLI.otherWaiting(inPgrep: listed, me: 4388)?.pid == 4021)
     #expect(CLI.otherWaiting(inPgrep: listed, me: 4021)?.command == "roamrun pair xcode --with macbook-pro")
     #expect(CLI.otherWaiting(inPgrep: "4388 /usr/local/bin/roamrun pair xcode --with x\n", me: 4388) == nil)
-    #expect(CLI.otherWaiting(inPgrep: "77 /bin/zsh -c echo pair control --with x\n9 tart exec -t vm /x/RoamRun pair introduce --mac a --to b", me: 1) == nil)
+    #expect(CLI.otherWaiting(inPgrep: "77 /bin/zsh -c echo pair control --with x\n9 tart exec -t vm /x/RoamRun pair introduce --host a --to b", me: 1) == nil)
 
     // The name this Mac offers under is one an offer may have, whatever the computer is called.
     func offered(_ name: String) -> Bool {
