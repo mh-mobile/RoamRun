@@ -180,7 +180,8 @@ impl Server {
 
     /// Refuses a point of a look taken with the device another way up than it is now.
     fn unturned(&mut self, name: &str, way: u8) -> Result<(), String> {
-        if turned(way, self.device(name)?.way()) { return Err("the device was turned since that look: nothing was pressed. Look again".into()) }
+        let device = self.device(name)?;
+        if turned(way, match device.way() { 0 => device.way(), now => now }) { return Err("the device was turned since that look: nothing was pressed. Look again".into()) }
         Ok(())
     }
 

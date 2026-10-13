@@ -543,10 +543,11 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), b"new");
         assert!(!path.with_extension(format!("{}.tmp", std::process::id())).exists());
         // Not written: what was there stays.
-        let dir = path.with_extension("dir");
-        std::fs::create_dir(&dir).unwrap();
-        assert!(replace_whole(&dir, b"x").is_err() && dir.is_dir());
-        std::fs::remove_dir(&dir).unwrap();
+        let beside = path.with_extension(format!("{}.tmp", std::process::id()));
+        std::fs::create_dir(&beside).unwrap();
+        assert!(replace_whole(&path, b"newer").is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+        std::fs::remove_dir(&beside).unwrap();
         std::fs::remove_file(&path).unwrap();
     }
 

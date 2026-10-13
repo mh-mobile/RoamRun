@@ -230,7 +230,8 @@ believed the first time it is used — use it only if the user named it.
 - `roamrunctl mcp` — for an agent's MCP config (the command `roamrunctl`, the argument
   `mcp`): `devices`, `look`, `tap`, `swipe`, `elements`, `type`, `paste`, `press`,
   `install`, `launch`. Look, act, look again: a look serves one tap or swipe, within a
-  minute, and points are pixels of the image it returned. `type`, `paste` and `press`
+  minute, and points are pixels of the image it returned; turned since that look, the
+  device isn't pressed: look again. `type`, `paste` and `press`
   aren't held to a look and go to whatever is on the screen: look before them too. A
   call that fails may or may not have reached the device — look before doing it again.
   A call you take back before its turn isn't made.
