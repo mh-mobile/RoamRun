@@ -1,0 +1,148 @@
+# How RoamRun works
+
+What the bridge does, step by step, and where each part lives in the source. The
+[README](../README.md) says what RoamRun is for and how to use it.
+
+Statements about what iOS, Xcode and `remotepairingd` do are what was seen while building RoamRun.
+They are Apple's behaviour, not RoamRun's, and a new release can change them.
+
+## The bridge
+
+Since iOS 17, wireless debugging runs on Apple's CoreDevice stack. The Mac's `remotepairingd`
+looks for devices on the local network with Bonjour (`_remotepairing._tcp`). Bonjour is
+link-local multicast, so it does not cross a layer-3 VPN such as Tailscale. `remotepairingd` also
+ties its connection to the interface where it found the device, so advertising the device's VPN
+address does not work either.
+
+RoamRun tells Xcode that the device is on the same Wi-Fi, and carries the traffic over the VPN.
+
+1. When you add a device, RoamRun captures its Bonjour record from the local network. While
+   bridging, it publishes that record again with this Mac as the destination, through a
+   `dns-sd -P` helper, on the Mac's LAN interface. That interface is en0 unless you choose another
+   under Settings › Network.
+2. `remotepairingd` finds the record and connects to this Mac. RoamRun's relay takes the
+   connection, and refuses any that does not come from this Mac's own address.
+3. The relay forwards the bytes to the device over the VPN. Pairing verification and encryption
+   happen end to end between the Mac and the device, as Apple implements them. RoamRun does not
+   read or change the traffic.
+
+```mermaid
+sequenceDiagram
+  participant X as Xcode
+  participant R as remotepairingd (Mac)
+  participant B as RoamRun
+  participant P as iPhone
+  B->>B: publishes the iPhone's Bonjour record with this Mac as the destination
+  R->>B: control channel, on the device's pairing port
+  B->>P: relays over Tailscale
+  Note over R,P: pair verification (Apple's, end to end)
+  X->>R: Run, install, debug
+  R->>P: asks for a tunnel, over the control channel
+  P-->>R: says which port N it listens on
+  Note over B: sees N in the log and opens relays for N to N+16
+  R->>B: tunnel connection, on port N
+  B->>P: relays over Tailscale
+  Note over X,P: installs, launches and debugging run inside this tunnel
+```
+
+Two details of the tunnel:
+
+- **The tunnel's port is new each time.** As seen, it goes up by one, and `remotepairingd`
+  connects a few milliseconds after it learns the port. So each time RoamRun sees a port in
+  `remotepairingd`'s log (through `log stream`), it opens relays for the next 16 ports in advance.
+- **The first tunnel after a bridge starts cannot be caught in time.** When the device first
+  connects, RoamRun runs `devicectl device info details` in the background to use up that first
+  tunnel, and tries again if CoreDevice does not list the device yet. A first Run then finds the
+  relays open.
+
+The control channel's relay listens on the device's own pairing port — 49152 as seen — or on one
+of the next 20 if that port is taken.
+
+While the device is on the Mac's own Wi-Fi, RoamRun stops bridging and shows "On this Wi‑Fi":
+Xcode reaches the device directly. When the device leaves, the bridge resumes by itself. When the
+Mac's address changes, the bridge restarts.
+
+## Pairing a Mac that is never near the device
+
+A bridge needs a Mac that is paired with the device, and pairing happens on one Wi-Fi: the device
+finds the Mac there by Bonjour and connects to it. A Mac elsewhere is never found. So something on
+the device's Wi-Fi stands in for the far Mac — a Mac with RoamRun, the Introducer app on the
+device, or a machine with `roamrunctl`. It is the bridge's trick turned around: the device is told
+that the far Mac is on its Wi-Fi, and the traffic goes over Tailscale.
+
+```mermaid
+flowchart RL
+  subgraph home["Mac on the device's Wi-Fi"]
+    fake["Stand-in Bonjour record<br/>(the far Mac's offer, pointing at this Mac)"]
+    relay["RoamRun relay<br/>(takes the device's address only)"]
+  end
+  subgraph far["Far Mac"]
+    host["Xcode, or the RoamRun app<br/>(waiting to pair, the key is made and stays here)"]
+  end
+  iphone["iPhone / iPad"]
+  iphone -. "1. finds “Pair with far-mac”" .-> fake
+  iphone -- "2. connects over Wi-Fi" --> relay
+  relay == "3. over Tailscale" ==> host
+```
+
+1. The far Mac offers to pair: Xcode's Device Hub › Pair Nearby Device, or the RoamRun app for
+   device control. It hands its offer to the Mac on the device's Wi-Fi, over Tailscale, each
+   naming the other. For Xcode's pairing the offer can also be carried by hand, as one line.
+2. That Mac announces the offer on its Wi-Fi with itself as the destination, for five minutes at
+   most, and relays the device's connection to the far Mac. It takes connections from the device's
+   own address only.
+3. The pairing is made end to end between the device and the far Mac, with the code typed on the
+   device. No key passes through the Mac in between. For Xcode, the code is the one Device Hub
+   shows on the far Mac. For device control, the far Mac's app makes the code, and whichever
+   introduces shows it: that Mac, the app on the device, or `roamrunctl`.
+
+From then on the far Mac bridges to the device like any other.
+
+An Apple Vision Pro goes the other way round. It waits to be picked, so what it announces is sent
+to the far Mac, which announces it on its own network for its own Device Hub to pick, and carries
+its own connections to the device.
+
+## Source layout
+
+`Sources/RoamRun/` holds the app and the CLI, which are one binary.
+
+| File | Role |
+|---|---|
+| `RoamRunApp.swift` | The entry point: `roamrun <command>` runs the CLI, anything else opens the app |
+| `CLI.swift` | The `roamrun` command |
+| `CLIInstaller.swift` | Links `/usr/local/bin/roamrun` to the app's binary |
+| `AppCoordinator.swift` | The app's state: saved devices, bridge control, presence checks, device control's pairing, the over-the-air page |
+| `Views/` | The windows: main window, device page, Add Device, Settings, menu bar |
+| `ProfileStore.swift`, `Models.swift` | Saved devices and the captured Bonjour record |
+| `StatusFile.swift` | Bridge status shared by the app and the CLI: who has which device |
+| `LogStore.swift` | The activity log |
+| `ProxyBridge.swift` | One bridge for one device: it runs the parts below |
+| `BridgeSupervisor.swift`, `BridgeEnv.swift` | When a bridge is started again, and what a bridge reaches outside itself (swapped in tests) |
+| `BonjourCapture.swift` | Parses the `dns-sd -Z` zone dump |
+| `DNSServiceProxy.swift` | The stand-in advertisement, through a `dns-sd -P` child process |
+| `Relays.swift` | The TCP relay; accepts connections from this Mac only |
+| `TunnelPortWatcher.swift` | Finds tunnel ports in `log stream` and attributes them to their device |
+| `InterfaceMonitor.swift` | Picks the LAN interface and notices when its address changes |
+| `ReachabilityProbe.swift` | TCP reachability, and the RemotePairing handshake check |
+| `TailscaleClient.swift` | Asks `tailscale` for status, ping, whois and what it serves |
+| `Proc.swift` | Runs helper tools |
+| `Introductions.swift` | Introducing a far Mac: the offer and the device as lines, the stand-in |
+| `PairByName.swift` | The exchange between two Macs that name each other (port 41830) |
+| `ControlIntroductions.swift` | Device control's pairing when another Mac introduces |
+| `TerminalQR.swift` | A QR code drawn in the terminal |
+| `DeviceControl.swift` | Device control: the connections the app holds, the pairing, and the socket the CLI and MCP tools ask through |
+| `DeviceControlKey.swift`, `DeviceControlAllowed.swift` | The Keychain key that saved pairings are sealed with, and the list of devices switched on |
+| `DeviceMCP.swift` | `roamrun mcp`: device control as MCP tools |
+| `OTA.swift`, `OTAPage.swift`, `OTAServer.swift` | Over-the-air installs: stored builds and signing checks, the install page, and the local server behind `tailscale serve` |
+
+Elsewhere:
+
+| Path | Role |
+|---|---|
+| `Sources/DeviceControl/` | Device control's connection to the device, in Swift |
+| `Rust/RoamRunDevice/` | RoamRun's C interface to the idevice crate, which `Sources/DeviceControl/` calls |
+| `Sources/DeviceProbe/` | A small tool that tests device control by itself |
+| `Rust/roamrunctl/` | `roamrunctl`, for a machine without RoamRun |
+| `iOS/` | RoamRun Introducer, the app that introduces from the device |
+| `skills/` | The agent skills that `roamrun init` and the roamrunctl archives carry |
+| `Tests/` | Unit tests |
