@@ -67,6 +67,19 @@ Three machines are spoken of below, and one machine can be two of them:
 A where the key may lie on the machine the agent runs on; B where it shouldn't. Neither limits what an agent
 there does with the device.
 
+```mermaid
+flowchart LR
+  subgraph a["A: the using machine holds the key"]
+    direction LR
+    ua["using machine<br/>holds the key"] -->|"looks, inputs, installs"| da["device"]
+  end
+  subgraph b["B: another machine keeps the key"]
+    direction LR
+    ub["using machine<br/>holds no key"] -->|"looks, inputs, installs"| db["device"]
+    ub -.->|"asks for a signature,<br/>once a connection"| kb["key's machine<br/>holds the key, runs sign"]
+  end
+```
+
 | | What is run, and where |
 |---|---|
 | **A**, using machine on the device's Wi‑Fi | using machine: `pair control --to <device>` |
@@ -98,6 +111,20 @@ roamrunctl pair control --to <the device's Tailscale name> --as phone
 # on the device: Settings › Privacy & Security › Developer Mode › this machine's name, and the code
 ```
 
+```mermaid
+sequenceDiagram
+  participant U as using machine
+  participant D as device
+  Note over U,D: both on the device's Wi-Fi
+  Note over U: run pair control --to
+  U-->>D: announces itself on the Wi-Fi
+  Note over D: Developer Mode, pick this machine
+  D->>U: connects
+  Note over U: shows the code
+  Note over D: the code is typed here
+  Note over U: the key is saved here
+```
+
 The device connects to this machine for that: a firewall here has to let it in. The command says the port it
 announced and the device's address on the Wi‑Fi (with ufw: `sudo ufw allow proto tcp from <that address>`).
 
@@ -109,6 +136,26 @@ roamrunctl pair control --with <the near machine> --as phone
 # on the near machine (`roamrun pair introduce` on a Mac does the same)
 roamrunctl pair introduce --host <the using machine> --to <the device's Tailscale name>
 # on the device: Settings › Privacy & Security › Developer Mode › the using machine's name, and the code
+```
+
+```mermaid
+sequenceDiagram
+  participant U as using machine, elsewhere
+  participant N as near machine
+  participant D as device
+  Note over N,D: on the device's Wi-Fi
+  Note over U: run pair control --with
+  Note over N: run pair introduce --host
+  N->>U: asks for its offer, over Tailscale
+  U->>N: its offer
+  N-->>D: announces the using machine on the Wi-Fi
+  Note over D: Developer Mode, pick the using machine
+  D->>N: connects
+  N->>U: carries that connection, over Tailscale
+  Note over U,N: both show the code
+  Note over D: the code is typed here
+  Note over U: the key is saved here
+  Note over N: keeps nothing
 ```
 
 The code shows on both machines. What the near machine prints calls the using machine "the host". The near
@@ -172,6 +219,23 @@ roamrunctl sign phone --for <the using machine>
 roamrunctl devices          # phone   its key is kept by <the key's machine>, which signs for this machine (not used here yet)
 roamrunctl look phone       # the first time: "phone is used for the first time here: <the key's machine> signs for it, and that is held to from now on"
 roamrunctl mcp              # look, install, launch: as in A
+```
+
+```mermaid
+sequenceDiagram
+  participant U as using machine
+  participant K as key's machine
+  participant D as device
+  Note over K,D: once, on the device's Wi-Fi
+  Note over K: run pair control --to, the key is saved here
+  Note over K: run sign --for, left running
+  Note over U,D: then, each connection, over Tailscale
+  U->>D: connects
+  D->>U: asks for proof of the key
+  U->>K: asks for the signature, port 41831
+  K->>U: the signature
+  U->>D: the signature
+  Note over U,D: looks, inputs and installs go directly
 ```
 
 A connection to the device has one thing signed with the pairing's key. The using machine asks the key's machine
