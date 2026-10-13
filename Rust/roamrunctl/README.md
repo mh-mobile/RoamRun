@@ -69,14 +69,14 @@ there does with the device.
 
 ```mermaid
 flowchart LR
-  subgraph a["A: the using machine holds the key"]
-    direction LR
-    ua["using machine<br/>holds the key"] -->|"looks, inputs, installs"| da["device"]
-  end
   subgraph b["B: another machine keeps the key"]
     direction LR
     ub["using machine<br/>holds no key"] -->|"looks, inputs, installs"| db["device"]
     ub -.->|"asks for a signature,<br/>once a connection"| kb["key's machine<br/>holds the key, runs sign"]
+  end
+  subgraph a["A: the using machine holds the key"]
+    direction LR
+    ua["using machine<br/>holds the key"] -->|"looks, inputs, installs"| da["device"]
   end
 ```
 
