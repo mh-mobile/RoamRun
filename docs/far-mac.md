@@ -40,18 +40,21 @@ None of this needs the RoamRun app open on the far Mac. The app lists the device
 opened, or within seconds if it is open.
 
 `roamrun pair xcode --qr` draws the offer as a QR code in the terminal, for the Introducer app to
-read. The command says what size of window it needs.
+read; the app then shows the line for `roamrun devices add <line>`. If the terminal's window is
+too small for the code, the command says the size it needs.
 
 ## What each side does and checks
 
 **The far Mac**, while `pair xcode --with` or `pair control --with` runs:
 
 - It listens on its Tailscale address, port 41830. Only one of the two commands can wait at a
-  time. A firewall on the far Mac has to let RoamRun in; the command says so when it starts.
+  time. A firewall on the far Mac has to let RoamRun in; when the firewall is on, the command says
+  so as it starts.
 - It answers only the machine it was given, which it checks by its address and by the machine
   Tailscale says holds that address at that moment.
-- It saves the device when a pairing was tried. "Saved" is not "paired": `roamrun up` shows whether
-  the pairing was made.
+- For Xcode's pairing, it saves the device when a pairing was tried. "Saved" is not "paired":
+  `roamrun up` shows whether the pairing was made. For device control, it keeps the pairing only
+  once it is made.
 
 **The introducing Mac**, while `pair introduce` runs:
 
@@ -64,14 +67,17 @@ read. The command says what size of window it needs.
 - It says whose Mac the far one is, as Tailscale has it — yours, another person's, or a shared
   (tagged) machine — before it announces anything. It introduces only the Mac you name with
   `--host`.
-- It stops when the device has tried to pair, or after five minutes. It then says that nothing is
+- It stops when the device has tried to pair, or after five minutes. It also stops on Ctrl-C, when
+  this Mac's address changes, and when the far Mac's command ends. It then says that nothing is
   announced or listening, or, if its announcement's helper may still be running, says that
   `roamrun doctor` will tell.
 - It cannot tell whether the pairing was made: a wrong code looks the same from there as one not
   yet typed.
 
-The pairing itself is made between the device and Xcode on the far Mac. No key leaves either, and
-none passes through the introducing Mac.
+The pairing itself is made between the device and the far Mac: its Xcode, or for device control
+its RoamRun app. No key leaves either, and none passes through the introducing Mac. If a
+connection between the two Macs is lost on the way, each side says what to do; the commands with
+a line carried by hand, above, need no such connection.
 
 ## What it needs
 
@@ -119,7 +125,8 @@ With an iPhone 15 Pro on iOS 27 and Xcode 27, and a virtual Mac as the far one:
   the bridge Ready afterwards, and device control's pairing.
 - On 2026-10-13, with RoamRun 0.7.0: by name for Xcode (the bridge Ready on the far Mac), by name
   for device control (a look from the far Mac, and a second try refused on both sides), and device
-  control's pairing through the Introducer app.
+  control's pairing through the Introducer app. With an Apple Vision Pro: the pairing by name, the
+  far Mac's command ending by itself, and the bridge Ready there.
 
-Not tried: an iPad, a far Mac that is not virtual, a far Mac of another Tailscale user or a tagged
+Not tried: an iPad, a far Mac with an older RoamRun than the introducing one, a far Mac that is not virtual, a far Mac of another Tailscale user or a tagged
 one, a Mac shared in from another tailnet, an introducing Mac with its firewall on.

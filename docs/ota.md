@@ -15,8 +15,10 @@ RoamRun stores the build, and while the app runs it publishes a page through `ta
 The command prints the page's address and which of your devices the build covers. When it runs in
 a terminal it also draws the address as a QR code. Open the address on the device and tap Install.
 
-- The page can take half a minute to appear after the app starts: RoamRun looks every 30 seconds.
-- `roamrun doctor` prints the address again while a build is stored.
+- The page can take half a minute to appear after a first build is stored: RoamRun looks when it
+  starts, and then every 30 seconds.
+- `roamrun doctor` prints the address again while a build is stored and Tailscale gives this Mac
+  a name.
 - The page lists the last 5 builds of each app, newest first, so you can go back a version.
 - Rebuilds usually keep the same version number, so builds stack up under it and the time tells
   them apart. Publishing the very same .ipa again does not add a row: it moves back to the top.
@@ -36,7 +38,8 @@ account. Xcode makes one with Product › Archive › Distribute App › Release
 - a Development build, an App Store or TestFlight build, and an unsigned one;
 - a build whose provisioning profile has expired (one that expires after it was stored is marked
   EXPIRED on the page);
-- a bundle identifier with characters other than letters, digits, `.`, `-` and `_`.
+- a bundle identifier with characters other than ASCII letters, digits, `.`, `-` and `_`, or one
+  that starts with `.`.
 
 An Ad Hoc build installs only on the devices its provisioning profile names. RoamRun says which
 of your devices those are. It knows the UDID of every device it has bridged, so bridge a device
@@ -50,7 +53,8 @@ build needs none of this.
 
 ## The port, and Funnel
 
-RoamRun serves on a port of its own, 41443 by default, and gives it back when it quits. To change
+RoamRun serves on a port of its own, 41443 by default, and gives it back when it quits. It does
+not use your tailnet's port 443, where anything else you serve lives. To change
 it:
 
 ```bash

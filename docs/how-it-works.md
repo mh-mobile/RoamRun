@@ -18,8 +18,8 @@ RoamRun tells Xcode that the device is on the same Wi-Fi, and carries the traffi
 
 1. When you add a device, RoamRun captures its Bonjour record from the local network. While
    bridging, it publishes that record again with this Mac as the destination, through a
-   `dns-sd -P` helper, on the Mac's LAN interface. That interface is en0 unless you choose another
-   under Settings › Network.
+   `dns-sd -P` helper, on the Mac's LAN interface. That is the interface chosen under Settings ›
+   Network; otherwise en0, or the first other en* port with an address when en0 has none.
 2. `remotepairingd` finds the record and connects to this Mac. RoamRun's relay takes the
    connection, and refuses any that does not come from this Mac's own address.
 3. The relay forwards the bytes to the device over the VPN. Pairing verification and encryption
@@ -49,7 +49,7 @@ Two details of the tunnel:
 
 - **The tunnel's port is new each time.** As seen, it goes up by one, and `remotepairingd`
   connects a few milliseconds after it learns the port. So each time RoamRun sees a port in
-  `remotepairingd`'s log (through `log stream`), it opens relays for the next 16 ports in advance.
+  `remotepairingd`'s log (through `log stream`), it opens relays for that port and the next 16.
 - **The first tunnel after a bridge starts cannot be caught in time.** When the device first
   connects, RoamRun runs `devicectl device info details` in the background to use up that first
   tunnel, and tries again if CoreDevice does not list the device yet. A first Run then finds the
@@ -80,9 +80,9 @@ flowchart RL
     host["Xcode, or the RoamRun app<br/>(waiting to pair, the key is made and stays here)"]
   end
   iphone["iPhone / iPad"]
-  iphone -. "1. finds “Pair with far-mac”" .-> fake
-  iphone -- "2. connects over Wi-Fi" --> relay
-  relay == "3. over Tailscale" ==> host
+  iphone -. "① finds “Pair with far-mac”" .-> fake
+  iphone -- "② connects over Wi-Fi" --> relay
+  relay == "③ over Tailscale" ==> host
 ```
 
 1. The far Mac offers to pair: Xcode's Device Hub › Pair Nearby Device, or the RoamRun app for
@@ -119,8 +119,8 @@ its own connections to the device.
 | `ProxyBridge.swift` | One bridge for one device: it runs the parts below |
 | `BridgeSupervisor.swift`, `BridgeEnv.swift` | When a bridge is started again, and what a bridge reaches outside itself (swapped in tests) |
 | `BonjourCapture.swift` | Parses the `dns-sd -Z` zone dump |
-| `DNSServiceProxy.swift` | The stand-in advertisement, through a `dns-sd -P` child process |
-| `Relays.swift` | The TCP relay; accepts connections from this Mac only |
+| `DNSServiceProxy.swift` | The stand-in advertisement, through a `dns-sd -P` child process, and the cleanup of ones left behind |
+| `Relays.swift` | The TCP relay. A bridge's accepts connections from this Mac only; a stand-in's, from the device only |
 | `TunnelPortWatcher.swift` | Finds tunnel ports in `log stream` and attributes them to their device |
 | `InterfaceMonitor.swift` | Picks the LAN interface and notices when its address changes |
 | `ReachabilityProbe.swift` | TCP reachability, and the RemotePairing handshake check |
@@ -133,7 +133,7 @@ its own connections to the device.
 | `DeviceControl.swift` | Device control: the connections the app holds, the pairing, and the socket the CLI and MCP tools ask through |
 | `DeviceControlKey.swift`, `DeviceControlAllowed.swift` | The Keychain key that saved pairings are sealed with, and the list of devices switched on |
 | `DeviceMCP.swift` | `roamrun mcp`: device control as MCP tools |
-| `OTA.swift`, `OTAPage.swift`, `OTAServer.swift` | Over-the-air installs: stored builds and signing checks, the install page, and the local server behind `tailscale serve` |
+| `OTA.swift`, `OTAPage.swift`, `OTAServer.swift` | Over-the-air installs: stored builds and signing checks, the install page and its `itms-services` manifest, and the local server behind `tailscale serve` |
 
 Elsewhere:
 
