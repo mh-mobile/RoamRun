@@ -1,0 +1,9 @@
+{
+  "rules": {
+    "preset-ja-technical-writing": {
+      "no-mix-dearu-desumasu": { "preferInBody": "ですます", "preferInList": "ですます", "preferInHeader": "" },
+      "no-doubled-joshi": { "allow": ["も"] }
+    },
+    "@textlint-ja/preset-ai-writing": true
+  }
+}

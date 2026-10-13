@@ -118,3 +118,7 @@ AND category == "input"'`. Text that arrives short with a line here was dropped 
 - Never mention inspecting or reverse-engineering other products in anything
   committed (README, comments, commit messages). Credit public sources only.
 - Keep comments short; no multi-line narration of what the code already says.
+- A document says what the code does or what was run, and says so of what wasn't run. A Japanese
+  document is written as Japanese from those facts, not translated sentence by sentence, and goes
+  through `make lint-ja` (textlint, Node 20 or later): that sees the shape of sentences, not whether
+  they read as a person's.

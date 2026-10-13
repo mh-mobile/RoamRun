@@ -20,7 +20,7 @@ SIGN_ID ?= -
 NOTARY_PROFILE ?=
 SIGN_FLAGS = --force --options runtime $(if $(filter -,$(SIGN_ID))$(findstring Apple Development,$(SIGN_ID)),,--timestamp)
 
-.PHONY: all build app run dmg release-dmg icon install-cli test clean device-lib device-probe licenses audit roamrunctl-archives
+.PHONY: all build app run dmg release-dmg icon install-cli test clean device-lib device-probe licenses audit roamrunctl-archives lint-ja
 
 all: app
 
@@ -46,6 +46,10 @@ app: build
 	@echo "Built $(BUNDLE)"
 
 # Pure logic only (parsers, ownership rules); the bridge itself needs a real iPhone.
+# The Japanese documents through textlint (scripts/lint-ja.sh says what it sees and what it can't).
+lint-ja:
+	scripts/lint-ja.sh
+
 test: device-lib
 	cd Rust/RoamRunDevice && $(CARGO) test --locked --target-dir $(CURDIR)/.build/device
 	xcrun swift test

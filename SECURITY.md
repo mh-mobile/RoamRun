@@ -16,7 +16,8 @@ bounded.
 
 - **It advertises your device on the local network.** While a bridge runs,
   `dns-sd` publishes the device's `_remotepairing._tcp` record (instance name,
-  identifier, authTag) pointing at this Mac, on every interface with mDNS. Unlike
+  identifier, authTag) pointing at this Mac, on the network of the one interface
+  the bridge uses (en0 unless another is chosen in Settings). Unlike
   the device's own advert, these values don't rotate, and the record's host name
   (`rr-<id>.roamrun.local`) is fixed too, so someone on the same network could
   notice the device is paired with this Mac — on every network the Mac joins,

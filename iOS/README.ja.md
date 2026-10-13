@@ -2,79 +2,147 @@
 
 <p align="center"><a href="README.md">English</a> | 日本語</p>
 
-デバイス自身の上で `roamrun pair introduce` の代わりをする iOS アプリです。離れた Mac のペアリングの申し出を、デバイスがいる Wi‑Fi で名乗り、「設定」からの 1 本の接続を受けて、デバイスにすでに入っている Tailscale の VPN 越しに、離れた Mac へ取り次ぎます。デバイスのそばに Mac は要りません。離れた Mac の側からの使い方は、メインの README の「[デバイス自身に引き合わせてもらう](../README.ja.md#デバイスと同じ場所にいたことのない-mac)」にあります。
+RoamRun Introducer は、離れたマシンを、このアプリを入れた iPhone とペアリングするための iPhone アプリです。デバイスのそばの Mac で `roamrun pair introduce` が行うことを、デバイス自身で行います。離れたマシンが出すペアリングのオファー（ペアリングを始めるためのデータ）を、デバイスがつながっている Wi-Fi 上に公開します。「設定」からの接続を受けて、デバイスに入っている Tailscale の VPN 経由で、離れたマシンへ中継します。デバイスのそばに Mac は要りません。
+
+離れたマシンは、RoamRun を入れた Mac です。デバイス操作のペアリングに限り、`roamrunctl` を入れたマシン（Linux、Windows、macOS）でも構いません（RoamRun 0.7.0 以降）。離れた Mac の側から見た手順は、本体の README の「[デバイス自身に仲介させる](../README.ja.md#デバイス自身に仲介させる)」にあります。
 
 <p align="center">
-  <img src="../docs/images/introducer-home.png" width="200" alt="最初の画面: 離れた Mac の名前と Introduce">
-  <img src="../docs/images/introducer-pairing.png" width="200" alt="引き合わせの途中: 設定でペアリングする">
-  <img src="../docs/images/introducer-done.png" width="200" alt="終わり: 離れた Mac がこの iPhone を保存した">
+  <img src="../docs/images/introducer-home.png" width="200" alt="最初の画面：離れた Mac の名前と Introduce ボタン">
+  <img src="../docs/images/introducer-pairing.png" width="200" alt="仲介の途中：「設定」でペアリングする">
+  <img src="../docs/images/introducer-done.png" width="200" alt="完了：離れた Mac がこの iPhone を保存した">
 </p>
 
-`make app` には含まれず、App Store にもありません。ここでビルドします。ホーム画面と「設定」では「RoamRun」と表示されます（アイコンの下に、名前の全体は収まりません）。`Sources/Introduction.swift` は `Sources/RoamRun/Introductions.swift`（行の形式とその決まり）の写しです。同じ内容に保ってください。
+このアプリは App Store になく、`make app` にも含まれません。自分でビルドします。iOS 27 以降が必要で、iPhone 専用です。iOS 27 が必要なのは、Device Hub の Pair Nearby Device で待っている Mac の代わりをするためです。Pair Nearby Device は、Xcode 27 が iOS 27 以降のデバイス向けに用意している機能です（Xcode のリリースノートの Device Hub の項）。ホーム画面と「設定」では、アプリの名前は「RoamRun」と表示されます。アイコンの下に、名前の全体が収まらないためです。
 
-iOS 27 以降が必要です。このアプリが代わりをするのは、Device Hub の Pair Nearby Device で待っている Mac で、Xcode 27 が iOS 27 以降のデバイス向けに用意するものだからです（Xcode のリリースノートの Device Hub の項）。
+## ビルドとインストール
 
-## ビルドして、デバイスで動かす
+Xcode 27 を入れた Mac と、[XcodeGen](https://github.com/yonaskolb/XcodeGen)（`brew install xcodegen`）が必要です。必要なのは最初の 1 回だけで、インストールしたあとは、デバイスのそばに Mac は要りません。無料の個人チームで署名したアプリは 7 日間動き、そのあとはインストールし直します。有料のチームなら 1 年です。
 
 ```
 cd iOS
 xcodegen generate
-open RoamRunIntroducer.xcodeproj   # Signing でチームを設定し、iPhone で実行
+open RoamRunIntroducer.xcodeproj   # Signing でチームを設定し、iPhone で実行する
 ```
 
-Xcode 27 の入った Mac と [XcodeGen](https://github.com/yonaskolb/XcodeGen)（`brew install xcodegen`）が、最初の 1 度だけ要ります。入れたあとは、デバイスのそばに Mac は要りません。無料の個人チームで署名した場合は 7 日間動き、そのあと入れ直しが要ります。有料のチームなら 1 年です。アプリ自身の版は 0.1 のままです。大事なのは離れた Mac の RoamRun の版で、0.5.0 以降が必要です。
+署名せずにシェルからビルドするには、次のコマンドを使います。
 
-シェルからビルドする場合: `xcodebuild -project RoamRunIntroducer.xcodeproj -scheme RoamRunIntroducer -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`。
-エンタイトルメントも、バックグラウンドモードも使いません。ローカルネットワークの許可と `BGContinuedProcessingTask` だけで動きます。
+```
+xcodebuild -project RoamRunIntroducer.xcodeproj -scheme RoamRunIntroducer -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build
+```
 
-## 流れ
+アプリにエンタイトルメントのファイルはなく、`UIBackgroundModes` も宣言していません。許可を求められるのは、次の 3 つです。
 
-行を手で運ぶことはありません。アプリが、`roamrun pair xcode --with` の引き合わせる側を受け持ちます。
+- ローカルネットワーク：最初に仲介するとき
+- カメラ：QR コードを読み取るとき
+- 通知：デバイス操作のペアリングをするとき
 
-1. 離れた Mac で: Xcode › Device Hub › Pair Nearby Device を押し、`roamrun pair xcode --with <この iPhone の Tailscale 上の名前>` を実行します（RoamRun 0.5.0 以降。それより前は、`--with` のあとに Mac しか指定できません）。
-2. アプリで: 離れた Mac の Tailscale 上の名前を入れます（入力は 1 度だけで、覚えています）。**Introduce** をタップし、ローカルネットワークの許可を尋ねられたら許可します。
-   `--with` のあとに `--qr` を付けると、離れた Mac が端末にコードを描きます。アプリの **Scan a Code** か iPhone のカメラで読むと、その名前が入った状態でアプリが開きます（`roamrun-introducer://<離れた Mac の Tailscale 上の名前>`）。何も入力せずに済みます。
-3. 設定 › プライバシーとセキュリティ › デベロッパモード › 「<離れた Mac>」とペアリング を選び、離れた Mac の Device Hub に出るコードを入力します。
-4. アプリが離れた Mac に伝え、離れた Mac がこの iPhone を、その Tailscale 上の名前で保存します。あちらで `roamrun up` を実行します。
+アプリ自身のバージョンは 0.1 のままです。必要なのは、離れた Mac の RoamRun が 0.5.0 以降であることです。
 
-デバイス操作（`look`、`tap` など）のペアリングも、同じ流れです。離れた Mac で RoamRun のアプリを開いたまま、`roamrun pair control --with <この iPhone の Tailscale 上の名前>` を実行します（アプリがまだ名前を覚えていない Mac には、ここでも `--qr` が使えます）。アプリ側に、ほかの設定は要りません。どちらのペアリングかは、離れた Mac の返事で決まります。コードは離れた Mac が決め、この iPhone に表示されます。通知と、iOS がアプリのバックグラウンド作業を表示する場所（「設定」の上）に出ます。
+## 離れた Mac を Xcode 用にペアリングする
+
+テキストを手で運ぶ必要はありません。`roamrun pair xcode --with` が待っている仲介役を、アプリが務めます。
+
+1. 離れた Mac で、Xcode › Device Hub › Pair Nearby Device を開きます。続けて、`roamrun pair xcode --with <この iPhone の Tailscale 上の名前>` を実行します。
+2. アプリで、離れた Mac の Tailscale 上の名前を入力し、**Introduce** をタップします。ローカルネットワークの許可を求められたら、許可します。
+3. 設定 › プライバシーとセキュリティ › デベロッパモード で、Pair with “<離れた Mac>” を選びます。離れた Mac の Device Hub に表示されたコードを入力します。
+4. アプリが離れた Mac に結果を伝え、離れた Mac がこの iPhone を、Tailscale 上の名前で保存します。離れた Mac で `roamrun up <name>` を実行します。`<name>` は、保存された名前です。
+
+名前を入力したくない場合は、手順 1 のコマンドに `--qr` を付けます。離れた Mac のターミナルに、QR コードが表示されます。これをアプリで読み取ります。読み取りのボタンは、名前が入っていないときは「Scan the Mac's Code」、入っているときは「Scan a Code」です。iPhone のカメラで読み取っても構いません。その場合は、`roamrun-introducer://<離れた Mac の Tailscale 上の名前>` のリンクから、名前が入った状態でアプリが開きます。Introduce をタップした時点で、アプリは名前を覚えます。次からは、入力も読み取りも要りません。
+
+アプリは、離れた Mac のオファーを最大 10 分待ちます。オファーを公開するのは、最大 5 分間です。
+
+## デバイス操作用にペアリングする
+
+デバイス操作（`look`、`tap` など）のペアリングも、同じ流れです。離れたマシンで、次のどちらかを実行します。
+
+- RoamRun を入れた Mac の場合：Mac の RoamRun（メニューバーのアプリ）を開いておきます。そのうえで、`roamrun pair control --with <この iPhone の Tailscale 上の名前>` を実行します。ここでも `--qr` を使えます。
+- `roamrunctl` を入れたマシンの場合：`roamrunctl pair control --with <この iPhone の Tailscale 上の名前>` を実行します。`roamrunctl` に `--qr` はありません。アプリには、そのマシンの Tailscale 上の名前を入力します。
+
+アプリの側で、ほかに設定するものはありません。どちらのペアリングかは、離れたマシンの応答で決まります。入力するコードは離れたマシンが作り、この iPhone に表示されます。表示される場所は、アプリの画面（大きな数字）、通知、iOS がアプリのバックグラウンド処理を表示する場所の 3 つです。`roamrunctl` の場合は、離れたマシンにもコードが表示されます。
 
 <p align="center">
-  <img src="../docs/images/introducer-code.png" width="200" alt="デバイス操作のペアリング: コードがこの iPhone に出る">
-  <img src="../docs/images/introducer-byhand.png" width="200" alt="手で運ぶ形: roamrun devices add に渡す行">
+  <img src="../docs/images/introducer-code.png" width="200" alt="デバイス操作のペアリング：コードがこの iPhone に表示される">
+  <img src="../docs/images/introducer-byhand.png" width="200" alt="テキストを手で運ぶ方法：roamrun devices add に渡す行">
 </p>
 
-**Carry the lines by hand**（行を手で運ぶ）は、`--with` を使わない形です。`roamrun pair xcode` が出す `rr-xcode-offer-v1:` の行を貼り付けるか、`roamrun pair xcode --qr` が描くコードから、離れた Mac の名前と一緒に読み取ります。アプリが表示する `rr-device-v1:` の行を、`roamrun devices add` に渡します。問い合わせのできない離れた Mac のための形です。離れた Mac が保存したかどうかを答えなかったときも、アプリはこの行を表示します。
+注意することが 2 つあります。
 
-離れた Mac の名前と、この iPhone の Tailscale 上の名前は、アプリを閉じても覚えています。申し出の行は覚えません。その行は、離れた Mac で Pair Nearby Device のシートが開いている間しか使えず、押すたびに別のものになるからです。
+- **何ともペアリングしたことのない iPhone では使えません**。アプリは、Wi-Fi 上で、この iPhone 自身のペアリング用のサービスを探します。iPhone がこれを公開するのは、一度ペアリングしたあとだけです。「This iPhone isn't announcing itself」と表示された場合は、先に Xcode のペアリングをしてください。
+- **「設定」に移ったら、すぐにコードを入力してください**。「設定」を開いている間も仲介を続けるために、アプリは iOS にバックグラウンド処理を申請します。iOS がこれを認めなかった場合、アプリがバックグラウンドで動けるのは約 30 秒です。その場合は、アプリにその旨が表示されます。Xcode のペアリングでも同じです。
 
-アプリが「この iPhone 自身の名乗りが見えなかった」と表示したときは、まず離れた Mac で `roamrun devices` を確かめてください。すでに保存があれば、`roamrun up <name>` でそのまま使えます。なければ、この iPhone を保存している Mac で `roamrun devices export <name>` を実行し、その行を離れた Mac で追加します。「pairing was tried」という表示は、接続がアプリを通ったという意味で、Xcode がコードを受け付けたかどうかは表しません。
+## テキストを手で運ぶ方法
 
-## 画面
+アプリから Tailscale 経由で問い合わせられない離れた Mac には、**Carry the lines by hand** を使います。使えるのは、Xcode のペアリングだけです。
 
-`Sources/Session.swift` が 1 回の引き合わせ（段階、コード、終わり方）を持ち、`Sources/ContentView.swift` がそれを表示します。最初の画面（最後に引き合わせた離れた Mac、Scan、Edit）、進行中の 3 つの段階、終わり方と、運ぶ行があるときはその行です。離れた Mac なしで画面を見るには、デバッグビルドで次のようにします。
+1. 離れた Mac で、Pair Nearby Device を開いたまま、`roamrun pair xcode` を実行します。`rr-xcode-offer-v1:` で始まる 1 行が表示されます。`roamrun pair xcode --qr` を実行すると、その行と離れた Mac の名前が、QR コードとして表示されます。これをアプリで読み取ることもできます。
+2. アプリで、その行を貼り付け、離れた Mac の Tailscale 上の名前と、この iPhone の Tailscale 上の名前を入力します。`--qr` の QR コードを読み取った場合は、行と離れた Mac の名前が入ります。
+3. 上と同じように、「設定」でペアリングします。
+4. アプリに、`rr-device-v1:` で始まる行が表示されます。離れた Mac で、この行を `roamrun devices add <line>` に渡します。
+
+離れた Mac から、保存したかどうかの応答がなかった場合にも、アプリにこの行が表示されます。
+
+オファーの行は、アプリを終了すると残りません。オファーが使えるのは、離れた Mac で Pair Nearby Device の画面が開いている間だけです。Pair Nearby Device を押すたびに、別のオファーになります。離れた Mac の名前と、この iPhone の Tailscale 上の名前は、アプリを終了しても残ります。
+
+## アプリの接続先
+
+- アプリが受け付けるのは、このデバイス自身のアドレスからの接続だけです。同時に受け付けるのは 2 本までです。データが両方向に流れた接続を閉じたあとは、受け付けをやめます。アプリの「A pairing was tried」という表示は、接続がアプリを通ったという意味です。Xcode がコードを受け入れたという意味ではありません。
+- 離れたマシンは、Tailscale が付けた名前で指定します。1 語の名前、`ts.net` で終わる名前、`100.x` のアドレスのどれかです。IPv6 のアドレスは受け付けません。
+- 問い合わせの送信先とペアリングの中継先は、Tailscale の範囲のアドレスだけです。QR コード、リンク、名前が何を指していても変わりません。アプリは、接続が確立したあとにこれを確かめます。範囲外のアドレスへの接続は、何も送らずに切ります。
+- Wi-Fi 上のペアリング用のサービスのうち、どれがこの iPhone 自身のものかを調べるために、アプリは、公開されているサービスのそれぞれに接続し、何も送らずに閉じます。
+
+## うまくいかないとき
+
+- **この iPhone 自身のサービスが見つからなかった、と表示された**。まず、離れた Mac で `roamrun devices` を実行します。すでに保存されていれば、`roamrun up <name>` でそのまま使えます。保存されていなければ、この iPhone を保存している Mac で `roamrun devices export <name>` を実行します。表示された行を、離れた Mac で `roamrun devices add <line>` に渡します。
+- **5 分たってもペアリングされなかった**。アプリは公開をやめています。手順 1 からやり直します。
+- **バックグラウンドで iOS に止められた**。上の「『設定』に移ったら、すぐにコードを入力してください」を見てください。
+
+「設定」からの接続がどこから来たかは、アプリの最後の画面の Details に表示されます。デバイスのログにも残ります。Mac の「コンソール」でデバイスを選び、サブシステム `io.github.mh-mobile.roamrun.introducer` で絞り込みます。
+
+## 試したこと
+
+iOS 27 の iPhone 15 Pro と、Tailscale 経由でつながる離れた Mac で、次のことを試しました。
+
+- Xcode のペアリング（名前を入力する方法と、`--qr` の QR コードを読み取る方法）
+- テキストを手で運ぶ方法
+- デバイス操作のペアリング
+
+次のものは試していません。
+
+- `roamrunctl` を入れたマシンを離れたマシンにした、デバイス操作のペアリング
+- iPad（アプリは iPhone 専用です）
+- ほかのバージョンの iOS
+
+## 開発者向け
+
+`Sources/Introduction.swift` には、行の形式と、その決まりが入っています。本体の `Sources/RoamRun/Introductions.swift` にも、同じものがあります。変えるときは、両方を変えてください。
+
+`Sources/Session.swift` は、1 回の仲介の状態（段階、コード、終わり方）を持ちます。`Sources/ContentView.swift` は、その状態を画面にします。表示するのは、最初の画面、進行中の 3 つの段階、終わり方です。運ぶ行がある場合は、その行も表示します。離れた Mac なしで画面を見るには、デバッグビルドをシミュレータで次のように起動します。
 
 ```
 SIMCTL_CHILD_INTRODUCER_PREVIEW=pairing xcrun simctl launch booted io.github.mh-mobile.roamrun.introducer
 ```
 
-（`empty`、`asking`、`pairing`、`code`、`finishing`、`done`、`byhand`、`failed`。）このページの画像は、この見本表示をシミュレータで撮ったものです。名前もコードも架空です。
+指定できる値は、`empty`、`asking`、`pairing`、`code`、`finishing`、`done`、`byhand`、`failed` です。これ以外の値を指定すると、名前が入った最初の画面になります。このページの画像は、このプレビューで撮りました。名前もコードも架空のものです。
 
-離れた Mac は、Tailscale が付ける名前で指定します。1 語の名前、`ts.net` で終わる名前、または Tailscale のアドレスです。コードやリンクや名前が何を指していても、問い合わせもペアリングそのものも、Tailscale のものではないアドレスへは行きません。
+`Checks/relay-check.swift` は、アプリの中核の部分を macOS 向けにビルドして動かします。サービスの種類には、テスト用の `_rrtest._tcp` を使います。本物の種類は使いません。確かめる内容には、次のものがあります。
 
-## デバイスで試したこと
+- 127.0.0.1 で、受け取ったデータをそのまま返す偽の離れた Mac が動くこと
+- 許可していないアドレスからの接続の拒否
+- 許可した接続の、両方向の中継
+- 接続でデータが流れたあとの終了
+- 公開したレコードが消えること
+- 時間切れ
+- アプリと離れたマシンの間でやり取りする行の解釈
+- Tailscale のアドレスかどうかの判定
 
-iOS 27 の iPhone 15 Pro と、Tailscale 越しに届く離れた Mac で試しました。Xcode のペアリングを、名前で指す形と `--qr` のコードで。行を手で運ぶ形。デバイス操作のペアリング。それぞれ、メインの README に書いてあるとおりです。iPad と、ほかの iOS の版では試していません。
-
-「設定」からの接続がどこから来たかは、最初に受け付けた 1 本について記録します。
-`log stream --level debug --predicate 'subsystem == "io.github.mh-mobile.roamrun.introducer"'`（Mac の「コンソール」でデバイスを選んで見ます）。
-
-アイコンは RoamRun のもので、端まで塗っています: `xcrun swift ../scripts/make-icon.swift --ios Sources/Assets.xcassets/AppIcon.appiconset/icon-1024.png`。
-
-## この Mac での確認
-
-`Checks/relay-check.swift` は、仕組みの部分を macOS 向けにコンパイルして、試験用の種類 `_rrtest._tcp` で動かします（本物の種類は使いません）。127.0.0.1 で返事をする偽の離れた Mac、断られるよそ者、許された接続の双方向の取り次ぎ、`.carried`、レコードの取り下げ、時間切れを確かめます。
+`iOS/` で、次のコマンドを実行します。
 
 ```
 xcrun swiftc -swift-version 6 -parse-as-library -o /tmp/relay-check Sources/StandIn.swift Sources/Introduction.swift Sources/Wire.swift Checks/relay-check.swift && /tmp/relay-check
+```
+
+アイコンは RoamRun のもので、余白のない全面の絵です。次のコマンドで作ります。
+
+```
+xcrun swift ../scripts/make-icon.swift --ios Sources/Assets.xcassets/AppIcon.appiconset/icon-1024.png
 ```
