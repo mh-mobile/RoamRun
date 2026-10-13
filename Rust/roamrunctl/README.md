@@ -71,8 +71,8 @@ the [releases page](https://github.com/mh-mobile/RoamRun/releases). Use matching
 
 ## Using a device from a machine without Xcode
 
-A pairing record contains a private key: someone who can use that key and reach the device
-can view its screen and operate it. You can keep the key on the machine using the device (**A**),
+Pairing saves a record that contains a private key. Someone who can use that key and reach the
+device can view its screen and operate it. You can keep the key on the machine using the device (**A**),
 or on another machine that signs connections on its behalf (**B**).
 
 The **using machine** runs `look`, `install`, `launch`, or `mcp`. The **key's machine** holds the
@@ -103,27 +103,23 @@ with names from your tailnet.
 
 ### A: on the device's Wi-Fi
 
-On a machine connected to the device's Wi-Fi:
+The machine has to be on the device's Wi-Fi, and Tailscale has to reach the device directly
+there over IPv4, not through a relay. Check first: `tailscale ping my-iphone` should end with
+`via` a local address, not `via DERP`.
 
 ```sh
 roamrunctl pair control --to my-iphone --as phone
 ```
 
-On the device, go to **Settings > Privacy & Security > Developer Mode**, select the machine
-that was announced, and enter the code printed in the terminal. The command confirms when
-it has paired, tested the connection over Tailscale, and saved the key.
+The command prints the name it announces, which is this machine's Tailscale name. On the
+device, go to **Settings > Privacy & Security > Developer Mode**, select that name, and enter
+the code printed in the terminal. The command confirms when it has paired, tested the
+connection over Tailscale, and saved the key.
 
-Tailscale must reach the device directly over this Wi-Fi using IPv4, rather than via a
-relay: `tailscale ping my-iphone` should answer `via` a local address, not `via DERP`. The device connects back to the using machine on a TCP port printed by the command.
-If a firewall blocks it, allow only that port from the device's local IP address. For
-example, with ufw, substituting the actual values printed:
-
-```sh
-sudo ufw allow from 192.168.1.50 to any port 54321 proto tcp
-```
-
-Remove this temporary rule when pairing is complete. Bonjour/mDNS discovery must also work
-on that Wi-Fi; see the [network details](../../docs/roamrunctl-reference.md#ports-and-firewalls).
+The device connects back to this machine on a TCP port that the command prints, together with
+the device's address on the Wi-Fi. If a firewall on this machine blocks incoming connections,
+allow that port from that address; see
+[ports and firewalls](../../docs/roamrunctl-reference.md#ports-and-firewalls).
 
 ### A: from another network
 
@@ -133,7 +129,7 @@ device's Wi-Fi can introduce it once.
 **Initial-pairing requirement:** For this `pair control --with` + `pair introduce` flow, the
 device must already have paired with something (such as a Mac running Xcode). That makes
 the device advertise the pairing service the near machine needs. If it has never paired,
-complete a local pairing first. This limitation is specific to this introduction flow.
+pair it once on its own Wi-Fi first.
 
 ```sh
 # On cloud-pc (the using machine, somewhere else):
@@ -143,9 +139,10 @@ roamrunctl pair control --with home-pc --as phone
 roamrunctl pair introduce --host cloud-pc --to my-iphone
 ```
 
-`--host` names the machine that will hold the pairing: here, the using machine. Its output
-calls that machine "the host". Either command can start first. On the device, select cloud-pc under Developer Mode and
-enter the code shown by the commands.
+`--host` names the machine that will hold the pairing: here, the using machine. The near
+machine's output calls it "the host". Either command can start first; each waits up to ten
+minutes for the other. On the device, select `cloud-pc` under Developer Mode and enter the
+code, which both commands print.
 
 ```mermaid
 sequenceDiagram
@@ -167,13 +164,16 @@ sequenceDiagram
 ```
 
 The using machine must allow incoming Tailscale TCP connections from the near machine on
-41830 and on a new dynamic port shown during pairing. Check both the Tailscale access
-policy and the operating-system firewall; a blocked dynamic port can make the host appear
-but prevent the pairing from finishing. See [ports and firewalls](../../docs/roamrunctl-reference.md#ports-and-firewalls).
+41830 and on a second port, which it prints during pairing. The near machine must let the
+device in on the port it prints. If the near machine cannot reach the using machine's second
+port, it says so before it announces anything. See
+[ports and firewalls](../../docs/roamrunctl-reference.md#ports-and-firewalls).
 
-There is also an [Introducer app](https://github.com/mh-mobile/RoamRun/tree/main/iOS) for the device itself. With that app, the using
-machine can run `roamrunctl pair control --with my-iphone`; the app on the device takes the
-near machine's place. It still requires the user to approve pairing on the device.
+The device can also do the introducing itself, with the
+[Introducer app](https://github.com/mh-mobile/RoamRun/tree/main/iOS) (built from source with
+Xcode; it is not on the App Store). Then no near machine is needed: run
+`roamrunctl pair control --with my-iphone --as phone` on the using machine, and enter the using
+machine's Tailscale name in the app.
 
 ### Use the paired device
 
@@ -184,8 +184,8 @@ roamrunctl install phone App.ipa      # or a signed .app folder
 roamrunctl launch phone com.example.App
 ```
 
-`install` and `launch` work on an app that is already built and signed; none of these needs
-Xcode on the using machine.
+To stop using a device, run `roamrunctl devices remove phone`. That forgets it on this machine.
+To withdraw the pairing itself, also remove this machine under Developer Mode on the device.
 
 ### Use with an AI agent (MCP)
 
@@ -207,10 +207,10 @@ Use the full executable path if the client cannot find `roamrunctl` in its `PATH
 The tools are `devices`, `look`, `tap`, `swipe`,
 `elements`, `type`, `paste`, `press`, `install`, and `launch`.
 
-For `tap` and `swipe`, the agent must first call `look`. Each screenshot permits one
-such action within 60 seconds; another action may invalidate it, and an orientation
-change may also invalidate it when detected. The server uses the device's screenshots
-and input commands, not a continuous screen-sharing stream.
+For `tap` and `swipe`, the agent must first call `look`. Each look permits one tap or swipe
+within 60 seconds. Any other tool call spends it, and a tap or swipe is refused if the device
+reports that it was turned since the look. The server uses the device's screenshots and input
+commands, not a continuous screen-sharing stream.
 
 An optional [agent skill](https://github.com/mh-mobile/RoamRun/tree/main/skills/roamrunctl)
 provides instructions: `npx skills add mh-mobile/RoamRun`. Installing the skill does not
@@ -224,11 +224,10 @@ Unix files are created readable only by their owner. **Any program running as th
 including an agent, can nevertheless use an unencrypted key** to operate the device.
 
 Add `--passphrase` to `pair control` to save an age-encrypted `phone.age` file instead.
-The passphrase is entered interactively, or taken in priority order from
-`ROAMRUNCTL_PASSPHRASE_FILE`, `ROAMRUNCTL_PASSPHRASE_COMMAND`, or
-`ROAMRUNCTL_PASSPHRASE` (the weakest option). Non-interactive `mcp` cannot prompt,
-so it requires one of these settings. Encrypting the file does not protect against
-software that can read the passphrase itself.
+The passphrase is taken from the first of these that is set: `ROAMRUNCTL_PASSPHRASE_FILE`,
+`ROAMRUNCTL_PASSPHRASE_COMMAND`, `ROAMRUNCTL_PASSPHRASE`. If none is set, it is asked for at
+the terminal. `mcp` cannot ask, so it requires one of them. Encrypting the file does not
+protect against software that can read the passphrase itself.
 
 ### B: another machine keeps the key
 
@@ -241,7 +240,7 @@ still travel directly between the using machine and the device.
 roamrunctl pair control --to my-iphone --as phone --passphrase
 roamrunctl sign phone --for cloud-pc  # enter the passphrase; leave sign running
 
-# On cloud-pc (the using machine): nothing to set up
+# On cloud-pc (the using machine): nothing to set up when both machines are yours and untagged
 roamrunctl devices
 roamrunctl look phone
 ```
@@ -251,34 +250,32 @@ sequenceDiagram
   participant U as using machine
   participant K as key's machine
   participant D as device
-  Note over K,D: paired earlier, the private key stays on the key's machine
+  Note over K: paired with the device earlier, holds the key
   Note over K: sign --for the using machine is running
   U->>D: opens a connection over Tailscale
-  D->>U: verifies itself and sends a challenge
+  D->>U: proves itself, then waits for proof of the key
   U->>K: requests a signature (TCP 41831)
   K->>U: returns a signature, not the private key
   U->>D: completes verification with that signature
   Note over U,D: screenshots, inputs and installs go directly
 ```
 
-The key's machine must allow incoming TCP 41831 from the named using machine. The using
-machine automatically discovers an online signer only when both machines are untagged and
-owned by the same Tailscale user. For tagged machines, different users, or a tailnet where
-another machine could offer the same device name, name the signer before first use:
+The key's machine must allow incoming TCP 41831 from the using machine. The using machine
+finds the key's machine by itself only when both are online, untagged, and owned by the same
+Tailscale user. Otherwise (a tagged machine, as a cloud VM often is; different users; or a
+tailnet where another machine could offer the same device name), name it before first use:
 `export ROAMRUNCTL_SIGNER=home-pc` on the using machine (in PowerShell,
-`$env:ROAMRUNCTL_SIGNER = 'home-pc'`; for MCP, in the MCP server's environment). Discovery is
-what was run against a device; naming the signer this way has not been yet.
+`$env:ROAMRUNCTL_SIGNER = 'home-pc'`; for MCP, in the MCP server's environment). Finding it
+automatically was run against a real device; `ROAMRUNCTL_SIGNER` was not.
 
 While `sign` answers, any program on the using machine can operate the device. Stopping
 `sign` prevents new signed connections, not already-open connections (including an
-existing MCP session). It has not been established whether an existing connection can be
-used to create another pairing; do not assume B prevents that. See the
+existing MCP session). Whether an open connection can be used to create another pairing
+has not been tried; do not assume B prevents that. See the
 [security details](../../docs/roamrunctl-reference.md#b-remote-signing-and-trust).
 
-To forget a device here, run `roamrunctl devices remove phone`. For a locally held pairing,
-also remove this machine from the device's Developer Mode pairing list. In B, removing the
-device on the using machine only forgets its association with the signing machine; it
-does not delete the private key on the signing machine.
+`roamrunctl devices remove phone` on the using machine does not touch the key on the key's
+machine, and the using machine lists the device again for as long as `sign` still names it.
 
 ## Introduce a device to a remote Mac or another host
 
@@ -300,10 +297,12 @@ What the host runs decides whose pairing it is:
 | `roamrun pair control --with home-pc` (RoamRun app open) | RoamRun device control |
 | `roamrun pair xcode --with home-pc` (Xcode Device Hub waiting) | Xcode |
 
-For device control, the pairing code is printed by the commands. For Xcode, use the
-code shown in **Device Hub > Pair Nearby Device** on the host. The near machine may print
-a device record if Xcode's pairing could not be saved automatically; follow its output
-and the [reference](../../docs/roamrunctl-reference.md#pair-introduce-options-and-results).
+For the two device-control rows, the near machine's command prints the pairing code; a
+`roamrunctl` host prints it too. For Xcode, use the code shown in
+**Device Hub > Pair Nearby Device** on the host; the near machine then prints a device record
+on standard output, and if it exits with 1, that record is added on the host with
+`roamrun devices add` (see the
+[reference](../../docs/roamrunctl-reference.md#pair-introduce-options-and-results)).
 Ctrl-C withdraws the near machine's local advertisement.
 
 ## Reference and security

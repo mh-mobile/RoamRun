@@ -25,10 +25,9 @@ the using machine and the device, not through the key's machine.
   `.\roamrunctl-windows-x86_64\roamrunctl.exe`, or add that directory to `PATH`.
   The binaries are unsigned; SmartScreen may warn. Windows Firewall may ask to allow incoming
   connections when the program first advertises a pairing. Allow the appropriate network profile.
-- `cargo install --locked --git ...` requires Rust 1.89 or later and a C compiler. On Windows,
-  cryptography dependencies may also need NASM (x86_64) or clang (ARM64). This is a source build,
-  not the release's static Linux build. `roamrunctl` is not published on crates.io; the Homebrew
-  formula is in `mh-mobile/tap`, not Homebrew core.
+- `cargo install --locked --git ...` requires Rust 1.89 or later and a C compiler. This is a
+  source build, not the release's static Linux build. `roamrunctl` is not published on
+  crates.io; the Homebrew formula is in `mh-mobile/tap`, not Homebrew core.
 - The reported version is RoamRun's version. Match versions between pairing participants.
   Before 0.7.0, `pair introduce` used `--mac` instead of `--host`; old and new releases may
   print incompatible commands.
@@ -60,20 +59,18 @@ the using machine and the device, not through the key's machine.
 | `pair control --with` | near machine → using machine, over Tailscale | 41830, then another dynamic port printed during pairing |
 | `pair introduce` | device → near machine, over local Wi-Fi | dynamic port printed by the introducer |
 | `pair introduce` | near machine → host, over Tailscale | 41830 when requesting an offer, then the host's pairing port |
-| `look`, `install`, `launch`, `mcp` | using machine → device, over Tailscale | device's own pairing port |
+| `look`, `install`, `launch`, `mcp` | using machine → device, over Tailscale | the device's pairing port, then a tunnel port the device names for that connection |
 | B (`sign --for`) | using machine → key's machine, over Tailscale | 41831 |
 
-- For `pair control --to`, allow the incoming **printed TCP port from the device's local IP**
-  on the using machine. With ufw, for example, if the command printed `192.168.1.50` and `54321`:
-
-  ```sh
-  sudo ufw allow from 192.168.1.50 to any port 54321 proto tcp
-  # After pairing:
-  sudo ufw delete allow from 192.168.1.50 to any port 54321 proto tcp
-  ```
-
-  Replace both values with the command's output. Remove only the temporary rule you added.
-  Local Bonjour/mDNS discovery also has to work on the Wi-Fi (normally UDP 5353).
+- For `pair control --to`, the device connects to the one TCP port the command prints, from
+  its own address on the Wi-Fi. The command prints two addresses: this machine's, and the
+  device's, which it says "has to be let in". A firewall on the using machine has to allow that.
+  Local Bonjour/mDNS discovery also has to work on the Wi-Fi (UDP 5353).
+- What was run with a firewall: Ubuntu with ufw enabled, during a
+  `pair introduce` under a test service, with a Mac standing in for the device. mDNS came
+  through as ufw is installed. The TCP connection got no answer until
+  `sudo ufw allow proto tcp from <the device's address>` was run, and then connected. A rule
+  limited to the printed port was not tried. firewalld and others were not tried.
 - For `pair control --with`, permit the named near machine to reach the using machine on
   TCP 41830 **and** the new port shown during the attempt, in both Tailscale's access policy
   and the using machine's firewall. The dynamic port changes between attempts. Port 41830
@@ -85,18 +82,22 @@ the using machine and the device, not through the key's machine.
 - In B, allow incoming TCP 41831 **from the named using machine** to the key's machine.
   Signing does not proxy screenshots or input; device traffic travels directly between
   the using machine and the device.
-- macOS and Windows may prompt for incoming connections. Windows' “Use Tailscale subnets”
-  setting can affect routes, but roamrunctl chooses its local Wi-Fi interface by examining
-  interface addresses.
+- macOS and Windows may prompt for incoming connections.
+- roamrunctl chooses its address on the Wi-Fi by looking at its interfaces' addresses, not at
+  the routing table. On one Windows machine, "Use Tailscale subnets" had routed its own LAN
+  through Tailscale, and pairing went through all the same.
 - A userspace-networking-only Tailscale setup may have no local Tailscale address to bind.
   `sign` and `pair control --with` are not expected to work in that configuration.
 
 ## Time limits
 
-- `pair control --to`: seven minutes to select the machine on the device and enter the code.
-- `pair control --with`: up to ten minutes for the near machine to arrive, then up to seven
-  minutes to pair. After a failed device pairing (for example, a wrong code), it can wait
-  for a fresh attempt, up to five attempts in all. Each retry needs a new introduction.
+- `pair control --to`: seven minutes in all. Once the code shows, three minutes to enter it.
+  A wrong or late code ends the command; run it again.
+- `pair control --with`: up to ten minutes for the near machine to arrive. A `roamrunctl`
+  near machine gives the pairing five minutes (this machine waits up to seven), and the code
+  has three minutes once it shows. Only a device that connected and did not pair is waited
+  for again, up to five attempts in all; each needs a new introduction. If the near machine
+  runs out of time, this command ends.
 - `pair introduce`: by default, five minutes of advertising (`--deadline`); 300 seconds
   maximum when it asks the host for an offer. Before that, it can wait up to ten minutes
   for the host on TCP 41830. Either machine can start its command first.
@@ -111,16 +112,16 @@ the using machine and the device, not through the key's machine.
   On Windows the folder is `%LOCALAPPDATA%\roamrunctl\devices` (falling back to `%APPDATA%`).
   Each saved device is `<name>.json`, or `<name>.age` when encrypted.
 - On Linux/macOS the directory is created with mode 0700 and the file with 0600; a file
-  readable by other users is refused. Windows relies on permissions of the profile directory
+  with any group or other permission is refused. Windows relies on permissions of the profile directory
   and does not perform the same Unix permission check.
 - A plain JSON pairing record is a credential: a program that can read it **and** reach the
   device can use it. `--passphrase` on `pair control` and `key import` encrypts the file
   using age's passphrase format. The passphrase is not accepted as a command-line argument.
 - The first configured source wins (and a failing source stops the command):
   `ROAMRUNCTL_PASSPHRASE_FILE` → `ROAMRUNCTL_PASSPHRASE_COMMAND` → `ROAMRUNCTL_PASSPHRASE`.
-  The command source runs with `sh -c` (Windows: `cmd /S /C`). The environment variable
-  containing the passphrase itself is the weakest option, because same-user processes
-  and child processes may be able to read it. Without a source, interactive commands prompt.
+  The command source runs with `sh -c` (Windows: `cmd /S /C`). A passphrase in
+  `ROAMRUNCTL_PASSPHRASE` is in the environment of every process started from that shell.
+  Without a source, interactive commands prompt.
 
 | Command | Passphrase handling |
 |---|---|
@@ -242,7 +243,7 @@ roamrunctl pair introduce --host <host> --to <device> [--offer <line>] [--as <na
   for an Xcode pairing, the printed device record can then be added manually using
   `roamrun devices add <line> --as <different-name>`. A `roamrunctl` host gives its own
   `--as` precedence.
-- `--on` selects a local interface/address when the near machine has multiple addresses
+- `--on` selects a local IPv4 address when the near machine has multiple addresses
   on the device's network. Otherwise the implementation chooses an appropriate local
   address and prints alternatives.
 - For Xcode the pairing code is shown in Device Hub on the host, not generated by the
@@ -257,7 +258,7 @@ roamrunctl pair introduce --host <host> --to <device> [--offer <line>] [--as <na
 | 0 | The host reported saving the pairing, or an Xcode pairing using manual `--offer` was attempted and a device record was produced |
 | 1, with a device-record line | Xcode pairing was attempted but the host did not confirm saving it; add the record manually on the host |
 | 1, without a device-record line | No pairing completed, the device advertisement was unavailable, or device control was not saved; inspect stderr |
-| 2 | Command-line usage error, such as an unsupported `--mac` flag |
+| 2 | Command-line usage error, such as an unsupported `--mac` flag (a `--deadline` over 300 without `--offer` exits 1) |
 
 Ctrl-C, a closed terminal or a dropped SSH session attempts to withdraw the local Bonjour
 advertisement before exiting (observed on macOS; on Windows for Ctrl-C and closing the console).
@@ -272,7 +273,7 @@ advertisement before exiting (observed on macOS; on Windows for Ctrl-C and closi
   intended participants appear online in the expected tailnet.
 - **`pair control --to` does not appear on the device:** confirm Developer Mode and Wi-Fi,
   local IPv4/direct Tailscale reachability, mDNS discovery, and incoming firewall access.
-  The command prints the IP and port the device must reach.
+  The command prints the port and the device's address that has to be let in.
 - **`pair control --with` fails before the code appears:** the remote introducer must reach
   the using machine on TCP 41830 and its dynamic pairing port. If `pair introduce` reports
   that the device's own advertisement was not seen, it may never have been paired before:
@@ -302,10 +303,11 @@ cargo test
 python3 scripts/local-check.py target/debug/roamrunctl "$(ipconfig getifaddr en0)"
 ```
 
-The local check uses a test-only Bonjour service (`_rrtest._tcp`) and a fake device/host,
-not a real device pairing. It checks discovery, refusal of unexpected peers, TCP relay,
-device-record creation, and advertisement cleanup. A fake host binds port 41830 locally;
-that port must be free.
+The local check pairs no real device. The offer goes out under a test-only Bonjour service
+(`_rrtest._tcp`); the fake device is announced under the real `_remotepairing._tcp` on the LAN
+while it runs. It checks discovery, refusal of unexpected peers, TCP relay, device-record
+creation, and advertisement cleanup, then the same for device control. Ports 41830 and 53050
+on this Mac must be free.
 
 Related Mac-side implementations include `Sources/RoamRun/Introductions.swift`,
 `PairByName.swift`, and `ControlIntroductions.swift`.
