@@ -2,7 +2,7 @@
 
 <p align="center"><a href="README.md">English</a> | 日本語</p>
 
-デバイス自身の上で `roamrun pair introduce` の代わりをする iOS アプリです。離れた Mac のペアリングの申し出を、デバイスがいる Wi‑Fi で名乗り、「設定」からの 1 本の接続を受けて、デバイスにすでに入っている Tailscale の VPN 越しに、離れた Mac へ取り次ぎます。デバイスのそばに Mac は要りません。離れた Mac の側からの使い方は、メインの README の「[デバイス自身に引き合わせてもらう](../README.ja.md#デバイスと同じ場所にいたことのない-mac)」にあります。
+デバイス自身の上で `roamrun pair introduce` の代わりをする iOS アプリです。離れた Mac のペアリングの申し出を、デバイスがいる Wi‑Fi で名乗り、「設定」からの 1 本の接続を受けて、デバイスにすでに入っている Tailscale の VPN 越しに、離れた Mac へ取り次ぎます。デバイスのそばに Mac は要りません。離れた Mac の側からの使い方は、メインの README の「[デバイス自身に仲介させる](../README.ja.md#デバイス自身に仲介させる)」にあります。
 
 <p align="center">
   <img src="../docs/images/introducer-home.png" width="200" alt="最初の画面: 離れた Mac の名前と Introduce">
