@@ -139,6 +139,9 @@ struct Introduce {
 // Not eprintln!: it panics once the terminal is gone, and what is announced must still be taken back.
 macro_rules! say { ($($t:tt)*) => {{ let _ = writeln!(std::io::stderr(), "roamrunctl: {}", format!($($t)*)); }} }
 
+/// `http://host:port`: the device is connected to through that proxy's CONNECT (look, tap, install and the rest).
+const PROXY: &str = "ROAMRUNCTL_PROXY";
+
 fn main() {
     let cli = Cli::try_parse().unwrap_or_else(|refused| {
         // The old name isn't taken; whoever was shown it by an earlier RoamRun is told the new one.
@@ -149,6 +152,11 @@ fn main() {
         }
         refused.exit()
     });
+    // A machine that reaches the device only through an HTTP proxy names it: never taken from HTTPS_PROXY.
+    if let Some(why) = std::env::var(PROXY).ok().filter(|url| !url.is_empty()).and_then(|url| roamrun_device::proxy::name(&url).err()) {
+        note!("roamrunctl: {PROXY}: {why}");
+        std::process::exit(2);
+    }
     let args = match cli.command {
         Command::Pair { command: Pair::Introduce(args) } => args,
         Command::Pair { command: Pair::Control { to, with, name, passphrase } } => match match (to, with) {

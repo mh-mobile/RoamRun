@@ -1,6 +1,7 @@
 //! RoamRun's C ABI over idevice. rr_device_tap, _swipe, _type, _paste and
 //! _button operate the device; rr_device_elements can scroll it.
 
+pub mod proxy;
 pub mod safe;
 
 use std::ffi::{c_char, CStr, CString};
@@ -26,7 +27,7 @@ use idevice::tcp::adapter::Adapter;
 use idevice::tcp::handle::{AdapterHandle, UdpSocketHandle};
 use idevice::provider::RsdProvider;
 use idevice::{ReadWrite, RsdService};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 
 const VERSION: &CStr = c"0.6.0";
 const LABEL: &str = "roamrun";
@@ -840,7 +841,7 @@ async fn connect(ip: &str, port: u16, file: &[u8], signer: Option<Signer>) -> Re
     // The device proves itself at every connection, by the key it gave when the pairing was
     // made: a pairing without that key would take whatever answers for the device.
     if pairing.peer_public_key.is_none() { return Err(UNCHECKED.into()); }
-    let control = TcpStream::connect((ip, port)).await.map_err(|e| format!("RemotePairing port: {e}"))?;
+    let control = proxy::dial(ip, port).await.map_err(|e| format!("RemotePairing port: {e}"))?;
     let mut client = RemotePairingClient::new(RpPairingSocket::new(control), LABEL);
     // Verify only: a pairing the device doesn't know must fail here, not start a new one.
     client.attempt_pair_verify().await.map_err(|e| format!("handshake: {e:?}"))?;
@@ -848,7 +849,7 @@ async fn connect(ip: &str, port: u16, file: &[u8], signer: Option<Signer>) -> Re
     let verified_ms = started.elapsed().as_millis();
 
     let tunnel_port = client.create_tcp_listener().await.map_err(|e| format!("tunnel listener: {e:?}"))?;
-    let stream = TcpStream::connect((ip, tunnel_port)).await.map_err(|e| format!("tunnel port {tunnel_port}: {e}"))?;
+    let stream = proxy::dial(ip, tunnel_port).await.map_err(|e| format!("tunnel port {tunnel_port}: {e}"))?;
     let tunnel = connect_tls_psk_tunnel_native(stream, client.encryption_key()).await.map_err(|e| format!("tunnel: {e:?}"))?;
     let info = tunnel.info.clone();
     let ours = info.client_address.parse().map_err(|_| "tunnel address".to_string())?;
