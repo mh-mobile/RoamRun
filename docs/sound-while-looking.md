@@ -6,7 +6,7 @@ sound and its microphone is the device's and each app's own doing; this is what 
 app, with what wasn't tried.
 
 Listened to on 2026-10-12: an iPhone 15 Pro on iOS 27.0, RoamRun 0.5.0 as released and a build of
-0.6.0, over Tailscale, with and without a cable. Each row is one to three runs of a look every two
+what became 0.7.0, over Tailscale, with and without a cable. Each row is one to three runs of a look every two
 seconds for 25 to 50 seconds, a person at the device listening. Apps as they were that day.
 
 ## What was heard

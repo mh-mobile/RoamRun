@@ -144,6 +144,7 @@ with Ctrl-C once the code was typed ends the same way: the far Mac's app goes on
 ## 5. Using a device from here
 
 Since 0.7.0 (an earlier `roamrunctl` has none of this, and names `--host` `--mac`).
+For an iPhone or iPad: not tried with an Apple Vision Pro.
 Three machines are spoken of, and one can be two of them: **the near machine** (on the
 device's Wi‑Fi; pairing needs one, once), **the using machine** (where `look`, `install`,
 `launch`, `mcp` run), and **the key's machine** (where the pairing's key is kept, and

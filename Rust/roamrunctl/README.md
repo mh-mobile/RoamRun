@@ -55,6 +55,8 @@ on, from the address it says the device has. With ufw on Ubuntu (which lets mDNS
 ## Using a device from a machine without Xcode
 
 Since 0.7.0. A machine with a pairing of its own reaches the device over Tailscale by itself, with no Xcode on it.
+An iPhone or iPad: none of this was tried with an Apple Vision Pro, and one that waits to be picked by a Mac
+(Remote Devices open on it) is paired by a Mac only: `roamrun pair introduce` refuses another kind of `--host` for it.
 Three machines are spoken of below, and one machine can be two of them:
 
 - **the near machine**: on the device's Wi‑Fi. Pairing needs one, once.
@@ -210,7 +212,8 @@ is stored there: `ROAMRUNCTL_PASSPHRASE_COMMAND='security find-generic-password 
 A look is the device's own screenshot, and inputs are sent without a screen stream: the device lists no
 screen-sharing session, and what plays goes on sounding (listened to with Apple Music on iOS 27.0, with looks,
 taps, keys and buttons). Not looked into: swipes and paste that way, and the microphone. `paste` makes the device
-ask "Allow Paste". Only `tap` and `swipe` are held to a look just taken; `type`, `paste` and `press` go to
+ask "Allow Paste". Only `tap` and `swipe` are held to a look just taken, and refused where the
+device says it was turned since; `type`, `paste` and `press` go to
 whatever is on the screen. A call the agent takes back before its turn isn't made, nor one whose turn comes after
 the agent went; one that runs already runs out. While `roamrunctl mcp` runs, a device removed, or another saved
 under its name, isn't the one it had open: it is opened anew, or said to be gone.

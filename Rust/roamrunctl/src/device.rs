@@ -85,6 +85,15 @@ pub fn own_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     }
 }
 
+/// As `own_whole`, in place of what is there: that stays until all of `bytes` is written.
+fn replace_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let beside = path.with_extension(format!("{}.tmp", std::process::id()));
+    let _ = std::fs::remove_file(&beside);
+    let put = own_file(&beside).and_then(|mut file| file.write_all(bytes)).and_then(|()| std::fs::rename(&beside, path));
+    if put.is_err() { let _ = std::fs::remove_file(&beside); }
+    put
+}
+
 /// The mode of a file that others can read, where the system has modes.
 fn open_to_others(meta: &std::fs::Metadata) -> Option<u32> {
     #[cfg(unix)]
@@ -427,9 +436,7 @@ fn look(name: &str, file: Option<PathBuf>) -> Result<String, String> {
     let (png, width, height) = fitted(&device.screenshot()?, image::ImageFormat::Png)?;
     let path = file.unwrap_or_else(|| std::env::temp_dir().join(format!("roamrunctl-{}-{}.png", named(name).unwrap_or("device"), std::process::id())));
     // Whatever is on the screen is in it: the owner's only.
-    let _ = std::fs::remove_file(&path);
-    let mut out = own_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    out.write_all(&png).map_err(|e| format!("{}: {e}", path.display()))?;
+    replace_whole(&path, &png).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(format!("{}\n{width} x {height}", path.display()))
 }
 
@@ -527,6 +534,21 @@ pub fn unstub(name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_look_takes_the_place_of_the_file_named_whole() {
+        let path = std::env::temp_dir().join(format!("roamrunctl-replace-{}.png", std::process::id()));
+        std::fs::write(&path, b"old").unwrap();
+        replace_whole(&path, b"new").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+        assert!(!path.with_extension(format!("{}.tmp", std::process::id())).exists());
+        // Not written: what was there stays.
+        let dir = path.with_extension("dir");
+        std::fs::create_dir(&dir).unwrap();
+        assert!(replace_whole(&dir, b"x").is_err() && dir.is_dir());
+        std::fs::remove_dir(&dir).unwrap();
+        std::fs::remove_file(&path).unwrap();
+    }
 
     #[test]
     fn what_a_machine_says_it_signs_for_is_taken_only_as_far_as_it_can_be_that() {
