@@ -1,5 +1,7 @@
 # roamrunctl
 
+<p align="center">English | <a href="https://github.com/mh-mobile/RoamRun/blob/main/Rust/roamrunctl/README.ja.md">日本語</a></p>
+
 For a machine that has no RoamRun — Windows, Linux, or a Mac. Since 0.7.0 it can hold a pairing with an iPhone or iPad
 itself and use the device over Tailscale with no Xcode: screenshots, installing and launching apps, and the same as
 MCP tools for an agent — see [Using a device from a machine without Xcode](#using-a-device-from-a-machine-without-xcode).
