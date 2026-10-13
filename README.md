@@ -26,7 +26,7 @@ It also does three related things:
 - **Shows and operates the device's screen** from the command line or from an AI agent
   ([Seeing and operating the device](#seeing-and-operating-the-device)).
 - **Pairs a Mac that was never near the device** — a cloud Mac, for example
-  ([A Mac the device was never near](#a-mac-the-device-was-never-near)).
+  ([A Mac the device was never near](#pairing-a-far-mac-for-xcode)).
 - **Lets a device install a build by itself**, with no bridge and no pairing
   ([Installing without the bridge](#installing-without-the-bridge-over-the-air)).
 
@@ -138,6 +138,45 @@ over by itself. When the Mac's address changes, the bridge restarts.
   <img src="docs/images/menu.png" width="260" alt="Menu bar menu">
 </p>
 
+## Working away from the Mac
+
+You can leave the Mac at home and run the whole build-and-try loop from the device in your hand.
+
+**To start a bridge, the device has to be on a Wi-Fi with internet access.** A café's or hotel's Wi-Fi, a
+pocket router, or another phone's hotspot all serve. Cellular alone does not, and neither does the
+device's own hotspot, since the device is then not on a Wi-Fi itself.
+
+**To keep a session on cellular**, turn on Settings › Network › Keep debugging on cellular. It is
+off by default, because with it on every Run uses the device's mobile data. It applies only from
+Ready for Xcode, the bridged state. When the device shows "On this Wi‑Fi", Xcode reaches it over the local network, so leaving
+home straight onto cellular ends the session. To avoid that, keep the device on a Wi-Fi that
+another device makes even at home — a travel router, or a spare phone sharing its connection — so
+that RoamRun bridges it from the start.
+
+A new session needs Wi-Fi again, for example after the device restarts. With the setting off,
+RoamRun closes the session when the device leaves Wi-Fi and reconnects when it is back.
+
+On a Wi-Fi with a sign-in page, sign in first. Joining a Wi-Fi marked "No Internet Connection" and
+sending traffic over cellular did not work when tried. Where a network blocks UDP, Tailscale goes
+through its relay servers: that works, more slowly, and `roamrun doctor` shows the path.
+
+Three ways to drive the Mac from the device:
+
+| Method | On the device | Good for |
+|---|---|---|
+| An AI agent | A feature for driving an agent on your Mac from your phone, such as Claude Code's [Remote Control](https://code.claude.com/docs/en/remote-control.md) or [Codex](https://learn.chatgpt.com/docs/remote-connections) in the ChatGPT app | Asking "build it and run it on my iPhone", looking at the result, and repeating |
+| A terminal over SSH | An SSH client and Tailscale | Using `roamrun`, `xcodebuild`, `devicectl` and `lldb` directly |
+| The Mac's screen | Screen Sharing or a VNC client, and Tailscale | Xcode's Run and breakpoints in its window |
+
+Away from home, running with the debugger takes longer than at home: attaching lldb takes hundreds
+of round trips. With a 600 KB app over tethering it took about a minute with the debugger and
+about 4 seconds without. When you don't need breakpoints, turn off "Debug executable" under Edit
+Scheme › Run › Info. When you do, turning off "Queue Debugging" (Options) and "Main Thread
+Checker" (Diagnostics) there made it faster.
+
+The agent features in the table send your conversation through each service's servers. Check your
+company's policy before using them on a work Mac.
+
 ## CLI
 
 The app's binary is also the `roamrun` command, for use over SSH or in scripts.
@@ -247,6 +286,10 @@ called device control. It needs **iOS or iPadOS 27 or later**. It does not use t
 Xcode: RoamRun makes a pairing and a connection of its own. It was run on an iPhone; an iPad has
 not been tried.
 
+Before you set it up, know this: **while a device is switched on, any program you run on this Mac
+can see and operate it**, not only the command or agent you meant it for. The details are under
+"Who can use it" below.
+
 **Set up once for each device**, with the device on the Mac's Wi-Fi. Open the device's page in
 RoamRun and press Device control › Set Up…. On the device, under Settings › Privacy & Security ›
 Developer Mode, pick "RoamRun (this Mac's name)" and enter the code the Mac shows. The sheet then
@@ -305,7 +348,7 @@ seen and operated too (seen), though unlocking still takes the passcode or Face 
 - The pairing holds a private key. How it is kept, and who can use it: [SECURITY.md](SECURITY.md).
 - To withdraw device control, remove RoamRun's entry on the device under Developer Mode.
 
-### From a Mac that can't pair itself
+### Device control on a far Mac
 
 Setting up needs the Mac and the device on one Wi-Fi. A Mac elsewhere, such as one in a data
 centre, never is. When both Macs are on one tailnet, a Mac on the device's Wi-Fi introduces the
@@ -349,7 +392,7 @@ name and can be removed there alone.
 Setting such a Mac up from nothing — Tailscale, RoamRun, the pairing — is in
 [docs/another-mac.md](docs/another-mac.md), with a script that does it.
 
-## A Mac the device was never near
+## Pairing a far Mac for Xcode
 
 A bridge needs a Mac that Xcode has paired with the device, and Xcode pairs on one network. A Mac
 elsewhere — in a data centre, an agent's, yours in another place — never shares one with the
@@ -519,63 +562,25 @@ restrict it with Tailscale's access rules. To take the page down, delete
 The rest — the port and Funnel, `--replace`, Developer Mode on the device, and what RoamRun checks
 before it stores a build — is in [docs/ota.md](docs/ota.md).
 
-## Working away from the Mac
-
-You can leave the Mac at home and run the whole build-and-try loop from the device in your hand.
-
-**The device has to be on a Wi-Fi with internet access to connect.** A café's or hotel's Wi-Fi, a
-pocket router, or another phone's hotspot all serve. Cellular alone does not, and neither does the
-device's own hotspot, since the device is then not on a Wi-Fi itself.
-
-**To keep a session on cellular**, turn on Settings › Network › Keep debugging on cellular. It is
-off by default, because with it on every Run uses the device's mobile data. It applies only from
-Ready for Xcode, the bridged state. When the device shows "On this Wi‑Fi", Xcode reaches it over the local network, so leaving
-home straight onto cellular ends the session. To avoid that, keep the device on a Wi-Fi that
-another device makes even at home — a travel router, or a spare phone sharing its connection — so
-that RoamRun bridges it from the start.
-
-A new session needs Wi-Fi again, for example after the device restarts. With the setting off,
-RoamRun closes the session when the device leaves Wi-Fi and reconnects when it is back.
-
-On a Wi-Fi with a sign-in page, sign in first. Joining a Wi-Fi marked "No Internet Connection" and
-sending traffic over cellular did not work when tried. Where a network blocks UDP, Tailscale goes
-through its relay servers: that works, more slowly, and `roamrun doctor` shows the path.
-
-Three ways to drive the Mac from the device:
-
-| Method | On the device | Good for |
-|---|---|---|
-| An AI agent | A feature for driving an agent on your Mac from your phone, such as Claude Code's [Remote Control](https://code.claude.com/docs/en/remote-control.md) or [Codex](https://learn.chatgpt.com/docs/remote-connections) in the ChatGPT app | Asking "build it and run it on my iPhone", looking at the result, and repeating |
-| A terminal over SSH | An SSH client and Tailscale | Using `roamrun`, `xcodebuild`, `devicectl` and `lldb` directly |
-| The Mac's screen | Screen Sharing or a VNC client, and Tailscale | Xcode's Run and breakpoints in its window |
-
-Away from home, running with the debugger takes longer than at home: attaching lldb takes hundreds
-of round trips. With a 600 KB app over tethering it took about a minute with the debugger and
-about 4 seconds without. When you don't need breakpoints, turn off "Debug executable" under Edit
-Scheme › Run › Info. When you do, turning off "Queue Debugging" (Options) and "Main Thread
-Checker" (Diagnostics) there made it faster.
-
-The agent features in the table send your conversation through each service's servers. Check your
-company's policy before using them on a work Mac.
-
 ## Limitations and known issues
+
+When in trouble, run `roamrun doctor` first.
+
+### What it rests on
 
 - **RoamRun depends on Apple's private protocols**: how CoreDevice and RemotePairing have behaved
   since iOS 17. A new iOS, macOS or Xcode may break it. When in trouble, run `roamrun doctor`
   first.
 - **The device must be on a Wi-Fi to connect**, and stay awake: when the device sleeps, Tailscale
   on it pauses too. While debugging, keep it unlocked with its screen on.
-- **If macOS blocks RoamRun's local-network access, the device always looks "away"**, and RoamRun
-  goes on bridging a device that sits beside it. RoamRun says so in its window, its log,
-  `roamrun status` and `roamrun doctor`. Allow RoamRun under System Settings › Privacy & Security ›
-  Local Network. If the switch is already on, the permission is stuck. The only way found to clear
-  it was to reinstall: `brew uninstall --zap --cask roamrun`, then install again. `--zap` deletes
-  your saved devices, so copy `~/Library/Application Support/RoamRun/profiles.json` aside first, and
-  put it back before you open RoamRun again
-  ([#23](https://github.com/mh-mobile/RoamRun/issues/23)).
 - **The bridge uses one network interface**: en0, or another en* port when en0 has no address,
   unless you choose one under Open RoamRun › Settings › Network. On a Mac that reaches its LAN
   through Ethernet, choose that.
+- **Introducing a far Mac needs iOS 27 and Xcode 27**, and rests on how they pair. An update of
+  either may need an update of RoamRun.
+
+### Security and privacy
+
 - **While bridging, RoamRun advertises the device's Bonjour identifiers on that interface's
   network.** These values are fixed, so someone on the same network could notice the device's
   presence — also on a network a laptop joins while bridging, such as a café's. The relay drops any
@@ -584,6 +589,19 @@ company's policy before using them on a work Mac.
   rejects them, but on a shared tailnet, restrict access with Tailscale's rules.
 - **If another Mac is on the same network**, the device may briefly show up in that Mac's Xcode
   too. The relay refuses that Mac's connections.
+- **Seeing or operating the device runs a screen-sharing session on it**, which lasts until about
+  five seconds after the last look or action.
+
+### Known problems
+
+- **If macOS blocks RoamRun's local-network access, the device always looks "away"**, and RoamRun
+  goes on bridging a device that sits beside it. RoamRun says so in its window, its log,
+  `roamrun status` and `roamrun doctor`. Allow RoamRun under System Settings › Privacy & Security ›
+  Local Network. If the switch is already on, the permission is stuck. The only way found to clear
+  it was to reinstall: `brew uninstall --zap --cask roamrun`, then install again. `--zap` deletes
+  your saved devices, so copy `~/Library/Application Support/RoamRun/profiles.json` aside first, and
+  put it back before you open RoamRun again
+  ([#23](https://github.com/mh-mobile/RoamRun/issues/23)).
 - **Tailscale on iOS has been seen to stop passing traffic** after sleep or a network change while
   it still looks connected ("MagicSock function ReceiveIPv4 is not running"). Turn the VPN off and
   on.
@@ -594,10 +612,9 @@ company's policy before using them on a work Mac.
   again.
 - **If the device's Bonjour record changes** (its identifier or authTag), add the device again on
   the same Wi-Fi.
-- **Seeing or operating the device runs a screen-sharing session on it**, which lasts until about
-  five seconds after the last look or action.
-- **Introducing a far Mac needs iOS 27 and Xcode 27**, and rests on how they pair. An update of
-  either may need an update of RoamRun.
+
+### Not tried
+
 - **Tested with Xcode and `devicectl`.** Flutter and React Native have not been tried
   ([#5](https://github.com/mh-mobile/RoamRun/issues/5)).
 
@@ -627,7 +644,10 @@ To uninstall, in this order:
    `tailscale serve` entry back.
 4. With Homebrew, `brew uninstall --zap --cask roamrun` removes the app, the CLI link, settings,
    logs and saved devices. The two Keychain items stay: remove them with the `security` lines
-   below. Without Homebrew, run all of the lines below.
+   below. Without Homebrew, run the lines below that apply to you.
+
+If you changed the over-the-air port, look it up before you delete anything, and use it in the
+`tailscale serve` line: `defaults read io.github.mh-mobile.roamrun otaPort` shows it.
 
 ```sh
 rm /usr/local/bin/roamrun                 # if you installed the CLI from the app or with make
@@ -639,9 +659,6 @@ defaults delete io.github.mh-mobile.roamrun      # after the line above: it hold
 defaults delete com.roamrun.app 2>/dev/null      # left by versions before 0.1.12
 # finally delete /Applications/RoamRun.app
 ```
-
-If you changed the over-the-air port, use that port in the `tailscale serve` line:
-`defaults read io.github.mh-mobile.roamrun otaPort` shows it.
 
 ## Getting help
 

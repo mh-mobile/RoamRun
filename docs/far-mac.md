@@ -2,7 +2,7 @@
 
 <p align="center">English | <a href="far-mac.ja.md">日本語</a></p>
 
-The [README](../README.md#a-mac-the-device-was-never-near) has the commands for the usual case,
+The [README](../README.md#pairing-a-far-mac-for-xcode) has the commands for the usual case,
 where both Macs are on one tailnet. This document has the other way of doing it, what each side
 checks, what the far Mac needs, and what was tried.
 
