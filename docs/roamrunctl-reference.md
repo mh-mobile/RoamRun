@@ -1,8 +1,7 @@
 # roamrunctl: reference
 
 The details behind [roamrunctl's README](../Rust/roamrunctl/README.md): what to open in a firewall, how long
-each step waits, and what each side checks. What was run on a device is in
-[roamrunctl-tried.md](roamrunctl-tried.md).
+each step waits, what each side checks, and what hasn't been tried.
 
 Three machines are spoken of, and one machine can be two of them: the **near machine** is on the device's
 Wi‑Fi; the **using machine** runs `look`, `install`, `launch` and `mcp`; the **key's machine** keeps the
@@ -45,6 +44,10 @@ pairing's key (the using machine itself in A, another in B).
   machine is on, over IPv4. Relayed, or over IPv6, they stop before announcing anything.
 - In B the key's machine reaches the device over the tailnet too: a pairing is tried that way before it is
   kept.
+- macOS's firewall, when it is on, asks whether to let `roamrunctl` take incoming connections. Windows' asks
+  the first time it announces; in a PowerShell run as administrator it asked nothing.
+- On Windows, "Use Tailscale subnets" (on by default) can route the device's own network through Tailscale.
+  roamrunctl finds its address on the Wi‑Fi among its own interfaces, so that doesn't matter.
 
 ## How long each step waits
 
@@ -76,6 +79,10 @@ pairing's key (the using machine itself in A, another in B).
 | `sign` | once for each device named that is kept under one, when it starts |
 | `devices`, `devices remove` | not asked |
 
+- Pairing a machine with a device again replaces its earlier pairing there: a key saved before is then
+  refused by the device, and `roamrunctl devices remove` clears it here.
+- A saved device is looked for on the port it was saved with and the sixteen from 49152. A device restarted
+  twice, and taken off the network and back, announced 49152 each time; if one isn't found, pair it again.
 - To not type it when `sign` starts, on a Mac with it stored in the keychain:
   `ROAMRUNCTL_PASSPHRASE_COMMAND='security find-generic-password -a "$USER" -s roamrunctl -w'`.
 - A Mac with RoamRun can make a pairing and hand it over: `roamrun key create <device> device.key` there (the
@@ -181,3 +188,20 @@ goodbye reaches a browser within a few seconds; then the same for device control
 
 Behaviour follows the Mac's side: `Sources/RoamRun/Introductions.swift` and `PairByName.swift` for
 `pair introduce`, and `ControlIntroductions.swift` for `pair control --with`.
+
+## What hasn't been tried
+
+Run so far with an iPhone 15 Pro on iOS 27.0, from Ubuntu 24.04 (arm64), Windows 11 on ARM and macOS, each a
+few times. Not run against a device:
+
+- An Apple Vision Pro, an iPad, and a device held upside down.
+- A pairing with no Mac anywhere in it; a device no Xcode ever prepared (launching may need what Xcode leaves
+  on it); a device nothing was paired with before.
+- A machine with an x86_64 processor, Linux without avahi, and firewalls other than ufw, Windows' and macOS's.
+- `sign` for more than one device, and `ROAMRUNCTL_SIGNER`.
+- A Mac's `roamrun pair introduce` introducing a machine with roamrunctl.
+- Through `mcp`: swipe, type, paste, install and launch (each was run by the command, or sent directly).
+- On Windows: `pair control --with`, `mcp`, `install` and `launch`.
+- A machine whose Tailscale runs in userspace mode: it has no address to listen on or connect from, so `sign`
+  and `pair control --with` are expected to stop there.
+- Xcode's pairing through `pair introduce` since `--mac` became `--host`.

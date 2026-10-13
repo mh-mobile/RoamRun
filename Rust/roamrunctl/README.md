@@ -220,8 +220,6 @@ shows on the host. Ctrl-C takes the announcement back.
 - [roamrunctl-reference.md](https://github.com/mh-mobile/RoamRun/blob/main/docs/roamrunctl-reference.md):
   ports and firewalls, time limits, passphrases, moving a key from a Mac, what `sign` checks and whom the
   using machine trusts, the rules of the MCP tools, `pair introduce`'s other flags and exit codes, building
-  from this folder.
-- [roamrunctl-tried.md](https://github.com/mh-mobile/RoamRun/blob/main/docs/roamrunctl-tried.md): what it was
-  run against, and what it wasn't — among them an iPad, x86_64 machines, `sign` for more than one device,
-  and `ROAMRUNCTL_SIGNER`.
+  from this folder — and what hasn't been tried, among it an iPad, x86_64 machines, `sign` for more than one
+  device, and `ROAMRUNCTL_SIGNER`.
 - Security: [SECURITY.md](https://github.com/mh-mobile/RoamRun/blob/main/SECURITY.md).
