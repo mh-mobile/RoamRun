@@ -99,9 +99,14 @@ example, an ephemeral cloud VM). B changes where the private key is stored; it *
 restrict the device actions** available to software on the using machine.
 
 Pairing requires entering a code on the device. **Run the pairing commands yourself in a
-terminal, not through an AI agent.** The following examples use `my-iphone`, `home-pc`, and
-`cloud-pc` as Tailscale node names, and save the device locally as `phone`. Replace these
-with names from your tailnet.
+terminal, not through an AI agent.** The examples use these names; replace them with your own:
+
+| Name in the examples | Stands for |
+|---|---|
+| `my-iphone` | the device's Tailscale name |
+| `home-pc` | the Tailscale name of a machine on the device's Wi-Fi |
+| `cloud-pc` | the Tailscale name of a machine somewhere else |
+| `phone` | the name this machine gives the paired device (set with `--as`) |
 
 ### A: on the device's Wi-Fi
 

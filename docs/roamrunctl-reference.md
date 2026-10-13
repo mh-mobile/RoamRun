@@ -1,5 +1,7 @@
 # roamrunctl: reference
 
+<p align="center">English | <a href="roamrunctl-reference.ja.md">日本語</a></p>
+
 Detailed behavior and constraints behind the [roamrunctl README](../Rust/roamrunctl/README.md).
 The README includes diagrams for the two key-storage models, remote pairing, and remote
 signing; this document supplies the exact prerequisites, network rules, and edge cases.
