@@ -13,7 +13,7 @@
 - iOS / iPadOS 27 以降の iPhone または iPad。デベロッパモードを有効にして Wi-Fi に接続し、起動後に一度ロックを解除しておきます。モバイル通信だけでは、新しい接続を受け付けません。
 - `install` を使うなら、そのデバイス向けにビルドと署名が済んだ `.ipa` か `.app`。`roamrunctl` 自体はビルドも署名もしません。
 
-動作を確認したのは、iOS 27.0 の iPhone 15 Pro です。iPad、Apple Vision Pro、Mac を一度も使わない構成は試していません。ほかに試していない構成は、[リファレンス](../../docs/roamrunctl-reference.ja.md#試していない構成)にまとめてあります。
+動作を確認したのは、iOS 27.0 の iPhone 15 Pro です。iPad と、Mac を一度も使わない構成は試していません。Apple Vision Pro も、`roamrunctl` では試していません。Vision Pro を離れた Mac とペアリングする手順は、RoamRun を入れた Mac どうしで動作を確かめてあり、[本体の README](https://github.com/mh-mobile/RoamRun/blob/main/README.ja.md#apple-vision-pro) にあります。ほかに試していない構成は、[リファレンス](../../docs/roamrunctl-reference.ja.md#試していない構成)にまとめてあります。
 
 ## インストール
 

@@ -131,7 +131,7 @@ roamrunctl pair introduce --host <host> --to <device> [--offer <line>] [--as <na
 - `--as` は、ホストがデバイスを保存するときの名前を指定します。ホストは、その名前を拒否することがあります。Xcode のペアリングでは、その場合、表示されたデバイスの情報を `roamrun devices add <行> --as <別の名前>` で手動で追加できます。ホストが `roamrunctl` の場合は、ホスト側の `--as` が優先されます。
 - `--on` は、仲介マシンがデバイスのネットワークに複数のアドレスを持つときに、使うローカルの IPv4 アドレスを指定します。指定しなければ、roamrunctl が適切なアドレスを選び、ほかの候補を表示します。
 - Xcode の場合、ペアリングのコードはホストの Device Hub に表示されます。仲介マシンが作るものではありません。デバイス操作の場合は、関係するターミナルに表示されます。
-- Mac の「Remote Devices」の画面を使う Apple Vision Pro のペアリングは、Mac だけで行う別の経路です。`roamrunctl` で動作を確かめた使い方ではありません。
+- Remote Devices（デバイスの 設定 > 一般 > Remote Devices）を開いた Apple Vision Pro は、Mac に選ばれるのを待つ状態になります。このペアリングは RoamRun を入れた Mac どうしで行うもので、その形では動作を確かめてあります。こうしたデバイスに対して、Mac の `roamrun pair introduce` は、Mac 以外を `--host` に指定すると拒否します。`roamrunctl` を Vision Pro で動かしたことはありません。
 - Xcode の場合、デバイスの情報が取得できれば、`roamrun devices add` に渡せる形で 1 行、**標準出力**に書かれます。状況や診断のメッセージは、**標準エラー**に出ます。
 
 | 終了コード | 意味 |
@@ -173,7 +173,7 @@ Mac 側の関連する実装は、`Sources/RoamRun/Introductions.swift`、`PairB
 
 これまでに動かしたのは、**iOS 27.0 の iPhone 15 Pro** と、Ubuntu 24.04（arm64）、ARM 版の Windows 11、macOS の組み合わせで、数回です。次のものは、この文書を書いた時点で、実機では確かめていません。
 
-- iPad、Apple Vision Pro、上下逆さまに持ったデバイス
+- iPad、上下逆さまに持ったデバイス、Apple Vision Pro での `roamrunctl`（RoamRun を入れた Mac では、Vision Pro で動かしています）
 - Mac を一度も使わない初期設定、Xcode で一度も準備したことのないデバイス、一度もペアリングしたことのないデバイス
 - x86_64 のマシン、Avahi のない Linux、ufw 以外のファイアウォールのツール
 - 複数のデバイスへの同時の署名、`ROAMRUNCTL_SIGNER` による指定

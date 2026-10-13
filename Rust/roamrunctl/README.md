@@ -24,8 +24,10 @@ Windows, and macOS. The machine running it needs neither RoamRun nor Xcode. It h
 - To `install` an app: an `.ipa` or `.app` already built and signed for that device. `roamrunctl`
   does not build or sign apps.
 
-Tested with an iPhone 15 Pro on iOS 27.0. iPad, Apple Vision Pro, and a setup without any Mac
-having ever participated have not been tested. More [untested configurations](../../docs/roamrunctl-reference.md#what-has-not-been-tested)
+Tested with an iPhone 15 Pro on iOS 27.0. An iPad, and a setup without any Mac having ever
+participated, have not been tested. `roamrunctl` has not been run with an Apple Vision Pro
+either; pairing one with a far Mac was run between Macs with RoamRun, and is in
+[the main README](https://github.com/mh-mobile/RoamRun/blob/main/README.md#apple-vision-pro). More [untested configurations](../../docs/roamrunctl-reference.md#what-has-not-been-tested)
 are listed in the reference.
 
 ## Install
