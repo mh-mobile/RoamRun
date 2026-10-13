@@ -390,7 +390,7 @@ roamrun key import ~/iphone-for-cloud.json                         # あちら�
 
   ```sh
   roamrun pair control --with macbook-pro              # あちら（RoamRun のアプリを開いたまま）: こちらの Mac を最長 10 分待つ
-  roamrun pair introduce --mac cloud-mac --to iPhone   # こちら（自分で流す）: デバイスで「cloud-mac」を選び、ここに出るコードを入れる
+  roamrun pair introduce --host cloud-mac --to iPhone   # こちら（自分で流す）: デバイスで「cloud-mac」を選び、ここに出るコードを入れる
   roamrun look iPhone                                  # あちら（ペアリングしたと出たら）
   ```
 
@@ -409,7 +409,7 @@ roamrun key import ~/iphone-for-cloud.json                         # あちら�
 roamrun pair xcode                                           # その Mac のペアリングの申し出を 1 行で出す
 
 # デバイスと同じ Wi‑Fi にいる Mac で（RoamRun にそのデバイスを保存済み）:
-roamrun pair introduce <offer> --mac cloud-mac --to iPhone   # cloud-mac: 離れた Mac の Tailscale 上の名前
+roamrun pair introduce <offer> --host cloud-mac --to iPhone   # cloud-mac: 離れた Mac の Tailscale 上の名前
 #   デバイスで: 設定 › プライバシーとセキュリティ › デベロッパモード › 「Pair with cloud-mac」、離れた Mac の Device Hub に出たコード
 #   自分で終わり、ペアリングが試みられたら、デバイスの登録を 1 行で出す
 
@@ -426,7 +426,7 @@ roamrun up iPhone                                            # Ready: その Mac
 # あちら: Device Hub › + › Pair Nearby Device（前でも後でも）を押して、
 roamrun pair xcode --with macbook-pro                # macbook-pro: こちらの Mac の Tailscale 上の名前。最長 10 分待つ
 # こちら:
-roamrun pair introduce --mac cloud-mac --to iPhone   # cloud-mac に申し出を求め、引き合わせて、デバイスを渡す
+roamrun pair introduce --host cloud-mac --to iPhone   # cloud-mac に申し出を求め、引き合わせて、デバイスを渡す
 # あちら（デバイスを保存したと出たら）:
 roamrun up iPhone
 ```
@@ -439,7 +439,7 @@ roamrun up iPhone
 
 ```sh
 OFFER=$(ssh cloud-mac roamrun pair xcode) &&
-LINE=$(roamrun pair introduce "$OFFER" --mac cloud-mac --to iPhone) &&
+LINE=$(roamrun pair introduce "$OFFER" --host cloud-mac --to iPhone) &&
 ssh cloud-mac roamrun devices add "$LINE"
 ```
 
@@ -468,7 +468,7 @@ roamrun up iphone-15-pro
 # 離れた Mac で: Device Hub › + › Pair Nearby Device を押して、
 roamrun pair xcode --with my-pc                                # my-pc: そのマシンの Tailscale 上の名前
 # そのマシンで（デバイスと同じ Wi‑Fi）:
-roamrunctl pair introduce --mac cloud-mac --to iphone-15-pro   # 離れた Mac の Tailscale 上の名前と、デバイスの Tailscale 上の名前
+roamrunctl pair introduce --host cloud-mac --to iphone-15-pro   # 離れた Mac の Tailscale 上の名前と、デバイスの Tailscale 上の名前
 # デバイスで: 設定 › プライバシーとセキュリティ › デベロッパモード › 「Pair with cloud-mac」、離れた Mac の Device Hub に出たコード
 # 離れた Mac で（デバイスを保存したと出たら）:
 roamrun up iphone-15-pro
@@ -476,7 +476,9 @@ roamrun up iphone-15-pro
 
 離れた Mac で RoamRun のアプリを開いて `roamrun pair control --with my-pc` を実行すれば、同じ流れでデバイス操作のペアリングができます。このとき、入力するコードは `roamrunctl` が表示します。自分のターミナルで、自分で実行してください。Linux（Ubuntu 24.04）と iOS 27 の iPhone 15 Pro で確かめました。Xcode のペアリングとその後のブリッジの Ready、デバイス操作のペアリングです。Windows 11（ARM 版）でも、同じ 2 つを確かめました。Windows のファイアウォールが、通信を許可するかを一度尋ねます。
 
-**誰がデバイスを使えるようになるか。** 引き合わせた Mac は、それ以降、開発者としてそのデバイスを使えます（アプリのインストールと実行、デバッグ、アプリのデータの読み出し）。デバイスをその Mac に USB で挿して「信頼」を押すのと同じ重さです。`pair introduce` は、始める前に、その Mac が誰のものかを Tailscale の情報から表示します（自分の Mac、ほかの人の Mac、共有の（タグ付きの）マシン＝そこで Xcode を使える人）。引き合わせるのは、`--mac` で名指しした Mac だけです。運ぶ 1 行は、行き先を決めません。取り消すには、デバイスの 設定 › プライバシーとセキュリティ › デベロッパモード でその Mac を削除します。一覧には、Tailscale 上の名前ではなく、その Mac が自分で名乗る名前で並びます（`pair introduce` が、どの名前かを表示します）。Xcode のペアリングには、RoamRun の側のスイッチはありません。
+**デバイスを使うマシンに RoamRun も Xcode も無い場合。** 0.7.0 から、`roamrunctl` は自分でペアリングを持てます。対象は Linux、Windows、RoamRun の入っていない Mac で、そのマシンに Xcode が無くても、Tailscale 越しにデバイスを使えます（Windows ではビルドが通るところまでで、実際には動かしていません）。これまでに試した経路は、どれも途中で Mac を使っています（引き合わせ、鍵の作成、署名のいずれか）。Mac を一度も使わない経路は、まだ試していません（どれも `roamrunctl pair control --to` から始まります）。コマンドでできるのは、スクリーンショットと、ビルドと署名が済んだアプリのインストールと起動です。エージェント向けの MCP ツールでは、これらに加えて、タップ、スワイプ、文字入力ができます。ペアリングの鍵を自分の別のマシンに置いたままにして、デバイスを使うマシンには接続のたびに署名だけを渡す、という使い方もあります。`roamrun pair introduce` の `--host` には、こうしたマシンも Mac と同じように指定できます。何を試して何を試していないか、それぞれのやり方がエージェントから何を守り、何を守らないかは、[roamrunctl の README](Rust/roamrunctl/README.md#using-a-device-from-a-machine-without-xcode)（英語）にあります。`pair introduce` は、0.7.0 より前はマシンを `--mac` で指定していました。いまは `roamrun` も `roamrunctl` も `--host` です。両方を同じバージョンにそろえてください。
+
+**誰がデバイスを使えるようになるか。** 引き合わせた Mac は、それ以降、開発者としてそのデバイスを使えます（アプリのインストールと実行、デバッグ、アプリのデータの読み出し）。デバイスをその Mac に USB で挿して「信頼」を押すのと同じ重さです。`pair introduce` は、始める前に、その Mac が誰のものかを Tailscale の情報から表示します（自分の Mac、ほかの人の Mac、共有の（タグ付きの）マシン＝そこで Xcode を使える人）。引き合わせるのは、`--host` で名指しした Mac だけです。運ぶ 1 行は、行き先を決めません。取り消すには、デバイスの 設定 › プライバシーとセキュリティ › デベロッパモード でその Mac を削除します。一覧には、Tailscale 上の名前ではなく、その Mac が自分で名乗る名前で並びます（`pair introduce` が、どの名前かを表示します）。Xcode のペアリングには、RoamRun の側のスイッチはありません。
 
 **必要なもの・できないこと。**
 - デバイスが、すでにどこかとペアリング済みで、引き合わせる Mac の RoamRun に保存されていること。ペアリングが 1 つも無いデバイスは、自分を名乗らないので、RoamRun には追加できません（デバイスのペアリングの画面には、名乗っている Mac が出ます）。先に、同じ Wi‑Fi にいるどれかの Mac と 1 度ペアリングしてください。引き合わせる Mac がその Mac である必要はなく、引き合わせる Mac 自身がデバイスとペアリングしている必要もありません。保存してあれば足ります。（デバイス自身のアプリや roamrunctl が引き合わせるときは、保存は要りません。デバイスの名乗りを、その場で見て渡します。）
@@ -499,7 +501,7 @@ Apple Vision Pro は、ペアリングの向きが逆です。デバイスが待
 # 離れた Mac で:
 roamrun pair xcode --with home-mac            # home-mac: デバイスと同じ Wi‑Fi にいる Mac の Tailscale 上の名前
 # その Mac で（デバイスを RoamRun に保存してあること）:
-roamrun pair introduce --mac cloud-mac --to vision-pro
+roamrun pair introduce --host cloud-mac --to vision-pro
 # 離れた Mac で、コマンドの案内が出たら: Device Hub › + › Pair Nearby Device › Apple Vision Pro で
 # デバイスを選び、Next。デバイスに出るコードを入力。Device Hub がペアリングすると、コマンドは終わる
 roamrun up vision-pro

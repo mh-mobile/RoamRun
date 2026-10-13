@@ -1,0 +1,408 @@
+//! `roamrunctl mcp`: the device's commands as MCP tools over stdin/stdout (one JSON-RPC message a
+//! line), as `roamrun mcp` gives them on a Mac. This process holds the connections: a device is
+//! opened at its first call and kept. Points are pixels of the image the last look returned.
+//! One call at a time, in the order asked. A call taken back (notifications/cancelled) before its turn isn't
+//! made, nor one whose turn comes after the client went; one that runs already runs out.
+
+use std::collections::HashMap;
+use std::io::{BufRead, Write};
+use std::time::{Duration, Instant};
+
+use base64::Engine;
+use roamrun_device::safe::Device;
+use serde_json::{json, Value};
+
+use crate::device;
+
+/// A look serves one action, within this long.
+const LOOK_STANDS: Duration = Duration::from_secs(60);
+/// A look right after an input waits this long from it for the screen to settle.
+const SETTLE: Duration = Duration::from_secs(1);
+/// The most `type` takes in one call.
+const LONGEST_TYPED: usize = 500;
+
+const INSTRUCTIONS: &str = "Operates a real iPhone or iPad from this machine. Look, act, look again: each look serves one \
+action, and points are pixels of the image the last look returned. Pairing with a device and signing for one \
+(`roamrunctl pair`, `roamrunctl sign`) are the user's to run, never yours. These press what is really there — don't tap what spends \
+money, posts, sends, deletes or signs in unless the user asked for exactly that. A look shows whatever is on the screen \
+(notifications, messages); don't pass the image on. The device shows no screen-sharing session for this; what an action itself brings up (paste's \"Allow Paste\") shows there. Only tap and swipe are held to a look: type, paste and press go to whatever is on the screen, so look before them too.";
+
+/// A look that was given out and not yet used.
+struct Shown {
+    /// The image's size, as the caller saw it.
+    size: (f64, f64),
+    /// Which way up the interface was: see `upright`.
+    way: u8,
+    at: Instant,
+    /// The saved file of the device it was of (see `device::mark`): another saved under the name isn't it.
+    of: Option<Vec<u8>>,
+}
+
+/// A point of a picture, as fractions of it, in the terms of the device held upright, where a touch is sent.
+/// None where the picture lies on its side and which way isn't known: the mirror of a point isn't pressed.
+/// Tried on an iPhone held each way on its side (iOS 27.0): a point off the picture landed where it was.
+pub fn upright(way: u8, sideways: bool, (x, y): (f64, f64)) -> Option<(f64, f64)> {
+    match way {
+        // Turned between the picture and the asking: the two don't go together, and nothing is pressed.
+        1 | 2 if sideways => None,
+        3 | 4 if !sideways => None,
+        1 => Some((x, y)),
+        2 => Some((1.0 - x, 1.0 - y)),
+        3 => Some((1.0 - y, x)),
+        4 => Some((y, 1.0 - x)),
+        _ => (!sideways).then_some((x, y)),
+    }
+}
+
+#[derive(Default)]
+pub struct Server {
+    /// Each with its saved file as it was when it was opened: a name saved anew since isn't this device.
+    open: HashMap<String, (Device, Option<Vec<u8>>)>,
+    shown: HashMap<String, Shown>,
+    acted: HashMap<String, Instant>,
+}
+
+fn text(s: impl Into<String>) -> Vec<Value> { vec![json!({ "type": "text", "text": s.into() })] }
+
+fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
+    let mut properties = properties;
+    let mut needs: Vec<&str> = Vec::new();
+    if name != "devices" {
+        properties["device"] = json!({ "type": "string", "description": "The device's name here (see `devices`)" });
+        needs.push("device");
+    }
+    needs.extend(required);
+    json!({ "name": name, "description": description, "inputSchema": { "type": "object", "properties": properties, "required": needs } })
+}
+
+fn tools() -> Value {
+    let point = json!({ "type": "number", "description": "Pixels of the image the last look returned" });
+    json!([
+        tool("devices", "The devices this machine can use, one a line: its name, a tab, and how it is kept (one sentence where there is none). One \"not used here yet\" is offered by another machine and believed the first time it is used: use it only if the user named it.", json!({}), &[]),
+        tool("look", "The device's screen now, as an image. Do this before every tap or swipe: it serves one action.", json!({}), &[]),
+        tool("tap", "Tap a point of the last look. Operates the device: whatever is there gets pressed.", json!({ "x": point, "y": point }), &["x", "y"]),
+        tool("swipe", "Drag from one point of the last look to another (to scroll, or move something). Operates the device.",
+             json!({ "x1": point, "y1": point, "x2": point, "y2": point, "milliseconds": { "type": "integer", "description": "How long the drag takes (50...5000, default 300)" } }),
+             &["x1", "y1", "x2", "y2"]),
+        tool("elements", "What accessibility says is on the screen, one caption a line (\"Home, tab, selected\"). No positions: find a caption in a look to tap it. The screen may scroll to what is visited. Nothing on the home screen.",
+             json!({ "limit": { "type": "integer", "description": "How many at most (default 40)" } }), &[]),
+        tool("type", "Type text on the device's keyboard, into whatever has its focus. US-keyboard characters only; a newline is Return. Right only while the device's keyboard is an English one — look first: under a Japanese one keys go to its conversion. 500 characters at most.",
+             json!({ "text": { "type": "string" } }), &["text"]),
+        tool("paste", "Put any text into whatever has the keyboard's focus, by the device's pasteboard (which it replaces). iOS then asks \"Allow Paste\" on the device each time: look, and tap it only if the user wants that.",
+             json!({ "text": { "type": "string" } }), &["text"]),
+        tool("press", "Press a hardware button. `lock` can't be undone from here: the user has to unlock.",
+             json!({ "button": { "type": "string", "enum": ["home", "lock", "volume-up", "volume-down"] } }), &["button"]),
+        tool("install", "Install an app built and signed for this device: the path, on this machine, of an .ipa or an .app folder. It answers once the app is in: a megabyte takes a few seconds, a large app minutes.",
+             json!({ "path": { "type": "string" } }), &["path"]),
+        tool("launch", "Launch an app on the device by its bundle identifier (one already running is ended first).",
+             json!({ "bundle": { "type": "string" } }), &["bundle"]),
+    ])
+}
+
+/// Whether the call `line` asks for was taken back by a message that came after it (notifications/cancelled):
+/// it then isn't made, and isn't answered. One that runs already runs out.
+fn taken_back<'a>(line: &str, later: impl Iterator<Item = &'a String>) -> bool {
+    if !is_call(line) { return false }
+    let Some(id) = serde_json::from_str::<Value>(line).ok().and_then(|call| call.get("id").cloned()).filter(|id| !id.is_null()) else { return false };
+    later.filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .any(|said| said["method"] == "notifications/cancelled" && said["params"]["requestId"] == id)
+}
+
+/// Whether a message asks for a tool: the only kind that is taken back, or dropped once the client went.
+fn is_call(line: &str) -> bool {
+    serde_json::from_str::<Value>(line).is_ok_and(|said| said["method"] == "tools/call")
+}
+
+impl Server {
+    /// Serves until stdin closes.
+    pub fn serve(&mut self) -> i32 {
+        let stdout = std::io::stdout();
+        // Read as it comes, while a call runs: what is taken back meanwhile is known before its turn.
+        // No more than these wait at once: a client that sends on regardless waits itself.
+        let (tell, told) = std::sync::mpsc::sync_channel::<String>(256);
+        let gone = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let went = gone.clone();
+        std::thread::spawn(move || {
+            for line in std::io::stdin().lock().lines() {
+                match line {
+                    Ok(line) => if tell.send(line).is_err() { break },
+                    // Not text: not a message, and not the end of them.
+                    Err(e) if e.kind() == std::io::ErrorKind::InvalidData => continue,
+                    Err(_) => break,
+                }
+            }
+            went.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let mut waiting = std::collections::VecDeque::new();
+        while let Some(line) = waiting.pop_front().or_else(|| told.recv().ok()) {
+            // All that came meanwhile, this call's own taking back among it.
+            waiting.extend(told.try_iter());
+            if line.trim().is_empty() || taken_back(&line, waiting.iter()) { continue }
+            // The client went: what it had asked of the device and wasn't begun, isn't.
+            if gone.load(std::sync::atomic::Ordering::SeqCst) && is_call(&line) { continue }
+            if let Some(answer) = self.handle(&line) {
+                let mut out = stdout.lock();
+                if writeln!(out, "{answer}").and_then(|()| out.flush()).is_err() { break }
+            }
+        }
+        0
+    }
+
+    /// One message in, its answer out; None for a notification.
+    pub fn handle(&mut self, message: &str) -> Option<String> {
+        let wrong = |id: Value, code: i32, what: &str| Some(json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": what } }).to_string());
+        let Ok(object) = serde_json::from_str::<Value>(message) else { return wrong(Value::Null, -32700, "not JSON") };
+        if !object.is_object() { return wrong(Value::Null, -32600, "one request at a time, as an object") }
+        let id = object.get("id")?.clone();
+        let Some(method) = object["method"].as_str() else { return wrong(id, -32600, "no method") };
+        let params = &object["params"];
+        let result = match method {
+            "initialize" => json!({
+                "protocolVersion": params["protocolVersion"].as_str().unwrap_or("2024-11-05"),
+                "capabilities": { "tools": {} },
+                "serverInfo": { "name": "roamrunctl", "version": env!("ROAMRUN_VERSION") },
+                "instructions": INSTRUCTIONS,
+            }),
+            "ping" => json!({}),
+            "tools/list" => json!({ "tools": tools() }),
+            "tools/call" => match self.call(params["name"].as_str().unwrap_or(""), &params["arguments"]) {
+                Ok(content) => json!({ "content": content, "isError": false }),
+                Err(why) => json!({ "content": text(why), "isError": true }),
+            },
+            _ => return Some(json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": format!("no such method: {method}") } }).to_string()),
+        };
+        Some(json!({ "jsonrpc": "2.0", "id": id, "result": result }).to_string())
+    }
+
+    /// The device, opened if it isn't.
+    fn device(&mut self, name: &str) -> Result<&Device, String> {
+        // Removed since, or another saved under the name: the one that is open isn't the one named any more.
+        if self.open.get(name).is_some_and(|(_, was)| device::mark(name) != *was) {
+            // What was seen of the other isn't this one's screen.
+            self.open.remove(name); self.shown.remove(name); self.acted.remove(name);
+        }
+        if !self.open.contains_key(name) { self.open.insert(name.to_string(), device::held(name)?); }
+        Ok(&self.open[name].0)
+    }
+
+    /// Asks the device, once: the library sends again by itself where nothing had reached the device, and
+    /// what may have reached it isn't sent twice. After a failure the next call opens it anew.
+    fn ask(&mut self, name: &str, call: impl Fn(&Device) -> String) -> Result<Value, String> {
+        let raw = call(self.device(name)?);
+        // Refused for what it says, before anything was sent: the connection is as it was.
+        if serde_json::from_str::<Value>(&raw).is_ok_and(|said| said["invalid"] == true) { return device::said(raw) }
+        let said = device::said(raw);
+        if said.is_err() { self.open.remove(name); }
+        said.map_err(|why| format!("{why}. It may or may not have reached the device: look before doing it again"))
+    }
+
+    fn call(&mut self, tool: &str, arguments: &Value) -> Result<Vec<Value>, String> {
+        if tool == "devices" { return device::listed(true).map(text) }
+        let name = arguments["device"].as_str().ok_or("device is missing")?.to_string();
+        // One that is open is known: asking again what there is would ask every machine that might sign.
+        if !self.open.contains_key(&name) {
+            let names = device::names()?;
+            if !names.contains(&name) { return Err(format!("no such device “{name}”: `devices` lists what there is, and says where a machine that should sign isn't found")); }
+        }
+        let number = |key: &str| arguments[key].as_f64().ok_or(format!("{key} is missing"));
+        let word = |key: &str| arguments[key].as_str().map(str::to_string).ok_or("nothing to send".to_string());
+        match tool {
+            "look" => {
+                // A look that fails leaves none to press by.
+                self.shown.remove(&name);
+                // An input just made: the screen is given a moment to settle.
+                if let Some(wait) = self.acted.get(&name).and_then(|at| SETTLE.checked_sub(at.elapsed())) { std::thread::sleep(wait); }
+                self.device(&name)?;
+                let of = self.open[&name].1.clone();
+                let device = &self.open[&name].0;
+                let (png, way) = match device.screenshot() {
+                    // Not said the first time, it is asked once more: a point is turned by it.
+                    Ok(png) => (png, match device.way() { 0 => device.way(), way => way }),
+                    Err(_) => {
+                        // Let go of meanwhile: once more, on a new connection.
+                        self.open.remove(&name);
+                        let device = self.device(&name)?;
+                        (device.screenshot()?, device.way())
+                    }
+                };
+                let (jpeg, width, height) = device::fitted(&png, image::ImageFormat::Jpeg)?;
+                self.shown.insert(name, Shown { size: (width as f64, height as f64), way, at: Instant::now(), of });
+                let mut content = vec![json!({ "type": "image", "data": base64::engine::general_purpose::STANDARD.encode(jpeg), "mimeType": "image/jpeg" })];
+                content.extend(text(format!("{width} x {height}. Points for tap and swipe are pixels of this image. It serves one action, within a minute: look again after it.")));
+                Ok(content)
+            }
+            "tap" | "swipe" => {
+                // The look is spent by what reaches the device: a call refused for what it says leaves it.
+                let shown = self.shown.get(&name).ok_or("look first: a point is given in the pixels of the image a look returns")?;
+                if shown.at.elapsed() > LOOK_STANDS { self.shown.remove(&name); return Err("that look is more than a minute old: look again".into()); }
+                if device::mark(&name) != shown.of { self.shown.remove(&name); return Err("the device saved under that name isn't the one that look was of: look again".into()); }
+                let (size, way) = (shown.size, shown.way);
+                let real = |x: f64, y: f64| -> Result<(f64, f64), String> {
+                    if !(0.0..size.0).contains(&x) || !(0.0..size.1).contains(&y) {
+                        return Err(format!("the point must be inside the image ({} x {})", size.0, size.1));
+                    }
+                    upright(way, size.0 > size.1, (x / size.0, y / size.1)).ok_or_else(|| if way == 0 {
+                        "the device is on its side and doesn't say which way: nothing was pressed. Ask the user to turn it upright".to_string()
+                    } else {
+                        "the device was turned as that look was taken: nothing was pressed. Look again".to_string()
+                    })
+                };
+                let done = if tool == "tap" {
+                    let (x, y) = real(number("x")?, number("y")?)?;
+                    self.shown.remove(&name);
+                    self.ask(&name, |d| d.tap(x, y)).map(|_| "tapped; look to see what it did")
+                } else {
+                    let (from, to) = (real(number("x1")?, number("y1")?)?, real(number("x2")?, number("y2")?)?);
+                    let ms = match &arguments["milliseconds"] {
+                        Value::Null => 300,
+                        given => given.as_u64().filter(|ms| (50..=5000).contains(ms)).ok_or("milliseconds is a whole number, 50...5000")? as u32,
+                    };
+                    self.shown.remove(&name);
+                    self.ask(&name, |d| d.swipe(from, to, ms)).map(|_| "swiped; look to see what it did")
+                };
+                self.acted.insert(name, Instant::now());
+                done.map(text)
+            }
+            "elements" => {
+                self.shown.remove(&name);   // the walk can scroll the screen
+                let limit = arguments["limit"].as_u64().unwrap_or(40) as u32;
+                let said = self.ask(&name, |d| d.elements(limit))?;
+                let captions: Vec<&str> = said["elements"].as_array().map(|all| all.iter().filter_map(|e| e["caption"].as_str()).collect()).unwrap_or_default();
+                let more = if said["complete"] == true { String::new() } else { format!("\n({} elements; the walk was cut short, there may be more)", captions.len()) };
+                Ok(text(captions.join("\n") + &more))
+            }
+            "type" | "paste" | "press" => {
+                let value = word(if tool == "press" { "button" } else { "text" })?;
+                if tool == "type" && value.chars().count() > LONGEST_TYPED {
+                    return Err(format!("too long to type here: {LONGEST_TYPED} characters at most (half a minute or more). paste takes any length"));
+                }
+                self.shown.remove(&name);
+                let done = self.ask(&name, |d| match tool { "type" => d.type_text(&value), "paste" => d.paste(&value), _ => d.button(&value) });
+                self.acted.insert(name, Instant::now());
+                done.map(|_| text(if tool == "type" && value.contains([' ', '\n']) {
+                    "typed. If the device's keyboard wasn't an English one, its spaces and Returns converted or confirmed instead of being typed, and under an English one auto-correction may have changed a word it didn't know: look, and if the text isn't what you sent, use paste"
+                } else { "sent; look to see what it did" }))
+            }
+            "install" => {
+                let path = arguments["path"].as_str().ok_or("path is missing")?.to_string();
+                if !std::path::Path::new(&path).exists() { return Err(format!("{path} isn't on this machine")); }
+                self.shown.remove(&name);
+                self.ask(&name, |d| d.install(&path)).map(|_| text("installed"))
+            }
+            "launch" => {
+                let bundle = arguments["bundle"].as_str().ok_or("bundle is missing")?.to_string();
+                self.shown.remove(&name);
+                let done = self.ask(&name, |d| d.launch(&bundle));
+                self.acted.insert(name, Instant::now());
+                done.map(|said| text(format!("launched (pid {}); look to see it", said["pid"])))
+            }
+            _ => Err(format!("no such tool: {tool}")),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_point_is_turned_back_to_the_device_held_upright() {
+        assert_eq!(upright(1, false, (0.25, 0.1)), Some((0.25, 0.1)));
+        assert_eq!(upright(2, false, (0.25, 0.1)), Some((0.75, 0.9)));
+        assert_eq!(upright(3, true, (0.25, 0.1)), Some((0.9, 0.25)));
+        assert_eq!(upright(4, true, (0.25, 0.1)), Some((0.1, 0.75)));
+        // Not said, and upright by its shape: taken as it is. On its side: not pressed.
+        assert_eq!(upright(0, false, (0.25, 0.1)), Some((0.25, 0.1)));
+        assert_eq!(upright(0, true, (0.25, 0.1)), None);
+        // Said one way and shaped the other (turned in between): not pressed.
+        assert_eq!((upright(1, true, (0.25, 0.1)), upright(3, false, (0.25, 0.1))), (None, None));
+    }
+
+    #[test]
+    fn the_server_says_what_it_is_and_what_it_has() {
+        let mut server = Server::default();
+        let hello: Value = serde_json::from_str(&server.handle(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#).unwrap()).unwrap();
+        assert_eq!(hello["result"]["protocolVersion"], "2025-06-18");
+        assert_eq!(hello["result"]["serverInfo"]["name"], "roamrunctl");
+        let listed: Value = serde_json::from_str(&server.handle(r#"{"jsonrpc":"2.0","id":"a","method":"tools/list"}"#).unwrap()).unwrap();
+        let names: Vec<&str> = listed["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["devices", "look", "tap", "swipe", "elements", "type", "paste", "press", "install", "launch"]);
+        assert_eq!(listed["id"], "a");
+        // Every tool but `devices` names its device.
+        for t in listed["result"]["tools"].as_array().unwrap() {
+            assert_eq!(t["inputSchema"]["required"].as_array().unwrap().iter().any(|r| r == "device"), t["name"] != "devices");
+        }
+        // A notification gets no answer; an unknown method gets an error with its id.
+        assert!(server.handle(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).is_none());
+        let garbled: Value = serde_json::from_str(&server.handle("not json").unwrap()).unwrap();
+        assert_eq!(garbled["error"]["code"], -32700);
+        // A call taken back before its turn isn't made; another's being taken back doesn't touch it.
+        let (call, cancel) = (r#"{"jsonrpc":"2.0","id":7,"method":"tools/call"}"#.to_string(), r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":7}}"#.to_string());
+        assert!(taken_back(&call, [&cancel].into_iter()));
+        assert!(!taken_back(&call.replace("7", "8"), [&cancel].into_iter()) && !taken_back(&call, [].into_iter()) && !taken_back(&cancel, [&cancel].into_iter()));
+        // Only a tool's call: what says what the server is, is answered whatever follows.
+        assert!(!taken_back(&call.replace("tools/call", "initialize"), [&cancel].into_iter()) && is_call(&call) && !is_call(&cancel));
+        let batch: Value = serde_json::from_str(&server.handle(r#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#).unwrap()).unwrap();
+        assert_eq!(batch["error"]["code"], -32600);
+        let unknown: Value = serde_json::from_str(&server.handle(r#"{"jsonrpc":"2.0","id":7,"method":"nope"}"#).unwrap()).unwrap();
+        assert_eq!((unknown["error"]["code"].as_i64(), unknown["id"].as_i64()), (Some(-32601), Some(7)));
+    }
+
+    #[test]
+    fn a_point_needs_a_look_and_a_tool_its_arguments() {
+        let mut server = Server::default();
+        let call = |server: &mut Server, name: &str, arguments: Value| -> Value {
+            let asked = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": name, "arguments": arguments } });
+            serde_json::from_str::<Value>(&server.handle(&asked.to_string()).unwrap()).unwrap()["result"].clone()
+        };
+        // No device named, and one that isn't saved: said, as a failure of the tool.
+        assert_eq!(call(&mut server, "tap", json!({ "x": 1, "y": 1 }))["isError"], true);
+        let none = call(&mut server, "look", json!({ "device": "not-saved-anywhere-7f3a" }));
+        assert_eq!(none["isError"], true);
+        assert!(none["content"][0]["text"].as_str().unwrap().starts_with("no such device"));
+        let headless: Value = serde_json::from_str(&server.handle(r#"{"id":1}"#).unwrap()).unwrap();
+        assert_eq!(headless["error"]["code"], -32600);
+    }
+
+    #[test]
+    fn a_point_is_pressed_only_by_a_look_of_that_device_still_good() {
+        // A device saved with no address: nothing is connected to, and what gets as far as asking it fails there.
+        let name = format!("mcp-{}", std::process::id());
+        device::stub(&name, 49152);
+        let mut server = Server::default();
+        let call = |server: &mut Server, tool: &str, mut arguments: Value| -> String {
+            arguments["device"] = json!(name);
+            server.call(tool, &arguments).err().unwrap_or_else(|| "done".into())
+        };
+        let look = |server: &mut Server, size, way, at| { server.shown.insert(name.clone(), Shown { size, way, at, of: device::mark(&name) }); };
+        let (upright, now) = ((100.0, 200.0), Instant::now);
+        assert!(call(&mut server, "tap", json!({ "x": 1, "y": 1 })).starts_with("look first"));
+        // Refused for what it says, the look stands: outside the image, a swipe too short, too much to type.
+        look(&mut server, upright, 1, now());
+        assert!(call(&mut server, "tap", json!({ "x": 100, "y": 1 })).contains("inside the image"));
+        assert!(call(&mut server, "swipe", json!({ "x1": 1, "y1": 1, "x2": 2, "y2": 2, "milliseconds": 10 })).contains("50...5000"));
+        assert!(call(&mut server, "type", json!({ "text": "a".repeat(501) })).starts_with("too long"));
+        assert!(server.shown.contains_key(&name));
+        // Sent, it is spent — though the device didn't answer.
+        assert!(call(&mut server, "tap", json!({ "x": 1, "y": 1 })).contains("doesn't answer"));
+        assert!(call(&mut server, "tap", json!({ "x": 1, "y": 1 })).starts_with("look first"));
+        // And by whatever else is sent in between.
+        for (tool, arguments) in [("type", json!({ "text": "a" })), ("paste", json!({ "text": "a" })), ("press", json!({ "button": "home" })), ("elements", json!({})), ("launch", json!({ "bundle": "a.b" }))] {
+            look(&mut server, upright, 1, now());
+            assert!(call(&mut server, tool, arguments).contains("doesn't answer"), "{tool}");
+            assert!(call(&mut server, "tap", json!({ "x": 1, "y": 1 })).starts_with("look first"), "{tool}");
+        }
+        // Turned since, or a minute old: not pressed.
+        look(&mut server, (200.0, 100.0), 1, now());
+        assert!(call(&mut server, "tap", json!({ "x": 1, "y": 1 })).contains("was turned"));
+        look(&mut server, upright, 1, now().checked_sub(LOOK_STANDS + std::time::Duration::from_secs(1)).unwrap());
+        assert!(call(&mut server, "tap", json!({ "x": 1, "y": 1 })).contains("more than a minute"));
+        // Another device saved under the name since the look: its look isn't this one's.
+        look(&mut server, upright, 1, now());
+        device::unstub(&name);
+        device::stub(&name, 49153);
+        assert!(call(&mut server, "tap", json!({ "x": 1, "y": 1 })).contains("isn't the one that look was of"));
+        assert!(call(&mut server, "tap", json!({ "x": 1, "y": 1 })).starts_with("look first"));
+        device::unstub(&name);
+    }
+}

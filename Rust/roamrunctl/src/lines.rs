@@ -28,7 +28,6 @@ pub struct Device {
     pub v: i64,
 }
 
-#[cfg(test)]
 pub fn offer_line(offer: &Offer) -> String {
     format!("{OFFER_PREFIX}{}", packed(offer))
 }

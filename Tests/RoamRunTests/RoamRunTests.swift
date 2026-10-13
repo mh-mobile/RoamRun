@@ -1021,8 +1021,8 @@ extension TimingSensitive.RelayOnLocalhost {
 /// `pair` and `devices` take a word that says what to do, not a device's name first.
 @Test func pairAndDevicesCommandsParse() throws {
     let line = "rr-xcode-offer-v1:eyJ4IjoxfQ"
-    let introduce = try CLI.parse(["pair", "introduce", line, "--mac", "cloud-mac", "--to=iPhone"]).get()
-    #expect(introduce.words == ["introduce", line] && introduce.values["--mac"] == "cloud-mac" && introduce.values["--to"] == "iPhone")
+    let introduce = try CLI.parse(["pair", "introduce", line, "--host", "cloud-mac", "--to=iPhone"]).get()
+    #expect(introduce.words == ["introduce", line] && introduce.values["--host"] == "cloud-mac" && introduce.values["--to"] == "iPhone")
     #expect(try CLI.parse(["pair", "xcode"]).get().words == ["xcode"])
     let add = try CLI.parse(["devices", "add", "rr-device-v1:eyJ4IjoxfQ", "--replace", "iPhone", "--peer=iphone-15-pro"]).get()
     #expect(add.words.count == 2 && add.values["--replace"] == "iPhone" && add.values["--peer"] == "iphone-15-pro")
@@ -7519,7 +7519,7 @@ extension TimingSensitive.RelayOnLocalhost {
     #expect(CLI.otherWaiting(inPgrep: listed, me: 4388)?.pid == 4021)
     #expect(CLI.otherWaiting(inPgrep: listed, me: 4021)?.command == "roamrun pair xcode --with macbook-pro")
     #expect(CLI.otherWaiting(inPgrep: "4388 /usr/local/bin/roamrun pair xcode --with x\n", me: 4388) == nil)
-    #expect(CLI.otherWaiting(inPgrep: "77 /bin/zsh -c echo pair control --with x\n9 tart exec -t vm /x/RoamRun pair introduce --mac a --to b", me: 1) == nil)
+    #expect(CLI.otherWaiting(inPgrep: "77 /bin/zsh -c echo pair control --with x\n9 tart exec -t vm /x/RoamRun pair introduce --host a --to b", me: 1) == nil)
 
     // The name this Mac offers under is one an offer may have, whatever the computer is called.
     func offered(_ name: String) -> Bool {

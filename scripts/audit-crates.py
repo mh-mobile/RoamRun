@@ -10,6 +10,9 @@ KNOWN = {
     # keys are in ca.rs, behind the `pair` feature, which isn't on here: remote pairing takes
     # only a random source and a signing trait from the crate (it signs with Ed25519).
     "RUSTSEC-2023-0071": "rsa: no RSA key is used (idevice's `pair` feature is off)",
+    # Unmaintained, not unsound. A proc-macro's helper that age's messages (i18n-embed-fl) bring in:
+    # it runs when roamrunctl is built, and nothing of it is in the binary.
+    "RUSTSEC-2026-0173": "proc-macro-error2: build-time only (a proc-macro under age), not in the binary",
 }
 
 def ask(url, body=None):

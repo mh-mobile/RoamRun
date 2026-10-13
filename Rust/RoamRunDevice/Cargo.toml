@@ -7,12 +7,13 @@ publish = false
 description = "RoamRun's C ABI over the idevice protocol stack"
 
 [lib]
-crate-type = ["staticlib"]
+# rlib: for roamrunctl.
+crate-type = ["staticlib", "rlib"]
 name = "roamrun_device"
 
 [dependencies]
 # Pinned: a newer idevice comes in only when this line and Cargo.lock are changed here.
-idevice = { version = "=0.1.68", features = ["rsd", "remote_pairing", "tunnel_tcp_stack", "core_device", "display_stream", "dvt"] }
+idevice = { version = "=0.1.68", features = ["rsd", "remote_pairing", "tunnel_tcp_stack", "core_device", "display_stream", "dvt", "afc", "installation_proxy", "springboardservices"] }
 # What idevice itself uses, for the accessibility service's archives.
 ns-keyed-archive = "=0.1.5"
 plist = "1"
@@ -23,7 +24,8 @@ uuid = { version = "1", features = ["v4"] }
 opt-level = "s"
 
 # idevice with the host's serial number and address settable (a pairing lists on the device by
-# them), and with the device verified at every connection by the key it gave when it paired:
-# its 0.1.68 and five commits. Gone when a release of idevice has both.
+# them), with the device verified at every connection by the key it gave when it paired, and with
+# pair-verify signed by whoever keeps the private key: its 0.1.68 and six commits. Gone when a
+# release of idevice has them.
 [patch.crates-io]
-idevice = { git = "https://github.com/mh-mobile/idevice", rev = "b747c25ce7c6a920ba4438369c17375f0ac95e72" }
+idevice = { git = "https://github.com/mh-mobile/idevice", rev = "89cdb2409643deabab99999286b4c4d091c7c068" }

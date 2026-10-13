@@ -1,6 +1,8 @@
 //! RoamRun's C ABI over idevice. rr_device_tap, _swipe, _type, _paste and
 //! _button operate the device; rr_device_elements can scroll it.
 
+pub mod safe;
+
 use std::ffi::{c_char, CStr, CString};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -13,8 +15,8 @@ use idevice::dvt::message::AuxValue;
 use idevice::dvt::remote_server::RemoteServerClient;
 use idevice::core_device::{
     build_keyframe_request, build_screen_audio_offer, build_screen_video_offer, build_start_audio_parameters,
-    build_start_video_parameters, is_rtcp, CallInfoBlob, DisplayServiceClient, HevcDepacketizer, PasteboardServiceClient, RtpPacket,
-    GENERAL_PASTEBOARD,
+    build_start_video_parameters, is_rtcp, CallInfoBlob, DisplayServiceClient, HevcDepacketizer, ImageFormat, PasteboardServiceClient, RtpPacket,
+    ScreenCaptureServiceClient, GENERAL_PASTEBOARD,
 };
 use idevice::remote_pairing::{
     connect_tls_psk_tunnel_native, PairableHost, PairableHostInfo, RemotePairingClient, RpPairingFile, RpPairingSocket,
@@ -58,6 +60,8 @@ struct Link {
     keyframes_answered: u32,
     /// Inputs sent on a new connection because the kept one was found gone.
     resent: u32,
+    /// Inputs go with no screen stream started for them.
+    bare_inputs: bool,
     /// Raised by the caller from another thread when the device is to be let go of: a long
     /// input stops between two keys. The caller's, and outlives this.
     stop: Stop,
@@ -188,6 +192,34 @@ fn quoted(s: &str) -> String {
 /// (the pairing itself, never a path: it isn't kept on disk as it is); `error` is null or writable.
 #[no_mangle]
 pub unsafe extern "C" fn rr_device_open(ip: *const c_char, port: u16, pairing: *const u8, pairing_len: usize, error: *mut *mut c_char) -> *mut RRDevice {
+    unsafe { open_with(ip, port, pairing, pairing_len, None, error) }
+}
+
+/// As rr_device_open, for a pairing whose private key is kept elsewhere: `pairing` is the pairing with any
+/// key in the private key's place, and `sign` is asked for the one signature a connection takes — given what
+/// is to be signed, it writes the 64 bytes of the signature and returns true, or returns false. Called on
+/// another thread, before this returns.
+/// # Safety
+/// As rr_device_open; `sign` and `context` are good until this returns.
+#[no_mangle]
+pub unsafe extern "C" fn rr_device_open_signed(
+    ip: *const c_char, port: u16, pairing: *const u8, pairing_len: usize,
+    sign: Option<unsafe extern "C" fn(*const u8, usize, *mut u8, *mut std::ffi::c_void) -> bool>, context: *mut std::ffi::c_void,
+    error: *mut *mut c_char,
+) -> *mut RRDevice {
+    let Some(sign) = sign else {
+        unsafe { set_error(error, "bad arguments".into()) };
+        return std::ptr::null_mut();
+    };
+    let context = context as usize;   // an address, carried to the thread that verifies
+    let signer: Signer = Arc::new(move |what: &[u8]| {
+        let mut signature = [0u8; 64];
+        if unsafe { sign(what.as_ptr(), what.len(), signature.as_mut_ptr(), context as *mut std::ffi::c_void) } { Ok(signature) } else { Err("the key's holder didn't sign".into()) }
+    });
+    unsafe { open_with(ip, port, pairing, pairing_len, Some(signer), error) }
+}
+
+unsafe fn open_with(ip: *const c_char, port: u16, pairing: *const u8, pairing_len: usize, signer: Option<Signer>, error: *mut *mut c_char) -> *mut RRDevice {
     let ip = (!ip.is_null()).then(|| unsafe { CStr::from_ptr(ip) }.to_str().ok()).flatten();
     let file = (!pairing.is_null()).then(|| unsafe { std::slice::from_raw_parts(pairing, pairing_len) });
     let opened = match (ip, file) {
@@ -195,7 +227,7 @@ pub unsafe extern "C" fn rr_device_open(ip: *const c_char, port: u16, pairing: *
             .map_err(|e| format!("no runtime: {e}"))
             .and_then(|runtime| {
                 let link = with_room(|| runtime.block_on(async {
-                    tokio::time::timeout(DEADLINE, connect(ip, port, file)).await.unwrap_or_else(|_| Err("timed out".into()))
+                    tokio::time::timeout(DEADLINE, connect(ip, port, file, signer.clone())).await.unwrap_or_else(|_| Err("timed out".into()))
                 }))?;
                 let held = Arc::new(Held { runtime, link: Mutex::new(link) });
                 watch_idle_stream(&held);
@@ -219,6 +251,15 @@ pub unsafe extern "C" fn rr_device_open(ip: *const c_char, port: u16, pairing: *
 pub unsafe extern "C" fn rr_device_stop_at(device: *mut RRDevice, flag: *const u8) {
     let device = unsafe { &*device };
     device.link.lock().unwrap_or_else(|e| e.into_inner()).stop = Stop(flag.cast());
+}
+
+/// Inputs from here on are sent with no screen stream started for them (or with one, as at first).
+/// # Safety
+/// `device` came from rr_device_open and wasn't closed.
+#[no_mangle]
+pub unsafe extern "C" fn rr_device_bare_inputs(device: *mut RRDevice, bare: bool) {
+    let device = unsafe { &*device };
+    device.link.lock().unwrap_or_else(|e| e.into_inner()).bare_inputs = bare;
 }
 
 /// # Safety
@@ -362,6 +403,152 @@ pub unsafe extern "C" fn rr_device_keyframe(device: *mut RRDevice, length: *mut 
             unsafe { set_error(error, why) };
             std::ptr::null_mut()
         }
+    }
+}
+
+/// The screen as a PNG the device makes itself: no stream is started for it.
+/// # Safety
+/// `device` came from rr_device_open and wasn't closed; `length` and `error` are null or writable.
+#[no_mangle]
+pub unsafe extern "C" fn rr_device_screenshot(device: *mut RRDevice, length: *mut usize, error: *mut *mut c_char) -> *mut u8 {
+    let (Some(device), false) = (unsafe { device.as_ref() }, length.is_null()) else {
+        unsafe { set_error(error, "bad arguments".into()) };
+        return std::ptr::null_mut();
+    };
+    let result = with_room(|| {
+        let mut link = device.link.lock().unwrap_or_else(|e| e.into_inner());
+        if link.stop.raised() { return Err(STOPPED.into()); }
+        let link = &mut *link;
+        device.runtime.block_on(async {
+            tokio::time::timeout(DEADLINE, async {
+                let mut capture = ScreenCaptureServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)
+                    .await.map_err(|e| format!("screenshot service: {e:?}"))?;
+                capture.take_screenshot(None, ImageFormat::Png).await.map_err(|e| format!("screenshot: {e:?}"))
+            }).await.unwrap_or_else(|_| Err("timed out".into()))
+        })
+    });
+    match result {
+        Ok(image) => {
+            let boxed = image.into_boxed_slice();
+            unsafe { *length = boxed.len() };
+            Box::into_raw(boxed) as *mut u8
+        }
+        Err(why) => {
+            unsafe { set_error(error, why) };
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Which way up the device's interface is: 1 portrait, 2 upside down, 3 on its side with the home
+/// indicator at the right, 4 with it at the left; 0 when the device doesn't say. A screenshot comes
+/// turned as the interface is, and a touch is sent in the device's own upright terms.
+/// # Safety
+/// `device` came from rr_device_open and wasn't closed.
+#[no_mangle]
+pub unsafe extern "C" fn rr_device_way(device: *mut RRDevice) -> u8 {
+    let Some(device) = (unsafe { device.as_ref() }) else { return 0 };
+    with_room(|| {
+        let mut link = device.link.lock().unwrap_or_else(|e| e.into_inner());
+        let link = &mut *link;
+        Ok(device.runtime.block_on(async {
+            tokio::time::timeout(SCREEN_WAIT, interface_way(link)).await.ok().flatten().unwrap_or(0)
+        }))
+    }).unwrap_or(0)
+}
+
+async fn interface_way(link: &mut Link) -> Option<u8> {
+    use idevice::springboardservices::{InterfaceOrientation, SpringBoardServicesClient};
+    let port = link.handshake.services.get("com.apple.springboardservices.shim.remote")?.port;
+    let stream = link.handle.connect_to_service_port(port).await.ok()?;
+    // A lockdown service bridged onto RSD: it wants a check-in before its own protocol.
+    let mut plain = idevice::Idevice::new(Box::new(stream), LABEL);
+    plain.rsd_checkin().await.ok()?;
+    Some(match SpringBoardServicesClient::new(plain).get_interface_orientation().await.ok()? {
+        InterfaceOrientation::Portrait => 1,
+        InterfaceOrientation::PortraitUpsideDown => 2,
+        InterfaceOrientation::LandscapeRight => 3,
+        InterfaceOrientation::LandscapeLeft => 4,
+        _ => 0,
+    })
+}
+
+/// What is at `path`, in megabytes, and how long an install of it is given: five minutes, and fifteen seconds a
+/// megabyte. One took three to four on the device's own Wi‑Fi (iPhone 15 Pro, iOS 27.0: 3 MB in 25 s, 37 MB in 150 s):
+/// some four times that, for a slower way there. It is there to end what hangs, not what is slow.
+pub fn install_given(path: &str) -> (u64, Duration) {
+    fn size(path: &std::path::Path) -> u64 {
+        match std::fs::read_dir(path) {
+            Ok(inside) => inside.flatten().map(|entry| size(&entry.path())).sum(),
+            Err(_) => std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0),
+        }
+    }
+    let megabytes = size(std::path::Path::new(path)) >> 20;
+    (megabytes, Duration::from_secs(300 + 15 * megabytes))
+}
+
+/// What `rr_device_install` and `rr_device_launch` share: one thing asked of the device's app services.
+enum App<'a> { Install(&'a str), Launch(&'a str) }
+
+fn app(device: &RRDevice, what: App) -> String {
+    let result = with_room(|| {
+        let mut link = device.link.lock().unwrap_or_else(|e| e.into_inner());
+        if link.stop.raised() { return Err(STOPPED.into()); }
+        let link = &mut *link;
+        device.runtime.block_on(async {
+            // An install sends the whole app: longer than a call's deadline, and longer the more there is of it.
+            let given = match what { App::Install(path) => install_given(path).1, App::Launch(_) => Duration::from_secs(300) };
+            tokio::time::timeout(given, async {
+                match what {
+                    App::Install(path) => {
+                        // An app folder is laid over what an earlier, cut-short install of that name left where
+                        // the device keeps them: cleared first, or the app taken in is the two mixed.
+                        if let Some(name) = std::path::Path::new(path).file_name().and_then(|n| n.to_str()).filter(|_| std::path::Path::new(path).is_dir()) {
+                            if let Ok(mut files) = idevice::afc::AfcClient::connect_rsd(&mut link.handle, &mut link.handshake).await {
+                                let _ = files.remove_all(format!("PublicStaging/{name}")).await;
+                            }
+                        }
+                        idevice::utils::installation::install_package_rsd(&mut link.handle, &mut link.handshake, path, None)
+                            .await.map(|()| String::new()).map_err(|e| format!("install: {e:?}"))
+                    }
+                    App::Launch(bundle) => {
+                        let mut apps = idevice::core_device::AppServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)
+                            .await.map_err(|e| format!("app service: {e:?}"))?;
+                        // One already running is ended: the one that answers is the one just started.
+                        apps.launch_application(bundle, &[], true, false, None, None, None)
+                            .await.map(|said| format!(",\"pid\":{}", said.pid)).map_err(|e| format!("launch: {e:?}"))
+                    }
+                }
+            }).await.unwrap_or_else(|_| Err("timed out".into()))
+        })
+    });
+    match result {
+        Ok(more) => format!("{{\"ok\":true{more}}}"),
+        Err(why) => failure(&why),
+    }
+}
+
+/// Installs the app at `path`, an .ipa or an .app folder on this machine, signed for the device already.
+/// # Safety
+/// `device` came from rr_device_open and wasn't closed; `path` is null or a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn rr_device_install(device: *mut RRDevice, path: *const c_char) -> *mut c_char {
+    let path = (!path.is_null()).then(|| unsafe { CStr::from_ptr(path) }.to_str().ok()).flatten();
+    match (unsafe { device.as_ref() }, path) {
+        (Some(device), Some(path)) => c_string(app(device, App::Install(path))),
+        _ => c_string(failure("bad arguments")),
+    }
+}
+
+/// Launches the app with that bundle identifier: JSON {"ok":true,"pid":…}.
+/// # Safety
+/// `device` came from rr_device_open and wasn't closed; `bundle` is null or a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn rr_device_launch(device: *mut RRDevice, bundle: *const c_char) -> *mut c_char {
+    let bundle = (!bundle.is_null()).then(|| unsafe { CStr::from_ptr(bundle) }.to_str().ok()).flatten();
+    match (unsafe { device.as_ref() }, bundle) {
+        (Some(device), Some(bundle)) => c_string(app(device, App::Launch(bundle))),
+        _ => c_string(failure("bad arguments")),
     }
 }
 
@@ -642,10 +829,14 @@ fn verify_words(e: &idevice::IdeviceError, ip: &str, port: u16) -> String {
 /// The words the header gives for a pairing without the device's key: only pairing again helps.
 const UNCHECKED: &str = "this pairing doesn't hold the device's key (it was made before RoamRun checked who answers): pair again";
 
-async fn connect(ip: &str, port: u16, file: &[u8]) -> Result<Link, String> {
+/// Signs what pair-verify signs, where the private key is kept elsewhere.
+type Signer = idevice::remote_pairing::PairVerifySigner;
+
+async fn connect(ip: &str, port: u16, file: &[u8], signer: Option<Signer>) -> Result<Link, String> {
     let started = Instant::now();
     // Unreadable is for good, like one without the device's key: said in the same words.
     let mut pairing = RpPairingFile::from_bytes(file).map_err(|e| format!("this pairing doesn't hold the device's key in a form RoamRun reads ({e:?}): pair again"))?;
+    pairing.signer = signer;
     // The device proves itself at every connection, by the key it gave when the pairing was
     // made: a pairing without that key would take whatever answers for the device.
     if pairing.peer_public_key.is_none() { return Err(UNCHECKED.into()); }
@@ -669,7 +860,7 @@ async fn connect(ip: &str, port: u16, file: &[u8]) -> Result<Link, String> {
 
     let rsd = handle.connect(info.server_rsd_port).await.map_err(|e| format!("RSD: {e:?}"))?;
     let handshake = RsdHandshake::new(rsd).await.map_err(|e| format!("RSD handshake: {e:?}"))?;
-    Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_stopped: None, stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, resent: 0, stop: Stop(std::ptr::null()), held: None, finger: None, verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
+    Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_stopped: None, stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, resent: 0, bare_inputs: false, stop: Stop(std::ptr::null()), held: None, finger: None, verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
 }
 
 /// The most that is typed in one call: beyond it, a slip in the middle is too costly, and paste does it in one.
@@ -712,7 +903,11 @@ fn input_time(input: &Input) -> Duration {
 /// the deadline every call has; the input then gets the time its own length needs, so that the
 /// deadline doesn't fall in the middle of it.
 async fn perform(link: &mut Link, input: Input) -> Result<(), String> {
-    tokio::time::timeout(DEADLINE, stream_for_input(link)).await.unwrap_or_else(|_| Err("timed out".into()))?;
+    // Without one where the caller said so (rr_device_bare_inputs): taps, keys and buttons were taken that way
+    // on iOS 27.0, and no screen-sharing session then shows on the device or takes its sound.
+    if !link.bare_inputs {
+        tokio::time::timeout(DEADLINE, stream_for_input(link)).await.unwrap_or_else(|_| Err("timed out".into()))?;
+    }
     // Told to stop while the stream was got ready (that can take seconds): nothing is sent.
     if link.stop.raised() { return Err(STOPPED.into()); }
     let done = match tokio::time::timeout(input_time(&input), send(link, &input)).await {
@@ -1206,10 +1401,13 @@ pub unsafe extern "C" fn rr_pairing_listen(name: *const c_char, model: *const c_
 /// function's whatever it returns; `only` is null or a NUL-terminated address.
 #[no_mangle]
 pub unsafe extern "C" fn rr_pairing_listen_on(name: *const c_char, model: *const c_char, host: *const c_char, socket: std::ffi::c_int, only: *const c_char, advert: *mut *mut c_char, error: *mut *mut c_char) -> *mut RRPairing {
-    use std::os::fd::FromRawFd;
     let arg = |p: *const c_char| (!p.is_null()).then(|| unsafe { CStr::from_ptr(p) }.to_str().ok()).flatten();
     // Taken first: every way out from here closes it.
-    let given = (socket >= 0).then(|| unsafe { std::net::TcpListener::from_raw_fd(socket) });
+    #[cfg(unix)]
+    let given = (socket >= 0).then(|| unsafe { <std::net::TcpListener as std::os::fd::FromRawFd>::from_raw_fd(socket) });
+    // A socket isn't an int there: one of the caller's making comes by `safe::Pairing::listen_on`.
+    #[cfg(not(unix))]
+    let given: Option<std::net::TcpListener> = { let _ = socket; None };
     let only = match arg(only).map(|a| a.parse::<std::net::IpAddr>()) {
         None if only.is_null() => None,
         Some(Ok(address)) => Some(address),
@@ -1219,29 +1417,7 @@ pub unsafe extern "C" fn rr_pairing_listen_on(name: *const c_char, model: *const
         }
     };
     let listening = match (arg(name), arg(model), arg(host)) {
-        (Some(name), Some(model), Some(host)) => tokio::runtime::Builder::new_multi_thread().worker_threads(1).thread_stack_size(STACK).enable_all().build()
-            .map_err(|e| format!("no runtime: {e}"))
-            .and_then(|runtime| {
-                let listener = match given {
-                    Some(given) => {
-                        given.set_nonblocking(true).map_err(|e| format!("can't listen: {e}"))?;
-                        let _in = runtime.enter();
-                        TcpListener::from_std(given).map_err(|e| format!("can't listen: {e}"))?
-                    }
-                    // Both families: the device reaches this Mac by whichever address its name resolves to.
-                    None => runtime.block_on(TcpListener::bind("[::]:0")).map_err(|e| format!("can't listen: {e}"))?,
-                };
-                let port = listener.local_addr().map_err(|e| format!("no port: {e}"))?.port();
-                // One identity per `host`, whatever it is named: pairing again replaces the
-                // device's record of it, and another Mac of the same name doesn't.
-                let file = RpPairingFile::generate(&format!("{LABEL} {host}"));
-                let mut info = PairableHostInfo::generate(name, model);
-                (info.serial_number, info.mac) = own_hardware(file.identifier());
-                let txt = info.mdns_txt_records(file.identifier()).iter()
-                    .map(|(k, v)| format!("{}:{}", quoted(k), quoted(v))).collect::<Vec<_>>().join(",");
-                let said = format!("{{\"port\":{port},\"identifier\":{},\"txt\":{{{txt}}}}}", quoted(file.identifier()));
-                Ok((RRPairing { runtime, listener, info, file: Mutex::new(file), cancelled: AtomicBool::new(false), only }, said))
-            }),
+        (Some(name), Some(model), Some(host)) => listening(name, model, host, given, only),
         _ => Err("bad arguments".into()),
     };
     match listening {
@@ -1254,6 +1430,30 @@ pub unsafe extern "C" fn rr_pairing_listen_on(name: *const c_char, model: *const
             std::ptr::null_mut()
         }
     }
+}
+
+/// A pairing that listens — on `given`, or on a port of its own — and what to announce for it.
+pub(crate) fn listening(name: &str, model: &str, host: &str, given: Option<std::net::TcpListener>, only: Option<std::net::IpAddr>) -> Result<(RRPairing, String), String> {
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(1).thread_stack_size(STACK).enable_all().build().map_err(|e| format!("no runtime: {e}"))?;
+    let listener = match given {
+        Some(given) => {
+            given.set_nonblocking(true).map_err(|e| format!("can't listen: {e}"))?;
+            let _in = runtime.enter();
+            TcpListener::from_std(given).map_err(|e| format!("can't listen: {e}"))?
+        }
+        // Both families: the device reaches this Mac by whichever address its name resolves to.
+        None => runtime.block_on(TcpListener::bind("[::]:0")).map_err(|e| format!("can't listen: {e}"))?,
+    };
+    let port = listener.local_addr().map_err(|e| format!("no port: {e}"))?.port();
+    // One identity per `host`, whatever it is named: pairing again replaces the
+    // device's record of it, and another Mac of the same name doesn't.
+    let file = RpPairingFile::generate(&format!("{LABEL} {host}"));
+    let mut info = PairableHostInfo::generate(name, model);
+    (info.serial_number, info.mac) = own_hardware(file.identifier());
+    let txt = info.mdns_txt_records(file.identifier()).iter()
+        .map(|(k, v)| format!("{}:{}", quoted(k), quoted(v))).collect::<Vec<_>>().join(",");
+    let said = format!("{{\"port\":{port},\"identifier\":{},\"txt\":{{{txt}}}}}", quoted(file.identifier()));
+    Ok((RRPairing { runtime, listener, info, file: Mutex::new(file), cancelled: AtomicBool::new(false), only }, said))
 }
 
 /// # Safety
@@ -1409,6 +1609,18 @@ async fn accept_pairing(pairing: &RRPairing, show: &(impl Fn(&str) + Sync)) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_install_is_given_longer_the_more_there_is_to_send() {
+        let folder = std::env::temp_dir().join(format!("rr-install-given-{}.app", std::process::id()));
+        std::fs::create_dir_all(folder.join("inside")).unwrap();
+        std::fs::write(folder.join("inside/binary"), vec![0u8; 3 << 20]).unwrap();
+        std::fs::write(folder.join("Info.plist"), b"<plist/>").unwrap();
+        assert_eq!(install_given(folder.to_str().unwrap()), (3, Duration::from_secs(345)));
+        assert_eq!(install_given(folder.join("inside/binary").to_str().unwrap()).0, 3);
+        assert_eq!(install_given("/nowhere/at/all.ipa"), (0, Duration::from_secs(300)));
+        std::fs::remove_dir_all(folder).unwrap();
+    }
 
     fn io(kind: std::io::ErrorKind) -> idevice::IdeviceError { idevice::IdeviceError::Socket(std::io::Error::from(kind)) }
 
