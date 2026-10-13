@@ -398,9 +398,6 @@ have the user add the MCP tools, which run outside it.
   for anything long, `paste` (the MCP tool takes 500 characters at most). `roamrun paste iPhone "任意の文字列"` puts any
   text in by the device's pasteboard — it replaces the pasteboard, and iOS asks
   "Allow Paste" each time: look, and tap it only if the user wants that.
-  After a `type` cut short (the pairing removed while it ran) the device's own
-  keyboard was seen to stay hidden, where a pairing code is entered too, until a
-  text field was opened elsewhere: tell the user to open one (Home Screen search).
 - `roamrun press iPhone home|lock|volume-up|volume-down`. `lock` can't be
   undone from here: the user has to unlock.
 - These press what is really there. Don't tap what spends money, posts, sends,
