@@ -53,7 +53,7 @@ pairing's key (the using machine itself in A, another in B).
   again, five tries in all.
 - `pair introduce`: five minutes (`--deadline`, 300 seconds at most when the host is asked for its offer).
   Before that it tries the host's port 41830 for up to ten minutes, so either command can be started first.
-- `install`: five minutes and fifteen seconds a megabyte — about four times what it took on the device's own
+- `install`: five minutes, plus fifteen seconds for each megabyte — about four times what it took on the device's own
   Wi‑Fi (3 MB in 25 seconds, 37 MB in two and a half minutes).
 
 ## The key file and passphrases
@@ -96,7 +96,7 @@ machine for that signature and does everything else itself.
 - The using machine asks the machines of its own user that Tailscale lists as online. A tagged machine is
   nobody's: where either machine is tagged, or the two are different users', set
   `ROAMRUNCTL_SIGNER=<the key's machine>` on the using machine (for `mcp`, in the agent's MCP config). `sign`
-  says so when it starts. A name there that isn't on the tailnet is said; devices saved on the using machine
+  says so when it starts. A name there that isn't on the tailnet is reported; devices saved on the using machine
   itself are used all the same.
 - The first time the using machine uses a device, it saves which machine signs for it and which device that
   is (no key), and holds to that from then on. If it can't save that, it doesn't use the device. Until then it
@@ -119,9 +119,9 @@ machine for that signature and does everything else itself.
   way. A turn isn't noticed where the device says nothing about its way either time and the picture is upright.
 - `type`, `paste` and `press` go to whatever is on the screen. `paste` makes the device ask "Allow Paste".
 - A call the agent takes back before its turn isn't made, nor one whose turn comes after the agent went; one
-  that already runs, runs out.
+  that is already running finishes.
 - While `mcp` runs, a device removed, or another saved under its name, isn't the one it had open: it is opened
-  anew, or said to be gone.
+  anew, or reported as gone.
 - No screen-sharing session shows and sound went on playing with looks, taps, keys and buttons (Apple Music,
   iOS 27.0). Swipes, paste and the microphone weren't looked into.
 
@@ -150,7 +150,9 @@ roamrunctl pair introduce --host <host> --to <device> [--offer <line>] [--as <na
   doesn't take, it doesn't save, and the line printed here then goes to
   `roamrun devices add <line> --as <another name>` there. A host with roamrunctl uses its own `--as` first.
 - `--on` picks the interface on a machine with more than one on the device's network. Without it, the one the
-  system sends to the device from is used and the others are said.
+  system sends to the device from is used, and it names the others.
+- A device that waits to be picked by a Mac (an Apple Vision Pro with Remote Devices open) is paired by a Mac
+  only: a Mac's `roamrun pair introduce` refuses a `--host` that isn't one for it.
 - For Xcode's pairing the device's line for `roamrun devices add` is printed on standard output; everything
   else, the pairing code among it, goes to standard error.
 
@@ -158,7 +160,7 @@ roamrunctl pair introduce --host <host> --to <device> [--offer <line>] [--as <na
 |---|---|
 | 0 | Xcode's pairing: the host said it saved the device (with `--offer`: a pairing was tried; the line goes to `roamrun devices add` there). Device control: the host kept the pairing |
 | 1, with a line | Xcode's pairing was tried and the host didn't say it saved the device: hand the line to `roamrun devices add` there |
-| 1, without | nothing was tried, or the device's own announcement wasn't seen here; device control: the host kept nothing, and why is said |
+| 1, without | nothing was tried, or the device's own announcement wasn't seen here; device control: the host kept nothing, and it says why |
 | 2 | the command was written wrong (`--mac` among it) |
 
 Ctrl-C, a closed terminal and a dropped ssh session all take the announcement back before it ends (seen on
@@ -178,4 +180,4 @@ goodbye reaches a browser within a few seconds; then the same for device control
 41830 of this Mac, which has to be free.
 
 Behaviour follows the Mac's side: `Sources/RoamRun/Introductions.swift` and `PairByName.swift` for
-`pair introduce`, and `roamrun pair control --with` for `pair control --with`.
+`pair introduce`, and `ControlIntroductions.swift` for `pair control --with`.

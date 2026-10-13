@@ -11,13 +11,14 @@ neither RoamRun nor Xcode. It does two things:
 
 What it needs:
 
-- [Tailscale](https://tailscale.com) on this machine and on the device, in the same tailnet.
+- [Tailscale](https://tailscale.com) on this machine and on the device. Machines and devices are named below
+  by their Tailscale names, as `tailscale status` lists them, not by what a device calls itself.
 - An iPhone or iPad on iOS 27 or later with Developer Mode on. It has to be on a Wi‑Fi (on cellular alone it
   refuses new connections) and unlocked once since it started.
 - For `install`: an app already built and signed for that device. roamrunctl doesn't build or sign.
 
-Not tried with an Apple Vision Pro. Every run so far had a Mac in it somewhere — to make the device's first
-pairing, to introduce, or to sign.
+Not tried with an Apple Vision Pro. And not tried without any Mac: so far a Mac always made the device's first
+pairing, introduced, or signed.
 
 ## Install
 
@@ -27,7 +28,8 @@ Linux, into `~/.local/bin`:
 mkdir -p ~/.local/bin && curl -fsSL https://github.com/mh-mobile/RoamRun/releases/latest/download/roamrunctl-linux-$(uname -m).tar.gz | tar -xz -C ~/.local/bin --strip-components 1 roamrunctl-linux-$(uname -m)/roamrunctl
 ```
 
-Windows (PowerShell), into a folder where you are. On an ARM PC write `aarch64` for `x86_64`:
+Windows (PowerShell), into a folder where you are. On an ARM PC write `aarch64` instead of `x86_64`, here and
+in the path below:
 
 ```
 irm https://github.com/mh-mobile/RoamRun/releases/latest/download/roamrunctl-windows-x86_64.zip -OutFile roamrunctl.zip; Expand-Archive -Force roamrunctl.zip .
@@ -46,7 +48,8 @@ For an agent there is a skill: `npx skills add mh-mobile/RoamRun`.
 ## Using a device from a machine without Xcode
 
 A pairing is a key. Whoever holds it and can reach the device in Tailscale can see its screen and operate it.
-So the first choice is where that key lives:
+So the first choice is where that key lives. The *using machine* is where `look`, `install`, `launch` and `mcp`
+run; the *key's machine* is where the key is kept.
 
 ```mermaid
 flowchart LR
@@ -113,17 +116,20 @@ sequenceDiagram
 
 - Either command can be started first. The using machine has to let the near machine in on any TCP port
   (Tailscale's rules, and its own firewall).
-- The device must have been paired with something before — a Mac's Xcode, or `pair control --to` on the near
-  machine. One that never was announces nothing to pass on, and `pair introduce` says so.
+- What the near machine prints calls the using machine "the host".
+- The device must have been paired with something before, such as a Mac's Xcode. A device that never was
+  announces nothing for the near machine to pass on, and `pair introduce` says so. (`pair control --to` on the
+  near machine may serve as that first pairing. That wasn't tried, and the near machine then holds a key too:
+  `roamrunctl devices remove` it there.)
 - A Mac with RoamRun can be the near machine: `roamrun pair introduce --host <the using machine> --to <the
-  device as RoamRun has it saved>`.
-- With the Introducer app on the device (built from [`iOS/`](../../iOS)) no near machine is needed:
+  device as RoamRun has it saved>` (not run against a device yet).
+- With the Introducer app on the device (built from [`iOS/`](https://github.com/mh-mobile/RoamRun/tree/main/iOS)) no near machine is needed:
   `roamrunctl pair control --with <the device's Tailscale name>`, and the using machine's name in the app.
 
 ### Using it
 
 ```sh
-roamrunctl devices                    # what is saved here
+roamrunctl devices                    # what this machine can use
 roamrunctl look phone shot.png        # a screenshot, 1280 pixels at most on its longer side
 roamrunctl install phone App.ipa      # or an .app folder
 roamrunctl launch phone com.example.App
@@ -133,16 +139,16 @@ roamrunctl devices remove phone       # forget it here; on the device, remove th
 For an agent, the MCP config names the command `roamrunctl` with the argument `mcp`. Its tools are `devices`,
 `look`, `tap`, `swipe`, `type`, `paste`, `press`, `elements`, `install` and `launch`. A tap or swipe needs a
 look first: one look serves one of them, within a minute, and it is refused if the device was turned since.
-Looks are the device's own screenshots and inputs are sent without a screen stream: the device shows no
-screen-sharing session, and what plays goes on sounding (heard with Apple Music on iOS 27.0).
+Looks are the device's own screenshots and inputs are sent without a screen stream, so the device shows no
+screen-sharing session.
 
-`install` prints the size and how long it may take, then nothing until the app is in. On the device's own
-Wi‑Fi it took three to four seconds a megabyte (37 MB in two and a half minutes).
+`install` prints the size and how long it may take, then nothing until the app is in: a few seconds for each
+megabyte on the device's own Wi‑Fi.
 
 ### The key file
 
 The key is saved as `~/.config/roamrunctl/devices/<name>.json` (`%LOCALAPPDATA%\roamrunctl\devices` on
-Windows), readable by its owner alone. **Any program running as that user, an agent among them, can use the
+Windows), readable by its owner alone on Linux and macOS. **Any program running as that user, an agent among them, can use the
 device with it**, and the file works from any machine that reaches the device.
 
 `--passphrase` on `pair control` encrypts it (`<name>.age`), so a copy of the file alone is no key. The
@@ -178,14 +184,14 @@ sequenceDiagram
   Note over U,D: looks, inputs and installs go directly
 ```
 
-- The key's machine has to let the using machine in on TCP port 41831, and has to reach the device itself.
+- The key's machine has to let the using machine in on TCP port 41831.
 - The using machine finds the key's machine among its own user's machines that are online. Where either
   machine is tagged, or the two belong to different users (a cloud machine is often tagged), set
-  `ROAMRUNCTL_SIGNER=<the key's machine>` on the using machine.
+  `ROAMRUNCTL_SIGNER=<the key's machine>` on the using machine (for `mcp`, in the agent's MCP config).
 - **What this gives:** the key can't be copied from the using machine; ending `sign` (Ctrl-C) ends new
   connections; `sign` prints each connection it signs.
 - **What it doesn't:** while `sign` runs, any program on the using machine can connect, as often as it asks,
-  and a connection does everything. One that is already open stays open after `sign` ends, until it is closed
+  and one connection can do everything roamrunctl can. One that is already open stays open after `sign` ends, until it is closed
   or a call on it fails.
 
 ## Introducing a machine elsewhere (`pair introduce`)
@@ -218,4 +224,4 @@ shows on the host. Ctrl-C takes the announcement back.
 - [roamrunctl-tried.md](https://github.com/mh-mobile/RoamRun/blob/main/docs/roamrunctl-tried.md): what it was
   run against, and what it wasn't — among them an iPad, x86_64 machines, `sign` for more than one device,
   and `ROAMRUNCTL_SIGNER`.
-- Security: [SECURITY.md](../../SECURITY.md).
+- Security: [SECURITY.md](https://github.com/mh-mobile/RoamRun/blob/main/SECURITY.md).
