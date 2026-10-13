@@ -72,7 +72,7 @@ flowchart LR
   subgraph b["B: another machine keeps the key"]
     direction LR
     ub["using machine<br/>holds no key"] -->|"looks, inputs, installs"| db["device"]
-    ub -.->|"asks for a signature,<br/>once a connection"| kb["key's machine<br/>holds the key, runs sign"]
+    ub -.->|"asks for a signature,<br/>once for each connection"| kb["key's machine<br/>holds the key, runs sign"]
   end
   subgraph a["A: the using machine holds the key"]
     direction LR
@@ -122,6 +122,7 @@ sequenceDiagram
   D->>U: connects
   Note over U: shows the code
   Note over D: the code is typed here
+  U->>D: tries the pairing, over Tailscale
   Note over U: the key is saved here
 ```
 
@@ -146,7 +147,7 @@ sequenceDiagram
   Note over N,D: on the device's Wi-Fi
   Note over U: run pair control --with
   Note over N: run pair introduce --host
-  N->>U: asks for its offer, over Tailscale
+  N->>U: says which device, asks for its offer, over Tailscale
   U->>N: its offer
   N-->>D: announces the using machine on the Wi-Fi
   Note over D: Developer Mode, pick the using machine
@@ -154,6 +155,7 @@ sequenceDiagram
   N->>U: carries that connection, over Tailscale
   Note over U,N: both show the code
   Note over D: the code is typed here
+  U->>D: tries the pairing, over Tailscale
   Note over U: the key is saved here
   Note over N: keeps nothing
 ```
@@ -226,12 +228,12 @@ sequenceDiagram
   participant U as using machine
   participant K as key's machine
   participant D as device
-  Note over K,D: once, on the device's Wi-Fi
+  Note over K,D: once, on the device's Wi-Fi, paired as in A
   Note over K: run pair control --to, the key is saved here
   Note over K: run sign --for, left running
   Note over U,D: then, each connection, over Tailscale
   U->>D: connects
-  D->>U: asks for proof of the key
+  D->>U: proves itself, and waits for proof of the key
   U->>K: asks for the signature, port 41831
   K->>U: the signature
   U->>D: the signature
