@@ -8,8 +8,8 @@ the far machine's pairing offer on the device's own Wi-Fi, takes the connections
 it, and relays them to the far machine over the Tailscale VPN already on the device. No Mac near
 the device is needed.
 
-The far machine is a Mac with RoamRun, or — for device control only, since RoamRun 0.7.0 — a Linux
-or Windows machine with `roamrunctl`. How it looks from the far Mac's side is in the main README,
+The far machine is a Mac with RoamRun, or — for device control only, since RoamRun 0.7.0 — a machine
+with `roamrunctl` (Linux, Windows or macOS). How it looks from the far Mac's side is in the main README,
 under [From the device itself](../README.md#from-the-device-itself).
 
 <p align="center">
@@ -40,7 +40,7 @@ open RoamRunIntroducer.xcodeproj   # set your team under Signing, then run on th
 From the shell, this builds it without signing:
 `xcodebuild -project RoamRunIntroducer.xcodeproj -scheme RoamRunIntroducer -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`.
 
-The app has no entitlements and no background modes. It asks for Local Network access when it
+The app has no entitlements file and declares no `UIBackgroundModes`. It asks for Local Network access when it
 first introduces, for the camera when you scan a code, and for notifications when it pairs for
 device control. Its own version stays 0.1; what matters is the version of RoamRun on the far Mac,
 0.5.0 or later.
@@ -73,7 +73,7 @@ Device control (`look`, `tap` and the rest) is paired the same way. The far mach
 
 - on a Mac, with the RoamRun app open: `roamrun pair control --with <this iPhone's Tailscale name>`
   (`--qr` works here too);
-- on a Linux or Windows machine: `roamrunctl pair control --with <this iPhone's Tailscale name>`.
+- on a machine with `roamrunctl`: `roamrunctl pair control --with <this iPhone's Tailscale name>`.
   `roamrunctl` has no `--qr`: type that machine's Tailscale name in the app.
 
 The app needs no other setting: the far machine's answer says which pairing it is. The code to type
@@ -93,7 +93,7 @@ Two things to know:
   app says the iPhone isn't announcing itself, pair Xcode first.
 - **Go to Settings and type the code straight away.** The app asks iOS for a background task to
   carry the introduction while you are in Settings. If iOS refuses it, the app has about
-  30 seconds in the background, and says so.
+  30 seconds in the background, and says so. This holds for Xcode's pairing too.
 
 ## Carrying the lines by hand
 
@@ -103,7 +103,8 @@ Xcode's pairing only.
 1. On the far Mac, with Pair Nearby Device open, run `roamrun pair xcode`. It prints one line that
    starts with `rr-xcode-offer-v1:`. (`roamrun pair xcode --qr` draws that line and the far Mac's
    name as a code, for the app to scan.)
-2. In the app, paste that line, and enter this iPhone's Tailscale name.
+2. In the app, paste that line, and enter the far Mac's Tailscale name and this iPhone's. (A code
+   from `--qr` fills in the line and the far Mac's name.)
 3. Pair in Settings as above.
 4. The app shows a line that starts with `rr-device-v1:`. On the far Mac, give it to
    `roamrun devices add <line>`.
@@ -117,7 +118,7 @@ iPhone's Tailscale name are kept.
 ## What the app connects to
 
 - It takes connections from this device's own addresses only, two at most at a time, and stops
-  once one has carried bytes both ways. "A pairing was tried" in the app means that: a connection
+  once a connection that carried bytes both ways has closed. "A pairing was tried" in the app means that: a connection
   passed through. It does not mean Xcode accepted the code.
 - A far machine is named as Tailscale names it: one word, a name under `ts.net`, or its `100.x`
   address. An IPv6 address is refused.
@@ -136,20 +137,22 @@ iPhone's Tailscale name are kept.
 - **Nothing was paired in 5 minutes.** The app stopped advertising. Start again from step 1.
 - **iOS stopped it in the background.** See "Go to Settings and type the code straight away" above.
 
-To see where a connection from Settings came from, read the device's log through the Mac's
-Console: `log stream --predicate 'subsystem == "io.github.mh-mobile.roamrun.introducer"'`.
+Where a connection from Settings came from is shown under Details on the screen the app ends on.
+It is also in the device's log: in Console on a Mac, select the device and filter by the subsystem
+`io.github.mh-mobile.roamrun.introducer`.
 
 ## What was tried
 
 On an iPhone 15 Pro on iOS 27, with a far Mac reached over Tailscale: Xcode's pairing by name and
 by a code from `--qr`, the lines carried by hand, and device control's pairing.
 
-Not tried: an iPad (the app is built for iPhone only), and other iOS versions.
+Not tried: device control's pairing with a machine running `roamrunctl` as the far one, an iPad
+(the app is built for iPhone only), and other iOS versions.
 
 ## For developers
 
-`Sources/Introduction.swift` mirrors `Sources/RoamRun/Introductions.swift` in the main app: the
-formats of the lines and their rules. Keep the two identical.
+`Sources/Introduction.swift` holds the formats of the lines and their rules, as
+`Sources/RoamRun/Introductions.swift` does in the main app. Change them in both.
 
 `Sources/Session.swift` holds one introduction: its stage, the code, and how it ended.
 `Sources/ContentView.swift` shows it: a first screen, the three steps while it runs, and how it
@@ -160,13 +163,15 @@ build in the simulator:
 SIMCTL_CHILD_INTRODUCER_PREVIEW=pairing xcrun simctl launch booted io.github.mh-mobile.roamrun.introducer
 ```
 
-The values are `empty`, `asking`, `pairing`, `code`, `finishing`, `done`, `byhand` and `failed`. The
+The values are `empty`, `asking`, `pairing`, `code`, `finishing`, `done`, `byhand` and `failed`. Any
+other value shows the first screen with a name held. The
 pictures on this page are that preview: its names and its code are made up.
 
 `Checks/relay-check.swift` builds the app's engine for macOS and runs it under a test service type,
-`_rrtest._tcp`, never the real one. It checks a fake far Mac echoing on 127.0.0.1, a stranger
+`_rrtest._tcp`, never the real one. Among what it checks: a fake far Mac echoing on 127.0.0.1, a stranger
 refused, an allowed connection relayed both ways, the end when a connection has carried, the record
-removed, and the deadline. Run it from `iOS/`:
+removed, the deadline, how the lines between the app and the far machine are read, and which
+addresses count as Tailscale's. Run it from `iOS/`:
 
 ```
 xcrun swiftc -swift-version 6 -parse-as-library -o /tmp/relay-check Sources/StandIn.swift Sources/Introduction.swift Sources/Wire.swift Checks/relay-check.swift && /tmp/relay-check
