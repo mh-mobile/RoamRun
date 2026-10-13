@@ -47,7 +47,7 @@ flowchart LR
   relay == "③ Tailscale 経由" ==> iphone
 ```
 
-ペアリングの検証と暗号化は、Apple の実装のまま、Mac とデバイスの間で行われます。RoamRun は通信を中継するだけで、中身を読むことも書き換えることもありません。詳しい仕組みは [docs/how-it-works.md](docs/how-it-works.md)（英語）にあります。
+ペアリングの検証と暗号化は、Apple の実装のまま、Mac とデバイスの間で行われます。RoamRun は通信を中継するだけで、中身を読むことも書き換えることもありません。詳しい仕組みは [docs/how-it-works.ja.md](docs/how-it-works.ja.md)にあります。
 
 ## 必要なもの
 
@@ -283,7 +283,7 @@ roamrun up iPhone
 
 **ペアリングした Mac は、デバイスを開発者として使えるようになります**。アプリのインストールと実行、デバッグ、アプリのデータの読み取りができます。取り消すには、デバイスの 設定 › プライバシーとセキュリティ › デベロッパモード で、その Mac を削除します。一覧には、その Mac 自身に付いている名前で表示されます。その名前は、`pair introduce` の出力で確かめられます。デバイス操作と違って、Xcode のペアリングは RoamRun からオフにできません。デバイスで削除するしかありません。
 
-ほかの方法と細かい決まりは、[docs/far-mac.md](docs/far-mac.md)（英語）にあります。1 行のテキストを手で運ぶ方法、それぞれの側が確かめること、離れた Mac でのデバッグに必要なシンボル、これまでに試したことを載せています。
+ほかの方法と細かい決まりは、[docs/far-mac.ja.md](docs/far-mac.ja.md)にあります。1 行のテキストを手で運ぶ方法、それぞれの側が確かめること、離れた Mac でのデバッグに必要なシンボル、これまでに試したことを載せています。
 
 ### デバイス自身に仲介させる
 
@@ -379,7 +379,7 @@ roamrun ota iPhone build/MyApp.ipa     # 名前を指定すると、そのデバ
 
 **tailnet のメンバーなら、だれでもこのページを開いて、ビルドをインストールできます**。tailnet を共有している場合は、Tailscale のアクセス制御で制限してください。ページの公開をやめるには、`~/Library/Application Support/RoamRun/ota/` を削除します。
 
-ポートと Funnel、`--replace`、デバイス側のデベロッパモード、ビルドを保存する前に RoamRun が確かめることは、[docs/ota.md](docs/ota.md)（英語）にあります。
+ポートと Funnel、`--replace`、デバイス側のデベロッパモード、ビルドを保存する前に RoamRun が確かめることは、[docs/ota.ja.md](docs/ota.ja.md)にあります。
 
 ## Mac から離れて作業する
 

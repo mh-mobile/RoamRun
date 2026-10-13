@@ -1,5 +1,7 @@
 # Installing over the air: details
 
+<p align="center">English | <a href="ota.ja.md">日本語</a></p>
+
 `roamrun ota` publishes a build on a page in your tailnet, and a device installs it by itself. The
 [README](../README.md#installing-without-the-bridge-over-the-air) says when to use it and how.
 This document has the rest.

@@ -1,5 +1,7 @@
 # How RoamRun works
 
+<p align="center">English | <a href="how-it-works.ja.md">日本語</a></p>
+
 What the bridge does, step by step, and where each part lives in the source. The
 [README](../README.md) says what RoamRun is for and how to use it.
 
