@@ -144,6 +144,7 @@ with Ctrl-C once the code was typed ends the same way: the far Mac's app goes on
 ## 5. Using a device from here
 
 Since 0.7.0 (an earlier `roamrunctl` has none of this, and names `--host` `--mac`).
+For an iPhone or iPad: not tried with an Apple Vision Pro.
 Three machines are spoken of, and one can be two of them: **the near machine** (on the
 device's Wi‑Fi; pairing needs one, once), **the using machine** (where `look`, `install`,
 `launch`, `mcp` run), and **the key's machine** (where the pairing's key is kept, and
@@ -229,7 +230,8 @@ believed the first time it is used — use it only if the user named it.
 - `roamrunctl mcp` — for an agent's MCP config (the command `roamrunctl`, the argument
   `mcp`): `devices`, `look`, `tap`, `swipe`, `elements`, `type`, `paste`, `press`,
   `install`, `launch`. Look, act, look again: a look serves one tap or swipe, within a
-  minute, and points are pixels of the image it returned. `type`, `paste` and `press`
+  minute, and points are pixels of the image it returned; turned since that look, the
+  device isn't pressed: look again. `type`, `paste` and `press`
   aren't held to a look and go to whatever is on the screen: look before them too. A
   call that fails may or may not have reached the device — look before doing it again.
   A call you take back before its turn isn't made.

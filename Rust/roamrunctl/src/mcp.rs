@@ -39,6 +39,10 @@ struct Shown {
 }
 
 /// A point of a picture, as fractions of it, in the terms of the device held upright, where a touch is sent.
+/// Whether the device was turned between a look and now.
+/// ponytail: a way not said (0) is taken as no turn; the look's shape still refuses the sideways case.
+pub fn turned(then: u8, now: u8) -> bool { then != 0 && now != 0 && then != now }
+
 /// None where the picture lies on its side and which way isn't known: the mirror of a point isn't pressed.
 /// Tried on an iPhone held each way on its side (iOS 27.0): a point off the picture landed where it was.
 pub fn upright(way: u8, sideways: bool, (x, y): (f64, f64)) -> Option<(f64, f64)> {
@@ -174,6 +178,13 @@ impl Server {
         Some(json!({ "jsonrpc": "2.0", "id": id, "result": result }).to_string())
     }
 
+    /// Refuses a point of a look taken with the device another way up than it is now.
+    fn unturned(&mut self, name: &str, way: u8) -> Result<(), String> {
+        let device = self.device(name)?;
+        if turned(way, match device.way() { 0 => device.way(), now => now }) { return Err("the device was turned since that look: nothing was pressed. Look again".into()) }
+        Ok(())
+    }
+
     /// The device, opened if it isn't.
     fn device(&mut self, name: &str) -> Result<&Device, String> {
         // Removed since, or another saved under the name: the one that is open isn't the one named any more.
@@ -250,6 +261,7 @@ impl Server {
                 let done = if tool == "tap" {
                     let (x, y) = real(number("x")?, number("y")?)?;
                     self.shown.remove(&name);
+                    self.unturned(&name, way)?;
                     self.ask(&name, |d| d.tap(x, y)).map(|_| "tapped; look to see what it did")
                 } else {
                     let (from, to) = (real(number("x1")?, number("y1")?)?, real(number("x2")?, number("y2")?)?);
@@ -258,6 +270,7 @@ impl Server {
                         given => given.as_u64().filter(|ms| (50..=5000).contains(ms)).ok_or("milliseconds is a whole number, 50...5000")? as u32,
                     };
                     self.shown.remove(&name);
+                    self.unturned(&name, way)?;
                     self.ask(&name, |d| d.swipe(from, to, ms)).map(|_| "swiped; look to see what it did")
                 };
                 self.acted.insert(name, Instant::now());
@@ -315,6 +328,7 @@ mod tests {
         assert_eq!(upright(0, false, (0.25, 0.1)), Some((0.25, 0.1)));
         assert_eq!(upright(0, true, (0.25, 0.1)), None);
         // Said one way and shaped the other (turned in between): not pressed.
+        assert!(turned(1, 3) && !turned(1, 1) && !turned(0, 3) && !turned(3, 0));
         assert_eq!((upright(1, true, (0.25, 0.1)), upright(3, false, (0.25, 0.1))), (None, None));
     }
 

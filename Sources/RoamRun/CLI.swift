@@ -822,6 +822,9 @@ enum CLI {
         let me = (try? TailscaleClient.fromSettings().selfDNSName()).flatMap { $0 }?.split(separator: ".").first.map(String.init) ?? "<this Mac's Tailscale name>"
         let client = TailscaleClient.fromSettings()
         let waits = await pairable(profile)
+        if waits != nil, far.os.lowercased() != "macos" {
+            stop("\(profile.displayName) waits to be picked by a Mac (Device Hub pairs it), and \(far.dnsName) isn't one: --host <a Mac>")
+        }
         let home = PairByName.Home(
             peer: peer,
             owner: { client.owner(of: $0) },
@@ -831,7 +834,7 @@ enum CLI {
                 switch event {
                 case .waiting: note("Waiting for \(far.dnsName), 10 minutes at most. There: roamrun pair xcode --with \(me)" + (waits == nil ? "   (or, for device control: roamrun pair control --with \(me) — roamrunctl pair control --with \(me) where it has no RoamRun)" : "")
                                     // Saved without its kind, and nothing waited: taken for a device that picks the Mac itself.
-                                    + (waits == nil && profile.deviceType == nil ? "\nIf \(profile.displayName) is an Apple Vision Pro: open Settings › General › Remote Devices on it, and run this again." : ""))
+                                    + (waits == nil && profile.deviceType == nil && far.os.lowercased() == "macos" ? "\nIf \(profile.displayName) is an Apple Vision Pro: open Settings › General › Remote Devices on it, and run this again." : ""))
                 case .connected: note(waits == nil ? "\(far.dnsName) answered; waiting for its offer." : "\(far.dnsName) answered.")
                 }
             })

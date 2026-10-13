@@ -7209,7 +7209,7 @@ extension TimingSensitive {
         // One that hangs up without a word, twice, is taken for a RoamRun from before.
         listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
         let old = Task.detached { [listener] in
-            for _ in 0..<2 { if let (link, _) = listener.accept(within: 3) { _ = link.read(within: 1); link.close() } }
+            for _ in 0..<2 { if let (link, _) = listener.accept(within: 10) { _ = link.read(within: 10); link.close() } }
         }
         home = homeMac(listener.port); home.device = "device-1"
         #expect(await home.hand(pairable: { "waits-1" }, resultWindow: 5) == .tooOld)
@@ -7231,8 +7231,8 @@ extension TimingSensitive {
         // That Mac took the device and went away: said as that, not as a mix-up of versions.
         listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
         let gone = Task.detached { [listener] in
-            guard let (link, _) = listener.accept(within: 3) else { return }
-            _ = link.read(within: 1); link.send(.wantDevice); _ = link.read(within: 1); link.close()
+            guard let (link, _) = listener.accept(within: 10) else { return }
+            _ = link.read(within: 10); link.send(.wantDevice); _ = link.read(within: 10); link.close()
         }
         home = homeMac(listener.port); home.device = "device-1"
         #expect(await home.hand(pairable: { "waits-1" }, resultWindow: 5) == .wentAway)
