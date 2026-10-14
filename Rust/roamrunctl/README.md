@@ -8,9 +8,11 @@ Windows, and macOS. The machine running it needs neither RoamRun nor Xcode. It h
 1. **Use an iPhone or iPad from this machine** (0.7.0+). Pair with the device, then take screenshots,
    install apps, and launch apps over Tailscale. An MCP server also lets an AI agent tap, swipe,
    type, and inspect the screen.
-2. **Introduce a device to a machine elsewhere** (`pair introduce`, 0.5.0+). A machine on the
-   device's Wi-Fi temporarily relays its pairing connection to a remote Mac or another machine.
-   The remote machine makes and keeps the pairing; the introducer keeps no key.
+2. **Introduce a device to a machine elsewhere** (`pair introduce`). A machine on the device's
+   Wi-Fi temporarily relays its pairing connection to a far Mac (0.5.0+) or to a machine with
+   `roamrunctl` (0.7.0+). The remote machine makes and keeps the pairing. The introducer passes
+   the connection on without reading it and saves nothing of it. For device control it shows the
+   code to type, so introduce with a machine you trust.
 
 ## Requirements
 
@@ -169,7 +171,7 @@ sequenceDiagram
   Note over D: user enters that code here
   U->>D: verifies the new pairing over Tailscale
   Note over U: saves the pairing key
-  Note over N: keeps no key, and is not needed after pairing
+  Note over N: saves nothing, and is not needed after pairing
 ```
 
 The using machine must allow incoming Tailscale TCP connections from the near machine on
