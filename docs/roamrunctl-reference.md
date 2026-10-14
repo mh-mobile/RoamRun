@@ -209,6 +209,10 @@ needed to establish each new device connection.
   Tap/swipe coordinates are pixels in the image returned by the last `look`.
 - `type`, `paste`, and `press` act on the currently focused interface. `paste` makes the device
   ask “Allow Paste” each time.
+- Each tool carries MCP's `readOnlyHint` and `destructiveHint`. `devices` and `look` are marked
+  read-only. `tap`, `swipe`, `type`, `paste`, `install`, and `launch` are marked destructive:
+  they press whatever is on the screen, end a running app, or replace one. `elements` and `press`
+  are neither. What a client does with the hints is the client's; none was checked.
 - A queued call cancelled before it starts is not executed; a call already running may
   complete. MCP keeps connections open and reopens a device when its saved association
   changes or its connection fails.

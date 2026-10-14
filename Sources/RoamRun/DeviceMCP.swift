@@ -244,7 +244,15 @@ final class DeviceMCP: @unchecked Sendable {
         var all = properties
         if name != "devices" { all["device"] = ["type": "string", "description": "The device's name in RoamRun (see `devices`)"] }
         return ["name": name, "description": description,
-                "inputSchema": ["type": "object", "properties": all, "required": (name == "devices" ? [] : ["device"]) + required]]
+                "inputSchema": ["type": "object", "properties": all, "required": (name == "devices" ? [] : ["device"]) + required],
+                "annotations": hints(name)]
+    }
+
+    /// What a client may take each tool to do, the same in `roamrunctl mcp`. `look` only reads: nothing it does on
+    /// the device lasts. `elements` may scroll. Destructive: whatever presses what is there.
+    static func hints(_ name: String) -> [String: Bool] {
+        ["readOnlyHint": ["devices", "look"].contains(name),
+         "destructiveHint": ["tap", "swipe", "type", "paste"].contains(name)]
     }
 
     // Computed: JSON objects aren't Sendable, and a static stored one would have to be.

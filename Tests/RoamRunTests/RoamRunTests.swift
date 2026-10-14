@@ -6176,6 +6176,9 @@ import ImageIO
     #expect(server.handle(Data(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#.utf8)) == nil)   // a notification gets no answer
     let tools = try #require(try result(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)["tools"] as? [[String: Any]])
     #expect(Set(tools.compactMap { $0["name"] as? String }) == ["devices", "look", "tap", "swipe", "elements", "type", "paste", "press"])
+    func hinted(_ hint: String) -> Set<String> { Set(tools.filter { ($0["annotations"] as? [String: Bool])?[hint] == true }.compactMap { $0["name"] as? String }) }
+    #expect(hinted("readOnlyHint") == ["devices", "look"])
+    #expect(hinted("destructiveHint") == ["tap", "swipe", "type", "paste"])
 
     // No look yet: refused here, and the app isn't even asked.
     #expect(try call("tap", #"{"device":"iPhone","x":10,"y":10}"#)["isError"] as? Bool == true)
