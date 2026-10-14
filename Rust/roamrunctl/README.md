@@ -237,7 +237,9 @@ Add `--passphrase` to `pair control` to save an age-encrypted `phone.age` file i
 The passphrase is taken from the first of these that is set: `ROAMRUNCTL_PASSPHRASE_FILE`,
 `ROAMRUNCTL_PASSPHRASE_COMMAND`, `ROAMRUNCTL_PASSPHRASE`. If none is set, it is asked for at
 the terminal. `mcp` cannot ask, so it requires one of them. Encrypting the file does not
-protect against software that can read the passphrase itself.
+protect against software that can read the passphrase itself. A file or a variable gives one
+passphrase for every encrypted device; the command is told which device it is for, so it can give
+each its own ([reference](../../docs/roamrunctl-reference.md#pairing-records-and-passphrases)).
 
 ### B: another machine keeps the key
 

@@ -159,7 +159,7 @@ fn read(name: &str, path: &Path, sealed: bool) -> Result<(Saved, Vec<u8>), Strin
     }
     let file = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let opened;
-    let bytes = if sealed { opened = crate::secret::opened(&file, &crate::secret::passphrase(name, false)?).map_err(|why| format!("{name}: {why}"))?; &opened } else { &file };
+    let bytes = if sealed { opened = crate::secret::opened(&file, &crate::secret::passphrase(Some(name), false)?).map_err(|why| format!("{name}: {why}"))?; &opened } else { &file };
     let saved: Saved = serde_json::from_slice(bytes).map_err(|e| format!("{} isn't a saved device ({e}): `roamrunctl devices remove {name}` forgets it", path.display()))?;
     // Another's file, found where names differ only by case, or renamed by hand.
     if saved.name != name { return Err(format!("“{name}” is saved here as “{}”: name it so", saved.name)); }
@@ -227,7 +227,7 @@ fn import(file: &Path, name: Option<String>, sealed: bool) -> Result<String, Str
     }
     // Tried before it is kept, and the file goes only once it is: a key that doesn't open the device isn't one.
     open(&saved)?;
-    let passphrase = if sealed { Some(crate::secret::passphrase(&saved.name, true)?) } else { None };
+    let passphrase = if sealed { Some(crate::secret::passphrase(Some(&saved.name), true)?) } else { None };
     let path = save(&saved, passphrase.as_deref())?;
     std::fs::remove_file(file).map_err(|e| format!("saved, but {} couldn't be removed ({e}): remove it yourself, it is a key", file.display()))?;
     Ok(match passphrase {

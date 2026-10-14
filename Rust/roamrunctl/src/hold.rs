@@ -124,7 +124,7 @@ pub fn run(with: &str, name: Option<String>, sealed: bool) -> Result<String, Str
     let other = tailscale::known(&status, with)?;
     if let Some(name) = &name { device::free(name)?; }
     // Before the device is asked anything: a pairing made and then not kept would leave it paired with nothing here.
-    let passphrase = if sealed { Some(secret::passphrase("the pairing", true)?) } else { None };
+    let passphrase = if sealed { Some(secret::passphrase(name.as_deref(), true)?) } else { None };
     let host = host_id()?;
     let shown = lines::announced_name(&status.this.dns_name).ok_or("this machine's Tailscale name can't be shown on a device: rename it there")?;
     let listener = TcpListener::bind((own, wire::PORT)).map_err(|e| if e.kind() == std::io::ErrorKind::AddrInUse {
@@ -259,7 +259,7 @@ pub fn here(to: &str, name: Option<String>, sealed: bool) -> Result<String, Stri
     let name = name.unwrap_or_else(|| filed(short(&device.dns)));
     device::free(&name)?;
     // Before the device is asked anything: a pairing made and then not kept would leave it paired with nothing here.
-    let passphrase = if sealed { Some(secret::passphrase("the pairing", true)?) } else { None };
+    let passphrase = if sealed { Some(secret::passphrase(Some(&name), true)?) } else { None };
     let host = host_id()?;
     let shown = lines::announced_name(&status.this.dns_name).ok_or("this machine's Tailscale name can't be shown on a device: rename it there")?;
     let socket = TcpListener::bind((local, 0)).map_err(|e| format!("can't listen on {local}: {e}"))?;
