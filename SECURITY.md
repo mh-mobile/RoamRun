@@ -287,8 +287,8 @@ bounded.
   to arrive within 10 s and its body within 30 s more, and one address holds 17 of the 32
   connections at most: a machine that can reach the port but isn't let in can't keep
   callers out for long. Only the devices named are used — each only while it is saved as
-  it was when the server began — and `install` isn't offered. A look serves the caller that
-  took it: a tap by another caller after it is refused. A tool call whose caller's
+  it was when the server began — and `install` isn't offered. A tap or swipe names the look
+  it is of, and is refused after another look of that device, whoever took it. A tool call whose caller's
   connection is gone when its turn comes isn't made. Whoever is let in operates those devices as roamrunctl does, while it runs.
   Between the caller and the machine, a cloud's proxy sees the images, what is typed or
   pasted, and the token: with Codex Cloud it ends TLS itself. The token file has to be its

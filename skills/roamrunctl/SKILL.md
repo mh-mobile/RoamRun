@@ -230,8 +230,9 @@ believed the first time it is used — use it only if the user named it.
 - `roamrunctl launch <name> <bundle id>` — one already running is ended first.
 - `roamrunctl mcp` — for an agent's MCP config (the command `roamrunctl`, the argument
   `mcp`): `devices`, `look`, `tap`, `swipe`, `elements`, `type`, `paste`, `press`,
-  `install`, `launch`. Look, act, look again: a look serves one tap or swipe, within a
-  minute, and points are pixels of the image it returned; turned since that look, the
+  `install`, `launch`. Look, act, look again: a look answers with an id (`look 12`) and
+  serves one tap or swipe, within a minute, which gives it (`"look": 12`) with points in
+  the pixels of the image it returned; looked at again since, by anyone, or turned since, the
   device isn't pressed: look again. `type`, `paste` and `press`
   aren't held to a look and go to whatever is on the screen: look before them too. A
   call that fails may or may not have reached the device — look before doing it again.
@@ -256,6 +257,8 @@ for c in r.get("content", []):
         with os.fdopen(fd, "wb") as f: f.write(base64.b64decode(c["data"]))
 print(r.get("isError"), [c.get("text") for c in r.get("content", []) if c.get("type") == "text"])'; }
 echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"device":"phone"}}}' | rr | said
+# It said "590 x 1280, look 12": a tap in the pixels of look.jpg gives that id.
+echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"tap","arguments":{"device":"phone","look":12,"x":295,"y":155}}}' | rr | said
 ```
 
 Write a look's image to a file, as above, and view the file: never print the base64 (the
@@ -263,7 +266,9 @@ screen may show messages or notifications: the file is yours alone to read). A 4
 is a missing or wrong token, a 403 a caller it doesn't let in — say so, don't retry. "not
 begun" did nothing; a timeout or a 504 may have done it — look before trying again. Keep
 the connection open until the answer comes: a call whose connection closed before its turn
-isn't made. A look serves you only: after another caller's, look again. Only the devices
+isn't made, and closing it is how a call is taken back here (`notifications/cancelled` does
+nothing over HTTP). Give each tap or swipe the id of your look: after another agent's look,
+yours is refused — look again. Only the devices
 the user named are there, and `install` isn't offered over HTTP.
 
 A look here is a picture the device makes, and inputs are sent without a screen stream:

@@ -206,9 +206,11 @@ needed to establish each new device connection.
   (next section). `look` returns a JPEG image
   to the agent, while the standalone `roamrunctl look` command saves a PNG; the longer
   image side is at most 1280 pixels.
-- An MCP `look` authorizes **one** `tap` or `swipe` within 60 seconds. Another operation
-  (`type`, `paste`, `press`, `elements`, `install`, or `launch`) invalidates that look.
-  A subsequent tap or swipe needs another `look`.
+- An MCP `look` answers with an id, and authorizes **one** `tap` or `swipe` within 60 seconds,
+  which gives that id (`"look": 12`). Another look since — by any client — or another
+  operation (`type`, `paste`, `press`, `elements`, `install`, or `launch`) invalidates it, and
+  the tap or swipe is refused: a subsequent one needs another `look`. Ids start from a random
+  number at each start, so one kept from an earlier run isn't taken for a later look.
 - Rotation is rejected when reported orientation or image-shape checks detect a mismatch;
   it is **not guaranteed** to be detected if the device reports no orientation.
   Tap/swipe coordinates are pixels in the image returned by the last `look`.
@@ -252,12 +254,16 @@ needed to establish each new device connection.
   connecting, the body within 30 s more, however it trickles in. A body is read as chunked
   when it says so (also when a length comes with it), else by its length; 1 MB at most.
   32 connections at once, 17 from one address; more are answered 503.
-- Tool calls take turns, as over stdio. One whose caller has closed its connection (or only
-  its own side of it), or whose connection broke, or that it took back
-  (`notifications/cancelled`), when its turn comes isn't made; one that waited 20 s for its
-  turn is answered "not begun" and isn't made. Other messages are answered at once.
-- A look serves its own caller (by address): a tap or swipe after another caller's look is
-  refused ("look first").
+- Tool calls on one device take turns, as over stdio; each device has its own turn, so a call
+  on one doesn't wait for another's. One whose caller has closed its connection (or only its
+  own side of it), or whose connection broke, when its turn comes isn't made: over HTTP a call
+  is taken back by closing its connection. A `notifications/cancelled` is answered 202 and
+  does nothing — its request id is the client's choosing, and another client's call could
+  carry the same (as MCP 2026-07-28 has it, and the SDKs' servers do without sessions). One
+  that waited 20 s for its turn is answered "not begun" and isn't made. Other messages are
+  answered at once.
+- Several agents can use one server at once: a tap or swipe names the look it is of, and is
+  refused after another look of that device, whoever took it.
 - Only the devices named are listed by `devices` or used, and only while each is saved here
   as it was when this began: removed, or saved anew under its name, it isn't used until this
   is run again. `install` isn't offered: its `path` would name a file on this machine for
