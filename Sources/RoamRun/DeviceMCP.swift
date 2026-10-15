@@ -20,6 +20,8 @@ final class DeviceMCP: @unchecked Sendable {
     static let longSide = DeviceControlHub.lookSide
     /// The most `type` takes in one call here.
     static let longestTyped = 500
+    /// The MCP versions spoken here: initialize answers the one asked for if it is one of them, else the newest.
+    static let versions = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"]
     /// Per device: the size of the last image given out, of the look behind it, and which look
     /// that was — a point is sent with it, so it isn't read against a look another made since.
     private var shown: [UUID: (shown: CGSize, real: CGSize, look: Int?)] = [:]
@@ -51,6 +53,7 @@ final class DeviceMCP: @unchecked Sendable {
     func serve(lines: () -> String? = { readLine(strippingNewline: true) },
                write: @escaping @Sendable (Data) -> Void = { FileHandle.standardOutput.write($0 + Data([0x0A])) }) {
         while let line = lines() {
+            if line.allSatisfy(\.isWhitespace) { continue }
             let message = Data(line.utf8)
             let object = try? JSONSerialization.jsonObject(with: message) as? [String: Any]
             if object?["method"] as? String == "notifications/cancelled" {
@@ -98,18 +101,24 @@ final class DeviceMCP: @unchecked Sendable {
         }
     }
 
-    /// One message in, its answer out; nil for a notification (and for what isn't JSON-RPC).
+    /// One message in, its answer out; nil for a notification. What can't be read is answered with
+    /// JSON-RPC's error for it, as `roamrunctl mcp` does: a client waiting on it isn't left waiting.
     func handle(_ message: Data) -> Data? {
-        guard let object = try? JSONSerialization.jsonObject(with: message) as? [String: Any],
-              let method = object["method"] as? String else { return nil }
+        func failed(_ id: Any, _ code: Int, _ why: String) -> Data? {
+            try? JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": id, "error": ["code": code, "message": why]])
+        }
+        guard let read = try? JSONSerialization.jsonObject(with: message, options: .fragmentsAllowed) else { return failed(NSNull(), -32700, "not JSON") }
+        guard let object = read as? [String: Any] else { return failed(NSNull(), -32600, "one request at a time, as an object") }
         guard let id = object["id"] else { return nil }   // a notification: nothing to answer
+        guard let method = object["method"] as? String else { return failed(id, -32600, "no method") }
         let params = object["params"] as? [String: Any] ?? [:]
         func reply(_ result: [String: Any]) -> Data? {
             try? JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": id, "result": result])
         }
         switch method {
         case "initialize":
-            return reply(["protocolVersion": params["protocolVersion"] as? String ?? "2024-11-05",
+            let asked = params["protocolVersion"] as? String
+            return reply(["protocolVersion": Self.versions.first { $0 == asked } ?? Self.versions.max()!,
                           "capabilities": ["tools": [String: Any]()],
                           "serverInfo": ["name": "roamrun", "version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"],
                           "instructions": Self.instructions])
@@ -128,8 +137,7 @@ final class DeviceMCP: @unchecked Sendable {
             }
             return reply(["content": content, "isError": failed])
         default:
-            return try? JSONSerialization.data(withJSONObject: [
-                "jsonrpc": "2.0", "id": id, "error": ["code": -32601, "message": "no such method: \(method)"]])
+            return failed(id, -32601, "no such method: \(method)")
         }
     }
 
@@ -244,7 +252,16 @@ final class DeviceMCP: @unchecked Sendable {
         var all = properties
         if name != "devices" { all["device"] = ["type": "string", "description": "The device's name in RoamRun (see `devices`)"] }
         return ["name": name, "description": description,
-                "inputSchema": ["type": "object", "properties": all, "required": (name == "devices" ? [] : ["device"]) + required]]
+                "inputSchema": ["type": "object", "properties": all, "required": (name == "devices" ? [] : ["device"]) + required],
+                "annotations": hints(name)]
+    }
+
+    /// What a client may take each tool to do, the same in `roamrunctl mcp`. `look` only reads: nothing it does on
+    /// the device lasts. `elements` may scroll. Destructive: whatever presses or types into what is
+    /// there, or can't be undone from here (`lock`).
+    static func hints(_ name: String) -> [String: Bool] {
+        ["readOnlyHint": ["devices", "look"].contains(name),
+         "destructiveHint": ["tap", "swipe", "type", "paste", "press"].contains(name)]
     }
 
     // Computed: JSON objects aren't Sendable, and a static stored one would have to be.

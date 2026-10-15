@@ -1,8 +1,10 @@
 //! Who is where on the tailnet, from the installed `tailscale` CLI.
 
 use serde::Deserialize;
-use std::net::{Ipv4Addr, SocketAddr};
-use std::process::Command;
+use std::io::Read;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 #[derive(Deserialize)]
 pub struct Status {
@@ -25,7 +27,7 @@ struct Tailnet {
 #[derive(Deserialize)]
 pub struct Node {
     #[serde(rename = "ID", default)]
-    id: String,
+    pub id: String,
     #[serde(rename = "DNSName", default)]
     pub dns_name: String,
     #[serde(rename = "TailscaleIPs", default)]
@@ -104,6 +106,60 @@ fn run(args: &[&str]) -> Result<String, String> {
         return Err(format!("tailscale {}: {}", args[0], String::from_utf8_lossy(&out.stderr).trim()));
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// The same, given `within` to answer: what waits on it (a request) isn't held by a Tailscale that hangs.
+fn run_within(args: &[&str], within: Duration) -> Result<String, String> {
+    let mut child = Command::new(exe()).args(args).env_remove("ROAMRUNCTL_PASSPHRASE").stdout(Stdio::piped()).stderr(Stdio::null())
+        .spawn().map_err(|e| format!("tailscale isn't installed here ({e})"))?;
+    let mut stdout = child.stdout.take().ok_or("tailscale gave no output")?;
+    let reading = std::thread::spawn(move || { let mut out = String::new(); let _ = stdout.read_to_string(&mut out); out });
+    let until = Instant::now() + within;
+    loop {
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            let out = reading.join().unwrap_or_default();
+            return if status.success() { Ok(out) } else { Err(format!("tailscale {} failed", args[0])) };
+        }
+        if Instant::now() >= until {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("tailscale {} didn't answer in {} s", args[0], within.as_secs()));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Who is at a tailnet address, as `tailscale whois --json` says: what `mcp --http` lets a caller in by.
+#[derive(Deserialize, Default)]
+pub struct Whois {
+    #[serde(rename = "Node", default)]
+    pub node: WhoisNode,
+    #[serde(rename = "UserProfile", default)]
+    pub user: WhoisUser,
+}
+
+#[derive(Deserialize, Default)]
+pub struct WhoisNode {
+    /// What `Status`'s nodes call `ID`.
+    #[serde(rename = "StableID", default)]
+    pub id: String,
+    #[serde(rename = "Tags", default)]
+    pub tags: Option<Vec<String>>,
+    /// Set on a machine shared into this tailnet from another: the user who shared it.
+    #[serde(rename = "Sharer", default)]
+    pub sharer: i64,
+}
+
+#[derive(Deserialize, Default)]
+pub struct WhoisUser {
+    #[serde(rename = "LoginName", default)]
+    pub login: String,
+}
+
+/// Who is at `ip`, with five seconds for Tailscale to say.
+pub fn whois(ip: IpAddr) -> Result<Whois, String> {
+    let out = run_within(&["whois", "--json", &ip.to_string()], Duration::from_secs(5))?;
+    serde_json::from_str(&out).map_err(|e| format!("tailscale whois wasn't readable ({e})"))
 }
 
 pub fn status() -> Result<Status, String> {

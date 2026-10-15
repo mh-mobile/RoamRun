@@ -216,11 +216,37 @@ Use the full executable path if the client cannot find `roamrunctl` in its `PATH
 The tools are `devices`, `look`, `tap`, `swipe`,
 `elements`, `type`, `paste`, `press`, `install`, and `launch`.
 
-For `tap` and `swipe`, the agent must first call `look`. Each look permits one tap or swipe
-within 60 seconds. `type`, `paste`, `press`, `elements`, `install` or `launch` on that device
-spends it, and a tap or swipe is refused if the device
-reports that it was turned since the look. The server uses the device's screenshots and input
-commands, not a continuous screen-sharing stream.
+For `tap`, `swipe`, `type` and `paste`, the agent must first call `look`, and give the id
+that look answered with (`"look": 12`). A look stands for 60 seconds, and only while it is
+the device's latest: another look by any agent (one that failed too), or `press`,
+`elements`, `install` or `launch` on that device, ends it. It permits one tap or swipe;
+after a tap, swipe, `type` or `paste` by it, a tap or swipe needs another look, while `type`
+and `paste` still go by it, so look → tap a field → type needs one look. A tap or swipe is
+also refused if the device reports that it was turned since the look, and a call that fails
+in a way that may have reached the device ends the look. The server uses the device's
+screenshots and input commands, not a continuous screen-sharing stream.
+
+#### Over HTTP, for an agent elsewhere
+
+An agent that reaches this machine only over HTTP (one in a cloud environment that is on your
+tailnet) uses the same tools from `roamrunctl mcp --http`, which you start and stop:
+
+```sh
+roamrunctl mcp --http 9090 --allow tag:codex phone
+```
+
+- It listens on this machine's Tailscale IPv4 address alone, on that port, until Ctrl-C.
+  The endpoint is `http://<that address>:9090/mcp`. A cloud environment usually has no
+  MagicDNS: give it the address, not the name.
+- `--allow` says who may call: `tag:<name>` for a tagged machine (a cloud's carries the tag of
+  the auth key you gave it), or a login (`someone@example.com`) for a person's own machines.
+  Tailscale is asked who each caller is (`tailscale whois`). A machine's name isn't taken.
+  A call from this machine itself is refused unless it brings the token.
+- `--token-file <file>` makes every request also bring `Authorization: Bearer <token>`: a
+  file only you can read, 32 characters or more.
+- Only the devices named are listed or used, and `install` isn't offered over HTTP.
+- What is shown and sent passes through whatever lies between: a cloud's proxy sees the
+  images, the text typed or pasted, and the token.
 
 An optional [agent skill](https://github.com/mh-mobile/RoamRun/tree/main/skills/roamrunctl)
 provides instructions: `npx skills add mh-mobile/RoamRun`. Installing the skill does not
@@ -236,8 +262,10 @@ including an agent, can nevertheless use an unencrypted key** to operate the dev
 Add `--passphrase` to `pair control` to save an age-encrypted `phone.age` file instead.
 The passphrase is taken from the first of these that is set: `ROAMRUNCTL_PASSPHRASE_FILE`,
 `ROAMRUNCTL_PASSPHRASE_COMMAND`, `ROAMRUNCTL_PASSPHRASE`. If none is set, it is asked for at
-the terminal. `mcp` cannot ask, so it requires one of them. Encrypting the file does not
-protect against software that can read the passphrase itself.
+the terminal. `mcp` cannot ask, so it requires one of them; `mcp --http` asks at the terminal
+as it starts. Encrypting the file does not
+protect against software that can read the passphrase itself. What the environment gives is one
+passphrase, used for every encrypted device opened under it: one `mcp` server uses one for all.
 
 ### B: another machine keeps the key
 
