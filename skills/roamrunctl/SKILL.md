@@ -233,9 +233,10 @@ believed the first time it is used — use it only if the user named it.
   `install`, `launch`. Look, act, look again: a look answers with an id (`look 12`) and
   serves one tap or swipe, within a minute, which gives it (`"look": 12`) with points in
   the pixels of the image it returned; looked at again since, by anyone, or turned since, the
-  device isn't pressed: look again. `type` and `paste` give the latest look's id too
-  (after a tap with it is fine; they don't spend it) and are refused once another look, a
-  button, a launch or `elements` came since: look again. `press` isn't held to a look and
+  device isn't pressed: look again. `type` and `paste` give the latest look's id too, within
+  the same minute (after a tap by it is fine, and so is more text) and are refused once
+  another look, a button, a launch, an install or `elements` came since: look again. After a
+  tap, swipe, type or paste, a tap or swipe needs a new look. `press` isn't held to a look and
   goes to whatever is on the screen: look before it too. A
   call that fails may or may not have reached the device — look before doing it again.
   A call you take back before its turn isn't made.
@@ -270,7 +271,7 @@ is a missing or wrong token, a 403 a caller it doesn't let in — say so, don't 
 begun" did nothing; a timeout or a 504 may have done it — look before trying again. Keep
 the connection open until the answer comes: a call whose connection closed before its turn
 isn't made, and closing it is how a call is taken back with curl (`notifications/cancelled`
-counts only with the `Mcp-Session-Id` an `initialize` answered with, as MCP clients send it). Give each tap or swipe the id of your look: after another agent's look,
+counts only with the `Mcp-Session-Id` an `initialize` answered with, as MCP clients send it). Give each tap, swipe, type and paste the id of your look: after another agent's look,
 yours is refused — look again. Only the devices
 the user named are there, and `install` isn't offered over HTTP.
 
@@ -284,9 +285,10 @@ Tailscale. Whether launching works on a device no Xcode ever met wasn't tried.
 Tried against a device, on Linux and macOS, in an earlier form of each: `pair control
 --with`, a key from a Mac, look, tap, type, a button, install, launch, `mcp`'s look and
 tap, and B. On macOS as it is now: `pair control --to`, and `mcp --http` called from the
-machine itself with the token (a look). Not yet: `sign` as it is now and
-`ROAMRUNCTL_SIGNER`, `--passphrase`, the Introducer app or a Mac introducing this machine,
-the other `mcp` tools, `mcp --http` from another machine or a cloud, and anything on
+machine itself with the token (look, tap, type, press, `elements`, calls taken back). Not
+yet: `sign` as it is now and `ROAMRUNCTL_SIGNER`, `--passphrase`, the Introducer app or a
+Mac introducing this machine, `mcp`'s swipe, install and launch and a paste that goes
+through, `mcp --http` from another machine or a cloud, and anything on
 Windows (it builds there). If one of those fails, say what it
 said; don't work around it.
 

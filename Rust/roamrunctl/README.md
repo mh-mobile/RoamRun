@@ -216,14 +216,15 @@ Use the full executable path if the client cannot find `roamrunctl` in its `PATH
 The tools are `devices`, `look`, `tap`, `swipe`,
 `elements`, `type`, `paste`, `press`, `install`, and `launch`.
 
-For `tap` and `swipe`, the agent must first call `look`, and give the id that look answered
-with (`"look": 12`). Each look permits one tap or swipe within 60 seconds, and only while it
-is the device's latest: after another look, by any agent, the tap or swipe is refused. `type`, `paste`, `press`, `elements`, `install` or `launch` on that device
-spends it, and a tap or swipe is refused if the device
-reports that it was turned since the look. `type` and `paste` give the latest look's id too
-(after a tap with it is fine; the look isn't spent by them), and are refused once another
-look, a button, a launch or `elements` came since: they go to whatever has focus. The server
-uses the device's screenshots and input commands, not a continuous screen-sharing stream.
+For `tap`, `swipe`, `type` and `paste`, the agent must first call `look`, and give the id
+that look answered with (`"look": 12`). A look stands for 60 seconds, and only while it is
+the device's latest: another look by any agent (one that failed too), or `press`,
+`elements`, `install` or `launch` on that device, ends it. It permits one tap or swipe;
+after a tap, swipe, `type` or `paste` by it, a tap or swipe needs another look, while `type`
+and `paste` still go by it, so look → tap a field → type needs one look. A tap or swipe is
+also refused if the device reports that it was turned since the look, and a call that fails
+in a way that may have reached the device ends the look. The server uses the device's
+screenshots and input commands, not a continuous screen-sharing stream.
 
 #### Over HTTP, for an agent elsewhere
 

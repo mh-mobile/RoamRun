@@ -1,6 +1,7 @@
 //! `roamrunctl mcp --http <port> --allow <who>… <devices>…`: the MCP tools over HTTP — Streamable HTTP as MCP
-//! 2025-11-25 has it, without sessions, every answer JSON — on this machine's Tailscale IPv4 address, for the
-//! callers Tailscale says are allowed. One request a connection. Tool calls on one device take turns, as over stdio.
+//! 2025-11-25 has it, every answer JSON, a session given only to take a call back in — on this machine's Tailscale
+//! IPv4 address, for the callers Tailscale says are allowed. One request a connection. Tool calls on one device take
+//! turns, as over stdio.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -31,6 +32,9 @@ const FROM_ONE: usize = 17;
 const TURNING_AWAY: usize = 64;
 /// A tool call that waited this long for its turn on its device isn't begun: another held the device.
 const TURN: Duration = Duration::from_secs(20);
+/// A taking back that came in before its call is kept this long for it: each comes on its own connection, and the
+/// call's can be the slower (its head, Tailscale's answer and its body take 45 s at most).
+const TAKEN_BACK: Duration = Duration::from_secs(60);
 
 /// Who may call: tagged machines by a tag, people's own machines by their login.
 #[derive(Debug, PartialEq, Clone)]
@@ -227,11 +231,19 @@ enum Work {
 /// pressed for nobody. One that waited too long is answered so, and not begun.
 fn work(mut server: Server, told: mpsc::Receiver<Work>) {
     let mut waiting = std::collections::VecDeque::new();
+    // What was taken back, and when: (session, id, at).
+    let mut cancelled: Vec<(String, Value, Instant)> = Vec::new();
     while let Some(next) = waiting.pop_front().or_else(|| told.recv().ok()) {
         waiting.extend(told.try_iter());
-        let Work::Call { session, id, line, stream, at, reply } = next else { continue };
+        cancelled.retain(|(_, _, at)| at.elapsed() < TAKEN_BACK);
+        let (session, id, line, stream, at, reply) = match next {
+            Work::Call { session, id, line, stream, at, reply } => (session, id, line, stream, at, reply),
+            // Perhaps before its call: kept for it a while (an id isn't used twice in a session).
+            Work::Cancel { session, id } => { cancelled.push((session, id, Instant::now())); continue }
+        };
         let taken_back = session.as_ref().is_some_and(|session| {
-            waiting.iter().any(|w| matches!(w, Work::Cancel { session: s, id: i } if s == session && *i == id))
+            cancelled.iter().any(|(s, i, _)| s == session && *i == id)
+                || waiting.iter().any(|w| matches!(w, Work::Cancel { session: s, id: i } if s == session && *i == id))
         });
         if taken_back || closed(&stream) { continue }
         if at.elapsed() > TURN {
@@ -260,7 +272,7 @@ struct Shared {
     offered: Vec<(String, Option<Vec<u8>>)>,
     /// Where a call on each device takes its turn.
     turns: HashMap<String, mpsc::Sender<Work>>,
-    /// What a request's Host may name: this machine's address, or its Tailscale names, with the port.
+    /// What a request's Host may name (see `hosts`).
     hosts: Vec<String>,
     /// This machine's address and lasting id on the tailnet: a call from it is this machine's own.
     own_ip: IpAddr,
@@ -284,6 +296,12 @@ fn offerable(devices: &[String]) -> Result<Vec<(String, Option<Vec<u8>>)>, Strin
         if let Some(other) = at.insert(ip.clone(), name) { return Err(format!("{other} and {name} are one device ({ip}): offer it under one name")) }
         Ok((name.clone(), Some(file)))
     }).collect()
+}
+
+/// What a request's Host may name: this machine's address, or one of its Tailscale names, with the port — or
+/// without it where the port is HTTP's own, as a client then sends it.
+fn hosts(ip: IpAddr, names: Vec<String>, port: u16) -> Vec<String> {
+    std::iter::once(ip.to_string()).chain(names).flat_map(|host| [Some(format!("{host}:{port}")), (port == 80).then_some(host)]).flatten().collect()
 }
 
 /// `roamrunctl mcp --http`: until Ctrl-C.
@@ -311,7 +329,7 @@ pub fn serve(options: Options) -> Result<String, String> {
 /// may give); `whois` says who a caller is (a test gives its own).
 fn run(listener: TcpListener, options: Options, offered: Vec<(String, Option<Vec<u8>>)>, own_ip: IpAddr, names: Vec<String>, own_id: String, head_within: Duration, whois: Box<dyn Fn(IpAddr) -> Result<Whois, String> + Send + Sync>) -> Result<String, String> {
     let own = listener.local_addr().map_err(|e| e.to_string())?;
-    let hosts = std::iter::once(own.to_string()).chain(names.iter().map(|name| format!("{name}:{}", own.port()))).collect();
+    let hosts = hosts(own.ip(), names, own.port());
     // A turn of its own for each device: a call on one doesn't wait for another's.
     let turns = options.devices.iter().map(|name| {
         let (tell, told) = mpsc::channel();
@@ -713,6 +731,9 @@ mod tests {
         let other = call(Some("b"), 4, false, 0);
         let none = call(None, 4, false, 0);
         tell.send(Work::Cancel { session: "a".into(), id: json!(4) }).unwrap();
+        // Taken back before the call came in (each on its own connection, the call's the slower): not made either.
+        tell.send(Work::Cancel { session: "c".into(), id: json!(5) }).unwrap();
+        let first = call(Some("c"), 5, false, 0);
         drop(tell);
         std::thread::spawn(move || work(Server::offering(vec![("phone".into(), None)]), told));
         let got = |answered: mpsc::Receiver<String>| answered.recv_timeout(Duration::from_secs(10)).ok();
@@ -722,6 +743,15 @@ mod tests {
         assert_eq!(got(taken_back), None);
         assert!(got(other).is_some_and(|a| a.contains(r#""id":4"#)));
         assert!(got(none).is_some_and(|a| a.contains(r#""id":4"#)));
+        assert_eq!(got(first), None);
+    }
+
+    #[test]
+    fn a_host_is_this_machine_with_the_port_or_without_it_where_it_is_80() {
+        let ip: IpAddr = "100.64.0.1".parse().unwrap();
+        assert_eq!(hosts(ip, vec!["mac".into()], 9090), ["100.64.0.1:9090", "mac:9090"]);
+        // HTTP's own port, which a client leaves out.
+        assert_eq!(hosts(ip, vec!["mac".into()], 80), ["100.64.0.1:80", "100.64.0.1", "mac:80", "mac"]);
     }
 
     #[test]

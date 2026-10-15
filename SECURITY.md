@@ -269,9 +269,10 @@ bounded.
   folder, then opens nothing — and a program that runs as the user and can read the
   passphrase where it is kept is no further from the device than before. It looks by
   the device's own screenshot and sends inputs with no screen stream, so the device
-  shows no screen-sharing session meanwhile. Its MCP tools hold `tap` and `swipe` to a
-  look just taken, and `type` and `paste` to the device's latest look with nothing else done
-  since (by the look's id); `press` goes to whatever is on the screen.
+  shows no screen-sharing session meanwhile. Its MCP tools hold `tap`, `swipe`, `type` and
+  `paste` to the device's latest look, by its id, for a minute — a tap or swipe to one that
+  nothing went by yet — and let it go after anything else done there, or a failure that may
+  have reached the device; `press` goes to whatever is on the screen.
   A call taken back before its turn, or whose turn comes after the client went, isn't
   made. A device it has open is held to the saved file it was opened from: removed, or
   another saved under the name, it isn't operated under that name any more. Where the
@@ -288,8 +289,8 @@ bounded.
   to arrive within 10 s and its body within 30 s more, and one address holds 17 of the 32
   connections at most: a machine that can reach the port but isn't let in can't keep
   callers out for long. Only the devices named are used — each only while it is saved as
-  it was when the server began — and `install` isn't offered. A tap or swipe names the look
-  it is of, and is refused after another look of that device, whoever took it. A tool call whose caller's
+  it was when the server began — and `install` isn't offered. A tap, swipe, type or paste names the
+  look it is of, and is refused after another look of that device, whoever took it. A tool call whose caller's
   connection is gone when its turn comes isn't made. Whoever is let in operates those devices as roamrunctl does, while it runs.
   Between the caller and the machine, a cloud's proxy sees the images, what is typed or
   pasted, and the token: with Codex Cloud it ends TLS itself. The token file has to be its
