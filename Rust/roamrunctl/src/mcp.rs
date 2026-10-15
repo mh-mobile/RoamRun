@@ -20,7 +20,7 @@ const LOOK_STANDS: Duration = Duration::from_secs(60);
 const SETTLE: Duration = Duration::from_secs(1);
 /// The most `type` takes in one call.
 const LONGEST_TYPED: usize = 500;
-/// The MCP versions spoken here, newest last: initialize answers the one asked for if it is one of them, else the newest.
+/// The MCP versions spoken here: initialize answers the one asked for if it is one of them, else the newest.
 const VERSIONS: [&str; 4] = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
 
 const INSTRUCTIONS: &str = "Operates a real iPhone or iPad from this machine. Look, act, look again: each look serves one \
@@ -173,7 +173,7 @@ impl Server {
         let params = &object["params"];
         let result = match method {
             "initialize" => json!({
-                "protocolVersion": VERSIONS.iter().find(|v| params["protocolVersion"].as_str() == Some(**v)).unwrap_or(&VERSIONS[VERSIONS.len() - 1]),
+                "protocolVersion": VERSIONS.into_iter().find(|v| params["protocolVersion"] == *v).or(VERSIONS.into_iter().max()),
                 "capabilities": { "tools": {} },
                 "serverInfo": { "name": "roamrunctl", "version": env!("ROAMRUN_VERSION") },
                 "instructions": INSTRUCTIONS,
@@ -357,6 +357,12 @@ mod tests {
         assert_eq!(answered(r#"{"protocolVersion":"2024-11-05"}"#), "2024-11-05");
         assert_eq!(answered(r#"{"protocolVersion":"2026-07-28"}"#), "2025-11-25");
         assert_eq!(answered("{}"), "2025-11-25");
+        assert_eq!(answered(r#"{"protocolVersion":20251125}"#), "2025-11-25");
+        // What can't be read is answered with JSON-RPC's error for it, as `roamrun mcp` does.
+        for (message, code) in [("not json", -32700), ("[]", -32600), (r#"{"jsonrpc":"2.0","id":9}"#, -32600)] {
+            let failed: Value = serde_json::from_str(&server.handle(message).unwrap()).unwrap();
+            assert_eq!(failed["error"]["code"], code, "{message}");
+        }
         let listed: Value = serde_json::from_str(&server.handle(r#"{"jsonrpc":"2.0","id":"a","method":"tools/list"}"#).unwrap()).unwrap();
         let names: Vec<&str> = listed["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert_eq!(names, ["devices", "look", "tap", "swipe", "elements", "type", "paste", "press", "install", "launch"]);

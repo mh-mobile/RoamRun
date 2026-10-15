@@ -6180,7 +6180,18 @@ import ImageIO
     #expect(try answered(#"{"protocolVersion":"2024-11-05"}"#) == "2024-11-05")
     #expect(try answered(#"{"protocolVersion":"2026-07-28"}"#) == "2025-11-25")
     #expect(try answered("{}") == "2025-11-25")
+    #expect(try answered(#"{"protocolVersion":20251125}"#) == "2025-11-25")
     #expect(server.handle(Data(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#.utf8)) == nil)   // a notification gets no answer
+    // What can't be read is answered with JSON-RPC's error for it, not left unanswered.
+    func failed(_ message: String) throws -> (code: Int?, id: Any?) {
+        let answer = try send(message)
+        return ((answer["error"] as? [String: Any])?["code"] as? Int, answer["id"])
+    }
+    #expect(try failed("not json").code == -32700)
+    #expect(try failed("[]").code == -32600)
+    let noMethod = try failed(#"{"jsonrpc":"2.0","id":9}"#)
+    #expect(noMethod.code == -32600 && noMethod.id as? Int == 9)
+    #expect(try failed(#"{"jsonrpc":"2.0","id":10,"method":"no/such"}"#).code == -32601)
     let tools = try #require(try result(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)["tools"] as? [[String: Any]])
     #expect(Set(tools.compactMap { $0["name"] as? String }) == ["devices", "look", "tap", "swipe", "elements", "type", "paste", "press"])
     func hinted(_ hint: String) -> Set<String> { Set(tools.filter { ($0["annotations"] as? [String: Bool])?[hint] == true }.compactMap { $0["name"] as? String }) }
@@ -6458,6 +6469,17 @@ func everyDocumentedCommandParses(_ doc: String) throws {
     #expect(try read { $0.providerIP = "fd7a:115c:a1e0::1" } != nil)
     #expect(try read { $0.serviceType = "_ssh._tcp" } == nil)
     #expect(try read { $0.domain = "example.com" } == nil)
+}
+
+/// A blank line is no message: nothing is answered, as `roamrunctl mcp` does. A line that isn't
+/// JSON is answered with its error.
+@Test func theMCPServerAnswersWhatItCantReadAndNotABlankLine() {
+    let server = DeviceMCP(profiles: { [] }, looks: FileManager.default.temporaryDirectory) { _ in .init(ok: true) }
+    let written = OSAllocatedUnfairLock<[String]>(initialState: [])
+    var lines = ["", "   ", "not json"].makeIterator()
+    server.serve(lines: { lines.next() }, write: { answer in written.withLock { $0.append(String(decoding: answer, as: UTF8.self)) } })
+    #expect(written.withLock { $0.count } == 1)
+    #expect(written.withLock { $0.first?.contains("-32700") } == true)
 }
 
 /// The MCP server reads on while a tool runs: a call taken back before its turn isn't begun, and
