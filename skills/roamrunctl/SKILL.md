@@ -183,7 +183,8 @@ devices remove <name>`. With `--passphrase` it is kept encrypted instead, which 
 a copy of the file, not the device from this machine. The passphrase then comes from
 `ROAMRUNCTL_PASSPHRASE_FILE`, `ROAMRUNCTL_PASSPHRASE_COMMAND` or `ROAMRUNCTL_PASSPHRASE`,
 else it is typed at a terminal at each command; `roamrunctl mcp` can't be typed to and
-takes it from one of the three only. Don't ask the user for a passphrase and don't print
+takes it from one of the three only. What they give is one passphrase, used for every
+encrypted device. Don't ask the user for a passphrase and don't print
 one; if a command says none is given, say so and stop.
 
 **B. Another machine keeps the key, and signs for this one.** For when the key shouldn't

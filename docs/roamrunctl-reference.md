@@ -125,6 +125,10 @@ the using machine and the device, not through the key's machine.
   The command source runs with `sh -c` (Windows: `cmd /S /C`). A passphrase in
   `ROAMRUNCTL_PASSPHRASE` is in the environment of every process started from that shell.
   Without a source, interactive commands prompt.
+- A configured source gives one passphrase, used for every encrypted device opened or saved
+  under that environment: the command source is run the same way whichever device it is for. So
+  devices opened under one environment share a passphrase; one `mcp` server uses one for every
+  device it opens. To keep a key off the machine an agent runs on, use B.
 
 | Command | Passphrase handling |
 |---|---|
