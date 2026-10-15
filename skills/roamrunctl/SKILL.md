@@ -265,9 +265,11 @@ Tailscale. Whether launching works on a device no Xcode ever met wasn't tried.
 
 Tried against a device, on Linux and macOS, in an earlier form of each: `pair control
 --with`, a key from a Mac, look, tap, type, a button, install, launch, `mcp`'s look and
-tap, and B. Not yet: `pair control --to`, `sign` as it is now and `ROAMRUNCTL_SIGNER`,
-`--passphrase`, the Introducer app or a Mac introducing this machine, the other `mcp`
-tools, and anything on Windows (it builds there). If one of those fails, say what it
+tap, and B. On macOS as it is now: `pair control --to`, and `mcp --http` called from the
+machine itself with the token (a look). Not yet: `sign` as it is now and
+`ROAMRUNCTL_SIGNER`, `--passphrase`, the Introducer app or a Mac introducing this machine,
+the other `mcp` tools, `mcp --http` from another machine or a cloud, and anything on
+Windows (it builds there). If one of those fails, say what it
 said; don't work around it.
 
 ## 6. What it doesn't do

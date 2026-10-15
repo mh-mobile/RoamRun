@@ -374,6 +374,9 @@ against a real device at the time these notes were written:
 - A Mac's `roamrun pair introduce` introducing a machine running `roamrunctl`.
 - Through MCP: swipe, type, paste, install, and launch (these had been tested outside MCP).
 - On Windows: `pair control --with`, MCP, install, and launch.
+- `mcp --http` from another machine (by a tag or a login), from a cloud, or on Linux or
+  Windows. On macOS it was checked from the machine itself, with the token:
+  `scripts/mcp-http-check.py` and a look at the device.
 - Tailscale userspace networking with no address available to bind.
 - Xcode pairing through `pair introduce` since the `--mac` → `--host` change.
 

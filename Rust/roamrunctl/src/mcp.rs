@@ -229,10 +229,8 @@ impl Server {
 
     fn call(&mut self, tool: &str, arguments: &Value) -> Result<Vec<Value>, String> {
         if tool == "devices" {
-            let listed = device::listed(true)?;
-            let Some(offered) = &self.offered else { return Ok(text(listed)) };
-            let lines: Vec<&str> = listed.lines().filter(|line| offered.iter().any(|name| line.split('\t').next() == Some(name))).collect();
-            return Ok(text(if lines.is_empty() { "No device is offered here now.".to_string() } else { lines.join("\n") }));
+            // Those offered are saved here: no machine that might sign is asked.
+            return Ok(text(match &self.offered { Some(offered) => device::lines(offered, &[]), None => device::listed(true)? }));
         }
         let name = arguments["device"].as_str().ok_or("device is missing")?.to_string();
         if let Some(offered) = &self.offered {

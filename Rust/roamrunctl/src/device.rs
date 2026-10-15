@@ -461,7 +461,7 @@ pub fn listed(agent: bool) -> Result<String, String> {
     Ok(lines(&names, &offered) + &wrong.map(|why| format!("\n({why}: no machine is asked what it signs for)")).unwrap_or_default())
 }
 
-fn lines(names: &[String], offered: &[Saved]) -> String {
+pub fn lines(names: &[String], offered: &[Saved]) -> String {
     // Named only: what else is saved of one may be under a passphrase, which a list doesn't ask for.
     names.iter().map(|name| match (kept(name), signer_of(name)) {
         (_, Some(signer)) => format!("{name}\tits key is kept by {signer}, which signs for this machine"),

@@ -222,6 +222,7 @@ Mac 側の関連する実装は、`Sources/RoamRun/Introductions.swift`、`PairB
 - RoamRun を入れた Mac を仲介マシンとし、`roamrunctl` を実行するマシンをホストとする構成
 - MCP 経由の swipe、type、paste、install、launch（MCP を使わない形では確かめています）
 - Windows での `pair control --with`、MCP、install、launch
+- ほかのマシンから（タグやログイン名で許して）、クラウドから、または Linux や Windows で使う `mcp --http`。macOS では、そのマシン自身からトークン付きで、`scripts/mcp-http-check.py` とデバイスの look を確かめています。
 - 待ち受けるアドレスのない、Tailscale のユーザースペースネットワーキング
 - `--mac` から `--host` への変更後に、`pair introduce` を使って Xcode とペアリングする構成
 

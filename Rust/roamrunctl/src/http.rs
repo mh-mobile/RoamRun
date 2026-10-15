@@ -238,7 +238,7 @@ pub fn serve(options: Options) -> Result<String, String> {
         _ => format!("can't listen on {own}:{}: {e}", options.port),
     })?;
     let who: Vec<&str> = options.allowed.iter().map(|a| match a { Allow::Tag(s) | Allow::Login(s) => s.as_str() }).collect();
-    note!("roamrunctl: the MCP tools for {} at http://{own}:{}/mcp, for {}{} on the tailnet. Ctrl-C ends it. What is sent and shown passes through whatever lies between (a cloud's proxy sees images and text).",
+    note!("roamrunctl: the MCP tools for {} at http://{own}:{}/mcp, for {} on the tailnet{}. Ctrl-C ends it. What is sent and shown passes through whatever lies between (a cloud's proxy sees images and text).",
         options.devices.join(", "), options.port, who.join(", "), if options.token.is_some() { ", with the token" } else { "" });
     run(listener, options, IpAddr::V4(own), status.this.id.clone(), Box::new(tailscale::whois))
 }
@@ -274,6 +274,19 @@ fn connection(mut stream: TcpStream, s: &Shared, tell: &mpsc::Sender<Work>) {
     let (mut who, mut what) = ("-".to_string(), "-".to_string());
     let outcome = served(&mut stream, s, tell, from, &mut who, &mut what);
     note!("{} {from} {who} {what} {outcome} {:.1}s", clock(), began.elapsed().as_secs_f64());
+    linger(&stream);
+}
+
+/// What the caller still sends after its answer (a body not read, where it was refused first) is read and
+/// dropped for a moment before the connection closes: closed with it unread, the system resets the
+/// connection, and the caller can lose the answer it was given.
+fn linger(mut stream: &TcpStream) {
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(250)));
+    let (until, mut left, mut rest) = (Instant::now() + Duration::from_secs(1), BODY, [0u8; 8192]);
+    while left > 0 && Instant::now() < until {
+        match stream.read(&mut rest) { Ok(0) | Err(_) => break, Ok(read) => left = left.saturating_sub(read) }
+    }
 }
 
 fn served(stream: &mut TcpStream, s: &Shared, tell: &mpsc::Sender<Work>, from: IpAddr, who: &mut String, what: &mut String) -> String {
@@ -524,6 +537,17 @@ mod tests {
         assert!(got(other).is_some_and(|a| a.contains("isn't offered here")));
         assert!(got(late).is_some_and(|a| a.contains("not begun") && a.contains(r#""id":3"#)));
         assert!(got(answered).is_some_and(|a| a.contains("isn't offered here") && a.contains(r#""id":4"#)));
+    }
+
+    #[test]
+    fn a_request_refused_before_its_body_is_read_still_gets_its_answer() {
+        // Closed with the body unread, the connection could be reset before the answer was read.
+        let at = started(Some("0123456789abcdef0123456789abcdef"), ci);
+        let body = format!(r#"{{"jsonrpc":"2.0","id":1,"method":"ping","params":{{"pad":"{}"}}}}"#, "x".repeat(64 * 1024));
+        for _ in 0..40 {
+            assert!(post(at, "", &body).starts_with("HTTP/1.1 401"));
+            assert!(post(at, "Authorization: Bearer 0123456789abcdef0123456789abcdef\r\nMCP-Protocol-Version: 2026-07-28\r\n", &body).starts_with("HTTP/1.1 400"));
+        }
     }
 
     #[test]
