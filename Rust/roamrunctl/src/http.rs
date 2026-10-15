@@ -35,6 +35,8 @@ const TURN: Duration = Duration::from_secs(20);
 /// A taking back that came in before its call is kept this long for it: each comes on its own connection, and the
 /// call's can be the slower (its head, Tailscale's answer and its body take 45 s at most).
 const TAKEN_BACK: Duration = Duration::from_secs(60);
+/// Of those, a device's worker keeps no more than this many: the oldest goes.
+const CANCELS: usize = 256;
 
 /// Who may call: tagged machines by a tag, people's own machines by their login.
 #[derive(Debug, PartialEq, Clone)]
@@ -239,7 +241,11 @@ fn work(mut server: Server, told: mpsc::Receiver<Work>) {
         let (session, id, line, stream, at, reply) = match next {
             Work::Call { session, id, line, stream, at, reply } => (session, id, line, stream, at, reply),
             // Perhaps before its call: kept for it a while (an id isn't used twice in a session).
-            Work::Cancel { session, id } => { cancelled.push((session, id, Instant::now())); continue }
+            Work::Cancel { session, id } => {
+                cancelled.push((session, id, Instant::now()));
+                if cancelled.len() > CANCELS { cancelled.remove(0); }
+                continue;
+            }
         };
         let taken_back = session.as_ref().is_some_and(|session| {
             cancelled.iter().any(|(s, i, _)| s == session && *i == id)
@@ -339,8 +345,13 @@ fn run(listener: TcpListener, options: Options, offered: Vec<(String, Option<Vec
     }).collect();
     let shared = Arc::new(Shared { options, offered, turns, hosts, own_ip, own_id, whois, head_within, open: Mutex::new(HashMap::new()), turning_away: AtomicUsize::new(0) });
     for stream in listener.incoming() {
-        // Too many files open, say: not tried again at once, over and over.
-        let Ok(mut stream) = stream else { std::thread::sleep(Duration::from_millis(100)); continue };
+        let mut stream = match stream {
+            Ok(stream) => stream,
+            // Gone before it was taken (Windows says so): the next is taken at once.
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted) => continue,
+            // Too many files open, say: not tried again at once, over and over.
+            Err(_) => { std::thread::sleep(Duration::from_millis(100)); continue }
+        };
         let Ok(from) = stream.peer_addr().map(|a| a.ip()) else { continue };
         let taken = {
             let mut open = shared.open.lock().unwrap_or_else(|e| e.into_inner());
@@ -444,8 +455,9 @@ fn served(stream: &mut TcpStream, s: &Shared, from: IpAddr, began: Instant, who:
         // A notification or a response: nothing to answer. `notifications/cancelled` takes back the call of that id in
         // its session, on whichever device it waits. Without a session it does nothing — the request id is the
         // client's choosing, and another client's call could have the same — and closing the connection does it.
-        if let (true, Some(session)) = (method == "notifications/cancelled", &session) {
-            for turn in s.turns.values() { let _ = turn.send(Work::Cancel { session: session.clone(), id: message["params"]["requestId"].clone() }); }
+        let taken = &message["params"]["requestId"];
+        if let (true, Some(session)) = (method == "notifications/cancelled" && request_id(taken), &session) {
+            for turn in s.turns.values() { let _ = turn.send(Work::Cancel { session: session.clone(), id: taken.clone() }); }
         }
         return refuse(202, "", "");
     };
@@ -472,6 +484,11 @@ fn served(stream: &mut TcpStream, s: &Shared, from: IpAddr, began: Instant, who:
         // Taken back in its session, or the caller's connection closed, before its turn: not answered.
         Err(_) => "not begun".into(),
     }
+}
+
+/// A request id as MCP has one: a number, or text, and not a long one. A taking back naming another isn't kept.
+fn request_id(id: &Value) -> bool {
+    id.is_number() || id.as_str().is_some_and(|id| id.len() <= 128)
 }
 
 /// Whether the caller's connection is closed or broken. Nothing more is due from a caller once its request is
@@ -734,6 +751,9 @@ mod tests {
         // Taken back before the call came in (each on its own connection, the call's the slower): not made either.
         tell.send(Work::Cancel { session: "c".into(), id: json!(5) }).unwrap();
         let first = call(Some("c"), 5, false, 0);
+        // No more than CANCELS are kept: the oldest goes.
+        for id in 0..=CANCELS as i64 { tell.send(Work::Cancel { session: "e".into(), id: json!(id) }).unwrap(); }
+        let (oldest, newest) = (call(Some("e"), 0, false, 0), call(Some("e"), CANCELS as i64, false, 0));
         drop(tell);
         std::thread::spawn(move || work(Server::offering(vec![("phone".into(), None)]), told));
         let got = |answered: mpsc::Receiver<String>| answered.recv_timeout(Duration::from_secs(10)).ok();
@@ -744,6 +764,14 @@ mod tests {
         assert!(got(other).is_some_and(|a| a.contains(r#""id":4"#)));
         assert!(got(none).is_some_and(|a| a.contains(r#""id":4"#)));
         assert_eq!(got(first), None);
+        assert!(got(oldest).is_some_and(|a| a.contains(r#""id":0"#)));
+        assert_eq!(got(newest), None);
+    }
+
+    #[test]
+    fn a_taking_back_is_kept_only_for_an_id_as_mcp_has_one() {
+        assert!(request_id(&json!(5)) && request_id(&json!("a-1")));
+        assert!(!request_id(&json!("x".repeat(129))) && !request_id(&json!({ "a": 1 })) && !request_id(&Value::Null));
     }
 
     #[test]

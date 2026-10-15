@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Checks a running `roamrunctl mcp --http` (or `roamrun mcp --http`) from a machine it lets in: how each
+"""Checks a running `roamrunctl mcp --http` from a machine it lets in: how each
 request is answered, as #156 has it. Run by hand: the server listens on a Tailscale address only.
 Nothing is asked of a device unless --look names one; then one look is saved to look.jpg here.
 
@@ -64,7 +64,7 @@ if args.look:
     image = next((c for c in content if c.get("type") == "image"), None)
     if image:
         # Whatever is on the screen is in it: the owner's alone to read, also where an older one was.
-        fd = os.open("look.jpg", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        fd = os.open("look.jpg", os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0), 0o600)
         if hasattr(os, "fchmod"): os.fchmod(fd, 0o600)   # not on Windows before Python 3.13
         with os.fdopen(fd, "wb") as f: f.write(base64.b64decode(image["data"]))
     check(f"look at {args.look}", image is not None, " ".join(c.get("text", "") for c in content if c.get("type") == "text") + (" → look.jpg" if image else ""))

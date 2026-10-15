@@ -159,11 +159,21 @@ fn read(name: &str, path: &Path, sealed: bool) -> Result<(Saved, Vec<u8>), Strin
     }
     let file = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let opened;
-    let bytes = if sealed { opened = crate::secret::opened(&file, &crate::secret::passphrase(name, false)?).map_err(|why| format!("{name}: {why}"))?; &opened } else { &file };
+    let bytes = if sealed { opened = opened_once(name, &file, || crate::secret::passphrase(name, false))?; &opened } else { &file };
     let saved: Saved = serde_json::from_slice(bytes).map_err(|e| format!("{} isn't a saved device ({e}): `roamrunctl devices remove {name}` forgets it", path.display()))?;
     // Another's file, found where names differ only by case, or renamed by hand.
     if saved.name != name { return Err(format!("“{name}” is saved here as “{}”: name it so", saved.name)); }
     Ok((saved, file))
+}
+
+/// What a sealed file opened to, kept for this process while the file is the same: `mcp --http` opens a device
+/// again after a failure, on a thread where no terminal can be asked, and a passphrase command isn't run again.
+fn opened_once(name: &str, file: &[u8], passphrase: impl FnOnce() -> Result<String, String>) -> Result<Vec<u8>, String> {
+    static OPENED: std::sync::Mutex<Vec<(Vec<u8>, Vec<u8>)>> = std::sync::Mutex::new(Vec::new());
+    if let Some((_, plain)) = OPENED.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(sealed, _)| sealed == file) { return Ok(plain.clone()) }
+    let plain = crate::secret::opened(file, &passphrase()?).map_err(|why| format!("{name}: {why}"))?;
+    OPENED.lock().unwrap_or_else(|e| e.into_inner()).push((file.to_vec(), plain.clone()));
+    Ok(plain)
 }
 
 /// How a machine that keeps a key comes to sign for this one, and how this one finds it.
@@ -545,6 +555,19 @@ pub fn unstub(name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sealed_file_is_asked_for_once_while_it_is_the_same() {
+        let (plain, sealed) = (b"{\"v\":1}", crate::secret::sealed(b"{\"v\":1}", "pw").unwrap());
+        assert_eq!(opened_once("d", &sealed, || Ok("pw".into())).unwrap(), plain);
+        // Opened again (by `mcp --http`'s worker, after a failure): nothing is asked.
+        assert_eq!(opened_once("d", &sealed, || Err("asked again".into())).unwrap(), plain);
+        // Another file under the name: asked; a wrong passphrase isn't kept.
+        let other = crate::secret::sealed(b"{\"v\":1}", "pw").unwrap();
+        assert_eq!(opened_once("d", &other, || Err("asked again".into())).unwrap_err(), "asked again");
+        assert!(opened_once("d", &other, || Ok("wrong".into())).unwrap_err().contains("isn't the one"));
+        assert_eq!(opened_once("d", &other, || Ok("pw".into())).unwrap(), plain);
+    }
 
     #[test]
     fn a_look_takes_the_place_of_the_file_named_whole() {

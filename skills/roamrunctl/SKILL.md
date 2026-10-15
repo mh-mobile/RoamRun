@@ -183,7 +183,7 @@ devices remove <name>`. With `--passphrase` it is kept encrypted instead, which 
 a copy of the file, not the device from this machine. The passphrase then comes from
 `ROAMRUNCTL_PASSPHRASE_FILE`, `ROAMRUNCTL_PASSPHRASE_COMMAND` or `ROAMRUNCTL_PASSPHRASE`,
 else it is typed at a terminal at each command; `roamrunctl mcp` can't be typed to and
-takes it from one of the three only. What they give is one passphrase, used for every
+takes it from one of the three only (`mcp --http`, which the user starts, asks as it starts). What they give is one passphrase, used for every
 encrypted device. Don't ask the user for a passphrase and don't print
 one; if a command says none is given, say so and stop.
 
@@ -249,14 +249,16 @@ user's tailnet): the user starts `roamrunctl mcp --http <port> --allow <tag or l
 token, if they set one) from them. Each call is one `POST /mcp`, no `initialize` first:
 
 ```sh
-rr() { curl -sS --max-time 120 -H 'Content-Type: application/json' ${RR_TOKEN:+-H "Authorization: Bearer $RR_TOKEN"} --data-binary @- "http://<address>:<port>/mcp"; }
-# What a call answered: its text; an image goes to look.jpg, readable by you alone.
+rr() { curl -sS --max-time 120 -w '\n%{http_code}\n' -H 'Content-Type: application/json' ${RR_TOKEN:+-H} ${RR_TOKEN:+"Authorization: Bearer $RR_TOKEN"} --data-binary @- "http://<address>:<port>/mcp"; }
+# What a call answered: its HTTP status where it isn't 200, else its text; an image goes to look.jpg, readable by you alone.
 said() { python3 -c '
 import base64, json, os, sys
-r = json.load(sys.stdin).get("result", {})
+*body, status = sys.stdin.read().rstrip("\n").split("\n")
+if status != "200": sys.exit("HTTP " + status + ": " + "\n".join(body)[:300])
+r = json.loads("\n".join(body)).get("result", {})
 for c in r.get("content", []):
     if c.get("type") == "image":
-        fd = os.open("look.jpg", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        fd = os.open("look.jpg", os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0), 0o600)
         if hasattr(os, "fchmod"): os.fchmod(fd, 0o600)
         with os.fdopen(fd, "wb") as f: f.write(base64.b64decode(c["data"]))
 print(r.get("isError"), [c.get("text") for c in r.get("content", []) if c.get("type") == "text"])'; }
@@ -266,9 +268,10 @@ echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"tap","argu
 ```
 
 Write a look's image to a file, as above, and view the file: never print the base64 (the
-screen may show messages or notifications: the file is yours alone to read). A 401
-is a missing or wrong token, a 403 a caller it doesn't let in — say so, don't retry. "not
-begun" did nothing; a timeout or a 504 may have done it — look before trying again. Keep
+screen may show messages or notifications: the file is yours alone to read). `HTTP 401`
+is a missing or wrong token, `HTTP 403` a caller it doesn't let in — say so, don't retry. "not
+begun" did nothing; `HTTP 000` (no answer: a timeout, or the connection closed) or a 504
+may have done it — look before trying again. Keep
 the connection open until the answer comes: a call whose connection closed before its turn
 isn't made, and closing it is how a call is taken back with curl (`notifications/cancelled`
 counts only with the `Mcp-Session-Id` an `initialize` answered with, as MCP clients send it). Give each tap, swipe, type and paste the id of your look: after another agent's look,

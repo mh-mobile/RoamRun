@@ -267,7 +267,8 @@ bounded.
   format, the passphrase taken from a file, a command or the environment, or typed at
   a terminal, not from the command line: the file alone, in a backup or a copied
   folder, then opens nothing — and a program that runs as the user and can read the
-  passphrase where it is kept is no further from the device than before. It looks by
+  passphrase where it is kept is no further from the device than before. A running `mcp`
+  keeps what it opened while the file is the same, as `sign` keeps what it serves. It looks by
   the device's own screenshot and sends inputs with no screen stream, so the device
   shows no screen-sharing session meanwhile. Its MCP tools hold `tap`, `swipe`, `type` and
   `paste` to the device's latest look, by its id, for a minute — a tap or swipe to one that

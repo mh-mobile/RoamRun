@@ -134,7 +134,8 @@ the using machine and the device, not through the key's machine.
 |---|---|
 | `pair control --passphrase`, `key import --passphrase` | prompts twice when creating a new encrypted record, or reads a configured source |
 | `look`, `install`, `launch` | prompts when opening an encrypted record, or reads a configured source |
-| `mcp` | cannot prompt; needs a configured source each time it opens an encrypted record |
+| `mcp` | cannot prompt; needs a configured source the first time it opens an encrypted record, and keeps what that opened while the file is the same |
+| `mcp --http` | prompts at a terminal, or reads a configured source, as it starts, for each encrypted device it offers; keeps what that opened while the file is the same |
 | `sign` | reads or prompts when starting for each encrypted record it serves |
 | `devices`, `devices remove` | no passphrase needed |
 

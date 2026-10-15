@@ -299,8 +299,9 @@ impl Server {
             if device::mark(&name) != *was { return Err(format!("{name} was removed here, or saved anew, since this began: it isn't used. To offer it again, end this and run it again")) }
             if tool == "install" { return Err("install isn't offered over HTTP".into()) }
         }
-        // One that is open is known: asking again what there is would ask every machine that might sign.
-        if !self.open.contains_key(&name) {
+        // One that is open is known, and one offered over HTTP is saved here (held to it above): asking what there is
+        // would run Tailscale and ask every machine that might sign, in the device's turn.
+        if self.offered.is_none() && !self.open.contains_key(&name) {
             let names = device::names()?;
             if !names.contains(&name) { return Err(format!("no such device “{name}”: `devices` lists what there is, and says where a machine that should sign isn't found")); }
         }
@@ -384,14 +385,15 @@ impl Server {
                 if tool == "press" {
                     self.shown.remove(&name);
                 } else {
-                    // Into whatever has focus: only by the device's latest look, with nothing done since but by it.
+                    // Into whatever has focus: only by the device's latest look, with nothing done since but by it —
+                    // held to after the screen's moment, in which another device could be saved under the name.
+                    self.settle(&name);
                     let given = look_of(arguments)?;
                     if self.shown.get(&name).is_none_or(|shown| shown.id != given) {
                         return Err(format!("look again: look {given} isn't the device's latest look, or something else was done since: nothing was {}", if tool == "type" { "typed" } else { "pasted" }));
                     }
                     self.stale(&name)?;
                     self.spend(&name);
-                    self.settle(&name);
                 }
                 let done = self.ask(&name, |d| match tool { "type" => d.type_text(&value), "paste" => d.paste(&value), _ => d.button(&value) });
                 self.acted.insert(name, Instant::now());
@@ -529,7 +531,8 @@ mod tests {
         server.shown.get_mut(&name).unwrap().spent = true;
         assert!(call(&mut server, "tap", json!({ "x": 1, "y": 1 })).starts_with("look first"));
         // And by whatever else is sent in between.
-        for (tool, arguments) in [("type", json!({ "text": "a" })), ("paste", json!({ "text": "a" })), ("press", json!({ "button": "home" })), ("elements", json!({})), ("launch", json!({ "bundle": "a.b" }))] {
+        let here = env!("CARGO_MANIFEST_DIR");
+        for (tool, arguments) in [("swipe", json!({ "x1": 1, "y1": 1, "x2": 2, "y2": 2 })), ("type", json!({ "text": "a" })), ("paste", json!({ "text": "a" })), ("press", json!({ "button": "home" })), ("elements", json!({})), ("install", json!({ "path": here })), ("launch", json!({ "bundle": "a.b" }))] {
             look(&mut server, upright, 1, now());
             assert!(call(&mut server, tool, arguments).contains("doesn't answer"), "{tool}");
             assert!(call(&mut server, "tap", json!({ "x": 1, "y": 1 })).starts_with("look first"), "{tool}");
@@ -537,6 +540,7 @@ mod tests {
         // Not the latest look (another, by whichever caller, since), or none named: not pressed, and the latest stands.
         look(&mut server, upright, 1, now());
         assert!(call(&mut server, "tap", json!({ "look": 6, "x": 1, "y": 1 })).starts_with("look again: look 6"));
+        assert!(call(&mut server, "type", json!({ "look": 6, "text": "a" })).starts_with("look again: look 6"));
         assert!(server.call("tap", &json!({ "device": name, "x": 1, "y": 1 })).unwrap_err().starts_with("look is missing"));
         assert!(call(&mut server, "tap", json!({ "look": -1, "x": 1, "y": 1 })).starts_with("look isn't a look's id"));
         // Written as text, as a model sometimes gives it: taken.
@@ -630,6 +634,12 @@ mod tests {
         }
         // An input long enough ago: nothing to wait out.
         assert!(sent(&mut server, "type", SETTLE * 2) < SETTLE / 2);
+        // Another device saved under the name in that moment: the text isn't sent to it.
+        server.shown.insert(name.clone(), Shown { size: (100.0, 200.0), way: 1, at: Instant::now(), of: device::mark(&name), id: 7, spent: true });
+        server.acted.insert(name.clone(), Instant::now());
+        let anew = { let name = name.clone(); std::thread::spawn(move || { std::thread::sleep(SETTLE / 4); device::unstub(&name); device::stub(&name, 49153); }) };
+        assert!(server.call("type", &json!({ "device": name, "look": 7, "text": "a" })).unwrap_err().contains("isn't the one that look was of"));
+        anew.join().unwrap();
         device::unstub(&name);
     }
 
