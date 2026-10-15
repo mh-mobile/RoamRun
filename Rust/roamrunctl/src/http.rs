@@ -600,12 +600,17 @@ mod tests {
         // A byte now and then keeps no read waiting long, but the whole head is due by its deadline.
         let began = Instant::now();
         let mut slow = TcpStream::connect(at).unwrap();
+        slow.set_read_timeout(Some(Duration::from_millis(100))).unwrap();
+        // Until the answer comes: on Windows, what is sent after the server closed resets the connection, and
+        // the answer received with it is lost.
+        let (mut answer, mut some) = (Vec::new(), [0u8; 256]);
         for _ in 0..20 {
             if slow.write_all(b"P").is_err() { break }
-            std::thread::sleep(Duration::from_millis(100));
+            if let Ok(read) = slow.read(&mut some) { answer.extend_from_slice(&some[..read]); break }
         }
-        let mut answer = String::new();
-        let _ = slow.read_to_string(&mut answer);
+        slow.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let _ = slow.read_to_end(&mut answer);
+        let answer = String::from_utf8_lossy(&answer);
         assert!(answer.starts_with("HTTP/1.1 408") && began.elapsed() < Duration::from_secs(3), "{answer:?} {:?}", began.elapsed());
         // One address holds FROM_ONE connections at most: the next is turned away at once.
         let idle: Vec<TcpStream> = (0..FROM_ONE).map(|_| TcpStream::connect(at).unwrap()).collect();
