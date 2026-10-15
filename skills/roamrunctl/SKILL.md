@@ -255,16 +255,18 @@ said() { python3 -c '
 import base64, json, os, sys
 *body, status = sys.stdin.read().rstrip("\n").split("\n")
 if status != "200": sys.exit("HTTP " + status + ": " + "\n".join(body)[:300])
-r = json.loads("\n".join(body)).get("result", {})
+try: r = json.loads("\n".join(body)).get("result", {})
+except ValueError: sys.exit("HTTP 200, cut short: " + "\n".join(body)[:300])
 for c in r.get("content", []):
     if c.get("type") == "image":
         fd = os.open("look.jpg", os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0), 0o600)
         if hasattr(os, "fchmod"): os.fchmod(fd, 0o600)
         with os.fdopen(fd, "wb") as f: f.write(base64.b64decode(c["data"]))
 print(r.get("isError"), [c.get("text") for c in r.get("content", []) if c.get("type") == "text"])'; }
-echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"device":"phone"}}}' | rr | said
+# printf, not echo: echo in zsh and sh turns a \n in the text into a newline (a Return, typed).
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"device":"phone"}}}' | rr | said
 # It said "590 x 1280, look 12": a tap in the pixels of look.jpg gives that id.
-echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"tap","arguments":{"device":"phone","look":12,"x":295,"y":155}}}' | rr | said
+printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"tap","arguments":{"device":"phone","look":12,"x":295,"y":155}}}' | rr | said
 ```
 
 Write a look's image to a file, as above, and view the file: never print the base64 (the

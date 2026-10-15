@@ -166,14 +166,22 @@ fn read(name: &str, path: &Path, sealed: bool) -> Result<(Saved, Vec<u8>), Strin
     Ok((saved, file))
 }
 
+/// What each device's sealed file opened to: (name, the file, what it opened to).
+static OPENED: std::sync::Mutex<Vec<(String, Vec<u8>, Vec<u8>)>> = std::sync::Mutex::new(Vec::new());
+
 /// What a sealed file opened to, kept for this process while the file is the same: `mcp --http` opens a device
 /// again after a failure, on a thread where no terminal can be asked, and a passphrase command isn't run again.
 fn opened_once(name: &str, file: &[u8], passphrase: impl FnOnce() -> Result<String, String>) -> Result<Vec<u8>, String> {
-    static OPENED: std::sync::Mutex<Vec<(Vec<u8>, Vec<u8>)>> = std::sync::Mutex::new(Vec::new());
-    if let Some((_, plain)) = OPENED.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(sealed, _)| sealed == file) { return Ok(plain.clone()) }
+    if let Some((_, _, plain)) = OPENED.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(n, sealed, _)| n == name && sealed == file) { return Ok(plain.clone()) }
+    forget_opened(name, Some(file));
     let plain = crate::secret::opened(file, &passphrase()?).map_err(|why| format!("{name}: {why}"))?;
-    OPENED.lock().unwrap_or_else(|e| e.into_inner()).push((file.to_vec(), plain.clone()));
+    OPENED.lock().unwrap_or_else(|e| e.into_inner()).push((name.to_string(), file.to_vec(), plain.clone()));
     Ok(plain)
+}
+
+/// Lets go of what the device's sealed file opened to, unless the file is still `now`: removed, or saved anew.
+fn forget_opened(name: &str, now: Option<&[u8]>) {
+    OPENED.lock().unwrap_or_else(|e| e.into_inner()).retain(|(n, sealed, _)| n != name || Some(sealed.as_slice()) == now);
 }
 
 /// How a machine that keeps a key comes to sign for this one, and how this one finds it.
@@ -352,7 +360,10 @@ fn offered() -> Result<Vec<Saved>, String> {
 
 /// A saved device's file as it is now: what tells it from another saved under its name since.
 pub fn mark(name: &str) -> Option<Vec<u8>> {
-    std::fs::read(kept(name).ok()??.0).ok()
+    let now = kept(name).ok().flatten().and_then(|(path, _)| std::fs::read(path).ok());
+    // What an earlier file under the name opened to isn't kept past it.
+    forget_opened(name, now.as_deref());
+    now
 }
 
 /// Of what each machine said it signs for (its name, its list), what is taken.
@@ -567,6 +578,29 @@ mod tests {
         assert_eq!(opened_once("d", &other, || Err("asked again".into())).unwrap_err(), "asked again");
         assert!(opened_once("d", &other, || Ok("wrong".into())).unwrap_err().contains("isn't the one"));
         assert_eq!(opened_once("d", &other, || Ok("pw".into())).unwrap(), plain);
+        // What the earlier file opened to went with it.
+        assert_eq!(opened_once("d", &sealed, || Err("asked again".into())).unwrap_err(), "asked again");
+        // Seen removed, or saved anew (by `mark`): let go of too; seen as it was, kept.
+        assert_eq!(opened_once("d", &other, || Ok("pw".into())).unwrap(), plain);
+        forget_opened("d", Some(&other));
+        assert_eq!(opened_once("d", &other, || Err("asked again".into())).unwrap(), plain);
+        forget_opened("d", None);
+        assert_eq!(opened_once("d", &other, || Err("asked again".into())).unwrap_err(), "asked again");
+    }
+
+    #[test]
+    fn what_a_sealed_file_opened_to_goes_once_it_is_seen_removed() {
+        let name = format!("sealed-{}", std::process::id());
+        let path = save(&Saved { v: 1, name: name.clone(), ip: "nowhere".into(), port: 1, pairing: "<plist/>".into(), signer: None }, Some("pw")).unwrap();
+        let file = std::fs::read(&path).unwrap();
+        opened_once(&name, &file, || Ok("pw".into())).unwrap();
+        // Seen as it was: kept.
+        assert_eq!(mark(&name).as_deref(), Some(file.as_slice()));
+        assert!(opened_once(&name, &file, || Err("asked again".into())).is_ok());
+        // Seen removed: let go of.
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(mark(&name), None);
+        assert_eq!(opened_once(&name, &file, || Err("asked again".into())).unwrap_err(), "asked again");
     }
 
     #[test]

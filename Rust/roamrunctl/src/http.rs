@@ -35,7 +35,7 @@ const TURN: Duration = Duration::from_secs(20);
 /// A taking back that came in before its call is kept this long for it: each comes on its own connection, and the
 /// call's can be the slower (its head, Tailscale's answer and its body take 45 s at most).
 const TAKEN_BACK: Duration = Duration::from_secs(60);
-/// Of those, a device's worker keeps no more than this many: the oldest goes.
+/// Of those, no more than this many are kept at once.
 const CANCELS: usize = 256;
 
 /// Who may call: tagged machines by a tag, people's own machines by their login.
@@ -219,37 +219,32 @@ fn clock() -> String {
     format!("{:02}:{:02}:{:02} UTC", s / 3600, s / 60 % 60, s % 60)
 }
 
-enum Work {
-    /// A tool call on the device, with what it is answered by. `session`: the `Mcp-Session-Id` it came with;
-    /// `stream`: the caller's connection, looked at as its turn comes.
-    Call { session: Option<String>, id: Value, line: String, stream: TcpStream, at: Instant, reply: mpsc::Sender<String> },
-    /// `notifications/cancelled`, in a session: the call of that id in it is taken back.
-    Cancel { session: String, id: Value },
+/// A tool call on a device, with what it is answered by. `session`: the `Mcp-Session-Id` it came with; `stream`: the
+/// caller's connection, looked at as its turn comes.
+struct Call { session: Option<String>, id: Value, line: String, stream: TcpStream, at: Instant, reply: mpsc::Sender<String> }
+
+/// What `notifications/cancelled` took back, in a session, and when: (session, request id, when). One list for every
+/// device's turn, read as a call's turn comes: a taking back may come before its call (each on its own connection).
+type Cancelled = Arc<Mutex<Vec<(String, Value, Instant)>>>;
+
+/// Keeps a taking back a while (an id isn't used twice in a session): CANCELS at most, and more aren't kept, so that a
+/// flood doesn't push out another's.
+fn take_back(cancelled: &Cancelled, session: &str, id: &Value) {
+    let mut cancelled = cancelled.lock().unwrap_or_else(|e| e.into_inner());
+    cancelled.retain(|(_, _, at)| at.elapsed() < TAKEN_BACK);
+    if cancelled.len() < CANCELS { cancelled.push((session.to_string(), id.clone(), Instant::now())); }
 }
 
 /// One device's tool calls, one at a time, in the order they came. One taken back in its session — a client that
 /// initialized was given a session id, so another's call of the same id isn't it — or whose caller's connection
 /// is closed or broken when its turn comes, isn't begun and isn't answered: what it would have pressed isn't
 /// pressed for nobody. One that waited too long is answered so, and not begun.
-fn work(mut server: Server, told: mpsc::Receiver<Work>) {
-    let mut waiting = std::collections::VecDeque::new();
-    // What was taken back, and when: (session, id, at).
-    let mut cancelled: Vec<(String, Value, Instant)> = Vec::new();
-    while let Some(next) = waiting.pop_front().or_else(|| told.recv().ok()) {
-        waiting.extend(told.try_iter());
-        cancelled.retain(|(_, _, at)| at.elapsed() < TAKEN_BACK);
-        let (session, id, line, stream, at, reply) = match next {
-            Work::Call { session, id, line, stream, at, reply } => (session, id, line, stream, at, reply),
-            // Perhaps before its call: kept for it a while (an id isn't used twice in a session).
-            Work::Cancel { session, id } => {
-                cancelled.push((session, id, Instant::now()));
-                if cancelled.len() > CANCELS { cancelled.remove(0); }
-                continue;
-            }
-        };
+fn work(mut server: Server, told: mpsc::Receiver<Call>, cancelled: Cancelled) {
+    while let Ok(Call { session, id, line, stream, at, reply }) = told.recv() {
         let taken_back = session.as_ref().is_some_and(|session| {
+            let mut cancelled = cancelled.lock().unwrap_or_else(|e| e.into_inner());
+            cancelled.retain(|(_, _, at)| at.elapsed() < TAKEN_BACK);
             cancelled.iter().any(|(s, i, _)| s == session && *i == id)
-                || waiting.iter().any(|w| matches!(w, Work::Cancel { session: s, id: i } if s == session && *i == id))
         });
         if taken_back || closed(&stream) { continue }
         if at.elapsed() > TURN {
@@ -277,7 +272,9 @@ struct Shared {
     /// The devices offered, each with its saved file as it was when this began (see `Server::offering`).
     offered: Vec<(String, Option<Vec<u8>>)>,
     /// Where a call on each device takes its turn.
-    turns: HashMap<String, mpsc::Sender<Work>>,
+    turns: HashMap<String, mpsc::Sender<Call>>,
+    /// What was taken back (see `Cancelled`).
+    cancelled: Cancelled,
     /// What a request's Host may name (see `hosts`).
     hosts: Vec<String>,
     /// This machine's address and lasting id on the tailnet: a call from it is this machine's own.
@@ -315,6 +312,8 @@ pub fn serve(options: Options) -> Result<String, String> {
     if options.allowed.is_empty() { return Err("who may call: --allow tag:<name> (a tagged machine, such as a cloud's) or --allow <login> (a person's own machines)".into()) }
     if options.devices.is_empty() { return Err("which devices: roamrunctl mcp --http <port> --allow <who> <device>…   (`roamrunctl devices` lists them)".into()) }
     let offered = offerable(&options.devices)?;
+    // Asked for what it offers, as it starts: from a device's worker later, nobody would answer.
+    crate::secret::ask_no_more();
     let status = tailscale::status()?;
     let own: Ipv4Addr = status.this.ips.iter().find_map(|a| a.parse().ok()).ok_or("this machine has no IPv4 address on the tailnet")?;
     let listener = TcpListener::bind((own, options.port)).map_err(|e| match e.kind() {
@@ -337,13 +336,14 @@ fn run(listener: TcpListener, options: Options, offered: Vec<(String, Option<Vec
     let own = listener.local_addr().map_err(|e| e.to_string())?;
     let hosts = hosts(own.ip(), names, own.port());
     // A turn of its own for each device: a call on one doesn't wait for another's.
+    let cancelled = Cancelled::default();
     let turns = options.devices.iter().map(|name| {
         let (tell, told) = mpsc::channel();
-        let server = Server::offering(offered.clone());
-        std::thread::spawn(move || work(server, told));
+        let (server, cancelled) = (Server::offering(offered.clone()), cancelled.clone());
+        std::thread::spawn(move || work(server, told, cancelled));
         (name.clone(), tell)
     }).collect();
-    let shared = Arc::new(Shared { options, offered, turns, hosts, own_ip, own_id, whois, head_within, open: Mutex::new(HashMap::new()), turning_away: AtomicUsize::new(0) });
+    let shared = Arc::new(Shared { options, offered, turns, cancelled, hosts, own_ip, own_id, whois, head_within, open: Mutex::new(HashMap::new()), turning_away: AtomicUsize::new(0) });
     for stream in listener.incoming() {
         let mut stream = match stream {
             Ok(stream) => stream,
@@ -457,7 +457,7 @@ fn served(stream: &mut TcpStream, s: &Shared, from: IpAddr, began: Instant, who:
         // client's choosing, and another client's call could have the same — and closing the connection does it.
         let taken = &message["params"]["requestId"];
         if let (true, Some(session)) = (method == "notifications/cancelled" && request_id(taken), &session) {
-            for turn in s.turns.values() { let _ = turn.send(Work::Cancel { session: session.clone(), id: taken.clone() }); }
+            take_back(&s.cancelled, session, taken);
         }
         return refuse(202, "", "");
     };
@@ -474,7 +474,7 @@ fn served(stream: &mut TcpStream, s: &Shared, from: IpAddr, began: Instant, who:
     };
     let (reply, answered) = mpsc::channel();
     let Ok(watched) = stream.try_clone() else { return "gone".into() };
-    if turn.send(Work::Call { session, id, line, stream: watched, at: Instant::now(), reply }).is_err() { respond(stream, 503, "", ""); return "503".into() }
+    if turn.send(Call { session, id, line, stream: watched, at: Instant::now(), reply }).is_err() { respond(stream, 503, "", ""); return "503".into() }
     match answered.recv() {
         Ok(answer) => {
             let failed = serde_json::from_str::<Value>(&answer).is_ok_and(|a| a["result"]["isError"] == true);
@@ -729,6 +729,7 @@ mod tests {
     #[test]
     fn a_call_is_begun_only_while_its_caller_still_wants_it() {
         let (tell, told) = mpsc::channel();
+        let cancelled = Cancelled::default();
         let mut kept = Vec::new();
         let mut call = |session: Option<&str>, id: i64, gone: bool, waited: u64| {
             let (reply, answered) = mpsc::channel();
@@ -736,7 +737,7 @@ mod tests {
             let at = Instant::now().checked_sub(Duration::from_secs(waited)).unwrap();
             let (stream, theirs) = ends();
             if gone { drop(theirs) } else { kept.push(theirs) }
-            tell.send(Work::Call { session: session.map(str::to_string), id: json!(id), line, stream, at, reply }).unwrap();
+            tell.send(Call { session: session.map(str::to_string), id: json!(id), line, stream, at, reply }).unwrap();
             answered
         };
         // All queued before the first has its turn.
@@ -747,15 +748,15 @@ mod tests {
         let taken_back = call(Some("a"), 4, false, 0);
         let other = call(Some("b"), 4, false, 0);
         let none = call(None, 4, false, 0);
-        tell.send(Work::Cancel { session: "a".into(), id: json!(4) }).unwrap();
+        take_back(&cancelled, "a", &json!(4));
         // Taken back before the call came in (each on its own connection, the call's the slower): not made either.
-        tell.send(Work::Cancel { session: "c".into(), id: json!(5) }).unwrap();
+        take_back(&cancelled, "c", &json!(5));
         let first = call(Some("c"), 5, false, 0);
-        // No more than CANCELS are kept: the oldest goes.
-        for id in 0..=CANCELS as i64 { tell.send(Work::Cancel { session: "e".into(), id: json!(id) }).unwrap(); }
-        let (oldest, newest) = (call(Some("e"), 0, false, 0), call(Some("e"), CANCELS as i64, false, 0));
+        // No more than CANCELS are kept, and a flood of them doesn't push out one kept already.
+        for id in 0..=CANCELS as i64 { take_back(&cancelled, "e", &json!(id)); }
+        let (kept_first, not_kept) = (call(Some("e"), 0, false, 0), call(Some("e"), CANCELS as i64, false, 0));
         drop(tell);
-        std::thread::spawn(move || work(Server::offering(vec![("phone".into(), None)]), told));
+        std::thread::spawn(move || work(Server::offering(vec![("phone".into(), None)]), told, cancelled));
         let got = |answered: mpsc::Receiver<String>| answered.recv_timeout(Duration::from_secs(10)).ok();
         assert_eq!(got(went), None);
         assert!(got(late).is_some_and(|a| a.contains("not begun") && a.contains(r#""id":2"#)));
@@ -764,8 +765,8 @@ mod tests {
         assert!(got(other).is_some_and(|a| a.contains(r#""id":4"#)));
         assert!(got(none).is_some_and(|a| a.contains(r#""id":4"#)));
         assert_eq!(got(first), None);
-        assert!(got(oldest).is_some_and(|a| a.contains(r#""id":0"#)));
-        assert_eq!(got(newest), None);
+        assert_eq!(got(kept_first), None);
+        assert!(got(not_kept).is_some_and(|a| a.contains(&format!(r#""id":{CANCELS}"#))));
     }
 
     #[test]

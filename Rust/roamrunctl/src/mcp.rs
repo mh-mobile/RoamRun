@@ -129,6 +129,11 @@ fn tools(remote: bool) -> Value {
     Value::Array(all.as_array().into_iter().flatten().filter(|t| !remote || t["name"] != "install").cloned().collect())
 }
 
+/// Over HTTP, of an offered device removed, or another saved under its name, since the server began.
+fn anew(name: &str) -> String {
+    format!("{name} was removed here, or saved anew, since this began: it isn't used. To offer it again, end this and run it again")
+}
+
 /// The look a tap, swipe, type or paste gives: a number, or one written as text, as a model sometimes gives it.
 fn look_of(arguments: &Value) -> Result<u64, String> {
     let given = &arguments["look"];
@@ -230,14 +235,21 @@ impl Server {
         Ok(())
     }
 
-    /// The device, opened if it isn't.
+    /// The device, opened if it isn't — over HTTP only as it was offered, though another be saved under the name
+    /// since (while a look waited for the screen, say): before it is opened, and by what it was opened from.
     fn device(&mut self, name: &str) -> Result<&Device, String> {
         // Removed since, or another saved under the name: the one that is open isn't the one named any more.
         if self.open.get(name).is_some_and(|(_, was)| device::mark(name) != *was) {
             // What was seen of the other isn't this one's screen.
             self.open.remove(name); self.shown.remove(name); self.acted.remove(name);
         }
-        if !self.open.contains_key(name) { self.open.insert(name.to_string(), device::held(name)?); }
+        if !self.open.contains_key(name) {
+            let offered = self.offered.as_ref().map(|offered| offered.iter().find(|(n, _)| n == name).and_then(|(_, was)| was.clone()));
+            if offered.as_ref().is_some_and(|was| device::mark(name) != *was) { return Err(anew(name)) }
+            let held = device::held(name)?;
+            if offered.as_ref().is_some_and(|was| held.1 != *was) { return Err(anew(name)) }
+            self.open.insert(name.to_string(), held);
+        }
         Ok(&self.open[name].0)
     }
 
@@ -296,7 +308,7 @@ impl Server {
                 return Err(format!("{name} isn't offered here: {}", offered.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>().join(", ")));
             };
             // Removed, or another saved under the name, since this began: not the device that was offered.
-            if device::mark(&name) != *was { return Err(format!("{name} was removed here, or saved anew, since this began: it isn't used. To offer it again, end this and run it again")) }
+            if device::mark(&name) != *was { return Err(anew(&name)) }
             if tool == "install" { return Err("install isn't offered over HTTP".into()) }
         }
         // One that is open is known, and one offered over HTTP is saved here (held to it above): asking what there is
@@ -665,5 +677,21 @@ mod tests {
         assert!(call(&mut server, "look").contains("saved anew"));
         assert_eq!(server_devices(&mut server), "No device offered here can be used now.");
         assert!(server.call("look", &json!({ "device": "another" })).unwrap_err().contains("isn't offered here"));
+    }
+
+    #[test]
+    fn over_http_what_is_saved_while_a_look_waits_isnt_opened() {
+        let name = format!("waited-{}", std::process::id());
+        // Removed while the look waited for the screen, or another saved under the name: neither is opened.
+        for again in [None, Some(49153)] {
+            device::stub(&name, 49152);
+            let mut server = Server::offering(vec![(name.clone(), device::mark(&name))]);
+            server.acted.insert(name.clone(), Instant::now());
+            let meanwhile = { let name = name.clone(); std::thread::spawn(move || { std::thread::sleep(SETTLE / 4); device::unstub(&name); if let Some(port) = again { device::stub(&name, port) } }) };
+            let said = server.call("look", &json!({ "device": name })).unwrap_err();
+            assert!(said.contains("saved anew"), "{again:?}: {said}");
+            meanwhile.join().unwrap();
+            if again.is_some() { device::unstub(&name) }
+        }
     }
 }

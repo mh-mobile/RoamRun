@@ -269,7 +269,7 @@ needed to establish each new device connection.
   is answered with an `Mcp-Session-Id`, which a client sends with what follows (the MCP SDKs
   do): a `notifications/cancelled` sent with it takes back the call of that id in that
   session, before its turn, also where it came in before the call (it is kept a minute for
-  it). Without a session it does nothing — the request id is the
+  it, 256 at most at once). Without a session it does nothing — the request id is the
   client's choosing, and another client's call could carry the same — and closing the
   connection takes the call back. One that waited 20 s for its turn is answered "not begun"
   and isn't made. Other messages are answered at once. (MCP 2025-11-25 asks that a closed
