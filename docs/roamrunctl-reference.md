@@ -219,7 +219,9 @@ needed to establish each new device connection.
   it is **not guaranteed** to be detected if the device reports no orientation.
   Tap/swipe coordinates are pixels in the image returned by the last `look`.
 - `type`, `paste`, and `press` act on the currently focused interface. `press` isn't held to a
-  look. `paste` makes the device ask “Allow Paste” each time.
+  look. `paste` makes the device ask “Allow Paste” each time. `type` and `paste`, as a `look`
+  does, wait until a second after the last input: keys sent at once after a tap on a field
+  were seen lost, or put before the cursor.
 - Each tool carries MCP's `readOnlyHint` and `destructiveHint`. `devices` and `look` are marked
   read-only. `elements` is neither: the screen may scroll. The rest are marked destructive: what
   is pressed or typed acts as it would by hand (a tap can delete or send, a typed newline is

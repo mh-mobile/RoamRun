@@ -16,7 +16,8 @@ use crate::device;
 
 /// A look serves one action, within this long.
 const LOOK_STANDS: Duration = Duration::from_secs(60);
-/// A look right after an input waits this long from it for the screen to settle.
+/// A look, or text typed or pasted, right after an input waits this long from it for the screen to settle. Keys
+/// sent at once after a tap on a field were seen lost, or put before the cursor (iOS 27.0, a Japanese keyboard).
 const SETTLE: Duration = Duration::from_secs(1);
 /// The most `type` takes in one call.
 const LONGEST_TYPED: usize = 500;
@@ -276,6 +277,11 @@ impl Server {
         if let Some(shown) = self.shown.get_mut(name) { shown.spent = true }
     }
 
+    /// An input just made on the device: the screen is given what is left of a moment to settle (see `SETTLE`).
+    fn settle(&self, name: &str) {
+        if let Some(wait) = self.acted.get(name).and_then(|at| SETTLE.checked_sub(at.elapsed())) { std::thread::sleep(wait); }
+    }
+
     fn call(&mut self, tool: &str, arguments: &Value) -> Result<Vec<Value>, String> {
         if tool == "devices" {
             // Those offered are saved here: no machine that might sign is asked.
@@ -304,8 +310,7 @@ impl Server {
             "look" => {
                 // A look that fails leaves none to act by: what an earlier one saw may have moved meanwhile.
                 self.shown.remove(&name);
-                // An input just made: the screen is given a moment to settle.
-                if let Some(wait) = self.acted.get(&name).and_then(|at| SETTLE.checked_sub(at.elapsed())) { std::thread::sleep(wait); }
+                self.settle(&name);
                 self.device(&name)?;
                 let of = self.open[&name].1.clone();
                 let device = &self.open[&name].0;
@@ -386,6 +391,7 @@ impl Server {
                     }
                     self.stale(&name)?;
                     self.spend(&name);
+                    self.settle(&name);
                 }
                 let done = self.ask(&name, |d| match tool { "type" => d.type_text(&value), "paste" => d.paste(&value), _ => d.button(&value) });
                 self.acted.insert(name, Instant::now());
@@ -601,6 +607,29 @@ mod tests {
             assert_ne!(call(&mut server, tool, arguments), "done", "{tool}");
             assert!(call(&mut server, "paste", typed(10)).starts_with("look again"), "{tool}");
         }
+        device::unstub(&name);
+    }
+
+    #[test]
+    fn text_waits_out_a_moment_after_an_input_as_a_look_does() {
+        let name = format!("settled-{}", std::process::id());
+        device::stub(&name, 49152);
+        let mut server = Server::default();
+        // How long `tool` takes, an input made `ago`: sent by the latest look (the device doesn't answer, as it isn't
+        // there; that it doesn't is known at once).
+        let sent = |server: &mut Server, tool: &str, ago: Duration| -> Duration {
+            server.shown.insert(name.clone(), Shown { size: (100.0, 200.0), way: 1, at: Instant::now(), of: device::mark(&name), id: 7, spent: true });
+            server.acted.insert(name.clone(), Instant::now().checked_sub(ago).unwrap());
+            let began = Instant::now();
+            assert!(server.call(tool, &json!({ "device": name, "look": 7, "text": "a" })).unwrap_err().contains("doesn't answer"));
+            began.elapsed()
+        };
+        // Right after a tap on a field, say: keys sent at once were seen lost, or put before the cursor.
+        for tool in ["type", "paste"] {
+            assert!(sent(&mut server, tool, Duration::ZERO) >= SETTLE - Duration::from_millis(100), "{tool}");
+        }
+        // An input long enough ago: nothing to wait out.
+        assert!(sent(&mut server, "type", SETTLE * 2) < SETTLE / 2);
         device::unstub(&name);
     }
 
