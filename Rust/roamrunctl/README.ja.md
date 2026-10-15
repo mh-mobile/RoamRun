@@ -167,7 +167,21 @@ roamrunctl launch phone com.example.App
 
 クライアントが `PATH` から `roamrunctl` を見つけられない場合は、実行ファイルのフルパスを指定してください。使えるツールは `devices`、`look`、`tap`、`swipe`、`elements`、`type`、`paste`、`press`、`install`、`launch` です。
 
-`tap` と `swipe` は、先に `look` を呼んでおかないと実行できません。`look` 1 回につき、60 秒以内に `tap` か `swipe` を 1 回だけ実行できます。同じデバイスに `type`、`paste`、`press`、`elements`、`install`、`launch` のいずれかを実行すると、その `look` は無効になります。`look` のあとに向きが変わったとデバイスから通知された場合も、`tap` と `swipe` は拒否されます。このサーバーが使うのはデバイスのスクリーンショットと入力コマンドで、画面共有のストリームを張り続けることはありません。
+`tap`、`swipe`、`type`、`paste` は、先に `look` を呼んでおかないと実行できません。そのとき、`look` が答えた id を渡します（`"look": 12`）。`look` が使えるのは 60 秒の間で、そのデバイスの最新の `look` である間だけです。どのエージェントのものでも、あとにほかの `look` があれば（失敗したものも含む）、その `look` は使えなくなります。同じデバイスに `press`、`elements`、`install`、`launch` があった場合も同じです。`tap` か `swipe` に使えるのは 1 回だけです。`tap`、`swipe`、`type`、`paste` のどれかに使ったあとは、次の `tap` や `swipe` に新しい `look` が要ります。一方、`type` と `paste` には続けて使えるので、`look` → 入力欄を `tap` → `type` の流れは `look` 1 回で済みます。`look` のあとに向きが変わったとデバイスから通知された場合も、`tap` と `swipe` は拒否されます。デバイスに届いたかどうか分からない失敗があったときも、その `look` は使えなくなります。このサーバーが使うのはデバイスのスクリーンショットと入力コマンドで、画面共有のストリームを張り続けることはありません。
+
+#### HTTP で、離れた場所のエージェントから使う
+
+HTTP でしかこのマシンに届かないエージェント（Tailnet に入れたクラウド環境のものなど）は、`roamrunctl mcp --http` で同じツールを使えます。起動と停止は、あなたが行います。
+
+```sh
+roamrunctl mcp --http 9090 --allow tag:codex phone
+```
+
+- このマシンの Tailscale の IPv4 アドレスだけで、指定したポートを待ち受けます。Ctrl-C で止まるまで動きます。エンドポイントは `http://<そのアドレス>:9090/mcp` です。クラウド環境の多くは MagicDNS を使えないので、名前ではなくアドレスを渡してください。
+- `--allow` で、呼び出せる相手を指定します。タグの付いたマシンなら `tag:<名前>` です。クラウド環境のマシンには、渡した認証キーのタグが付きます。人が使うマシンなら、そのログイン名（`someone@example.com`）で指定します。呼び出しのたびに、相手が誰かを Tailscale に尋ねます（`tailscale whois`）。マシンの名前では指定できません。このマシン自身からの呼び出しは、トークンがない限り断ります。
+- `--token-file <ファイル>` を付けると、どの要求にも `Authorization: Bearer <トークン>` が必要になります。ファイルは、あなただけが読めるものにしてください。トークンは 32 文字以上です。
+- 一覧に出し、操作できるのは、指定したデバイスだけです。HTTP では `install` は使えません。
+- 画像や、入力・貼り付けした文字は、途中にあるものを通ります。クラウド環境のプロキシには、画像も文字もトークンも見えます。
 
 エージェントに使い方を教える[スキル](https://github.com/mh-mobile/RoamRun/tree/main/skills/roamrunctl)も用意しています（`npx skills add mh-mobile/RoamRun`）。スキルを入れても、MCP サーバーの登録や起動は行われません。
 
@@ -175,7 +189,7 @@ roamrunctl launch phone com.example.App
 
 A では、鍵は Linux と macOS なら `~/.config/roamrunctl/devices/phone.json` に保存されます。`$XDG_CONFIG_HOME` が絶対パスで設定されていれば、その下になります。Windows では `%LOCALAPPDATA%\roamrunctl\devices` です。Linux と macOS では、所有者だけが読めるファイルとして作られます。それでも、**そのユーザーの権限で動くプログラムなら、エージェントも含めて、暗号化していない鍵を使ってデバイスを操作できます。**
 
-`pair control` に `--passphrase` を付けると、age で暗号化した `phone.age` として保存されます。パスフレーズは、次の 3 つの環境変数のうち、最初に設定されているものから取得します。順に `ROAMRUNCTL_PASSPHRASE_FILE`、`ROAMRUNCTL_PASSPHRASE_COMMAND`、`ROAMRUNCTL_PASSPHRASE` です。どれも設定されていなければ、ターミナルで入力を求めます。`mcp` は入力を求められないので、いずれかの設定が必要です。ファイルを暗号化しても、パスフレーズ自体を読めるソフトウェアからは守れません。
+`pair control` に `--passphrase` を付けると、age で暗号化した `phone.age` として保存されます。パスフレーズは、次の 3 つの環境変数のうち、最初に設定されているものから取得します。順に `ROAMRUNCTL_PASSPHRASE_FILE`、`ROAMRUNCTL_PASSPHRASE_COMMAND`、`ROAMRUNCTL_PASSPHRASE` です。どれも設定されていなければ、ターミナルで入力を求めます。`mcp` は入力を求められないので、いずれかの設定が必要です。`mcp --http` は、起動するときにターミナルで入力を求めます。ファイルを暗号化しても、パスフレーズ自体を読めるソフトウェアからは守れません。環境変数から取得するパスフレーズは 1 つで、同じ環境で開く、暗号化したすべてのデバイスに使われます。たとえば、1 つの `mcp` サーバーは、すべてのデバイスに同じパスフレーズを使います。
 
 ### B：鍵を別のマシンに置く
 

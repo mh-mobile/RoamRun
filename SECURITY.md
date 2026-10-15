@@ -267,15 +267,37 @@ bounded.
   format, the passphrase taken from a file, a command or the environment, or typed at
   a terminal, not from the command line: the file alone, in a backup or a copied
   folder, then opens nothing — and a program that runs as the user and can read the
-  passphrase where it is kept is no further from the device than before. It looks by
+  passphrase where it is kept is no further from the device than before. A running `mcp`
+  keeps what it opened while the file is the same, as `sign` keeps what it serves. It looks by
   the device's own screenshot and sends inputs with no screen stream, so the device
-  shows no screen-sharing session meanwhile. Its MCP tools hold only `tap` and `swipe`
-  to a look just taken; `type`, `paste` and `press` go to whatever is on the screen.
+  shows no screen-sharing session meanwhile. Its MCP tools hold `tap`, `swipe`, `type` and
+  `paste` to the device's latest look, by its id, for a minute — a tap or swipe to one that
+  nothing went by yet — and let it go after anything else done there, or a failure that may
+  have reached the device; `press` goes to whatever is on the screen.
   A call taken back before its turn, or whose turn comes after the client went, isn't
   made. A device it has open is held to the saved file it was opened from: removed, or
   another saved under the name, it isn't operated under that name any more. Where the
   device doesn't say which way up it is and its picture is upright, a point is pressed
   as it is — on a device held upside down that would be the opposite point (not tried).
+- **roamrunctl can serve its MCP tools over HTTP.** `roamrunctl mcp --http <port> --allow
+  <who>… <devices>…`, started by a person and ended with Ctrl-C, listens on the machine's
+  Tailscale IPv4 address only. A caller is let in by what `tailscale whois` says of its
+  address at each request — a tag given with `--allow`, or, for an untagged machine, its
+  user's login — and, with `--token-file`, by a token as well. Refused: a machine shared in
+  from another tailnet; the machine itself without the token (any of its users would
+  otherwise pass); any request with an `Origin` (a web page in a browser on the tailnet);
+  a `Host` other than the server's address or its own Tailscale names. A request's head has
+  to arrive within 10 s and its body within 30 s more, and one address holds 17 of the 32
+  connections at most: a machine that can reach the port but isn't let in can't keep
+  callers out for long. Only the devices named are used — each only while it is saved as
+  it was when the server began — and `install` isn't offered. A tap, swipe, type or paste names the
+  look it is of, and is refused after another look of that device, whoever took it. A tool call whose caller's
+  connection is gone when its turn comes isn't made. Whoever is let in operates those devices as roamrunctl does, while it runs.
+  Between the caller and the machine, a cloud's proxy sees the images, what is typed or
+  pasted, and the token: with Codex Cloud it ends TLS itself. The token file has to be its
+  owner's alone (not checked on Windows). The log has one line a request — the caller's
+  address and identity, the method and tool, the outcome — and never the token, a body,
+  text, captions or images.
 - **roamrunctl can use a pairing whose key is on another machine.** `roamrunctl sign
   <devices> --for <machine>` runs where the keys are and listens on that machine's
   tailnet address (port 41831) for the one machine named, held to its address and to

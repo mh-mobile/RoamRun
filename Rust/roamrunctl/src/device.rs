@@ -159,11 +159,29 @@ fn read(name: &str, path: &Path, sealed: bool) -> Result<(Saved, Vec<u8>), Strin
     }
     let file = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let opened;
-    let bytes = if sealed { opened = crate::secret::opened(&file, &crate::secret::passphrase(name, false)?).map_err(|why| format!("{name}: {why}"))?; &opened } else { &file };
+    let bytes = if sealed { opened = opened_once(name, &file, || crate::secret::passphrase(name, false))?; &opened } else { &file };
     let saved: Saved = serde_json::from_slice(bytes).map_err(|e| format!("{} isn't a saved device ({e}): `roamrunctl devices remove {name}` forgets it", path.display()))?;
     // Another's file, found where names differ only by case, or renamed by hand.
     if saved.name != name { return Err(format!("“{name}” is saved here as “{}”: name it so", saved.name)); }
     Ok((saved, file))
+}
+
+/// What each device's sealed file opened to: (name, the file, what it opened to).
+static OPENED: std::sync::Mutex<Vec<(String, Vec<u8>, Vec<u8>)>> = std::sync::Mutex::new(Vec::new());
+
+/// What a sealed file opened to, kept for this process while the file is the same: `mcp --http` opens a device
+/// again after a failure, on a thread where no terminal can be asked, and a passphrase command isn't run again.
+fn opened_once(name: &str, file: &[u8], passphrase: impl FnOnce() -> Result<String, String>) -> Result<Vec<u8>, String> {
+    if let Some((_, _, plain)) = OPENED.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(n, sealed, _)| n == name && sealed == file) { return Ok(plain.clone()) }
+    forget_opened(name, Some(file));
+    let plain = crate::secret::opened(file, &passphrase()?).map_err(|why| format!("{name}: {why}"))?;
+    OPENED.lock().unwrap_or_else(|e| e.into_inner()).push((name.to_string(), file.to_vec(), plain.clone()));
+    Ok(plain)
+}
+
+/// Lets go of what the device's sealed file opened to, unless the file is still `now`: removed, or saved anew.
+fn forget_opened(name: &str, now: Option<&[u8]>) {
+    OPENED.lock().unwrap_or_else(|e| e.into_inner()).retain(|(n, sealed, _)| n != name || Some(sealed.as_slice()) == now);
 }
 
 /// How a machine that keeps a key comes to sign for this one, and how this one finds it.
@@ -342,7 +360,16 @@ fn offered() -> Result<Vec<Saved>, String> {
 
 /// A saved device's file as it is now: what tells it from another saved under its name since.
 pub fn mark(name: &str) -> Option<Vec<u8>> {
-    std::fs::read(kept(name).ok()??.0).ok()
+    let kept = kept(name);
+    let now = kept.as_ref().ok().cloned().flatten().and_then(|(path, _)| std::fs::read(path).ok());
+    // What an earlier file under the name opened to isn't kept past it: seen gone, or read and not it. A read that
+    // failed says neither, and lets go of nothing.
+    match (&kept, &now) {
+        (Ok(None), _) => forget_opened(name, None),
+        (_, Some(now)) => forget_opened(name, Some(now)),
+        _ => {}
+    }
+    now
 }
 
 /// Of what each machine said it signs for (its name, its list), what is taken.
@@ -384,6 +411,14 @@ fn keys(names: &[String]) -> Result<Signing, String> {
     Ok((keys, told, marks))
 }
 
+/// A device saved here — with its key, or held to the machine that signs for it — read as using it reads it:
+/// its address on the tailnet, and its file as read (what `mark` gives while it is unchanged). An error
+/// where it is only offered by a machine that signs, or can't be read.
+pub fn as_saved(name: &str) -> Result<(String, Vec<u8>), String> {
+    let (path, sealed) = kept(named(name)?)?.ok_or_else(|| format!("{name} isn't saved here: use it once here first (`roamrunctl look {name}`), or name another"))?;
+    read(name, &path, sealed).map(|(saved, file)| (saved.ip, file))
+}
+
 pub fn opened(name: &str) -> Result<Device, String> {
     held(name).map(|(device, _)| device)
 }
@@ -391,6 +426,14 @@ pub fn opened(name: &str) -> Result<Device, String> {
 /// The device named, opened, and the file it was opened from (see `mark`). One another machine signs for is
 /// saved here the first time it opens, without its key: from then on only that machine is asked, and only
 /// that device is taken for it.
+/// The device saved here under `name`, opened, and its file as read; None where none is saved. Never one only a
+/// machine that signs offers: `mcp --http` holds to what it offered, and asks no other machine.
+pub fn held_here(name: &str) -> Result<Option<(Device, Option<Vec<u8>>)>, String> {
+    let Some((path, sealed)) = kept(name)? else { return Ok(None) };
+    let (saved, file) = read(name, &path, sealed)?;
+    Ok(Some((open(&saved)?, Some(file))))
+}
+
 pub fn held(name: &str) -> Result<(Device, Option<Vec<u8>>), String> {
     let (saved, mut file) = load(name)?;
     let device = open(&saved)?;
@@ -456,7 +499,7 @@ pub fn listed(agent: bool) -> Result<String, String> {
     Ok(lines(&names, &offered) + &wrong.map(|why| format!("\n({why}: no machine is asked what it signs for)")).unwrap_or_default())
 }
 
-fn lines(names: &[String], offered: &[Saved]) -> String {
+pub fn lines(names: &[String], offered: &[Saved]) -> String {
     // Named only: what else is saved of one may be under a passphrase, which a list doesn't ask for.
     names.iter().map(|name| match (kept(name), signer_of(name)) {
         (_, Some(signer)) => format!("{name}\tits key is kept by {signer}, which signs for this machine"),
@@ -499,7 +542,10 @@ pub fn run(command: Command) -> i32 {
         Command::Launch { name, bundle } => opened(&name).and_then(|device| {
             said(device.launch(&bundle)).map(|value| format!("Launched {bundle} on {name} (pid {}).", value["pid"]))
         }),
-        Command::Mcp => return crate::mcp::Server::default().serve(),
+        Command::Mcp { http: None, .. } => return crate::mcp::Server::default().serve(),
+        Command::Mcp { http: Some(port), allow, token_file, devices } => allow.iter().map(|a| crate::http::allow(a)).collect::<Result<Vec<_>, _>>()
+            .and_then(|allowed| Ok(crate::http::Options { port, allowed, token: token_file.as_deref().map(crate::http::token).transpose()?, devices }))
+            .and_then(crate::http::serve),
         Command::Sign { names, machine } => keys(&names).and_then(|(keys, told, marks)| {
             // The file it was read from, still: not another saved under the name since.
             // Once seen changed, not signed for again until this is run again — though the same file came back.
@@ -534,6 +580,63 @@ pub fn unstub(name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sealed_file_is_asked_for_once_while_it_is_the_same() {
+        let (plain, sealed) = (b"{\"v\":1}", crate::secret::sealed(b"{\"v\":1}", "pw").unwrap());
+        assert_eq!(opened_once("d", &sealed, || Ok("pw".into())).unwrap(), plain);
+        // Opened again (by `mcp --http`'s worker, after a failure): nothing is asked.
+        assert_eq!(opened_once("d", &sealed, || Err("asked again".into())).unwrap(), plain);
+        // Another file under the name: asked; a wrong passphrase isn't kept.
+        let other = crate::secret::sealed(b"{\"v\":1}", "pw").unwrap();
+        assert_eq!(opened_once("d", &other, || Err("asked again".into())).unwrap_err(), "asked again");
+        assert!(opened_once("d", &other, || Ok("wrong".into())).unwrap_err().contains("isn't the one"));
+        assert_eq!(opened_once("d", &other, || Ok("pw".into())).unwrap(), plain);
+        // What the earlier file opened to went with it.
+        assert_eq!(opened_once("d", &sealed, || Err("asked again".into())).unwrap_err(), "asked again");
+        // Seen removed, or saved anew (by `mark`): let go of too; seen as it was, kept.
+        assert_eq!(opened_once("d", &other, || Ok("pw".into())).unwrap(), plain);
+        forget_opened("d", Some(&other));
+        assert_eq!(opened_once("d", &other, || Err("asked again".into())).unwrap(), plain);
+        forget_opened("d", None);
+        assert_eq!(opened_once("d", &other, || Err("asked again".into())).unwrap_err(), "asked again");
+    }
+
+    #[test]
+    fn what_a_sealed_file_opened_to_goes_once_it_is_seen_removed() {
+        let name = format!("sealed-{}", std::process::id());
+        let path = save(&Saved { v: 1, name: name.clone(), ip: "nowhere".into(), port: 1, pairing: "<plist/>".into(), signer: None }, Some("pw")).unwrap();
+        let file = std::fs::read(&path).unwrap();
+        opened_once(&name, &file, || Ok("pw".into())).unwrap();
+        // Seen as it was: kept.
+        assert_eq!(mark(&name).as_deref(), Some(file.as_slice()));
+        assert!(opened_once(&name, &file, || Err("asked again".into())).is_ok());
+        // A read that failed (here, a file its owner can't read): it says nothing of the file, and nothing goes.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+            // Unless this runs as root, which reads it all the same.
+            if std::fs::read(&path).is_err() {
+                assert_eq!(mark(&name), None);
+                assert!(opened_once(&name, &file, || Err("asked again".into())).is_ok());
+            }
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        // Seen saved anew under the name: what the old file opened to goes.
+        let anew = crate::secret::sealed(b"{}", "pw").unwrap();
+        std::fs::write(&path, &anew).unwrap();
+        assert_eq!(mark(&name).as_deref(), Some(anew.as_slice()));
+        assert_eq!(opened_once(&name, &file, || Err("asked again".into())).unwrap_err(), "asked again");
+        std::fs::write(&path, &file).unwrap();
+        opened_once(&name, &file, || Ok("pw".into())).unwrap();
+        // Seen removed: let go of.
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(mark(&name), None);
+        assert_eq!(opened_once(&name, &file, || Err("asked again".into())).unwrap_err(), "asked again");
+        // Opened only as saved here, over HTTP: none saved is none, and no machine that signs is asked.
+        assert!(matches!(held_here(&name), Ok(None)));
+    }
 
     #[test]
     fn a_look_takes_the_place_of_the_file_named_whole() {
