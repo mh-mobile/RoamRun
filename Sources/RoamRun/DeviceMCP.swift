@@ -249,10 +249,11 @@ final class DeviceMCP: @unchecked Sendable {
     }
 
     /// What a client may take each tool to do, the same in `roamrunctl mcp`. `look` only reads: nothing it does on
-    /// the device lasts. `elements` may scroll. Destructive: whatever presses what is there.
+    /// the device lasts. `elements` may scroll. Destructive: whatever presses or types into what is
+    /// there, or can't be undone from here (`lock`).
     static func hints(_ name: String) -> [String: Bool] {
         ["readOnlyHint": ["devices", "look"].contains(name),
-         "destructiveHint": ["tap", "swipe", "type", "paste"].contains(name)]
+         "destructiveHint": ["tap", "swipe", "type", "paste", "press"].contains(name)]
     }
 
     // Computed: JSON objects aren't Sendable, and a static stored one would have to be.

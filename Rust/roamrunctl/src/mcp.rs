@@ -80,11 +80,11 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
 }
 
 /// What a client may take each tool to do, the same in `roamrun mcp`. `look` only reads: nothing it does on
-/// the device lasts. `elements` may scroll. Destructive: whatever presses what is there,
-/// ends an app, or replaces one.
+/// the device lasts. `elements` may scroll. Destructive: whatever presses or types into what is there,
+/// can't be undone from here (`lock`), ends an app, or replaces one.
 fn hints(name: &str) -> Value {
     let reads = matches!(name, "devices" | "look");
-    let destroys = matches!(name, "tap" | "swipe" | "type" | "paste" | "install" | "launch");
+    let destroys = matches!(name, "tap" | "swipe" | "type" | "paste" | "press" | "install" | "launch");
     json!({ "readOnlyHint": reads, "destructiveHint": destroys })
 }
 
@@ -357,7 +357,7 @@ mod tests {
         }
         let hinted = |hint: &str| -> Vec<&str> { listed["result"]["tools"].as_array().unwrap().iter().filter(|t| t["annotations"][hint] == true).map(|t| t["name"].as_str().unwrap()).collect() };
         assert_eq!(hinted("readOnlyHint"), ["devices", "look"]);
-        assert_eq!(hinted("destructiveHint"), ["tap", "swipe", "type", "paste", "install", "launch"]);
+        assert_eq!(hinted("destructiveHint"), ["tap", "swipe", "type", "paste", "press", "install", "launch"]);
         // A notification gets no answer; an unknown method gets an error with its id.
         assert!(server.handle(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).is_none());
         let garbled: Value = serde_json::from_str(&server.handle("not json").unwrap()).unwrap();
