@@ -276,6 +276,20 @@ bounded.
   another saved under the name, it isn't operated under that name any more. Where the
   device doesn't say which way up it is and its picture is upright, a point is pressed
   as it is — on a device held upside down that would be the opposite point (not tried).
+- **roamrunctl can serve its MCP tools over HTTP.** `roamrunctl mcp --http <port> --allow
+  <who>… <devices>…`, started by a person and ended with Ctrl-C, listens on the machine's
+  Tailscale IPv4 address only. A caller is let in by what `tailscale whois` says of its
+  address at each request — a tag given with `--allow`, or, for an untagged machine, its
+  user's login — and, with `--token-file`, by a token as well. Refused: a machine shared in
+  from another tailnet; the machine itself without the token (any of its users would
+  otherwise pass); any request with an `Origin` (a web page in a browser on the tailnet);
+  a `Host` other than the server's address. Only the devices named are used, and `install`
+  isn't offered. Whoever is let in operates those devices as roamrunctl does, while it runs.
+  Between the caller and the machine, a cloud's proxy sees the images, what is typed or
+  pasted, and the token: with Codex Cloud it ends TLS itself. The token file has to be its
+  owner's alone (not checked on Windows). The log has one line a request — the caller's
+  address and identity, the method and tool, the outcome — and never the token, a body,
+  text, captions or images.
 - **roamrunctl can use a pairing whose key is on another machine.** `roamrunctl sign
   <devices> --for <machine>` runs where the keys are and listens on that machine's
   tailnet address (port 41831) for the one machine named, held to its address and to

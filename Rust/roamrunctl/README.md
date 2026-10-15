@@ -222,6 +222,28 @@ spends it, and a tap or swipe is refused if the device
 reports that it was turned since the look. The server uses the device's screenshots and input
 commands, not a continuous screen-sharing stream.
 
+#### Over HTTP, for an agent elsewhere
+
+An agent that reaches this machine only over HTTP (one in a cloud environment that is on your
+tailnet) uses the same tools from `roamrunctl mcp --http`, which you start and stop:
+
+```sh
+roamrunctl mcp --http 9090 --allow tag:codex phone
+```
+
+- It listens on this machine's Tailscale IPv4 address alone, on that port, until Ctrl-C.
+  The endpoint is `http://<that address>:9090/mcp`. A cloud environment usually has no
+  MagicDNS: give it the address, not the name.
+- `--allow` says who may call: `tag:<name>` for a tagged machine (a cloud's carries the tag of
+  the auth key you gave it), or a login (`someone@example.com`) for a person's own machines.
+  Tailscale is asked who each caller is (`tailscale whois`). A machine's name isn't taken.
+  A call from this machine itself is refused unless it brings the token.
+- `--token-file <file>` makes every request also bring `Authorization: Bearer <token>`: a
+  file only you can read, 32 characters or more.
+- Only the devices named are listed or used, and `install` isn't offered over HTTP.
+- What is shown and sent passes through whatever lies between: a cloud's proxy sees the
+  images, the text typed or pasted, and the token.
+
 An optional [agent skill](https://github.com/mh-mobile/RoamRun/tree/main/skills/roamrunctl)
 provides instructions: `npx skills add mh-mobile/RoamRun`. Installing the skill does not
 register or start the MCP server.

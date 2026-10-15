@@ -202,7 +202,8 @@ needed to establish each new device connection.
 
 ## MCP tools
 
-- `roamrunctl mcp` communicates through standard input/output. `look` returns a JPEG image
+- `roamrunctl mcp` communicates through standard input/output, or over HTTP with `--http`
+  (next section). `look` returns a JPEG image
   to the agent, while the standalone `roamrunctl look` command saves a PNG; the longer
   image side is at most 1280 pixels.
 - An MCP `look` authorizes **one** `tap` or `swipe` within 60 seconds. Another operation
@@ -224,6 +225,38 @@ needed to establish each new device connection.
 - `look` and inputs do not establish a persistent video stream or a visible screen-sharing
   session. Music continued playing during the screen/input tests, but microphone and some
   other interaction scenarios have not been verified.
+
+## MCP over HTTP
+
+`roamrunctl mcp --http <port> --allow <who>… [--token-file <file>] <device>…`, until Ctrl-C:
+
+- It listens on this machine's Tailscale IPv4 address only. It doesn't start without
+  Tailscale, without `--allow`, or without a device; a device only offered by a machine that
+  signs, and not used here yet, isn't taken.
+- Who may call: `--allow tag:<name>` matches a tagged caller by its tags, and `--allow <login>`
+  an untagged caller by its user's login, as `tailscale whois` gives them for the caller's
+  address, asked at each request (5 s at most; no answer is a refusal). A login never matches
+  a tagged machine. A machine shared in from another tailnet is refused, and so is this
+  machine itself unless the token came.
+- `--token-file`: each request also brings `Authorization: Bearer <token>`. The file has to be
+  its owner's alone (not checked on Windows), the token 32 characters or more on one line.
+- The transport is MCP's Streamable HTTP as of 2025-11-25, without sessions: one JSON-RPC
+  message a `POST /mcp`, answered in JSON; a notification or a response gets 202; `GET` and
+  `DELETE` get 405. `initialize` isn't needed before a call. `MCP-Protocol-Version`, when
+  sent, is one of 2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25, else 400.
+- Answered before anything else: `/.well-known/*` and `/register` with 404 (no OAuth here),
+  any `Origin` with 403, a `Host` other than this address and port with 400; then a missing or
+  wrong token with 401 (`WWW-Authenticate: Bearer`), a caller not allowed with 403.
+- One request a connection (`Connection: close`). A body is read as chunked when it says so
+  (also when a length comes with it), else by its length; 1 MB at most.
+- Tool calls take turns, as over stdio. One whose caller closes the connection, or takes it
+  back (`notifications/cancelled`), before its turn isn't made; one that waited 20 s for its
+  turn is answered "not begun" and isn't made. Other messages are answered at once.
+- Only the devices named are listed by `devices` or used. `install` isn't offered: its
+  `path` would name a file on this machine for whoever calls.
+- One line a request on standard error: the time (UTC), the caller's address and who
+  Tailscale says it is, the method and tool, the outcome, how long it took. Never the
+  token, a body, text typed or pasted, captions or images.
 
 ## Installing apps
 

@@ -21,7 +21,7 @@ const SETTLE: Duration = Duration::from_secs(1);
 /// The most `type` takes in one call.
 const LONGEST_TYPED: usize = 500;
 /// The MCP versions spoken here: initialize answers the one asked for if it is one of them, else the newest.
-const VERSIONS: [&str; 4] = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
+pub const VERSIONS: [&str; 4] = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
 
 const INSTRUCTIONS: &str = "Operates a real iPhone or iPad from this machine. Look, act, look again: each look serves one \
 action, and points are pixels of the image the last look returned. Pairing with a device and signing for one \
@@ -66,6 +66,9 @@ pub struct Server {
     open: HashMap<String, (Device, Option<Vec<u8>>)>,
     shown: HashMap<String, Shown>,
     acted: HashMap<String, Instant>,
+    /// Over HTTP (`mcp --http`): the devices named there, the only ones listed and used; and no install,
+    /// whose path would name a file on this machine for whoever calls.
+    offered: Option<Vec<String>>,
 }
 
 fn text(s: impl Into<String>) -> Vec<Value> { vec![json!({ "type": "text", "text": s.into() })] }
@@ -90,9 +93,9 @@ fn hints(name: &str) -> Value {
     json!({ "readOnlyHint": reads, "destructiveHint": destroys })
 }
 
-fn tools() -> Value {
+fn tools(remote: bool) -> Value {
     let point = json!({ "type": "number", "description": "Pixels of the image the last look returned" });
-    json!([
+    let all = json!([
         tool("devices", "The devices this machine can use, one a line: its name, a tab, and how it is kept (one sentence where there is none). One \"not used here yet\" is offered by another machine and believed the first time it is used: use it only if the user named it.", json!({}), &[]),
         tool("look", "The device's screen now, as an image. Do this before every tap or swipe: it serves one action.", json!({}), &[]),
         tool("tap", "Tap a point of the last look. Operates the device: whatever is there gets pressed.", json!({ "x": point, "y": point }), &["x", "y"]),
@@ -111,7 +114,8 @@ fn tools() -> Value {
              json!({ "path": { "type": "string" } }), &["path"]),
         tool("launch", "Launch an app on the device by its bundle identifier (one already running is ended first).",
              json!({ "bundle": { "type": "string" } }), &["bundle"]),
-    ])
+    ]);
+    Value::Array(all.as_array().into_iter().flatten().filter(|t| !remote || t["name"] != "install").cloned().collect())
 }
 
 /// Whether the call `line` asks for was taken back by a message that came after it (notifications/cancelled):
@@ -129,6 +133,11 @@ fn is_call(line: &str) -> bool {
 }
 
 impl Server {
+    /// For `mcp --http`: these devices only, and no install.
+    pub fn offering(devices: Vec<String>) -> Server {
+        Server { offered: Some(devices), ..Server::default() }
+    }
+
     /// Serves until stdin closes.
     pub fn serve(&mut self) -> i32 {
         let stdout = std::io::stdout();
@@ -179,7 +188,7 @@ impl Server {
                 "instructions": INSTRUCTIONS,
             }),
             "ping" => json!({}),
-            "tools/list" => json!({ "tools": tools() }),
+            "tools/list" => json!({ "tools": tools(self.offered.is_some()) }),
             "tools/call" => match self.call(params["name"].as_str().unwrap_or(""), &params["arguments"]) {
                 Ok(content) => json!({ "content": content, "isError": false }),
                 Err(why) => json!({ "content": text(why), "isError": true }),
@@ -219,8 +228,17 @@ impl Server {
     }
 
     fn call(&mut self, tool: &str, arguments: &Value) -> Result<Vec<Value>, String> {
-        if tool == "devices" { return device::listed(true).map(text) }
+        if tool == "devices" {
+            let listed = device::listed(true)?;
+            let Some(offered) = &self.offered else { return Ok(text(listed)) };
+            let lines: Vec<&str> = listed.lines().filter(|line| offered.iter().any(|name| line.split('\t').next() == Some(name))).collect();
+            return Ok(text(if lines.is_empty() { "No device is offered here now.".to_string() } else { lines.join("\n") }));
+        }
         let name = arguments["device"].as_str().ok_or("device is missing")?.to_string();
+        if let Some(offered) = &self.offered {
+            if !offered.contains(&name) { return Err(format!("{name} isn't offered here: {}", offered.join(", "))) }
+            if tool == "install" { return Err("install isn't offered over HTTP".into()) }
+        }
         // One that is open is known: asking again what there is would ask every machine that might sign.
         if !self.open.contains_key(&name) {
             let names = device::names()?;

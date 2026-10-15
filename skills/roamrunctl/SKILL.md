@@ -239,6 +239,23 @@ believed the first time it is used — use it only if the user named it.
   These press what is really there — don't tap what spends money, posts, sends, deletes
   or signs in unless the user asked for exactly that.
 
+**Over HTTP**, for an agent that reaches the machine only that way (one in a cloud on the
+user's tailnet): the user starts `roamrunctl mcp --http <port> --allow <tag or login>
+<devices>` there, and stops it with Ctrl-C — never you. You get its address and port (and a
+token, if they set one) from them. Each call is one `POST /mcp`, no `initialize` first:
+
+```sh
+rr() { curl -sS --max-time 120 -H 'Content-Type: application/json' ${RR_TOKEN:+-H "Authorization: Bearer $RR_TOKEN"} --data-binary @- "http://<address>:<port>/mcp"; }
+rr <<'EOF' | python3 -c 'import json,sys,base64; r=json.load(sys.stdin).get("result",{}); [open("look.jpg","wb").write(base64.b64decode(c["data"])) for c in r.get("content",[]) if c.get("type")=="image"]; print(r.get("isError"), [c.get("text") for c in r.get("content",[]) if c.get("type")=="text"])'
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"device":"phone"}}}
+EOF
+```
+
+Write a look's image to a file, as above, and view the file: never print the base64. A 401
+is a missing or wrong token, a 403 a caller it doesn't let in — say so, don't retry. "not
+begun" did nothing; a timeout or a 504 may have done it — look before trying again. Only
+the devices the user named are there, and `install` isn't offered over HTTP.
+
 A look here is a picture the device makes, and inputs are sent without a screen stream:
 the device lists no screen-sharing session and what plays goes on sounding (listened to
 on iOS 27.0, with looks, taps, keys and buttons; swipes, paste and the microphone weren't
