@@ -148,7 +148,6 @@ the using machine and the device, not through the key's machine.
   item per device, whose account is the device's name, set it in single quotes, so that the
   variable is read when the command runs:
   `export ROAMRUNCTL_PASSPHRASE_COMMAND='security find-generic-password -a "$ROAMRUNCTL_DEVICE" -s roamrunctl -w'`.
-  This line wasn't run with a Keychain; a unit test checks that the command sees the name.
 - Re-pairing a device under the same host identity replaces the earlier pairing on the device.
   An old record then fails to connect; remove it with `roamrunctl devices remove <name>`.
   Also remove the machine's pairing entry in the device's Developer Mode list when withdrawing it.
