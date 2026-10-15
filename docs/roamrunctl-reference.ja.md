@@ -224,7 +224,7 @@ Mac 側の関連する実装は、`Sources/RoamRun/Introductions.swift`、`PairB
 - RoamRun を入れた Mac を仲介マシンとし、`roamrunctl` を実行するマシンをホストとする構成
 - MCP 経由の swipe、最後まで通る paste、install、launch（MCP を使わない形では確かめています）
 - Windows での `pair control --with`、MCP、install、launch
-- ほかのマシンから（タグやログイン名で許して）、クラウドから、または Linux や Windows で使う `mcp --http`。macOS では、そのマシン自身からトークン付きで `scripts/mcp-http-check.py` を通しました。iPhone では、look、tap、type、press、`elements` を確かめています。ほかの呼び出し元の look のあとの tap と、古い look での type と paste は、断られました。順番待ちの呼び出しは、接続を閉じても、セッションの中の `notifications/cancelled` でも取り消せました。これらは、少し前の形での確認です。最後の変更（デバイスを、提供したときのままでしか開かないことと、取り消しの覚え方）は、127.0.0.1 でのテストだけで確かめています。
+- ほかのマシンから（タグやログイン名で許して）、クラウドから、または Linux や Windows で使う `mcp --http`。macOS では、そのマシン自身からトークン付きで `scripts/mcp-http-check.py` を通しました。iPhone では、look、tap、type、press、`elements` を確かめています。ほかの呼び出し元の look のあとの tap と、古い look での type と paste は、断られました。順番待ちの呼び出しは、接続を閉じても、セッションの中の `notifications/cancelled` でも取り消せました。このうち、look、tap、type、`elements` と、セッションの中の取り消し（取り消しが呼び出しより前に届いた場合と後に届いた場合）は、今の形でも確かめています。ほかは、少し前の形での確認です。
 - 待ち受けるアドレスのない、Tailscale のユーザースペースネットワーキング
 - `--mac` から `--host` への変更後に、`pair introduce` を使って Xcode とペアリングする構成
 
