@@ -253,7 +253,8 @@ import base64, json, os, sys
 r = json.load(sys.stdin).get("result", {})
 for c in r.get("content", []):
     if c.get("type") == "image":
-        fd = os.open("look.jpg", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600); os.fchmod(fd, 0o600)
+        fd = os.open("look.jpg", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        if hasattr(os, "fchmod"): os.fchmod(fd, 0o600)
         with os.fdopen(fd, "wb") as f: f.write(base64.b64decode(c["data"]))
 print(r.get("isError"), [c.get("text") for c in r.get("content", []) if c.get("type") == "text"])'; }
 echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"device":"phone"}}}' | rr | said
@@ -266,8 +267,8 @@ screen may show messages or notifications: the file is yours alone to read). A 4
 is a missing or wrong token, a 403 a caller it doesn't let in — say so, don't retry. "not
 begun" did nothing; a timeout or a 504 may have done it — look before trying again. Keep
 the connection open until the answer comes: a call whose connection closed before its turn
-isn't made, and closing it is how a call is taken back here (`notifications/cancelled` does
-nothing over HTTP). Give each tap or swipe the id of your look: after another agent's look,
+isn't made, and closing it is how a call is taken back with curl (`notifications/cancelled`
+counts only with the `Mcp-Session-Id` an `initialize` answered with, as MCP clients send it). Give each tap or swipe the id of your look: after another agent's look,
 yours is refused — look again. Only the devices
 the user named are there, and `install` isn't offered over HTTP.
 

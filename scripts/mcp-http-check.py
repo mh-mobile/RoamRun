@@ -65,7 +65,7 @@ if args.look:
     if image:
         # Whatever is on the screen is in it: the owner's alone to read, also where an older one was.
         fd = os.open("look.jpg", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        os.fchmod(fd, 0o600)
+        if hasattr(os, "fchmod"): os.fchmod(fd, 0o600)   # not on Windows before Python 3.13
         with os.fdopen(fd, "wb") as f: f.write(base64.b64decode(image["data"]))
     check(f"look at {args.look}", image is not None, " ".join(c.get("text", "") for c in content if c.get("type") == "text") + (" → look.jpg" if image else ""))
 

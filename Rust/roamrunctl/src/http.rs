@@ -213,21 +213,27 @@ fn clock() -> String {
     format!("{:02}:{:02}:{:02} UTC", s / 3600, s / 60 % 60, s % 60)
 }
 
-/// A tool call on a device, with what it is answered by. `stream`: the caller's connection, looked at as its turn comes.
-struct Call {
-    id: Value,
-    line: String,
-    stream: TcpStream,
-    at: Instant,
-    reply: mpsc::Sender<String>,
+enum Work {
+    /// A tool call on the device, with what it is answered by. `session`: the `Mcp-Session-Id` it came with;
+    /// `stream`: the caller's connection, looked at as its turn comes.
+    Call { session: Option<String>, id: Value, line: String, stream: TcpStream, at: Instant, reply: mpsc::Sender<String> },
+    /// `notifications/cancelled`, in a session: the call of that id in it is taken back.
+    Cancel { session: String, id: Value },
 }
 
-/// One device's tool calls, one at a time, in the order they came. One whose caller's connection is closed or
-/// broken when its turn comes — over HTTP, that is how a call is taken back — isn't begun and isn't answered:
-/// what it would have pressed isn't pressed for nobody. One that waited too long is answered so, and not begun.
-fn work(mut server: Server, told: mpsc::Receiver<Call>) {
-    for Call { id, line, stream, at, reply } in told {
-        if closed(&stream) { continue }
+/// One device's tool calls, one at a time, in the order they came. One taken back in its session — a client that
+/// initialized was given a session id, so another's call of the same id isn't it — or whose caller's connection
+/// is closed or broken when its turn comes, isn't begun and isn't answered: what it would have pressed isn't
+/// pressed for nobody. One that waited too long is answered so, and not begun.
+fn work(mut server: Server, told: mpsc::Receiver<Work>) {
+    let mut waiting = std::collections::VecDeque::new();
+    while let Some(next) = waiting.pop_front().or_else(|| told.recv().ok()) {
+        waiting.extend(told.try_iter());
+        let Work::Call { session, id, line, stream, at, reply } = next else { continue };
+        let taken_back = session.as_ref().is_some_and(|session| {
+            waiting.iter().any(|w| matches!(w, Work::Cancel { session: s, id: i } if s == session && *i == id))
+        });
+        if taken_back || closed(&stream) { continue }
         if at.elapsed() > TURN {
             let busy = format!("not begun: another call held the device for more than {} s. Look before trying again", TURN.as_secs());
             let _ = reply.send(json!({ "jsonrpc": "2.0", "id": id, "result": { "content": [{ "type": "text", "text": busy }], "isError": true } }).to_string());
@@ -253,7 +259,7 @@ struct Shared {
     /// The devices offered, each with its saved file as it was when this began (see `Server::offering`).
     offered: Vec<(String, Option<Vec<u8>>)>,
     /// Where a call on each device takes its turn.
-    turns: HashMap<String, mpsc::Sender<Call>>,
+    turns: HashMap<String, mpsc::Sender<Work>>,
     /// What a request's Host may name: this machine's address, or its Tailscale names, with the port.
     hosts: Vec<String>,
     /// This machine's address and lasting id on the tailnet: a call from it is this machine's own.
@@ -268,14 +274,23 @@ struct Shared {
     turning_away: AtomicUsize,
 }
 
+/// The devices named, each read as it will be held to: one only offered by a machine that signs isn't used here
+/// yet (whether to believe it is the user's to decide, at a terminal), one that can't be read isn't offered, and
+/// one device isn't offered under two names — it would have two turns and two latest looks.
+fn offerable(devices: &[String]) -> Result<Vec<(String, Option<Vec<u8>>)>, String> {
+    let mut at: HashMap<String, &String> = HashMap::new();
+    devices.iter().map(|name| {
+        let (ip, file) = crate::device::as_saved(name)?;
+        if let Some(other) = at.insert(ip.clone(), name) { return Err(format!("{other} and {name} are one device ({ip}): offer it under one name")) }
+        Ok((name.clone(), Some(file)))
+    }).collect()
+}
+
 /// `roamrunctl mcp --http`: until Ctrl-C.
 pub fn serve(options: Options) -> Result<String, String> {
     if options.allowed.is_empty() { return Err("who may call: --allow tag:<name> (a tagged machine, such as a cloud's) or --allow <login> (a person's own machines)".into()) }
     if options.devices.is_empty() { return Err("which devices: roamrunctl mcp --http <port> --allow <who> <device>…   (`roamrunctl devices` lists them)".into()) }
-    for name in &options.devices {
-        // One only offered by a machine that signs isn't used here yet: whether to believe it is the user's to decide, at a terminal.
-        if !crate::device::saved_here(name)? { return Err(format!("{name} isn't saved here: use it once here first (`roamrunctl look {name}`), or name another")) }
-    }
+    let offered = offerable(&options.devices)?;
     let status = tailscale::status()?;
     let own: Ipv4Addr = status.this.ips.iter().find_map(|a| a.parse().ok()).ok_or("this machine has no IPv4 address on the tailnet")?;
     let listener = TcpListener::bind((own, options.port)).map_err(|e| match e.kind() {
@@ -289,15 +304,14 @@ pub fn serve(options: Options) -> Result<String, String> {
         options.devices.join(", "), who.join(", "), if options.token.is_some() { ", with the token" } else { "" });
     let dns = status.this.dns_name.trim_end_matches('.');
     let names = [dns, tailscale::short(dns)].into_iter().filter(|n| !n.is_empty()).map(str::to_string).collect();
-    run(listener, options, IpAddr::V4(own), names, status.this.id.clone(), HEAD_WITHIN, Box::new(tailscale::whois))
+    run(listener, options, offered, IpAddr::V4(own), names, status.this.id.clone(), HEAD_WITHIN, Box::new(tailscale::whois))
 }
 
 /// What `serve` does once it listens; `own_ip`, `names`, `own_id`: this machine on the tailnet (its names, a Host
 /// may give); `whois` says who a caller is (a test gives its own).
-fn run(listener: TcpListener, options: Options, own_ip: IpAddr, names: Vec<String>, own_id: String, head_within: Duration, whois: Box<dyn Fn(IpAddr) -> Result<Whois, String> + Send + Sync>) -> Result<String, String> {
+fn run(listener: TcpListener, options: Options, offered: Vec<(String, Option<Vec<u8>>)>, own_ip: IpAddr, names: Vec<String>, own_id: String, head_within: Duration, whois: Box<dyn Fn(IpAddr) -> Result<Whois, String> + Send + Sync>) -> Result<String, String> {
     let own = listener.local_addr().map_err(|e| e.to_string())?;
     let hosts = std::iter::once(own.to_string()).chain(names.iter().map(|name| format!("{name}:{}", own.port()))).collect();
-    let offered: Vec<(String, Option<Vec<u8>>)> = options.devices.iter().map(|name| (name.clone(), crate::device::mark(name))).collect();
     // A turn of its own for each device: a call on one doesn't wait for another's.
     let turns = options.devices.iter().map(|name| {
         let (tell, told) = mpsc::channel();
@@ -405,31 +419,39 @@ fn served(stream: &mut TcpStream, s: &Shared, from: IpAddr, began: Instant, who:
         "" => "a response".into(),
         method => method.to_string(),
     };
+    // Given at initialize (a client that initialized sends it on): what a call is taken back within.
+    let session = request.header("mcp-session-id").filter(|s| (1..=128).contains(&s.len()) && s.bytes().all(|b| (0x21..=0x7e).contains(&b))).map(str::to_string);
     let response = method.is_empty() && (message.get("result").is_some() || message.get("error").is_some());
     let Some(id) = message.get("id").cloned().filter(|_| !response) else {
-        // A notification or a response: nothing to answer. Not even `notifications/cancelled`: the request id is the
-        // client's choosing, and another client's call of the same id would be taken back. A call is taken back by
-        // closing its connection (as MCP 2026-07-28 has it, and the SDKs' servers do without sessions).
+        // A notification or a response: nothing to answer. `notifications/cancelled` takes back the call of that id in
+        // its session, on whichever device it waits. Without a session it does nothing — the request id is the
+        // client's choosing, and another client's call could have the same — and closing the connection does it.
+        if let (true, Some(session)) = (method == "notifications/cancelled", &session) {
+            for turn in s.turns.values() { let _ = turn.send(Work::Cancel { session: session.clone(), id: message["params"]["requestId"].clone() }); }
+        }
         return refuse(202, "", "");
     };
     if method.is_empty() { return refuse(400, "", &rpc_error(id, -32600, "no method")) }
     let line = message.to_string();
     let turn = (method == "tools/call").then(|| message["params"]["arguments"]["device"].as_str()).flatten().and_then(|name| s.turns.get(name));
     let Some(turn) = turn else {
-        // Asks nothing of a device offered (`devices`, `initialize`, a device not offered): answered at once.
+        // Asks nothing of a device offered (`devices`, `initialize`, a device not offered): answered at once. An
+        // initialize is given a session id, sent back with what follows.
         let answer = Server::offering(s.offered.clone()).handle(&line).unwrap_or_default();
-        return refuse(200, "", &answer);
+        let given = (method == "initialize").then(|| crate::hold::random::<16>().ok()).flatten()
+            .map(|bytes| format!("Mcp-Session-Id: {}\r\n", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()));
+        return refuse(200, given.as_deref().unwrap_or(""), &answer);
     };
     let (reply, answered) = mpsc::channel();
     let Ok(watched) = stream.try_clone() else { return "gone".into() };
-    if turn.send(Call { id, line, stream: watched, at: Instant::now(), reply }).is_err() { respond(stream, 503, "", ""); return "503".into() }
+    if turn.send(Work::Call { session, id, line, stream: watched, at: Instant::now(), reply }).is_err() { respond(stream, 503, "", ""); return "503".into() }
     match answered.recv() {
         Ok(answer) => {
             let failed = serde_json::from_str::<Value>(&answer).is_ok_and(|a| a["result"]["isError"] == true);
             respond(stream, 200, "", &answer);
             if failed { "error".into() } else { "ok".into() }
         }
-        // The caller's connection closed before its turn: not answered.
+        // Taken back in its session, or the caller's connection closed, before its turn: not answered.
         Err(_) => "not begun".into(),
     }
 }
@@ -544,7 +566,7 @@ mod tests {
         let at = listener.local_addr().unwrap();
         let options = Options { port: at.port(), allowed: vec![Allow::Tag("tag:ci".into())], token: token.map(str::to_string), devices: vec!["phone".into()] };
         let names = vec!["mac.example.ts.net".into(), "mac".into()];
-        std::thread::spawn(move || run(listener, options, "100.64.0.1".parse().unwrap(), names, "own".into(), Duration::from_millis(500), Box::new(whois)));
+        std::thread::spawn(move || run(listener, options, vec![("phone".into(), None)], "100.64.0.1".parse().unwrap(), names, "own".into(), Duration::from_millis(500), Box::new(whois)));
         at
     }
 
@@ -583,6 +605,12 @@ mod tests {
         assert_eq!(status(&post(at, "", r#"{"jsonrpc":"2.0","id":1,"result":{}}"#)), "202");
         let hello = post(at, "MCP-Protocol-Version: 2025-06-18\r\n", r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#);
         assert!(hello.starts_with("HTTP/1.1 200") && hello.contains(r#""protocolVersion":"2025-06-18""#) && hello.contains("application/json"), "{hello}");
+        // An initialize is given a session id; a cancel in one, or in none, is nothing to answer.
+        assert!(hello.lines().any(|l| l.starts_with("Mcp-Session-Id: ") && l.len() == "Mcp-Session-Id: ".len() + 32), "{hello}");
+        assert!(!post(at, "", r#"{"jsonrpc":"2.0","id":9,"method":"ping"}"#).contains("Mcp-Session-Id"));
+        for session in ["Mcp-Session-Id: abc\r\n", ""] {
+            assert_eq!(status(&post(at, session, r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":3}}"#)), "202");
+        }
         // No install over HTTP: its path would name a file on this machine for whoever calls.
         let listed = post(at, "", r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
         assert!(listed.contains(r#""name":"launch""#) && !listed.contains(r#""name":"install""#), "{listed}");
@@ -629,6 +657,28 @@ mod tests {
     }
 
     #[test]
+    fn a_device_is_offered_only_as_it_can_be_read_and_under_one_name() {
+        let (a, b) = (format!("one-{}", std::process::id()), format!("two-{}", std::process::id()));
+        crate::device::stub(&a, 49152);
+        crate::device::stub(&b, 49152);
+        // Not `serve`, which would go on to listen where these checks let it.
+        let offer = |devices: &[&String]| offerable(&devices.iter().map(|d| d.to_string()).collect::<Vec<_>>()).unwrap_err();
+        // Two names of one device (one address): it would have two turns and two latest looks.
+        assert!(offer(&[&a, &b]).contains("are one device"), "{}", offer(&[&a, &b]));
+        // One that can't be read as it will be used isn't offered.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let file = crate::device::folder().unwrap().join(format!("{a}.json"));
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(offer(&[&a]).contains("can be read by others"));
+        }
+        crate::device::unstub(&a);
+        crate::device::unstub(&b);
+        assert!(offer(&[&a]).contains("isn't saved here"));
+    }
+
+    #[test]
     fn what_a_caller_sends_is_logged_on_one_line_without_its_control_characters() {
         assert_eq!(printable("tools/call a\nb\u{1b}[2J"), "tools/call a?b?[2J");
         assert_eq!(printable(&"x".repeat(300)).len(), 200);
@@ -645,25 +695,33 @@ mod tests {
     fn a_call_is_begun_only_while_its_caller_still_wants_it() {
         let (tell, told) = mpsc::channel();
         let mut kept = Vec::new();
-        let mut call = |id: i64, gone: bool, waited: u64| {
+        let mut call = |session: Option<&str>, id: i64, gone: bool, waited: u64| {
             let (reply, answered) = mpsc::channel();
             let line = json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": { "name": "look", "arguments": { "device": "pad" } } }).to_string();
             let at = Instant::now().checked_sub(Duration::from_secs(waited)).unwrap();
             let (stream, theirs) = ends();
             if gone { drop(theirs) } else { kept.push(theirs) }
-            tell.send(Call { id: json!(id), line, stream, at, reply }).unwrap();
+            tell.send(Work::Call { session: session.map(str::to_string), id: json!(id), line, stream, at, reply }).unwrap();
             answered
         };
         // All queued before the first has its turn.
-        let went = call(1, true, 0);
-        let late = call(2, false, TURN.as_secs() + 1);
-        let answered = call(3, false, 0);
+        let went = call(None, 1, true, 0);
+        let late = call(None, 2, false, TURN.as_secs() + 1);
+        let answered = call(None, 3, false, 0);
+        // Taken back in its session; the same id in another session, or in none, isn't.
+        let taken_back = call(Some("a"), 4, false, 0);
+        let other = call(Some("b"), 4, false, 0);
+        let none = call(None, 4, false, 0);
+        tell.send(Work::Cancel { session: "a".into(), id: json!(4) }).unwrap();
         drop(tell);
         std::thread::spawn(move || work(Server::offering(vec![("phone".into(), None)]), told));
         let got = |answered: mpsc::Receiver<String>| answered.recv_timeout(Duration::from_secs(10)).ok();
         assert_eq!(got(went), None);
         assert!(got(late).is_some_and(|a| a.contains("not begun") && a.contains(r#""id":2"#)));
         assert!(got(answered).is_some_and(|a| a.contains("isn't offered here") && a.contains(r#""id":3"#)));
+        assert_eq!(got(taken_back), None);
+        assert!(got(other).is_some_and(|a| a.contains(r#""id":4"#)));
+        assert!(got(none).is_some_and(|a| a.contains(r#""id":4"#)));
     }
 
     #[test]

@@ -234,7 +234,8 @@ needed to establish each new device connection.
 
 - It listens on this machine's Tailscale IPv4 address only. It doesn't start without
   Tailscale, without `--allow`, or without a device; a device only offered by a machine that
-  signs, and not used here yet, isn't taken.
+  signs, and not used here yet, isn't taken, nor one whose saved file can't be read (a
+  passphrase not given), nor one device under two names.
 - Who may call: `--allow tag:<name>` matches a tagged caller by its tags, and `--allow <login>`
   an untagged caller by its user's login, as `tailscale whois` gives them for the caller's
   address, asked at each request (5 s at most; no answer is a refusal). A login never matches
@@ -256,12 +257,15 @@ needed to establish each new device connection.
   32 connections at once, 17 from one address; more are answered 503.
 - Tool calls on one device take turns, as over stdio; each device has its own turn, so a call
   on one doesn't wait for another's. One whose caller has closed its connection (or only its
-  own side of it), or whose connection broke, when its turn comes isn't made: over HTTP a call
-  is taken back by closing its connection. A `notifications/cancelled` is answered 202 and
-  does nothing — its request id is the client's choosing, and another client's call could
-  carry the same (as MCP 2026-07-28 has it, and the SDKs' servers do without sessions). One
-  that waited 20 s for its turn is answered "not begun" and isn't made. Other messages are
-  answered at once.
+  own side of it), or whose connection broke, when its turn comes isn't made. An `initialize`
+  is answered with an `Mcp-Session-Id`, which a client sends with what follows (the MCP SDKs
+  do): a `notifications/cancelled` sent with it takes back the call of that id in that
+  session, before its turn. Without a session it does nothing — the request id is the
+  client's choosing, and another client's call could carry the same — and closing the
+  connection takes the call back. One that waited 20 s for its turn is answered "not begun"
+  and isn't made. Other messages are answered at once. (MCP 2025-11-25 asks that a closed
+  connection not be taken as a call taken back; a call for a caller who is gone isn't made
+  here all the same.)
 - Several agents can use one server at once: a tap or swipe names the look it is of, and is
   refused after another look of that device, whoever took it.
 - Only the devices named are listed by `devices` or used, and only while each is saved here

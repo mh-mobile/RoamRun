@@ -292,7 +292,9 @@ impl Server {
             "tap" | "swipe" => {
                 // The look is spent by what reaches the device: a call refused for what it says leaves it.
                 let shown = self.shown.get(&name).ok_or("look first: a point is given in the pixels of the image a look returns")?;
-                let given = arguments["look"].as_u64().ok_or("look is missing: give the id the last look answered with")?;
+                // A number, or one written as text, as a model sometimes gives it.
+                let given = arguments["look"].as_u64().or_else(|| arguments["look"].as_str()?.trim().parse().ok())
+                    .ok_or("look is missing: give the id the last look answered with")?;
                 // Looked at again since, by another caller or this one: what that look saw may not be on the screen any more.
                 if given != shown.id { return Err(format!("look again: look {given} isn't the device's latest look (it was looked at again since)")) }
                 if shown.at.elapsed() > LOOK_STANDS { self.shown.remove(&name); return Err("that look is more than a minute old: look again".into()); }
@@ -479,6 +481,9 @@ mod tests {
         look(&mut server, upright, 1, now());
         assert!(call(&mut server, "tap", json!({ "look": 6, "x": 1, "y": 1 })).starts_with("look again: look 6"));
         assert!(server.call("tap", &json!({ "device": name, "x": 1, "y": 1 })).unwrap_err().starts_with("look is missing"));
+        // Written as text, as a model sometimes gives it: taken.
+        assert!(call(&mut server, "tap", json!({ "look": "7", "x": 1, "y": 1 })).contains("doesn't answer"));
+        look(&mut server, upright, 1, now());
         assert!(server.shown.contains_key(&name));
         // Turned since, or a minute old: not pressed.
         look(&mut server, (200.0, 100.0), 1, now());

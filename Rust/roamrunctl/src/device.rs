@@ -384,9 +384,12 @@ fn keys(names: &[String]) -> Result<Signing, String> {
     Ok((keys, told, marks))
 }
 
-/// Whether `name` is saved here — with its key, or held to the machine that signs for it — not only offered.
-pub fn saved_here(name: &str) -> Result<bool, String> {
-    Ok(kept(named(name)?)?.is_some())
+/// A device saved here — with its key, or held to the machine that signs for it — read as using it reads it:
+/// its address on the tailnet, and its file as read (what `mark` gives while it is unchanged). An error
+/// where it is only offered by a machine that signs, or can't be read.
+pub fn as_saved(name: &str) -> Result<(String, Vec<u8>), String> {
+    let (path, sealed) = kept(named(name)?)?.ok_or_else(|| format!("{name} isn't saved here: use it once here first (`roamrunctl look {name}`), or name another"))?;
+    read(name, &path, sealed).map(|(saved, file)| (saved.ip, file))
 }
 
 pub fn opened(name: &str) -> Result<Device, String> {
