@@ -236,7 +236,9 @@ impl Server {
         if tool == "devices" {
             // Those offered are saved here: no machine that might sign is asked.
             let Some(offered) = &self.offered else { return device::listed(true).map(text) };
-            return Ok(text(device::lines(&offered.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>(), &[])));
+            // One removed, or saved anew, since it was offered isn't used: not listed either.
+            let names: Vec<String> = offered.iter().filter(|(name, was)| device::mark(name) == *was).map(|(name, _)| name.clone()).collect();
+            return Ok(text(if names.is_empty() { "No device offered here can be used now.".to_string() } else { device::lines(&names, &[]) }));
         }
         let name = arguments["device"].as_str().ok_or("device is missing")?.to_string();
         if let Some(offered) = &self.offered {
@@ -482,20 +484,27 @@ mod tests {
         device::unstub(&name);
     }
 
+    fn server_devices(server: &mut Server) -> String {
+        server.call("devices", &json!({})).unwrap()[0]["text"].as_str().unwrap().to_string()
+    }
+
     #[test]
     fn over_http_only_the_devices_offered_are_used_and_only_as_they_were_saved() {
         let name = format!("offered-{}", std::process::id());
         device::stub(&name, 49152);
         let mut server = Server::offering(std::slice::from_ref(&name));
-        let mut call = |tool: &str| server.call(tool, &json!({ "device": name, "path": "/etc/hosts" })).err().unwrap_or_else(|| "done".into());
-        assert!(call("look").contains("doesn't answer"));
-        assert!(call("install").contains("isn't offered over HTTP"));
+        let call = |server: &mut Server, tool: &str| server.call(tool, &json!({ "device": name, "path": "/etc/hosts" })).err().unwrap_or_else(|| "done".into());
+        assert!(call(&mut server, "look").contains("doesn't answer"));
+        assert!(call(&mut server, "install").contains("isn't offered over HTTP"));
         // Saved anew under the name, or removed, since it was offered: not used.
+        assert!(server_devices(&mut server).starts_with(&name));
         device::unstub(&name);
         device::stub(&name, 49153);
-        assert!(call("look").contains("saved anew"));
+        assert!(call(&mut server, "look").contains("saved anew"));
+        assert!(!server_devices(&mut server).contains(&name));
         device::unstub(&name);
-        assert!(call("look").contains("saved anew"));
+        assert!(call(&mut server, "look").contains("saved anew"));
+        assert_eq!(server_devices(&mut server), "No device offered here can be used now.");
         assert!(server.call("look", &json!({ "device": "another" })).unwrap_err().contains("isn't offered here"));
     }
 }

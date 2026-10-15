@@ -5,7 +5,7 @@ Nothing is asked of a device unless --look names one; then one look is saved to 
 
     python3 scripts/mcp-http-check.py http://<server's Tailscale IPv4>:<port> [--token-file <file>] [--look <device>]
 """
-import argparse, base64, http.client, json, sys, urllib.parse
+import argparse, base64, http.client, json, os, sys, urllib.parse
 
 parser = argparse.ArgumentParser()
 parser.add_argument("url")
@@ -63,7 +63,10 @@ if args.look:
     content = looked["result"]["content"] if status == 200 else []
     image = next((c for c in content if c.get("type") == "image"), None)
     if image:
-        open("look.jpg", "wb").write(base64.b64decode(image["data"]))
+        # Whatever is on the screen is in it: the owner's alone to read, also where an older one was.
+        fd = os.open("look.jpg", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb") as f: f.write(base64.b64decode(image["data"]))
     check(f"look at {args.look}", image is not None, " ".join(c.get("text", "") for c in content if c.get("type") == "text") + (" → look.jpg" if image else ""))
 
 print("all checks passed" if not failures else f"{len(failures)} failed: {', '.join(failures)}")

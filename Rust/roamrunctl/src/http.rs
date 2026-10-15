@@ -164,7 +164,7 @@ pub fn body(reader: &mut impl BufRead, request: &Request, most: usize) -> Result
             if size > most - body.len() { return Err(413) }
             let at = body.len();
             body.resize(at + size, 0);
-            reader.read_exact(&mut body[at..]).map_err(|_| 400u16)?;
+            reader.read_exact(&mut body[at..]).map_err(late)?;
             if !line(reader, 2)?.is_empty() { return Err(400) }
         }
         // What may trail the last piece: read to the empty line, not used.
@@ -179,8 +179,13 @@ pub fn body(reader: &mut impl BufRead, request: &Request, most: usize) -> Result
     };
     if length > most { return Err(413) }
     let mut body = vec![0; length];
-    reader.read_exact(&mut body).map_err(|_| 400u16)?;
+    reader.read_exact(&mut body).map_err(late)?;
     Ok(body)
+}
+
+/// A body that stopped coming: 408 where its time ran out, else 400 (cut short).
+fn late(e: std::io::Error) -> u16 {
+    if matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) { 408 } else { 400 }
 }
 
 fn reason(status: u16) -> &'static str {
@@ -516,6 +521,12 @@ mod tests {
             assert_eq!(parsed(raw).err(), Some(status), "{raw:?}");
         }
         assert_eq!(parsed(&format!("POST /mcp HTTP/1.1\r\nX: {}\r\n\r\n", "a".repeat(HEAD))).err(), Some(431));
+        // A body whose time ran out, not one cut short.
+        struct Late;
+        impl Read for Late { fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> { Err(std::io::ErrorKind::TimedOut.into()) } }
+        let mut reader = BufReader::new(b"POST /mcp HTTP/1.1\r\nContent-Length: 5\r\n\r\nhe".chain(Late));
+        let request = head(&mut reader).unwrap();
+        assert_eq!(super::body(&mut reader, &request, 16).err(), Some(408));
     }
 
     /// A server on 127.0.0.1 offering one device, saying who callers are by `whois`; this machine is named `mac`.

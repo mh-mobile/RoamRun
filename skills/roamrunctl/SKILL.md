@@ -246,12 +246,20 @@ token, if they set one) from them. Each call is one `POST /mcp`, no `initialize`
 
 ```sh
 rr() { curl -sS --max-time 120 -H 'Content-Type: application/json' ${RR_TOKEN:+-H "Authorization: Bearer $RR_TOKEN"} --data-binary @- "http://<address>:<port>/mcp"; }
-rr <<'EOF' | python3 -c 'import json,sys,base64; r=json.load(sys.stdin).get("result",{}); [open("look.jpg","wb").write(base64.b64decode(c["data"])) for c in r.get("content",[]) if c.get("type")=="image"]; print(r.get("isError"), [c.get("text") for c in r.get("content",[]) if c.get("type")=="text"])'
-{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"device":"phone"}}}
-EOF
+# What a call answered: its text; an image goes to look.jpg, readable by you alone.
+said() { python3 -c '
+import base64, json, os, sys
+r = json.load(sys.stdin).get("result", {})
+for c in r.get("content", []):
+    if c.get("type") == "image":
+        fd = os.open("look.jpg", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600); os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb") as f: f.write(base64.b64decode(c["data"]))
+print(r.get("isError"), [c.get("text") for c in r.get("content", []) if c.get("type") == "text"])'; }
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"device":"phone"}}}' | rr | said
 ```
 
-Write a look's image to a file, as above, and view the file: never print the base64. A 401
+Write a look's image to a file, as above, and view the file: never print the base64 (the
+screen may show messages or notifications: the file is yours alone to read). A 401
 is a missing or wrong token, a 403 a caller it doesn't let in — say so, don't retry. "not
 begun" did nothing; a timeout or a 504 may have done it — look before trying again. Keep
 the connection open until the answer comes: a call whose connection closed before its turn
