@@ -20,6 +20,8 @@ const LOOK_STANDS: Duration = Duration::from_secs(60);
 const SETTLE: Duration = Duration::from_secs(1);
 /// The most `type` takes in one call.
 const LONGEST_TYPED: usize = 500;
+/// The MCP versions spoken here: initialize answers the one asked for if it is one of them, else the newest.
+const VERSIONS: [&str; 4] = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
 
 const INSTRUCTIONS: &str = "Operates a real iPhone or iPad from this machine. Look, act, look again: each look serves one \
 action, and points are pixels of the image the last look returned. Pairing with a device and signing for one \
@@ -171,7 +173,7 @@ impl Server {
         let params = &object["params"];
         let result = match method {
             "initialize" => json!({
-                "protocolVersion": params["protocolVersion"].as_str().unwrap_or("2024-11-05"),
+                "protocolVersion": VERSIONS.into_iter().find(|v| params["protocolVersion"] == *v).or(VERSIONS.into_iter().max()),
                 "capabilities": { "tools": {} },
                 "serverInfo": { "name": "roamrunctl", "version": env!("ROAMRUN_VERSION") },
                 "instructions": INSTRUCTIONS,
@@ -347,6 +349,20 @@ mod tests {
         let hello: Value = serde_json::from_str(&server.handle(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#).unwrap()).unwrap();
         assert_eq!(hello["result"]["protocolVersion"], "2025-06-18");
         assert_eq!(hello["result"]["serverInfo"]["name"], "roamrunctl");
+        // A version not spoken here, or none, gets the newest that is: not an echo of what was asked.
+        let mut answered = |params: &str| -> Value {
+            let hello: Value = serde_json::from_str(&server.handle(&format!(r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{params}}}"#)).unwrap()).unwrap();
+            hello["result"]["protocolVersion"].clone()
+        };
+        assert_eq!(answered(r#"{"protocolVersion":"2024-11-05"}"#), "2024-11-05");
+        assert_eq!(answered(r#"{"protocolVersion":"2026-07-28"}"#), "2025-11-25");
+        assert_eq!(answered("{}"), "2025-11-25");
+        assert_eq!(answered(r#"{"protocolVersion":20251125}"#), "2025-11-25");
+        // What can't be read is answered with JSON-RPC's error for it, as `roamrun mcp` does.
+        for (message, code) in [("not json", -32700), ("[]", -32600), (r#"{"jsonrpc":"2.0","id":9}"#, -32600)] {
+            let failed: Value = serde_json::from_str(&server.handle(message).unwrap()).unwrap();
+            assert_eq!(failed["error"]["code"], code, "{message}");
+        }
         let listed: Value = serde_json::from_str(&server.handle(r#"{"jsonrpc":"2.0","id":"a","method":"tools/list"}"#).unwrap()).unwrap();
         let names: Vec<&str> = listed["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert_eq!(names, ["devices", "look", "tap", "swipe", "elements", "type", "paste", "press", "install", "launch"]);
