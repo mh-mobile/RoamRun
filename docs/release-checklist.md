@@ -296,6 +296,45 @@ tunnel and Xcode has to run again.
     there until it is; a mistyped name there is said. On Windows: `pair control --with`, introduced by a Mac; `look`;
     `sign` for a Linux machine. `roamrunctl pair introduce --mac x --to y` → says `--host`.
 
+30b. roamrunctl's MCP over HTTP (when `Rust/roamrunctl`'s `mcp.rs`, `http.rs` or `tailscale.rs`
+    changed). On Linux and on a Mac — and on Windows, if one is at hand — with a device paired
+    there (30a's will do), the roamrunctl the pull request's CI built, and a token
+    (`openssl rand -hex 32 > t && chmod 600 t`). Calls by hand go through the skill's `rr` and
+    `said` (skills/roamrunctl/SKILL.md, Over HTTP).
+    As it starts, each of these ends it with a sentence before anything listens: `--allow` left
+    out, or naming a machine (`--allow laptop`); no device; a device not saved here; one device
+    under two names; a token file others can read (`chmod 644 t`; not checked on Windows) or a
+    token shorter than 32 characters; a port already taken. A device kept under a passphrase:
+    asked for once as it starts (or taken from the environment), before the port; a wrong one
+    ends it there. Started, it prints `http://<its Tailscale IPv4>:<port>/mcp` and listens on that
+    address only (`ss -ltn` on Linux, `lsof -nP -iTCP:<port> -sTCP:LISTEN` on a Mac,
+    `netstat -an | findstr <port>` on Windows). The device kept under a passphrase: a look; its
+    Wi‑Fi off until a look fails; back on, a look → the screen, with nothing asked.
+    `scripts/mcp-http-check.py http://<address>:<port> --token-file t --look <device>` → "all
+    checks passed", its `devices` line listing only the devices named: from this machine itself,
+    from a tagged machine let in by `--allow tag:<its tag>`, and from an untagged one let in by
+    `--allow <its user's login>`. Refused, each with nothing done: from this machine without the
+    token → 403; an `Origin` header → 403; a `Host` other than its address or Tailscale names →
+    400 (where it may listen on 80: with `--http 80`, the address without a port → 200); a wrong
+    token → 401; a machine not in `--allow`, and a tagged machine with only its owner's login in
+    `--allow` → 403 (sent with no `Origin`, the right `Host` and the token: those are refused
+    first).
+    Looks, through `rr`: look → a tap on a text field by that look → a type by it: typed. A tap by
+    an older look, a tap after that type, and a type more than a minute after its look → refused
+    with "look again", nothing done. Two callers: A looks, B looks, A taps by its look → refused.
+    Calls taken back, each a look queued behind a `type` that runs 5–15 s (time one first): its
+    `rr` stopped (Ctrl-C) before its turn → not made, and the log says `not begun`. With the
+    `Mcp-Session-Id` an `initialize` answered with (`curl -i`) sent with the look and with
+    `notifications/cancelled` for its id — the cancel sent after the look, and once before it →
+    not made, no answer (`said` says HTTP 000), `not begun`; the cancel sent with another session
+    id → made. Queued behind more than 20 s → answered "not begun: another call held the device
+    for more than 20 s", not made.
+    The log (standard error): one line a request — the time, the caller's address and who
+    Tailscale says it is, the method and tool, the outcome, the seconds; a refused caller with
+    why (`…, not allowed`). `grep` of it for the token and for the text typed → nothing. Ctrl-C →
+    it ends, the port is free (as above) and no roamrunctl is left (`pgrep roamrunctl`;
+    `Get-Process roamrunctl` on Windows).
+
 31. An Apple Vision Pro and a far Mac (when `pair xcode --with`, `pair introduce`, the stand-in,
     the wire, Xcode or visionOS changed). The far Mac's entry removed on the device first
     (Settings › General › Remote Devices), that screen left open, the device saved in RoamRun
