@@ -253,8 +253,10 @@ EOF
 
 Write a look's image to a file, as above, and view the file: never print the base64. A 401
 is a missing or wrong token, a 403 a caller it doesn't let in — say so, don't retry. "not
-begun" did nothing; a timeout or a 504 may have done it — look before trying again. Only
-the devices the user named are there, and `install` isn't offered over HTTP.
+begun" did nothing; a timeout or a 504 may have done it — look before trying again. Keep
+the connection open until the answer comes: a call whose connection closed before its turn
+isn't made. A look serves you only: after another caller's, look again. Only the devices
+the user named are there, and `install` isn't offered over HTTP.
 
 A look here is a picture the device makes, and inputs are sent without a screen stream:
 the device lists no screen-sharing session and what plays goes on sounding (listened to

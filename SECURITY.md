@@ -283,8 +283,13 @@ bounded.
   user's login — and, with `--token-file`, by a token as well. Refused: a machine shared in
   from another tailnet; the machine itself without the token (any of its users would
   otherwise pass); any request with an `Origin` (a web page in a browser on the tailnet);
-  a `Host` other than the server's address. Only the devices named are used, and `install`
-  isn't offered. Whoever is let in operates those devices as roamrunctl does, while it runs.
+  a `Host` other than the server's address or its own Tailscale names. A request's head has
+  to arrive within 10 s and its body within 30 s more, and one address holds 17 of the 32
+  connections at most: a machine that can reach the port but isn't let in can't keep
+  callers out for long. Only the devices named are used — each only while it is saved as
+  it was when the server began — and `install` isn't offered. A look serves the caller that
+  took it: a tap by another caller after it is refused. A tool call whose caller's
+  connection is gone when its turn comes isn't made. Whoever is let in operates those devices as roamrunctl does, while it runs.
   Between the caller and the machine, a cloud's proxy sees the images, what is typed or
   pasted, and the token: with Codex Cloud it ends TLS itself. The token file has to be its
   owner's alone (not checked on Windows). The log has one line a request — the caller's

@@ -2,12 +2,12 @@
 //! 2025-11-25 has it, without sessions, every answer JSON — on this machine's Tailscale IPv4 address, for the
 //! callers Tailscale says are allowed. One request a connection. Tool calls take turns, as over stdio.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, TcpListener, TcpStream};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
@@ -18,10 +18,17 @@ use crate::tailscale::{self, Whois};
 /// A request's head at most, and a message's body.
 const HEAD: usize = 16 * 1024;
 const BODY: usize = 1 << 20;
-/// For reading a whole request, and for writing an answer.
-const READ: Duration = Duration::from_secs(30);
-/// Connections served at once (a client opens up to 16, and one more to take a call back); more are turned away.
+/// For a request's head, from when it connected (before it is known who it is), and then for its body: all of
+/// it, not each read — what trickles in is waited for no longer. And for writing an answer.
+const HEAD_WITHIN: Duration = Duration::from_secs(10);
+const BODY_WITHIN: Duration = Duration::from_secs(30);
+const WRITE: Duration = Duration::from_secs(30);
+/// Connections served at once (a client opens up to 16, and one more to take a call back), and from one
+/// address: more are turned away, so that one machine on the tailnet can't take them all.
 const AT_ONCE: usize = 32;
+const FROM_ONE: usize = 17;
+/// Connections being turned away at once (each answered, then given a moment); more are closed unanswered.
+const TURNING_AWAY: usize = 64;
 /// A tool call that waited this long for its turn isn't begun: another held the device.
 const TURN: Duration = Duration::from_secs(20);
 
@@ -69,6 +76,26 @@ pub fn token(path: &Path) -> Result<String, String> {
         return Err(format!("{}: a token is 32 characters or more on one line (`openssl rand -hex 32`, say)", path.display()));
     }
     Ok(token)
+}
+
+/// What a caller sent, as the log shows it: no control characters (a newline, a terminal's escape), 200 at most.
+fn printable(said: &str) -> String {
+    said.chars().take(200).map(|c| if c.is_control() { '?' } else { c }).collect()
+}
+
+/// The socket, read with a deadline for all that is read, not for each read.
+struct Timed {
+    stream: TcpStream,
+    until: Instant,
+}
+
+impl Read for Timed {
+    fn read(&mut self, into: &mut [u8]) -> std::io::Result<usize> {
+        let left = self.until.checked_duration_since(Instant::now()).filter(|left| !left.is_zero())
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::TimedOut))?;
+        self.stream.set_read_timeout(Some(left))?;
+        self.stream.read(into)
+    }
 }
 
 /// Equal, in a time that doesn't tell how much of it was.
@@ -170,9 +197,9 @@ fn respond(stream: &mut TcpStream, status: u16, extra: &str, body: &str) {
     let _ = stream.write_all(head.as_bytes()).and_then(|()| stream.write_all(body.as_bytes())).and_then(|()| stream.flush());
 }
 
-/// A JSON-RPC error with no request to answer: what the MCP SDKs send with a 400.
-fn rpc_error(code: i32, message: &str) -> String {
-    json!({ "jsonrpc": "2.0", "id": null, "error": { "code": code, "message": message } }).to_string()
+/// A JSON-RPC error, sent with a 400 (with no id where the request can't be read: what the MCP SDKs do).
+fn rpc_error(id: Value, code: i32, message: &str) -> String {
+    json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } }).to_string()
 }
 
 /// The time of day in UTC, as a cloud's logs give it.
@@ -182,25 +209,32 @@ fn clock() -> String {
 }
 
 enum Work {
-    Call { caller: IpAddr, id: Value, line: String, gone: Arc<AtomicBool>, at: Instant, reply: mpsc::Sender<String> },
+    /// `stream`: the caller's connection, looked at as its turn comes.
+    Call { caller: IpAddr, id: Value, line: String, stream: TcpStream, at: Instant, reply: mpsc::Sender<String> },
     Cancel(IpAddr, Value),
 }
 
-/// The tool calls, one at a time, in the order they came. One taken back (by its caller) or whose caller went
-/// before its turn isn't begun, and isn't answered; one that waited too long is answered so, and not begun.
+/// The tool calls, one at a time, in the order they came. One taken back (by its caller), or whose caller's
+/// connection is closed or broken when its turn comes, isn't begun and isn't answered: what it would have
+/// pressed isn't pressed for nobody. One that waited too long is answered so, and not begun.
 fn work(mut server: Server, told: mpsc::Receiver<Work>) {
     let mut waiting: VecDeque<Work> = VecDeque::new();
     while let Some(next) = waiting.pop_front().or_else(|| told.recv().ok()) {
         waiting.extend(told.try_iter());
-        let Work::Call { caller, id, line, gone, at, reply } = next else { continue };
+        let Work::Call { caller, id, line, stream, at, reply } = next else { continue };
         let taken_back = waiting.iter().any(|w| matches!(w, Work::Cancel(c, i) if *c == caller && *i == id));
-        if taken_back || gone.load(Ordering::SeqCst) { continue }
+        if taken_back || closed(&stream) { continue }
         if at.elapsed() > TURN {
             let busy = format!("not begun: another call held the device for more than {} s. Look before trying again", TURN.as_secs());
             let _ = reply.send(json!({ "jsonrpc": "2.0", "id": id, "result": { "content": [{ "type": "text", "text": busy }], "isError": true } }).to_string());
             continue;
         }
-        if let Some(answer) = server.handle(&line) { let _ = reply.send(answer); }
+        server.caller = Some(caller.to_string());
+        // A call that fails inside isn't the end of the others: it is answered so, and the next has its turn.
+        let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| server.handle(&line))).unwrap_or_else(|_| {
+            Some(json!({ "jsonrpc": "2.0", "id": id, "result": { "content": [{ "type": "text", "text": "failed inside roamrunctl: look before trying again" }], "isError": true } }).to_string())
+        });
+        if let Some(answer) = answer { let _ = reply.send(answer); }
     }
 }
 
@@ -213,13 +247,18 @@ pub struct Options {
 
 struct Shared {
     options: Options,
-    /// Where this listens: what a request's Host has to name.
-    own: std::net::SocketAddr,
+    /// What a request's Host may name: this machine's address, or its Tailscale names, with the port.
+    hosts: Vec<String>,
     /// This machine's address and lasting id on the tailnet: a call from it is this machine's own.
     own_ip: IpAddr,
     own_id: String,
     whois: Box<dyn Fn(IpAddr) -> Result<Whois, String> + Send + Sync>,
-    busy: AtomicUsize,
+    /// For a head (`HEAD_WITHIN`; a test gives less).
+    head_within: Duration,
+    /// Connections open now, from each address.
+    open: Mutex<HashMap<IpAddr, usize>>,
+    /// Connections being turned away now.
+    turning_away: AtomicUsize,
 }
 
 /// `roamrunctl mcp --http`: until Ctrl-C.
@@ -237,30 +276,53 @@ pub fn serve(options: Options) -> Result<String, String> {
         std::io::ErrorKind::AddrNotAvailable => format!("can't listen on {own}: this machine's Tailscale gives it no address of its own to listen on (userspace networking?)"),
         _ => format!("can't listen on {own}:{}: {e}", options.port),
     })?;
+    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let who: Vec<&str> = options.allowed.iter().map(|a| match a { Allow::Tag(s) | Allow::Login(s) => s.as_str() }).collect();
-    note!("roamrunctl: the MCP tools for {} at http://{own}:{}/mcp, for {} on the tailnet{}. Ctrl-C ends it. What is sent and shown passes through whatever lies between (a cloud's proxy sees images and text).",
-        options.devices.join(", "), options.port, who.join(", "), if options.token.is_some() { ", with the token" } else { "" });
-    run(listener, options, IpAddr::V4(own), status.this.id.clone(), Box::new(tailscale::whois))
+    note!("roamrunctl: the MCP tools for {} at http://{own}:{port}/mcp, for {} on the tailnet{}. Ctrl-C ends it. What is sent and shown passes through whatever lies between (a cloud's proxy sees images and text).",
+        options.devices.join(", "), who.join(", "), if options.token.is_some() { ", with the token" } else { "" });
+    let dns = status.this.dns_name.trim_end_matches('.');
+    let names = [dns, tailscale::short(dns)].into_iter().filter(|n| !n.is_empty()).map(str::to_string).collect();
+    run(listener, options, IpAddr::V4(own), names, status.this.id.clone(), HEAD_WITHIN, Box::new(tailscale::whois))
 }
 
-/// What `serve` does once it listens; `whois` says who a caller is (a test gives its own).
-fn run(listener: TcpListener, options: Options, own_ip: IpAddr, own_id: String, whois: Box<dyn Fn(IpAddr) -> Result<Whois, String> + Send + Sync>) -> Result<String, String> {
+/// What `serve` does once it listens; `own_ip`, `names`, `own_id`: this machine on the tailnet (its names, a Host
+/// may give); `whois` says who a caller is (a test gives its own).
+fn run(listener: TcpListener, options: Options, own_ip: IpAddr, names: Vec<String>, own_id: String, head_within: Duration, whois: Box<dyn Fn(IpAddr) -> Result<Whois, String> + Send + Sync>) -> Result<String, String> {
     let own = listener.local_addr().map_err(|e| e.to_string())?;
+    let hosts = std::iter::once(own.to_string()).chain(names.iter().map(|name| format!("{name}:{}", own.port()))).collect();
     let (tell, told) = mpsc::channel();
-    let devices = options.devices.clone();
-    std::thread::spawn(move || work(Server::offering(devices), told));
-    let shared = Arc::new(Shared { options, own, own_ip, own_id, whois, busy: AtomicUsize::new(0) });
+    let server = Server::offering(&options.devices);
+    std::thread::spawn(move || work(server, told));
+    let shared = Arc::new(Shared { options, hosts, own_ip, own_id, whois, head_within, open: Mutex::new(HashMap::new()), turning_away: AtomicUsize::new(0) });
     for stream in listener.incoming() {
-        let Ok(mut stream) = stream else { continue };
-        if shared.busy.fetch_add(1, Ordering::SeqCst) >= AT_ONCE {
-            shared.busy.fetch_sub(1, Ordering::SeqCst);
-            respond(&mut stream, 503, "", "too many connections at once\n");
+        // Too many files open, say: not tried again at once, over and over.
+        let Ok(mut stream) = stream else { std::thread::sleep(Duration::from_millis(100)); continue };
+        let Ok(from) = stream.peer_addr().map(|a| a.ip()) else { continue };
+        let taken = {
+            let mut open = shared.open.lock().unwrap_or_else(|e| e.into_inner());
+            let full = open.values().sum::<usize>() >= AT_ONCE || open.get(&from).is_some_and(|n| *n >= FROM_ONE);
+            if !full { *open.entry(from).or_default() += 1; }
+            !full
+        };
+        if !taken {
+            // Answered aside, so that waiting for what it sends doesn't hold up the next.
+            if shared.turning_away.fetch_add(1, Ordering::SeqCst) < TURNING_AWAY {
+                let shared = shared.clone();
+                std::thread::spawn(move || {
+                    respond(&mut stream, 503, "", "too many connections at once\n");
+                    linger(&stream);
+                    shared.turning_away.fetch_sub(1, Ordering::SeqCst);
+                });
+            } else {
+                shared.turning_away.fetch_sub(1, Ordering::SeqCst);
+            }
             continue;
         }
         let (shared, tell) = (shared.clone(), tell.clone());
         std::thread::spawn(move || {
-            connection(stream, &shared, &tell);
-            shared.busy.fetch_sub(1, Ordering::SeqCst);
+            connection(stream, from, &shared, &tell);
+            let mut open = shared.open.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(n) = open.get_mut(&from) { *n -= 1; if *n == 0 { open.remove(&from); } }
         });
     }
     Ok(String::new())
@@ -268,12 +330,11 @@ fn run(listener: TcpListener, options: Options, own_ip: IpAddr, own_id: String, 
 
 /// One request, from its head to its answer, and its line in the log. Never logged: the token, a body,
 /// what is typed or pasted, what is shown.
-fn connection(mut stream: TcpStream, s: &Shared, tell: &mpsc::Sender<Work>) {
+fn connection(mut stream: TcpStream, from: IpAddr, s: &Shared, tell: &mpsc::Sender<Work>) {
     let began = Instant::now();
-    let Ok(from) = stream.peer_addr().map(|a| a.ip()) else { return };
     let (mut who, mut what) = ("-".to_string(), "-".to_string());
-    let outcome = served(&mut stream, s, tell, from, &mut who, &mut what);
-    note!("{} {from} {who} {what} {outcome} {:.1}s", clock(), began.elapsed().as_secs_f64());
+    let outcome = served(&mut stream, s, tell, from, began, &mut who, &mut what);
+    note!("{} {from} {} {} {outcome} {:.1}s", clock(), printable(&who), printable(&what), began.elapsed().as_secs_f64());
     linger(&stream);
 }
 
@@ -289,11 +350,10 @@ fn linger(mut stream: &TcpStream) {
     }
 }
 
-fn served(stream: &mut TcpStream, s: &Shared, tell: &mpsc::Sender<Work>, from: IpAddr, who: &mut String, what: &mut String) -> String {
-    let _ = stream.set_read_timeout(Some(READ));
-    let _ = stream.set_write_timeout(Some(READ));
+fn served(stream: &mut TcpStream, s: &Shared, tell: &mpsc::Sender<Work>, from: IpAddr, began: Instant, who: &mut String, what: &mut String) -> String {
+    let _ = stream.set_write_timeout(Some(WRITE));
     let Ok(read) = stream.try_clone() else { return "gone".into() };
-    let mut reader = BufReader::new(read);
+    let mut reader = BufReader::new(Timed { stream: read, until: began + s.head_within });
     let mut refuse = |status: u16, extra: &str, body: &str| { respond(stream, status, extra, body); status.to_string() };
     let request = match head(&mut reader) { Ok(request) => request, Err(status) => return refuse(status, "", "") };
     *what = format!("{} {}", request.method, request.path);
@@ -301,8 +361,8 @@ fn served(stream: &mut TcpStream, s: &Shared, tell: &mpsc::Sender<Work>, from: I
     if request.path.starts_with("/.well-known/") || request.path == "/register" { return refuse(404, "", "") }
     // A browser's: a page on some site isn't let in by its viewer's place on the tailnet.
     if request.header("origin").is_some() { return refuse(403, "", "") }
-    if request.header("host").is_none_or(|host| host != s.own.to_string()) { return refuse(400, "", "the Host isn't this server's address\n") }
-    let presented = request.header("authorization").and_then(|v| v.strip_prefix("Bearer "));
+    if request.header("host").is_none_or(|host| !s.hosts.iter().any(|h| h.eq_ignore_ascii_case(host))) { return refuse(400, "", "the Host isn't this server's address or name\n") }
+    let presented = request.header("authorization").and_then(|v| v.split_once(' ')).filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer")).map(|(_, t)| t.trim());
     let token = matches!((&s.options.token, presented), (Some(t), Some(p)) if same(t.as_bytes(), p.as_bytes()));
     if s.options.token.is_some() && !token { return refuse(401, "WWW-Authenticate: Bearer\r\n", "") }
     let whois = match (s.whois)(from) {
@@ -317,55 +377,58 @@ fn served(stream: &mut TcpStream, s: &Shared, tell: &mpsc::Sender<Work>, from: I
     if request.path != "/mcp" { return refuse(404, "", "") }
     if request.method != "POST" { return refuse(405, "Allow: POST\r\n", "") }
     if let Some(version) = request.header("mcp-protocol-version").filter(|v| !VERSIONS.contains(v)) {
-        return refuse(400, "", &rpc_error(-32000, &format!("Bad Request: Unsupported protocol version: {version} (supported: {})", VERSIONS.join(", "))));
+        return refuse(400, "", &rpc_error(Value::Null, -32000, &format!("Bad Request: Unsupported protocol version: {version} (supported: {})", VERSIONS.join(", "))));
     }
+    reader.get_mut().until = Instant::now() + BODY_WITHIN;
     if request.header("expect").is_some_and(|e| e.eq_ignore_ascii_case("100-continue")) {
         let _ = stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n");
     }
     let mut refuse = |status: u16, extra: &str, body: &str| { respond(stream, status, extra, body); status.to_string() };
     let body = match body(&mut reader, &request, BODY) { Ok(body) => body, Err(status) => return refuse(status, "", "") };
-    let Ok(message) = serde_json::from_slice::<Value>(&body) else { return refuse(400, "", &rpc_error(-32700, "not JSON")) };
-    if !message.is_object() { return refuse(400, "", &rpc_error(-32600, "one message a request, as an object")) }
+    let Ok(message) = serde_json::from_slice::<Value>(&body) else { return refuse(400, "", &rpc_error(Value::Null, -32700, "not JSON")) };
+    if !message.is_object() { return refuse(400, "", &rpc_error(Value::Null, -32600, "one message a request, as an object")) }
     let method = message["method"].as_str().unwrap_or("");
     *what = match method {
         "tools/call" => format!("tools/call {}", message["params"]["name"].as_str().unwrap_or("?")),
         "" => "a response".into(),
         method => method.to_string(),
     };
-    let Some(id) = message.get("id").cloned().filter(|_| !method.is_empty()) else {
+    let response = method.is_empty() && (message.get("result").is_some() || message.get("error").is_some());
+    let Some(id) = message.get("id").cloned().filter(|_| !response) else {
         // A notification or a response: nothing to answer. A call taken back is told to the queue.
         if method == "notifications/cancelled" { let _ = tell.send(Work::Cancel(from, message["params"]["requestId"].clone())); }
         return refuse(202, "", "");
     };
+    if method.is_empty() { return refuse(400, "", &rpc_error(id, -32600, "no method")) }
     let line = message.to_string();
     if method != "tools/call" {
         // Asks nothing of a device: answered at once, beside whatever call runs.
-        let answer = Server::offering(s.options.devices.clone()).handle(&line).unwrap_or_default();
+        let answer = Server::offering(&s.options.devices).handle(&line).unwrap_or_default();
         return refuse(200, "", &answer);
     }
     let (reply, answered) = mpsc::channel();
-    let gone = Arc::new(AtomicBool::new(false));
-    if tell.send(Work::Call { caller: from, id, line, gone: gone.clone(), at: Instant::now(), reply }).is_err() { return refuse(503, "", "") }
-    loop {
-        match answered.recv_timeout(Duration::from_millis(250)) {
-            Ok(answer) => {
-                let failed = serde_json::from_str::<Value>(&answer).is_ok_and(|a| a["result"]["isError"] == true);
-                respond(stream, 200, "", &answer);
-                return if failed { "error".into() } else { "ok".into() };
-            }
-            // Taken back, or the caller went before its turn: not answered.
-            Err(mpsc::RecvTimeoutError::Disconnected) => return "not begun".into(),
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                if closed(stream) { gone.store(true, Ordering::SeqCst); }
-            }
+    let Ok(watched) = stream.try_clone() else { return "gone".into() };
+    if tell.send(Work::Call { caller: from, id, line, stream: watched, at: Instant::now(), reply }).is_err() { respond(stream, 503, "", ""); return "503".into() }
+    match answered.recv() {
+        Ok(answer) => {
+            let failed = serde_json::from_str::<Value>(&answer).is_ok_and(|a| a["result"]["isError"] == true);
+            respond(stream, 200, "", &answer);
+            if failed { "error".into() } else { "ok".into() }
         }
+        // Taken back, or the caller's connection closed before its turn: not answered.
+        Err(_) => "not begun".into(),
     }
 }
 
-/// Whether the caller closed its side: nothing more is due from it, so a read that ends says so.
+/// Whether the caller's connection is closed or broken. Nothing more is due from a caller once its request is
+/// in, so a read that ends, or fails, says so — a caller that only shuts its own side to wait is taken as gone
+/// too: that can't be told apart, and a call for nobody isn't made.
 fn closed(stream: &TcpStream) -> bool {
-    if stream.set_nonblocking(true).is_err() { return false }
-    let ended = matches!(stream.peek(&mut [0u8; 1]), Ok(0));
+    if stream.set_nonblocking(true).is_err() { return true }
+    let ended = match stream.peek(&mut [0u8; 1]) {
+        Ok(read) => read == 0,
+        Err(e) => e.kind() != std::io::ErrorKind::WouldBlock,
+    };
     let _ = stream.set_nonblocking(false);
     ended
 }
@@ -455,12 +518,13 @@ mod tests {
         assert_eq!(parsed(&format!("POST /mcp HTTP/1.1\r\nX: {}\r\n\r\n", "a".repeat(HEAD))).err(), Some(431));
     }
 
-    /// A server on 127.0.0.1 offering one device, saying who callers are by `whois`.
+    /// A server on 127.0.0.1 offering one device, saying who callers are by `whois`; this machine is named `mac`.
     fn started(token: Option<&str>, whois: fn(IpAddr) -> Result<Whois, String>) -> SocketAddr {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let at = listener.local_addr().unwrap();
         let options = Options { port: at.port(), allowed: vec![Allow::Tag("tag:ci".into())], token: token.map(str::to_string), devices: vec!["phone".into()] };
-        std::thread::spawn(move || run(listener, options, "100.64.0.1".parse().unwrap(), "own".into(), Box::new(whois)));
+        let names = vec!["mac.example.ts.net".into(), "mac".into()];
+        std::thread::spawn(move || run(listener, options, "100.64.0.1".parse().unwrap(), names, "own".into(), Duration::from_millis(500), Box::new(whois)));
         at
     }
 
@@ -509,16 +573,60 @@ mod tests {
         // Chunked with a length too, and Expect: 100-continue answered first.
         let both = asked(at, &format!("POST /mcp HTTP/1.1\r\nHost: {at}\r\nExpect: 100-continue\r\nContent-Length: 999\r\nTransfer-Encoding: chunked\r\n\r\n2a\r\n{}\r\n0\r\n\r\n", r#"{"jsonrpc":"2.0","id":5,"method":"ping"} "#));
         assert!(both.starts_with("HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200"), "{both}");
+        // This machine's Tailscale names are its own: not a page's on another site.
+        for host in ["mac", "MAC.example.ts.net"] {
+            assert_eq!(status(&asked(at, &format!("POST /mcp HTTP/1.1\r\nHost: {host}:{}\r\nContent-Length: 40\r\n\r\n{}", at.port(), r#"{"jsonrpc":"2.0","id":6,"method":"ping"}"#))), "200", "{host}");
+        }
+        assert_eq!(status(&asked(at, &format!("POST /mcp HTTP/1.1\r\nHost: mac.example.com:{}\r\nContent-Length: 2\r\n\r\n{{}}", at.port()))), "400");
+        // A request with no method, which isn't a response, is told so; a response gets nothing.
+        let no_method = post(at, "", r#"{"jsonrpc":"2.0","id":7}"#);
+        assert!(no_method.starts_with("HTTP/1.1 400") && no_method.contains("-32600") && no_method.contains(r#""id":7"#), "{no_method}");
+    }
+
+    #[test]
+    fn a_slow_caller_is_given_no_longer_than_its_deadline_and_one_address_not_every_connection() {
+        let at = started(None, ci);
+        // A byte now and then keeps no read waiting long, but the whole head is due by its deadline.
+        let began = Instant::now();
+        let mut slow = TcpStream::connect(at).unwrap();
+        for _ in 0..20 {
+            if slow.write_all(b"P").is_err() { break }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let mut answer = String::new();
+        let _ = slow.read_to_string(&mut answer);
+        assert!(answer.starts_with("HTTP/1.1 408") && began.elapsed() < Duration::from_secs(3), "{answer:?} {:?}", began.elapsed());
+        // One address holds FROM_ONE connections at most: the next is turned away at once.
+        let idle: Vec<TcpStream> = (0..FROM_ONE).map(|_| TcpStream::connect(at).unwrap()).collect();
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(asked(at, "GET / HTTP/1.1\r\n\r\n").starts_with("HTTP/1.1 503"));
+        drop(idle);
+    }
+
+    #[test]
+    fn what_a_caller_sends_is_logged_on_one_line_without_its_control_characters() {
+        assert_eq!(printable("tools/call a\nb\u{1b}[2J"), "tools/call a?b?[2J");
+        assert_eq!(printable(&"x".repeat(300)).len(), 200);
+    }
+
+    /// A connection's two ends: what the server holds, and the caller's (dropped, it is gone).
+    fn ends() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let caller = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        (listener.accept().unwrap().0, caller)
     }
 
     #[test]
     fn a_call_is_begun_only_while_its_caller_still_wants_it() {
         let (tell, told) = mpsc::channel();
-        let call = |caller: &str, id: i64, gone: bool, waited: u64| {
+        let mut kept = Vec::new();
+        let mut call = |caller: &str, id: i64, gone: bool, waited: u64| {
             let (reply, answered) = mpsc::channel();
             let line = json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": { "name": "look", "arguments": { "device": "pad" } } }).to_string();
             let at = Instant::now().checked_sub(Duration::from_secs(waited)).unwrap();
-            tell.send(Work::Call { caller: caller.parse().unwrap(), id: json!(id), line, gone: Arc::new(AtomicBool::new(gone)), at, reply }).unwrap();
+            let (stream, theirs) = ends();
+            if gone { drop(theirs) } else { kept.push(theirs) }
+            tell.send(Work::Call { caller: caller.parse().unwrap(), id: json!(id), line, stream, at, reply }).unwrap();
             answered
         };
         // All queued before the first has its turn.
@@ -530,7 +638,7 @@ mod tests {
         let late = call("100.64.0.2", 3, false, TURN.as_secs() + 1);
         let answered = call("100.64.0.2", 4, false, 0);
         drop(tell);
-        std::thread::spawn(move || work(Server::offering(vec!["phone".into()]), told));
+        std::thread::spawn(move || work(Server::offering(&["phone".into()]), told));
         let got = |answered: mpsc::Receiver<String>| answered.recv_timeout(Duration::from_secs(10)).ok();
         assert_eq!(got(went), None);
         assert_eq!(got(taken_back), None);
@@ -553,6 +661,9 @@ mod tests {
     #[test]
     fn a_caller_is_let_in_only_as_it_is_allowed() {
         let body = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
+        // The token's scheme is taken in any case, as HTTP has it.
+        let at = started(Some("0123456789abcdef0123456789abcdef"), ci);
+        assert!(post(at, "Authorization: bearer 0123456789abcdef0123456789abcdef\r\n", body).starts_with("HTTP/1.1 200"));
         // A token asked for: none or another is 401 (with nothing that would start OAuth), before Tailscale is asked.
         let at = started(Some("0123456789abcdef0123456789abcdef"), |_| panic!("not asked"));
         let none = post(at, "", body);

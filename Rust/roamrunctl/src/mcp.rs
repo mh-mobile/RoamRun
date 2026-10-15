@@ -38,6 +38,8 @@ struct Shown {
     at: Instant,
     /// The saved file of the device it was of (see `device::mark`): another saved under the name isn't it.
     of: Option<Vec<u8>>,
+    /// Who looked (over HTTP, the caller's address): a point is pressed by a look of its own caller's.
+    by: Option<String>,
 }
 
 /// A point of a picture, as fractions of it, in the terms of the device held upright, where a touch is sent.
@@ -66,9 +68,12 @@ pub struct Server {
     open: HashMap<String, (Device, Option<Vec<u8>>)>,
     shown: HashMap<String, Shown>,
     acted: HashMap<String, Instant>,
-    /// Over HTTP (`mcp --http`): the devices named there, the only ones listed and used; and no install,
-    /// whose path would name a file on this machine for whoever calls.
-    offered: Option<Vec<String>>,
+    /// Over HTTP (`mcp --http`): the devices named there, each with its saved file as it was then (see
+    /// `device::mark`) — the only ones listed and used, and only while that file is as it was; and no
+    /// install, whose path would name a file on this machine for whoever calls.
+    offered: Option<Vec<(String, Option<Vec<u8>>)>>,
+    /// Over HTTP, who the call being made is from (see `Shown::by`).
+    pub caller: Option<String>,
 }
 
 fn text(s: impl Into<String>) -> Vec<Value> { vec![json!({ "type": "text", "text": s.into() })] }
@@ -133,9 +138,9 @@ fn is_call(line: &str) -> bool {
 }
 
 impl Server {
-    /// For `mcp --http`: these devices only, and no install.
-    pub fn offering(devices: Vec<String>) -> Server {
-        Server { offered: Some(devices), ..Server::default() }
+    /// For `mcp --http`: these devices only, as they are saved now, and no install.
+    pub fn offering(devices: &[String]) -> Server {
+        Server { offered: Some(devices.iter().map(|name| (name.clone(), device::mark(name))).collect()), ..Server::default() }
     }
 
     /// Serves until stdin closes.
@@ -230,11 +235,16 @@ impl Server {
     fn call(&mut self, tool: &str, arguments: &Value) -> Result<Vec<Value>, String> {
         if tool == "devices" {
             // Those offered are saved here: no machine that might sign is asked.
-            return Ok(text(match &self.offered { Some(offered) => device::lines(offered, &[]), None => device::listed(true)? }));
+            let Some(offered) = &self.offered else { return device::listed(true).map(text) };
+            return Ok(text(device::lines(&offered.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>(), &[])));
         }
         let name = arguments["device"].as_str().ok_or("device is missing")?.to_string();
         if let Some(offered) = &self.offered {
-            if !offered.contains(&name) { return Err(format!("{name} isn't offered here: {}", offered.join(", "))) }
+            let Some((_, was)) = offered.iter().find(|(offered, _)| *offered == name) else {
+                return Err(format!("{name} isn't offered here: {}", offered.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>().join(", ")));
+            };
+            // Removed, or another saved under the name, since this began: not the device that was offered.
+            if device::mark(&name) != *was { return Err(format!("{name} was removed here, or saved anew, since this began: it isn't used. To offer it again, end this and run it again")) }
             if tool == "install" { return Err("install isn't offered over HTTP".into()) }
         }
         // One that is open is known: asking again what there is would ask every machine that might sign.
@@ -264,7 +274,7 @@ impl Server {
                     }
                 };
                 let (jpeg, width, height) = device::fitted(&png, image::ImageFormat::Jpeg)?;
-                self.shown.insert(name, Shown { size: (width as f64, height as f64), way, at: Instant::now(), of });
+                self.shown.insert(name, Shown { size: (width as f64, height as f64), way, at: Instant::now(), of, by: self.caller.clone() });
                 let mut content = vec![json!({ "type": "image", "data": base64::engine::general_purpose::STANDARD.encode(jpeg), "mimeType": "image/jpeg" })];
                 content.extend(text(format!("{width} x {height}. Points for tap and swipe are pixels of this image. It serves one action, within a minute: look again after it.")));
                 Ok(content)
@@ -272,6 +282,8 @@ impl Server {
             "tap" | "swipe" => {
                 // The look is spent by what reaches the device: a call refused for what it says leaves it.
                 let shown = self.shown.get(&name).ok_or("look first: a point is given in the pixels of the image a look returns")?;
+                // Another caller's look: what was seen here may not be on the screen any more.
+                if shown.by != self.caller { return Err("look first: the last look at it was another caller's".into()) }
                 if shown.at.elapsed() > LOOK_STANDS { self.shown.remove(&name); return Err("that look is more than a minute old: look again".into()); }
                 if device::mark(&name) != shown.of { self.shown.remove(&name); return Err("the device saved under that name isn't the one that look was of: look again".into()); }
                 let (size, way) = (shown.size, shown.way);
@@ -432,7 +444,7 @@ mod tests {
             arguments["device"] = json!(name);
             server.call(tool, &arguments).err().unwrap_or_else(|| "done".into())
         };
-        let look = |server: &mut Server, size, way, at| { server.shown.insert(name.clone(), Shown { size, way, at, of: device::mark(&name) }); };
+        let look = |server: &mut Server, size, way, at| { server.shown.insert(name.clone(), Shown { size, way, at, of: device::mark(&name), by: server.caller.clone() }); };
         let (upright, now) = ((100.0, 200.0), Instant::now);
         assert!(call(&mut server, "tap", json!({ "x": 1, "y": 1 })).starts_with("look first"));
         // Refused for what it says, the look stands: outside the image, a swipe too short, too much to type.
@@ -450,6 +462,12 @@ mod tests {
             assert!(call(&mut server, tool, arguments).contains("doesn't answer"), "{tool}");
             assert!(call(&mut server, "tap", json!({ "x": 1, "y": 1 })).starts_with("look first"), "{tool}");
         }
+        // Another caller's look (over HTTP): not pressed by.
+        server.caller = Some("100.64.0.2".into());
+        look(&mut server, upright, 1, now());
+        server.caller = Some("100.64.0.3".into());
+        assert!(call(&mut server, "tap", json!({ "x": 1, "y": 1 })).contains("another caller's"));
+        server.caller = None;
         // Turned since, or a minute old: not pressed.
         look(&mut server, (200.0, 100.0), 1, now());
         assert!(call(&mut server, "tap", json!({ "x": 1, "y": 1 })).contains("was turned"));
@@ -462,5 +480,22 @@ mod tests {
         assert!(call(&mut server, "tap", json!({ "x": 1, "y": 1 })).contains("isn't the one that look was of"));
         assert!(call(&mut server, "tap", json!({ "x": 1, "y": 1 })).starts_with("look first"));
         device::unstub(&name);
+    }
+
+    #[test]
+    fn over_http_only_the_devices_offered_are_used_and_only_as_they_were_saved() {
+        let name = format!("offered-{}", std::process::id());
+        device::stub(&name, 49152);
+        let mut server = Server::offering(std::slice::from_ref(&name));
+        let mut call = |tool: &str| server.call(tool, &json!({ "device": name, "path": "/etc/hosts" })).err().unwrap_or_else(|| "done".into());
+        assert!(call("look").contains("doesn't answer"));
+        assert!(call("install").contains("isn't offered over HTTP"));
+        // Saved anew under the name, or removed, since it was offered: not used.
+        device::unstub(&name);
+        device::stub(&name, 49153);
+        assert!(call("look").contains("saved anew"));
+        device::unstub(&name);
+        assert!(call("look").contains("saved anew"));
+        assert!(server.call("look", &json!({ "device": "another" })).unwrap_err().contains("isn't offered here"));
     }
 }

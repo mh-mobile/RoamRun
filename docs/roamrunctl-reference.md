@@ -245,18 +245,27 @@ needed to establish each new device connection.
   `DELETE` get 405. `initialize` isn't needed before a call. `MCP-Protocol-Version`, when
   sent, is one of 2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25, else 400.
 - Answered before anything else: `/.well-known/*` and `/register` with 404 (no OAuth here),
-  any `Origin` with 403, a `Host` other than this address and port with 400; then a missing or
-  wrong token with 401 (`WWW-Authenticate: Bearer`), a caller not allowed with 403.
-- One request a connection (`Connection: close`). A body is read as chunked when it says so
-  (also when a length comes with it), else by its length; 1 MB at most.
-- Tool calls take turns, as over stdio. One whose caller closes the connection, or takes it
-  back (`notifications/cancelled`), before its turn isn't made; one that waited 20 s for its
+  any `Origin` with 403, a `Host` other than this machine's address or its Tailscale names
+  (with the port) with 400; then a missing or wrong token with 401 (`WWW-Authenticate:
+  Bearer`), a caller not allowed with 403.
+- One request a connection (`Connection: close`). The head has to be in within 10 s of
+  connecting, the body within 30 s more, however it trickles in. A body is read as chunked
+  when it says so (also when a length comes with it), else by its length; 1 MB at most.
+  32 connections at once, 17 from one address; more are answered 503.
+- Tool calls take turns, as over stdio. One whose caller has closed its connection (or only
+  its own side of it), or whose connection broke, or that it took back
+  (`notifications/cancelled`), when its turn comes isn't made; one that waited 20 s for its
   turn is answered "not begun" and isn't made. Other messages are answered at once.
-- Only the devices named are listed by `devices` or used. `install` isn't offered: its
-  `path` would name a file on this machine for whoever calls.
+- A look serves its own caller (by address): a tap or swipe after another caller's look is
+  refused ("look first").
+- Only the devices named are listed by `devices` or used, and only while each is saved here
+  as it was when this began: removed, or saved anew under its name, it isn't used until this
+  is run again. `install` isn't offered: its `path` would name a file on this machine for
+  whoever calls.
 - One line a request on standard error: the time (UTC), the caller's address and who
-  Tailscale says it is, the method and tool, the outcome, how long it took. Never the
-  token, a body, text typed or pasted, captions or images.
+  Tailscale says it is, the method and tool, the outcome, how long it took — with control
+  characters shown as `?`. Never the token, a body, text typed or pasted, captions or
+  images.
 
 ## Installing apps
 
