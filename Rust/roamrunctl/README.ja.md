@@ -175,7 +175,7 @@ roamrunctl launch phone com.example.App
 
 A では、鍵は Linux と macOS なら `~/.config/roamrunctl/devices/phone.json` に保存されます。`$XDG_CONFIG_HOME` が絶対パスで設定されていれば、その下になります。Windows では `%LOCALAPPDATA%\roamrunctl\devices` です。Linux と macOS では、所有者だけが読めるファイルとして作られます。それでも、**そのユーザーの権限で動くプログラムなら、エージェントも含めて、暗号化していない鍵を使ってデバイスを操作できます。**
 
-`pair control` に `--passphrase` を付けると、age で暗号化した `phone.age` として保存されます。パスフレーズは、次の 3 つの環境変数のうち、最初に設定されているものから取得します。順に `ROAMRUNCTL_PASSPHRASE_FILE`、`ROAMRUNCTL_PASSPHRASE_COMMAND`、`ROAMRUNCTL_PASSPHRASE` です。どれも設定されていなければ、ターミナルで入力を求めます。`mcp` は入力を求められないので、いずれかの設定が必要です。ファイルを暗号化しても、パスフレーズ自体を読めるソフトウェアからは守れません。
+`pair control` に `--passphrase` を付けると、age で暗号化した `phone.age` として保存されます。パスフレーズは、次の 3 つの環境変数のうち、最初に設定されているものから取得します。順に `ROAMRUNCTL_PASSPHRASE_FILE`、`ROAMRUNCTL_PASSPHRASE_COMMAND`、`ROAMRUNCTL_PASSPHRASE` です。どれも設定されていなければ、ターミナルで入力を求めます。`mcp` は入力を求められないので、いずれかの設定が必要です。ファイルを暗号化しても、パスフレーズ自体を読めるソフトウェアからは守れません。環境変数から取得するパスフレーズは 1 つで、同じ環境で開く、暗号化したすべてのデバイスに使われます。たとえば、1 つの `mcp` サーバーは、すべてのデバイスに同じパスフレーズを使います。
 
 ### B：鍵を別のマシンに置く
 

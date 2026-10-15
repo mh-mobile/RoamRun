@@ -336,7 +336,7 @@ rand_chacha 0.3.1 (MIT OR Apache-2.0)
 ring 0.17.14 (Apache-2.0 AND ISC), in src/polyfill/once_cell
 rsa 0.9.10 (MIT OR Apache-2.0)
 rustc_version 0.4.1 (MIT OR Apache-2.0)
-rustls 0.23.45 (Apache-2.0 OR ISC OR MIT)
+rustls 0.23.46 (Apache-2.0 OR ISC OR MIT)
 sha1 0.10.7 (MIT OR Apache-2.0)
 sha2 0.10.9 (MIT OR Apache-2.0)
 signature 2.2.0 (Apache-2.0 OR MIT)
@@ -5836,7 +5836,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ################################################################################
-rustls 0.23.45 (Apache-2.0 OR ISC OR MIT)
+rustls 0.23.46 (Apache-2.0 OR ISC OR MIT)
 #-------------------------------------------------------------------------------
 Copyright (c) 2016 Joseph Birr-Pixton <jpixton@gmail.com>
 
@@ -5865,7 +5865,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ################################################################################
-rustls 0.23.45 (Apache-2.0 OR ISC OR MIT)
+rustls 0.23.46 (Apache-2.0 OR ISC OR MIT)
 #-------------------------------------------------------------------------------
 ISC License (ISC)
 Copyright (c) 2016, Joseph Birr-Pixton <jpixton@gmail.com>

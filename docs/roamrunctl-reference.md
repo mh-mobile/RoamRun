@@ -125,6 +125,10 @@ the using machine and the device, not through the key's machine.
   The command source runs with `sh -c` (Windows: `cmd /S /C`). A passphrase in
   `ROAMRUNCTL_PASSPHRASE` is in the environment of every process started from that shell.
   Without a source, interactive commands prompt.
+- A configured source gives one passphrase, used for every encrypted device opened or saved
+  under that environment: the command source is run the same way whichever device it is for. So
+  devices opened under one environment share a passphrase; one `mcp` server uses one for every
+  device it opens. To keep a key off the machine an agent runs on, use B.
 
 | Command | Passphrase handling |
 |---|---|
@@ -209,6 +213,11 @@ needed to establish each new device connection.
   Tap/swipe coordinates are pixels in the image returned by the last `look`.
 - `type`, `paste`, and `press` act on the currently focused interface. `paste` makes the device
   ask “Allow Paste” each time.
+- Each tool carries MCP's `readOnlyHint` and `destructiveHint`. `devices` and `look` are marked
+  read-only. `elements` is neither: the screen may scroll. The rest are marked destructive: what
+  is pressed or typed acts as it would by hand (a tap can delete or send, a typed newline is
+  Return), `press lock` can't be undone from here, `launch` ends a running app first, and
+  `install` replaces one. What a client does with the hints is the client's; none was checked.
 - A queued call cancelled before it starts is not executed; a call already running may
   complete. MCP keeps connections open and reopens a device when its saved association
   changes or its connection fails.
