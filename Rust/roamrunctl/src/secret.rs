@@ -11,8 +11,6 @@ pub const FILE: &str = "ROAMRUNCTL_PASSPHRASE_FILE";
 pub const COMMAND: &str = "ROAMRUNCTL_PASSPHRASE_COMMAND";
 /// The passphrase itself. The weakest of the three: any process of this user can read it, and children inherit it.
 pub const ITSELF: &str = "ROAMRUNCTL_PASSPHRASE";
-/// Set for `COMMAND` to the device's name, where it is known: a command that looks at it can give each device its own.
-pub const DEVICE: &str = "ROAMRUNCTL_DEVICE";
 
 fn whole(text: String, from: &str) -> Result<String, String> {
     let text = text.strip_suffix('\n').map(|t| t.strip_suffix('\r').unwrap_or(t)).unwrap_or(&text).to_string();
@@ -20,7 +18,7 @@ fn whole(text: String, from: &str) -> Result<String, String> {
 }
 
 /// The passphrase as the environment gives it: by file, else by command, else itself. None when it gives none.
-pub fn given(get: impl Fn(&str) -> Option<String>, device: Option<&str>) -> Result<Option<String>, String> {
+pub fn given(get: impl Fn(&str) -> Option<String>) -> Result<Option<String>, String> {
     if let Some(path) = get(FILE) {
         // Without the mark some editors on Windows put first, which nobody could type.
         return whole(std::fs::read_to_string(&path).map_err(|e| format!("{FILE} ({path}): {e}"))?.trim_start_matches('\u{feff}').to_string(), FILE).map(Some);
@@ -31,8 +29,6 @@ pub fn given(get: impl Fn(&str) -> Option<String>, device: Option<&str>) -> Resu
         // As it is, inside one pair of quotes that /S takes off: quoted the usual way, cmd wouldn't read its own.
         #[cfg(windows)]
         let mut shell = { let mut cmd = std::process::Command::new("cmd"); std::os::windows::process::CommandExt::raw_arg(cmd.args(["/S", "/C"]), format!("\"{command}\"")); cmd };
-        // Not inherited: a name left from elsewhere would be another device's.
-        match device { Some(name) => shell.env(DEVICE, name), None => shell.env_remove(DEVICE) };
         let ran = shell.stderr(std::process::Stdio::inherit()).output()
             .map_err(|e| format!("{COMMAND}: {e}"))?;
         if !ran.status.success() { return Err(format!("{COMMAND} failed ({})", ran.status)); }
@@ -41,11 +37,9 @@ pub fn given(get: impl Fn(&str) -> Option<String>, device: Option<&str>) -> Resu
     get(ITSELF).map(|text| whole(text, ITSELF)).transpose()
 }
 
-/// The passphrase of the device named (None: its name isn't known yet): as the environment gives it,
-/// else asked at the terminal (twice when it is a new one).
-pub fn passphrase(device: Option<&str>, new: bool) -> Result<String, String> {
-    let what = device.unwrap_or("the pairing");
-    if let Some(given) = given(|name| std::env::var(name).ok(), device)? { return Ok(given); }
+/// The passphrase: as the environment gives it, else asked at the terminal (twice when it is a new one).
+pub fn passphrase(what: &str, new: bool) -> Result<String, String> {
+    if let Some(given) = given(|name| std::env::var(name).ok())? { return Ok(given); }
     if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
         return Err(format!("{what} is kept under a passphrase, and none is given: set {FILE}, {COMMAND} or {ITSELF} (the weakest), or run this at a terminal"));
     }
@@ -92,27 +86,14 @@ mod tests {
         std::fs::write(&file, "from the file\n").unwrap();
         let path = file.to_string_lossy().to_string();
         let env = |pairs: &[(&str, &str)]| { let pairs: Vec<(String, String)> = pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(); move |name: &str| pairs.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone()) };
-        assert_eq!(given(env(&[(FILE, &path), (COMMAND, "echo no"), (ITSELF, "no")]), None).unwrap().as_deref(), Some("from the file"));
-        assert_eq!(given(env(&[(COMMAND, "echo from the command"), (ITSELF, "no")]), None).unwrap().as_deref(), Some("from the command"));
-        assert_eq!(given(env(&[(ITSELF, "itself")]), None).unwrap().as_deref(), Some("itself"));
-        assert_eq!(given(env(&[]), None).unwrap(), None);
+        assert_eq!(given(env(&[(FILE, &path), (COMMAND, "echo no"), (ITSELF, "no")])).unwrap().as_deref(), Some("from the file"));
+        assert_eq!(given(env(&[(COMMAND, "echo from the command"), (ITSELF, "no")])).unwrap().as_deref(), Some("from the command"));
+        assert_eq!(given(env(&[(ITSELF, "itself")])).unwrap().as_deref(), Some("itself"));
+        assert_eq!(given(env(&[])).unwrap(), None);
         // One that fails, or gives nothing, is said: not passed over for the next.
-        assert!(given(env(&[(COMMAND, "exit 3"), (ITSELF, "x")]), None).is_err());
-        assert!(given(env(&[(FILE, "/nonexistent/roamrunctl"), (ITSELF, "x")]), None).is_err());
-        assert!(given(env(&[(ITSELF, "")]), None).is_err());
+        assert!(given(env(&[(COMMAND, "exit 3"), (ITSELF, "x")])).is_err());
+        assert!(given(env(&[(FILE, "/nonexistent/roamrunctl"), (ITSELF, "x")])).is_err());
+        assert!(given(env(&[(ITSELF, "")])).is_err());
         std::fs::remove_file(file).unwrap();
-    }
-
-    #[test]
-    fn the_command_is_told_which_device_and_only_where_one_is_named() {
-        #[cfg(not(windows))]
-        let said = "echo \"[$ROAMRUNCTL_DEVICE]\"";
-        #[cfg(windows)]
-        let said = "echo [%ROAMRUNCTL_DEVICE%]";
-        let env = move |name: &str| (name == COMMAND).then(|| said.to_string());
-        assert_eq!(given(env, Some("phone")).unwrap().as_deref(), Some("[phone]"));
-        // cmd prints an unset variable as written: only sh says it is empty.
-        #[cfg(not(windows))]
-        assert_eq!(given(env, None).unwrap().as_deref(), Some("[]"));
     }
 }

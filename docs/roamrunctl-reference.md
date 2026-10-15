@@ -125,13 +125,11 @@ the using machine and the device, not through the key's machine.
   The command source runs with `sh -c` (Windows: `cmd /S /C`). A passphrase in
   `ROAMRUNCTL_PASSPHRASE` is in the environment of every process started from that shell.
   Without a source, interactive commands prompt.
-- A file or `ROAMRUNCTL_PASSPHRASE` gives one passphrase, used for every encrypted device. The
-  command source runs with `ROAMRUNCTL_DEVICE` set to the name of the device being opened or
-  saved, so it can give each device its own. `pair control --with` without `--as` runs it before
-  the device's name is known, with the variable unset.
-- Separate passphrases protect copies of the files. They do not keep this machine from the
-  devices: whoever can run the command can ask it for each passphrase. To keep a key off the
-  machine an agent runs on, use B.
+- A configured source gives one passphrase, used for every encrypted device: the command source
+  is run the same way whichever device is opened. Where nothing can be typed (`mcp`, a CI job),
+  devices kept under passphrases therefore share one. Separate passphrases would protect copies
+  of the files, not the devices from this machine. To keep a key off the machine an agent runs
+  on, use B.
 
 | Command | Passphrase handling |
 |---|---|
@@ -144,10 +142,7 @@ the using machine and the device, not through the key's machine.
 - For an MCP client, configure the passphrase source in the MCP server's environment, beside the
   command the README shows.
 - An example for `ROAMRUNCTL_PASSPHRASE_COMMAND` on macOS, **if a matching Keychain item
-  already exists**, is `security find-generic-password -a "$USER" -s roamrunctl -w`. With one
-  item per device, whose account is the device's name, set it in single quotes, so that the
-  variable is read when the command runs:
-  `export ROAMRUNCTL_PASSPHRASE_COMMAND='security find-generic-password -a "$ROAMRUNCTL_DEVICE" -s roamrunctl -w'`.
+  already exists**, is `security find-generic-password -a "$USER" -s roamrunctl -w`.
 - Re-pairing a device under the same host identity replaces the earlier pairing on the device.
   An old record then fails to connect; remove it with `roamrunctl devices remove <name>`.
   Also remove the machine's pairing entry in the device's Developer Mode list when withdrawing it.
