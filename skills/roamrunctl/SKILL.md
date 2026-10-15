@@ -255,8 +255,10 @@ said() { python3 -c '
 import base64, json, os, sys
 *body, status = sys.stdin.read().rstrip("\n").split("\n")
 if status != "200": sys.exit("HTTP " + status + ": " + "\n".join(body)[:300])
-try: r = json.loads("\n".join(body)).get("result", {})
-except ValueError: sys.exit("HTTP 200, cut short: " + "\n".join(body)[:300])
+try: d = json.loads("\n".join(body))
+except ValueError: sys.exit("HTTP 200, cut short after " + str(len("\n".join(body))) + " characters")
+if "error" in d: sys.exit("error " + str(d["error"].get("code")) + ": " + str(d["error"].get("message")))
+r = d.get("result", {})
 for c in r.get("content", []):
     if c.get("type") == "image":
         fd = os.open("look.jpg", os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0), 0o600)
@@ -289,8 +291,10 @@ Tailscale. Whether launching works on a device no Xcode ever met wasn't tried.
 
 Tried against a device, on Linux and macOS, in an earlier form of each: `pair control
 --with`, a key from a Mac, look, tap, type, a button, install, launch, `mcp`'s look and
-tap, and B. On macOS as it is now: `pair control --to`, and `mcp --http` called from the
-machine itself with the token (look, tap, type, press, `elements`, calls taken back). Not
+tap, and B. On macOS: `pair control --to` as it is now, and `mcp --http` called from the
+machine itself with the token in a form just before this one (look, tap, type, press,
+`elements`, calls taken back); how it now opens a device and keeps what was taken back is
+tested, not tried on a device. Not
 yet: `sign` as it is now and `ROAMRUNCTL_SIGNER`, `--passphrase`, the Introducer app or a
 Mac introducing this machine, `mcp`'s swipe, install and launch and a paste that goes
 through, `mcp --http` from another machine or a cloud, and anything on

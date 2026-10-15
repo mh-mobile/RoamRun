@@ -246,7 +246,7 @@ impl Server {
         if !self.open.contains_key(name) {
             let offered = self.offered.as_ref().map(|offered| offered.iter().find(|(n, _)| n == name).and_then(|(_, was)| was.clone()));
             if offered.as_ref().is_some_and(|was| device::mark(name) != *was) { return Err(anew(name)) }
-            let held = device::held(name)?;
+            let held = if offered.is_some() { device::held_here(name)?.ok_or_else(|| anew(name))? } else { device::held(name)? };
             if offered.as_ref().is_some_and(|was| held.1 != *was) { return Err(anew(name)) }
             self.open.insert(name.to_string(), held);
         }

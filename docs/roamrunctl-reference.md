@@ -408,6 +408,8 @@ against a real device at the time these notes were written:
   `scripts/mcp-http-check.py`; and on an iPhone, look, tap, type, press and `elements`, a tap
   refused after another caller's look, types and pastes refused by an older look, and queued
   calls taken back by closing their connection and by `notifications/cancelled` in a session.
+  These were runs of earlier forms of it: the last changes, to how a device is opened (only as
+  it was offered) and to how what was taken back is kept, were tested on 127.0.0.1 only.
 - Tailscale userspace networking with no address available to bind.
 - Xcode pairing through `pair introduce` since the `--mac` → `--host` change.
 

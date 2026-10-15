@@ -360,9 +360,15 @@ fn offered() -> Result<Vec<Saved>, String> {
 
 /// A saved device's file as it is now: what tells it from another saved under its name since.
 pub fn mark(name: &str) -> Option<Vec<u8>> {
-    let now = kept(name).ok().flatten().and_then(|(path, _)| std::fs::read(path).ok());
-    // What an earlier file under the name opened to isn't kept past it.
-    forget_opened(name, now.as_deref());
+    let kept = kept(name);
+    let now = kept.as_ref().ok().cloned().flatten().and_then(|(path, _)| std::fs::read(path).ok());
+    // What an earlier file under the name opened to isn't kept past it: seen gone, or read and not it. A read that
+    // failed says neither, and lets go of nothing.
+    match (&kept, &now) {
+        (Ok(None), _) => forget_opened(name, None),
+        (_, Some(now)) => forget_opened(name, Some(now)),
+        _ => {}
+    }
     now
 }
 
@@ -420,6 +426,14 @@ pub fn opened(name: &str) -> Result<Device, String> {
 /// The device named, opened, and the file it was opened from (see `mark`). One another machine signs for is
 /// saved here the first time it opens, without its key: from then on only that machine is asked, and only
 /// that device is taken for it.
+/// The device saved here under `name`, opened, and its file as read; None where none is saved. Never one only a
+/// machine that signs offers: `mcp --http` holds to what it offered, and asks no other machine.
+pub fn held_here(name: &str) -> Result<Option<(Device, Option<Vec<u8>>)>, String> {
+    let Some((path, sealed)) = kept(name)? else { return Ok(None) };
+    let (saved, file) = read(name, &path, sealed)?;
+    Ok(Some((open(&saved)?, Some(file))))
+}
+
 pub fn held(name: &str) -> Result<(Device, Option<Vec<u8>>), String> {
     let (saved, mut file) = load(name)?;
     let device = open(&saved)?;
@@ -597,10 +611,31 @@ mod tests {
         // Seen as it was: kept.
         assert_eq!(mark(&name).as_deref(), Some(file.as_slice()));
         assert!(opened_once(&name, &file, || Err("asked again".into())).is_ok());
+        // A read that failed (here, a file its owner can't read): it says nothing of the file, and nothing goes.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+            // Unless this runs as root, which reads it all the same.
+            if std::fs::read(&path).is_err() {
+                assert_eq!(mark(&name), None);
+                assert!(opened_once(&name, &file, || Err("asked again".into())).is_ok());
+            }
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        // Seen saved anew under the name: what the old file opened to goes.
+        let anew = crate::secret::sealed(b"{}", "pw").unwrap();
+        std::fs::write(&path, &anew).unwrap();
+        assert_eq!(mark(&name).as_deref(), Some(anew.as_slice()));
+        assert_eq!(opened_once(&name, &file, || Err("asked again".into())).unwrap_err(), "asked again");
+        std::fs::write(&path, &file).unwrap();
+        opened_once(&name, &file, || Ok("pw".into())).unwrap();
         // Seen removed: let go of.
         std::fs::remove_file(&path).unwrap();
         assert_eq!(mark(&name), None);
         assert_eq!(opened_once(&name, &file, || Err("asked again".into())).unwrap_err(), "asked again");
+        // Opened only as saved here, over HTTP: none saved is none, and no machine that signs is asked.
+        assert!(matches!(held_here(&name), Ok(None)));
     }
 
     #[test]
