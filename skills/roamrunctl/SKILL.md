@@ -183,7 +183,7 @@ devices remove <name>`. With `--passphrase` it is kept encrypted instead, which 
 a copy of the file, not the device from this machine. The passphrase then comes from
 `ROAMRUNCTL_PASSPHRASE_FILE`, `ROAMRUNCTL_PASSPHRASE_COMMAND` or `ROAMRUNCTL_PASSPHRASE`,
 else it is typed at a terminal at each command; `roamrunctl mcp` can't be typed to and
-takes it from one of the three only. What they give is one passphrase, used for every
+takes it from one of the three only (`mcp --http`, which the user starts, asks as it starts). What they give is one passphrase, used for every
 encrypted device. Don't ask the user for a passphrase and don't print
 one; if a command says none is given, say so and stop.
 
@@ -230,14 +230,57 @@ believed the first time it is used — use it only if the user named it.
 - `roamrunctl launch <name> <bundle id>` — one already running is ended first.
 - `roamrunctl mcp` — for an agent's MCP config (the command `roamrunctl`, the argument
   `mcp`): `devices`, `look`, `tap`, `swipe`, `elements`, `type`, `paste`, `press`,
-  `install`, `launch`. Look, act, look again: a look serves one tap or swipe, within a
-  minute, and points are pixels of the image it returned; turned since that look, the
-  device isn't pressed: look again. `type`, `paste` and `press`
-  aren't held to a look and go to whatever is on the screen: look before them too. A
+  `install`, `launch`. Look, act, look again: a look answers with an id (`look 12`) and
+  serves one tap or swipe, within a minute, which gives it (`"look": 12`) with points in
+  the pixels of the image it returned; looked at again since, by anyone, or turned since, the
+  device isn't pressed: look again. `type` and `paste` give the latest look's id too, within
+  the same minute (after a tap by it is fine, and so is more text) and are refused once
+  another look, a button, a launch, an install or `elements` came since: look again. After a
+  tap, swipe, type or paste, a tap or swipe needs a new look. `press` isn't held to a look and
+  goes to whatever is on the screen: look before it too. A
   call that fails may or may not have reached the device — look before doing it again.
   A call you take back before its turn isn't made.
   These press what is really there — don't tap what spends money, posts, sends, deletes
   or signs in unless the user asked for exactly that.
+
+**Over HTTP**, for an agent that reaches the machine only that way (one in a cloud on the
+user's tailnet): the user starts `roamrunctl mcp --http <port> --allow <tag or login>
+<devices>` there, and stops it with Ctrl-C — never you. You get its address and port (and a
+token, if they set one) from them. Each call is one `POST /mcp`, no `initialize` first:
+
+```sh
+rr() { curl -sS --max-time 120 -w '\n%{http_code}\n' -H 'Content-Type: application/json' ${RR_TOKEN:+-H} ${RR_TOKEN:+"Authorization: Bearer $RR_TOKEN"} --data-binary @- "http://<address>:<port>/mcp"; }
+# What a call answered: its HTTP status where it isn't 200, else its text; an image goes to look.jpg, readable by you alone.
+said() { python3 -c '
+import base64, json, os, sys
+*body, status = sys.stdin.read().rstrip("\n").split("\n")
+if status != "200": sys.exit("HTTP " + status + ": " + "\n".join(body)[:300])
+try: d = json.loads("\n".join(body))
+except ValueError: sys.exit("HTTP 200, cut short after " + str(len("\n".join(body))) + " characters")
+if "error" in d: sys.exit("error " + str(d["error"].get("code")) + ": " + str(d["error"].get("message")))
+r = d.get("result", {})
+for c in r.get("content", []):
+    if c.get("type") == "image":
+        fd = os.open("look.jpg", os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0), 0o600)
+        if hasattr(os, "fchmod"): os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb") as f: f.write(base64.b64decode(c["data"]))
+print(r.get("isError"), [c.get("text") for c in r.get("content", []) if c.get("type") == "text"])'; }
+# printf, not echo: echo in zsh and sh turns a \n in the text into a newline (a Return, typed).
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"device":"phone"}}}' | rr | said
+# It said "590 x 1280, look 12": a tap in the pixels of look.jpg gives that id.
+printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"tap","arguments":{"device":"phone","look":12,"x":295,"y":155}}}' | rr | said
+```
+
+Write a look's image to a file, as above, and view the file: never print the base64 (the
+screen may show messages or notifications: the file is yours alone to read). `HTTP 401`
+is a missing or wrong token, `HTTP 403` a caller it doesn't let in — say so, don't retry. "not
+begun" did nothing; `HTTP 000` (no answer: a timeout, or the connection closed) or a 504
+may have done it — look before trying again. Keep
+the connection open until the answer comes: a call whose connection closed before its turn
+isn't made, and closing it is how a call is taken back with curl (`notifications/cancelled`
+counts only with the `Mcp-Session-Id` an `initialize` answered with, as MCP clients send it). Give each tap, swipe, type and paste the id of your look: after another agent's look,
+yours is refused — look again. Only the devices
+the user named are there, and `install` isn't offered over HTTP.
 
 A look here is a picture the device makes, and inputs are sent without a screen stream:
 the device lists no screen-sharing session and what plays goes on sounding (listened to
@@ -248,9 +291,13 @@ Tailscale. Whether launching works on a device no Xcode ever met wasn't tried.
 
 Tried against a device, on Linux and macOS, in an earlier form of each: `pair control
 --with`, a key from a Mac, look, tap, type, a button, install, launch, `mcp`'s look and
-tap, and B. Not yet: `pair control --to`, `sign` as it is now and `ROAMRUNCTL_SIGNER`,
-`--passphrase`, the Introducer app or a Mac introducing this machine, the other `mcp`
-tools, and anything on Windows (it builds there). If one of those fails, say what it
+tap, and B. On macOS as it is now: `pair control --to`, and `mcp --http` called from the
+machine itself with the token (look, tap, type, `elements`, calls taken back in a session;
+a button in a form just before this one). Not
+yet: `sign` as it is now and `ROAMRUNCTL_SIGNER`, `--passphrase`, the Introducer app or a
+Mac introducing this machine, `mcp`'s swipe, install and launch and a paste that goes
+through, `mcp --http` from another machine or a cloud, and anything on
+Windows (it builds there). If one of those fails, say what it
 said; don't work around it.
 
 ## 6. What it doesn't do

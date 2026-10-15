@@ -134,7 +134,8 @@ the using machine and the device, not through the key's machine.
 |---|---|
 | `pair control --passphrase`, `key import --passphrase` | prompts twice when creating a new encrypted record, or reads a configured source |
 | `look`, `install`, `launch` | prompts when opening an encrypted record, or reads a configured source |
-| `mcp` | cannot prompt; needs a configured source each time it opens an encrypted record |
+| `mcp` | cannot prompt; needs a configured source the first time it opens an encrypted record, and keeps what that opened while the file is the same |
+| `mcp --http` | prompts at a terminal, or reads a configured source, as it starts, for each encrypted device it offers; keeps what that opened while the file is the same |
 | `sign` | reads or prompts when starting for each encrypted record it serves |
 | `devices`, `devices remove` | no passphrase needed |
 
@@ -202,17 +203,26 @@ needed to establish each new device connection.
 
 ## MCP tools
 
-- `roamrunctl mcp` communicates through standard input/output. `look` returns a JPEG image
+- `roamrunctl mcp` communicates through standard input/output, or over HTTP with `--http`
+  (next section). `look` returns a JPEG image
   to the agent, while the standalone `roamrunctl look` command saves a PNG; the longer
   image side is at most 1280 pixels.
-- An MCP `look` authorizes **one** `tap` or `swipe` within 60 seconds. Another operation
-  (`type`, `paste`, `press`, `elements`, `install`, or `launch`) invalidates that look.
-  A subsequent tap or swipe needs another `look`.
+- An MCP `look` answers with an id, which `tap`, `swipe`, `type` and `paste` give
+  (`"look": 12`). It stands for 60 seconds, and only while it is the device's latest:
+  another look since — by any client, one that failed too — or `press`, `elements`,
+  `install`, or `launch` ends it, and so does a call that fails in a way that may have
+  reached the device, or another device saved under the name. It authorizes **one** `tap` or
+  `swipe`: after a tap, swipe, `type`, or `paste` by it, a tap or swipe needs another `look`,
+  while `type` and `paste` still go by it (look → tap a field → type needs one look). Ids
+  start from a random number at each start, so one kept from an earlier run isn't taken for
+  a later look.
 - Rotation is rejected when reported orientation or image-shape checks detect a mismatch;
   it is **not guaranteed** to be detected if the device reports no orientation.
   Tap/swipe coordinates are pixels in the image returned by the last `look`.
-- `type`, `paste`, and `press` act on the currently focused interface. `paste` makes the device
-  ask “Allow Paste” each time.
+- `type`, `paste`, and `press` act on the currently focused interface. `press` isn't held to a
+  look. `paste` makes the device ask “Allow Paste” each time. `type` and `paste`, as a `look`
+  does, wait until a second after the last input: keys sent at once after a tap on a field
+  were seen lost, or put before the cursor.
 - Each tool carries MCP's `readOnlyHint` and `destructiveHint`. `devices` and `look` are marked
   read-only. `elements` is neither: the screen may scroll. The rest are marked destructive: what
   is pressed or typed acts as it would by hand (a tap can delete or send, a typed newline is
@@ -224,6 +234,57 @@ needed to establish each new device connection.
 - `look` and inputs do not establish a persistent video stream or a visible screen-sharing
   session. Music continued playing during the screen/input tests, but microphone and some
   other interaction scenarios have not been verified.
+
+## MCP over HTTP
+
+`roamrunctl mcp --http <port> --allow <who>… [--token-file <file>] <device>…`, until Ctrl-C:
+
+- It listens on this machine's Tailscale IPv4 address only. It doesn't start without
+  Tailscale, without `--allow`, or without a device; a device only offered by a machine that
+  signs, and not used here yet, isn't taken, nor one whose saved file can't be read (a
+  passphrase not given), nor one device under two names.
+- Who may call: `--allow tag:<name>` matches a tagged caller by its tags, and `--allow <login>`
+  an untagged caller by its user's login, as `tailscale whois` gives them for the caller's
+  address, asked at each request (5 s at most; no answer is a refusal). A login never matches
+  a tagged machine. A machine shared in from another tailnet is refused, and so is this
+  machine itself unless the token came.
+- `--token-file`: each request also brings `Authorization: Bearer <token>`. The file has to be
+  its owner's alone (not checked on Windows), the token 32 characters or more on one line.
+- The transport is MCP's Streamable HTTP as of 2025-11-25: one JSON-RPC message a
+  `POST /mcp`, answered in JSON; a notification or a response gets 202; `GET` and `DELETE`
+  get 405. A session is given only to take a call back in (below), and `initialize` isn't
+  needed before a call. `MCP-Protocol-Version`, when sent, is one of 2024-11-05, 2025-03-26,
+  2025-06-18, 2025-11-25, else 400.
+- Answered before anything else: `/.well-known/*` and `/register` with 404 (no OAuth here),
+  any `Origin` with 403, a `Host` other than this machine's address or its Tailscale names
+  (with the port, which may be left out where it is 80) with 400; then a missing or wrong token with 401 (`WWW-Authenticate:
+  Bearer`), a caller not allowed with 403.
+- One request a connection (`Connection: close`). The head has to be in within 10 s of
+  connecting, the body within 30 s more, however it trickles in. A body is read as chunked
+  when it says so (also when a length comes with it), else by its length; 1 MB at most.
+  32 connections at once, 17 from one address; more are answered 503.
+- Tool calls on one device take turns, as over stdio; each device has its own turn, so a call
+  on one doesn't wait for another's. One whose caller has closed its connection (or only its
+  own side of it), or whose connection broke, when its turn comes isn't made. An `initialize`
+  is answered with an `Mcp-Session-Id`, which a client sends with what follows (the MCP SDKs
+  do): a `notifications/cancelled` sent with it takes back the call of that id in that
+  session, before its turn, also where it came in before the call (it is kept a minute for
+  it, 256 at most at once). Without a session it does nothing — the request id is the
+  client's choosing, and another client's call could carry the same — and closing the
+  connection takes the call back. One that waited 20 s for its turn is answered "not begun"
+  and isn't made. Other messages are answered at once. (MCP 2025-11-25 asks that a closed
+  connection not be taken as a call taken back; a call for a caller who is gone isn't made
+  here all the same.)
+- Several agents can use one server at once: a tap, swipe, type or paste names the look it is
+  of, and is refused after another look of that device, whoever took it.
+- Only the devices named are listed by `devices` or used, and only while each is saved here
+  as it was when this began: removed, or saved anew under its name, it isn't used until this
+  is run again. `install` isn't offered: its `path` would name a file on this machine for
+  whoever calls.
+- One line a request on standard error: the time (UTC), the caller's address and who
+  Tailscale says it is, the method and tool, the outcome, how long it took — with control
+  characters shown as `?`. Never the token, a body, text typed or pasted, captions or
+  images.
 
 ## Installing apps
 
@@ -339,8 +400,16 @@ against a real device at the time these notes were written:
 - x86_64 machines, Linux without Avahi, and firewall tools other than ufw.
 - Signing multiple devices at once, and the `ROAMRUNCTL_SIGNER` override.
 - A Mac's `roamrun pair introduce` introducing a machine running `roamrunctl`.
-- Through MCP: swipe, type, paste, install, and launch (these had been tested outside MCP).
+- Through MCP: swipe, a paste that goes through, install, and launch (these had been tested
+  outside MCP).
 - On Windows: `pair control --with`, MCP, install, and launch.
+- `mcp --http` from another machine (by a tag or a login), from a cloud, or on Linux or
+  Windows. On macOS it was checked from the machine itself, with the token:
+  `scripts/mcp-http-check.py`; and on an iPhone, look, tap, type, press and `elements`, a tap
+  refused after another caller's look, types and pastes refused by an older look, and queued
+  calls taken back by closing their connection and by `notifications/cancelled` in a session.
+  Look, tap, type, `elements`, and calls taken back in a session (the cancel coming before the
+  call, or after it) were run again as it is now; the rest were runs of earlier forms of it.
 - Tailscale userspace networking with no address available to bind.
 - Xcode pairing through `pair introduce` since the `--mac` → `--host` change.
 
