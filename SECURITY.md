@@ -269,8 +269,9 @@ bounded.
   folder, then opens nothing — and a program that runs as the user and can read the
   passphrase where it is kept is no further from the device than before. It looks by
   the device's own screenshot and sends inputs with no screen stream, so the device
-  shows no screen-sharing session meanwhile. Its MCP tools hold only `tap` and `swipe`
-  to a look just taken; `type`, `paste` and `press` go to whatever is on the screen.
+  shows no screen-sharing session meanwhile. Its MCP tools hold `tap` and `swipe` to a
+  look just taken, and `type` and `paste` to the device's latest look with nothing else done
+  since (by the look's id); `press` goes to whatever is on the screen.
   A call taken back before its turn, or whose turn comes after the client went, isn't
   made. A device it has open is held to the saved file it was opened from: removed, or
   another saved under the name, it isn't operated under that name any more. Where the

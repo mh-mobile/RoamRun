@@ -233,8 +233,10 @@ believed the first time it is used — use it only if the user named it.
   `install`, `launch`. Look, act, look again: a look answers with an id (`look 12`) and
   serves one tap or swipe, within a minute, which gives it (`"look": 12`) with points in
   the pixels of the image it returned; looked at again since, by anyone, or turned since, the
-  device isn't pressed: look again. `type`, `paste` and `press`
-  aren't held to a look and go to whatever is on the screen: look before them too. A
+  device isn't pressed: look again. `type` and `paste` give the latest look's id too
+  (after a tap with it is fine; they don't spend it) and are refused once another look, a
+  button, a launch or `elements` came since: look again. `press` isn't held to a look and
+  goes to whatever is on the screen: look before it too. A
   call that fails may or may not have reached the device — look before doing it again.
   A call you take back before its turn isn't made.
   These press what is really there — don't tap what spends money, posts, sends, deletes

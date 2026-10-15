@@ -220,8 +220,10 @@ For `tap` and `swipe`, the agent must first call `look`, and give the id that lo
 with (`"look": 12`). Each look permits one tap or swipe within 60 seconds, and only while it
 is the device's latest: after another look, by any agent, the tap or swipe is refused. `type`, `paste`, `press`, `elements`, `install` or `launch` on that device
 spends it, and a tap or swipe is refused if the device
-reports that it was turned since the look. The server uses the device's screenshots and input
-commands, not a continuous screen-sharing stream.
+reports that it was turned since the look. `type` and `paste` give the latest look's id too
+(after a tap with it is fine; the look isn't spent by them), and are refused once another
+look, a button, a launch or `elements` came since: they go to whatever has focus. The server
+uses the device's screenshots and input commands, not a continuous screen-sharing stream.
 
 #### Over HTTP, for an agent elsewhere
 

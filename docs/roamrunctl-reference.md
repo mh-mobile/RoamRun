@@ -214,8 +214,12 @@ needed to establish each new device connection.
 - Rotation is rejected when reported orientation or image-shape checks detect a mismatch;
   it is **not guaranteed** to be detected if the device reports no orientation.
   Tap/swipe coordinates are pixels in the image returned by the last `look`.
-- `type`, `paste`, and `press` act on the currently focused interface. `paste` makes the device
-  ask “Allow Paste” each time.
+- `type`, `paste`, and `press` act on the currently focused interface. `type` and `paste` give
+  the id of the device's latest look (`"look": 12`), and are refused once something else came
+  since: another look, by any client, a button, a launch, or `elements`. A tap or swipe with
+  that id before them doesn't count, and they don't spend the look: look → tap a field → type
+  needs one look. `press` isn't held to a look. `paste` makes the device ask “Allow Paste” each
+  time.
 - Each tool carries MCP's `readOnlyHint` and `destructiveHint`. `devices` and `look` are marked
   read-only. `elements` is neither: the screen may scroll. The rest are marked destructive: what
   is pressed or typed acts as it would by hand (a tap can delete or send, a typed newline is
