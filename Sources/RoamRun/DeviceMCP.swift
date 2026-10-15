@@ -20,6 +20,8 @@ final class DeviceMCP: @unchecked Sendable {
     static let longSide = DeviceControlHub.lookSide
     /// The most `type` takes in one call here.
     static let longestTyped = 500
+    /// The MCP versions spoken here, newest last: initialize answers the one asked for if it is one of them, else the newest.
+    static let versions = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"]
     /// Per device: the size of the last image given out, of the look behind it, and which look
     /// that was — a point is sent with it, so it isn't read against a look another made since.
     private var shown: [UUID: (shown: CGSize, real: CGSize, look: Int?)] = [:]
@@ -109,7 +111,8 @@ final class DeviceMCP: @unchecked Sendable {
         }
         switch method {
         case "initialize":
-            return reply(["protocolVersion": params["protocolVersion"] as? String ?? "2024-11-05",
+            let asked = params["protocolVersion"] as? String
+            return reply(["protocolVersion": Self.versions.first { $0 == asked } ?? Self.versions.last!,
                           "capabilities": ["tools": [String: Any]()],
                           "serverInfo": ["name": "roamrun", "version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"],
                           "instructions": Self.instructions])

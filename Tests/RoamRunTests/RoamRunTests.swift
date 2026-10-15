@@ -6173,6 +6173,13 @@ import ImageIO
 
     let hello = try result(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#)
     #expect(hello["protocolVersion"] as? String == "2025-06-18")
+    // A version not spoken here, or none, gets the newest that is: not an echo of what was asked.
+    func answered(_ params: String) throws -> String? {
+        try result(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":\#(params)}"#)["protocolVersion"] as? String
+    }
+    #expect(try answered(#"{"protocolVersion":"2024-11-05"}"#) == "2024-11-05")
+    #expect(try answered(#"{"protocolVersion":"2026-07-28"}"#) == "2025-11-25")
+    #expect(try answered("{}") == "2025-11-25")
     #expect(server.handle(Data(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#.utf8)) == nil)   // a notification gets no answer
     let tools = try #require(try result(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)["tools"] as? [[String: Any]])
     #expect(Set(tools.compactMap { $0["name"] as? String }) == ["devices", "look", "tap", "swipe", "elements", "type", "paste", "press"])
