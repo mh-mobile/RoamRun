@@ -313,22 +313,24 @@ tunnel and Xcode has to run again.
     `scripts/mcp-http-check.py http://<address>:<port> --token-file t --look <device>` → "all
     checks passed", its `devices` line listing only the devices named: from this machine itself,
     from a tagged machine let in by `--allow tag:<its tag>`, and from an untagged one let in by
-    `--allow <its user's login>`. Refused, each with nothing done: from this machine without the
-    token → 403; an `Origin` header → 403; a `Host` other than its address or Tailscale names →
-    400 (where it may listen on 80: with `--http 80`, the address without a port → 200); a wrong
-    token → 401; a machine not in `--allow`, and a tagged machine with only its owner's login in
-    `--allow` → 403 (sent with no `Origin`, the right `Host` and the token: those are refused
-    first).
+    `--allow <its user's login>`. Refused, each with nothing done: an `Origin` header → 403; a
+    `Host` other than its address or Tailscale names → 400 (where it may listen on 80: with
+    `--http 80`, the address without a port → 200); no token or a wrong one → 401; a machine not
+    in `--allow`, and a tagged machine with only its owner's login in `--allow` → 403 (sent with
+    no `Origin`, the right `Host` and the token: those are refused first). Started without
+    `--token-file`: from this machine → 403, the log saying `this machine itself, without the
+    token`.
     Looks, through `rr`: look → a tap on a text field by that look → a type by it: typed. A tap by
-    an older look, a tap after that type, and a type more than a minute after its look → refused
-    with "look again", nothing done. Two callers: A looks, B looks, A taps by its look → refused.
+    an older look, and a type more than a minute after its look → refused with "look again"; a
+    tap after that type → "look first"; nothing done. Two callers: A looks, B looks, A taps by its
+    look → refused.
     Calls taken back, each a look queued behind a `type` that runs 5–15 s (time one first): its
     `rr` stopped (Ctrl-C) before its turn → not made, and the log says `not begun`. With the
-    `Mcp-Session-Id` an `initialize` answered with (`curl -i`) sent with the look and with
-    `notifications/cancelled` for its id — the cancel sent after the look, and once before it →
-    not made, no answer (`said` says HTTP 000), `not begun`; the cancel sent with another session
-    id → made. Queued behind more than 20 s → answered "not begun: another call held the device
-    for more than 20 s", not made.
+    `Mcp-Session-Id` an `initialize` answered with (`curl -i`; added to `rr` as `-H`) sent with
+    the look and with `notifications/cancelled` for its id — the cancel sent after the look, and
+    once before it → not made, no answer (`said` says HTTP 000), `not begun`; the cancel sent with
+    another session id → made. Queued behind more than 20 s → answered "not begun: another call
+    held the device for more than 20 s", not made.
     The log (standard error): one line a request — the time, the caller's address and who
     Tailscale says it is, the method and tool, the outcome, the seconds; a refused caller with
     why (`…, not allowed`). `grep` of it for the token and for the text typed → nothing. Ctrl-C →
