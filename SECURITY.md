@@ -281,8 +281,8 @@ bounded.
   as it is — on a device held upside down that would be the opposite point (not tried).
 - **roamrunctl can serve its MCP tools over HTTP.** `roamrunctl mcp --http <port> --allow
   <who>… <devices>…`, started by a person and ended with Ctrl-C, listens on the machine's
-  Tailscale IPv4 address only. A caller is let in by what `tailscale whois` says of its
-  address at each request — a tag given with `--allow`, or, for an untagged machine, its
+  Tailscale IPv4 address only, and doesn't start as root (not checked on Windows). A caller
+  is let in by what `tailscale whois` says of its address at each request — a tag given with `--allow`, or, for an untagged machine, its
   user's login — and, with `--token-file`, by a token as well. Refused: a machine shared in
   from another tailnet; the machine itself without the token (any of its users would
   otherwise pass); any request with an `Origin` (a web page in a browser on the tailnet);
@@ -290,14 +290,22 @@ bounded.
   to arrive within 10 s and its body within 30 s more, and one address holds 17 of the 32
   connections at most: a machine that can reach the port but isn't let in can't keep
   callers out for long. Only the devices named are used — each only while it is saved as
-  it was when the server began — and `install` isn't offered. A tap, swipe, type or paste names the
+  it was when the server began — and `install` is offered only with `--allow-install`, from an
+  `.ipa` sent with `PUT /upload`, never a path on the machine. One upload is kept (200 MiB at
+  most by default), in a folder made for the run that only its user can open (on Windows, the
+  user's own temporary folder); only the caller that sent it — by its Tailscale node's lasting
+  id — can install it, by the sha256 it was answered; it goes when its install ends, after
+  30 minutes unused, at Ctrl-C, or when another comes in. Whoever is let in with
+  `--allow-install` can replace the apps on those devices with any app signed for them. An
+  `.ipa` is checked before it is sent to a device, with every roamrunctl install: one app, no `.bundle`,
+  4 GiB unpacked at most by what it says. A tap, swipe, type or paste names the
   look it is of, and is refused after another look of that device, whoever took it. A tool call whose caller's
   connection is gone when its turn comes isn't made. Whoever is let in operates those devices as roamrunctl does, while it runs.
   Between the caller and the machine, a cloud's proxy sees the images, what is typed or
-  pasted, and the token: with Codex Cloud it ends TLS itself. The token file has to be its
+  pasted, what is uploaded, and the token: with Codex Cloud it ends TLS itself. The token file has to be its
   owner's alone (not checked on Windows). The log has one line a request — the caller's
   address and identity, the method and tool, the outcome — and never the token, a body,
-  text, captions or images.
+  text, captions, images or uploads.
 - **roamrunctl can use a pairing whose key is on another machine.** `roamrunctl sign
   <devices> --for <machine>` runs where the keys are and listens on that machine's
   tailnet address (port 41831) for the one machine named, held to its address and to

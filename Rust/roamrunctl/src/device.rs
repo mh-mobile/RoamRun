@@ -543,8 +543,8 @@ pub fn run(command: Command) -> i32 {
             said(device.launch(&bundle)).map(|value| format!("Launched {bundle} on {name} (pid {}).", value["pid"]))
         }),
         Command::Mcp { http: None, .. } => return crate::mcp::Server::default().serve(),
-        Command::Mcp { http: Some(port), allow, token_file, devices } => allow.iter().map(|a| crate::http::allow(a)).collect::<Result<Vec<_>, _>>()
-            .and_then(|allowed| Ok(crate::http::Options { port, allowed, token: token_file.as_deref().map(crate::http::token).transpose()?, devices }))
+        Command::Mcp { http: Some(port), allow, token_file, allow_install, max_upload, devices } => allow.iter().map(|a| crate::http::allow(a)).collect::<Result<Vec<_>, _>>()
+            .and_then(|allowed| Ok(crate::http::Options { port, allowed, token: token_file.as_deref().map(crate::http::token).transpose()?, devices, uploads: allow_install.then_some(max_upload << 20) }))
             .and_then(crate::http::serve),
         Command::Sign { names, machine } => keys(&names).and_then(|(keys, told, marks)| {
             // The file it was read from, still: not another saved under the name since.

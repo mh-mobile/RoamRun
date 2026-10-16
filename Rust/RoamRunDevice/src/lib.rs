@@ -487,6 +487,53 @@ pub fn install_given(path: &str) -> (u64, Duration) {
     (megabytes, Duration::from_secs(300 + 15 * megabytes))
 }
 
+/// The most an .ipa may unpack to, by what its archive says (the device unpacks it), and the most of its
+/// Info.plist read here (idevice reads all of it, however much it inflates to).
+const UNPACKED: u64 = 4 << 30;
+const INFO_PLIST: u64 = 1 << 20;
+
+/// The bundle identifier of the app in the .ipa at `path`, checked before anything of it is sent: `Payload`
+/// holds one `<name>.app` and nothing else (a `.bundle` idevice would install as another kind of package),
+/// with the one Info.plist idevice takes the app's from, and it unpacks to `UNPACKED` at most.
+pub fn ipa_checked(path: &str) -> Result<String, String> {
+    ipa_within(path, UNPACKED, INFO_PLIST)
+}
+
+fn ipa_within(path: &str, unpacked: u64, info_plist: u64) -> Result<String, String> {
+    use futures_lite::io::{AssertAsync, AsyncReadExt, BufReader};
+    let not = |why: String| format!("{path} isn't an app's .ipa: {why}");
+    let file = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+    futures_lite::future::block_on(async {
+        // The same reader idevice finds the app with: what is checked is what it will read.
+        let mut zip = async_zip::base::read::seek::ZipFileReader::new(BufReader::new(AssertAsync::new(file))).await.map_err(|e| not(format!("{e}")))?;
+        let (mut app, mut plists, mut size) = (None, Vec::new(), 0u64);
+        for (index, entry) in zip.file().entries().iter().enumerate() {
+            let name = entry.filename().as_str().map_err(|_| not("a name in it isn't UTF-8".into()))?.trim_end_matches('/');
+            size = size.saturating_add(entry.uncompressed_size());
+            // Where idevice looks for the app's Info.plist: any name of three parts ending so.
+            if name.ends_with("Info.plist") && name.split('/').count() == 3 { plists.push((index, name.to_string(), entry.uncompressed_size())) }
+            let Some(top) = name.strip_prefix("Payload/").and_then(|rest| rest.split('/').next()) else { continue };
+            if !top.ends_with(".app") || app.is_some_and(|app| app != top) { return Err(not(format!("Payload/{top} beside {}: it holds one app (.app) and nothing else", app.unwrap_or("it")))) }
+            app = Some(top);
+        }
+        let app = app.ok_or_else(|| not("no Payload/<name>.app in it".into()))?.to_string();
+        if size > unpacked { return Err(not(format!("it says it unpacks to {} MB, more than {} MB", size >> 20, unpacked >> 20))) }
+        let [(index, name, declared)] = plists.as_slice() else {
+            return Err(not(format!("{} Info.plist where the app's is looked for, not one: {}", plists.len(), plists.iter().map(|p| p.1.as_str()).collect::<Vec<_>>().join(", "))));
+        };
+        if *name != format!("Payload/{app}/Info.plist") { return Err(not(format!("{name} is where the app's Info.plist would be looked for"))) }
+        // By what comes out, not by what it says: what it says can be less.
+        let mut read = Vec::new();
+        if *declared <= info_plist {
+            let entry = zip.reader_without_entry(*index).await.map_err(|e| not(format!("{e}")))?;
+            entry.take(info_plist + 1).read_to_end(&mut read).await.map_err(|e| not(format!("{e}")))?;
+        }
+        if *declared > info_plist || read.len() as u64 > info_plist { return Err(not(format!("its Info.plist is more than {} KB", info_plist >> 10))) }
+        plist::from_bytes::<plist::Dictionary>(&read).ok().and_then(|info| info.get("CFBundleIdentifier")?.as_string().map(str::to_string))
+            .ok_or_else(|| not("its Info.plist doesn't say the app's bundle identifier".into()))
+    })
+}
+
 /// What `rr_device_install` and `rr_device_launch` share: one thing asked of the device's app services.
 enum App<'a> { Install(&'a str), Launch(&'a str) }
 
@@ -528,14 +575,18 @@ fn app(device: &RRDevice, what: App) -> String {
     }
 }
 
-/// Installs the app at `path`, an .ipa or an .app folder on this machine, signed for the device already.
+/// Installs the app at `path`, an .ipa or an .app folder on this machine, signed for the device already. An .ipa
+/// that `ipa_checked` refuses is refused before anything is sent ("invalid").
 /// # Safety
 /// `device` came from rr_device_open and wasn't closed; `path` is null or a NUL-terminated string.
 #[no_mangle]
 pub unsafe extern "C" fn rr_device_install(device: *mut RRDevice, path: *const c_char) -> *mut c_char {
     let path = (!path.is_null()).then(|| unsafe { CStr::from_ptr(path) }.to_str().ok()).flatten();
     match (unsafe { device.as_ref() }, path) {
-        (Some(device), Some(path)) => c_string(app(device, App::Install(path))),
+        (Some(device), Some(path)) => c_string(match with_room(|| if std::path::Path::new(path).is_dir() { Ok(String::new()) } else { ipa_checked(path) }) {
+            Ok(_) => app(device, App::Install(path)),
+            Err(why) => format!("{{\"ok\":false,\"invalid\":true,\"error\":{}}}", quoted(&why)),
+        }),
         _ => c_string(failure("bad arguments")),
     }
 }
@@ -1620,6 +1671,67 @@ mod tests {
         assert_eq!(install_given(folder.join("inside/binary").to_str().unwrap()).0, 3);
         assert_eq!(install_given("/nowhere/at/all.ipa"), (0, Duration::from_secs(300)));
         std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    /// An .ipa of these files, deflated, written to a file of its own; its path.
+    fn ipa(name: &str, files: &[(&str, &[u8])]) -> String {
+        use async_zip::{base::write::ZipFileWriter, Compression, ZipEntryBuilder};
+        let bytes = futures_lite::future::block_on(async {
+            let mut zip = ZipFileWriter::new(Vec::new());
+            for (file, data) in files { zip.write_entry_whole(ZipEntryBuilder::new((*file).into(), Compression::Deflate), data).await.unwrap(); }
+            zip.close().await.unwrap()
+        });
+        let path = std::env::temp_dir().join(format!("rr-ipa-{}-{name}.ipa", std::process::id()));
+        std::fs::write(&path, bytes).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    const INFO: &[u8] = b"<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>io.example.app</string></dict></plist>";
+
+    #[test]
+    fn an_ipa_is_installed_only_as_one_app_with_its_info_plist_and_not_too_big() {
+        let checked = |name: &str, files: &[(&str, &[u8])]| { let path = ipa(name, files); let said = ipa_within(&path, 1 << 20, 1024); std::fs::remove_file(path).unwrap(); said };
+        let app = [("Payload/A.app/Info.plist", INFO), ("Payload/A.app/A", &b"binary"[..]), ("SwiftSupport/iphoneos/libswiftCore.dylib", &b"x"[..])];
+        assert_eq!(checked("good", &app), Ok("io.example.app".into()));
+        let refused = |name: &str, files: &[(&str, &[u8])], why: &str| { let said = checked(name, files).unwrap_err(); assert!(said.contains(why), "{name}: {said}") };
+        // A .bundle: idevice would install it as another kind of package.
+        refused("bundle", &[("Payload/A.bundle/Info.plist", INFO)], "Payload/A.bundle");
+        refused("two-apps", &[("Payload/A.app/Info.plist", INFO), ("Payload/B.app/Info.plist", INFO)], "Payload/B.app beside A.app");
+        refused("stray", &[("Payload/A.app/Info.plist", INFO), ("Payload/readme.txt", b"x")], "Payload/readme.txt");
+        refused("no-app", &[("A.app/Info.plist", INFO)], "no Payload/<name>.app");
+        refused("no-plist", &[("Payload/A.app/A", b"binary")], "0 Info.plist");
+        // Another name idevice would take for the app's Info.plist (it reads the first one it meets).
+        refused("other-plist", &[("Payload/A.app/Info.plist", INFO), ("Symbols/x/Info.plist", INFO)], "2 Info.plist");
+        refused("look-alike", &[("Payload/A.app/Info.plist", INFO), ("Payload/A.app/FooInfo.plist", INFO)], "2 Info.plist");
+        refused("elsewhere", &[("Payload/A.app/A", b"binary"), ("Symbols/x/Info.plist", INFO)], "Symbols/x/Info.plist is where");
+        refused("deeper", &[("Payload/A.app/Inner/Info.plist", INFO), ("Payload/A.app/A", b"binary")], "0 Info.plist");
+        refused("too-big", &[("Payload/A.app/Info.plist", INFO), ("Payload/A.app/A", &vec![0u8; 2 << 20])], "unpacks to 2 MB");
+        refused("big-plist", &[("Payload/A.app/Info.plist", &vec![b' '; 2048])], "more than 1 KB");
+        refused("no-id", &[("Payload/A.app/Info.plist", b"<plist version=\"1.0\"><dict/></plist>")], "bundle identifier");
+        assert!(ipa_within("/nowhere/at/all.ipa", 1 << 20, 1024).is_err());
+        let not_zip = std::env::temp_dir().join(format!("rr-ipa-{}-text.ipa", std::process::id()));
+        std::fs::write(&not_zip, b"not a zip").unwrap();
+        assert!(ipa_within(not_zip.to_str().unwrap(), 1 << 20, 1024).unwrap_err().contains("isn't an app's .ipa"));
+        std::fs::remove_file(not_zip).unwrap();
+    }
+
+    #[test]
+    fn an_info_plist_is_read_no_further_than_its_bound_whatever_it_says() {
+        // An Info.plist that inflates to more than its archive says: the bound holds by what comes out.
+        let big = [INFO, &vec![b' '; 4096]].concat();
+        let path = ipa("lying", &[("Payload/A.app/Info.plist", &big)]);
+        let mut bytes = std::fs::read(&path).unwrap();
+        let said = (big.len() as u32).to_le_bytes();
+        // Its size, as the local header (at 22) and the central directory (at 24) say it, made 10.
+        for (signature, at) in [([0x50, 0x4b, 0x03, 0x04], 22), ([0x50, 0x4b, 0x01, 0x02], 24)] {
+            let start = bytes.windows(4).position(|w| w == signature).unwrap();
+            assert_eq!(bytes[start + at..start + at + 4], said);
+            bytes[start + at..start + at + 4].copy_from_slice(&10u32.to_le_bytes());
+        }
+        std::fs::write(&path, &bytes).unwrap();
+        let said = ipa_within(&path, 1 << 20, 1024);
+        std::fs::remove_file(path).unwrap();
+        assert!(said.as_ref().unwrap_err().contains("more than 1 KB"), "{said:?}");
     }
 
     fn io(kind: std::io::ErrorKind) -> idevice::IdeviceError { idevice::IdeviceError::Socket(std::io::Error::from(kind)) }

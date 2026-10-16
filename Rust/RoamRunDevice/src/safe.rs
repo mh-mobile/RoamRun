@@ -96,6 +96,13 @@ impl Drop for Device {
     }
 }
 
+/// This process's effective user id, for roamrunctl, whose own code has no `unsafe`.
+#[cfg(unix)]
+pub fn effective_user() -> u32 {
+    extern "C" { fn geteuid() -> u32; }
+    unsafe { geteuid() }
+}
+
 /// What a device's refusal says, where the library gives it as the device sent it: an archived dictionary's
 /// bytes (`Data([98, 112, …])`), or a dictionary with a description in it. Anything else comes back as it is.
 pub fn readable(error: &str) -> String {
