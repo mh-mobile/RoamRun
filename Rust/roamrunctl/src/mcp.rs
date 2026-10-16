@@ -2,10 +2,12 @@
 //! line), as `roamrun mcp` gives them on a Mac. This process holds the connections: a device is
 //! opened at its first call and kept. Points are pixels of the image the last look returned.
 //! One call at a time, in the order asked. A call taken back (notifications/cancelled) before its turn isn't
-//! made, nor one whose turn comes after the client went; one that runs already runs out.
+//! made, nor one whose turn comes after the client went; one that runs already runs out. An install goes on
+//! aside: it answers at once, `install_status` says how it goes, and the device does nothing else meanwhile.
 
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use base64::Engine;
@@ -13,6 +15,7 @@ use roamrun_device::safe::Device;
 use serde_json::{json, Value};
 
 use crate::device;
+use crate::http::Uploads;
 
 /// A look serves one action, within this long.
 const LOOK_STANDS: Duration = Duration::from_secs(60);
@@ -46,6 +49,20 @@ struct Shown {
     spent: bool,
 }
 
+/// A device's install, going on aside with the device's connection, or how the last one went.
+struct Install {
+    /// The app's bundle identifier (`bundle`), or the .app folder's path.
+    what: String,
+    bundle: bool,
+    megabytes: u64,
+    given: Duration,
+    began: Instant,
+    /// The library's answer, while it is awaited.
+    going: Option<std::thread::JoinHandle<String>>,
+    /// How it went, and how long it took.
+    ended: Option<(Result<(), String>, Duration)>,
+}
+
 /// A point of a picture, as fractions of it, in the terms of the device held upright, where a touch is sent.
 /// Whether the device was turned between a look and now.
 /// ponytail: a way not said (0) is taken as no turn; the look's shape still refuses the sideways case.
@@ -74,8 +91,11 @@ pub struct Server {
     acted: HashMap<String, Instant>,
     /// Over HTTP (`mcp --http`): the devices named there, each with its saved file as it was then (see
     /// `device::mark`) — the only ones listed and used, and only while that file is as it was; and no
-    /// install, whose path would name a file on this machine for whoever calls.
+    /// install from a path, which would name a file on this machine for whoever calls.
     offered: Option<Vec<(String, Option<Vec<u8>>)>>,
+    /// Over HTTP with `--allow-install`: what is installed from, by its id.
+    uploads: Option<Arc<Uploads>>,
+    installs: HashMap<String, Install>,
     /// The last look's id; the first is a random one, so that a look kept from an earlier run isn't taken for one since.
     looks: u64,
 }
@@ -97,12 +117,13 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
 /// the device lasts. `elements` may scroll. Destructive: whatever presses or types into what is there,
 /// can't be undone from here (`lock`), ends an app, or replaces one.
 fn hints(name: &str) -> Value {
-    let reads = matches!(name, "devices" | "look");
+    let reads = matches!(name, "devices" | "look" | "install_status");
     let destroys = matches!(name, "tap" | "swipe" | "type" | "paste" | "press" | "install" | "launch");
     json!({ "readOnlyHint": reads, "destructiveHint": destroys })
 }
 
-fn tools(remote: bool) -> Value {
+/// The tools: over HTTP without install unless `installs` (and then from an upload, not a path).
+fn tools(remote: bool, installs: bool) -> Value {
     let point = json!({ "type": "number", "description": "Pixels of the image the last look returned" });
     let look = json!({ "type": "integer", "description": "The id the last look answered with" });
     let since = json!({ "type": "integer", "description": "The id of the device's latest look, less than a minute old, with no other look, button, launch, install or elements since (taps, swipes, types and pastes by it are fine)" });
@@ -121,18 +142,27 @@ fn tools(remote: bool) -> Value {
              json!({ "look": since, "text": { "type": "string" } }), &["look", "text"]),
         tool("press", "Press a hardware button. `lock` can't be undone from here: the user has to unlock.",
              json!({ "button": { "type": "string", "enum": ["home", "lock", "volume-up", "volume-down"] } }), &["button"]),
-        tool("install", "Install an app built and signed for this device: the path, on this machine, of an .ipa or an .app folder. It answers once the app is in: a megabyte takes a few seconds, a large app minutes.",
-             json!({ "path": { "type": "string" } }), &["path"]),
+        if remote {
+            tool("install", "Start installing an .ipa sent with PUT /upload, built and signed for this device: the upload's id and sha256, as the upload answered them. It answers at once; install_status says when the app is in (a megabyte takes a few seconds, a large app minutes), and until then other calls on the device answer that it is installing. An upload serves one install.",
+                 json!({ "upload": { "type": "string" }, "sha256": { "type": "string" } }), &["upload", "sha256"])
+        } else {
+            tool("install", "Start installing an app built and signed for this device: the path, on this machine, of an .ipa or an .app folder. It answers at once; install_status says when the app is in (a megabyte takes a few seconds, a large app minutes), and until then other calls on the device answer that it is installing.",
+                 json!({ "path": { "type": "string" } }), &["path"])
+        },
+        tool("install_status", "How the device's install goes: still going (for how long), done (with the app's bundle identifier, for launch), or why it failed.", json!({}), &[]),
         tool("launch", "Launch an app on the device by its bundle identifier (one already running is ended first).",
              json!({ "bundle": { "type": "string" } }), &["bundle"]),
     ]);
-    Value::Array(all.as_array().into_iter().flatten().filter(|t| !remote || t["name"] != "install").cloned().collect())
+    Value::Array(all.as_array().into_iter().flatten().filter(|t| !remote || installs || !t["name"].as_str().is_some_and(|n| n.starts_with("install"))).cloned().collect())
 }
 
 /// Over HTTP, of an offered device removed, or another saved under its name, since the server began.
 fn anew(name: &str) -> String {
     format!("{name} was removed here, or saved anew, since this began: it isn't used. To offer it again, end this and run it again")
 }
+
+/// An upload dropped between being found and being read (unused for half an hour): where it was isn't said.
+fn gone_meanwhile() -> String { "the upload was dropped meanwhile: send it again".into() }
 
 /// The look a tap, swipe, type or paste gives: a number, or one written as text, as a model sometimes gives it.
 fn look_of(arguments: &Value) -> Result<u64, String> {
@@ -157,9 +187,10 @@ fn is_call(line: &str) -> bool {
 }
 
 impl Server {
-    /// For `mcp --http`: these devices only, each while it is saved as `device::mark` gave it then, and no install.
-    pub fn offering(offered: Vec<(String, Option<Vec<u8>>)>) -> Server {
-        Server { offered: Some(offered), ..Server::default() }
+    /// For `mcp --http`: these devices only, each while it is saved as `device::mark` gave it then, and installs
+    /// only from `uploads` (`--allow-install`).
+    pub fn offering(offered: Vec<(String, Option<Vec<u8>>)>, uploads: Option<Arc<Uploads>>) -> Server {
+        Server { offered: Some(offered), uploads, ..Server::default() }
     }
 
     fn next_look(&mut self) -> u64 {
@@ -199,7 +230,13 @@ impl Server {
                 if writeln!(out, "{answer}").and_then(|()| out.flush()).is_err() { break }
             }
         }
+        self.finish();
         0
+    }
+
+    /// An install that runs already runs out.
+    fn finish(&mut self) {
+        for install in self.installs.values_mut() { if let Some(going) = install.going.take() { let _ = going.join(); } }
     }
 
     /// One message in, its answer out; None for a notification.
@@ -218,7 +255,7 @@ impl Server {
                 "instructions": INSTRUCTIONS,
             }),
             "ping" => json!({}),
-            "tools/list" => json!({ "tools": tools(self.offered.is_some()) }),
+            "tools/list" => json!({ "tools": tools(self.offered.is_some(), self.uploads.is_some()) }),
             "tools/call" => match self.call(params["name"].as_str().unwrap_or(""), &params["arguments"]) {
                 Ok(content) => json!({ "content": content, "isError": false }),
                 Err(why) => json!({ "content": text(why), "isError": true }),
@@ -309,8 +346,11 @@ impl Server {
             };
             // Removed, or another saved under the name, since this began: not the device that was offered.
             if device::mark(&name) != *was { return Err(anew(&name)) }
-            if tool == "install" { return Err("install isn't offered over HTTP".into()) }
+            if tool.starts_with("install") && self.uploads.is_none() { return Err("install isn't offered here: this was started without --allow-install".into()) }
         }
+        if tool == "install_status" { return self.install_status(&name).map(text) }
+        // Its connection is the install's meanwhile.
+        if let Some(busy) = self.installing(&name) { return Err(busy) }
         // One that is open is known, and one offered over HTTP is saved here (held to it above): asking what there is
         // would run Tailscale and ask every machine that might sign, in the device's turn.
         if self.offered.is_none() && !self.open.contains_key(&name) {
@@ -413,12 +453,7 @@ impl Server {
                     "typed. If the device's keyboard wasn't an English one, its spaces and Returns converted or confirmed instead of being typed, and under an English one auto-correction may have changed a word it didn't know: look, and if the text isn't what you sent, use paste"
                 } else { "sent; look to see what it did" }))
             }
-            "install" => {
-                let path = arguments["path"].as_str().ok_or("path is missing")?.to_string();
-                if !std::path::Path::new(&path).exists() { return Err(format!("{path} isn't on this machine")); }
-                self.shown.remove(&name);
-                self.ask(&name, |d| d.install(&path)).map(|_| text("installed"))
-            }
+            "install" => self.install(&name, arguments).map(text),
             "launch" => {
                 let bundle = arguments["bundle"].as_str().ok_or("bundle is missing")?.to_string();
                 self.shown.remove(&name);
@@ -427,6 +462,58 @@ impl Server {
                 done.map(|said| text(format!("launched (pid {}); look to see it", said["pid"])))
             }
             _ => Err(format!("no such tool: {tool}")),
+        }
+    }
+
+    /// Starts installing, aside with the device's connection, which is the install's until it ends (it is opened
+    /// anew after): from a path here, or over HTTP from an upload, used up once the device is open. What is installed
+    /// is checked before the device is asked.
+    fn install(&mut self, name: &str, arguments: &Value) -> Result<String, String> {
+        let upload = match &self.uploads {
+            None => None,
+            Some(uploads) => {
+                let (id, sha256) = (arguments["upload"].as_str().ok_or("upload is missing: the id PUT /upload answered")?, arguments["sha256"].as_str().ok_or("sha256 is missing")?);
+                Some((uploads.clone(), id.to_string(), sha256.to_string(), uploads.path(id, sha256)?))
+            }
+        };
+        let path = match &upload {
+            Some((.., path)) => path.to_string_lossy().into_owned(),
+            None => arguments["path"].as_str().ok_or("path is missing")?.to_string(),
+        };
+        if !std::path::Path::new(&path).exists() { return Err(if upload.is_some() { gone_meanwhile() } else { format!("{path} isn't on this machine") }); }
+        let bundle = !std::path::Path::new(&path).is_dir();
+        // An upload's file is named so: where it is kept here is no caller's business.
+        let what = if bundle { roamrun_device::ipa_checked(&path).map_err(|why| if upload.is_some() { why.replace(&path, "the upload") } else { why })? } else { path.clone() };
+        // What a look saw may move while the app is replaced.
+        self.shown.remove(name);
+        // Before the upload is used up: a device that can't be used now leaves it for another try.
+        self.device(name)?;
+        let upload = upload.map(|(uploads, id, sha256, _)| uploads.claim(&id, &sha256)).transpose()?;
+        let (device, _) = self.open.remove(name).ok_or("the device isn't open")?;
+        let (megabytes, given) = roamrun_device::install_given(&path);
+        let going = std::thread::spawn(move || { let said = device.install(&path); drop(upload); said });
+        self.installs.insert(name.to_string(), Install { what: what.clone(), bundle, megabytes, given, began: Instant::now(), going: Some(going), ended: None });
+        Ok(format!("installing {what} ({megabytes} MB) on {name}, for {} s at most: install_status says how it goes. Until it ends, other calls on {name} answer that it is installing.", given.as_secs()))
+    }
+
+    /// The device's install, while it goes on: what any other call on it is answered.
+    fn installing(&mut self, name: &str) -> Option<String> {
+        let install = self.installs.get_mut(name)?;
+        if let Some(going) = install.going.take_if(|going| going.is_finished()) {
+            let said = going.join().map_err(|_| "failed inside roamrunctl".to_string()).and_then(device::said);
+            install.ended = Some((said.map(|_| ()), install.began.elapsed()));
+        }
+        install.going.as_ref().map(|_| format!("installing {} on {name} ({} s so far): nothing else is done on it until that ends. install_status says how it goes", install.what, install.began.elapsed().as_secs()))
+    }
+
+    fn install_status(&mut self, name: &str) -> Result<String, String> {
+        if let Some(going) = self.installing(name) { return Ok(going) }
+        let Some(Install { what, bundle, megabytes, given, ended: Some((said, took)), .. }) = self.installs.get(name) else { return Ok(format!("no install was begun on {name} since this began")) };
+        let took = took.as_secs();
+        match said {
+            Ok(()) if *bundle => Ok(format!("{what} is installed on {name} ({megabytes} MB in {took} s): launch takes it by that bundle identifier")),
+            Ok(()) => Ok(format!("{what} is installed on {name} ({megabytes} MB in {took} s)")),
+            Err(why) => Err(format!("installing {what} on {name} failed after {took} s (of the {} s it was given): {why}", given.as_secs())),
         }
     }
 }
@@ -471,14 +558,14 @@ mod tests {
         }
         let listed: Value = serde_json::from_str(&server.handle(r#"{"jsonrpc":"2.0","id":"a","method":"tools/list"}"#).unwrap()).unwrap();
         let names: Vec<&str> = listed["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["devices", "look", "tap", "swipe", "elements", "type", "paste", "press", "install", "launch"]);
+        assert_eq!(names, ["devices", "look", "tap", "swipe", "elements", "type", "paste", "press", "install", "install_status", "launch"]);
         assert_eq!(listed["id"], "a");
         // Every tool but `devices` names its device, and says whether it only reads.
         for t in listed["result"]["tools"].as_array().unwrap() {
             assert_eq!(t["inputSchema"]["required"].as_array().unwrap().iter().any(|r| r == "device"), t["name"] != "devices");
         }
         let hinted = |hint: &str| -> Vec<&str> { listed["result"]["tools"].as_array().unwrap().iter().filter(|t| t["annotations"][hint] == true).map(|t| t["name"].as_str().unwrap()).collect() };
-        assert_eq!(hinted("readOnlyHint"), ["devices", "look"]);
+        assert_eq!(hinted("readOnlyHint"), ["devices", "look", "install_status"]);
         assert_eq!(hinted("destructiveHint"), ["tap", "swipe", "type", "paste", "press", "install", "launch"]);
         // A notification gets no answer; an unknown method gets an error with its id.
         assert!(server.handle(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).is_none());
@@ -543,8 +630,7 @@ mod tests {
         server.shown.get_mut(&name).unwrap().spent = true;
         assert!(call(&mut server, "tap", json!({ "x": 1, "y": 1 })).starts_with("look first"));
         // And by whatever else is sent in between.
-        let here = env!("CARGO_MANIFEST_DIR");
-        for (tool, arguments) in [("swipe", json!({ "x1": 1, "y1": 1, "x2": 2, "y2": 2 })), ("type", json!({ "text": "a" })), ("paste", json!({ "text": "a" })), ("press", json!({ "button": "home" })), ("elements", json!({})), ("install", json!({ "path": here })), ("launch", json!({ "bundle": "a.b" }))] {
+        for (tool, arguments) in [("swipe", json!({ "x1": 1, "y1": 1, "x2": 2, "y2": 2 })), ("type", json!({ "text": "a" })), ("paste", json!({ "text": "a" })), ("press", json!({ "button": "home" })), ("elements", json!({})), ("launch", json!({ "bundle": "a.b" }))] {
             look(&mut server, upright, 1, now());
             assert!(call(&mut server, tool, arguments).contains("doesn't answer"), "{tool}");
             assert!(call(&mut server, "tap", json!({ "x": 1, "y": 1 })).starts_with("look first"), "{tool}");
@@ -663,10 +749,12 @@ mod tests {
     fn over_http_only_the_devices_offered_are_used_and_only_as_they_were_saved() {
         let name = format!("offered-{}", std::process::id());
         device::stub(&name, 49152);
-        let mut server = Server::offering(vec![(name.clone(), device::mark(&name))]);
+        let mut server = Server::offering(vec![(name.clone(), device::mark(&name))], None);
         let call = |server: &mut Server, tool: &str| server.call(tool, &json!({ "device": name, "path": "/etc/hosts" })).err().unwrap_or_else(|| "done".into());
         assert!(call(&mut server, "look").contains("doesn't answer"));
-        assert!(call(&mut server, "install").contains("isn't offered over HTTP"));
+        // No install from a path over HTTP, and none at all without --allow-install.
+        assert!(call(&mut server, "install").contains("without --allow-install"));
+        assert!(call(&mut server, "install_status").contains("without --allow-install"));
         // Saved anew under the name, or removed, since it was offered: not used.
         assert!(server_devices(&mut server).starts_with(&name));
         device::unstub(&name);
@@ -685,7 +773,7 @@ mod tests {
         // Removed while the look waited for the screen, or another saved under the name: neither is opened.
         for again in [None, Some(49153)] {
             device::stub(&name, 49152);
-            let mut server = Server::offering(vec![(name.clone(), device::mark(&name))]);
+            let mut server = Server::offering(vec![(name.clone(), device::mark(&name))], None);
             server.acted.insert(name.clone(), Instant::now());
             let meanwhile = { let name = name.clone(); std::thread::spawn(move || { std::thread::sleep(SETTLE / 4); device::unstub(&name); if let Some(port) = again { device::stub(&name, port) } }) };
             let said = server.call("look", &json!({ "device": name })).unwrap_err();
@@ -693,5 +781,130 @@ mod tests {
             meanwhile.join().unwrap();
             if again.is_some() { device::unstub(&name) }
         }
+    }
+
+    const INFO: &[u8] = b"<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>io.example.app</string></dict></plist>";
+
+    /// An .ipa of one app with this Info.plist, stored, as an archiver writes it.
+    fn ipa(info: &[u8]) -> Vec<u8> {
+        let name = b"Payload/A.app/Info.plist";
+        let crc = !info.iter().fold(!0u32, |c, &b| (0..8).fold(c ^ b as u32, |c, _| if c & 1 == 1 { (c >> 1) ^ 0xedb8_8320 } else { c >> 1 }));
+        let (size, name_len) = ((info.len() as u32).to_le_bytes(), (name.len() as u16).to_le_bytes());
+        // Version 20, no flags, stored, no time; then its CRC and sizes, and its name's length with no extra. The
+        // central directory's adds no comment, disk, attributes, and where the entry begins (0).
+        let common = [&20u16.to_le_bytes()[..], &[0; 8], &crc.to_le_bytes(), &size, &size, &name_len, &[0; 2]].concat();
+        let local = [&0x0403_4b50u32.to_le_bytes()[..], &common, name, info].concat();
+        let central = [&0x0201_4b50u32.to_le_bytes()[..], &20u16.to_le_bytes(), &common, &[0; 10], &0u32.to_le_bytes(), name].concat();
+        let end = [&0x0605_4b50u32.to_le_bytes()[..], &[0; 4], &1u16.to_le_bytes(), &1u16.to_le_bytes(), &(central.len() as u32).to_le_bytes(), &(local.len() as u32).to_le_bytes(), &[0; 2]].concat();
+        [local, central, end].concat()
+    }
+
+    /// Waits, a few seconds at most, for the device's install to end; how it went, as install_status says.
+    fn ended(server: &mut Server, name: &str) -> Result<String, String> {
+        let began = Instant::now();
+        while server.installing(name).is_some() && began.elapsed() < Duration::from_secs(10) { std::thread::sleep(Duration::from_millis(20)) }
+        server.install_status(name)
+    }
+
+    #[test]
+    fn an_install_goes_on_aside_and_the_device_does_nothing_else_meanwhile() {
+        let name = format!("installing-{}", std::process::id());
+        device::stub(&name, 49152);
+        let mut server = Server::default();
+        // An install going on until told to end (one on a real device takes a while), answered `said`.
+        let going = |server: &mut Server, said: &'static str| -> std::sync::mpsc::Sender<()> {
+            let (end, ends) = std::sync::mpsc::channel::<()>();
+            let going = std::thread::spawn(move || { let _ = ends.recv(); if said.is_empty() { panic!("inside") } said.to_string() });
+            server.installs.insert(name.clone(), Install { what: "io.example.app".into(), bundle: true, megabytes: 3, given: Duration::from_secs(345), began: Instant::now(), going: Some(going), ended: None });
+            end
+        };
+        let end = going(&mut server, r#"{"ok":true}"#);
+        for (tool, arguments) in [("look", json!({})), ("tap", json!({ "look": 7, "x": 1, "y": 1 })), ("type", json!({ "look": 7, "text": "a" })), ("press", json!({ "button": "home" })), ("elements", json!({})), ("launch", json!({ "bundle": "a.b" })), ("install", json!({ "path": env!("CARGO_MANIFEST_DIR") }))] {
+            let mut arguments = arguments;
+            arguments["device"] = json!(name);
+            let said = server.call(tool, &arguments).unwrap_err();
+            assert!(said.starts_with("installing io.example.app on") && said.contains("nothing else is done"), "{tool}: {said}");
+        }
+        assert!(server.install_status(&name).unwrap().contains("s so far"));
+        end.send(()).unwrap();
+        assert!(ended(&mut server, &name).unwrap().starts_with("io.example.app is installed on"));
+        // Ended, the device is used again (opened anew: it doesn't answer, as it isn't there).
+        assert!(server.call("look", &json!({ "device": name })).unwrap_err().contains("doesn't answer"));
+        // A failure, and one inside, are said.
+        let end = going(&mut server, r#"{"ok":false,"error":"timed out"}"#);
+        end.send(()).unwrap();
+        let failed = ended(&mut server, &name).unwrap_err();
+        assert!(failed.contains("failed after") && failed.contains("timed out"), "{failed}");
+        let end = going(&mut server, "");
+        end.send(()).unwrap();
+        assert!(ended(&mut server, &name).unwrap_err().contains("failed inside roamrunctl"));
+        // At the end of stdio, one that runs runs out.
+        let end = going(&mut server, r#"{"ok":true}"#);
+        std::thread::spawn(move || { std::thread::sleep(Duration::from_millis(200)); let _ = end.send(()); });
+        server.finish();
+        assert!(server.installs[&name].going.is_none());
+        device::unstub(&name);
+    }
+
+    #[test]
+    fn an_install_answers_once_begun_with_the_connection_its_own() {
+        let name = format!("begun-{}", std::process::id());
+        device::stub(&name, 49152);
+        let mut server = Server::default();
+        let app = std::env::temp_dir().join(format!("rr-begun-{}.app", std::process::id()));
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::write(app.join("Info.plist"), b"<plist/>").unwrap();
+        // Refused before anything is begun: no such file, an .ipa that isn't an app's.
+        assert!(server.call("install", &json!({ "device": name, "path": "/nowhere/at/all.ipa" })).unwrap_err().contains("isn't on this machine"));
+        let not_ipa = app.join("Info.plist");
+        let said = server.call("install", &json!({ "device": name, "path": not_ipa }));
+        assert!(said.as_ref().unwrap_err().contains("isn't an app's .ipa"), "{said:?}");
+        assert!(server.install_status(&name).unwrap().starts_with("no install was begun"));
+        // A device that can't be opened: nothing is begun, but the look is ended as it is tried.
+        server.shown.insert(name.clone(), Shown { size: (100.0, 200.0), way: 1, at: Instant::now(), of: device::mark(&name), id: 7, spent: false });
+        assert!(server.call("install", &json!({ "device": name, "path": app })).unwrap_err().contains("doesn't answer"));
+        assert!(!server.shown.contains_key(&name));
+        assert!(server.install_status(&name).unwrap().starts_with("no install was begun"));
+        std::fs::remove_dir_all(app).unwrap();
+        device::unstub(&name);
+    }
+
+    #[test]
+    fn over_http_an_install_is_offered_with_allow_install_and_takes_an_upload() {
+        let listed = |server: &mut Server| -> Vec<Value> {
+            let said: Value = serde_json::from_str(&server.handle(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).unwrap()).unwrap();
+            said["result"]["tools"].as_array().unwrap().iter().filter(|t| t["name"].as_str().unwrap().starts_with("install")).cloned().collect()
+        };
+        assert!(listed(&mut Server::offering(vec![], None)).is_empty());
+        let uploads = Uploads::new(1 << 20).unwrap();
+        let tools = listed(&mut Server::offering(vec![], Some(uploads.clone())));
+        assert_eq!(tools.iter().map(|t| t["name"].as_str().unwrap()).collect::<Vec<_>>(), ["install", "install_status"]);
+        assert_eq!(tools[0]["inputSchema"]["required"], json!(["device", "upload", "sha256"]));
+        let name = format!("uploaded-{}", std::process::id());
+        device::stub(&name, 49152);
+        let mut server = Server::offering(vec![(name.clone(), device::mark(&name))], Some(uploads.clone()));
+        // A path isn't taken; an upload not kept isn't either.
+        assert!(server.call("install", &json!({ "device": name, "path": "/etc/hosts" })).unwrap_err().contains("upload is missing"));
+        assert!(server.call("install", &json!({ "device": name, "upload": "0", "sha256": "0" })).unwrap_err().contains("no upload 0"));
+        // One that isn't an app's .ipa is refused by what it is called, not by where it is kept here.
+        let (id, sha256) = uploads.put("n1", b"not an ipa");
+        let said = server.call("install", &json!({ "device": name, "upload": id, "sha256": sha256 })).unwrap_err();
+        assert!(said.starts_with("the upload isn't an app's .ipa") && !said.contains(&*uploads.path(&id, &sha256).unwrap().to_string_lossy()), "{said}");
+        // Its file gone between being found and being read: where it was isn't said either.
+        let (id, sha256) = uploads.put("n1", &ipa(INFO));
+        let kept = uploads.path(&id, &sha256).unwrap();
+        std::fs::remove_file(&kept).unwrap();
+        let said = server.call("install", &json!({ "device": name, "upload": id, "sha256": sha256 })).unwrap_err();
+        assert!(said.contains("dropped meanwhile") && !said.contains(&*kept.to_string_lossy()), "{said}");
+        let (id, sha256) = uploads.put("n1", &ipa(INFO));
+        // A device that can't be used now leaves the upload for another try.
+        let said = server.call("install", &json!({ "device": name, "upload": id, "sha256": sha256 }));
+        assert!(said.as_ref().unwrap_err().contains("doesn't answer"), "{said:?}");
+        device::unstub(&name);
+        device::stub(&name, 49153);
+        assert!(server.call("install", &json!({ "device": name, "upload": id, "sha256": sha256 })).unwrap_err().contains("saved anew"));
+        assert!(uploads.check(&id, "n1", &sha256).is_ok());
+        device::unstub(&name);
+        uploads.end();
     }
 }

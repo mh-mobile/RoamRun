@@ -222,15 +222,19 @@ believed the first time it is used — use it only if the user named it.
 - `roamrunctl look <name> [file.png]` — the screen now, its longer side 1280 at most;
   prints the path, then its size. The file is whatever was on the screen: the user's.
 - `roamrunctl install <name> <app.ipa or .app>` — an app already built and signed for
-  that device (xtool's `dev build --ipa`, or Xcode's). It doesn't build or sign. One
-  install to a device at a time. It says how much it sends, then nothing until the app is
+  that device (xtool's `dev build --ipa`, or Xcode's). It doesn't build or sign. An .ipa
+  that isn't one app (`Payload/<name>.app` and nothing else, no `.bundle`) is refused before
+  anything is sent. One install to a device at a time. It says how much it sends, then nothing until the app is
   in: a megabyte takes three to four seconds on the device's Wi‑Fi (a large app, minutes),
   and it is given some four times that (five minutes and fifteen seconds a megabyte) — run
   it where it can wait.
 - `roamrunctl launch <name> <bundle id>` — one already running is ended first.
 - `roamrunctl mcp` — for an agent's MCP config (the command `roamrunctl`, the argument
   `mcp`): `devices`, `look`, `tap`, `swipe`, `elements`, `type`, `paste`, `press`,
-  `install`, `launch`. Look, act, look again: a look answers with an id (`look 12`) and
+  `install`, `install_status`, `launch`. `install` answers once it has begun;
+  `install_status` says when the app is in (or why not), and until then every other call on
+  that device answers that it is installing — ask `install_status` now and then, then launch.
+  Look, act, look again: a look answers with an id (`look 12`) and
   serves one tap or swipe, within a minute, which gives it (`"look": 12`) with points in
   the pixels of the image it returned; looked at again since, by anyone, or turned since, the
   device isn't pressed: look again. `type` and `paste` give the latest look's id too, within
@@ -280,7 +284,22 @@ the connection open until the answer comes: a call whose connection closed befor
 isn't made, and closing it is how a call is taken back with curl (`notifications/cancelled`
 counts only with the `Mcp-Session-Id` an `initialize` answered with, as MCP clients send it). Give each tap, swipe, type and paste the id of your look: after another agent's look,
 yours is refused — look again. Only the devices
-the user named are there, and `install` isn't offered over HTTP.
+the user named are there.
+
+`install` is there only if the user added `--allow-install`. It takes an .ipa you send first,
+as the body of a `PUT /upload` (200 MiB at most, unless they set `--max-upload`), never a
+path:
+
+```sh
+curl -sS --max-time 600 -w '\n%{http_code}\n' ${RR_TOKEN:+-H} ${RR_TOKEN:+"Authorization: Bearer $RR_TOKEN"} -T App.ipa "http://<address>:<port>/upload"
+# It answered {"upload":"<id>","size":…,"sha256":"<hex>"}: check the sha256 is your file's (sha256sum App.ipa; on a Mac, shasum -a 256 App.ipa), then give both.
+printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"install","arguments":{"device":"phone","upload":"<id>","sha256":"<hex>"}}}' | rr | said
+printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"install_status","arguments":{"device":"phone"}}}' | rr | said
+```
+
+An upload serves one install, by you alone. `409` is another upload coming in (send yours
+again once it's in), `413` one too big. One is kept at a time: if `install` says there's no
+such upload (another replaced it, or it waited 30 minutes), send it again.
 
 A look here is a picture the device makes, and inputs are sent without a screen stream:
 the device lists no screen-sharing session and what plays goes on sounding (listened to
@@ -293,10 +312,11 @@ Tried against a device, on Linux and macOS, in an earlier form of each: `pair co
 --with`, a key from a Mac, look, tap, type, a button, install, launch, `mcp`'s look and
 tap, and B. On macOS as it is now: `pair control --to`, and `mcp --http` called from the
 machine itself with the token (look, tap, type, `elements`, calls taken back in a session;
-a button in a form just before this one). Not
+a button in a form just before this one; uploads and their refusals, against a device saved
+where nothing is). Not
 yet: `sign` as it is now and `ROAMRUNCTL_SIGNER`, `--passphrase`, the Introducer app or a
-Mac introducing this machine, `mcp`'s swipe, install and launch and a paste that goes
-through, `mcp --http` from another machine or a cloud, and anything on
+Mac introducing this machine, `mcp`'s swipe, install (as it is now, from a path or an
+upload) and launch and a paste that goes through, `mcp --http` from another machine or a cloud, and anything on
 Windows (it builds there). If one of those fails, say what it
 said; don't work around it.
 

@@ -1,12 +1,12 @@
 //! `roamrunctl mcp --http <port> --allow <who>… <devices>…`: the MCP tools over HTTP — Streamable HTTP as MCP
 //! 2025-11-25 has it, every answer JSON, a session given only to take a call back in — on this machine's Tailscale
 //! IPv4 address, for the callers Tailscale says are allowed. One request a connection. Tool calls on one device take
-//! turns, as over stdio.
+//! turns, as over stdio. With `--allow-install`, `PUT /upload` takes an .ipa for `install`.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, TcpListener, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -37,6 +37,11 @@ const TURN: Duration = Duration::from_secs(20);
 const TAKEN_BACK: Duration = Duration::from_secs(60);
 /// Of those, no more than this many are kept at once.
 const CANCELS: usize = 256;
+/// An upload's body is given this long a MiB on top of `BODY_WITHIN`, by its length or, chunked, by the most taken:
+/// 200 MiB took 103 s through a cloud's proxy (about 2 MiB a second).
+const UPLOAD_MIB_WITHIN: Duration = Duration::from_secs(2);
+/// An upload not used this long is dropped.
+const UPLOAD_KEPT: Duration = Duration::from_secs(30 * 60);
 
 /// Who may call: tagged machines by a tag, people's own machines by their login.
 #[derive(Debug, PartialEq, Clone)]
@@ -157,36 +162,61 @@ pub fn head(reader: &mut impl BufRead) -> Result<Request, u16> {
     Ok(Request { method: method.to_string(), path, headers })
 }
 
-/// The body as the head frames it: chunked where it says so (also when a length comes with it, as HTTP has
-/// it), else by its one length, else none. `most` bytes at most.
+/// The body as the head frames it, in memory: `framed`.
 pub fn body(reader: &mut impl BufRead, request: &Request, most: usize) -> Result<Vec<u8>, u16> {
+    let mut body = Vec::new();
+    framed(reader, request, most as u64, &mut body)?;
+    Ok(body)
+}
+
+/// The length the head gives, if it gives one and isn't chunked; 400 where it gives it wrong.
+fn length(request: &Request) -> Result<Option<u64>, u16> {
+    if request.header("transfer-encoding").is_some() { return Ok(None) }
+    let lengths: Vec<&str> = request.headers.iter().filter(|(n, _)| n == "content-length").map(|(_, v)| v.as_str()).collect();
+    match lengths.as_slice() {
+        [] => Ok(None),
+        [one] if !one.is_empty() && one.bytes().all(|b| b.is_ascii_digit()) => one.parse::<u64>().map(Some).map_err(|_| 413u16),
+        _ => Err(400),
+    }
+}
+
+/// The body as the head frames it, into `into`: chunked where it says so (also when a length comes with it, as
+/// HTTP has it), else by its one length, else none. `most` bytes at most; its size.
+fn framed(reader: &mut impl BufRead, request: &Request, most: u64, into: &mut impl Write) -> Result<u64, u16> {
     if let Some(coding) = request.header("transfer-encoding") {
         if !coding.eq_ignore_ascii_case("chunked") { return Err(501) }
-        let mut body = Vec::new();
+        let mut size = 0u64;
         loop {
-            let size = line(reader, 1024)?;
-            let size = usize::from_str_radix(size.split(';').next().unwrap_or("").trim(), 16).map_err(|_| 400u16)?;
-            if size == 0 { break }
-            if size > most - body.len() { return Err(413) }
-            let at = body.len();
-            body.resize(at + size, 0);
-            reader.read_exact(&mut body[at..]).map_err(late)?;
+            let piece = line(reader, 1024)?;
+            let piece = u64::from_str_radix(piece.split(';').next().unwrap_or("").trim(), 16).map_err(|_| 400u16)?;
+            if piece == 0 { break }
+            if piece > most - size { return Err(413) }
+            passed(reader, piece, into)?;
+            size += piece;
             if !line(reader, 2)?.is_empty() { return Err(400) }
         }
         // What may trail the last piece: read to the empty line, not used.
         while !line(reader, 1024)?.is_empty() {}
-        return Ok(body);
+        return Ok(size);
     }
-    let lengths: Vec<&str> = request.headers.iter().filter(|(n, _)| n == "content-length").map(|(_, v)| v.as_str()).collect();
-    let length = match lengths.as_slice() {
-        [] => return Ok(Vec::new()),
-        [one] if !one.is_empty() && one.bytes().all(|b| b.is_ascii_digit()) => one.parse::<usize>().map_err(|_| 413u16)?,
-        _ => return Err(400),
-    };
+    let length = length(request)?.unwrap_or(0);
     if length > most { return Err(413) }
-    let mut body = vec![0; length];
-    reader.read_exact(&mut body).map_err(late)?;
-    Ok(body)
+    passed(reader, length, into)?;
+    Ok(length)
+}
+
+/// `length` bytes of the body, into `into`: 408 where its time ran out, 400 where it was cut short, 507 where they
+/// couldn't be kept.
+fn passed(reader: &mut impl BufRead, mut length: u64, into: &mut impl Write) -> Result<(), u16> {
+    while length > 0 {
+        let some = reader.fill_buf().map_err(late)?;
+        if some.is_empty() { return Err(400) }
+        let n = some.len().min(usize::try_from(length).unwrap_or(usize::MAX));
+        into.write_all(&some[..n]).map_err(|_| 507u16)?;
+        reader.consume(n);
+        length -= n as u64;
+    }
+    Ok(())
 }
 
 /// A body that stopped coming: 408 where its time ran out, else 400 (cut short).
@@ -197,8 +227,9 @@ fn late(e: std::io::Error) -> u16 {
 fn reason(status: u16) -> &'static str {
     match status {
         200 => "OK", 202 => "Accepted", 400 => "Bad Request", 401 => "Unauthorized", 403 => "Forbidden", 404 => "Not Found",
-        405 => "Method Not Allowed", 408 => "Request Timeout", 413 => "Content Too Large", 431 => "Request Header Fields Too Large",
-        501 => "Not Implemented", 503 => "Service Unavailable", 505 => "HTTP Version Not Supported", _ => "",
+        405 => "Method Not Allowed", 408 => "Request Timeout", 409 => "Conflict", 411 => "Length Required", 413 => "Content Too Large",
+        431 => "Request Header Fields Too Large", 501 => "Not Implemented", 503 => "Service Unavailable", 505 => "HTTP Version Not Supported",
+        507 => "Insufficient Storage", _ => "",
     }
 }
 
@@ -217,6 +248,159 @@ fn rpc_error(id: Value, code: i32, message: &str) -> String {
 fn clock() -> String {
     let s = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()) % 86_400;
     format!("{:02}:{:02}:{:02} UTC", s / 3600, s / 60 % 60, s % 60)
+}
+
+/// An .ipa sent with `PUT /upload`, for one install: its file goes once nothing holds it.
+pub struct Upload {
+    id: String,
+    /// The caller's lasting id on the tailnet: the only one that can install it.
+    owner: String,
+    sha256: String,
+    pub path: PathBuf,
+}
+
+impl Drop for Upload {
+    fn drop(&mut self) { let _ = std::fs::remove_file(&self.path); }
+}
+
+/// The one upload kept (`--allow-install`), in a folder made for this run, the owner's alone. A new one replaces it.
+pub struct Uploads {
+    folder: PathBuf,
+    /// The most taken, in bytes.
+    most: u64,
+    kept: Mutex<Slot>,
+}
+
+#[derive(Default)]
+struct Slot {
+    /// The upload, and when it was last used.
+    kept: Option<(Arc<Upload>, Instant)>,
+    /// Whether one is coming in now.
+    coming: bool,
+}
+
+/// One upload coming in: the slot is free again once it is dropped.
+struct Coming<'a>(&'a Uploads);
+
+impl Drop for Coming<'_> {
+    fn drop(&mut self) { self.0.slot().coming = false; }
+}
+
+/// The bytes written to a file, and their sha256.
+struct Hashed { file: std::fs::File, hash: sha2::Sha256 }
+
+impl Write for Hashed {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let n = self.file.write(bytes)?;
+        sha2::Digest::update(&mut self.hash, &bytes[..n]);
+        Ok(n)
+    }
+    fn flush(&mut self) -> std::io::Result<()> { self.file.flush() }
+}
+
+fn hex(bytes: &[u8]) -> String { bytes.iter().map(|b| format!("{b:02x}")).collect() }
+
+impl Uploads {
+    /// The folder made now, in the system's temporary one (on Windows, the user's own, as it is).
+    pub fn new(most: u64) -> Result<Arc<Uploads>, String> {
+        let folder = std::env::temp_dir().join(format!("roamrunctl-uploads-{}", hex(&crate::hold::random::<8>()?)));
+        let mut made = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut made, 0o700);
+        made.create(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+        Ok(Arc::new(Uploads { folder, most, kept: Mutex::default() }))
+    }
+
+    fn slot(&self) -> std::sync::MutexGuard<'_, Slot> { self.kept.lock().unwrap_or_else(|e| e.into_inner()) }
+
+    /// The slot for one coming in, the one kept let go of; None while another comes in.
+    fn coming(&self) -> Option<Coming<'_>> {
+        let mut slot = self.slot();
+        if slot.coming { return None }
+        slot.kept = None;
+        slot.coming = true;
+        Some(Coming(self))
+    }
+
+    /// The body, into a file of this folder: what is kept and answered, or a status for a body that didn't
+    /// all come. What was written of it is gone then.
+    fn receive(&self, reader: &mut impl BufRead, request: &Request, owner: &str) -> Result<String, u16> {
+        let id = hex(&crate::hold::random::<16>().map_err(|_| 507u16)?);
+        let path = self.folder.join(format!("{id}.ipa"));
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let file = options.open(&path).map_err(|_| 507u16)?;
+        // Removed with its file, however this ends.
+        let mut upload = Upload { id, owner: owner.to_string(), sha256: String::new(), path };
+        let mut into = Hashed { file, hash: <sha2::Sha256 as sha2::Digest>::new() };
+        let size = framed(reader, request, self.most, &mut into)?;
+        into.flush().map_err(|_| 507u16)?;
+        upload.sha256 = hex(&sha2::Digest::finalize(into.hash));
+        let answer = json!({ "upload": upload.id, "size": size, "sha256": upload.sha256 }).to_string();
+        self.slot().kept = Some((Arc::new(upload), Instant::now()));
+        Ok(answer)
+    }
+
+    /// Whether `owner` may install the upload `id` it names by `sha256`: before the call waits its turn.
+    pub fn check(&self, id: &str, owner: &str, sha256: &str) -> Result<(), String> {
+        let mut slot = self.slot();
+        match &mut slot.kept {
+            Some((upload, used)) if upload.id == id && upload.owner == owner => {
+                *used = Instant::now();
+                if upload.sha256.eq_ignore_ascii_case(sha256) { Ok(()) } else { Err(format!("sha256 {sha256} isn't upload {id}'s: nothing was installed")) }
+            }
+            _ => Err(gone(id)),
+        }
+    }
+
+    /// Where the upload `id`, named by `sha256`, is kept: for what it holds to be checked before it is used up.
+    pub fn path(&self, id: &str, sha256: &str) -> Result<PathBuf, String> {
+        match &self.slot().kept {
+            Some((upload, _)) if upload.id == id && upload.sha256.eq_ignore_ascii_case(sha256) => Ok(upload.path.clone()),
+            _ => Err(gone(id)),
+        }
+    }
+
+    /// The upload `id`, used up by the install that names it by `sha256`, in its turn (`check`ed before).
+    pub fn claim(&self, id: &str, sha256: &str) -> Result<Arc<Upload>, String> {
+        let mut slot = self.slot();
+        match slot.kept.take() {
+            Some((upload, _)) if upload.id == id && upload.sha256.eq_ignore_ascii_case(sha256) => Ok(upload),
+            other => { slot.kept = other; Err(gone(id)) }
+        }
+    }
+
+    /// Lets go of the upload not used since `UPLOAD_KEPT` before `now`.
+    fn sweep(&self, now: Instant) {
+        let mut slot = self.slot();
+        if slot.kept.as_ref().is_some_and(|(_, used)| now.duration_since(*used) > UPLOAD_KEPT) { slot.kept = None }
+    }
+
+    /// At stop: the folder, and what is in it.
+    pub fn end(&self) {
+        let _ = std::fs::remove_dir_all(&self.folder);
+    }
+
+    /// For tests: `bytes` uploaded by `owner`; the upload's id and sha256.
+    #[cfg(test)]
+    pub fn put(&self, owner: &str, bytes: &[u8]) -> (String, String) {
+        let request = Request { method: "PUT".into(), path: "/upload".into(), headers: vec![("content-length".into(), bytes.len().to_string())] };
+        let _coming = self.coming().unwrap();
+        let said: Value = serde_json::from_str(&self.receive(&mut &bytes[..], &request, owner).unwrap()).unwrap();
+        (said["upload"].as_str().unwrap().into(), said["sha256"].as_str().unwrap().into())
+    }
+}
+
+fn gone(id: &str) -> String {
+    format!("no upload {id} is kept here for you (replaced by a later upload, used by an install, or dropped after {} minutes unused): send it again", UPLOAD_KEPT.as_secs() / 60)
+}
+
+/// `mcp --http` as root: refused (by its effective user id). Not checked on Windows.
+#[cfg(unix)]
+fn not_root(uid: u32) -> Result<(), String> {
+    if uid == 0 { Err("not as root: start it as the user whose devices it offers".into()) } else { Ok(()) }
 }
 
 /// A tool call on a device, with what it is answered by. `session`: the `Mcp-Session-Id` it came with; `stream`: the
@@ -265,6 +449,8 @@ pub struct Options {
     pub allowed: Vec<Allow>,
     pub token: Option<String>,
     pub devices: Vec<String>,
+    /// `--allow-install`: uploads of this many bytes at most are taken, and `install` is offered.
+    pub uploads: Option<u64>,
 }
 
 struct Shared {
@@ -275,6 +461,8 @@ struct Shared {
     turns: HashMap<String, mpsc::Sender<Call>>,
     /// What was taken back (see `Cancelled`).
     cancelled: Cancelled,
+    /// With `--allow-install`.
+    uploads: Option<Arc<Uploads>>,
     /// What a request's Host may name (see `hosts`).
     hosts: Vec<String>,
     /// This machine's address and lasting id on the tailnet: a call from it is this machine's own.
@@ -309,6 +497,8 @@ fn hosts(ip: IpAddr, names: Vec<String>, port: u16) -> Vec<String> {
 
 /// `roamrunctl mcp --http`: until Ctrl-C.
 pub fn serve(options: Options) -> Result<String, String> {
+    #[cfg(unix)]
+    not_root(roamrun_device::safe::effective_user())?;
     if options.allowed.is_empty() { return Err("who may call: --allow tag:<name> (a tagged machine, such as a cloud's) or --allow <login> (a person's own machines)".into()) }
     if options.devices.is_empty() { return Err("which devices: roamrunctl mcp --http <port> --allow <who> <device>…   (`roamrunctl devices` lists them)".into()) }
     let offered = offerable(&options.devices)?;
@@ -322,28 +512,43 @@ pub fn serve(options: Options) -> Result<String, String> {
         _ => format!("can't listen on {own}:{}: {e}", options.port),
     })?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    // At stop, what was uploaded goes with its folder: Ctrl-C, and what a closed terminal sends. Set up before the
+    // folder is made, so that a failure here leaves none.
+    let uploads = match options.uploads {
+        Some(most) => {
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+            let mut stop = runtime.block_on(async { crate::stops() })?;
+            let uploads = Uploads::new(most)?;
+            let (ended, kept) = (uploads.clone(), uploads.clone());
+            std::thread::spawn(move || { let _ = runtime.block_on(stop.changed()); ended.end(); std::process::exit(130) });
+            std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(60)); kept.sweep(Instant::now()) });
+            Some(uploads)
+        }
+        None => None,
+    };
     let who: Vec<&str> = options.allowed.iter().map(|a| match a { Allow::Tag(s) | Allow::Login(s) => s.as_str() }).collect();
-    note!("roamrunctl: the MCP tools for {} at http://{own}:{port}/mcp, for {} on the tailnet{}. Ctrl-C ends it. What is sent and shown passes through whatever lies between (a cloud's proxy sees images and text).",
-        options.devices.join(", "), who.join(", "), if options.token.is_some() { ", with the token" } else { "" });
+    note!("roamrunctl: the MCP tools for {} at http://{own}:{port}/mcp, for {} on the tailnet{}{}. Ctrl-C ends it. What is sent and shown passes through whatever lies between (a cloud's proxy sees images and text).",
+        options.devices.join(", "), who.join(", "), if options.token.is_some() { ", with the token" } else { "" },
+        options.uploads.map_or(String::new(), |most| format!("; install of an .ipa sent to http://{own}:{port}/upload, {} MiB at most", most >> 20)));
     let dns = status.this.dns_name.trim_end_matches('.');
     let names = [dns, tailscale::short(dns)].into_iter().filter(|n| !n.is_empty()).map(str::to_string).collect();
-    run(listener, options, offered, IpAddr::V4(own), names, status.this.id.clone(), HEAD_WITHIN, Box::new(tailscale::whois))
+    run(listener, options, offered, IpAddr::V4(own), names, status.this.id.clone(), HEAD_WITHIN, Box::new(tailscale::whois), uploads)
 }
 
 /// What `serve` does once it listens; `own_ip`, `names`, `own_id`: this machine on the tailnet (its names, a Host
 /// may give); `whois` says who a caller is (a test gives its own).
-fn run(listener: TcpListener, options: Options, offered: Vec<(String, Option<Vec<u8>>)>, own_ip: IpAddr, names: Vec<String>, own_id: String, head_within: Duration, whois: Box<dyn Fn(IpAddr) -> Result<Whois, String> + Send + Sync>) -> Result<String, String> {
+fn run(listener: TcpListener, options: Options, offered: Vec<(String, Option<Vec<u8>>)>, own_ip: IpAddr, names: Vec<String>, own_id: String, head_within: Duration, whois: Box<dyn Fn(IpAddr) -> Result<Whois, String> + Send + Sync>, uploads: Option<Arc<Uploads>>) -> Result<String, String> {
     let own = listener.local_addr().map_err(|e| e.to_string())?;
     let hosts = hosts(own.ip(), names, own.port());
     // A turn of its own for each device: a call on one doesn't wait for another's.
     let cancelled = Cancelled::default();
     let turns = options.devices.iter().map(|name| {
         let (tell, told) = mpsc::channel();
-        let (server, cancelled) = (Server::offering(offered.clone()), cancelled.clone());
+        let (server, cancelled) = (Server::offering(offered.clone(), uploads.clone()), cancelled.clone());
         std::thread::spawn(move || work(server, told, cancelled));
         (name.clone(), tell)
     }).collect();
-    let shared = Arc::new(Shared { options, offered, turns, cancelled, hosts, own_ip, own_id, whois, head_within, open: Mutex::new(HashMap::new()), turning_away: AtomicUsize::new(0) });
+    let shared = Arc::new(Shared { options, offered, turns, cancelled, uploads, hosts, own_ip, own_id, whois, head_within, open: Mutex::new(HashMap::new()), turning_away: AtomicUsize::new(0) });
     for stream in listener.incoming() {
         let mut stream = match stream {
             Ok(stream) => stream,
@@ -429,6 +634,29 @@ fn served(stream: &mut TcpStream, s: &Shared, from: IpAddr, began: Instant, who:
         Ok(name) => *who = name,
         Err(why) => { *who = why; return refuse(403, "", "") }
     }
+    if request.path == "/upload" {
+        let Some(uploads) = &s.uploads else { return refuse(404, "", "") };
+        if request.method != "PUT" { return refuse(405, "Allow: PUT\r\n", "") }
+        // Tied to the caller by its lasting id: none, no upload.
+        if whois.node.id.is_empty() { return refuse(403, "", "") }
+        let length = match length(&request) { Ok(length) => length, Err(status) => return refuse(status, "", "") };
+        // Refused before the slot is taken, which lets go of the one kept.
+        match request.header("transfer-encoding") {
+            Some(coding) if !coding.eq_ignore_ascii_case("chunked") => return refuse(501, "", ""),
+            None if length.is_none() => return refuse(411, "", ""),
+            _ => {}
+        }
+        if length.is_some_and(|length| length > uploads.most) { return refuse(413, "", &format!("{} MiB at most\n", uploads.most >> 20)) }
+        let Some(_coming) = uploads.coming() else { return refuse(409, "", "another upload is coming in: try again once it is in\n") };
+        let mib = length.unwrap_or(uploads.most).div_ceil(1 << 20);
+        reader.get_mut().until = Instant::now() + BODY_WITHIN + UPLOAD_MIB_WITHIN * u32::try_from(mib).unwrap_or(u32::MAX);
+        if request.header("expect").is_some_and(|e| e.eq_ignore_ascii_case("100-continue")) {
+            let _ = stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n");
+        }
+        let (status, answer) = uploads.receive(&mut reader, &request, &whois.node.id).map_or_else(|status| (status, String::new()), |answer| (200, answer));
+        respond(stream, status, "", &answer);
+        return if status == 200 { "ok".into() } else { status.to_string() };
+    }
     if request.path != "/mcp" { return refuse(404, "", "") }
     if request.method != "POST" { return refuse(405, "Allow: POST\r\n", "") }
     if let Some(version) = request.header("mcp-protocol-version").filter(|v| !VERSIONS.contains(v)) {
@@ -462,12 +690,20 @@ fn served(stream: &mut TcpStream, s: &Shared, from: IpAddr, began: Instant, who:
         return refuse(202, "", "");
     };
     if method.is_empty() { return refuse(400, "", &rpc_error(id, -32600, "no method")) }
+    // An install from another's upload, or one not as it was sent, is refused before it waits its turn.
+    let arguments = &message["params"]["arguments"];
+    if let (Some(uploads), "tools/call", "install", Some(upload)) = (&s.uploads, method, message["params"]["name"].as_str().unwrap_or(""), arguments["upload"].as_str()) {
+        if let Err(why) = uploads.check(upload, &whois.node.id, arguments["sha256"].as_str().unwrap_or("")) {
+            refuse(200, "", &json!({ "jsonrpc": "2.0", "id": id, "result": { "content": [{ "type": "text", "text": why }], "isError": true } }).to_string());
+            return "error".into();
+        }
+    }
     let line = message.to_string();
     let turn = (method == "tools/call").then(|| message["params"]["arguments"]["device"].as_str()).flatten().and_then(|name| s.turns.get(name));
     let Some(turn) = turn else {
         // Asks nothing of a device offered (`devices`, `initialize`, a device not offered): answered at once. An
         // initialize is given a session id, sent back with what follows.
-        let answer = Server::offering(s.offered.clone()).handle(&line).unwrap_or_default();
+        let answer = Server::offering(s.offered.clone(), s.uploads.clone()).handle(&line).unwrap_or_default();
         let given = (method == "initialize").then(|| crate::hold::random::<16>().ok()).flatten()
             .map(|bytes| format!("Mcp-Session-Id: {}\r\n", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()));
         return refuse(200, given.as_deref().unwrap_or(""), &answer);
@@ -597,11 +833,16 @@ mod tests {
 
     /// A server on 127.0.0.1 offering one device, saying who callers are by `whois`; this machine is named `mac`.
     fn started(token: Option<&str>, whois: fn(IpAddr) -> Result<Whois, String>) -> SocketAddr {
+        started_with(token, whois, None)
+    }
+
+    /// The same, taking uploads into `uploads` (`--allow-install`).
+    fn started_with(token: Option<&str>, whois: fn(IpAddr) -> Result<Whois, String>, uploads: Option<Arc<Uploads>>) -> SocketAddr {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let at = listener.local_addr().unwrap();
-        let options = Options { port: at.port(), allowed: vec![Allow::Tag("tag:ci".into())], token: token.map(str::to_string), devices: vec!["phone".into()] };
+        let options = Options { port: at.port(), allowed: vec![Allow::Tag("tag:ci".into())], token: token.map(str::to_string), devices: vec!["phone".into()], uploads: uploads.as_ref().map(|u| u.most) };
         let names = vec!["mac.example.ts.net".into(), "mac".into()];
-        std::thread::spawn(move || run(listener, options, vec![("phone".into(), None)], "100.64.0.1".parse().unwrap(), names, "own".into(), Duration::from_millis(500), Box::new(whois)));
+        std::thread::spawn(move || run(listener, options, vec![("phone".into(), None)], "100.64.0.1".parse().unwrap(), names, "own".into(), Duration::from_millis(500), Box::new(whois), uploads));
         at
     }
 
@@ -646,13 +887,14 @@ mod tests {
         for session in ["Mcp-Session-Id: abc\r\n", ""] {
             assert_eq!(status(&post(at, session, r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":3}}"#)), "202");
         }
-        // No install over HTTP: its path would name a file on this machine for whoever calls.
+        // No install over HTTP without --allow-install.
         let listed = post(at, "", r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
-        assert!(listed.contains(r#""name":"launch""#) && !listed.contains(r#""name":"install""#), "{listed}");
+        assert!(listed.contains(r#""name":"launch""#) && !listed.contains(r#""name":"install"#), "{listed}");
         let other = post(at, "", r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"look","arguments":{"device":"pad"}}}"#);
         assert!(other.contains("isn't offered here: phone") && other.contains(r#""isError":true"#), "{other}");
         let install = post(at, "", r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"install","arguments":{"device":"phone","path":"/etc/hosts"}}}"#);
-        assert!(install.contains("install isn't offered over HTTP"), "{install}");
+        assert!(install.contains("without --allow-install"), "{install}");
+        assert_eq!(status(&asked(at, &format!("PUT /upload HTTP/1.1\r\nHost: {at}\r\nContent-Length: 2\r\n\r\nPK"))), "404");
         // Chunked with a length too, and Expect: 100-continue answered first.
         let both = asked(at, &format!("POST /mcp HTTP/1.1\r\nHost: {at}\r\nExpect: 100-continue\r\nContent-Length: 999\r\nTransfer-Encoding: chunked\r\n\r\n2a\r\n{}\r\n0\r\n\r\n", r#"{"jsonrpc":"2.0","id":5,"method":"ping"} "#));
         assert!(both.starts_with("HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200"), "{both}");
@@ -756,7 +998,7 @@ mod tests {
         for id in 0..=CANCELS as i64 { take_back(&cancelled, "e", &json!(id)); }
         let (kept_first, not_kept) = (call(Some("e"), 0, false, 0), call(Some("e"), CANCELS as i64, false, 0));
         drop(tell);
-        std::thread::spawn(move || work(Server::offering(vec![("phone".into(), None)]), told, cancelled));
+        std::thread::spawn(move || work(Server::offering(vec![("phone".into(), None)], None), told, cancelled));
         let got = |answered: mpsc::Receiver<String>| answered.recv_timeout(Duration::from_secs(10)).ok();
         assert_eq!(got(went), None);
         assert!(got(late).is_some_and(|a| a.contains("not begun") && a.contains(r#""id":2"#)));
@@ -816,5 +1058,146 @@ mod tests {
         // This machine itself, without a token: refused.
         let at = started(None, |_| Ok(whois("own", &["tag:ci"], "tagged-devices", 0)));
         assert!(post(at, "", body).starts_with("HTTP/1.1 403"));
+    }
+
+    /// Who uploads and installs in `an_install_names_its_own_upload_as_it_was_sent`: n1, or n2 while this is set.
+    static AS_N2: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    fn n1_or_n2(_: IpAddr) -> Result<Whois, String> { Ok(whois(if AS_N2.load(Ordering::SeqCst) { "n2" } else { "n1" }, &["tag:ci"], "tagged-devices", 0)) }
+
+    fn put(at: SocketAddr, extra: &str, body: &[u8]) -> String {
+        let mut stream = TcpStream::connect(at).unwrap();
+        stream.write_all(format!("PUT /upload HTTP/1.1\r\nHost: {at}\r\n{extra}\r\n").as_bytes()).unwrap();
+        let _ = stream.write_all(body);
+        let mut answer = String::new();
+        let _ = stream.read_to_string(&mut answer);
+        answer
+    }
+
+    fn files(uploads: &Uploads) -> Vec<PathBuf> {
+        std::fs::read_dir(&uploads.folder).unwrap().map(|e| e.unwrap().path()).collect()
+    }
+
+    #[test]
+    fn an_upload_is_taken_only_as_allowed_and_kept_whole_or_not_at_all() {
+        let uploads = Uploads::new(64 * 1024).unwrap();
+        let at = started_with(None, ci, Some(uploads.clone()));
+        let status = |answer: &str| answer.split(' ').nth(1).unwrap_or("").to_string();
+        // Checked before its body is taken: the method, a length to go by, the most taken.
+        let get = asked(at, &format!("GET /upload HTTP/1.1\r\nHost: {at}\r\n\r\n"));
+        assert!(get.starts_with("HTTP/1.1 405") && get.contains("Allow: PUT\r\n"), "{get}");
+        assert_eq!(status(&put(at, "", b"")), "411");
+        assert_eq!(status(&put(at, "Content-Length: 70000\r\n", b"")), "413");
+        // Kept whole: the answer names it by an id, its size and its sha256; a file of the owner's alone.
+        let bytes: Vec<u8> = (0..5000u32).map(|i| i as u8).collect();
+        let answer = put(at, "Content-Length: 5000\r\nExpect: 100-continue\r\n", &bytes);
+        assert!(answer.starts_with("HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200"), "{answer}");
+        let said: Value = serde_json::from_str(answer.rsplit("\r\n\r\n").next().unwrap()).unwrap();
+        let sha256 = hex(&<sha2::Sha256 as sha2::Digest>::digest(&bytes));
+        assert_eq!((said["size"].as_u64(), said["sha256"].as_str(), said["upload"].as_str().map(str::len)), (Some(5000), Some(sha256.as_str()), Some(32)));
+        assert_eq!(files(&uploads).len(), 1);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&uploads.folder).unwrap().permissions().mode() & 0o777, 0o700);
+            assert_eq!(std::fs::metadata(&files(&uploads)[0]).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        // Too big by its length, or in a coding not taken: refused before 100 Continue, and the one kept stays.
+        let big = put(at, "Content-Length: 70000\r\nExpect: 100-continue\r\n", b"");
+        assert!(big.starts_with("HTTP/1.1 413"), "{big}");
+        assert_eq!(status(&put(at, "Transfer-Encoding: gzip\r\nExpect: 100-continue\r\n", b"")), "501");
+        assert!(uploads.check(said["upload"].as_str().unwrap(), "n1", &sha256).is_ok());
+        // Given longer than a head is, by its length: one still coming once the head's time is up is taken.
+        let mut slow = TcpStream::connect(at).unwrap();
+        slow.write_all(format!("PUT /upload HTTP/1.1\r\nHost: {at}\r\nContent-Length: 3\r\n\r\na").as_bytes()).unwrap();
+        std::thread::sleep(Duration::from_millis(700));
+        slow.write_all(b"bc").unwrap();
+        let mut answer = String::new();
+        let _ = slow.read_to_string(&mut answer);
+        assert_eq!(status(&answer), "200", "{answer}");
+        // Chunked, it replaces the one kept.
+        let chunked = put(at, "Transfer-Encoding: chunked\r\n", b"3\r\nabc\r\n0\r\n\r\n");
+        assert!(chunked.starts_with("HTTP/1.1 200") && chunked.contains(r#""size":3"#), "{chunked}");
+        assert_eq!(files(&uploads).len(), 1);
+        assert!(uploads.check(said["upload"].as_str().unwrap(), "n1", &sha256).unwrap_err().contains("no upload"));
+        // Cut short, or more than the most chunked: nothing is kept.
+        let mut cut = TcpStream::connect(at).unwrap();
+        cut.write_all(format!("PUT /upload HTTP/1.1\r\nHost: {at}\r\nContent-Length: 5000\r\n\r\nabc").as_bytes()).unwrap();
+        cut.shutdown(std::net::Shutdown::Write).unwrap();
+        let mut answer = String::new();
+        let _ = cut.read_to_string(&mut answer);
+        assert_eq!(status(&answer), "400");
+        assert!(files(&uploads).is_empty());
+        let over = format!("{:x}\r\n{}\r\n", 70000, "x".repeat(70000));
+        assert_eq!(status(&put(at, "Transfer-Encoding: chunked\r\n", over.as_bytes())), "413");
+        assert!(files(&uploads).is_empty());
+        // One at a time: another while one comes in is turned away.
+        let mut coming = TcpStream::connect(at).unwrap();
+        coming.write_all(format!("PUT /upload HTTP/1.1\r\nHost: {at}\r\nContent-Length: 5000\r\n\r\nabc").as_bytes()).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(status(&put(at, "Content-Length: 3\r\n", b"abc")), "409");
+        drop(coming);
+        // Install is offered.
+        let listed = post(at, "", r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
+        assert!(listed.contains(r#""name":"install""#) && listed.contains(r#""name":"install_status""#) && listed.contains(r#""sha256""#), "{listed}");
+        uploads.end();
+    }
+
+    #[test]
+    fn an_install_names_its_own_upload_as_it_was_sent() {
+        let uploads = Uploads::new(64 * 1024).unwrap();
+        let at = started_with(None, n1_or_n2, Some(uploads.clone()));
+        let answer = put(at, "Content-Length: 3\r\n", b"abc");
+        let said: Value = serde_json::from_str(answer.rsplit("\r\n\r\n").next().unwrap()).unwrap();
+        let (id, sha256) = (said["upload"].as_str().unwrap(), said["sha256"].as_str().unwrap());
+        let install = |sha256: &str| post(at, "", &json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "install", "arguments": { "device": "phone", "upload": id, "sha256": sha256 } } }).to_string());
+        // Another caller's, or not as it was sent: refused before its turn, and the upload stays.
+        AS_N2.store(true, Ordering::SeqCst);
+        let other = install(sha256);
+        AS_N2.store(false, Ordering::SeqCst);
+        assert!(other.contains("no upload") && other.contains(r#""isError":true"#), "{other}");
+        assert!(install(&"0".repeat(64)).contains("isn't upload"));
+        assert!(uploads.check(id, "n1", sha256).is_ok());
+        // Its own, as sent: its turn comes (the device offered here can't be used, which leaves the upload).
+        let own = install(&sha256.to_uppercase());
+        assert!(own.contains(r#""isError":true"#) && !own.contains("no upload") && !own.contains("isn't upload"), "{own}");
+        assert!(uploads.check(id, "n1", sha256).is_ok());
+        uploads.end();
+    }
+
+    #[test]
+    fn an_upload_is_used_up_only_as_it_is_named_and_goes_with_its_last_holder() {
+        let uploads = Uploads::new(1024).unwrap();
+        let (id, sha256) = uploads.put("n1", b"abc");
+        // Named otherwise: it stays.
+        assert!(uploads.claim("0", &sha256).is_err() && uploads.path(&id, &sha256).is_ok());
+        assert!(uploads.claim(&id, "0").is_err() && uploads.path(&id, &sha256).is_ok());
+        // Used up: no longer kept, its file there while the install holds it, gone after.
+        let taken = uploads.claim(&id, &sha256.to_uppercase()).unwrap();
+        assert!(uploads.path(&id, &sha256).is_err() && taken.path.exists());
+        drop(taken);
+        assert!(files(&uploads).is_empty());
+        uploads.end();
+    }
+
+    #[test]
+    fn an_upload_not_used_for_half_an_hour_goes_and_all_go_at_stop() {
+        let uploads = Uploads::new(1024).unwrap();
+        let (id, sha256) = uploads.put("n1", b"abc");
+        uploads.sweep(Instant::now() + UPLOAD_KEPT - Duration::from_secs(60));
+        assert!(uploads.check(&id, "n1", &sha256).is_ok());
+        uploads.sweep(Instant::now() + UPLOAD_KEPT + Duration::from_secs(60));
+        assert!(uploads.check(&id, "n1", &sha256).is_err() && files(&uploads).is_empty());
+        // Another caller's upload replaces it.
+        let (id, sha256) = uploads.put("n1", b"abc");
+        uploads.put("n2", b"def");
+        assert!(uploads.check(&id, "n1", &sha256).is_err() && files(&uploads).len() == 1);
+        uploads.end();
+        assert!(!uploads.folder.exists());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn it_doesnt_serve_as_root() {
+        assert!(not_root(0).is_err() && not_root(501).is_ok());
     }
 }
