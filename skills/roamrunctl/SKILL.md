@@ -292,7 +292,7 @@ path:
 
 ```sh
 curl -sS --max-time 600 -w '\n%{http_code}\n' ${RR_TOKEN:+-H} ${RR_TOKEN:+"Authorization: Bearer $RR_TOKEN"} -T App.ipa "http://<address>:<port>/upload"
-# It answered {"upload":"<id>","size":…,"sha256":"<hex>"}: check the sha256 is your file's (sha256sum App.ipa), then give both.
+# It answered {"upload":"<id>","size":…,"sha256":"<hex>"}: check the sha256 is your file's (sha256sum App.ipa; on a Mac, shasum -a 256 App.ipa), then give both.
 printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"install","arguments":{"device":"phone","upload":"<id>","sha256":"<hex>"}}}' | rr | said
 printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"install_status","arguments":{"device":"phone"}}}' | rr | said
 ```

@@ -317,11 +317,15 @@ until Ctrl-C:
 
 - `install` accepts an `.ipa` or a signed `.app` directory built for the target device.
   `roamrunctl` does not compile or sign apps.
-- An `.ipa` is checked before anything of it is sent, by `roamrunctl install` and by MCP alike:
-  `Payload` holds one `<name>.app` and nothing else (a `.bundle` is refused), with one
+- An `.ipa` is checked before anything of it is sent, by `roamrunctl install` (before the
+  device is opened) and by MCP alike: `Payload` holds one `<name>.app` and nothing else but
+  hidden files such as `.DS_Store` (a `.bundle` is refused; a name ending in `.app` counts as
+  an app, hidden or not), with one
   `Info.plist` where the app's is looked for, which gives the app's bundle identifier; it
   unpacks to 4 GiB at most, by what the archive says; and no more than 1 MiB of that
   `Info.plist` is read. An `.app` directory isn't checked.
+- An `.ipa` is read whole into memory to be sent: an upload as large as `--max-upload` allows
+  takes that much memory on this machine while it is installed.
 - An `.app` directory is staged on the device under its own name, and `.ipa` packages use
   a fixed staging name. **Do not run concurrent installs to one device** from separate
   commands: they are not coordinated. Within one `mcp` server, a device's second install is

@@ -298,7 +298,7 @@ bounded.
   30 minutes unused, at Ctrl-C, or when another comes in. Whoever is let in with
   `--allow-install` can replace the apps on those devices with any app signed for them. An
   `.ipa` is checked before it is sent to a device, with every roamrunctl install: one app, no `.bundle`,
-  4 GiB unpacked at most by what it says. A tap, swipe, type or paste names the
+  4 GiB unpacked at most by what it says. It is read whole into memory to be sent. A tap, swipe, type or paste names the
   look it is of, and is refused after another look of that device, whoever took it. A tool call whose caller's
   connection is gone when its turn comes isn't made. Whoever is let in operates those devices as roamrunctl does, while it runs.
   Between the caller and the machine, a cloud's proxy sees the images, what is typed or

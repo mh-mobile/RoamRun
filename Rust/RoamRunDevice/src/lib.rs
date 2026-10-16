@@ -493,8 +493,9 @@ const UNPACKED: u64 = 4 << 30;
 const INFO_PLIST: u64 = 1 << 20;
 
 /// The bundle identifier of the app in the .ipa at `path`, checked before anything of it is sent: `Payload`
-/// holds one `<name>.app` and nothing else (a `.bundle` idevice would install as another kind of package),
-/// with the one Info.plist idevice takes the app's from, and it unpacks to `UNPACKED` at most.
+/// holds one `<name>.app` and nothing else but hidden files (a `.bundle` idevice would install as another kind of
+/// package; a name ending in `.app` is an app, hidden or not), with the one Info.plist idevice takes the app's
+/// from, and it unpacks to `UNPACKED` at most.
 pub fn ipa_checked(path: &str) -> Result<String, String> {
     ipa_within(path, UNPACKED, INFO_PLIST)
 }
@@ -513,7 +514,11 @@ fn ipa_within(path: &str, unpacked: u64, info_plist: u64) -> Result<String, Stri
             // Where idevice looks for the app's Info.plist: any name of three parts ending so.
             if name.ends_with("Info.plist") && name.split('/').count() == 3 { plists.push((index, name.to_string(), entry.uncompressed_size())) }
             let Some(top) = name.strip_prefix("Payload/").and_then(|rest| rest.split('/').next()) else { continue };
-            if !top.ends_with(".app") || app.is_some_and(|app| app != top) { return Err(not(format!("Payload/{top} beside {}: it holds one app (.app) and nothing else", app.unwrap_or("it")))) }
+            // A hidden file beside the app (Finder's .DS_Store) is nothing idevice takes; "._A.app" it could take for the app.
+            if top.starts_with('.') && !top.ends_with(".app") && !top.ends_with(".bundle") { continue }
+            if !top.ends_with(".app") || app.is_some_and(|app| app != top) {
+                return Err(not(format!("Payload/{top}{}: it holds one app (.app) and nothing else", app.map_or(String::new(), |app| format!(" beside {app}")))));
+            }
             app = Some(top);
         }
         let app = app.ok_or_else(|| not("no Payload/<name>.app in it".into()))?.to_string();
@@ -1697,7 +1702,14 @@ mod tests {
         // A .bundle: idevice would install it as another kind of package.
         refused("bundle", &[("Payload/A.bundle/Info.plist", INFO)], "Payload/A.bundle");
         refused("two-apps", &[("Payload/A.app/Info.plist", INFO), ("Payload/B.app/Info.plist", INFO)], "Payload/B.app beside A.app");
-        refused("stray", &[("Payload/A.app/Info.plist", INFO), ("Payload/readme.txt", b"x")], "Payload/readme.txt");
+        refused("stray", &[("Payload/A.app/Info.plist", INFO), ("Payload/readme.txt", b"x")], "Payload/readme.txt beside A.app");
+        refused("stray-first", &[("Payload/readme.txt", b"x"), ("Payload/A.app/Info.plist", INFO)], "Payload/readme.txt: it holds");
+        // A hidden file beside it is let be; one idevice could take for the app isn't.
+        assert_eq!(checked("ds-store", &[("Payload/.DS_Store", b"x"), ("Payload/A.app/Info.plist", INFO)]), Ok("io.example.app".into()));
+        refused("apple-double", &[("Payload/._A.app", b"x"), ("Payload/A.app/Info.plist", INFO)], "Payload/A.app beside ._A.app");
+        refused("hidden-bundle", &[("Payload/A.app/Info.plist", INFO), ("Payload/.B.bundle/x", b"x")], "Payload/.B.bundle");
+        // A name ending in .app is an app, hidden or not: alone, it is the one.
+        assert_eq!(checked("hidden-app", &[("Payload/.A.app/Info.plist", INFO)]), Ok("io.example.app".into()));
         refused("no-app", &[("A.app/Info.plist", INFO)], "no Payload/<name>.app");
         refused("no-plist", &[("Payload/A.app/A", b"binary")], "0 Info.plist");
         // Another name idevice would take for the app's Info.plist (it reads the first one it meets).

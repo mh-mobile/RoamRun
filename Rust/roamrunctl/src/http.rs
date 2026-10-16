@@ -512,21 +512,26 @@ pub fn serve(options: Options) -> Result<String, String> {
         _ => format!("can't listen on {own}:{}: {e}", options.port),
     })?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    // At stop, what was uploaded goes with its folder: Ctrl-C, and what a closed terminal sends. Set up before the
+    // folder is made, so that a failure here leaves none.
+    let uploads = match options.uploads {
+        Some(most) => {
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+            let mut stop = runtime.block_on(async { crate::stops() })?;
+            let uploads = Uploads::new(most)?;
+            let (ended, kept) = (uploads.clone(), uploads.clone());
+            std::thread::spawn(move || { let _ = runtime.block_on(stop.changed()); ended.end(); std::process::exit(130) });
+            std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(60)); kept.sweep(Instant::now()) });
+            Some(uploads)
+        }
+        None => None,
+    };
     let who: Vec<&str> = options.allowed.iter().map(|a| match a { Allow::Tag(s) | Allow::Login(s) => s.as_str() }).collect();
     note!("roamrunctl: the MCP tools for {} at http://{own}:{port}/mcp, for {} on the tailnet{}{}. Ctrl-C ends it. What is sent and shown passes through whatever lies between (a cloud's proxy sees images and text).",
         options.devices.join(", "), who.join(", "), if options.token.is_some() { ", with the token" } else { "" },
         options.uploads.map_or(String::new(), |most| format!("; install of an .ipa sent to http://{own}:{port}/upload, {} MiB at most", most >> 20)));
     let dns = status.this.dns_name.trim_end_matches('.');
     let names = [dns, tailscale::short(dns)].into_iter().filter(|n| !n.is_empty()).map(str::to_string).collect();
-    let uploads = options.uploads.map(Uploads::new).transpose()?;
-    if let Some(uploads) = &uploads {
-        // At stop, what was uploaded goes with its folder: Ctrl-C, and what a closed terminal sends.
-        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
-        let mut stop = runtime.block_on(async { crate::stops() })?;
-        let (ended, kept) = (uploads.clone(), uploads.clone());
-        std::thread::spawn(move || { let _ = runtime.block_on(stop.changed()); ended.end(); std::process::exit(130) });
-        std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(60)); kept.sweep(Instant::now()) });
-    }
     run(listener, options, offered, IpAddr::V4(own), names, status.this.id.clone(), HEAD_WITHIN, Box::new(tailscale::whois), uploads)
 }
 
@@ -635,7 +640,12 @@ fn served(stream: &mut TcpStream, s: &Shared, from: IpAddr, began: Instant, who:
         // Tied to the caller by its lasting id: none, no upload.
         if whois.node.id.is_empty() { return refuse(403, "", "") }
         let length = match length(&request) { Ok(length) => length, Err(status) => return refuse(status, "", "") };
-        if length.is_none() && request.header("transfer-encoding").is_none() { return refuse(411, "", "") }
+        // Refused before the slot is taken, which lets go of the one kept.
+        match request.header("transfer-encoding") {
+            Some(coding) if !coding.eq_ignore_ascii_case("chunked") => return refuse(501, "", ""),
+            None if length.is_none() => return refuse(411, "", ""),
+            _ => {}
+        }
         if length.is_some_and(|length| length > uploads.most) { return refuse(413, "", &format!("{} MiB at most\n", uploads.most >> 20)) }
         let Some(_coming) = uploads.coming() else { return refuse(409, "", "another upload is coming in: try again once it is in\n") };
         let mib = length.unwrap_or(uploads.most).div_ceil(1 << 20);
@@ -1091,9 +1101,10 @@ mod tests {
             assert_eq!(std::fs::metadata(&uploads.folder).unwrap().permissions().mode() & 0o777, 0o700);
             assert_eq!(std::fs::metadata(&files(&uploads)[0]).unwrap().permissions().mode() & 0o777, 0o600);
         }
-        // Too big by its length: refused before 100 Continue, and the one kept stays.
+        // Too big by its length, or in a coding not taken: refused before 100 Continue, and the one kept stays.
         let big = put(at, "Content-Length: 70000\r\nExpect: 100-continue\r\n", b"");
         assert!(big.starts_with("HTTP/1.1 413"), "{big}");
+        assert_eq!(status(&put(at, "Transfer-Encoding: gzip\r\nExpect: 100-continue\r\n", b"")), "501");
         assert!(uploads.check(said["upload"].as_str().unwrap(), "n1", &sha256).is_ok());
         // Given longer than a head is, by its length: one still coming once the head's time is up is taken.
         let mut slow = TcpStream::connect(at).unwrap();
