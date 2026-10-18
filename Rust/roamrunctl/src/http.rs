@@ -52,6 +52,8 @@ pub enum Allow {
 
 /// `--allow`, as given.
 pub fn allow(said: &str) -> Result<Allow, String> {
+    // One each: a list in one (tag:a,tag:b) would be one tag nobody has.
+    if said.contains([',', ' ']) { return Err(format!("--allow {said}: one tag or login each; --allow again for another")) }
     if said.len() > 4 && said.starts_with("tag:") { return Ok(Allow::Tag(said.to_string())) }
     if said.contains('@') { return Ok(Allow::Login(said.to_string())) }
     Err(format!("--allow {said}: a tag (tag:ci) or a login (someone@example.com), as `tailscale whois` names them. A machine's name isn't taken: it can be taken by another"))
@@ -757,6 +759,7 @@ mod tests {
         assert_eq!(allow("someone@example.com"), Ok(Allow::Login("someone@example.com".into())));
         // A machine's name can be taken by another: not taken here.
         assert!(allow("laptop").is_err() && allow("tag:").is_err());
+        assert!(allow("tag:ci,tag:cloud").is_err() && allow("a@example.com b@example.com").is_err());
         let allowed = [Allow::Tag("tag:ci".into()), Allow::Login("Someone@example.com".into())];
         assert_eq!(judged(&whois("n1", &["tag:ci", "tag:other"], "tagged-devices", 0), &allowed, false, false), Ok("tag:ci,tag:other".into()));
         assert_eq!(judged(&whois("n2", &[], "someone@example.com", 0), &allowed, false, false), Ok("someone@example.com".into()));
