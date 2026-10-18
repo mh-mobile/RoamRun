@@ -335,6 +335,13 @@ tunnel and Xcode has to run again.
     `grep` (`findstr` on Windows) of it for the token and for the text typed → nothing. Ctrl-C →
     it ends, the port is free (as above) and no roamrunctl is left (`pgrep roamrunctl`;
     `Get-Process roamrunctl` on Windows).
+    Install (also when the device library's install or its `.ipa` check changed): started again
+    with `--allow-install` added, `curl -T <an .ipa signed for the device> -H "Authorization:
+    Bearer $(cat t)" http://<address>:<port>/upload` → its `sha256` is the file's (`sha256sum`;
+    `shasum -a 256` on a Mac, `Get-FileHash` on Windows); `install` with that `upload` and
+    `sha256` → answered at once; `install_status` until it says installed. Ctrl-C → no
+    `roamrunctl-uploads-*` left in the temporary folder (`ls "${TMPDIR:-/tmp}"`; `dir %TEMP%` on
+    Windows).
     Last, as it takes the place of that pairing on the device: the device paired once more, under
     another name and with `--passphrase` (as in 30a). Both names given → refused as one device
     (after its passphrase). The new name alone: its passphrase asked for once as it starts
