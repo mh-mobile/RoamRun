@@ -32,6 +32,14 @@ const VERSION: &CStr = c"0.6.0";
 const LABEL: &str = "roamrun";
 /// Each call: a device that stops answering mid-way must not hang the caller.
 const DEADLINE: Duration = Duration::from_secs(20);
+/// A call that starts a screen stream: its steps that wait on the device have limits of their own
+/// and stop what they started, which a deadline falling inside them couldn't. This only ends what
+/// those don't.
+const STREAM_DEADLINE: Duration = Duration::from_secs(45);
+/// A look's PNG, its size the screen's (6 MB took 12 s, on the Mac's own Wi‑Fi, and 3.9 MB once
+/// 19 s). ponytail: a fixed limit; ending only when nothing arrives would need the service's
+/// stream wrapped.
+const SHOT_TIME: Duration = Duration::from_secs(60);
 /// The device's word on its screen's size: a look waits for it, and does without it.
 const SCREEN_WAIT: Duration = Duration::from_secs(5);
 /// Services device control needs, by the word that names them.
@@ -390,7 +398,7 @@ pub unsafe extern "C" fn rr_device_keyframe(device: *mut RRDevice, length: *mut 
         let mut link = device.link.lock().unwrap_or_else(|e| e.into_inner());
         if link.stop.raised() { return Err(STOPPED.into()); }
         device.runtime.block_on(async {
-            tokio::time::timeout(DEADLINE, keyframe(&mut link)).await.unwrap_or_else(|_| Err("timed out".into()))
+            tokio::time::timeout(STREAM_DEADLINE, keyframe(&mut link)).await.unwrap_or_else(|_| Err("timed out".into()))
         })
     });
     match result {
@@ -420,11 +428,12 @@ pub unsafe extern "C" fn rr_device_screenshot(device: *mut RRDevice, length: *mu
         if link.stop.raised() { return Err(STOPPED.into()); }
         let link = &mut *link;
         device.runtime.block_on(async {
-            tokio::time::timeout(DEADLINE, async {
-                let mut capture = ScreenCaptureServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)
-                    .await.map_err(|e| format!("screenshot service: {e:?}"))?;
-                capture.take_screenshot(None, ImageFormat::Png).await.map_err(|e| format!("screenshot: {e:?}"))
-            }).await.unwrap_or_else(|_| Err("timed out".into()))
+            let mut capture = tokio::time::timeout(DEADLINE, ScreenCaptureServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)).await
+                .map_err(|_| "screenshot service: timed out".to_string())?
+                .map_err(|e| format!("screenshot service: {e:?}"))?;
+            tokio::time::timeout(SHOT_TIME, capture.take_screenshot(None, ImageFormat::Png)).await
+                .map_err(|_| "screenshot: timed out".to_string())?
+                .map_err(|e| format!("screenshot: {e:?}"))
         })
     });
     match result {
@@ -948,7 +957,8 @@ fn input_time(input: &Input) -> Duration {
         Input::Tap(..) => 100,
         Input::Swipe { ms, .. } => *ms as u64,
         Input::Type(strokes) => strokes.len() as u64 * 200,
-        Input::Paste(_) => 5_000,
+        // Sent once for each kind of text it is put in as (three), at 50 KB/s at least.
+        Input::Paste(text) => 5_000 + text.len() as u64 * 3 / 50,
         Input::Button(_, _, hold) => *hold,
     };
     Duration::from_millis(own) + Duration::from_secs(10)
@@ -956,13 +966,13 @@ fn input_time(input: &Input) -> Duration {
 
 /// The device drops input that isn't accompanied by a screen stream, so one runs with it: the
 /// one kept from before if frames still come on it, a new one otherwise. Getting that far has
-/// the deadline every call has; the input then gets the time its own length needs, so that the
+/// a stream's deadline; the input then gets the time its own length needs, so that the
 /// deadline doesn't fall in the middle of it.
 async fn perform(link: &mut Link, input: Input) -> Result<(), String> {
     // Without one where the caller said so (rr_device_bare_inputs): taps, keys and buttons were taken that way
     // on iOS 27.0, and no screen-sharing session then shows on the device or takes its sound.
     if !link.bare_inputs {
-        tokio::time::timeout(DEADLINE, stream_for_input(link)).await.unwrap_or_else(|_| Err("timed out".into()))?;
+        tokio::time::timeout(STREAM_DEADLINE, stream_for_input(link)).await.unwrap_or_else(|_| Err("timed out".into()))?;
     }
     // Told to stop while the stream was got ready (that can take seconds): nothing is sent.
     if link.stop.raised() { return Err(STOPPED.into()); }
@@ -1344,8 +1354,9 @@ async fn start_stream(link: &mut Link) -> Result<Stream, String> {
     if let Some(early) = link.stream_stopped.and_then(|at| AFTER_STOP.checked_sub(at.elapsed())) {
         tokio::time::sleep(early).await;
     }
-    let mut display = DisplayServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)
-        .await.map_err(|e| format!("display service: {e:?}"))?;
+    let mut display = tokio::time::timeout(STREAM_START, DisplayServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)).await
+        .map_err(|_| "display service: no answer".to_string())?
+        .map_err(|e| format!("display service: {e:?}"))?;
     let audio = link.handle.bind_udp(0).await.map_err(|e| format!("udp: {e:?}"))?;
     let video = link.handle.bind_udp(0).await.map_err(|e| format!("udp: {e:?}"))?;
     let (ours, theirs) = (link.handle.host_ip().to_string(), link.handle.peer_ip().to_string());
@@ -1378,7 +1389,8 @@ async fn start_stream(link: &mut Link) -> Result<Stream, String> {
     Ok(stream)
 }
 
-/// How long one half of a stream gets to start (they answer within a second when they do).
+/// How long one half of a stream gets to start (they answer within a second when they do), and
+/// the display service's connection.
 const STREAM_START: Duration = Duration::from_secs(5);
 
 /// How long a stream just started gets to send the key frame it opens with.
@@ -1604,6 +1616,22 @@ fn own_hardware(identifier: &str) -> (String, [u8; 6]) {
     (serial, mac)
 }
 
+/// Accepts failing since one last succeeded that end a wait: they are the listener's then, not a connection's.
+const ACCEPT_TRIES: u32 = 20;
+
+/// What an accept gave: a connection, or none for now. One that failed alone was a connection
+/// lost as it was taken, or no room for it just then, and the wait goes on (roamrunctl's too).
+pub fn taken_one<T>(accepted: std::io::Result<T>, failed: &mut u32) -> std::io::Result<Option<T>> {
+    match accepted {
+        Ok(came) => { *failed = 0; Ok(Some(came)) }
+        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+        Err(e) => {
+            *failed += 1;
+            if *failed < ACCEPT_TRIES { Ok(None) } else { Err(e) }
+        }
+    }
+}
+
 /// Whether a connection from `from` is one to answer. Written as IPv4 or as IPv4 in IPv6's
 /// form, an address is one address.
 fn taken(from: std::net::IpAddr, only: Option<std::net::IpAddr>) -> bool {
@@ -1612,11 +1640,15 @@ fn taken(from: std::net::IpAddr, only: Option<std::net::IpAddr>) -> bool {
 
 async fn accept_pairing(pairing: &RRPairing, show: &(impl Fn(&str) + Sync)) -> Result<(idevice::remote_pairing::PeerDevice, String), NotPaired> {
     let cancelled = || pairing.cancelled.load(Ordering::Relaxed);
+    let mut failed = 0;
     loop {
         let stream = loop {
             if cancelled() { return Err("cancelled".into()); }
             if let Ok(accepted) = tokio::time::timeout(TICK, pairing.listener.accept()).await {
-                let (stream, from) = accepted.map_err(|e| format!("can't accept: {e}"))?;
+                let Some((stream, from)) = taken_one(accepted, &mut failed).map_err(|e| format!("can't accept: {e}"))? else {
+                    tokio::time::sleep(TICK).await;
+                    continue;
+                };
                 if !taken(from.ip(), pairing.only) { continue; }
                 break stream;
             }
@@ -1865,6 +1897,38 @@ mod tests {
         let long = Input::Type(vec![(0x04, false); LONGEST_TYPED]);
         assert_eq!(input_time(&long), ten + Duration::from_secs(400));   // 2000 keys at 200 ms each
         assert!(input_time(&Input::Type(vec![(0x04, false); 5])) < DEADLINE);
+        // A paste is sent three times over: 1 MiB is 3 MiB, at 50 KB/s.
+        assert!(input_time(&Input::Paste("x".repeat(1 << 20))) > Duration::from_secs(60));
+        assert!(input_time(&Input::Paste("a few words".into())) < Duration::from_secs(16));
+    }
+
+    /// A call that starts a stream ends by its steps' own limits, each of which stops what it
+    /// started, before its deadline: cut in the middle, a stream started is dropped unstopped.
+    #[test]
+    fn a_stream_call_ends_by_its_own_limits_before_its_deadline() {
+        let start = AFTER_STOP + STREAM_START * 3 + STOP_WAIT;   // connecting, sound, video, and a half started stopped
+        let asked = (REPORT_WAIT + KEYFRAME_APART + KEYFRAME_WAIT) * 2;   // more than it can be
+        assert!(asked + STOP_WAIT + start + FIRST_KEYFRAME + STOP_WAIT < STREAM_DEADLINE, "keyframe");
+        assert!(Duration::from_millis(300) + STOP_WAIT + start * 2 < STREAM_DEADLINE, "stream_for_input");
+    }
+
+    /// A look has room for the slowest one measured on the Mac's own Wi‑Fi, three times over.
+    #[test]
+    fn a_look_has_room_for_a_big_screen_on_a_slower_link() {
+        assert!(SHOT_TIME >= Duration::from_secs(19) * 3);
+    }
+
+    /// A connection lost as it was taken doesn't end a wait for a pairing; a listener that
+    /// fails every time does.
+    #[test]
+    fn a_connection_lost_as_it_is_taken_doesnt_end_the_wait() {
+        let lost = || Err::<(), _>(std::io::Error::from(std::io::ErrorKind::ConnectionAborted));
+        let mut failed = 0;
+        assert!(matches!(taken_one(lost(), &mut failed), Ok(None)));
+        assert!(matches!(taken_one(Ok(()), &mut failed), Ok(Some(()))) && failed == 0);
+        assert!(matches!(taken_one(Err::<(), _>(std::io::ErrorKind::WouldBlock.into()), &mut failed), Ok(None)) && failed == 0);
+        for _ in 1..ACCEPT_TRIES { assert!(matches!(taken_one(lost(), &mut failed), Ok(None))); }
+        assert!(taken_one(lost(), &mut failed).is_err());
     }
 
     /// Every character a US keyboard has maps to its key, shifted or not; anything else to none.
