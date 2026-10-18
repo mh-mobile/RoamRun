@@ -380,11 +380,50 @@ extension TimingSensitive {
             _ = Proc.run("/usr/bin/pkill", ["-f", "sleep \(marker)"])
         }
 
+        /// The watchdog's shell must not lose a TERM sent while it sets its trap, as bash 3.2
+        /// (/bin/sh) does: it ignores the signal meanwhile, once for each signal named.
+        @Test func aTermWhileTheWatchdogSetsItsTrapIsntLost() async throws {
+            let shell = try #require(Proc.tied("/usr/bin/true", []).executableURL)
+            let marker = "42.\(Int.random(in: 100_000...999_999))"   // sleep's argument, to find strays
+            defer { _ = Proc.run("/usr/bin/pkill", ["-f", "^/bin/sleep \(marker)"]) }
+            // A long trap command named eight times: setting it takes long enough to be hit.
+            let script = #"b=x; i=0; while [ $i -lt 20 ]; do b=$b$b; i=$((i+1)); done; echo; trap "exit 3 #$b" TERM TERM TERM TERM TERM TERM TERM TERM; /bin/sleep "$0" >/dev/null 2>&1 & wait $!"#
+            // A round the TERM ended before the trap sends the next one later, a round the trap
+            // took sends it sooner: so the TERMs keep landing while it is set, however fast the machine.
+            var delay: useconds_t = 0, early = 0, trapped = 0
+            for round in 0..<200 where trapped < 30 {
+                let t = Process()
+                t.executableURL = shell
+                t.arguments = ["-c", script, marker]
+                let out = Pipe()
+                t.standardOutput = out
+                try t.run()
+                _ = out.fileHandleForReading.readData(ofLength: 1)   // about to set the trap
+                usleep(delay)
+                t.terminate()
+                let clock = ContinuousClock(), start = clock.now
+                while t.isRunning && clock.now - start < .seconds(5) { try await Task.sleep(for: .milliseconds(10)) }
+                if t.isRunning {
+                    Issue.record("round \(round): the TERM sent \(delay) µs after the echo was lost")
+                    kill(t.processIdentifier, SIGKILL)
+                    return
+                }
+                if t.terminationReason == .uncaughtSignal {
+                    early += 1
+                    delay += trapped == 0 ? 500 : 100
+                } else {
+                    #expect(t.terminationStatus == 3, "round \(round)")
+                    trapped += 1
+                    delay -= min(delay, 100)
+                }
+            }
+            #expect(early > 0 && trapped > 0, "early=\(early) trapped=\(trapped): the TERMs never straddled the trap")
+        }
+
         /// A child that ignores TERM: the watchdog can't stop it, so the caller does.
         @Test func aRegistrationThatWontStopIsKilledAndConfirmedGone() async throws {
             let t = Proc.tied("/bin/sh", ["-c", "trap '' TERM; exec /bin/sleep 30"])
             t.standardOutput = FileHandle.nullDevice
-            t.standardError = FileHandle.nullDevice   // the watchdog's "Killed: 9"
             try t.run()
             try await Task.sleep(for: .milliseconds(300))   // the trap is set
             let child = Proc.run("/usr/bin/pgrep", ["-P", "\(t.processIdentifier)"]).out
