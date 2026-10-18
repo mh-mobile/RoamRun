@@ -611,7 +611,8 @@ When in trouble, run `roamrun doctor` first.
   it. To keep them: stop the bridges `roamrun up` started, with `-d` or in a terminal
   (`roamrun down <name>`), and quit RoamRun; copy that folder aside; run `brew uninstall --zap --cask roamrun` and install
   again; then put the folder back before you open RoamRun or run `roamrun`. Whether the
-  permission stays cleared with the folder put back hasn't been tried.
+  permission stays cleared with the folder put back hasn't been tried, nor whether device control
+  then opens its devices as before.
 - **Tailscale on iOS has been seen to stop passing traffic** after sleep or a network change while
   it still looks connected ("MagicSock function ReceiveIPv4 is not running"). Turn the VPN off and
   on.
