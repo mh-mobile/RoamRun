@@ -140,8 +140,8 @@ fn with_what(error: &str, said: &str) -> String {
 mod tests {
     use super::{readable, Device};
 
-    /// Text with a NUL in it is refused before anything is sent, and said so ("invalid"): the
-    /// connection and the look are kept for it.
+    /// Text with a NUL in it is refused before anything is sent, and said so ("invalid"): roamrunctl's
+    /// MCP keeps the device's connection for it (and, for type and paste, the look they spent).
     #[test]
     fn a_nul_is_refused_before_anything_is_sent() {
         let none = Device(std::ptr::null_mut());   // never reached: the text is refused first

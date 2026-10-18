@@ -1389,7 +1389,8 @@ async fn start_stream(link: &mut Link) -> Result<Stream, String> {
     Ok(stream)
 }
 
-/// How long one half of a stream gets to start (they answer within a second when they do).
+/// How long one half of a stream gets to start (they answer within a second when they do), and
+/// the display service's connection.
 const STREAM_START: Duration = Duration::from_secs(5);
 
 /// How long a stream just started gets to send the key frame it opens with.
