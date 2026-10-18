@@ -2062,8 +2062,17 @@ enum CLI {
         if FileManager.default.fileExists(atPath: file.path, isDirectory: &folder), folder.boolValue {
             throw ArgumentError(message: "it is a folder")
         }
-        try Data(contentsOf: made).write(to: file, options: .atomic)
-        chmod(file.path, 0o600)   // a screen, with whatever was on it
+        // A screen, with whatever was on it: the owner's alone before it is in its place, not after.
+        let data = try Data(contentsOf: made)
+        let beside = file.deletingLastPathComponent().appendingPathComponent(".roamrun-look-\(UUID().uuidString)")
+        let fd = try reserve(beside.path)
+        var failed = write(data, to: fd) ? nil : errno
+        close(fd)
+        if failed == nil, rename(beside.path, file.path) != 0 { failed = errno }
+        if let failed {
+            unlink(beside.path)
+            throw ArgumentError(message: String(cString: strerror(failed)))
+        }
     }
 
     private static func askApp(_ request: DeviceControlWire.Request) -> DeviceControlWire.Response {

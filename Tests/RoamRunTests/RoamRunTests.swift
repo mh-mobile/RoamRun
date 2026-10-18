@@ -895,6 +895,12 @@ import ServiceManagement
     // A bridge running for it is rebuilt only when the device is somewhere else: not for a UDID learned.
     #expect(AppCoordinator.moved(old, to: ("100.64.0.9", 51000)) && AppCoordinator.moved(old, to: ("100.64.0.10", 50000)))
     #expect(!AppCoordinator.moved(old, to: ("100.64.0.9", 50000)) && !AppCoordinator.moved(nil, to: ("100.64.0.9", 50000)))
+    // Saved again by `roamrun devices add` with another announcement: a running bridge waits for its next start.
+    var announced = old; announced.instanceName += "-renewed"; announced.txt["identifier"] = "another"; announced.udid = "00008130-000D00000000D004"
+    #expect(!AppCoordinator.rebuildsNow(running: true, holding: old, saved: announced))
+    #expect(AppCoordinator.rebuildsNow(running: false, holding: old, saved: announced))
+    announced.remotePairingPort = 51000
+    #expect(AppCoordinator.rebuildsNow(running: true, holding: old, saved: announced))
 
     // What another Mac sent is shown only as a device read and written again.
     #expect(Introduction.shown(Introduction.line(device)) == Introduction.line(device))
@@ -1119,6 +1125,11 @@ extension TimingSensitive.RelayOnLocalhost {
     #expect(d?.map(\.name) == ["my-iphone", "mac"])   // iOS first
     #expect(d?.first?.curAddr == "203.0.113.50:41641" && d?.last?.curAddr == "")
     #expect(TailscaleClient.devices(fromStatusJSON: "not json") == nil)
+}
+
+@Test func aPeerWithoutAMagicDNSNameIsNamedByItsHost() {
+    let json = #"{"Peer":{"k1":{"DNSName":"","HostName":"Ken's iPhone","OS":"iOS","TailscaleIPs":["100.64.0.10"]}}}"#
+    #expect(TailscaleClient.devices(fromStatusJSON: json)?.map(\.name) == ["Ken's iPhone"])
 }
 
 @Test func theDeviceWaitingIsFoundByItsAddressEvenWhenOnlyAnIPv6OneWasHeard() {
@@ -3852,6 +3863,46 @@ func aDeviceWithANewTailscaleAddressIsFollowed(answersThere: Bool) async {
     #expect(rig.world.scans == 0)
 }
 
+/// What the command line saved while the app runs is taken in as a save takes it, without one.
+@Test func whatTheCommandLineSavedIsTakenInAsASaveTakesIt() {
+    let a = inertProfile("iPhone")
+    var b = a; b.instanceName += "-b"
+    var c = a; c.instanceName += "-c"
+    // Saved anew twice while the app saves nothing: the second is what it holds, and its next save keeps.
+    let first = AppCoordinator.takenIn(disk: [b], saved: [a], mine: [a])
+    #expect(first.profiles == [b] && first.changed == [b] && first.new.isEmpty)
+    let second = AppCoordinator.takenIn(disk: [c], saved: first.base, mine: first.profiles)
+    #expect(second.profiles == [c] && ProfileStore.merge(base: second.base, wanted: second.profiles, disk: [c]) == [c])
+    // What the app changed and couldn't save stays, with what the command line changed.
+    var mine = a; mine.providerIP = "100.64.0.99"
+    let kept = AppCoordinator.takenIn(disk: [b], saved: [a], mine: [mine])
+    #expect(kept.profiles.first?.providerIP == "100.64.0.99" && kept.profiles.first?.instanceName == b.instanceName)
+    #expect(ProfileStore.merge(base: kept.base, wanted: kept.profiles, disk: [b]) == kept.profiles)
+    // One never seen here comes in, and a save after keeps it.
+    var other = inertProfile("iPad"); other.providerIP = "127.0.0.9"   // another device: another address
+    let added = AppCoordinator.takenIn(disk: [other, a], saved: [a], mine: [a])
+    #expect(added.new == [other] && added.profiles == [other, a] && added.changed.isEmpty)
+    #expect(ProfileStore.merge(base: added.base, wanted: added.profiles, disk: [other, a]) == [other, a])
+    // The app's own save read back: nothing to take in.
+    let own = AppCoordinator.takenIn(disk: [a], saved: [a], mine: [a])
+    #expect(own.new.isEmpty && own.changed.isEmpty)
+}
+
+/// A host name two peers have isn't followed: without MagicDNS, iPhones share "iPhone".
+@MainActor @Test func aNameTwoPeersHaveIsntFollowed() async {
+    var p = inertProfile("iPhone"); p.providerHostName = "iPhone"
+    let rig = Rig(p)
+    defer { rig.done() }
+    rig.world.answering = ["127.0.0.2", "127.0.0.3"]
+    rig.world.advertAnswers = true
+    rig.world.peers = [MeshDevice(id: "1", name: "iPhone", os: "iOS", ips: ["127.0.0.2"], online: true),
+                       MeshDevice(id: "2", name: "iPhone", os: "iOS", ips: ["127.0.0.3"], online: true)]
+    var saved: DeviceProfile?
+    rig.bridge.onProfileChange = { saved = $0 }
+    await rig.bridge.start(.manual)
+    #expect(rig.bridge.profile.providerIP == "127.0.0.1" && saved == nil)
+}
+
 enum ClaimCase: String, CaseIterable {
     case erroredCLIAutomatic, erroredCLIManual, readyCLIManual, readyCLIFromACLI, erroredAppAutomatic, erroredCLIAutomaticFromACLI
 }
@@ -4061,6 +4112,17 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
     #expect(StatusFile.write(other.id, cli, in: other.dir, live: { _ in true }) == .written)
     await other.bridge.resumeIfAway()
     #expect(other.bridge.status == .off && yieldedTo == 4242)
+
+    // The app's bridge is started again by the app, which rebuilds one saved anew meanwhile.
+    let app = Rig()
+    defer { app.done() }
+    app.world.onLAN = true
+    await app.bridge.start(.manual)
+    var resumed = 0
+    app.bridge.onResume = { resumed += 1 }
+    app.world.onLAN = false
+    for _ in 0..<3 { await app.bridge.resumeIfAway() }
+    #expect(resumed == 1 && app.bridge.status == .local)
 }
 
 /// Three outcomes, so 2b can tell this Mac's problem from the device's.
@@ -5729,6 +5791,41 @@ private func lookFile(in dir: URL) -> String {
     #expect(try String(contentsOf: file, encoding: .utf8) == "new")
     try CLI.put(look: try made("first"), at: dir.appendingPathComponent("fresh.png"))
     #expect(try String(contentsOf: dir.appendingPathComponent("fresh.png"), encoding: .utf8) == "first")
+    // A name as long as a file's may be: what is made beside it first is no longer.
+    let long = dir.appendingPathComponent(String(repeating: "a", count: 251) + ".png")
+    try CLI.put(look: try made("long"), at: long)
+    #expect(try String(contentsOf: long, encoding: .utf8) == "long")
+}
+
+extension TimingSensitive {
+    /// Watched while looks keep taking its place (a new file each time, as a look's name is):
+    /// it is never there readable by others. A chmod after the write showed 644 within 50.
+    @Test func aLookIsNeverThereReadableByOthers() throws {
+        let dir = scratchDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("now.png")
+        let before = umask(0o022)
+        defer { umask(before) }
+        let modes = OSAllocatedUnfairLock<(seen: Set<mode_t>, done: Bool)>(initialState: ([], false))
+        let watcher = Thread {
+            while !modes.withLock({ $0.done }) {
+                var st = stat()
+                guard stat(file.path, &st) == 0 else { continue }
+                let mode = st.st_mode & 0o777
+                modes.withLock { _ = $0.seen.insert(mode) }
+            }
+        }
+        watcher.start()
+        for _ in 0..<200 {
+            try? FileManager.default.removeItem(at: file)
+            let made = dir.appendingPathComponent("made-\(UUID().uuidString).png")
+            try Data(count: 1000).write(to: made)
+            try CLI.put(look: made, at: file)
+        }
+        modes.withLock { $0.done = true }
+        while watcher.isExecuting { usleep(1000) }
+        #expect(modes.withLock { $0.seen } == [0o600])
+    }
 }
 
 /// A point is read off the look it came from: when another has looked since, the screen it was

@@ -89,8 +89,8 @@ final class OTAServer: @unchecked Sendable {
             default: break
             }
         }
+        self.listener = listener   // before it can fail: forget() only lets go of the listener it holds
         listener.start(queue: queue)
-        self.listener = listener
         _ = ready.wait(timeout: .now() + 5)
         guard port > 0 else { stop(); return nil }
         return port
