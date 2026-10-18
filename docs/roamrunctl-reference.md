@@ -442,8 +442,8 @@ against a real device at the time these notes were written:
 - x86_64 machines, Linux without Avahi, and firewall tools other than ufw.
 - Signing multiple devices at once, and the `ROAMRUNCTL_SIGNER` override.
 - A Mac's `roamrun pair introduce` introducing a machine running `roamrunctl`.
-- Through MCP: swipe, a paste that goes through, and launch (these had been tested outside
-  MCP). Installing through MCP on Linux or Windows.
+- Through MCP: swipe and a paste that goes through (these had been tested outside MCP).
+  Installing and launching through MCP on Linux or Windows.
 - On Windows: `pair control --with`, MCP, install, and launch.
 - `mcp --http` from another machine (by a tag or a login), from a cloud, or on Linux or
   Windows. On macOS it was checked from the machine itself, with the token:
@@ -462,7 +462,8 @@ against a real device at the time these notes were written:
   `install_status` said it was installed after 15 s; over HTTP, the upload took 0.6 s with
   the sha256 `shasum` gives, `install` answered at once, a look and a second install by the
   same upload were refused meanwhile, it was installed after 10 s, the upload's file was gone
-  after, and the folder was removed at Ctrl-C.
+  after, and the folder was removed at Ctrl-C. `launch` of it over stdio answered with its pid
+  in 1.3 s.
 - Tailscale userspace networking with no address available to bind.
 - Xcode pairing through `pair introduce` since the `--mac` → `--host` change.
 
