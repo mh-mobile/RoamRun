@@ -869,7 +869,8 @@ final class ProxyBridge: ObservableObject {
             // Followed only once RemotePairing answers there: a name Tailscale gave to another
             // device would otherwise be saved over this one's address, for the app and the CLI.
             // ponytail: the handshake doesn't say which device it is; same-named iPhones can still swap.
-            // One name, one device: a host name two peers have (no MagicDNS) isn't followed.
+            // One name, one device: a name two peers have (host names without MagicDNS; a device shared
+            // in from another tailnet) isn't followed.
             let named = peers.filter { $0.name == p.providerHostName }
             if named.count == 1, let ip = named[0].ipv4, ip != p.providerIP {
                 let at = NWEndpoint.hostPort(host: .init(ip), port: .init(rawValue: p.remotePairingPort) ?? 49152)

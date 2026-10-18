@@ -3863,6 +3863,31 @@ func aDeviceWithANewTailscaleAddressIsFollowed(answersThere: Bool) async {
     #expect(rig.world.scans == 0)
 }
 
+/// What the command line saved while the app runs is taken in as a save takes it, without one.
+@Test func whatTheCommandLineSavedIsTakenInAsASaveTakesIt() {
+    let a = inertProfile("iPhone")
+    var b = a; b.instanceName += "-b"
+    var c = a; c.instanceName += "-c"
+    // Saved anew twice while the app saves nothing: the second is what it holds, and its next save keeps.
+    let first = AppCoordinator.takenIn(disk: [b], saved: [a], mine: [a])
+    #expect(first.profiles == [b] && first.changed == [b] && first.new.isEmpty)
+    let second = AppCoordinator.takenIn(disk: [c], saved: first.base, mine: first.profiles)
+    #expect(second.profiles == [c] && ProfileStore.merge(base: second.base, wanted: second.profiles, disk: [c]) == [c])
+    // What the app changed and couldn't save stays, with what the command line changed.
+    var mine = a; mine.providerIP = "100.64.0.99"
+    let kept = AppCoordinator.takenIn(disk: [b], saved: [a], mine: [mine])
+    #expect(kept.profiles.first?.providerIP == "100.64.0.99" && kept.profiles.first?.instanceName == b.instanceName)
+    #expect(ProfileStore.merge(base: kept.base, wanted: kept.profiles, disk: [b]) == kept.profiles)
+    // One never seen here comes in, and a save after keeps it.
+    var other = inertProfile("iPad"); other.providerIP = "127.0.0.9"   // another device: another address
+    let added = AppCoordinator.takenIn(disk: [other, a], saved: [a], mine: [a])
+    #expect(added.new == [other] && added.profiles == [other, a] && added.changed.isEmpty)
+    #expect(ProfileStore.merge(base: added.base, wanted: added.profiles, disk: [other, a]) == [other, a])
+    // The app's own save read back: nothing to take in.
+    let own = AppCoordinator.takenIn(disk: [a], saved: [a], mine: [a])
+    #expect(own.new.isEmpty && own.changed.isEmpty)
+}
+
 /// A host name two peers have isn't followed: without MagicDNS, iPhones share "iPhone".
 @MainActor @Test func aNameTwoPeersHaveIsntFollowed() async {
     var p = inertProfile("iPhone"); p.providerHostName = "iPhone"
