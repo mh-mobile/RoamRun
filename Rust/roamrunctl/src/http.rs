@@ -307,14 +307,20 @@ impl Write for Hashed {
 
 fn hex(bytes: &[u8]) -> String { bytes.iter().map(|b| format!("{b:02x}")).collect() }
 
+/// The uploads' folder, made for this run, only its user's: one there already (another user's, in a shared /tmp)
+/// isn't taken.
+fn folder_made(folder: &Path) -> std::io::Result<()> {
+    let mut made = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut made, 0o700);
+    made.create(folder)
+}
+
 impl Uploads {
     /// The folder made now, in the system's temporary one (on Windows, the user's own, as it is).
     pub fn new(most: u64) -> Result<Arc<Uploads>, String> {
         let folder = std::env::temp_dir().join(format!("roamrunctl-uploads-{}", hex(&crate::hold::random::<8>()?)));
-        let mut made = std::fs::DirBuilder::new();
-        #[cfg(unix)]
-        std::os::unix::fs::DirBuilderExt::mode(&mut made, 0o700);
-        made.create(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+        folder_made(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
         Ok(Arc::new(Uploads { folder, most, kept: Mutex::default() }))
     }
 
@@ -338,7 +344,11 @@ impl Uploads {
         options.write(true).create_new(true);
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-        let file = options.open(&path).map_err(|_| 507u16)?;
+        let file = match options.open(&path) {
+            // The folder removed meanwhile (by a cleaner of the temporary folder, say): made again, once.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => folder_made(&self.folder).and_then(|()| options.open(&path)),
+            opened => opened,
+        }.map_err(|_| 507u16)?;
         // Removed with its file, however this ends.
         let mut upload = Upload { id, owner: owner.to_string(), sha256: String::new(), path };
         let mut into = Hashed { file, hash: <sha2::Sha256 as sha2::Digest>::new() };
@@ -1092,6 +1102,18 @@ mod tests {
         let mut answer = String::new();
         let _ = stream.read_to_string(&mut answer);
         answer
+    }
+
+    #[test]
+    fn an_upload_folder_removed_meanwhile_is_made_again_as_it_was() {
+        let uploads = Uploads::new(1 << 20).unwrap();
+        // As a cleaner of the temporary folder may.
+        std::fs::remove_dir_all(&uploads.folder).unwrap();
+        let (id, sha256) = uploads.put("n1", b"PK");
+        assert!(uploads.path(&id, &sha256).unwrap().exists());
+        #[cfg(unix)]
+        assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&uploads.folder).unwrap().permissions()) & 0o777, 0o700);
+        uploads.end();
     }
 
     fn files(uploads: &Uploads) -> Vec<PathBuf> {
