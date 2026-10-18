@@ -648,14 +648,15 @@ fn served(stream: &mut TcpStream, s: &Shared, from: IpAddr, began: Instant, who:
             None if length.is_none() => return refuse(411, "", ""),
             _ => {}
         }
-        if length.is_some_and(|length| length > uploads.most) { return refuse(413, "", &format!("{} MiB at most\n", uploads.most >> 20)) }
+        let too_big = format!("{} MiB at most: the server's --max-upload sets it\n", uploads.most >> 20);
+        if length.is_some_and(|length| length > uploads.most) { return refuse(413, "", &too_big) }
         let Some(_coming) = uploads.coming() else { return refuse(409, "", "another upload is coming in: try again once it is in\n") };
         let mib = length.unwrap_or(uploads.most).div_ceil(1 << 20);
         reader.get_mut().until = Instant::now() + BODY_WITHIN + UPLOAD_MIB_WITHIN * u32::try_from(mib).unwrap_or(u32::MAX);
         if request.header("expect").is_some_and(|e| e.eq_ignore_ascii_case("100-continue")) {
             let _ = stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n");
         }
-        let (status, answer) = uploads.receive(&mut reader, &request, &whois.node.id).map_or_else(|status| (status, String::new()), |answer| (200, answer));
+        let (status, answer) = uploads.receive(&mut reader, &request, &whois.node.id).map_or_else(|status| (status, if status == 413 { too_big } else { String::new() }), |answer| (200, answer));
         respond(stream, status, "", &answer);
         return if status == 200 { "ok".into() } else { status.to_string() };
     }
@@ -1116,7 +1117,7 @@ mod tests {
         }
         // Too big by its length, or in a coding not taken: refused before 100 Continue, and the one kept stays.
         let big = put(at, "Content-Length: 70000\r\nExpect: 100-continue\r\n", b"");
-        assert!(big.starts_with("HTTP/1.1 413"), "{big}");
+        assert!(big.starts_with("HTTP/1.1 413") && big.contains("--max-upload sets it"), "{big}");
         assert_eq!(status(&put(at, "Transfer-Encoding: gzip\r\nExpect: 100-continue\r\n", b"")), "501");
         assert!(uploads.check(said["upload"].as_str().unwrap(), "n1", &sha256).is_ok());
         // Given longer than a head is, by its length: one still coming once the head's time is up is taken.
@@ -1141,7 +1142,8 @@ mod tests {
         assert_eq!(status(&answer), "400");
         assert!(files(&uploads).is_empty());
         let over = format!("{:x}\r\n{}\r\n", 70000, "x".repeat(70000));
-        assert_eq!(status(&put(at, "Transfer-Encoding: chunked\r\n", over.as_bytes())), "413");
+        let chunked = put(at, "Transfer-Encoding: chunked\r\n", over.as_bytes());
+        assert!(status(&chunked) == "413" && chunked.contains("--max-upload sets it"), "{chunked}");
         assert!(files(&uploads).is_empty());
         // One at a time: another while one comes in is turned away.
         let mut coming = TcpStream::connect(at).unwrap();

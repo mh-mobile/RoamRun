@@ -251,7 +251,7 @@ roamrunctl mcp --http 9090 --allow tag:codex phone
 - Only the devices named are listed or used. It doesn't start as root (not checked on
   Windows).
 - `--allow-install` also offers `install`, of an `.ipa` sent first to
-  `http://<that address>:9090/upload` (`curl -T App.ipa`, 200 MiB at most unless
+  `http://<that address>:9090/upload` (`curl -T App.ipa`, 1024 MiB at most unless
   `--max-upload <MiB>` says otherwise): the answer's `upload` id and `sha256` are what `install`
   is given. One upload is kept, only its sender can install it, and it is removed when the
   install ends, after 30 minutes unused, or at Ctrl-C. Without the flag there is no install over

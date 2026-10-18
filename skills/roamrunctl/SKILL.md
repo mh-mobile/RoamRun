@@ -290,7 +290,7 @@ yours is refused — look again. Only the devices
 the user named are there.
 
 `install` is there only if the user added `--allow-install`. It takes an .ipa you send first,
-as the body of a `PUT /upload` (200 MiB at most, unless they set `--max-upload`), never a
+as the body of a `PUT /upload` (1024 MiB at most, unless they set `--max-upload`), never a
 path:
 
 ```sh
