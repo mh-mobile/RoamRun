@@ -294,7 +294,7 @@ as the body of a `PUT /upload` (1024 MiB at most, unless they set `--max-upload`
 path:
 
 ```sh
-curl -sS --max-time 600 -w '\n%{http_code}\n' ${RR_TOKEN:+-H} ${RR_TOKEN:+"Authorization: Bearer $RR_TOKEN"} -T App.ipa "http://<address>:<port>/upload"
+curl -sS --max-time 2100 -w '\n%{http_code}\n' ${RR_TOKEN:+-H} ${RR_TOKEN:+"Authorization: Bearer $RR_TOKEN"} -T App.ipa "http://<address>:<port>/upload"
 # It answered {"upload":"<id>","size":…,"sha256":"<hex>"}: check the sha256 is your file's (sha256sum App.ipa; on a Mac, shasum -a 256 App.ipa), then give both.
 printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"install","arguments":{"device":"phone","upload":"<id>","sha256":"<hex>"}}}' | rr | said
 printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"install_status","arguments":{"device":"phone"}}}' | rr | said
@@ -313,7 +313,7 @@ Tailscale. Whether launching works on a device no Xcode ever met wasn't tried.
 
 Tried against a device, on Linux and macOS, in an earlier form of each: `pair control
 --with`, a key from a Mac, look, tap, type, a button, install, launch, `mcp`'s look and
-tap, and B. On macOS as it is now: `pair control --to`, and `mcp --http` called from the
+tap, and B. On macOS, in a later form: `pair control --to`, and `mcp --http` called from the
 machine itself with the token (look, tap, type, `elements`, calls taken back in a session;
 a button in a form just before this one; uploads and their refusals; an install over stdio
 and one from an upload, with `install_status`, and `launch` after). Not

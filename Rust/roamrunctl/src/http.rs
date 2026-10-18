@@ -24,6 +24,11 @@ const BODY: usize = 1 << 20;
 const HEAD_WITHIN: Duration = Duration::from_secs(10);
 const BODY_WITHIN: Duration = Duration::from_secs(30);
 const WRITE: Duration = Duration::from_secs(30);
+/// Nor is one read waited for longer than this: an upload whose caller went without a word lets go of its slot.
+#[cfg(not(test))]
+const IDLE: Duration = Duration::from_secs(60);
+#[cfg(test)]
+const IDLE: Duration = Duration::from_secs(3);
 /// Connections served at once (a client opens up to 16, and one more to take a call back), and from one
 /// address: more are turned away, so that one machine on the tailnet can't take them all.
 const AT_ONCE: usize = 32;
@@ -106,7 +111,7 @@ impl Read for Timed {
     fn read(&mut self, into: &mut [u8]) -> std::io::Result<usize> {
         let left = self.until.checked_duration_since(Instant::now()).filter(|left| !left.is_zero())
             .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::TimedOut))?;
-        self.stream.set_read_timeout(Some(left))?;
+        self.stream.set_read_timeout(Some(left.min(IDLE)))?;
         self.stream.read(into)
     }
 }
@@ -1151,6 +1156,18 @@ mod tests {
         std::thread::sleep(Duration::from_millis(200));
         assert_eq!(status(&put(at, "Content-Length: 3\r\n", b"abc")), "409");
         drop(coming);
+        // Once the server has seen it go.
+        let began = Instant::now();
+        while status(&put(at, "Content-Length: 3\r\n", b"abc")) == "409" && began.elapsed() < IDLE { std::thread::sleep(Duration::from_millis(50)) }
+        // One that stops coming without a word lets go once nothing came for IDLE, not at its body's deadline.
+        let began = Instant::now();
+        let mut silent = TcpStream::connect(at).unwrap();
+        silent.write_all(format!("PUT /upload HTTP/1.1\r\nHost: {at}\r\nContent-Length: 60000\r\n\r\nabc").as_bytes()).unwrap();
+        let mut answer = String::new();
+        silent.set_read_timeout(Some(IDLE * 3)).unwrap();
+        let _ = silent.read_to_string(&mut answer);
+        assert!(status(&answer) == "408" && began.elapsed() < IDLE * 2, "{answer:?} {:?}", began.elapsed());
+        assert_eq!(status(&put(at, "Content-Length: 3\r\n", b"abc")), "200");
         // Install is offered.
         let listed = post(at, "", r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
         assert!(listed.contains(r#""name":"install""#) && listed.contains(r#""name":"install_status""#) && listed.contains(r#""sha256""#), "{listed}");

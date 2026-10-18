@@ -31,10 +31,11 @@ if ! "$ts" status >/dev/null 2>&1; then
     [ -n "${TS_AUTHKEY-}" ] || die "this Mac isn't on your tailnet: set TS_AUTHKEY (an auth key from the Tailscale admin console › Settings › Keys) and run this again"
     # The App Store's and the standalone Tailscale run their own service; Homebrew's needs starting.
     # The app's CLI joins as the user running it: run by root it didn't reach the app (tailscale#3063).
-    if [ "$ts" = "$app" ]; then "$ts" up --auth-key="$TS_AUTHKEY"
-    else
-        if brew list --formula tailscale >/dev/null 2>&1; then sudo brew services start tailscale; fi
+    # Else it is taken as the app's (its launcher, for an app outside /Applications).
+    if [ "$ts" != "$app" ] && brew list --formula tailscale >/dev/null 2>&1; then
+        sudo brew services start tailscale
         sudo "$ts" up --auth-key="$TS_AUTHKEY"
+    else "$ts" up --auth-key="$TS_AUTHKEY"
     fi
 fi
 "$ts" status | head -3

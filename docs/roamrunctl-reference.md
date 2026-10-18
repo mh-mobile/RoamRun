@@ -302,7 +302,8 @@ until Ctrl-C:
 - Once the caller is let in (as for `/mcp`): a method other than `PUT` is 405, no length and
   not chunked 411, a length over the most 413 (before `100 Continue` is sent), and one while
   another is coming in 409. `--max-upload <MiB>` sets the most: 1024 by default, 1 to 4096.
-  The body may take 30 seconds plus 2 seconds a MiB of its length (of the most, when chunked).
+  The body may take 30 seconds plus 2 seconds a MiB of its length (of the most, when chunked),
+  and nothing may come for 60 seconds at most: then it is refused with 408 and the slot is free.
 - One upload is kept: when another begins to come in, from whichever caller, the one kept is
   dropped. It is kept in a folder made
   for this run in the system's temporary folder: mode 0700, the file 0600 (on Windows, the
@@ -455,7 +456,7 @@ against a real device at the time these notes were written:
   refused after another caller's look, types and pastes refused by an older look, and queued
   calls taken back by closing their connection and by `notifications/cancelled` in a session.
   Look, tap, type, `elements`, and calls taken back in a session (the cancel coming before the
-  call, or after it) were run again as it is now; the rest were runs of earlier forms of it.
+  call, or after it) were run again in a later form; the rest were runs of earlier forms of it.
   Uploads were run on macOS from the machine itself with the token, against a device saved
   with an address nothing is at: an upload answered with its size and the sha256 `shasum`
   gives, one over `--max-upload` refused with the one kept staying, `install` of it refused as
