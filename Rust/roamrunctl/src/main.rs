@@ -87,6 +87,12 @@ enum Command {
         /// Over HTTP, a token each request must also bring (Authorization: Bearer): a file of the owner's alone, 32 characters or more
         #[arg(long = "token-file", requires = "http")]
         token_file: Option<std::path::PathBuf>,
+        /// Over HTTP, offer `install`, of an .ipa sent with PUT /upload
+        #[arg(long = "allow-install", requires = "http")]
+        allow_install: bool,
+        /// With --allow-install, the most an upload may be, in MiB (4096 at most: an .ipa that unpacks to more isn't installed)
+        #[arg(long = "max-upload", requires = "allow_install", default_value_t = 200, value_parser = clap::value_parser!(u64).range(1..=4096))]
+        max_upload: u64,
         /// Over HTTP, the devices offered, as `roamrunctl devices` names them: no other is listed or used
         #[arg(requires = "http")]
         devices: Vec<String>,

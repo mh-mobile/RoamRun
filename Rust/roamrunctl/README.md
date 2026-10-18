@@ -214,7 +214,9 @@ clients that accept an `mcpServers` configuration, register it like this:
 
 Use the full executable path if the client cannot find `roamrunctl` in its `PATH`.
 The tools are `devices`, `look`, `tap`, `swipe`,
-`elements`, `type`, `paste`, `press`, `install`, and `launch`.
+`elements`, `type`, `paste`, `press`, `install`, `install_status`, and `launch`. `install`
+answers once the install has begun; `install_status` says when the app is in, and until then
+other calls on that device answer that it is installing.
 
 For `tap`, `swipe`, `type` and `paste`, the agent must first call `look`, and give the id
 that look answered with (`"look": 12`). A look stands for 60 seconds, and only while it is
@@ -244,9 +246,16 @@ roamrunctl mcp --http 9090 --allow tag:codex phone
   A call from this machine itself is refused unless it brings the token.
 - `--token-file <file>` makes every request also bring `Authorization: Bearer <token>`: a
   file only you can read, 32 characters or more.
-- Only the devices named are listed or used, and `install` isn't offered over HTTP.
+- Only the devices named are listed or used. It doesn't start as root (not checked on
+  Windows).
+- `--allow-install` also offers `install`, of an `.ipa` sent first to
+  `http://<that address>:9090/upload` (`curl -T App.ipa`, 200 MiB at most unless
+  `--max-upload <MiB>` says otherwise): the answer's `upload` id and `sha256` are what `install`
+  is given. One upload is kept, only its sender can install it, and it is removed when the
+  install ends, after 30 minutes unused, or at Ctrl-C. Without the flag there is no install over
+  HTTP.
 - What is shown and sent passes through whatever lies between: a cloud's proxy sees the
-  images, the text typed or pasted, and the token.
+  images, the text typed or pasted, what is uploaded, and the token.
 
 An optional [agent skill](https://github.com/mh-mobile/RoamRun/tree/main/skills/roamrunctl)
 provides instructions: `npx skills add mh-mobile/RoamRun`. Installing the skill does not

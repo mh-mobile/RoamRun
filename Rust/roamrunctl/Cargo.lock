@@ -1766,6 +1766,8 @@ dependencies = [
 name = "roamrun-device"
 version = "0.1.0"
 dependencies = [
+ "async_zip",
+ "futures-lite",
  "idevice",
  "ns-keyed-archive",
  "plist",
@@ -1790,6 +1792,7 @@ dependencies = [
  "rpassword",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tokio",
 ]
 

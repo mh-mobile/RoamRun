@@ -474,6 +474,16 @@ fn names_here() -> Result<Vec<String>, String> {
     Ok(names)
 }
 
+/// `roamrunctl install`: an .ipa is checked before the device is opened, as MCP does.
+fn install(name: &str, path: &std::path::Path) -> Result<String, String> {
+    let path_text = path.to_string_lossy();
+    if path.is_file() { roamrun_device::ipa_checked(&path_text)?; }
+    let device = opened(name)?;
+    let (megabytes, given) = roamrun_device::install_given(&path_text);
+    note!("Sending {} ({megabytes} MB) to {name}: nothing more is said until it is in, {} minutes at most. A megabyte took three to four seconds on the device's own Wi‑Fi.", path.display(), given.as_secs().div_ceil(60));
+    said(device.install(&path_text)).map(|_| format!("Installed {} on {name}.", path.display()))
+}
+
 fn look(name: &str, file: Option<PathBuf>) -> Result<String, String> {
     let device = opened(name)?;
     let (png, width, height) = fitted(&device.screenshot()?, image::ImageFormat::Png)?;
@@ -534,17 +544,13 @@ pub fn run(command: Command) -> i32 {
         }),
         Command::Key { command: Key::Import { file, name, passphrase } } => import(&file, name, passphrase),
         Command::Look { name, file } => look(&name, file),
-        Command::Install { name, path } => opened(&name).and_then(|device| {
-            let (megabytes, given) = roamrun_device::install_given(&path.to_string_lossy());
-            note!("Sending {} ({megabytes} MB) to {name}: nothing more is said until it is in, {} minutes at most. A megabyte took three to four seconds on the device's own Wi‑Fi.", path.display(), given.as_secs().div_ceil(60));
-            said(device.install(&path.to_string_lossy())).map(|_| format!("Installed {} on {name}.", path.display()))
-        }),
+        Command::Install { name, path } => install(&name, &path),
         Command::Launch { name, bundle } => opened(&name).and_then(|device| {
             said(device.launch(&bundle)).map(|value| format!("Launched {bundle} on {name} (pid {}).", value["pid"]))
         }),
         Command::Mcp { http: None, .. } => return crate::mcp::Server::default().serve(),
-        Command::Mcp { http: Some(port), allow, token_file, devices } => allow.iter().map(|a| crate::http::allow(a)).collect::<Result<Vec<_>, _>>()
-            .and_then(|allowed| Ok(crate::http::Options { port, allowed, token: token_file.as_deref().map(crate::http::token).transpose()?, devices }))
+        Command::Mcp { http: Some(port), allow, token_file, allow_install, max_upload, devices } => allow.iter().map(|a| crate::http::allow(a)).collect::<Result<Vec<_>, _>>()
+            .and_then(|allowed| Ok(crate::http::Options { port, allowed, token: token_file.as_deref().map(crate::http::token).transpose()?, devices, uploads: allow_install.then_some(max_upload << 20) }))
             .and_then(crate::http::serve),
         Command::Sign { names, machine } => keys(&names).and_then(|(keys, told, marks)| {
             // The file it was read from, still: not another saved under the name since.
@@ -580,6 +586,19 @@ pub fn unstub(name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_ipa_that_isnt_an_app_is_refused_before_the_device_is_opened() {
+        let name = format!("cli-install-{}", std::process::id());
+        stub(&name, 49152);
+        let file = std::env::temp_dir().join(format!("rr-cli-{}.ipa", std::process::id()));
+        std::fs::write(&file, b"not a zip").unwrap();
+        // Not "doesn't answer": the device, which isn't there, isn't asked.
+        let said = install(&name, &file).unwrap_err();
+        assert!(said.contains("isn't an app's .ipa"), "{said}");
+        std::fs::remove_file(file).unwrap();
+        unstub(&name);
+    }
 
     #[test]
     fn a_sealed_file_is_asked_for_once_while_it_is_the_same() {
