@@ -207,7 +207,8 @@ If the user's `pair control --with` ends with the other machine not having come 
 minutes, or the other machine says nobody waits, the usual reason is that this machine
 doesn't let the other in (Tailscale's rules, a firewall): on port 41830, and on a port
 that is another each time. B needs this machine able to write its own devices folder
-(`~/.config/roamrunctl/devices`; on Windows `%LOCALAPPDATA%\roamrunctl\devices`).
+(`~/.config/roamrunctl/devices`, or `$XDG_CONFIG_HOME/roamrunctl/devices` when that is an
+absolute path; on Windows `%LOCALAPPDATA%\roamrunctl\devices`, `%APPDATA%`'s without it).
 
 What B does and doesn't: the key isn't on this machine to be copied, and when the user ends
 `sign`, or removes the device on the key's machine, no new connection is made. While `sign` answers, any program on this machine
@@ -243,7 +244,8 @@ believed the first time it is used — use it only if the user named it.
   tap, swipe, type or paste, a tap or swipe needs a new look. `press` isn't held to a look and
   goes to whatever is on the screen: look before it too. A
   call that fails may or may not have reached the device — look before doing it again.
-  A call you take back before its turn isn't made.
+  A call you take back before its turn isn't made; a `notifications/cancelled` counts while the
+  server holds fewer than 256 from the last minute.
   These press what is really there — don't tap what spends money, posts, sends, deletes
   or signs in unless the user asked for exactly that.
 

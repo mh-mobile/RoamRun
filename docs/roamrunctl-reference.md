@@ -238,7 +238,7 @@ needed to establish each new device connection.
 
 ## MCP over HTTP
 
-`roamrunctl mcp --http <port> --allow <who>… [--token-file <file>] [--allow-install [--max-upload <MiB>]] <device>…`,
+`roamrunctl mcp --http <port> --allow <who> [--allow <who>…] [--token-file <file>] [--allow-install [--max-upload <MiB>]] <device>…`,
 until Ctrl-C:
 
 - It listens on this machine's Tailscale IPv4 address only. It doesn't start without

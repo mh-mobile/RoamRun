@@ -605,8 +605,8 @@ When in trouble, run `roamrun doctor` first.
   `roamrun status` and `roamrun doctor`. Allow RoamRun under System Settings › Privacy & Security ›
   Local Network. If the switch is already on, the permission is stuck. The only way found to clear
   it was to reinstall: `brew uninstall --zap --cask roamrun`, then install again. `--zap` deletes
-  your saved devices, so copy `~/Library/Application Support/RoamRun/profiles.json` aside first, and
-  put it back before you open RoamRun again
+  the folder `~/Library/Application Support/RoamRun`, with your saved devices and device control's
+  pairings in it, so copy that folder aside first, and put it back before you open RoamRun again
   ([#23](https://github.com/mh-mobile/RoamRun/issues/23)).
 - **Tailscale on iOS has been seen to stop passing traffic** after sleep or a network change while
   it still looks connected ("MagicSock function ReceiveIPv4 is not running"). Turn the VPN off and

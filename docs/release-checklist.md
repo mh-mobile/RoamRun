@@ -361,8 +361,9 @@ tunnel and Xcode has to run again.
     `pgrep -fl "dns-sd -i"`, `pgrep -fl "log stream"`) and saves the device; the other Mac says so too. `roamrun up
     <device>` on the far Mac → Ready, `devicectl … process launch`. Once with Remote Devices
     closed: for a device RoamRun's app shows as an Apple Vision Pro, `pair introduce` says it
-    isn't waiting, exit 1; for one saved without its kind (`roamrun devices --json`: no
-    `deviceType`) it waits as for an iPhone and says what to do if it is one. Once with Ctrl-C
+    isn't waiting, exit 1; for one saved without its kind (no `deviceType` for it in
+    `~/Library/Application Support/RoamRun/profiles.json`: `devices --json` doesn't show it) it
+    waits as for an iPhone and says what to do if it is one. Once with Ctrl-C
     on the far Mac before it connected: it says nothing was saved. Once with the far Mac running
     `pair control --with`: the other Mac says that Mac doesn't stand in as it runs.
 

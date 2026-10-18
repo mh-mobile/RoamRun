@@ -258,7 +258,8 @@ bounded.
   - Not tried with a Mac shared in from another tailnet.
 - **roamrunctl can hold a pairing of its own.** `roamrunctl pair control --to` or
   `--with` (or `key import`) keeps the pairing in `~/.config/roamrunctl/devices`
-  (`%LOCALAPPDATA%\roamrunctl\devices` on Windows), a file only its owner can read; one that others can read is refused
+  (`$XDG_CONFIG_HOME/roamrunctl/devices` when that is an absolute path;
+  `%LOCALAPPDATA%\roamrunctl\devices` on Windows, `%APPDATA%`'s without it), a file only its owner can read; one that others can read is refused
   (on Windows the folder is the user's by what it inherits, and nothing more is checked).
   A program running as the same user — an agent that can run `roamrunctl` — uses the
   device as roamrunctl does. There is no switch per device there: holding the pairing
@@ -280,7 +281,7 @@ bounded.
   device doesn't say which way up it is and its picture is upright, a point is pressed
   as it is — on a device held upside down that would be the opposite point (not tried).
 - **roamrunctl can serve its MCP tools over HTTP.** `roamrunctl mcp --http <port> --allow
-  <who>… <devices>…`, started by a person and ended with Ctrl-C, listens on the machine's
+  <who> [--allow <who>…] <devices>…`, started by a person and ended with Ctrl-C, listens on the machine's
   Tailscale IPv4 address only, and doesn't start as root (not checked on Windows). A caller
   is let in by what `tailscale whois` says of its address at each request — a tag given with `--allow`, or, for an untagged machine, its
   user's login — and, with `--token-file`, by a token as well. Refused: a machine shared in
