@@ -85,7 +85,8 @@ impl Device {
     fn with(&self, text: &str, call: impl FnOnce(*mut RRDevice, *const c_char) -> *mut c_char) -> String {
         match c(text) {
             Ok(text) => take(call(self.0, text.as_ptr())),
-            Err(why) => format!("{{\"ok\":false,\"error\":\"{why}\"}}"),
+            // Refused before anything went to the device, as the library's own refusals are.
+            Err(why) => format!("{{\"ok\":false,\"invalid\":true,\"error\":\"{why}\"}}"),
         }
     }
 }
@@ -137,7 +138,17 @@ fn with_what(error: &str, said: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::readable;
+    use super::{readable, Device};
+
+    /// Text with a NUL in it is refused before anything is sent, and said so ("invalid"): the
+    /// connection and the look are kept for it.
+    #[test]
+    fn a_nul_is_refused_before_anything_is_sent() {
+        let none = Device(std::ptr::null_mut());   // never reached: the text is refused first
+        for said in [none.type_text("a\0b"), none.paste("a\0b"), none.button("home\0"), none.launch("a\0b")] {
+            assert!(said.starts_with(r#"{"ok":false,"invalid":true,"#), "{said}");
+        }
+    }
 
     #[test]
     fn a_refusal_is_said_in_its_own_words() {
