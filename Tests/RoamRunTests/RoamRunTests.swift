@@ -934,12 +934,6 @@ import ServiceManagement
     // A bridge running for it is rebuilt only when the device is somewhere else: not for a UDID learned.
     #expect(AppCoordinator.moved(old, to: ("100.64.0.9", 51000)) && AppCoordinator.moved(old, to: ("100.64.0.10", 50000)))
     #expect(!AppCoordinator.moved(old, to: ("100.64.0.9", 50000)) && !AppCoordinator.moved(nil, to: ("100.64.0.9", 50000)))
-    // Saved again by `roamrun devices add` with another announcement: a running bridge waits for its next start.
-    var announced = old; announced.instanceName += "-renewed"; announced.txt["identifier"] = "another"; announced.udid = "00008130-000D00000000D004"
-    #expect(!AppCoordinator.rebuildsNow(running: true, holding: old, saved: announced))
-    #expect(AppCoordinator.rebuildsNow(running: false, holding: old, saved: announced))
-    announced.remotePairingPort = 51000
-    #expect(AppCoordinator.rebuildsNow(running: true, holding: old, saved: announced))
 
     // What another Mac sent is shown only as a device read and written again.
     #expect(Introduction.shown(Introduction.line(device)) == Introduction.line(device))
@@ -3925,6 +3919,38 @@ func aDeviceWithANewTailscaleAddressIsFollowed(answersThere: Bool) async {
     // The app's own save read back: nothing to take in.
     let own = AppCoordinator.takenIn(disk: [a], saved: [a], mine: [a])
     #expect(own.new.isEmpty && own.changed.isEmpty)
+}
+
+/// A device saved again elsewhere: a running bridge is rebuilt now only where the device is somewhere
+/// else; at the same address it stays up and is rebuilt at its next start (#163).
+@Test func aRunningBridgeSavedAgainAtTheSameAddressWaitsForItsNextStart() {
+    var held = profile("iPhone"); held.providerIP = "100.64.0.9"; held.remotePairingPort = 50000
+    var announced = held; announced.instanceName = "renewed"; announced.txt["identifier"] = "another"; announced.udid = "00008130-000D00000000D004"
+    var port = held; port.remotePairingPort = 51000
+    var ip = held; ip.providerIP = "100.64.0.10"
+    let rows: [(String, saved: DeviceProfile, running: DeviceProfile?, waits: Bool)] = [
+        ("running, announcement and UDID saved anew", announced, held, true),
+        ("off", announced, nil, false),
+        ("running, another port", port, held, false),
+        ("running, another address", ip, held, false),
+    ]
+    for row in rows {
+        let decided = AppCoordinator.rebuilds([row.saved], running: row.running.map { [held.id: $0] } ?? [:])
+        #expect(decided.atStart == (row.waits ? [held.id] : []), "\(row.0)")
+        #expect(decided.now == (row.waits ? [] : [row.saved]), "\(row.0)")
+    }
+    // Two at once, each decided on its own.
+    var other = profile("iPad"); other.providerIP = "100.64.0.11"
+    var otherMoved = other; otherMoved.remotePairingPort = 51000
+    let both = AppCoordinator.rebuilds([announced, otherMoved], running: [held.id: held, other.id: other])
+    #expect(both.atStart == [held.id] && both.now == [otherMoved])
+
+    // At its next start, the one waiting is rebuilt with what was saved; a start rebuilds nothing more.
+    #expect(AppCoordinator.rebuiltAtStart(waiting: true, holding: held, saved: announced) == announced)
+    #expect(AppCoordinator.rebuiltAtStart(waiting: false, holding: held, saved: announced) == nil)
+    #expect(AppCoordinator.rebuiltAtStart(waiting: true, holding: announced, saved: announced) == nil)
+    #expect(AppCoordinator.rebuiltAtStart(waiting: true, holding: held, saved: nil) == nil)   // deleted meanwhile
+    #expect(AppCoordinator.rebuiltAtStart(waiting: true, holding: nil, saved: announced) == nil)
 }
 
 /// A host name two peers have isn't followed: without MagicDNS, iPhones share "iPhone".

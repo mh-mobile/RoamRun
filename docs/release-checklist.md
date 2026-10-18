@@ -312,8 +312,7 @@ tunnel and Xcode has to run again.
     checks passed", its `devices` line listing only the devices named: from this machine itself,
     from a tagged machine let in by `--allow tag:<its tag>`, and from an untagged one let in by
     `--allow <its user's login>`. Refused, each with nothing done: an `Origin` header → 403; a
-    `Host` other than its address or Tailscale names → 400 (where it may listen on 80: with
-    `--http 80`, the address without a port → 200); no token or a wrong one → 401; a machine not
+    `Host` other than its address or Tailscale names → 400; no token or a wrong one → 401; a machine not
     in `--allow`, and a tagged machine with only its owner's login in `--allow` → 403 (sent with
     no `Origin`, the right `Host` and the token: those are refused first). Started without
     `--token-file`: from this machine → 403, the log saying `this machine itself, without the

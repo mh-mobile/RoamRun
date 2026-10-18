@@ -275,13 +275,11 @@ final class AppCoordinator: ObservableObject {
     }
 
     /// Devices saved anew elsewhere: a running bridge (it holds its profile by value) is rebuilt now
-    /// only where the device is somewhere else, and otherwise at its next start (rebuildsNow).
+    /// or at its next start (rebuilds).
     private func rebuild(_ changed: [DeviceProfile]) {
-        for p in changed {
-            if let b = bridges[p.id], !Self.rebuildsNow(running: b.state != .off, holding: b.profile, saved: p) {
-                rebuildAtStart.insert(p.id)
-            } else { replaceBridge(with: p) }
-        }
+        let decided = Self.rebuilds(changed, running: bridges.filter { $0.value.state != .off }.mapValues(\.profile))
+        rebuildAtStart.formUnion(decided.atStart)
+        for p in decided.now { replaceBridge(with: p) }
     }
 
     // MARK: - Over the air
@@ -1036,11 +1034,19 @@ final class AppCoordinator: ObservableObject {
         saved.map { $0.providerIP != at.ip || $0.remotePairingPort != at.port } ?? false
     }
 
-    /// A device saved again elsewhere: its bridge is rebuilt now only when off or when the
-    /// device is somewhere else. Anything more waits for its next start, or it would drop what
-    /// Xcode is doing for nothing (`roamrun devices add` says so).
-    nonisolated static func rebuildsNow(running: Bool, holding: DeviceProfile, saved: DeviceProfile) -> Bool {
-        !running || moved(holding, to: (saved.providerIP, saved.remotePairingPort))
+    /// Devices saved again elsewhere, against the profiles their running bridges hold: a bridge is
+    /// rebuilt now only when not running or when the device is somewhere else. Anything more waits
+    /// for its next start, or it would drop what Xcode is doing for nothing (`roamrun devices add` says so).
+    nonisolated static func rebuilds(_ changed: [DeviceProfile], running: [UUID: DeviceProfile])
+        -> (now: [DeviceProfile], atStart: [UUID]) {
+        let waits = { (p: DeviceProfile) in running[p.id].map { !moved($0, to: (p.providerIP, p.remotePairingPort)) } ?? false }
+        return (changed.filter { !waits($0) }, changed.filter(waits).map(\.id))
+    }
+
+    /// At a start, what a bridge is rebuilt with: only one waiting in rebuildAtStart, for nothing more.
+    nonisolated static func rebuiltAtStart(waiting: Bool, holding: DeviceProfile?, saved: DeviceProfile?) -> DeviceProfile? {
+        guard waiting, let holding, let saved, holding != saved else { return nil }
+        return saved
     }
 
     /// A saved device a pairing was brought for is kept — with the UDID, if it had none — only
@@ -1543,10 +1549,10 @@ final class AppCoordinator: ObservableObject {
         bridge?.requestStart(reason)   // the claim itself defers to a CLI that got there first
     }
 
-    /// A start sets a bridge up anew: one waiting in rebuildAtStart is rebuilt here, for nothing more.
+    /// A start sets a bridge up anew (rebuiltAtStart).
     private func bridgeToStart(_ id: UUID) -> ProxyBridge? {
-        if rebuildAtStart.remove(id) != nil, let p = profile(id), let old = bridges[id], old.profile != p {
-            old.stop()
+        if let p = Self.rebuiltAtStart(waiting: rebuildAtStart.remove(id) != nil, holding: bridges[id]?.profile, saved: profile(id)) {
+            bridges[id]?.stop()
             install(newBridge(p))
         }
         return bridges[id]

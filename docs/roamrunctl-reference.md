@@ -252,7 +252,8 @@ until Ctrl-C:
   passphrase not given), nor one device under two names.
 - Who may call: `--allow tag:<name>` matches a tagged caller by its tags, and `--allow <login>`
   an untagged caller by its user's login, as `tailscale whois` gives them for the caller's
-  address, asked at each request (5 s at most; no answer is a refusal). A login never matches
+  address, asked at each request (5 s at most; where it doesn't say who the caller is, the
+  request is answered 503, to be tried again). A login never matches
   a tagged machine. A machine shared in from another tailnet is refused, and so is this
   machine itself unless the token came.
 - `--token-file`: each request also brings `Authorization: Bearer <token>`. The file has to be
@@ -265,7 +266,7 @@ until Ctrl-C:
 - Answered before anything else: `/.well-known/*` and `/register` with 404 (no OAuth here),
   any `Origin` with 403, a `Host` other than this machine's address or its Tailscale names
   (with the port, which may be left out where it is 80) with 400; then a missing or wrong token with 401 (`WWW-Authenticate:
-  Bearer`), a caller not allowed with 403.
+  Bearer`), a caller `tailscale whois` didn't say who it is with 503, a caller not allowed with 403.
 - One request a connection (`Connection: close`). The head has to be in within 10 s of
   connecting, the body within 30 s more, however it trickles in. A body is read as chunked
   when it says so (also when a length comes with it), else by its length; 1 MB at most.
@@ -325,10 +326,12 @@ until Ctrl-C:
 - An `.ipa` is checked before anything of it is sent, by `roamrunctl install` (before the
   device is opened) and by MCP alike: `Payload` holds one `<name>.app` and nothing else but
   hidden files such as `.DS_Store` (a `.bundle` is refused; a name ending in `.app` counts as
-  an app, hidden or not), with one
-  `Info.plist` where the app's is looked for, which gives the app's bundle identifier; it
-  unpacks to 4 GiB at most, by what the archive says; and no more than 1 MiB of that
-  `Info.plist` is read. An `.app` directory isn't checked.
+  an app, hidden or not), and it unpacks to 4 GiB at most, by what the archive says. The
+  app's bundle identifier is found as the install finds it: the files whose names have three
+  parts and end in `Info.plist` are read in the archive's order, and the first that gives a
+  bundle identifier must be `Payload/<name>.app/Info.plist`. One before it without an
+  identifier, such as Firebase's `GoogleService-Info.plist` in the app, is passed over. Each
+  one read must be a plist of 1 MiB at most. An `.app` directory isn't checked.
 - An `.ipa` is read whole into memory to be sent: an upload as large as `--max-upload` allows
   takes that much memory on this machine while it is installed.
 - An `.app` directory is staged on the device under its own name, and `.ipa` packages use

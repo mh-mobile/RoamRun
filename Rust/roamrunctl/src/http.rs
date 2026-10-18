@@ -307,14 +307,20 @@ impl Write for Hashed {
 
 fn hex(bytes: &[u8]) -> String { bytes.iter().map(|b| format!("{b:02x}")).collect() }
 
+/// The uploads' folder, made for this run, only its user's: one there already (another user's, in a shared /tmp)
+/// isn't taken.
+fn folder_made(folder: &Path) -> std::io::Result<()> {
+    let mut made = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut made, 0o700);
+    made.create(folder)
+}
+
 impl Uploads {
     /// The folder made now, in the system's temporary one (on Windows, the user's own, as it is).
     pub fn new(most: u64) -> Result<Arc<Uploads>, String> {
         let folder = std::env::temp_dir().join(format!("roamrunctl-uploads-{}", hex(&crate::hold::random::<8>()?)));
-        let mut made = std::fs::DirBuilder::new();
-        #[cfg(unix)]
-        std::os::unix::fs::DirBuilderExt::mode(&mut made, 0o700);
-        made.create(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+        folder_made(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
         Ok(Arc::new(Uploads { folder, most, kept: Mutex::default() }))
     }
 
@@ -338,7 +344,11 @@ impl Uploads {
         options.write(true).create_new(true);
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-        let file = options.open(&path).map_err(|_| 507u16)?;
+        let file = match options.open(&path) {
+            // The folder removed meanwhile (by a cleaner of the temporary folder, say): made again, once.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => folder_made(&self.folder).and_then(|()| options.open(&path)),
+            opened => opened,
+        }.map_err(|_| 507u16)?;
         // Removed with its file, however this ends.
         let mut upload = Upload { id, owner: owner.to_string(), sha256: String::new(), path };
         let mut into = Hashed { file, hash: <sha2::Sha256 as sha2::Digest>::new() };
@@ -634,7 +644,8 @@ fn served(stream: &mut TcpStream, s: &Shared, from: IpAddr, began: Instant, who:
     if s.options.token.is_some() && !token { return refuse(401, "WWW-Authenticate: Bearer\r\n", "") }
     let whois = match (s.whois)(from) {
         Ok(whois) => whois,
-        Err(why) => { *who = format!("(whois: {why})"); return refuse(403, "", "") }
+        // Not known to be refused: a 403 would tell the caller not to try again.
+        Err(why) => { *who = format!("(whois: {why})"); return refuse(503, "", "the caller couldn't be looked up (tailscale whois): try again\n") }
     };
     let own = from == s.own_ip || (!s.own_id.is_empty() && whois.node.id == s.own_id);
     match judged(&whois, &s.options.allowed, own, token) {
@@ -1071,9 +1082,10 @@ mod tests {
         assert!(post(at, "Authorization: Bearer 0123456789abcdef0123456789abcdef\r\n", body).starts_with("HTTP/1.1 403"));
         let at = started(Some("0123456789abcdef0123456789abcdef"), ci);
         assert!(post(at, "Authorization: Bearer 0123456789abcdef0123456789abcdef\r\n", body).starts_with("HTTP/1.1 200"));
-        // Tailscale can't say: refused.
+        // Tailscale can't say: not let in, and told to try again (a 403 says not to).
         let at = started(None, |_| Err("no answer".into()));
-        assert!(post(at, "", body).starts_with("HTTP/1.1 403"));
+        let unknown = post(at, "", body);
+        assert!(unknown.starts_with("HTTP/1.1 503") && unknown.contains("couldn't be looked up"), "{unknown}");
         // This machine itself, without a token: refused.
         let at = started(None, |_| Ok(whois("own", &["tag:ci"], "tagged-devices", 0)));
         assert!(post(at, "", body).starts_with("HTTP/1.1 403"));
@@ -1090,6 +1102,18 @@ mod tests {
         let mut answer = String::new();
         let _ = stream.read_to_string(&mut answer);
         answer
+    }
+
+    #[test]
+    fn an_upload_folder_removed_meanwhile_is_made_again_as_it_was() {
+        let uploads = Uploads::new(1 << 20).unwrap();
+        // As a cleaner of the temporary folder may.
+        std::fs::remove_dir_all(&uploads.folder).unwrap();
+        let (id, sha256) = uploads.put("n1", b"PK");
+        assert!(uploads.path(&id, &sha256).unwrap().exists());
+        #[cfg(unix)]
+        assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&uploads.folder).unwrap().permissions()) & 0o777, 0o700);
+        uploads.end();
     }
 
     fn files(uploads: &Uploads) -> Vec<PathBuf> {

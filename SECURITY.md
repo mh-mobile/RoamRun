@@ -290,8 +290,9 @@ bounded.
   otherwise pass); any request with an `Origin` (a web page in a browser on the tailnet);
   a `Host` other than the server's address or its own Tailscale names. A request's head has
   to arrive within 10 s and its body within 30 s more, and one address holds 17 of the 32
-  connections at most: a machine that can reach the port but isn't let in can't keep
-  callers out for long. Only the devices named are used — each only while it is saved as
+  connections at most: one machine that can reach the port can't take them all, but two or
+  more that the tailnet's access rules let reach it can keep callers out for as long as they
+  keep connecting. Only the devices named are used — each only while it is saved as
   it was when the server began — and `install` is offered only with `--allow-install`, from an
   `.ipa` sent with `PUT /upload`, never a path on the machine. One upload is kept (1024 MiB at
   most by default), in a folder made for the run that only its user can open (on Windows, the
