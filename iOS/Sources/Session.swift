@@ -403,7 +403,7 @@ final class Session {
         let ending = standIn
         standIn = nil
         ending?.end(.stopped)
-        keeper.finish()
+        keeper.finish(success: outcome?.tone == .success)
         finder?.stop()
         finder = nil
         code = nil

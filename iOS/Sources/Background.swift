@@ -118,15 +118,15 @@ final class BackgroundKeeper {
         task.updateTitle(title, subtitle: subtitle)
     }
 
-    /// On the introduction's end: completes the task exactly once, takes back a request iOS hasn't
-    /// launched yet, and ends the grace window.
-    func finish() {
+    /// On the introduction's end: completes the task exactly once, as it went, takes back a request
+    /// iOS hasn't launched yet, and ends the grace window.
+    func finish(success: Bool) {
         active = false
         ticker?.invalidate()
         ticker = nil
         if let task {
             task.progress.completedUnitCount = task.progress.totalUnitCount
-            task.setTaskCompleted(success: true)
+            task.setTaskCompleted(success: success)
             self.task = nil
         }
         BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: Self.identifier)

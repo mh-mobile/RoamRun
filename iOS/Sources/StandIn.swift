@@ -76,6 +76,8 @@ final class StandIn: @unchecked Sendable {
     private var deadlineWork: DispatchWorkItem?
     private var ended = false
     private var loggedFirst = false
+    /// Whose refusals were said: each address once, and 16 at most, however many knock (as roamrunctl).
+    private var refusalsSaid = Set<Data>()
     private let anywhere: Bool
 
     /// `offer`: as it is to be announced (name substituted already). `farHost`: the far Mac's Tailscale
@@ -131,20 +133,23 @@ final class StandIn: @unchecked Sendable {
         listener.start(queue: queue)
     }
 
+    private func refuse(_ connection: NWConnection, _ endpoint: NWEndpoint, saying from: String) {
+        connection.cancel()
+        if refusalsSaid.count < 16, refusalsSaid.insert(OwnAddresses.raw(endpoint) ?? Data(from.utf8)).inserted { onEvent(.refused(from: from)) }
+    }
+
     private func take(_ connection: NWConnection) {
         guard !ended else { connection.cancel(); return }
         let endpoint = connection.currentPath?.remoteEndpoint ?? connection.endpoint
         let from = OwnAddresses.shown(endpoint)
         guard let raw = OwnAddresses.raw(endpoint), allowed.contains(raw) else {
             standInLog.notice("refused a connection from \(from, privacy: .public)")
-            connection.cancel()
-            onEvent(.refused(from: from))
+            refuse(connection, endpoint, saying: from)
             return
         }
         guard pairs.count < 2 else {
             standInLog.notice("refused a third connection from \(from, privacy: .public)")
-            connection.cancel()
-            onEvent(.refused(from: "\(from) (two are being carried already)"))
+            refuse(connection, endpoint, saying: "\(from) (two are being carried already)")
             return
         }
         if !loggedFirst {

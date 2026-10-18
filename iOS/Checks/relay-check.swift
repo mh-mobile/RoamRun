@@ -174,6 +174,9 @@ func answerAfterFIN(_ c: NWConnection, size: Int, on queue: DispatchQueue) {
         let stranger = Client(port: portA, queue: queue)
         check(evA.wait { $0.contains { if case .refused = $0 { return true }; return false } }, "refused event")
         check(stranger.wait { _, closed, failed, _ in closed || failed }, "stranger's connection was closed")
+        let again = [Client(port: portA, queue: queue), Client(port: portA, queue: queue), Client(port: portA, queue: queue)]
+        check(again.allSatisfy { $0.wait { _, closed, failed, _ in closed || failed } }
+              && evA.list.filter { if case .refused = $0 { return true }; return false }.count == 1, "a stranger knocking again is said once")
         check(farHits.value == 0, "the fake far Mac saw no connection")
         a.end(.stopped); a.end(.stopped)
         check(evA.wait { $0.filter { $0 == .ended(.stopped) }.count == 1 }, "ended(.stopped) once (end is idempotent)")
