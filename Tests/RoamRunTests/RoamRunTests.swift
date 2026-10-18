@@ -895,6 +895,12 @@ import ServiceManagement
     // A bridge running for it is rebuilt only when the device is somewhere else: not for a UDID learned.
     #expect(AppCoordinator.moved(old, to: ("100.64.0.9", 51000)) && AppCoordinator.moved(old, to: ("100.64.0.10", 50000)))
     #expect(!AppCoordinator.moved(old, to: ("100.64.0.9", 50000)) && !AppCoordinator.moved(nil, to: ("100.64.0.9", 50000)))
+    // Saved again by `roamrun devices add` with another announcement: a running bridge waits for its next start.
+    var announced = old; announced.instanceName += "-renewed"; announced.txt["identifier"] = "another"; announced.udid = "00008130-000D00000000D004"
+    #expect(!AppCoordinator.rebuildsNow(running: true, holding: old, saved: announced))
+    #expect(AppCoordinator.rebuildsNow(running: false, holding: old, saved: announced))
+    announced.remotePairingPort = 51000
+    #expect(AppCoordinator.rebuildsNow(running: true, holding: old, saved: announced))
 
     // What another Mac sent is shown only as a device read and written again.
     #expect(Introduction.shown(Introduction.line(device)) == Introduction.line(device))
@@ -1119,6 +1125,11 @@ extension TimingSensitive.RelayOnLocalhost {
     #expect(d?.map(\.name) == ["my-iphone", "mac"])   // iOS first
     #expect(d?.first?.curAddr == "203.0.113.50:41641" && d?.last?.curAddr == "")
     #expect(TailscaleClient.devices(fromStatusJSON: "not json") == nil)
+}
+
+@Test func aPeerWithoutAMagicDNSNameIsNamedByItsHost() {
+    let json = #"{"Peer":{"k1":{"DNSName":"","HostName":"Ken's iPhone","OS":"iOS","TailscaleIPs":["100.64.0.10"]}}}"#
+    #expect(TailscaleClient.devices(fromStatusJSON: json)?.map(\.name) == ["Ken's iPhone"])
 }
 
 @Test func theDeviceWaitingIsFoundByItsAddressEvenWhenOnlyAnIPv6OneWasHeard() {
@@ -5729,6 +5740,37 @@ private func lookFile(in dir: URL) -> String {
     #expect(try String(contentsOf: file, encoding: .utf8) == "new")
     try CLI.put(look: try made("first"), at: dir.appendingPathComponent("fresh.png"))
     #expect(try String(contentsOf: dir.appendingPathComponent("fresh.png"), encoding: .utf8) == "first")
+}
+
+extension TimingSensitive {
+    /// Watched while looks keep taking its place (a new file each time, as a look's name is):
+    /// it is never there readable by others. A chmod after the write showed 644 within 50.
+    @Test func aLookIsNeverThereReadableByOthers() throws {
+        let dir = scratchDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("now.png")
+        let before = umask(0o022)
+        defer { umask(before) }
+        let modes = OSAllocatedUnfairLock<(seen: Set<mode_t>, done: Bool)>(initialState: ([], false))
+        let watcher = Thread {
+            while !modes.withLock({ $0.done }) {
+                var st = stat()
+                guard stat(file.path, &st) == 0 else { continue }
+                let mode = st.st_mode & 0o777
+                modes.withLock { _ = $0.seen.insert(mode) }
+            }
+        }
+        watcher.start()
+        for _ in 0..<200 {
+            try? FileManager.default.removeItem(at: file)
+            let made = dir.appendingPathComponent("made-\(UUID().uuidString).png")
+            try Data(count: 1000).write(to: made)
+            try CLI.put(look: made, at: file)
+        }
+        modes.withLock { $0.done = true }
+        while watcher.isExecuting { usleep(1000) }
+        #expect(modes.withLock { $0.seen } == [0o600])
+    }
 }
 
 /// A point is read off the look it came from: when another has looked since, the screen it was

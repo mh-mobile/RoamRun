@@ -59,6 +59,9 @@ final class AppCoordinator: ObservableObject {
     /// Per saved device, kept across its bridges: a rebuilt one (edited endpoint, port found
     /// again) remembers what the old one learned.
     private var memories: [UUID: DeviceMemory] = [:]
+    /// Running bridges whose device was saved again elsewhere at the same address (another
+    /// announcement, a UDID): rebuilt at their next start, not at the save.
+    private var rebuildAtStart = Set<UUID>()
     /// Deleted devices' bridges whose status removal failed: kept until a retry lands it, or
     /// the entry (this app's own, so never stale) would make the iPhone a duplicate if added again.
     private var departing: [ProxyBridge] = []
@@ -1011,6 +1014,13 @@ final class AppCoordinator: ObservableObject {
         saved.map { $0.providerIP != at.ip || $0.remotePairingPort != at.port } ?? false
     }
 
+    /// A device saved again elsewhere: its bridge is rebuilt now only when off or when the
+    /// device is somewhere else. Anything more waits for its next start, or it would drop what
+    /// Xcode is doing for nothing (`roamrun devices add` says so).
+    nonisolated static func rebuildsNow(running: Bool, holding: DeviceProfile, saved: DeviceProfile) -> Bool {
+        !running || moved(holding, to: (saved.providerIP, saved.remotePairingPort))
+    }
+
     /// A saved device a pairing was brought for is kept — with the UDID, if it had none — only
     /// once the list is written, and that is asked whatever changed: a device can be here and
     /// not in the file (a save that failed when it was added, or when its UDID was learned).
@@ -1248,7 +1258,7 @@ final class AppCoordinator: ObservableObject {
 
     func startBridge(_ profile: DeviceProfile) {
         // Screenshot mode's fake devices are for looking at: no real bridge, no saved state.
-        guard Snapshot.fakeProfiles == nil, let bridge = bridges[profile.id] else { return }
+        guard Snapshot.fakeProfiles == nil, let bridge = bridgeToStart(profile.id) else { return }
 
         var ids = wasActiveIDs
         ids.insert(profile.id)
@@ -1486,6 +1496,7 @@ final class AppCoordinator: ObservableObject {
     /// profile by value, so otherwise the new endpoint only takes effect at the
     /// next launch — and the bridge spends a retry finding it out for itself.
     private func replaceBridge(with profile: DeviceProfile) {
+        rebuildAtStart.remove(profile.id)
         guard let old = bridges[profile.id], old.profile != profile else { return }
         let wasOn = old.state != .off
         old.stop()
@@ -1503,8 +1514,18 @@ final class AppCoordinator: ObservableObject {
             startWhenFree(id, after: other, reason)
             return
         }
-        if StartPolicy.of(reason).restarts { bridges[id]?.stop() }
-        bridges[id]?.requestStart(reason)   // the claim itself defers to a CLI that got there first
+        let bridge = bridgeToStart(id)
+        if StartPolicy.of(reason).restarts { bridge?.stop() }
+        bridge?.requestStart(reason)   // the claim itself defers to a CLI that got there first
+    }
+
+    /// A start sets a bridge up anew: one waiting in rebuildAtStart is rebuilt here, for nothing more.
+    private func bridgeToStart(_ id: UUID) -> ProxyBridge? {
+        if rebuildAtStart.remove(id) != nil, let p = profile(id), let old = bridges[id], old.profile != p {
+            old.stop()
+            install(newBridge(p))
+        }
+        return bridges[id]
     }
 
     /// Devices waiting in startWhenFree: the 30 s retry must not stack a waiter per tick.
@@ -1859,7 +1880,11 @@ final class AppCoordinator: ObservableObject {
                 let wanted = wasActiveIDs
                 let stale = saved.filter { p in mine[p.id].map { $0 != p } ?? false }
                 profiles = saved
-                for p in stale { replaceBridge(with: p) }   // it holds its profile by value
+                for p in stale {   // a bridge holds its profile by value
+                    if let b = bridges[p.id], !Self.rebuildsNow(running: b.state != .off, holding: b.profile, saved: p) {
+                        rebuildAtStart.insert(p.id)
+                    } else { replaceBridge(with: p) }
+                }
                 // Kept from disk rather than dropped (the list we started from was unreadable): they need bridges.
                 for p in saved where bridges[p.id] == nil {
                     capture.ownedHosts.insert(install(newBridge(p)).spoofHost)

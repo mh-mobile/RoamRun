@@ -309,7 +309,8 @@ struct TailscaleClient {
             for (_, value) in peers {
                 guard let p = value as? [String: Any] else { continue }
                 let ips = (p["TailscaleIPs"] as? [String]) ?? []
-                let name = (p["DNSName"] as? String)?.components(separatedBy: ".").first
+                // Without MagicDNS the name is "": its host name then, not an empty one.
+                let name = (p["DNSName"] as? String)?.split(separator: ".").first.map(String.init)
                     ?? (p["HostName"] as? String) ?? "unknown"
                 let os = (p["OS"] as? String) ?? ""
                 let online = (p["Online"] as? Bool) ?? false
