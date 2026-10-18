@@ -34,6 +34,7 @@ money, posts, sends, deletes or signs in unless the user asked for exactly that.
 (notifications, messages); don't pass the image on. The device shows no screen-sharing session for this; what an action itself brings up (paste's \"Allow Paste\") shows there. Type and paste give the id of the latest look too, within a minute of it (after a tap with it is fine), and are refused once something else was looked at or done since: they go to whatever has focus. Press goes to whatever is on the screen: look before it too.";
 
 /// The device's latest look, while nothing else was done since.
+#[derive(Clone)]
 struct Shown {
     /// The image's size, as the caller saw it.
     size: (f64, f64),
@@ -298,16 +299,22 @@ impl Server {
     }
 
     /// Asks the device, once: the library sends again by itself where nothing had reached the device, and
-    /// what may have reached it isn't sent twice. After a failure the next call opens it anew.
-    fn ask(&mut self, name: &str, by: Option<&Option<Vec<u8>>>, call: impl Fn(&Device) -> String) -> Result<Value, String> {
+    /// what may have reached it isn't sent twice. After a failure the next call opens it anew. `before`: the
+    /// device's look as it was before this call (see `answered`).
+    fn ask(&mut self, name: &str, by: Option<&Option<Vec<u8>>>, before: Option<Shown>, call: impl Fn(&Device) -> String) -> Result<Value, String> {
         let raw = call(self.device(name, by)?);
-        self.answered(name, raw)
+        self.answered(name, raw, before)
     }
 
     /// What the device answered `raw`. Refused for what it says, before anything was sent: the connection is as it
-    /// was. Failed otherwise, it may have reached the device and moved what the look saw: nothing more goes by that look.
-    fn answered(&mut self, name: &str, raw: String) -> Result<Value, String> {
-        if serde_json::from_str::<Value>(&raw).is_ok_and(|said| said["invalid"] == true) { return device::said(raw) }
+    /// was, the look is `before` again, and it was no input. Otherwise it was one; failed, it may have reached the
+    /// device and moved what the look saw: nothing more goes by that look.
+    fn answered(&mut self, name: &str, raw: String, before: Option<Shown>) -> Result<Value, String> {
+        if serde_json::from_str::<Value>(&raw).is_ok_and(|said| said["invalid"] == true) {
+            if let Some(before) = before { self.shown.insert(name.to_string(), before); }
+            return device::said(raw);
+        }
+        self.acted.insert(name.to_string(), Instant::now());
         let said = device::said(raw);
         if said.is_err() { self.open.remove(name); self.shown.remove(name); }
         said.map_err(|why| format!("{why}. It may or may not have reached the device: look before doing it again"))
@@ -393,8 +400,8 @@ impl Server {
             }
             "tap" | "swipe" => {
                 // The look is spent by what reaches the device: a call refused for what it says leaves it.
-                let shown = self.shown.get(&name).filter(|shown| !shown.spent).ok_or("look first: a point is given in the pixels of the image a look returns")?;
-                let (id, size, way, of) = (shown.id, shown.size, shown.way, shown.of.clone());
+                let before = self.shown.get(&name).filter(|shown| !shown.spent).ok_or("look first: a point is given in the pixels of the image a look returns")?.clone();
+                let (id, size, way, of) = (before.id, before.size, before.way, before.of.clone());
                 // A number, or one written as text, as a model sometimes gives it.
                 let given = look_of(arguments)?;
                 // Looked at again since, by another caller or this one: what that look saw may not be on the screen any more.
@@ -414,7 +421,7 @@ impl Server {
                     let (x, y) = real(number("x")?, number("y")?)?;
                     self.spend(&name);
                     self.unturned(&name, way, &of)?;
-                    self.ask(&name, Some(&of), |d| d.tap(x, y)).map(|_| "tapped; look to see what it did")
+                    self.ask(&name, Some(&of), Some(before), |d| d.tap(x, y)).map(|_| "tapped; look to see what it did")
                 } else {
                     let (from, to) = (real(number("x1")?, number("y1")?)?, real(number("x2")?, number("y2")?)?);
                     let ms = match &arguments["milliseconds"] {
@@ -423,15 +430,14 @@ impl Server {
                     };
                     self.spend(&name);
                     self.unturned(&name, way, &of)?;
-                    self.ask(&name, Some(&of), |d| d.swipe(from, to, ms)).map(|_| "swiped; look to see what it did")
+                    self.ask(&name, Some(&of), Some(before), |d| d.swipe(from, to, ms)).map(|_| "swiped; look to see what it did")
                 };
-                self.acted.insert(name, Instant::now());
                 done.map(text)
             }
             "elements" => {
                 self.shown.remove(&name);   // the walk can scroll the screen
                 let limit = arguments["limit"].as_u64().unwrap_or(40) as u32;
-                let said = self.ask(&name, None, |d| d.elements(limit))?;
+                let said = self.ask(&name, None, None, |d| d.elements(limit))?;
                 let captions: Vec<&str> = said["elements"].as_array().map(|all| all.iter().filter_map(|e| e["caption"].as_str()).collect()).unwrap_or_default();
                 let more = if said["complete"] == true { String::new() } else { format!("\n({} elements; the walk was cut short, there may be more)", captions.len()) };
                 Ok(text(captions.join("\n") + &more))
@@ -441,9 +447,8 @@ impl Server {
                 if tool == "type" && value.chars().count() > LONGEST_TYPED {
                     return Err(format!("too long to type here: {LONGEST_TYPED} characters at most (half a minute or more). paste takes any length"));
                 }
-                let by = if tool == "press" {
-                    self.shown.remove(&name);
-                    None
+                let (by, before) = if tool == "press" {
+                    (None, self.shown.remove(&name))
                 } else {
                     // Into whatever has focus: only by the device's latest look, with nothing done since but by it —
                     // held to after the screen's moment, in which another device could be saved under the name.
@@ -453,11 +458,11 @@ impl Server {
                         return Err(format!("look again: look {given} isn't the device's latest look, or something else was done since: nothing was {}", if tool == "type" { "typed" } else { "pasted" }));
                     }
                     self.stale(&name)?;
+                    let before = self.shown[&name].clone();
                     self.spend(&name);
-                    Some(self.shown[&name].of.clone())
+                    (Some(before.of.clone()), Some(before))
                 };
-                let done = self.ask(&name, by.as_ref(), |d| match tool { "type" => d.type_text(&value), "paste" => d.paste(&value), _ => d.button(&value) });
-                self.acted.insert(name, Instant::now());
+                let done = self.ask(&name, by.as_ref(), before, |d| match tool { "type" => d.type_text(&value), "paste" => d.paste(&value), _ => d.button(&value) });
                 done.map(|_| text(if tool == "type" && value.contains([' ', '\n']) {
                     "typed. If the device's keyboard wasn't an English one, its spaces and Returns converted or confirmed instead of being typed, and under an English one auto-correction may have changed a word it didn't know: look, and if the text isn't what you sent, use paste"
                 } else { "sent; look to see what it did" }))
@@ -466,8 +471,7 @@ impl Server {
             "launch" => {
                 let bundle = arguments["bundle"].as_str().ok_or("bundle is missing")?.to_string();
                 self.shown.remove(&name);
-                let done = self.ask(&name, None, |d| d.launch(&bundle));
-                self.acted.insert(name, Instant::now());
+                let done = self.ask(&name, None, None, |d| d.launch(&bundle));
                 done.map(|said| text(format!("launched (pid {}); look to see it", said["pid"])))
             }
             _ => Err(format!("no such tool: {tool}")),
@@ -680,7 +684,7 @@ mod tests {
         device::unstub(&name);
         device::stub(&name, 49153);
         assert!(server.unturned(&name, 1, &of).unwrap_err().contains("isn't the one that look was of"));
-        assert!(server.ask(&name, Some(&of), |d| d.tap(0.5, 0.5)).unwrap_err().contains("isn't the one that look was of"));
+        assert!(server.ask(&name, Some(&of), None, |d| d.tap(0.5, 0.5)).unwrap_err().contains("isn't the one that look was of"));
         // A look is held to none: it opens the device saved now (which doesn't answer, as it isn't there).
         assert!(server.call("look", &json!({ "device": name })).unwrap_err().contains("doesn't answer"));
         device::unstub(&name);
@@ -715,9 +719,9 @@ mod tests {
         assert!(call(&mut server, "tap", json!({ "look": 8, "x": 1, "y": 1 })).starts_with("look first"));
         // Refused by the device for what it says, before anything was sent: the look stands. Failed otherwise, it may
         // have reached the device and moved what the look saw: nothing more goes by it.
-        assert!(server.answered(&name, r#"{"ok":false,"invalid":true,"error":"no such button"}"#.into()).is_err());
+        assert!(server.answered(&name, r#"{"ok":false,"invalid":true,"error":"no such button"}"#.into(), None).is_err());
         assert!(server.shown.contains_key(&name));
-        assert!(server.answered(&name, r#"{"ok":false,"error":"timed out"}"#.into()).unwrap_err().contains("may or may not"));
+        assert!(server.answered(&name, r#"{"ok":false,"error":"timed out"}"#.into(), None).unwrap_err().contains("may or may not"));
         assert!(call(&mut server, "type", typed(8)).starts_with("look again"));
         // Another look since, by whoever; one more than a minute old; one of another device saved under the name
         // since: not sent.
@@ -737,6 +741,32 @@ mod tests {
             assert!(call(&mut server, "paste", typed(10)).starts_with("look again"), "{tool}");
         }
         device::unstub(&name);
+    }
+
+    #[test]
+    fn a_call_the_device_refuses_for_what_it_says_leaves_the_look_as_it_was_and_is_no_input() {
+        let name = format!("refused-{}", std::process::id());
+        let mut server = Server::default();
+        let refused = || r#"{"ok":false,"invalid":true,"error":"can't type character 1 of the text"}"#.to_string();
+        let look = |server: &mut Server, spent: bool| { server.shown.insert(name.clone(), Shown { size: (100.0, 200.0), way: 1, at: Instant::now(), of: None, id: 7, spent }); };
+        // A tap, swipe, type or paste spends the look as it is sent; refused, the look is as it was: a tap by it is
+        // still taken, and one gone by it already (look → tap → type) still isn't.
+        for spent in [false, true] {
+            look(&mut server, spent);
+            let before = server.shown.get(&name).cloned();
+            server.spend(&name);
+            assert!(server.answered(&name, refused(), before).is_err());
+            assert_eq!(server.shown[&name].spent, spent);
+        }
+        // A press ends the look as it is sent; refused, it stands.
+        let before = server.shown.remove(&name);
+        assert!(server.answered(&name, refused(), before).is_err());
+        assert!(server.shown.contains_key(&name));
+        // None of those was an input, which a look or text would wait a moment after; whatever else the device
+        // answered was one, the elements walked too.
+        assert!(!server.acted.contains_key(&name));
+        assert!(server.answered(&name, r#"{"ok":true,"elements":[],"complete":true}"#.into(), None).is_ok());
+        assert!(server.acted.contains_key(&name));
     }
 
     #[test]
