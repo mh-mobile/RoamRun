@@ -6,7 +6,8 @@ and a pairing made on a Mac that can pair. Xcode isn't needed there. `scripts/se
 does the part on that Mac in one go; what it does, and what only you can do, is below.
 
 What that Mac needs: Apple silicon, macOS 13 or later, [Homebrew](https://brew.sh), an
-administrator's password (Tailscale's service is started with it), and somebody logged in at
+administrator's password where Tailscale comes from Homebrew (its service is started with it),
+and somebody logged in at
 its screen — the RoamRun app holds the connection, and an app needs a session to run in.
 
 ## 1. On your own Mac: make a pairing for it
@@ -57,13 +58,14 @@ curl -fsSLO https://raw.githubusercontent.com/mh-mobile/RoamRun/main/scripts/set
 TS_AUTHKEY=tskey-auth-… sh set-up-mac.sh ~/for-the-other-mac.json
 ```
 
-Read the script first: it runs `sudo`. It installs Tailscale and joins your tailnet, installs
+Read the script first: it runs `sudo` for Homebrew's Tailscale. It installs Tailscale and joins your tailnet, installs
 RoamRun and opens it, installs the agent skill, and imports the pairing — skipping what is
 already done, so it can be run again. `TS_AUTHKEY=file:/path/to/key` keeps the key out of the
 process list.
 
 By hand, on a Mac without the Tailscale app, it is (with the app, the script uses the app's
-own Tailscale and installs none):
+own Tailscale, as the user running it, and installs none). The script hasn't been run whole on a
+Mac, and its way with the Tailscale app hasn't been tried; the steps one by one are these:
 
 ```sh
 brew install tailscale

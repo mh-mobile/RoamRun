@@ -71,9 +71,10 @@ bounded.
   - The offer's port is not checked to be Xcode's pairing port — only that it is
     1024 or above and answers. Give `pair introduce` only an offer from a Mac you
     trust; by name, it comes from the Mac you named.
-  - **The code doesn't prove which Mac is at the other end.** It is shown by
-    whatever listens on the named Mac's port and typed on the device; this Mac
-    sees neither. What you are trusting is the Mac you named: introduce one only
+  - **The code doesn't prove which Mac is at the other end.** For Xcode, it is
+    shown by whatever listens on the named Mac's port and typed on the device;
+    this Mac sees neither. For device control it is shown here, on the Mac that
+    introduces (see device control below). What you are trusting is the Mac you named: introduce one only
     if you would plug the device into it. For a Mac of your own, type only a code
     you read off its screen yourself.
   - The device shows the entry under that Mac's Tailscale name, which is this

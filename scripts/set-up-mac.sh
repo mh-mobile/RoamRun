@@ -5,7 +5,8 @@
 #   TS_AUTHKEY=tskey-auth-… sh set-up-mac.sh [pairing.json]
 #
 # Each step is skipped where it is already done, so it can be run again. It asks for an
-# administrator's password once, to start Tailscale. TS_AUTHKEY is needed only while this Mac
+# administrator's password once, to start Homebrew's Tailscale (the Tailscale app's needs none).
+# TS_AUTHKEY is needed only while this Mac
 # isn't on the tailnet; `file:/path` is taken too, which keeps the key out of the process list.
 set -eu
 
@@ -22,13 +23,19 @@ say "Tailscale"
 # The App Store's or the standalone app's own CLI first, as RoamRun looks for it: Homebrew's
 # beside that app would be a second Tailscale.
 app=/Applications/Tailscale.app/Contents/MacOS/Tailscale
+# The app's binary is its CLI only when told so (Tailscale's own advice for scripts).
+export TAILSCALE_BE_CLI=1
 if [ -x "$app" ]; then ts=$app; else ts=$(command -v tailscale || true); fi
 [ -n "$ts" ] || { brew install tailscale; ts=$(command -v tailscale); }
 if ! "$ts" status >/dev/null 2>&1; then
     [ -n "${TS_AUTHKEY-}" ] || die "this Mac isn't on your tailnet: set TS_AUTHKEY (an auth key from the Tailscale admin console › Settings › Keys) and run this again"
     # The App Store's and the standalone Tailscale run their own service; Homebrew's needs starting.
-    if [ "$ts" != "$app" ] && brew list --formula tailscale >/dev/null 2>&1; then sudo brew services start tailscale; fi
-    sudo "$ts" up --auth-key="$TS_AUTHKEY"
+    # The app's CLI joins as the user running it: run by root it didn't reach the app (tailscale#3063).
+    if [ "$ts" = "$app" ]; then "$ts" up --auth-key="$TS_AUTHKEY"
+    else
+        if brew list --formula tailscale >/dev/null 2>&1; then sudo brew services start tailscale; fi
+        sudo "$ts" up --auth-key="$TS_AUTHKEY"
+    fi
 fi
 "$ts" status | head -3
 
