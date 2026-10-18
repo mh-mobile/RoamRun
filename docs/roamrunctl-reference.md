@@ -301,7 +301,7 @@ until Ctrl-C:
   `--allow-install`, `/upload` is 404 and neither `install` nor `install_status` is listed.
 - Once the caller is let in (as for `/mcp`): a method other than `PUT` is 405, no length and
   not chunked 411, a length over the most 413 (before `100 Continue` is sent), and one while
-  another is coming in 409. `--max-upload <MiB>` sets the most: 200 by default, 1 to 4096.
+  another is coming in 409. `--max-upload <MiB>` sets the most: 1024 by default, 1 to 4096.
   The body may take 30 seconds plus 2 seconds a MiB of its length (of the most, when chunked).
 - One upload is kept: when another begins to come in, from whichever caller, the one kept is
   dropped. It is kept in a folder made

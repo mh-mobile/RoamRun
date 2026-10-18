@@ -292,7 +292,7 @@ bounded.
   connections at most: a machine that can reach the port but isn't let in can't keep
   callers out for long. Only the devices named are used — each only while it is saved as
   it was when the server began — and `install` is offered only with `--allow-install`, from an
-  `.ipa` sent with `PUT /upload`, never a path on the machine. One upload is kept (200 MiB at
+  `.ipa` sent with `PUT /upload`, never a path on the machine. One upload is kept (1024 MiB at
   most by default), in a folder made for the run that only its user can open (on Windows, the
   user's own temporary folder); only the caller that sent it — by its Tailscale node's lasting
   id — can install it, by the sha256 it was answered; it goes when its install ends, after
