@@ -244,8 +244,7 @@ believed the first time it is used — use it only if the user named it.
   tap, swipe, type or paste, a tap or swipe needs a new look. `press` isn't held to a look and
   goes to whatever is on the screen: look before it too. A
   call that fails may or may not have reached the device — look before doing it again.
-  A call you take back before its turn isn't made; a `notifications/cancelled` counts while the
-  server holds fewer than 256 from the last minute.
+  A call you take back before its turn isn't made.
   These press what is really there — don't tap what spends money, posts, sends, deletes
   or signs in unless the user asked for exactly that.
 
@@ -284,7 +283,8 @@ begun" did nothing; `HTTP 000` (no answer: a timeout, or the connection closed) 
 may have done it — look before trying again. Keep
 the connection open until the answer comes: a call whose connection closed before its turn
 isn't made, and closing it is how a call is taken back with curl (`notifications/cancelled`
-counts only with the `Mcp-Session-Id` an `initialize` answered with, as MCP clients send it). Give each tap, swipe, type and paste the id of your look: after another agent's look,
+counts only with the `Mcp-Session-Id` an `initialize` answered with, as MCP clients send it,
+and while the server holds fewer than 256 from the last minute). Give each tap, swipe, type and paste the id of your look: after another agent's look,
 yours is refused — look again. Only the devices
 the user named are there.
 

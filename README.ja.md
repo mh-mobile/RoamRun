@@ -428,7 +428,7 @@ roamrun ota iPhone build/MyApp.ipa     # 名前を指定すると、そのデバ
 
 ### 既知の問題
 
-- **macOS が RoamRun のローカルネットワークへのアクセスを止めていると、デバイスは常に「離れた場所にある」ように見えます**。その場合、RoamRun は、すぐ横にあるデバイスをブリッジし続けます。RoamRun は、ウインドウ、ログ、`roamrun status`、`roamrun doctor` でこの状態を知らせます。システム設定 › プライバシーとセキュリティ › ローカルネットワーク で、RoamRun を許可してください。スイッチがすでにオンになっている場合は、許可が正しく効いていません。これまでに見つかった直し方は、入れ直すことだけです。`brew uninstall --zap --cask roamrun` を実行してから、もう一度インストールします。`--zap` は `~/Library/Application Support/RoamRun` のフォルダごと削除します。保存したデバイスも、デバイス操作のペアリングも、このフォルダにあります。先にフォルダごと別の場所にコピーし、RoamRun を開く前に戻してください（[#23](https://github.com/mh-mobile/RoamRun/issues/23)）。
+- **macOS が RoamRun のローカルネットワークへのアクセスを止めていると、デバイスは常に「離れた場所にある」ように見えます**。その場合、RoamRun は、すぐ横にあるデバイスをブリッジし続けます。RoamRun は、ウインドウ、ログ、`roamrun status`、`roamrun doctor` でこの状態を知らせます。システム設定 › プライバシーとセキュリティ › ローカルネットワーク で、RoamRun を許可してください。スイッチがすでにオンになっている場合は、許可が正しく効いていません。これまでに見つかった直し方は、入れ直すことだけです（[#23](https://github.com/mh-mobile/RoamRun/issues/23)）。`--zap` は `~/Library/Application Support/RoamRun` のフォルダごと削除します。保存したデバイスも、デバイス操作のペアリングも、このフォルダにあります。これらを残すには、まず `roamrun up -d` で始めたブリッジを止め（`roamrun down <name>`）、RoamRun を終了してから、フォルダを別の場所にコピーします。次に `brew uninstall --zap --cask roamrun` を実行して、もう一度インストールします。そのあと、RoamRun を開く前、`roamrun` を実行する前に、フォルダを元の場所に戻します。フォルダを戻したあとも許可が効いたままかどうかは、試していません。
 - **iOS の Tailscale が、接続中に見えたまま通信を通さなくなることがあります**。スリープやネットワークの切り替えのあとに起きました（「MagicSock function ReceiveIPv4 is not running」と表示されます）。VPN を一度オフにして、オンに戻してください。
 - **USB でつないだデバイスがあると、ブリッジ中の別のデバイスが Ready にならないことがあります**。USB のデバイスを外してください。
 - **Mac が数分間スリープすると、Xcode のセッションは切れます**。スリープから戻ったあとに、もう一度 Run してください。
