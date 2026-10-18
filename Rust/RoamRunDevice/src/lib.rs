@@ -496,15 +496,15 @@ pub fn install_given(path: &str) -> (u64, Duration) {
     (megabytes, Duration::from_secs(300 + 15 * megabytes))
 }
 
-/// The most an .ipa may unpack to, by what its archive says (the device unpacks it), and the most of its
-/// Info.plist read here (idevice reads all of it, however much it inflates to).
+/// The most an .ipa may unpack to, by what its archive says (the device unpacks it), and the most of each
+/// Info.plist read here (idevice reads all of each one it meets, however much it inflates to).
 const UNPACKED: u64 = 4 << 30;
 const INFO_PLIST: u64 = 1 << 20;
 
 /// The bundle identifier of the app in the .ipa at `path`, checked before anything of it is sent: `Payload`
 /// holds one `<name>.app` and nothing else but hidden files (a `.bundle` idevice would install as another kind of
-/// package; a name ending in `.app` is an app, hidden or not), with the one Info.plist idevice takes the app's
-/// from, and it unpacks to `UNPACKED` at most.
+/// package; a name ending in `.app` is an app, hidden or not), the first Info.plist idevice takes a bundle
+/// identifier from is the app's, and it unpacks to `UNPACKED` at most.
 pub fn ipa_checked(path: &str) -> Result<String, String> {
     ipa_within(path, UNPACKED, INFO_PLIST)
 }
@@ -532,19 +532,21 @@ fn ipa_within(path: &str, unpacked: u64, info_plist: u64) -> Result<String, Stri
         }
         let app = app.ok_or_else(|| not("no Payload/<name>.app in it".into()))?.to_string();
         if size > unpacked { return Err(not(format!("it says it unpacks to {} MB, more than {} MB", size >> 20, unpacked >> 20))) }
-        let [(index, name, declared)] = plists.as_slice() else {
-            return Err(not(format!("{} Info.plist where the app's is looked for, not one: {}", plists.len(), plists.iter().map(|p| p.1.as_str()).collect::<Vec<_>>().join(", "))));
-        };
-        if *name != format!("Payload/{app}/Info.plist") { return Err(not(format!("{name} is where the app's Info.plist would be looked for"))) }
-        // By what comes out, not by what it says: what it says can be less.
-        let mut read = Vec::new();
-        if *declared <= info_plist {
-            let entry = zip.reader_without_entry(*index).await.map_err(|e| not(format!("{e}")))?;
-            entry.take(info_plist + 1).read_to_end(&mut read).await.map_err(|e| not(format!("{e}")))?;
+        // As idevice reads them: in order, each whole, until one says a bundle identifier.
+        for (index, name, declared) in plists {
+            // By what comes out, not by what it says: what it says can be less.
+            let mut read = Vec::new();
+            if declared <= info_plist {
+                let entry = zip.reader_without_entry(index).await.map_err(|e| not(format!("{e}")))?;
+                entry.take(info_plist + 1).read_to_end(&mut read).await.map_err(|e| not(format!("{e}")))?;
+            }
+            if declared > info_plist || read.len() as u64 > info_plist { return Err(not(format!("{name} is more than {} KB", info_plist >> 10))) }
+            let info = plist::from_bytes::<plist::Value>(&read).map_err(|e| not(format!("{name} isn't a plist: {e}")))?;
+            let Some(id) = info.as_dictionary().and_then(|info| info.get("CFBundleIdentifier")?.as_string()) else { continue };
+            if name != format!("Payload/{app}/Info.plist") { return Err(not(format!("{name} is where the app's Info.plist would be looked for"))) }
+            return Ok(id.to_string());
         }
-        if *declared > info_plist || read.len() as u64 > info_plist { return Err(not(format!("its Info.plist is more than {} KB", info_plist >> 10))) }
-        plist::from_bytes::<plist::Dictionary>(&read).ok().and_then(|info| info.get("CFBundleIdentifier")?.as_string().map(str::to_string))
-            .ok_or_else(|| not("its Info.plist doesn't say the app's bundle identifier".into()))
+        Err(not("no Info.plist where the app's is looked for says a bundle identifier".into()))
     })
 }
 
@@ -1724,12 +1726,18 @@ mod tests {
     }
 
     const INFO: &[u8] = b"<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>io.example.app</string></dict></plist>";
+    const OTHER: &[u8] = b"<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>io.example.other</string></dict></plist>";
+    const GOOGLE: &[u8] = b"<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>BUNDLE_ID</key><string>io.example.app</string></dict></plist>";
 
     #[test]
     fn an_ipa_is_installed_only_as_one_app_with_its_info_plist_and_not_too_big() {
         let checked = |name: &str, files: &[(&str, &[u8])]| { let path = ipa(name, files); let said = ipa_within(&path, 1 << 20, 1024); std::fs::remove_file(path).unwrap(); said };
         let app = [("Payload/A.app/Info.plist", INFO), ("Payload/A.app/A", &b"binary"[..]), ("SwiftSupport/iphoneos/libswiftCore.dylib", &b"x"[..])];
         assert_eq!(checked("good", &app), Ok("io.example.app".into()));
+        // Firebase's GoogleService-Info.plist beside the app's: idevice passes over a plist without an id.
+        assert_eq!(checked("firebase-first", &[("Payload/A.app/GoogleService-Info.plist", GOOGLE), ("Payload/A.app/Info.plist", INFO)]), Ok("io.example.app".into()));
+        assert_eq!(checked("firebase-after", &[("Payload/A.app/Info.plist", INFO), ("Payload/A.app/GoogleService-Info.plist", GOOGLE)]), Ok("io.example.app".into()));
+        assert_eq!(checked("array-first", &[("Payload/A.app/List-Info.plist", b"<plist version=\"1.0\"><array/></plist>"), ("Payload/A.app/Info.plist", INFO)]), Ok("io.example.app".into()));
         let refused = |name: &str, files: &[(&str, &[u8])], why: &str| { let said = checked(name, files).unwrap_err(); assert!(said.contains(why), "{name}: {said}") };
         // A .bundle: idevice would install it as another kind of package.
         refused("bundle", &[("Payload/A.bundle/Info.plist", INFO)], "Payload/A.bundle");
@@ -1743,15 +1751,22 @@ mod tests {
         // A name ending in .app is an app, hidden or not: alone, it is the one.
         assert_eq!(checked("hidden-app", &[("Payload/.A.app/Info.plist", INFO)]), Ok("io.example.app".into()));
         refused("no-app", &[("A.app/Info.plist", INFO)], "no Payload/<name>.app");
-        refused("no-plist", &[("Payload/A.app/A", b"binary")], "0 Info.plist");
-        // Another name idevice would take for the app's Info.plist (it reads the first one it meets).
-        refused("other-plist", &[("Payload/A.app/Info.plist", INFO), ("Symbols/x/Info.plist", INFO)], "2 Info.plist");
-        refused("look-alike", &[("Payload/A.app/Info.plist", INFO), ("Payload/A.app/FooInfo.plist", INFO)], "2 Info.plist");
+        refused("no-plist", &[("Payload/A.app/A", b"binary")], "no Info.plist where the app's is looked for says");
+        // idevice takes the id of the first plist it meets that has one: before the app's, it isn't the app's.
+        refused("other-plist", &[("Symbols/x/Info.plist", OTHER), ("Payload/A.app/Info.plist", INFO)], "Symbols/x/Info.plist is where");
+        refused("look-alike", &[("Payload/A.app/FooInfo.plist", OTHER), ("Payload/A.app/Info.plist", INFO)], "Payload/A.app/FooInfo.plist is where");
+        assert_eq!(checked("other-plist-after", &[("Payload/A.app/Info.plist", INFO), ("Symbols/x/Info.plist", OTHER)]), Ok("io.example.app".into()));
+        assert_eq!(checked("look-alike-after", &[("Payload/A.app/Info.plist", INFO), ("Payload/A.app/FooInfo.plist", OTHER)]), Ok("io.example.app".into()));
+        // One it reads before the app's that it can't parse fails the install; one it reads whole is bounded too.
+        refused("unparsed-first", &[("Payload/A.app/GoogleService-Info.plist", b"not a plist"), ("Payload/A.app/Info.plist", INFO)], "Payload/A.app/GoogleService-Info.plist isn't a plist");
+        refused("big-first", &[("Payload/A.app/GoogleService-Info.plist", &vec![b' '; 2048]), ("Payload/A.app/Info.plist", INFO)], "Payload/A.app/GoogleService-Info.plist is more than 1 KB");
+        assert_eq!(checked("unparsed-after", &[("Payload/A.app/Info.plist", INFO), ("Payload/A.app/GoogleService-Info.plist", b"not a plist")]), Ok("io.example.app".into()));
+        assert_eq!(checked("big-after", &[("Payload/A.app/Info.plist", INFO), ("Payload/A.app/GoogleService-Info.plist", &vec![b' '; 2048])]), Ok("io.example.app".into()));
         refused("elsewhere", &[("Payload/A.app/A", b"binary"), ("Symbols/x/Info.plist", INFO)], "Symbols/x/Info.plist is where");
-        refused("deeper", &[("Payload/A.app/Inner/Info.plist", INFO), ("Payload/A.app/A", b"binary")], "0 Info.plist");
+        refused("deeper", &[("Payload/A.app/Inner/Info.plist", INFO), ("Payload/A.app/A", b"binary")], "no Info.plist where the app's is looked for says");
         refused("too-big", &[("Payload/A.app/Info.plist", INFO), ("Payload/A.app/A", &vec![0u8; 2 << 20])], "unpacks to 2 MB");
         refused("big-plist", &[("Payload/A.app/Info.plist", &vec![b' '; 2048])], "more than 1 KB");
-        refused("no-id", &[("Payload/A.app/Info.plist", b"<plist version=\"1.0\"><dict/></plist>")], "bundle identifier");
+        refused("no-id", &[("Payload/A.app/Info.plist", b"<plist version=\"1.0\"><dict/></plist>"), ("Payload/A.app/GoogleService-Info.plist", GOOGLE)], "no Info.plist where the app's is looked for says");
         assert!(ipa_within("/nowhere/at/all.ipa", 1 << 20, 1024).is_err());
         let not_zip = std::env::temp_dir().join(format!("rr-ipa-{}-text.ipa", std::process::id()));
         std::fs::write(&not_zip, b"not a zip").unwrap();

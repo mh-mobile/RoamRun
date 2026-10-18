@@ -325,10 +325,12 @@ until Ctrl-C:
 - An `.ipa` is checked before anything of it is sent, by `roamrunctl install` (before the
   device is opened) and by MCP alike: `Payload` holds one `<name>.app` and nothing else but
   hidden files such as `.DS_Store` (a `.bundle` is refused; a name ending in `.app` counts as
-  an app, hidden or not), with one
-  `Info.plist` where the app's is looked for, which gives the app's bundle identifier; it
-  unpacks to 4 GiB at most, by what the archive says; and no more than 1 MiB of that
-  `Info.plist` is read. An `.app` directory isn't checked.
+  an app, hidden or not), and it unpacks to 4 GiB at most, by what the archive says. The
+  app's bundle identifier is found as the install finds it: the files whose names have three
+  parts and end in `Info.plist` are read in the archive's order, and the first that gives a
+  bundle identifier must be `Payload/<name>.app/Info.plist`. One before it without an
+  identifier, such as Firebase's `GoogleService-Info.plist` in the app, is passed over. Each
+  one read must be a plist of 1 MiB at most. An `.app` directory isn't checked.
 - An `.ipa` is read whole into memory to be sent: an upload as large as `--max-upload` allows
   takes that much memory on this machine while it is installed.
 - An `.app` directory is staged on the device under its own name, and `.ipa` packages use
