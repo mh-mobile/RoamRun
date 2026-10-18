@@ -1068,7 +1068,7 @@ enum CLI {
                 note("roamrun: " + sentence(why, other: far.name, device: profile.displayName))
                 exit(1)
             case nil:
-                note("What \(far.name) kept couldn't be learned. There: roamrun pair control --attempt \(control)")
+                note("What \(far.name) kept couldn't be learned. Its own terminal says; with RoamRun there: roamrun pair control --attempt \(control)")
                 exit(1)
             }
         }

@@ -137,7 +137,7 @@ B では、署名マシンが秘密鍵を持ちます。操作マシンは、デ
 次の形で起動し、Ctrl-C で止めるまで動きます。
 
 ```
-roamrunctl mcp --http <ポート> --allow <相手>… [--token-file <ファイル>] [--allow-install [--max-upload <MiB>]] <デバイス>…
+roamrunctl mcp --http <ポート> --allow <相手> [--allow <相手>…] [--token-file <ファイル>] [--allow-install [--max-upload <MiB>]] <デバイス>…
 ```
 
 - 待ち受けるのは、このマシンの Tailscale の IPv4 アドレスだけです。Tailscale が動いていないとき、`--allow` がないとき、デバイスの指定がないとき、root で動かしたときは起動しません。root かどうかは、Linux と macOS では実効ユーザーで判断します。Windows では確かめません。次のデバイスも指定できません。署名するマシンが提供しているだけで、まだこのマシンで使ったことのないもの、保存ファイルを読めないもの（パスフレーズが与えられていない場合など）、同じデバイスを 2 つの名前で指定したものです。

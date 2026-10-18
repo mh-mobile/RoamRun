@@ -428,7 +428,7 @@ roamrun ota iPhone build/MyApp.ipa     # 名前を指定すると、そのデバ
 
 ### 既知の問題
 
-- **macOS が RoamRun のローカルネットワークへのアクセスを止めていると、デバイスは常に「離れた場所にある」ように見えます**。その場合、RoamRun は、すぐ横にあるデバイスをブリッジし続けます。RoamRun は、ウインドウ、ログ、`roamrun status`、`roamrun doctor` でこの状態を知らせます。システム設定 › プライバシーとセキュリティ › ローカルネットワーク で、RoamRun を許可してください。スイッチがすでにオンになっている場合は、許可が正しく効いていません。これまでに見つかった直し方は、入れ直すことだけです。`brew uninstall --zap --cask roamrun` を実行してから、もう一度インストールします。`--zap` は保存したデバイスも削除します。先に `~/Library/Application Support/RoamRun/profiles.json` を別の場所にコピーし、RoamRun を開く前に戻してください（[#23](https://github.com/mh-mobile/RoamRun/issues/23)）。
+- **macOS が RoamRun のローカルネットワークへのアクセスを止めていると、デバイスは常に「離れた場所にある」ように見えます**。その場合、RoamRun は、すぐ横にあるデバイスをブリッジし続けます。RoamRun は、ウインドウ、ログ、`roamrun status`、`roamrun doctor` でこの状態を知らせます。システム設定 › プライバシーとセキュリティ › ローカルネットワーク で、RoamRun を許可してください。スイッチがすでにオンになっている場合は、許可が正しく効いていません。これまでに見つかった直し方は、`brew uninstall` に `--zap` を付けてアンインストールしてから、入れ直すことだけです（[#23](https://github.com/mh-mobile/RoamRun/issues/23)）。`--zap` は `~/Library/Application Support/RoamRun` のフォルダごと削除します。保存したデバイスも、デバイス操作のペアリングも、このフォルダにあります。これらを残すには、まず `roamrun up` で始めたブリッジを止めます（`roamrun down <name>`）。`-d` を付けたものも、ターミナルで動いているものも止めます。次に RoamRun を終了し、フォルダを別の場所にコピーします。そのうえで `brew uninstall --zap --cask roamrun` を実行して、もう一度インストールします。そのあと、RoamRun を開く前、`roamrun` を実行する前に、フォルダを元の場所に戻します。フォルダを戻したあとも許可が効いたままかどうかは、試していません。
 - **iOS の Tailscale が、接続中に見えたまま通信を通さなくなることがあります**。スリープやネットワークの切り替えのあとに起きました（「MagicSock function ReceiveIPv4 is not running」と表示されます）。VPN を一度オフにして、オンに戻してください。
 - **USB でつないだデバイスがあると、ブリッジ中の別のデバイスが Ready にならないことがあります**。USB のデバイスを外してください。
 - **Mac が数分間スリープすると、Xcode のセッションは切れます**。スリープから戻ったあとに、もう一度 Run してください。
@@ -461,7 +461,7 @@ RoamRun は、自分のファイルを次の場所に置きます。
 
 アンインストールは、次の順で行います。
 
-1. `roamrun up -d` で始めたブリッジを止めます（`roamrun down <name>`）。このブリッジは、アプリがなくても動き続けます。
+1. `roamrun up` で始めたブリッジ（`-d` を付けたものも、ターミナルで動いているものも）を止めます（`roamrun down <name>`）。このブリッジは、アプリがなくても動き続けます。
 2. スキルを入れた場合は、ここで `roamrun init --uninstall` を実行します。`roamrun` コマンドがあるうちに実行してください。
 3. 「Open at login」をオンにしていた場合はオフにして、RoamRun を終了します。終了するとき、RoamRun は `tailscale serve` の設定を自分で片づけます。
 4. Homebrew を使っている場合は、`brew uninstall --zap --cask roamrun` を実行します。アプリ、CLI のリンク、設定、ログ、保存したデバイスが削除されます。キーチェーンの 2 つの項目は残るので、下の `security` の 2 行で削除してください。Homebrew を使っていない場合は、下の行のうち、該当するものを実行します。

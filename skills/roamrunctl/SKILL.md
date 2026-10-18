@@ -207,7 +207,8 @@ If the user's `pair control --with` ends with the other machine not having come 
 minutes, or the other machine says nobody waits, the usual reason is that this machine
 doesn't let the other in (Tailscale's rules, a firewall): on port 41830, and on a port
 that is another each time. B needs this machine able to write its own devices folder
-(`~/.config/roamrunctl/devices`; on Windows `%LOCALAPPDATA%\roamrunctl\devices`).
+(`~/.config/roamrunctl/devices`, or `$XDG_CONFIG_HOME/roamrunctl/devices` when that is an
+absolute path; on Windows `%LOCALAPPDATA%\roamrunctl\devices`, `%APPDATA%`'s without it).
 
 What B does and doesn't: the key isn't on this machine to be copied, and when the user ends
 `sign`, or removes the device on the key's machine, no new connection is made. While `sign` answers, any program on this machine
@@ -282,7 +283,8 @@ begun" did nothing; `HTTP 000` (no answer: a timeout, or the connection closed) 
 may have done it — look before trying again. Keep
 the connection open until the answer comes: a call whose connection closed before its turn
 isn't made, and closing it is how a call is taken back with curl (`notifications/cancelled`
-counts only with the `Mcp-Session-Id` an `initialize` answered with, as MCP clients send it). Give each tap, swipe, type and paste the id of your look: after another agent's look,
+counts only with the `Mcp-Session-Id` an `initialize` answered with, as MCP clients send it,
+and while the server holds fewer than 256 from the last minute). Give each tap, swipe, type and paste the id of your look: after another agent's look,
 yours is refused — look again. Only the devices
 the user named are there.
 

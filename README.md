@@ -604,10 +604,13 @@ When in trouble, run `roamrun doctor` first.
   goes on bridging a device that sits beside it. RoamRun says so in its window, its log,
   `roamrun status` and `roamrun doctor`. Allow RoamRun under System Settings › Privacy & Security ›
   Local Network. If the switch is already on, the permission is stuck. The only way found to clear
-  it was to reinstall: `brew uninstall --zap --cask roamrun`, then install again. `--zap` deletes
-  your saved devices, so copy `~/Library/Application Support/RoamRun/profiles.json` aside first, and
-  put it back before you open RoamRun again
-  ([#23](https://github.com/mh-mobile/RoamRun/issues/23)).
+  it was to uninstall with `brew uninstall --zap` and install again
+  ([#23](https://github.com/mh-mobile/RoamRun/issues/23)). `--zap` deletes the folder
+  `~/Library/Application Support/RoamRun`, with your saved devices and device control's pairings in
+  it. To keep them: stop the bridges `roamrun up` started, with `-d` or in a terminal
+  (`roamrun down <name>`), and quit RoamRun; copy that folder aside; run `brew uninstall --zap --cask roamrun` and install
+  again; then put the folder back before you open RoamRun or run `roamrun`. Whether the
+  permission stays cleared with the folder put back hasn't been tried.
 - **Tailscale on iOS has been seen to stop passing traffic** after sleep or a network change while
   it still looks connected ("MagicSock function ReceiveIPv4 is not running"). Turn the VPN off and
   on.
@@ -644,7 +647,8 @@ item if you turned on "Open at login", and one `tailscale serve` entry while it 
 
 To uninstall, in this order:
 
-1. Stop bridges started with `roamrun up -d` (`roamrun down <name>`). They run without the app.
+1. Stop the bridges `roamrun up` started, with `-d` or in a terminal (`roamrun down <name>`). They
+   run without the app.
 2. If you installed the skill, run `roamrun init --uninstall` now, while the command still exists.
 3. Turn off "Open at login" if you turned it on, and quit RoamRun. Quitting gives its
    `tailscale serve` entry back.
