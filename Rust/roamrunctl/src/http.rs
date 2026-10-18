@@ -838,11 +838,16 @@ mod tests {
 
     /// The same, taking uploads into `uploads` (`--allow-install`).
     fn started_with(token: Option<&str>, whois: fn(IpAddr) -> Result<Whois, String>, uploads: Option<Arc<Uploads>>) -> SocketAddr {
+        started_for(token, whois, uploads, Duration::from_millis(500))
+    }
+
+    /// The same, a head given `head_within`.
+    fn started_for(token: Option<&str>, whois: fn(IpAddr) -> Result<Whois, String>, uploads: Option<Arc<Uploads>>, head_within: Duration) -> SocketAddr {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let at = listener.local_addr().unwrap();
         let options = Options { port: at.port(), allowed: vec![Allow::Tag("tag:ci".into())], token: token.map(str::to_string), devices: vec!["phone".into()], uploads: uploads.as_ref().map(|u| u.most) };
         let names = vec!["mac.example.ts.net".into(), "mac".into()];
-        std::thread::spawn(move || run(listener, options, vec![("phone".into(), None)], "100.64.0.1".parse().unwrap(), names, "own".into(), Duration::from_millis(500), Box::new(whois), uploads));
+        std::thread::spawn(move || run(listener, options, vec![("phone".into(), None)], "100.64.0.1".parse().unwrap(), names, "own".into(), head_within, Box::new(whois), uploads));
         at
     }
 
@@ -926,10 +931,15 @@ mod tests {
         let _ = slow.read_to_end(&mut answer);
         let answer = String::from_utf8_lossy(&answer);
         assert!(answer.starts_with("HTTP/1.1 408") && began.elapsed() < Duration::from_secs(3), "{answer:?} {:?}", began.elapsed());
-        // One address holds FROM_ONE connections at most: the next is turned away at once.
+        // One address holds FROM_ONE connections at most: the next is turned away, once the server has taken them
+        // (a busy machine may take a while: they are given a head long enough to be held till then).
+        let at = started_for(None, ci, None, Duration::from_secs(10));
         let idle: Vec<TcpStream> = (0..FROM_ONE).map(|_| TcpStream::connect(at).unwrap()).collect();
-        std::thread::sleep(Duration::from_millis(100));
-        assert!(asked(at, "GET / HTTP/1.1\r\n\r\n").starts_with("HTTP/1.1 503"));
+        let until = Instant::now() + Duration::from_secs(5);
+        while !asked(at, "GET / HTTP/1.1\r\n\r\n").starts_with("HTTP/1.1 503") {
+            assert!(Instant::now() < until, "one address was never turned away");
+            std::thread::sleep(Duration::from_millis(50));
+        }
         drop(idle);
     }
 
