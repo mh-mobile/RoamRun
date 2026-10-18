@@ -64,11 +64,13 @@ device-lib:
 	cd Rust/RoamRunDevice && CFLAGS_aarch64_apple_darwin="-mmacosx-version-min=13.0" \
 		$(CARGO) build --release --locked --target-dir $(CURDIR)/.build/device
 	# SwiftPM's older build system (Xcode 26's) doesn't link again for a changed library alone:
-	# what an older one was linked into is removed, so that it is.
-	@if [ .build/device/release/libroamrun_device.a -nt .build/device/linked ]; then \
+	# what an older one was linked into is removed, so that it is. By its time, not newer-than:
+	# cargo puts an older build back with its own time.
+	@now=$$(/usr/bin/stat -f %Fm .build/device/release/libroamrun_device.a); \
+	if [ "$$now" != "$$(cat .build/device/linked 2>/dev/null)" ]; then \
 		rm -rf .build/*/debug/RoamRun .build/*/release/RoamRun .build/*/debug/DeviceProbe .build/*/release/DeviceProbe \
 			.build/*/debug/RoamRunPackageTests.xctest .build/*/release/RoamRunPackageTests.xctest; \
-		touch .build/device/linked; \
+		echo "$$now" > .build/device/linked; \
 	fi
 
 # The licenses of the crates that library is built from, which the app carries: made anew

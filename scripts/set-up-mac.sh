@@ -19,16 +19,15 @@ pairing=${1-}
 [ -z "$pairing" ] || [ -f "$pairing" ] || die "no such file: $pairing"
 
 say "Tailscale"
-# The App Store's or the standalone app's own CLI where none is on PATH, as RoamRun finds it:
-# Homebrew's beside that app would be a second Tailscale.
+# The App Store's or the standalone app's own CLI first, as RoamRun looks for it: Homebrew's
+# beside that app would be a second Tailscale.
 app=/Applications/Tailscale.app/Contents/MacOS/Tailscale
-ts=$(command -v tailscale || true)
-[ -n "$ts" ] || [ ! -x "$app" ] || ts=$app
+if [ -x "$app" ]; then ts=$app; else ts=$(command -v tailscale || true); fi
 [ -n "$ts" ] || { brew install tailscale; ts=$(command -v tailscale); }
 if ! "$ts" status >/dev/null 2>&1; then
     [ -n "${TS_AUTHKEY-}" ] || die "this Mac isn't on your tailnet: set TS_AUTHKEY (an auth key from the Tailscale admin console › Settings › Keys) and run this again"
     # The App Store's and the standalone Tailscale run their own service; Homebrew's needs starting.
-    case $ts in "$(brew --prefix)"/*) sudo brew services start tailscale ;; esac
+    if [ "$ts" != "$app" ] && brew list --formula tailscale >/dev/null 2>&1; then sudo brew services start tailscale; fi
     sudo "$ts" up --auth-key="$TS_AUTHKEY"
 fi
 "$ts" status | head -3
