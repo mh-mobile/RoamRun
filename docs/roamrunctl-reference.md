@@ -252,7 +252,8 @@ until Ctrl-C:
   passphrase not given), nor one device under two names.
 - Who may call: `--allow tag:<name>` matches a tagged caller by its tags, and `--allow <login>`
   an untagged caller by its user's login, as `tailscale whois` gives them for the caller's
-  address, asked at each request (5 s at most; no answer is a refusal). A login never matches
+  address, asked at each request (5 s at most; where it doesn't say who the caller is, the
+  request is answered 503, to be tried again). A login never matches
   a tagged machine. A machine shared in from another tailnet is refused, and so is this
   machine itself unless the token came.
 - `--token-file`: each request also brings `Authorization: Bearer <token>`. The file has to be
@@ -265,7 +266,7 @@ until Ctrl-C:
 - Answered before anything else: `/.well-known/*` and `/register` with 404 (no OAuth here),
   any `Origin` with 403, a `Host` other than this machine's address or its Tailscale names
   (with the port, which may be left out where it is 80) with 400; then a missing or wrong token with 401 (`WWW-Authenticate:
-  Bearer`), a caller not allowed with 403.
+  Bearer`), a caller `tailscale whois` didn't say who it is with 503, a caller not allowed with 403.
 - One request a connection (`Connection: close`). The head has to be in within 10 s of
   connecting, the body within 30 s more, however it trickles in. A body is read as chunked
   when it says so (also when a length comes with it), else by its length; 1 MB at most.

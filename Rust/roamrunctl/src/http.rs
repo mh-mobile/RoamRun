@@ -634,7 +634,8 @@ fn served(stream: &mut TcpStream, s: &Shared, from: IpAddr, began: Instant, who:
     if s.options.token.is_some() && !token { return refuse(401, "WWW-Authenticate: Bearer\r\n", "") }
     let whois = match (s.whois)(from) {
         Ok(whois) => whois,
-        Err(why) => { *who = format!("(whois: {why})"); return refuse(403, "", "") }
+        // Not known to be refused: a 403 would tell the caller not to try again.
+        Err(why) => { *who = format!("(whois: {why})"); return refuse(503, "", "the caller couldn't be looked up (tailscale whois): try again\n") }
     };
     let own = from == s.own_ip || (!s.own_id.is_empty() && whois.node.id == s.own_id);
     match judged(&whois, &s.options.allowed, own, token) {
@@ -1071,9 +1072,10 @@ mod tests {
         assert!(post(at, "Authorization: Bearer 0123456789abcdef0123456789abcdef\r\n", body).starts_with("HTTP/1.1 403"));
         let at = started(Some("0123456789abcdef0123456789abcdef"), ci);
         assert!(post(at, "Authorization: Bearer 0123456789abcdef0123456789abcdef\r\n", body).starts_with("HTTP/1.1 200"));
-        // Tailscale can't say: refused.
+        // Tailscale can't say: not let in, and told to try again (a 403 says not to).
         let at = started(None, |_| Err("no answer".into()));
-        assert!(post(at, "", body).starts_with("HTTP/1.1 403"));
+        let unknown = post(at, "", body);
+        assert!(unknown.starts_with("HTTP/1.1 503") && unknown.contains("couldn't be looked up"), "{unknown}");
         // This machine itself, without a token: refused.
         let at = started(None, |_| Ok(whois("own", &["tag:ci"], "tagged-devices", 0)));
         assert!(post(at, "", body).starts_with("HTTP/1.1 403"));

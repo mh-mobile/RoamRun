@@ -279,7 +279,9 @@ printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"t
 
 Write a look's image to a file, as above, and view the file: never print the base64 (the
 screen may show messages or notifications: the file is yours alone to read). `HTTP 401`
-is a missing or wrong token, `HTTP 403` a caller it doesn't let in — say so, don't retry. "not
+is a missing or wrong token, `HTTP 403` a caller it doesn't let in — say so, don't retry.
+`HTTP 503` did nothing (Tailscale didn't say who you are, or too many connections at once):
+try again in a moment. "not
 begun" did nothing; `HTTP 000` (no answer: a timeout, or the connection closed) or a 504
 may have done it — look before trying again. Keep
 the connection open until the answer comes: a call whose connection closed before its turn
