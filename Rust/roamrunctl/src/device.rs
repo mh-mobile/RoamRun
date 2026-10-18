@@ -349,10 +349,15 @@ fn bare(mut saved: Saved) -> Result<Saved, String> {
 
 /// The devices other machines say they keep the keys of and sign for this one. What is said isn't checked
 /// beyond its form: it is believed the first time a device is used, and held to from then on (see `opened`).
-/// An error only where the machine `ROAMRUNCTL_SIGNER` names isn't one: said, not taken for none signing.
+/// An error where Tailscale can't say (signed out, stopped, not answering) or the machine `ROAMRUNCTL_SIGNER`
+/// names isn't one: said, not taken for none signing.
 fn offered() -> Result<Vec<Saved>, String> {
     if cfg!(test) { return Ok(Vec::new()) }
-    let Ok(status) = crate::tailscale::status() else { return Ok(Vec::new()) };
+    offered_by(crate::tailscale::status())
+}
+
+fn offered_by(status: Result<crate::tailscale::Status, String>) -> Result<Vec<Saved>, String> {
+    let status = status?;
     let on_tailnet: std::collections::HashSet<&str> = status.peers.values().flat_map(|p| p.ips.iter().map(String::as_str)).collect();
     let said = crate::sign::signers(&status, std::env::var(crate::sign::SIGNER).ok().filter(|s| !s.is_empty()))?;
     Ok(taken(&said, &on_tailnet))
@@ -586,6 +591,13 @@ pub fn unstub(name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Tailscale signed out is said as that by `devices` and `look`, not taken for no machine signing.
+    #[test]
+    fn a_tailscale_that_cant_say_is_said_so() {
+        let why = offered_by(Err("Tailscale here isn't signed in: `tailscale up`".into())).err().unwrap_or_default();
+        assert!(why.contains("isn't signed in"), "{why}");
+    }
 
     #[test]
     fn an_ipa_that_isnt_an_app_is_refused_before_the_device_is_opened() {
