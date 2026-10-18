@@ -63,6 +63,13 @@ device-lib:
 	# MACOSX_DEPLOYMENT_TARGET instead also reaches the proc-macro dylibs, which then don't load.
 	cd Rust/RoamRunDevice && CFLAGS_aarch64_apple_darwin="-mmacosx-version-min=13.0" \
 		$(CARGO) build --release --locked --target-dir $(CURDIR)/.build/device
+	# SwiftPM's older build system (Xcode 26's) doesn't link again for a changed library alone:
+	# what an older one was linked into is removed, so that it is.
+	@if [ .build/device/release/libroamrun_device.a -nt .build/device/linked ]; then \
+		rm -rf .build/*/debug/RoamRun .build/*/release/RoamRun .build/*/debug/DeviceProbe .build/*/release/DeviceProbe \
+			.build/*/debug/RoamRunPackageTests.xctest .build/*/release/RoamRunPackageTests.xctest; \
+		touch .build/device/linked; \
+	fi
 
 # The licenses of the crates that library is built from, which the app carries: made anew
 # whenever Cargo.lock changes (CI checks it is current).
