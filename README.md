@@ -358,8 +358,9 @@ seen and operated too (seen), though unlocking still takes the passcode or Face 
 
 Setting up needs the Mac and the device on one Wi-Fi. A Mac elsewhere, such as one in a data
 centre, never is. When both Macs are on one tailnet, a Mac on the device's Wi-Fi introduces the
-far Mac, and the far Mac makes its own pairing. No key is carried; the far Mac keeps its own,
-sealed.
+far Mac, and the far Mac makes its own pairing and keeps it, sealed. The Mac beside the device
+relays the device's connection without reading it and saves nothing of it, but it shows the code
+to type: introduce with a Mac you trust.
 
 ```sh
 roamrun pair control --with macbook-pro              # on the far Mac, with the RoamRun app open

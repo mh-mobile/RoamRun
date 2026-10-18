@@ -77,7 +77,9 @@ too small for the code, the command says the size it needs.
   yet typed.
 
 The pairing itself is made between the device and the far Mac: its Xcode, or for device control
-its RoamRun app. No key leaves either, and none passes through the introducing Mac. If a
+its RoamRun app. The introducing Mac passes the connection on without reading it and saves
+nothing of it; that no key can be taken from what passes rests on the pairing's own encryption.
+For device control the introducing Mac shows the code, so it is a Mac you trust. If a
 connection between the two Macs is lost on the way, each side says what to do; the commands with
 a line carried by hand, above, need no such connection.
 

@@ -94,9 +94,11 @@ flowchart RL
    most, and relays the device's connection to the far Mac. It takes connections from the device's
    own address only.
 3. The pairing is made end to end between the device and the far Mac, with the code typed on the
-   device. No key passes through the Mac in between. For Xcode, the code is the one Device Hub
-   shows on the far Mac. For device control, the far Mac's app makes the code, and whichever
-   introduces shows it: that Mac, the app on the device, or `roamrunctl`.
+   device. The Mac in between passes the connection on without reading it and saves nothing of
+   it; that no key can be taken from what passes rests on the pairing's own encryption. For
+   Xcode, the code is the one Device Hub shows on the far Mac. For device control, the far Mac's
+   app makes the code, and whichever introduces shows it: that Mac, the app on the device, or
+   `roamrunctl`. So whatever introduces is something you trust.
 
 From then on the far Mac bridges to the device like any other.
 

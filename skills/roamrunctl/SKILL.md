@@ -15,8 +15,9 @@ For the first, three machines are involved:
 - **the far Mac** — has Xcode and RoamRun, and is somewhere else (a cloud Mac, a Mac
   at the office). The pairing is made with it, and everything afterwards happens on it.
 - **this machine** — Windows, Linux, or a Mac without RoamRun, on the same Wi‑Fi as
-  the device. `roamrunctl` runs here. While introducing, it only carries the device's
-  connection; it gets no key and no access to the device.
+  the device. `roamrunctl` runs here. While introducing, it carries the device's
+  connection unread and saves nothing. For device control it shows the code to type, so
+  it is a machine the user trusts.
 - **the device** — an iPhone or iPad, with Tailscale connected.
 
 After a pairing, this machine is done. Bridging, building, launching and debugging are
