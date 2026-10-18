@@ -93,7 +93,8 @@ pub fn serve(machine: &str, keys: Keys, list: Listed, held: Held) -> Result<Stri
         note!("{machine} or this machine is tagged, or they are different users': {machine} doesn't ask by itself. There, set ROAMRUNCTL_SIGNER={} — then `roamrunctl devices` lists them, and its commands ask here (TCP port {PORT}).", tailscale::short(&status.this.dns_name));
     }
     for stream in listener.incoming() {
-        let Ok(mut stream) = stream else { continue };
+        // One that goes on failing (no file descriptors left) isn't tried again at once, over and over.
+        let Ok(mut stream) = stream else { std::thread::sleep(Duration::from_millis(100)); continue };
         let Ok(from) = stream.peer_addr() else { continue };
         // Whoever asks is held to being the machine named, by address and by Tailscale's own id for it.
         if from.ip() != std::net::IpAddr::V4(other.ip) { note!("Turned away {}: it isn't {machine}.", from.ip()); continue }

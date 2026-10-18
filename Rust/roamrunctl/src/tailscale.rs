@@ -8,14 +8,17 @@ use std::time::{Duration, Instant};
 
 #[derive(Deserialize)]
 pub struct Status {
-    #[serde(rename = "BackendState", default)]
-    pub backend_state: String,
     #[serde(rename = "Self")]
     pub this: Node,
-    #[serde(rename = "Peer", default)]
+    #[serde(rename = "Peer", default, deserialize_with = "or_none")]
     pub peers: std::collections::HashMap<String, Node>,
     #[serde(rename = "CurrentTailnet", default)]
     tailnet: Option<Tailnet>,
+}
+
+/// Tailscale writes a map or a list it has nothing in (no peers yet) as null.
+fn or_none<'de, D: serde::Deserializer<'de>, T: Default + Deserialize<'de>>(d: D) -> Result<T, D::Error> {
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
 }
 
 #[derive(Deserialize)]
@@ -30,7 +33,7 @@ pub struct Node {
     pub id: String,
     #[serde(rename = "DNSName", default)]
     pub dns_name: String,
-    #[serde(rename = "TailscaleIPs", default)]
+    #[serde(rename = "TailscaleIPs", default, deserialize_with = "or_none")]
     pub ips: Vec<String>,
     #[serde(rename = "CurAddr", default)]
     pub cur_addr: String,
@@ -110,15 +113,17 @@ fn run(args: &[&str]) -> Result<String, String> {
 
 /// The same, given `within` to answer: what waits on it (a request) isn't held by a Tailscale that hangs.
 fn run_within(args: &[&str], within: Duration) -> Result<String, String> {
-    let mut child = Command::new(exe()).args(args).env_remove("ROAMRUNCTL_PASSPHRASE").stdout(Stdio::piped()).stderr(Stdio::null())
+    let mut child = Command::new(exe()).args(args).env_remove("ROAMRUNCTL_PASSPHRASE").stdout(Stdio::piped()).stderr(Stdio::piped())
         .spawn().map_err(|e| format!("tailscale isn't installed here ({e})"))?;
-    let mut stdout = child.stdout.take().ok_or("tailscale gave no output")?;
-    let reading = std::thread::spawn(move || { let mut out = String::new(); let _ = stdout.read_to_string(&mut out); out });
+    let read = |mut from: Box<dyn Read + Send>| std::thread::spawn(move || { let mut out = String::new(); let _ = from.read_to_string(&mut out); out });
+    let reading = read(Box::new(child.stdout.take().ok_or("tailscale gave no output")?));
+    let said = read(Box::new(child.stderr.take().ok_or("tailscale gave no output")?));
     let until = Instant::now() + within;
     loop {
         if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
             let out = reading.join().unwrap_or_default();
-            return if status.success() { Ok(out) } else { Err(format!("tailscale {} failed", args[0])) };
+            let said = said.join().unwrap_or_default();
+            return if status.success() { Ok(out) } else { Err(format!("tailscale {}: {}", args[0], said.trim())) };
         }
         if Instant::now() >= until {
             let _ = child.kill();
@@ -162,12 +167,19 @@ pub fn whois(ip: IpAddr) -> Result<Whois, String> {
     serde_json::from_str(&out).map_err(|e| format!("tailscale whois wasn't readable ({e})"))
 }
 
+/// With ten seconds to answer: a listener asks it for each connection, and a signature for each one made.
 pub fn status() -> Result<Status, String> {
-    let status: Status = serde_json::from_str(&run(&["status", "--json"])?).map_err(|e| format!("tailscale status wasn't readable ({e})"))?;
-    if let Some(problem) = state_problem(&status.backend_state) {
+    status_from(&run_within(&["status", "--json"], Duration::from_secs(10))?)
+}
+
+/// Its state read first: signed out or stopped, the rest of it may be anything (Self too).
+fn status_from(out: &str) -> Result<Status, String> {
+    #[derive(Deserialize)]
+    struct State { #[serde(rename = "BackendState", default)] backend_state: String }
+    if let Some(problem) = serde_json::from_str::<State>(out).ok().and_then(|s| state_problem(&s.backend_state)) {
         return Err(problem);
     }
-    Ok(status)
+    serde_json::from_str(out).map_err(|e| format!("tailscale status wasn't readable ({e})"))
 }
 
 /// None while Tailscale is up (or too old to say); else what to do.
@@ -311,7 +323,21 @@ mod tests {
         let unnamed = peer(&st, "iphone-15.other.ts.net").unwrap();
         assert!(!unnamed.is(&unnamed));
         assert_eq!(short(&st.this.dns_name), "me");
-        assert_eq!(st.backend_state, "");
+        assert!(status_from(&json).is_ok());   // a Tailscale too old to say its state is taken as up
+    }
+
+    /// Signed out or stopped, Tailscale writes what it has none of as null: said as what to do, not as unreadable.
+    #[test]
+    fn a_status_with_nothing_in_it_is_read() {
+        let signed_out = r#"{"BackendState":"NeedsLogin","Self":{"ID":"","TailscaleIPs":null},"Peer":null}"#;
+        assert!(status_from(signed_out).err().is_some_and(|e| e.contains("signed in")));
+        // Read before the rest, which may then be missing too.
+        assert!(status_from(r#"{"BackendState":"NeedsLogin","Peer":null}"#).err().is_some_and(|e| e.contains("signed in")));
+        let alone = r#"{"BackendState":"Running","Self":{"ID":"n1","DNSName":"pc.example.ts.net.","TailscaleIPs":["100.64.0.2"]},"Peer":null}"#;
+        let addressless = r#"{"BackendState":"Running","Self":{"ID":"n1","TailscaleIPs":["100.64.0.2"]},"Peer":{"k":{"ID":"n2","TailscaleIPs":null}}}"#;
+        assert!(status_from(addressless).is_ok_and(|s| s.peers["k"].ips.is_empty()));
+        assert!(status_from(alone).is_ok_and(|s| s.peers.is_empty() && s.this.ips.len() == 1));
+        assert!(status_from("not json").err().is_some_and(|e| e.contains("wasn't readable")));
     }
 
     #[test]

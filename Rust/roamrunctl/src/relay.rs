@@ -48,7 +48,11 @@ const AT_ONCE: usize = 2;
 pub async fn serve(listener: TcpListener, only_from: Ipv4Addr, far: SocketAddr, events: Sender<Event>) {
     let room = Arc::new(Semaphore::new(AT_ONCE));
     loop {
-        let Ok((inbound, from)) = listener.accept().await else { continue };
+        let Ok((inbound, from)) = listener.accept().await else {
+            // One that goes on failing (no file descriptors left) isn't tried again at once, over and over.
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            continue;
+        };
         let held = room.clone().try_acquire_owned();
         // Said when there is room to say it: strangers knocking mustn't keep the device waiting.
         let (true, Ok(held)) = (from.ip() == only_from, held) else {

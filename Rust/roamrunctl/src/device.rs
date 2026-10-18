@@ -144,7 +144,8 @@ fn kept(name: &str) -> Result<Option<(PathBuf, bool)>, String> {
 fn load(name: &str) -> Result<(Saved, Option<Vec<u8>>), String> {
     let Some((path, sealed)) = kept(name)? else {
         // Not saved here: one another machine keeps the key of, and signs for this one.
-        return offered()?.into_iter().find(|saved| saved.name == name).map(|saved| (saved, None)).ok_or_else(|| format!(
+        let offered = offered().map_err(|why| format!("no device “{name}” is saved here, and none is offered: {why}"))?;
+        return offered.into_iter().find(|saved| saved.name == name).map(|saved| (saved, None)).ok_or_else(|| format!(
             "no device “{name}” is saved here, and no machine was found that signs for this one with it.\n{}", sign_how(name)));
     };
     read(name, &path, sealed).map(|(saved, file)| (saved, Some(file)))
@@ -349,10 +350,15 @@ fn bare(mut saved: Saved) -> Result<Saved, String> {
 
 /// The devices other machines say they keep the keys of and sign for this one. What is said isn't checked
 /// beyond its form: it is believed the first time a device is used, and held to from then on (see `opened`).
-/// An error only where the machine `ROAMRUNCTL_SIGNER` names isn't one: said, not taken for none signing.
+/// An error where Tailscale can't say (signed out, stopped, not answering) or the machine `ROAMRUNCTL_SIGNER`
+/// names isn't one: said, not taken for none signing.
 fn offered() -> Result<Vec<Saved>, String> {
     if cfg!(test) { return Ok(Vec::new()) }
-    let Ok(status) = crate::tailscale::status() else { return Ok(Vec::new()) };
+    offered_by(crate::tailscale::status())
+}
+
+fn offered_by(status: Result<crate::tailscale::Status, String>) -> Result<Vec<Saved>, String> {
+    let status = status?;
     let on_tailnet: std::collections::HashSet<&str> = status.peers.values().flat_map(|p| p.ips.iter().map(String::as_str)).collect();
     let said = crate::sign::signers(&status, std::env::var(crate::sign::SIGNER).ok().filter(|s| !s.is_empty()))?;
     Ok(taken(&said, &on_tailnet))
@@ -586,6 +592,13 @@ pub fn unstub(name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What Tailscale couldn't say is passed on (`offered_by`), not taken for no machine signing.
+    #[test]
+    fn a_tailscale_that_cant_say_is_said_so() {
+        let why = offered_by(Err("Tailscale here isn't signed in: `tailscale up`".into())).err().unwrap_or_default();
+        assert!(why.contains("isn't signed in"), "{why}");
+    }
 
     #[test]
     fn an_ipa_that_isnt_an_app_is_refused_before_the_device_is_opened() {

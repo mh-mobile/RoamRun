@@ -108,6 +108,10 @@ the using machine and the device, not through the key's machine.
   the size and time limit, then waits without progress output; the MCP tool answers once the
   install has begun (see [Installing apps](#installing-apps)). In tests on the device's Wi-Fi,
   3 MB took about 25 seconds and 37 MB about two and a half minutes.
+- `tailscale status`: ten seconds to answer, wherever roamrunctl asks it. `sign` and
+  `pair control --with` ask for each connection, and turn the connection away when it doesn't
+  answer; `pair control --with` asks again for the device the near machine names, and ends
+  there when it doesn't answer.
 
 ## Pairing records and passphrases
 
