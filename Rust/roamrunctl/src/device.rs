@@ -144,7 +144,8 @@ fn kept(name: &str) -> Result<Option<(PathBuf, bool)>, String> {
 fn load(name: &str) -> Result<(Saved, Option<Vec<u8>>), String> {
     let Some((path, sealed)) = kept(name)? else {
         // Not saved here: one another machine keeps the key of, and signs for this one.
-        return offered()?.into_iter().find(|saved| saved.name == name).map(|saved| (saved, None)).ok_or_else(|| format!(
+        let offered = offered().map_err(|why| format!("no device “{name}” is saved here, and none is offered: {why}"))?;
+        return offered.into_iter().find(|saved| saved.name == name).map(|saved| (saved, None)).ok_or_else(|| format!(
             "no device “{name}” is saved here, and no machine was found that signs for this one with it.\n{}", sign_how(name)));
     };
     read(name, &path, sealed).map(|(saved, file)| (saved, Some(file)))
@@ -592,7 +593,7 @@ pub fn unstub(name: &str) {
 mod tests {
     use super::*;
 
-    /// Tailscale signed out is said as that by `devices` and `look`, not taken for no machine signing.
+    /// What Tailscale couldn't say is passed on (`offered_by`), not taken for no machine signing.
     #[test]
     fn a_tailscale_that_cant_say_is_said_so() {
         let why = offered_by(Err("Tailscale here isn't signed in: `tailscale up`".into())).err().unwrap_or_default();

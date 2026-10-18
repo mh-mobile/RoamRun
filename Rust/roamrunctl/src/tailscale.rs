@@ -16,7 +16,7 @@ pub struct Status {
     tailnet: Option<Tailnet>,
 }
 
-/// Tailscale writes a map or a list it has nothing in (no peers yet, no address signed out) as null.
+/// Tailscale writes a map or a list it has nothing in (no peers yet) as null.
 fn or_none<'de, D: serde::Deserializer<'de>, T: Default + Deserialize<'de>>(d: D) -> Result<T, D::Error> {
     Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
 }
@@ -334,6 +334,8 @@ mod tests {
         // Read before the rest, which may then be missing too.
         assert!(status_from(r#"{"BackendState":"NeedsLogin","Peer":null}"#).err().is_some_and(|e| e.contains("signed in")));
         let alone = r#"{"BackendState":"Running","Self":{"ID":"n1","DNSName":"pc.example.ts.net.","TailscaleIPs":["100.64.0.2"]},"Peer":null}"#;
+        let addressless = r#"{"BackendState":"Running","Self":{"ID":"n1","TailscaleIPs":["100.64.0.2"]},"Peer":{"k":{"ID":"n2","TailscaleIPs":null}}}"#;
+        assert!(status_from(addressless).is_ok_and(|s| s.peers["k"].ips.is_empty()));
         assert!(status_from(alone).is_ok_and(|s| s.peers.is_empty() && s.this.ips.len() == 1));
         assert!(status_from("not json").err().is_some_and(|e| e.contains("wasn't readable")));
     }
