@@ -28,9 +28,11 @@ public final class DeviceSession: @unchecked Sendable {
         case message(String)
         /// Refused for what was asked, before anything went to the device.
         case invalid(String)
+        /// Not begun: no connection could be had, or the call was stopped before it began. Nothing went to the device.
+        case notBegun(String)
         public var description: String {
             switch self {
-            case .message(let m), .invalid(let m): m
+            case .message(let m), .invalid(let m), .notBegun(let m): m
             }
         }
     }
@@ -42,6 +44,7 @@ public final class DeviceSession: @unchecked Sendable {
     public static func leavesConnectionInDoubt(_ error: Error) -> Bool {
         if case Failure.invalid = error { return false }
         if case Failure.message(let m) = error, m.hasPrefix(stopped) { return false }   // told to stop, by us
+        if case Failure.notBegun(let m) = error, m.hasPrefix(stopped) { return false }
         return true
     }
 
@@ -115,7 +118,7 @@ public final class DeviceSession: @unchecked Sendable {
     public func gate(_ mayBegin: @escaping @Sendable () -> Bool) { standingLock.withLock { self.mayBegin = mayBegin } }
 
     /// In the words of a call stopped: not a failure of the connection, and not tried again.
-    private static let replaced = Failure.message("\(stopped) this connection was closed (the device has a new one): look again")
+    private static let replaced = Failure.notBegun("\(stopped) this connection was closed (the device has a new one): look again")
 
     /// As of the last call that finished; never waits for one that runs.
     public var isOpen: Bool { standingLock.withLock { standing.open } }
@@ -249,7 +252,7 @@ public final class DeviceSession: @unchecked Sendable {
         do { pairing = try self.pairing() } catch {
             // Trying again reads the same — unless it was only told to stop (its file is another's for now).
             refused = !"\(error)".hasPrefix(Self.stopped)
-            throw error
+            throw Failure.notBegun("\(error)")
         }
         guard let opened = pairing.withUnsafeBytes({ rr_device_open(ip, port, $0.bindMemory(to: UInt8.self).baseAddress, $0.count, &error) }) else {
             defer { rr_string_free(error) }
@@ -257,7 +260,7 @@ public final class DeviceSession: @unchecked Sendable {
             // By how the library's own words begin: nothing the other side wrote comes first.
             refused = why.hasPrefix(Self.refusal) || why.hasPrefix(Self.unchecked)
             another = why.hasPrefix(Self.notTheDevice)
-            throw Failure.message(why)
+            throw Failure.notBegun(why)
         }
         refused = false
         another = false
@@ -304,7 +307,7 @@ public final class DeviceSession: @unchecked Sendable {
         guard !leaving else { throw Self.replaced }
         // Switched off while this waited its turn: a stop asked then was for this call too.
         let asked: (@Sendable () -> Bool)? = standingLock.withLock { self.mayBegin }
-        guard asked?() ?? true else { throw Failure.message("\(Self.stopped) its device was switched off before it began") }
+        guard asked?() ?? true else { throw Failure.notBegun("\(Self.stopped) its device was switched off before it began") }
     }
 
     private func recovering<T>(repeatable: Bool, _ body: (OpaquePointer) throws -> T) throws -> T {
