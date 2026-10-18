@@ -442,10 +442,8 @@ against a real device at the time these notes were written:
 - x86_64 machines, Linux without Avahi, and firewall tools other than ufw.
 - Signing multiple devices at once, and the `ROAMRUNCTL_SIGNER` override.
 - A Mac's `roamrun pair introduce` introducing a machine running `roamrunctl`.
-- Through MCP: swipe, a paste that goes through, install, and launch (these had been tested
-  outside MCP).
-- Installing as it is now — begun, then `install_status` — on a device, from a path or from an
-  upload, and the `.ipa` check before a real install.
+- Through MCP: swipe, a paste that goes through, and launch (these had been tested outside
+  MCP). Installing through MCP on Linux or Windows.
 - On Windows: `pair control --with`, MCP, install, and launch.
 - `mcp --http` from another machine (by a tag or a login), from a cloud, or on Linux or
   Windows. On macOS it was checked from the machine itself, with the token:
@@ -458,7 +456,13 @@ against a real device at the time these notes were written:
   with an address nothing is at: an upload answered with its size and the sha256 `shasum`
   gives, one over `--max-upload` refused with the one kept staying, `install` of it refused as
   that device can't be opened with the upload staying, and the folder made 0700 and removed at
-  Ctrl-C (exit 130); and without the token, `/upload` refused as this machine itself.
+  Ctrl-C (exit 130); and without the token, `/upload` refused as this machine itself. Then on
+  the iPhone 15 Pro, an 8.5 MB `.ipa` (one app, its check passed): over stdio from its path,
+  `install` answered in 1 s, a look meanwhile was answered that it was installing, and
+  `install_status` said it was installed after 15 s; over HTTP, the upload took 0.6 s with
+  the sha256 `shasum` gives, `install` answered at once, a look and a second install by the
+  same upload were refused meanwhile, it was installed after 10 s, the upload's file was gone
+  after, and the folder was removed at Ctrl-C.
 - Tailscale userspace networking with no address available to bind.
 - Xcode pairing through `pair introduce` since the `--mac` → `--host` change.
 

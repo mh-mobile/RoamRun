@@ -312,11 +312,10 @@ Tried against a device, on Linux and macOS, in an earlier form of each: `pair co
 --with`, a key from a Mac, look, tap, type, a button, install, launch, `mcp`'s look and
 tap, and B. On macOS as it is now: `pair control --to`, and `mcp --http` called from the
 machine itself with the token (look, tap, type, `elements`, calls taken back in a session;
-a button in a form just before this one; uploads and their refusals, against a device saved
-where nothing is). Not
+a button in a form just before this one; uploads and their refusals; an install over stdio
+and one from an upload, with `install_status`). Not
 yet: `sign` as it is now and `ROAMRUNCTL_SIGNER`, `--passphrase`, the Introducer app or a
-Mac introducing this machine, `mcp`'s swipe, install (as it is now, from a path or an
-upload) and launch and a paste that goes through, `mcp --http` from another machine or a cloud, and anything on
+Mac introducing this machine, `mcp`'s swipe and launch and a paste that goes through, `mcp --http` from another machine or a cloud, and anything on
 Windows (it builds there). If one of those fails, say what it
 said; don't work around it.
 
