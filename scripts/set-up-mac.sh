@@ -19,14 +19,18 @@ pairing=${1-}
 [ -z "$pairing" ] || [ -f "$pairing" ] || die "no such file: $pairing"
 
 say "Tailscale"
-command -v tailscale >/dev/null || brew install tailscale
-if ! tailscale status >/dev/null 2>&1; then
+# The App Store's or the standalone app's own CLI first, as RoamRun looks for it: Homebrew's
+# beside that app would be a second Tailscale.
+app=/Applications/Tailscale.app/Contents/MacOS/Tailscale
+if [ -x "$app" ]; then ts=$app; else ts=$(command -v tailscale || true); fi
+[ -n "$ts" ] || { brew install tailscale; ts=$(command -v tailscale); }
+if ! "$ts" status >/dev/null 2>&1; then
     [ -n "${TS_AUTHKEY-}" ] || die "this Mac isn't on your tailnet: set TS_AUTHKEY (an auth key from the Tailscale admin console › Settings › Keys) and run this again"
     # The App Store's and the standalone Tailscale run their own service; Homebrew's needs starting.
-    brew list --formula tailscale >/dev/null 2>&1 && sudo brew services start tailscale
-    sudo tailscale up --auth-key="$TS_AUTHKEY"
+    if [ "$ts" != "$app" ] && brew list --formula tailscale >/dev/null 2>&1; then sudo brew services start tailscale; fi
+    sudo "$ts" up --auth-key="$TS_AUTHKEY"
 fi
-tailscale status | head -3
+"$ts" status | head -3
 
 say "RoamRun"
 brew list --cask roamrun >/dev/null 2>&1 || brew install --cask mh-mobile/tap/roamrun

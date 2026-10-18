@@ -23,8 +23,9 @@ crates = []
 for path in sys.argv[1:] or ["Rust/RoamRunDevice/Cargo.lock", "Rust/roamrunctl/Cargo.lock"]:
     for block in open(path).read().split("[[package]]")[1:]:
         field = lambda name: (re.search(rf'^{name} = "([^"]+)"', block, re.M) or [None, None])[1]
-        # ours and the pinned fork aren't on crates.io; a crate both pin is asked about once
-        if (field("source") or "").startswith("registry+") and (field("name"), field("version")) not in crates:
+        # Ours aren't on crates.io. The pinned fork is asked about by its crate's name and version:
+        # it is that release and a few commits. A crate both pin is asked about once.
+        if (field("source") or "").startswith(("registry+", "git+")) and (field("name"), field("version")) not in crates:
             crates.append((field("name"), field("version")))
 answer = ask("https://api.osv.dev/v1/querybatch",
              {"queries": [{"package": {"name": n, "ecosystem": "crates.io"}, "version": v} for n, v in crates]})

@@ -62,7 +62,8 @@ RoamRun and opens it, installs the agent skill, and imports the pairing — skip
 already done, so it can be run again. `TS_AUTHKEY=file:/path/to/key` keeps the key out of the
 process list.
 
-By hand, it is:
+By hand, on a Mac without the Tailscale app, it is (with the app, the script uses the app's
+own Tailscale and installs none):
 
 ```sh
 brew install tailscale
