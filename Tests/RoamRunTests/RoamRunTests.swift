@@ -3863,6 +3863,21 @@ func aDeviceWithANewTailscaleAddressIsFollowed(answersThere: Bool) async {
     #expect(rig.world.scans == 0)
 }
 
+/// A host name two peers have isn't followed: without MagicDNS, iPhones share "iPhone".
+@MainActor @Test func aNameTwoPeersHaveIsntFollowed() async {
+    var p = inertProfile("iPhone"); p.providerHostName = "iPhone"
+    let rig = Rig(p)
+    defer { rig.done() }
+    rig.world.answering = ["127.0.0.2", "127.0.0.3"]
+    rig.world.advertAnswers = true
+    rig.world.peers = [MeshDevice(id: "1", name: "iPhone", os: "iOS", ips: ["127.0.0.2"], online: true),
+                       MeshDevice(id: "2", name: "iPhone", os: "iOS", ips: ["127.0.0.3"], online: true)]
+    var saved: DeviceProfile?
+    rig.bridge.onProfileChange = { saved = $0 }
+    await rig.bridge.start(.manual)
+    #expect(rig.bridge.profile.providerIP == "127.0.0.1" && saved == nil)
+}
+
 enum ClaimCase: String, CaseIterable {
     case erroredCLIAutomatic, erroredCLIManual, readyCLIManual, readyCLIFromACLI, erroredAppAutomatic, erroredCLIAutomaticFromACLI
 }
@@ -4072,6 +4087,17 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
     #expect(StatusFile.write(other.id, cli, in: other.dir, live: { _ in true }) == .written)
     await other.bridge.resumeIfAway()
     #expect(other.bridge.status == .off && yieldedTo == 4242)
+
+    // The app's bridge is started again by the app, which rebuilds one saved anew meanwhile.
+    let app = Rig()
+    defer { app.done() }
+    app.world.onLAN = true
+    await app.bridge.start(.manual)
+    var resumed = 0
+    app.bridge.onResume = { resumed += 1 }
+    app.world.onLAN = false
+    for _ in 0..<3 { await app.bridge.resumeIfAway() }
+    #expect(resumed == 1 && app.bridge.status == .local)
 }
 
 /// Three outcomes, so 2b can tell this Mac's problem from the device's.
@@ -5740,6 +5766,10 @@ private func lookFile(in dir: URL) -> String {
     #expect(try String(contentsOf: file, encoding: .utf8) == "new")
     try CLI.put(look: try made("first"), at: dir.appendingPathComponent("fresh.png"))
     #expect(try String(contentsOf: dir.appendingPathComponent("fresh.png"), encoding: .utf8) == "first")
+    // A name as long as a file's may be: what is made beside it first is no longer.
+    let long = dir.appendingPathComponent(String(repeating: "a", count: 251) + ".png")
+    try CLI.put(look: try made("long"), at: long)
+    #expect(try String(contentsOf: long, encoding: .utf8) == "long")
 }
 
 extension TimingSensitive {

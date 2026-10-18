@@ -2064,7 +2064,7 @@ enum CLI {
         }
         // A screen, with whatever was on it: the owner's alone before it is in its place, not after.
         let data = try Data(contentsOf: made)
-        let beside = file.deletingLastPathComponent().appendingPathComponent(".\(file.lastPathComponent).\(UUID().uuidString)")
+        let beside = file.deletingLastPathComponent().appendingPathComponent(".roamrun-look-\(UUID().uuidString)")
         let fd = try reserve(beside.path)
         var failed = write(data, to: fd) ? nil : errno
         close(fd)

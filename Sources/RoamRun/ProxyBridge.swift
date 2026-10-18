@@ -44,6 +44,8 @@ final class ProxyBridge: ObservableObject {
     var onProfileChange: ((DeviceProfile) -> Void)?
     /// Called after this bridge stopped because another process stands aside for the same device.
     var onYield: ((StatusFile.Entry) -> Void)?
+    /// Starts it again once the device has left this LAN, where it stood aside; none, it starts itself.
+    var onResume: (() -> Void)?
     /// Learned from remotepairingd, or saved with the profile.
     var udid: String? { memory.udid }
     let memory: DeviceMemory
@@ -867,7 +869,9 @@ final class ProxyBridge: ObservableObject {
             // Followed only once RemotePairing answers there: a name Tailscale gave to another
             // device would otherwise be saved over this one's address, for the app and the CLI.
             // ponytail: the handshake doesn't say which device it is; same-named iPhones can still swap.
-            if let ip = peers.first(where: { $0.name == p.providerHostName })?.ipv4, ip != p.providerIP {
+            // One name, one device: a host name two peers have (no MagicDNS) isn't followed.
+            let named = peers.filter { $0.name == p.providerHostName }
+            if named.count == 1, let ip = named[0].ipv4, ip != p.providerIP {
                 let at = NWEndpoint.hostPort(host: .init(ip), port: .init(rawValue: p.remotePairingPort) ?? 49152)
                 if await env.answers(at) {
                     log("\(p.providerHostName) has a new address: \(p.providerIP) → \(ip)")
@@ -1038,7 +1042,7 @@ final class ProxyBridge: ObservableObject {
             onYield?(other)
             return
         }
-        await start(.resume)
+        if let onResume { onResume() } else { await start(.resume) }
     }
 
     /// Home if the iPhone itself advertises on this LAN — Tailscale may keep a

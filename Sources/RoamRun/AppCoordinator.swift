@@ -1396,6 +1396,8 @@ final class AppCoordinator: ObservableObject {
         }
         // Stepped back for a `roamrun up` watching the same device: take over again once it's gone.
         bridge.onYield = { [weak self] other in self?.startWhenFree(id, after: other, .resume) }
+        // Through autoStart: one saved anew meanwhile is rebuilt first (rebuildAtStart).
+        bridge.onResume = { [weak self] in self?.autoStart(id, live: StatusFile.read(), .resume) }
         bridge.onProfileChange = { [weak self] moved in
             guard let self, let i = self.profiles.firstIndex(where: { $0.id == id }) else { return }
             self.profiles[i].providerIP = moved.providerIP
