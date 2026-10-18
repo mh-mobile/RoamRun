@@ -32,8 +32,9 @@ const VERSION: &CStr = c"0.6.0";
 const LABEL: &str = "roamrun";
 /// Each call: a device that stops answering mid-way must not hang the caller.
 const DEADLINE: Duration = Duration::from_secs(20);
-/// A call that starts a screen stream: every step of one has its own limit and stops what it
-/// started, which a deadline falling inside it couldn't. This only ends what those don't.
+/// A call that starts a screen stream: its steps that wait on the device have limits of their own
+/// and stop what they started, which a deadline falling inside them couldn't. This only ends what
+/// those don't.
 const STREAM_DEADLINE: Duration = Duration::from_secs(45);
 /// A look's PNG, its size the screen's (6 MB took 12 s, on the Mac's own Wi‑Fi, and 3.9 MB once
 /// 19 s). ponytail: a fixed limit; ending only when nothing arrives would need the service's
@@ -965,7 +966,7 @@ fn input_time(input: &Input) -> Duration {
 
 /// The device drops input that isn't accompanied by a screen stream, so one runs with it: the
 /// one kept from before if frames still come on it, a new one otherwise. Getting that far has
-/// the deadline every call has; the input then gets the time its own length needs, so that the
+/// a stream's deadline; the input then gets the time its own length needs, so that the
 /// deadline doesn't fall in the middle of it.
 async fn perform(link: &mut Link, input: Input) -> Result<(), String> {
     // Without one where the caller said so (rr_device_bare_inputs): taps, keys and buttons were taken that way
@@ -1614,7 +1615,7 @@ fn own_hardware(identifier: &str) -> (String, [u8; 6]) {
     (serial, mac)
 }
 
-/// Accepts failing in a row that end a wait: they are the listener's then, not a connection's.
+/// Accepts failing since one last succeeded that end a wait: they are the listener's then, not a connection's.
 const ACCEPT_TRIES: u32 = 20;
 
 /// What an accept gave: a connection, or none for now. One that failed alone was a connection
