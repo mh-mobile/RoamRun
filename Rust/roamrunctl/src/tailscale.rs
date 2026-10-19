@@ -111,9 +111,10 @@ fn run(args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// The same, given `within` to answer: what waits on it (a request) isn't held by a Tailscale that hangs.
+/// The same, given `within` to answer: what waits on it (a request) isn't held by a Tailscale that hangs. Not
+/// given this process's input, which is `mcp`'s requests over stdio.
 fn run_within(args: &[&str], within: Duration) -> Result<String, String> {
-    let mut child = Command::new(exe()).args(args).env_remove("ROAMRUNCTL_PASSPHRASE").stdout(Stdio::piped()).stderr(Stdio::piped())
+    let mut child = Command::new(exe()).args(args).env_remove("ROAMRUNCTL_PASSPHRASE").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped())
         .spawn().map_err(|e| format!("tailscale isn't installed here ({e})"))?;
     let read = |mut from: Box<dyn Read + Send>| std::thread::spawn(move || { let mut out = String::new(); let _ = from.read_to_string(&mut out); out });
     let reading = read(Box::new(child.stdout.take().ok_or("tailscale gave no output")?));
