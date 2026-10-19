@@ -429,9 +429,6 @@ pub fn opened(name: &str) -> Result<Device, String> {
     held(name).map(|(device, _)| device)
 }
 
-/// The device named, opened, and the file it was opened from (see `mark`). One another machine signs for is
-/// saved here the first time it opens, without its key: from then on only that machine is asked, and only
-/// that device is taken for it.
 /// The device saved here under `name`, opened, and its file as read; None where none is saved. Never one only a
 /// machine that signs offers: `mcp --http` holds to what it offered, and asks no other machine.
 pub fn held_here(name: &str) -> Result<Option<(Device, Option<Vec<u8>>)>, String> {
@@ -440,6 +437,9 @@ pub fn held_here(name: &str) -> Result<Option<(Device, Option<Vec<u8>>)>, String
     Ok(Some((open(&saved)?, Some(file))))
 }
 
+/// The device named, opened, and the file it was opened from (see `mark`). One another machine signs for is
+/// saved here the first time it opens, without its key: from then on only that machine is asked, and only
+/// that device is taken for it.
 pub fn held(name: &str) -> Result<(Device, Option<Vec<u8>>), String> {
     let (saved, mut file) = load(name)?;
     let device = open(&saved)?;
