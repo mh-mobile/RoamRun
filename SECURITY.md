@@ -289,7 +289,8 @@ bounded.
   from another tailnet; the machine itself without the token (any of its users would
   otherwise pass); any request with an `Origin` (a web page in a browser on the tailnet);
   a `Host` other than the server's address or its own Tailscale names. A request's head has
-  to arrive within 10 s and its body within 30 s more, and one address holds 17 of the 32
+  to arrive within 10 s and its body within 30 s more (an upload's: 30 s plus 2 s a MiB, with
+  no more than 60 s between reads), and one address holds 17 of the 32
   connections at most: one machine that can reach the port can't take them all, but two or
   more that the tailnet's access rules let reach it can keep callers out for as long as they
   keep connecting. Only the devices named are used — each only while it is saved as
@@ -298,7 +299,7 @@ bounded.
   most by default), in a folder made for the run that only its user can open (on Windows, the
   user's own temporary folder); only the caller that sent it — by its Tailscale node's lasting
   id — can install it, by the sha256 it was answered; it goes when its install ends, after
-  30 minutes unused, at Ctrl-C, or when another comes in. Whoever is let in with
+  30 minutes unused, at Ctrl-C, or when another begins to come in. Whoever is let in with
   `--allow-install` can replace the apps on those devices with any app signed for them. An
   `.ipa` is checked before it is sent to a device, with every roamrunctl install: one app, no `.bundle`,
   4 GiB unpacked at most by what it says. It is read whole into memory to be sent. A tap, swipe, type or paste names the
