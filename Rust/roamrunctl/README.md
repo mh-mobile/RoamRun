@@ -216,12 +216,12 @@ clients that accept an `mcpServers` configuration, register it like this:
 
 Use the full executable path if the client cannot find `roamrunctl` in its `PATH`.
 The tools are `devices`, `look`, `tap`, `swipe`,
-`elements`, `type`, `paste`, `press`, `install`, `install_status`, and `launch`. `install`
-answers once the install has begun; `install_status` says when the app is in, and until then
-other calls on that device answer that it is installing.
+`elements`, `type`, `paste`, `press`, `install`, `install_status`, and `launch`. Since 0.8.0,
+`install` answers once the install has begun; `install_status` says when the app is in, and until
+then other calls on that device answer that it is installing.
 
 For `tap`, `swipe`, `type` and `paste`, the agent must first call `look`, and give the id
-that look answered with (`"look": 12`). A look stands for 60 seconds, and only while it is
+that look answered with (`"look": 12`; 0.8.0+). A look stands for 60 seconds, and only while it is
 the device's latest: another look by any agent (one that failed too), or `press`,
 `elements`, `install` or `launch` on that device, ends it. It permits one tap or swipe;
 after a tap, swipe, `type` or `paste` by it, a tap or swipe needs another look, while `type`
@@ -230,7 +230,7 @@ also refused if the device reports that it was turned since the look, and a call
 in a way that may have reached the device ends the look. The server uses the device's
 screenshots and input commands, not a continuous screen-sharing stream.
 
-#### Over HTTP, for an agent elsewhere
+#### Over HTTP, for an agent elsewhere (0.8.0+)
 
 An agent that reaches this machine only over HTTP (one in a cloud environment that is on your
 tailnet) uses the same tools from `roamrunctl mcp --http`, which you start and stop:
@@ -253,8 +253,9 @@ roamrunctl mcp --http 9090 --allow tag:codex phone
 - `--allow-install` also offers `install`, of an `.ipa` sent first to
   `http://<that address>:9090/upload` (`curl -T App.ipa`, 1024 MiB at most unless
   `--max-upload <MiB>` says otherwise): the answer's `upload` id and `sha256` are what `install`
-  is given. One upload is kept, only its sender can install it, and it is removed when the
-  install ends, after 30 minutes unused, or at Ctrl-C. Without the flag there is no install over
+  is given. One upload is kept, and only its sender can install it. It is removed when the
+  install ends, after 30 minutes unused, at Ctrl-C, or when another upload begins to come in,
+  from any caller. Without the flag there is no install over
   HTTP.
 - What is shown and sent passes through whatever lies between: a cloud's proxy sees the
   images, the text typed or pasted, what is uploaded, and the token.
