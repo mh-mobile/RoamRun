@@ -19,8 +19,8 @@ enum DeviceControlWire {
         var milliseconds: Int?
         var text: String?
         var limit: Int?
-        /// For "tap" and "swipe": the look the points are of, when the caller keeps it (the MCP
-        /// tools do; a command run by hand is of whatever was looked at last).
+        /// For "tap", "swipe", "type" and "paste": the look the points or the text are held to, when
+        /// the caller keeps it (the MCP tools do; a command run by hand is of whatever was looked at last).
         var look: Int?
         /// For "pair-start": this Mac's address on the tailnet, the interface it is on, and the
         /// one address the device's connection will come from (the Mac that introduces it).
@@ -52,6 +52,8 @@ enum DeviceControlWire {
         var listUnreadable: Bool?
         /// For "import": whether the file the pairing came in is gone (`error` may say more than that).
         var removed: Bool?
+        /// For "rules": which look rules this app holds to (`DeviceControlHub.rules`); an older app has none.
+        var rules: Int?
         /// For "pair-start": this Mac's offer to pair. For "pair-status": where the attempt stands
         /// (waiting, code, checking, done, failed, unknown), its code while one is shown, and
         /// why it failed, as a word.
@@ -447,10 +449,12 @@ final class DeviceControlHub: @unchecked Sendable {
         /// Under the hub's lock (a rename changes it while the session stays).
         var target: Target
         let session: any ControlledDevice
-        /// The last look: its size, which a tap's pixels are of, which look it was, and when.
-        /// (This and `acted` under the device's gate.)
-        var looked: (width: Int, height: Int, id: Int, at: Date)?
-        /// When the last input ended: a look right after it waits for the screen to settle.
+        /// The device's latest look: its size, which a tap's pixels are of, which look it was, when, and
+        /// whether a tap, swipe or text went by it already — then no other tap or swipe does (what it
+        /// saw may have moved), while text still may (look, tap a field, type). (This and `acted`
+        /// under the device's gate.)
+        var looked: (width: Int, height: Int, id: Int, at: Date, spent: Bool)?
+        /// When the last input ended: a look, or text, right after it waits for the screen to settle.
         var acted: Date?
         /// Opening it in the background: one attempt at a time, and further apart while they fail.
         /// (These three under the hub's lock.)
@@ -1142,12 +1146,19 @@ final class DeviceControlHub: @unchecked Sendable {
     // ponytail: a fixed wait, enough for a transition or a scroll coming to rest. Comparing
     // frames until they stop changing, if it proves short (a playing video never stops).
     static let settle: TimeInterval = 1
+    /// The same, for this hub (a test gives less). Keys sent at once after a tap on a field were
+    /// seen lost, or put before the cursor (iOS 27.0, a Japanese keyboard): text waits it out too.
+    var settling = DeviceControlHub.settle
 
-    /// How long a look still has to wait after the last input.
-    static func settleWait(acted: Date?, now: Date = Date()) -> TimeInterval {
+    /// How long a look, or text, still has to wait after the last input.
+    static func settleWait(acted: Date?, now: Date = Date(), settle: TimeInterval = DeviceControlHub.settle) -> TimeInterval {
         guard let acted else { return 0 }
         return min(settle, max(0, settle - now.timeIntervalSince(acted)))
     }
+
+    /// The look rules this app holds to, said by "rules": 2, a look's id held to by text too, and a
+    /// look spent by a tap still good for text. `roamrun mcp` refuses an app that says fewer.
+    static let rules = 2
 
     /// What a `type` sent (debug level), never the text itself: tells a key the device dropped
     /// from one that wasn't sent.
@@ -1168,7 +1179,7 @@ final class DeviceControlHub: @unchecked Sendable {
             && file.lastPathComponent.hasPrefix("look-") && file.pathExtension == "png"
     }
 
-    private static let lookFirst = "look first: a point is given in the pixels of a look, and each look serves one action"
+    static let lookFirst = "look first: a point is given in the pixels of the image a look returns"
     static let nobodyWaits = "nobody is waiting for this any more"
     static let notGiven = "not given: whoever asked has left, or the device was switched off meanwhile"
     /// The longer side of a look, at most: what a model is shown without its being scaled once more.
@@ -1185,10 +1196,15 @@ final class DeviceControlHub: @unchecked Sendable {
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         return context.makeImage() ?? image
     }
-    static let lookOld = "look again: the look this point is from is over a minute old, and the screen may be another by now"
+    static let lookOld = "that look is more than a minute old: look again"
     /// How long a look serves: whoever read a point off it took their time, and the screen its own course.
     var lookStands: TimeInterval = 60
-    static let lookedSince = "the device was looked at again since the look this point is from (by another): look again"
+    /// A point given with a look that isn't the device's latest.
+    static func lookedSince(_ given: Int) -> String { "look again: look \(given) isn't the device's latest look (it was looked at again since)" }
+    /// Text given with a look that isn't the device's latest, or after something else was done.
+    static func notLatest(_ given: Int, _ op: String) -> String {
+        "look again: look \(given) isn't the device's latest look, or something else was done since: nothing was \(op == "type" ? "typed" : "pasted")"
+    }
 
     private func listen() {
         guard lock.withLock({ listener == nil }) else { return }
@@ -1208,6 +1224,8 @@ final class DeviceControlHub: @unchecked Sendable {
         if request.op.hasPrefix("pair-") {
             return onIntroduction?(request) ?? .failure("this RoamRun can't be introduced to a device")
         }
+        // Which rules a look is held to: asked before an action by `roamrun mcp`, of no device.
+        if request.op == "rules" { return .init(ok: true, rules: Self.rules) }
         // How it stands is said at once, whatever runs on the device.
         if request.op == "state" {
             guard let h = lock.withLock({ held[request.device] }) else { return notSetUp }
@@ -1242,54 +1260,84 @@ final class DeviceControlHub: @unchecked Sendable {
 
     /// Under the device's gate.
     private func perform(_ request: DeviceControlWire.Request, on h: Held, named name: String, wanted: @escaping @Sendable () -> Bool) -> DeviceControlWire.Response {
-        // Failed or not: an input may have reached the device before the failure showed.
-        defer { if request.op != "look" { h.acted = Date() } }
-        /// The look's size, for a point to be read against; taken away by `spend` once the request is one that goes to the device.
-        func spend() { h.looked = nil }
+        // Failed or not, once begun: an input may have reached the device before the failure showed.
+        // One refused for what it says, before anything was sent, isn't an input.
+        var begun = false
+        defer { if begun { h.acted = Date() } }
+        /// What a look saw is no longer on the screen as it was: a press, the elements walked, another
+        /// look, a failure once something was sent.
+        func end() { h.looked = nil }
+        /// A tap, swipe or text reached the device by the look it gave: no other tap or swipe goes by
+        /// it; text still may. One that gave none is of no one's look: what the latest saw is gone.
+        func went() { if request.look == nil { end() } else { h.looked?.spent = true } }
+        /// Text, after the screen's moment: held to the look given (spent or not), when it is given.
+        func held(to given: Int?) -> DeviceControlWire.Response? {
+            Thread.sleep(forTimeInterval: Self.settleWait(acted: h.acted, settle: settling))
+            guard wanted() else { return .failure("\(DeviceSession.stopped) whoever asked left, or the device was switched off, before it began") }
+            guard let given else { return nil }   // by hand: whatever was looked at last
+            guard let size = h.looked, size.id == given else { return .failure(Self.notLatest(given, request.op)) }
+            guard Date().timeIntervalSince(size.at) <= lookStands else { end(); return .failure(Self.lookOld) }
+            return nil
+        }
+        /// The look a point is read against: one no tap or swipe went by yet, the one given, still good.
+        func pointable() -> (Int, Int)? {
+            guard let size = h.looked, !size.spent else { return nil }
+            return (size.width, size.height)
+        }
         // A call can wait for its connection, and a text takes its time: an asker who leaves
         // meanwhile has it stopped where it is, or not begun.
         let session = h.session
         do {
             switch request.op {
             case "elements":
-                spend()   // the walk can scroll the screen
+                end()   // the walk can scroll the screen
+                begun = true
                 let walked = h.session
                 let limit = Self.elementLimit(request.limit)
                 let found = try Self.whileWanted(wanted, else: { walked.interrupt() }) { try walked.elements(limit: limit) }
                 return .init(ok: true, captions: found.captions, complete: found.complete)
             case "swipe":
                 // A request refused for what it says leaves the look to be used: it is spent by what reaches the device.
-                guard let size = h.looked else { return .failure(Self.lookFirst) }
-                guard request.look ?? size.id == size.id else { return .failure(Self.lookedSince) }
-                guard Date().timeIntervalSince(size.at) <= lookStands else { return .failure(Self.lookOld) }
+                guard pointable() != nil, let size = h.looked else { return .failure(Self.lookFirst) }
+                guard request.look ?? size.id == size.id else { return .failure(Self.lookedSince(request.look ?? size.id)) }
+                guard Date().timeIntervalSince(size.at) <= lookStands else { end(); return .failure(Self.lookOld) }
                 guard let from = Self.fraction(x: request.x, y: request.y, of: (size.width, size.height)),
                       let to = Self.fraction(x: request.x2, y: request.y2, of: (size.width, size.height)) else {
-                    return .failure("both points must be inside the last look (\(size.width) x \(size.height))")
+                    return .failure("the point must be inside the image (\(size.width) x \(size.height))")
                 }
                 guard let duration = Self.swipeDuration(request.milliseconds) else {
                     return .failure("a swipe takes 50...5000 ms")
                 }
-                spend()
+                begun = true
                 try Self.whileWanted(wanted, else: { session.interrupt() }) { try session.swipe(from: from, to: to, milliseconds: duration) }
+                went()
                 return .init(ok: true)
             case "type", "paste", "press":
-                spend()
                 guard let text = request.text else { return .failure("nothing to send") }
+                // Into whatever has focus: held to the device's latest look, as a point is.
+                if request.op != "press", let refused = held(to: request.look) { return refused }
+                begun = true
                 switch request.op {
                 case "type":
                     let started = Date()
                     try Self.whileWanted(wanted, else: { session.interrupt() }) { try session.type(text) }
                     Self.inputLog.debug("\(name, privacy: .public): typed \(text.count) keys, \(text.filter { $0 == " " }.count) spaces, in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
-                case "paste": try Self.whileWanted(wanted, else: { session.interrupt() }) { try session.paste(text) }
-                default: try Self.whileWanted(wanted, else: { session.interrupt() }) { try session.press(text) }
+                    went()
+                case "paste":
+                    try Self.whileWanted(wanted, else: { session.interrupt() }) { try session.paste(text) }
+                    went()
+                default:
+                    try Self.whileWanted(wanted, else: { session.interrupt() }) { try session.press(text) }
+                    end()   // goes to whatever is on the screen: what the look saw may go with it
                 }
                 return .init(ok: true)
             case "look":
                 // Written only where RoamRun keeps looks: whoever asks takes it from there.
                 guard let path = request.path, Self.isLookFile(path, in: directory) else { return .failure("no file to write the look to") }
                 // What an earlier look showed is no longer what a point may be read off, whether or not this one succeeds.
-                spend()
-                Thread.sleep(forTimeInterval: Self.settleWait(acted: h.acted))
+                end()
+                Thread.sleep(forTimeInterval: Self.settleWait(acted: h.acted, settle: settling))
+                guard wanted() else { return .failure(Self.notGiven) }
                 // As large as a model is shown it, no larger: an image scaled again by whatever shows
                 // it has points that aren't the look's any more, and a tap goes beside what was meant.
                 let image = Self.fitted(try h.session.look())
@@ -1304,25 +1352,36 @@ final class DeviceControlHub: @unchecked Sendable {
                     return .failure(Self.notGiven)
                 }
                 let id = lock.withLock { () -> Int in looks += 1; return looks }
-                h.looked = (image.width, image.height, id, Date())
+                h.looked = (image.width, image.height, id, Date(), false)
                 return .init(ok: true, width: image.width, height: image.height, look: id)
             case "tap":
-                // In the pixels of what was last looked at: there is no tapping a screen not seen.
-                guard let size = h.looked else { return .failure(Self.lookFirst) }
+                // In the pixels of what was last looked at, no tap or swipe gone by it: there is no tapping a screen not seen.
+                guard pointable() != nil, let size = h.looked else { return .failure(Self.lookFirst) }
                 // Of this look, when the caller says which: another's look since shows a screen this one never saw.
-                guard request.look ?? size.id == size.id else { return .failure(Self.lookedSince) }
-                guard Date().timeIntervalSince(size.at) <= lookStands else { return .failure(Self.lookOld) }
+                guard request.look ?? size.id == size.id else { return .failure(Self.lookedSince(request.look ?? size.id)) }
+                guard Date().timeIntervalSince(size.at) <= lookStands else { end(); return .failure(Self.lookOld) }
                 guard let point = Self.fraction(x: request.x, y: request.y, of: (size.width, size.height)) else {
-                    return .failure("the point must be inside the last look (\(size.width) x \(size.height))")
+                    return .failure("the point must be inside the image (\(size.width) x \(size.height))")
                 }
-                spend()
+                begun = true
                 try Self.whileWanted(wanted, else: { session.interrupt() }) { try session.tap(x: point.x, y: point.y) }
+                went()
                 return .init(ok: true)
             default:
                 return .failure("unknown request")
             }
         } catch {
-            return .failure("\(error)")
+            // Refused for what it says, before anything went to the device: the look stands. Failed
+            // otherwise (an interruption among them), it may have reached the device: nothing more goes by it.
+            if let failure = error as? DeviceSession.Failure {
+                switch failure {
+                case .invalid, .notBegun: begun = false; return .failure("\(error)")
+                case .message: break
+                }
+            }
+            guard begun else { return .failure("\(error)") }
+            end()
+            return .failure("\(error). It may or may not have reached the device: look before doing it again")
         }
     }
 }

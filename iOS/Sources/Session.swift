@@ -324,6 +324,7 @@ final class Session {
             note("A device connected from \(from).")
             hint = kind == .control ? "Connected. The code is on its way." : "Connected. Type the code Device Hub shows on \(name)."
         case .refused(let from): note("Refused a connection from \(from): not this device.")
+        case .full(let from): note("Refused a connection from \(from): two are carried already.")
         case .farDidNotAnswer(let why):
             note("\(name) didn't take it (\(why)).")
             hint = "\(name) didn't take the connection. Still announced: try Pair with “\(announcedName)” again."
@@ -403,7 +404,7 @@ final class Session {
         let ending = standIn
         standIn = nil
         ending?.end(.stopped)
-        keeper.finish()
+        keeper.finish(success: outcome?.tone == .success)
         finder?.stop()
         finder = nil
         code = nil

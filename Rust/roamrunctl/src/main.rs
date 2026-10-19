@@ -7,6 +7,7 @@ macro_rules! note { ($($t:tt)*) => {{ let _ = std::io::Write::write_fmt(&mut std
 mod announce;
 mod device;
 mod hold;
+mod http;
 mod mcp;
 mod secret;
 mod sign;
@@ -75,8 +76,27 @@ enum Command {
         /// The app's bundle identifier
         bundle: String,
     },
-    /// The device's commands as MCP tools, over stdin/stdout (for an agent's MCP config)
-    Mcp,
+    /// The device's commands as MCP tools: over stdin/stdout (for an agent's MCP config), or with --http over HTTP on this machine's Tailscale address, until Ctrl-C
+    Mcp {
+        /// Serve over HTTP on this port of this machine's Tailscale IPv4 address, not over stdin/stdout
+        #[arg(long)]
+        http: Option<u16>,
+        /// Who may call over HTTP: tag:<name> (a tagged machine, such as a cloud's) or a login (a person's own machines), as `tailscale whois` names them; again for more
+        #[arg(long, requires = "http")]
+        allow: Vec<String>,
+        /// Over HTTP, a token each request must also bring (Authorization: Bearer): a file of the owner's alone, 32 characters or more
+        #[arg(long = "token-file", requires = "http")]
+        token_file: Option<std::path::PathBuf>,
+        /// Over HTTP, offer `install`, of an .ipa sent with PUT /upload
+        #[arg(long = "allow-install", requires = "http")]
+        allow_install: bool,
+        /// With --allow-install, the most an upload may be, in MiB (4096 at most: an .ipa that unpacks to more isn't installed)
+        #[arg(long = "max-upload", requires = "allow_install", default_value_t = 1024, value_parser = clap::value_parser!(u64).range(1..=4096))]
+        max_upload: u64,
+        /// Over HTTP, the devices offered, as `roamrunctl devices` names them: no other is listed or used
+        #[arg(requires = "http")]
+        devices: Vec<String>,
+    },
     /// Keep the pairings saved here to yourself and sign with them for another machine, which then uses the devices without having their keys; until Ctrl-C
     Sign {
         /// The devices, as they are saved here, that the other machine may use

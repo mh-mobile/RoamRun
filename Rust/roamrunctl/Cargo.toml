@@ -31,6 +31,8 @@ rpassword = "7"
 ed25519-dalek = "2"
 plist = "1"
 getrandom = "0.3"
+# An upload's sha256: age's and idevice's own already.
+sha2 = "0.10"
 
 [profile.release]
 opt-level = "s"

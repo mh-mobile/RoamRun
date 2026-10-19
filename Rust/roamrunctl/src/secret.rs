@@ -37,9 +37,20 @@ pub fn given(get: impl Fn(&str) -> Option<String>) -> Result<Option<String>, Str
     get(ITSELF).map(|text| whole(text, ITSELF)).transpose()
 }
 
+/// Set once `mcp --http` has read what it offers: no terminal is asked after that. Asked from a device's worker,
+/// nobody would answer, and its calls would wait for it.
+static ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn ask_no_more() {
+    ASKED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 /// The passphrase: as the environment gives it, else asked at the terminal (twice when it is a new one).
 pub fn passphrase(what: &str, new: bool) -> Result<String, String> {
     if let Some(given) = given(|name| std::env::var(name).ok())? { return Ok(given); }
+    if ASKED.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(format!("{what} is kept under a passphrase, which is asked for only as this starts: end this and run it again"));
+    }
     if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
         return Err(format!("{what} is kept under a passphrase, and none is given: set {FILE}, {COMMAND} or {ITSELF} (the weakest), or run this at a terminal"));
     }
@@ -78,6 +89,15 @@ mod tests {
         assert_eq!(opened(&sealed, "correct horse").unwrap(), b"a pairing");
         assert_eq!(opened(&sealed, "wrong").unwrap_err(), "the passphrase isn't the one it was kept under");
         assert!(opened(b"{\"v\":1}", "x").is_err());
+    }
+
+    #[test]
+    fn once_asked_no_more_no_terminal_is_asked() {
+        ask_no_more();
+        // Where the environment gives one, that is taken still.
+        if given(|name| std::env::var(name).ok()).ok().flatten().is_none() {
+            assert!(passphrase("phone", false).unwrap_err().contains("only as this starts"));
+        }
     }
 
     #[test]

@@ -19,6 +19,9 @@ ns-keyed-archive = "=0.1.5"
 plist = "1"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "time"] }
 uuid = { version = "1", features = ["v4"] }
+# An .ipa is checked with what idevice reads it with: both are idevice's own already.
+async_zip = { version = "=0.0.18", features = ["deflate"] }
+futures-lite = { version = "2", default-features = false, features = ["std"] }
 
 [profile.release]
 opt-level = "s"

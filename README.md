@@ -300,8 +300,9 @@ RoamRun app holds the connection, so it has to be running. A connection that was
 when the device's Wi-Fi was switched off (seen on iOS 27.0).
 
 ```sh
-roamrun look iPhone /tmp/now.png          # the screen now, as PNG, 1280 pixels at most on its longer side
-roamrun tap iPhone 295 640                # a point, in the pixels of that image
+roamrun look iPhone /tmp/now.png          # the screen now, as PNG, 1280 pixels at most on its longer side;
+                                          # prints the path, its size, then "look 12"
+roamrun tap iPhone 295 640                # a point, in the pixels of that image (--look 12: of that look only)
 roamrun look iPhone /tmp/now.png          # look again before the next action
 roamrun swipe iPhone 295 900 295 450      # drag from one point to another
 roamrun type iPhone "hello"               # US keys; right only while the device's keyboard is an English one
@@ -313,7 +314,11 @@ roamrun elements iPhone                   # what accessibility says is on the sc
 The rules:
 
 - **Look, act, look again.** A `tap` or `swipe` needs a `look` taken within the last minute, and
-  each look serves one action.
+  each look serves one action. `type` and `paste` may still go by a look an action used (look, tap
+  a field, type), and wait until a second after the last input before they are sent.
+- `--look <n>` on `tap`, `swipe`, `type` and `paste` (after the text for those two) holds them to
+  look n, the number `look` prints: refused once another look (by any caller), a button,
+  `elements` or an action without `--look` came since, or after a minute. Without it, a `tap` or `swipe` goes by the last look, and `type` or `paste` needs none.
 - The image is the screen as the device holds it. An app in landscape appeared turned on its side
   (seen), and points are still pixels of that image.
 - `type` sends at most 2000 characters, about 16 a second, and a newline is Return. Under a
@@ -323,9 +328,10 @@ The rules:
 
 **For an agent** the same are MCP tools: `claude mcp add roamrun -- roamrun mcp`, or the like for
 another agent. The tools are `devices`, `look`, `tap`, `swipe`, `type`, `paste`, `press` and
-`elements`. They differ from the commands in three ways: `look` returns the picture to the agent
-instead of writing a file, `type` takes 500 characters a call, and a tap or swipe is refused if
-another caller has looked at that device since.
+`elements`. They differ from the commands in three ways: `look` returns the picture to the agent,
+with the look's id, instead of writing a file; `type` takes 500 characters a call; and `tap`,
+`swipe`, `type` and `paste` must give that id (`"look": 12`), as `--look` does. An app older than
+the `roamrun` it is asked from gets none of these four.
 
 **What the device does meanwhile.** Each look and each action runs a screen-sharing session on the
 device, which RoamRun keeps for about five seconds after the last one. The device showed it as
@@ -352,8 +358,9 @@ seen and operated too (seen), though unlocking still takes the passcode or Face 
 
 Setting up needs the Mac and the device on one Wi-Fi. A Mac elsewhere, such as one in a data
 centre, never is. When both Macs are on one tailnet, a Mac on the device's Wi-Fi introduces the
-far Mac, and the far Mac makes its own pairing. No key is carried; the far Mac keeps its own,
-sealed.
+far Mac, and the far Mac makes its own pairing and keeps it, sealed. The Mac beside the device
+relays the device's connection without reading it and saves nothing of it, but it shows the code
+to type: introduce with a Mac you trust.
 
 ```sh
 roamrun pair control --with macbook-pro              # on the far Mac, with the RoamRun app open
@@ -598,10 +605,14 @@ When in trouble, run `roamrun doctor` first.
   goes on bridging a device that sits beside it. RoamRun says so in its window, its log,
   `roamrun status` and `roamrun doctor`. Allow RoamRun under System Settings › Privacy & Security ›
   Local Network. If the switch is already on, the permission is stuck. The only way found to clear
-  it was to reinstall: `brew uninstall --zap --cask roamrun`, then install again. `--zap` deletes
-  your saved devices, so copy `~/Library/Application Support/RoamRun/profiles.json` aside first, and
-  put it back before you open RoamRun again
-  ([#23](https://github.com/mh-mobile/RoamRun/issues/23)).
+  it was to uninstall with `brew uninstall --zap` and install again
+  ([#23](https://github.com/mh-mobile/RoamRun/issues/23)). `--zap` deletes the folder
+  `~/Library/Application Support/RoamRun`, with your saved devices and device control's pairings in
+  it. To keep them: stop the bridges `roamrun up` started, with `-d` or in a terminal
+  (`roamrun down <name>`), and quit RoamRun; copy that folder aside; run `brew uninstall --zap --cask roamrun` and install
+  again; then put the folder back before you open RoamRun or run `roamrun`. Whether the
+  permission stays cleared with the folder put back hasn't been tried, nor whether device control
+  then opens its devices as before.
 - **Tailscale on iOS has been seen to stop passing traffic** after sleep or a network change while
   it still looks connected ("MagicSock function ReceiveIPv4 is not running"). Turn the VPN off and
   on.
@@ -638,7 +649,8 @@ item if you turned on "Open at login", and one `tailscale serve` entry while it 
 
 To uninstall, in this order:
 
-1. Stop bridges started with `roamrun up -d` (`roamrun down <name>`). They run without the app.
+1. Stop the bridges `roamrun up` started, with `-d` or in a terminal (`roamrun down <name>`). They
+   run without the app.
 2. If you installed the skill, run `roamrun init --uninstall` now, while the command still exists.
 3. Turn off "Open at login" if you turned it on, and quit RoamRun. Quitting gives its
    `tailscale serve` entry back.

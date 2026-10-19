@@ -31,18 +31,23 @@ enum CLI {
     Operating a device (iOS 27 or later; the RoamRun app holds the connection, and the device needs
     a pairing of RoamRun's own):
       look <name> [file.png]         Save the device's screen now as PNG, its longer side 1280 at most;
-                                     prints the path, then its size
-      tap <name> <x> <y>             Tap a point given in the pixels of the last look
-      swipe <name> <x1> <y1> <x2> <y2> [ms]
+                                     prints the path, its size, then "look <n>"
+      tap <name> <x> <y> [--look <n>]
+                                     Tap a point given in the pixels of the last look (of look n only)
+      swipe <name> <x1> <y1> <x2> <y2> [ms] [--look <n>]
                                      Drag from one point of the last look to another
       elements <name> [limit]        What accessibility says is on the screen, one caption a line
                                      (no positions; the screen may scroll)
-      type <name> <text>             Type on the device's keyboard (US keys; right only while that
+      type <name> <text> [--look <n>]
+                                     Type on the device's keyboard (US keys; right only while that
                                      keyboard is an English one: under a Japanese one even a space converts)
-      paste <name> <text>            Any text, by the device's pasteboard (it asks the user each time)
+      paste <name> <text> [--look <n>]
+                                     Any text, by the device's pasteboard (it asks the user each time)
       press <name> <button>          home, lock, volume-up or volume-down
       mcp                            The same as MCP tools, over stdin/stdout (for an agent's MCP config)
-    Each look serves one action: look, act, look again.
+    Each look serves one action (type and paste may still go by it): look, act, look again.
+    With --look, refused once another look (anyone's), a button, elements or an action without
+    --look came since, or after a minute: what an agent sharing the device gives.
     For a Mac that can't pair itself (not on the device's network):
       key create <name> <file> [--as <label>]
                                      Here, with the device on this Wi‑Fi: pairs once more, as
@@ -1063,7 +1068,7 @@ enum CLI {
                 note("roamrun: " + sentence(why, other: far.name, device: profile.displayName))
                 exit(1)
             case nil:
-                note("What \(far.name) kept couldn't be learned. There: roamrun pair control --attempt \(control)")
+                note("What \(far.name) kept couldn't be learned. Its own terminal says; with RoamRun there: roamrun pair control --attempt \(control)")
                 exit(1)
             }
         }
@@ -1272,20 +1277,20 @@ enum CLI {
                 look(p, path: words.count >= 2 ? words[words.startIndex + 1] : nil)
             case "tap":
                 guard name != nil, let p = targets.first, words.count == 3, let point = finite(words.dropFirst()) else {
-                    fail("usage: roamrun tap <name> <x> <y> — pixels of the last `roamrun look`. " + names(profiles))
+                    fail("usage: roamrun tap <name> <x> <y> [--look <n>] — pixels of the last `roamrun look`. " + names(profiles))
                 }
-                tap(p, x: point[0], y: point[1])
+                operate(p, .init(op: "tap", device: p.id, x: point[0], y: point[1], look: lookGiven(parsed)))
             case "swipe":
                 guard name != nil, let p = targets.first, let numbers = finite(words.dropFirst()), (4...5).contains(numbers.count),
                       let ms = numbers.count == 5 ? Int(exactly: numbers[4].rounded()) : 300 else {
-                    fail("usage: roamrun swipe <name> <x1> <y1> <x2> <y2> [milliseconds] — pixels of the last `roamrun look`. " + names(profiles))
+                    fail("usage: roamrun swipe <name> <x1> <y1> <x2> <y2> [milliseconds] [--look <n>] — pixels of the last `roamrun look`. " + names(profiles))
                 }
-                operate(p, .init(op: "swipe", device: p.id, x: numbers[0], y: numbers[1], x2: numbers[2], y2: numbers[3], milliseconds: ms))
+                operate(p, .init(op: "swipe", device: p.id, x: numbers[0], y: numbers[1], x2: numbers[2], y2: numbers[3], milliseconds: ms, look: lookGiven(parsed)))
             case "type", "paste", "press":
                 guard name != nil, let p = targets.first, words.count == 2 else {
-                    fail("usage: roamrun \(args[0]) <name> \(args[0] == "press" ? "<home|lock|volume-up|volume-down>" : "<text>"). " + names(profiles))
+                    fail("usage: roamrun \(args[0]) <name> \(args[0] == "press" ? "<home|lock|volume-up|volume-down>" : "<text> [--look <n>]"). " + names(profiles))
                 }
-                operate(p, .init(op: args[0], device: p.id, text: words[words.startIndex + 1]))
+                operate(p, .init(op: args[0], device: p.id, text: words[words.startIndex + 1], look: args[0] == "press" ? nil : lookGiven(parsed)))
             case "elements":
                 guard name != nil, let p = targets.first else { fail("usage: roamrun elements <name> [limit]. " + names(profiles)) }
                 elements(p, limit: words.count >= 2 ? Int(words[words.startIndex + 1]) : nil)
@@ -1303,10 +1308,10 @@ enum CLI {
     nonisolated private static let specs: [String: (options: Set<String>, words: ClosedRange<Int>)] = {
         var all = baseSpecs
         all["look"] = ([], 0...2)
-        all["tap"] = ([], 0...3)
-        all["swipe"] = ([], 0...6)
-        all["type"] = ([], 0...2)
-        all["paste"] = ([], 0...2)
+        all["tap"] = (["--look="], 0...3)
+        all["swipe"] = (["--look="], 0...6)
+        all["type"] = (["--look="], 0...2)
+        all["paste"] = (["--look="], 0...2)
         all["press"] = ([], 0...2)
         all["elements"] = ([], 0...2)
         all["mcp"] = ([], 0...0)
@@ -2057,8 +2062,17 @@ enum CLI {
         if FileManager.default.fileExists(atPath: file.path, isDirectory: &folder), folder.boolValue {
             throw ArgumentError(message: "it is a folder")
         }
-        try Data(contentsOf: made).write(to: file, options: .atomic)
-        chmod(file.path, 0o600)   // a screen, with whatever was on it
+        // A screen, with whatever was on it: the owner's alone before it is in its place, not after.
+        let data = try Data(contentsOf: made)
+        let beside = file.deletingLastPathComponent().appendingPathComponent(".roamrun-look-\(UUID().uuidString)")
+        let fd = try reserve(beside.path)
+        var failed = write(data, to: fd) ? nil : errno
+        close(fd)
+        if failed == nil, rename(beside.path, file.path) != 0 { failed = errno }
+        if let failed {
+            unlink(beside.path)
+            throw ArgumentError(message: String(cString: strerror(failed)))
+        }
     }
 
     private static func askApp(_ request: DeviceControlWire.Request) -> DeviceControlWire.Response {
@@ -2087,16 +2101,24 @@ enum CLI {
         }
         print(file.path)
         print("\(w) x \(h)")
+        // Which look this is: given with --look, an action is held to it.
+        if let id = r.look { print("look \(id)") }
         exit(0)
     }
 
-    /// One tap, at a point in the pixels of the last look. Operates the device.
-    private static func tap(_ profile: DeviceProfile, x: Double, y: Double) -> Never {
-        operate(profile, .init(op: "tap", device: profile.id, x: x, y: y))
+    /// `--look <n>`: the look an action is held to; none, the last one, whoever looked.
+    private static func lookGiven(_ parsed: Parsed) -> Int? {
+        guard let given = parsed.values["--look"] else { return nil }
+        guard let n = Int(given), n >= 0 else { fail("--look takes the number a look printed (\"look <n>\")") }
+        return n
     }
 
     /// Something done to the device: silent when it went (but see `typed`), the reason when it didn't.
     private static func operate(_ profile: DeviceProfile, _ request: DeviceControlWire.Request) -> Never {
+        // Held to a look: an app older than this doesn't hold to it, and isn't sent it.
+        if request.look != nil, DeviceMCP.older(askApp(.init(op: "rules", device: request.device))) {
+            stop("\(request.op) failed: \(DeviceMCP.olderApp)")
+        }
         let r = askApp(request)
         guard r.ok else { stop("\(request.op) failed: \(r.error ?? "no answer")") }
         if request.op == "type", let note = request.text.flatMap(DeviceControlWire.typed) { print(note) }

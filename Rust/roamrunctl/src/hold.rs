@@ -134,11 +134,12 @@ pub fn run(with: &str, name: Option<String>, sealed: bool) -> Result<String, Str
     note!("Waiting for {with}, 10 minutes at most; only it is answered.\n  Where {with} is a machine on the device's Wi‑Fi, there:  roamrunctl pair introduce --host {me} --to <the device's Tailscale name>\n    (a Mac with RoamRun:  roamrun pair introduce --host {me} --to <device>)\n  Where {with} is the device itself, on it:  the RoamRun Introducer app, far Mac “{me}”, Introduce");
     let mut until = Instant::now() + CONNECT;
     let mut tried = 0;
+    let mut failed = 0;
     loop {
         if Instant::now() >= until { return Err(format!("{with} didn't come in 10 minutes: nothing was paired")); }
-        let (stream, from) = match listener.accept() {
-            Ok(came) => came,
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => { std::thread::sleep(Duration::from_millis(200)); continue }
+        let (stream, from) = match roamrun_device::taken_one(listener.accept(), &mut failed) {
+            Ok(Some(came)) => came,
+            Ok(None) => { std::thread::sleep(Duration::from_millis(200)); continue }
             Err(e) => return Err(format!("can't take a connection: {e}")),
         };
         // Whoever connects is held to being the machine named, by address and by Tailscale's own id for it.

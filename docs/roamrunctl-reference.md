@@ -105,8 +105,13 @@ the using machine and the device, not through the key's machine.
   maximum when it asks the host for an offer. Before that, it can wait up to ten minutes
   for the host on TCP 41830. Either machine can start its command first.
 - `install`: five minutes plus 15 seconds per megabyte as its time limit. The command prints
-  the size and time limit, then waits without progress output. In tests on the device's Wi-Fi,
+  the size and time limit, then waits without progress output; the MCP tool answers once the
+  install has begun (see [Installing apps](#installing-apps)). In tests on the device's Wi-Fi,
   3 MB took about 25 seconds and 37 MB about two and a half minutes.
+- `tailscale status`: ten seconds to answer, wherever roamrunctl asks it. `sign` and
+  `pair control --with` ask for each connection, and turn the connection away when it doesn't
+  answer; `pair control --with` asks again for the device the near machine names, and ends
+  there when it doesn't answer.
 
 ## Pairing records and passphrases
 
@@ -125,12 +130,17 @@ the using machine and the device, not through the key's machine.
   The command source runs with `sh -c` (Windows: `cmd /S /C`). A passphrase in
   `ROAMRUNCTL_PASSPHRASE` is in the environment of every process started from that shell.
   Without a source, interactive commands prompt.
+- A configured source gives one passphrase, used for every encrypted device opened or saved
+  under that environment: the command source is run the same way whichever device it is for. So
+  devices opened under one environment share a passphrase; one `mcp` server uses one for every
+  device it opens. To keep a key off the machine an agent runs on, use B.
 
 | Command | Passphrase handling |
 |---|---|
 | `pair control --passphrase`, `key import --passphrase` | prompts twice when creating a new encrypted record, or reads a configured source |
 | `look`, `install`, `launch` | prompts when opening an encrypted record, or reads a configured source |
-| `mcp` | cannot prompt; needs a configured source each time it opens an encrypted record |
+| `mcp` | cannot prompt; needs a configured source the first time it opens an encrypted record, and keeps what that opened while the file is the same |
+| `mcp --http` | prompts at a terminal, or reads a configured source, as it starts, for each encrypted device it offers; keeps what that opened while the file is the same |
 | `sign` | reads or prompts when starting for each encrypted record it serves |
 | `devices`, `devices remove` | no passphrase needed |
 
@@ -198,17 +208,31 @@ needed to establish each new device connection.
 
 ## MCP tools
 
-- `roamrunctl mcp` communicates through standard input/output. `look` returns a JPEG image
+- `roamrunctl mcp` communicates through standard input/output, or over HTTP with `--http`
+  (next section). `look` returns a JPEG image
   to the agent, while the standalone `roamrunctl look` command saves a PNG; the longer
   image side is at most 1280 pixels.
-- An MCP `look` authorizes **one** `tap` or `swipe` within 60 seconds. Another operation
-  (`type`, `paste`, `press`, `elements`, `install`, or `launch`) invalidates that look.
-  A subsequent tap or swipe needs another `look`.
+- An MCP `look` answers with an id, which `tap`, `swipe`, `type` and `paste` give
+  (`"look": 12`). It stands for 60 seconds, and only while it is the device's latest:
+  another look since — by any client, one that failed too — or `press`, `elements`,
+  `install`, or `launch` ends it, and so does a call that fails in a way that may have
+  reached the device, or another device saved under the name. It authorizes **one** `tap` or
+  `swipe`: after a tap, swipe, `type`, or `paste` by it, a tap or swipe needs another `look`,
+  while `type` and `paste` still go by it (look → tap a field → type needs one look). Ids
+  start from a random number at each start, so one kept from an earlier run isn't taken for
+  a later look.
 - Rotation is rejected when reported orientation or image-shape checks detect a mismatch;
   it is **not guaranteed** to be detected if the device reports no orientation.
   Tap/swipe coordinates are pixels in the image returned by the last `look`.
-- `type`, `paste`, and `press` act on the currently focused interface. `paste` makes the device
-  ask “Allow Paste” each time.
+- `type`, `paste`, and `press` act on the currently focused interface. `press` isn't held to a
+  look. `paste` makes the device ask “Allow Paste” each time. `type` and `paste`, as a `look`
+  does, wait until a second after the last input: keys sent at once after a tap on a field
+  were seen lost, or put before the cursor.
+- Each tool carries MCP's `readOnlyHint` and `destructiveHint`. `devices`, `look` and
+  `install_status` are marked read-only. `elements` is neither: the screen may scroll. The rest are marked destructive: what
+  is pressed or typed acts as it would by hand (a tap can delete or send, a typed newline is
+  Return), `press lock` can't be undone from here, `launch` ends a running app first, and
+  `install` replaces one. What a client does with the hints is the client's; none was checked.
 - A queued call cancelled before it starts is not executed; a call already running may
   complete. MCP keeps connections open and reopens a device when its saved association
   changes or its connection fails.
@@ -216,16 +240,112 @@ needed to establish each new device connection.
   session. Music continued playing during the screen/input tests, but microphone and some
   other interaction scenarios have not been verified.
 
+## MCP over HTTP
+
+`roamrunctl mcp --http <port> --allow <who> [--allow <who>…] [--token-file <file>] [--allow-install [--max-upload <MiB>]] <device>…`,
+until Ctrl-C:
+
+- It listens on this machine's Tailscale IPv4 address only. It doesn't start without
+  Tailscale, without `--allow`, without a device, or as root (on Linux and macOS, by its
+  effective user; not checked on Windows); a device only offered by a machine that
+  signs, and not used here yet, isn't taken, nor one whose saved file can't be read (a
+  passphrase not given), nor one device under two names.
+- Who may call: `--allow tag:<name>` matches a tagged caller by its tags, and `--allow <login>`
+  an untagged caller by its user's login, as `tailscale whois` gives them for the caller's
+  address, asked at each request (5 s at most; where it doesn't say who the caller is, the
+  request is answered 503, to be tried again). A login never matches
+  a tagged machine. A machine shared in from another tailnet is refused, and so is this
+  machine itself unless the token came.
+- `--token-file`: each request also brings `Authorization: Bearer <token>`. The file has to be
+  its owner's alone (not checked on Windows), the token 32 characters or more on one line.
+- The transport is MCP's Streamable HTTP as of 2025-11-25: one JSON-RPC message a
+  `POST /mcp`, answered in JSON; a notification or a response gets 202; `GET` and `DELETE`
+  get 405. A session is given only to take a call back in (below), and `initialize` isn't
+  needed before a call. `MCP-Protocol-Version`, when sent, is one of 2024-11-05, 2025-03-26,
+  2025-06-18, 2025-11-25, else 400.
+- Answered before anything else: `/.well-known/*` and `/register` with 404 (no OAuth here),
+  any `Origin` with 403, a `Host` other than this machine's address or its Tailscale names
+  (with the port, which may be left out where it is 80) with 400; then a missing or wrong token with 401 (`WWW-Authenticate:
+  Bearer`), a caller `tailscale whois` didn't say who it is with 503, a caller not allowed with 403.
+- One request a connection (`Connection: close`). The head has to be in within 10 s of
+  connecting, the body within 30 s more, however it trickles in. A body is read as chunked
+  when it says so (also when a length comes with it), else by its length; 1 MB at most.
+  32 connections at once, 17 from one address; more are answered 503.
+- Tool calls on one device take turns, as over stdio; each device has its own turn, so a call
+  on one doesn't wait for another's. One whose caller has closed its connection (or only its
+  own side of it), or whose connection broke, when its turn comes isn't made. An `initialize`
+  is answered with an `Mcp-Session-Id`, which a client sends with what follows (the MCP SDKs
+  do): a `notifications/cancelled` sent with it takes back the call of that id in that
+  session, before its turn, also where it came in before the call (it is kept a minute for
+  it, 256 at most at once). Without a session it does nothing — the request id is the
+  client's choosing, and another client's call could carry the same — and closing the
+  connection takes the call back. One that waited 20 s for its turn is answered "not begun"
+  and isn't made. Other messages are answered at once. (MCP 2025-11-25 asks that a closed
+  connection not be taken as a call taken back; a call for a caller who is gone isn't made
+  here all the same.)
+- Several agents can use one server at once: a tap, swipe, type or paste names the look it is
+  of, and is refused after another look of that device, whoever took it.
+- Only the devices named are listed by `devices` or used, and only while each is saved here
+  as it was when this began: removed, or saved anew under its name, it isn't used until this
+  is run again. `install` and `install_status` are offered only with `--allow-install`, and
+  `install` then takes an upload, never a path (next section).
+- One line a request on standard error: the time (UTC), the caller's address and who
+  Tailscale says it is, the method and tool, the outcome, how long it took — with control
+  characters shown as `?`. Never the token, a body, text typed or pasted, captions or
+  images, or what was uploaded.
+
+### Uploads (`--allow-install`)
+
+- `PUT /upload` takes an `.ipa` as the body, with `Content-Length` or chunked
+  (`curl -T app.ipa`), and answers `{"upload": "<id>", "size": <bytes>, "sha256": "<hex>"}`.
+  `install` then names it: `{"device": …, "upload": "<id>", "sha256": "<hex>"}`. Without
+  `--allow-install`, `/upload` is 404 and neither `install` nor `install_status` is listed.
+- Once the caller is let in (as for `/mcp`): a method other than `PUT` is 405, no length and
+  not chunked 411, a length over the most 413 (before `100 Continue` is sent), and one while
+  another is coming in 409. `--max-upload <MiB>` sets the most: 1024 by default, 1 to 4096.
+  The body may take 30 seconds plus 2 seconds a MiB of its length (of the most, when chunked),
+  and nothing may come for 60 seconds at most: then it is refused with 408 and the slot is free.
+- One upload is kept: when another begins to come in, from whichever caller, the one kept is
+  dropped. It is kept in a folder made
+  for this run in the system's temporary folder: mode 0700, the file 0600 (on Windows, the
+  user's own temporary folder, not restricted further). One cut short is dropped at once, one
+  not used for 30 minutes is dropped (looked for every minute), and the folder is removed at
+  Ctrl-C, SIGTERM or SIGHUP (on Windows, Ctrl-C, Ctrl-Break or the console closing). One ended
+  otherwise (killed) leaves its folder.
+- Only the caller that sent an upload — by its node's lasting id, as `tailscale whois` gives
+  it — can install it, and only by the sha256 it was answered (in either case). Another caller's
+  id, or another sha256, is refused before the call waits its turn, and the upload stays.
+- An upload serves one install. What it holds is checked first (below); a device that can't
+  be opened then leaves it for another try; once the device is open, the install takes it,
+  and its file is removed when the install ends.
+
 ## Installing apps
 
 - `install` accepts an `.ipa` or a signed `.app` directory built for the target device.
   `roamrunctl` does not compile or sign apps.
+- An `.ipa` is checked before anything of it is sent, by `roamrunctl install` (before the
+  device is opened) and by MCP alike: `Payload` holds one `<name>.app` and nothing else but
+  hidden files such as `.DS_Store` (a `.bundle` is refused; a name ending in `.app` counts as
+  an app, hidden or not), and it unpacks to 4 GiB at most, by what the archive says. The
+  app's bundle identifier is found as the install finds it: the files whose names have three
+  parts and end in `Info.plist` are read in the archive's order, and the first that gives a
+  bundle identifier must be `Payload/<name>.app/Info.plist`. One before it without an
+  identifier, such as Firebase's `GoogleService-Info.plist` in the app, is passed over. Each
+  one read must be a plist of 1 MiB at most. An `.app` directory isn't checked.
+- An `.ipa` is read whole into memory to be sent: an upload as large as `--max-upload` allows
+  takes that much memory on this machine while it is installed.
 - An `.app` directory is staged on the device under its own name, and `.ipa` packages use
-  a fixed staging name. **Do not run concurrent installs to one device**: they are not
-  coordinated across commands.
+  a fixed staging name. **Do not run concurrent installs to one device** from separate
+  commands: they are not coordinated. Within one `mcp` server, a device's second install is
+  refused while its first runs.
 - A subsequent `.app` installation cleans up interrupted staging where possible.
-  The command prints its transfer size and timeout, then reports the result; the MCP tool
-  likewise returns a result only after the operation completes.
+  The command prints its transfer size and timeout, then reports the result.
+- The MCP `install` answers once the install has begun, with the bundle identifier (or the
+  `.app` path), the size and the time limit; `install_status` says how it goes: still going
+  and for how long, installed, or why it failed. Until it ends, every other call on that
+  device is answered that it is installing, and the device's latest look is ended. Over stdio,
+  an install still going when standard input closes runs out before the server ends; over
+  HTTP, Ctrl-C ends it where it is.
 
 ## `pair introduce` options and results
 
@@ -330,8 +450,28 @@ against a real device at the time these notes were written:
 - x86_64 machines, Linux without Avahi, and firewall tools other than ufw.
 - Signing multiple devices at once, and the `ROAMRUNCTL_SIGNER` override.
 - A Mac's `roamrun pair introduce` introducing a machine running `roamrunctl`.
-- Through MCP: swipe, type, paste, install, and launch (these had been tested outside MCP).
+- Through MCP: swipe and a paste that goes through (these had been tested outside MCP).
+  Installing and launching through MCP on Linux or Windows.
 - On Windows: `pair control --with`, MCP, install, and launch.
+- `mcp --http` from another machine (by a tag or a login), from a cloud, or on Linux or
+  Windows. On macOS it was checked from the machine itself, with the token:
+  `scripts/mcp-http-check.py`; and on an iPhone, look, tap, type, press and `elements`, a tap
+  refused after another caller's look, types and pastes refused by an older look, and queued
+  calls taken back by closing their connection and by `notifications/cancelled` in a session.
+  Look, tap, type, `elements`, and calls taken back in a session (the cancel coming before the
+  call, or after it) were run again in a later form; the rest were runs of earlier forms of it.
+  Uploads were run on macOS from the machine itself with the token, against a device saved
+  with an address nothing is at: an upload answered with its size and the sha256 `shasum`
+  gives, one over `--max-upload` refused with the one kept staying, `install` of it refused as
+  that device can't be opened with the upload staying, and the folder made 0700 and removed at
+  Ctrl-C (exit 130); and without the token, `/upload` refused as this machine itself. Then on
+  the iPhone 15 Pro, an 8.5 MB `.ipa` (one app, its check passed): over stdio from its path,
+  `install` answered in 1 s, a look meanwhile was answered that it was installing, and
+  `install_status` said it was installed after 15 s; over HTTP, the upload took 0.6 s with
+  the sha256 `shasum` gives, `install` answered at once, a look and a second install by the
+  same upload were refused meanwhile, it was installed after 10 s, the upload's file was gone
+  after, and the folder was removed at Ctrl-C. `launch` of it over stdio answered with its pid
+  in 1.3 s.
 - Tailscale userspace networking with no address available to bind.
 - Xcode pairing through `pair introduce` since the `--mac` → `--host` change.
 

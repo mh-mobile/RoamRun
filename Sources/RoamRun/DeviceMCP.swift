@@ -4,9 +4,9 @@ import ImageIO
 import UniformTypeIdentifiers
 
 /// `roamrun mcp`: the device's commands as MCP tools over stdin/stdout (one JSON-RPC message a
-/// line). A thin front: every tool asks the app, as the CLI's commands do.
-/// What differs is the look: the image comes back in the answer, scaled down to what a model
-/// is shown anyway, and points are taken in that image's pixels.
+/// line). A thin front: every tool asks the app, as the CLI's commands do, and the app alone
+/// holds a look to what is done by it (it sees every caller's looks). What differs is that the
+/// image comes back in the answer, with the look's id, which a tap, swipe, type or paste gives.
 /// Tools run one at a time, in the order asked; what the client says meanwhile is still read,
 /// so that it can take a call back.
 final class DeviceMCP: @unchecked Sendable {
@@ -20,9 +20,8 @@ final class DeviceMCP: @unchecked Sendable {
     static let longSide = DeviceControlHub.lookSide
     /// The most `type` takes in one call here.
     static let longestTyped = 500
-    /// Per device: the size of the last image given out, of the look behind it, and which look
-    /// that was — a point is sent with it, so it isn't read against a look another made since.
-    private var shown: [UUID: (shown: CGSize, real: CGSize, look: Int?)] = [:]
+    /// The MCP versions spoken here: initialize answers the one asked for if it is one of them, else the newest.
+    static let versions = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"]
 
     /// Where the app writes a look for this to read: the folder it keeps looks in.
     private let looks: URL
@@ -51,6 +50,7 @@ final class DeviceMCP: @unchecked Sendable {
     func serve(lines: () -> String? = { readLine(strippingNewline: true) },
                write: @escaping @Sendable (Data) -> Void = { FileHandle.standardOutput.write($0 + Data([0x0A])) }) {
         while let line = lines() {
+            if line.allSatisfy(\.isWhitespace) { continue }
             let message = Data(line.utf8)
             let object = try? JSONSerialization.jsonObject(with: message) as? [String: Any]
             if object?["method"] as? String == "notifications/cancelled" {
@@ -98,18 +98,24 @@ final class DeviceMCP: @unchecked Sendable {
         }
     }
 
-    /// One message in, its answer out; nil for a notification (and for what isn't JSON-RPC).
+    /// One message in, its answer out; nil for a notification. What can't be read is answered with
+    /// JSON-RPC's error for it, as `roamrunctl mcp` does: a client waiting on it isn't left waiting.
     func handle(_ message: Data) -> Data? {
-        guard let object = try? JSONSerialization.jsonObject(with: message) as? [String: Any],
-              let method = object["method"] as? String else { return nil }
+        func failed(_ id: Any, _ code: Int, _ why: String) -> Data? {
+            try? JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": id, "error": ["code": code, "message": why]])
+        }
+        guard let read = try? JSONSerialization.jsonObject(with: message, options: .fragmentsAllowed) else { return failed(NSNull(), -32700, "not JSON") }
+        guard let object = read as? [String: Any] else { return failed(NSNull(), -32600, "one request at a time, as an object") }
         guard let id = object["id"] else { return nil }   // a notification: nothing to answer
+        guard let method = object["method"] as? String else { return failed(id, -32600, "no method") }
         let params = object["params"] as? [String: Any] ?? [:]
         func reply(_ result: [String: Any]) -> Data? {
             try? JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": id, "result": result])
         }
         switch method {
         case "initialize":
-            return reply(["protocolVersion": params["protocolVersion"] as? String ?? "2024-11-05",
+            let asked = params["protocolVersion"] as? String
+            return reply(["protocolVersion": Self.versions.first { $0 == asked } ?? Self.versions.max()!,
                           "capabilities": ["tools": [String: Any]()],
                           "serverInfo": ["name": "roamrun", "version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"],
                           "instructions": Self.instructions])
@@ -128,12 +134,32 @@ final class DeviceMCP: @unchecked Sendable {
             }
             return reply(["content": content, "isError": failed])
         default:
-            return try? JSONSerialization.data(withJSONObject: [
-                "jsonrpc": "2.0", "id": id, "error": ["code": -32601, "message": "no such method: \(method)"]])
+            return failed(id, -32601, "no such method: \(method)")
         }
     }
 
     struct Failure: Error, CustomStringConvertible { let description: String }
+
+    /// The look a tap, swipe, type or paste gives: a number, or one written as text, as a model sometimes gives it.
+    static func look(of arguments: [String: Any]) throws -> Int {
+        guard let given = arguments["look"], !(given is NSNull) else { throw Failure(description: "look is missing: give the id the last look answered with") }
+        if let id = whole(given), id >= 0 { return id }
+        if let s = given as? String, let id = Int(s.trimmingCharacters(in: .whitespacesAndNewlines)), id >= 0 { return id }
+        throw Failure(description: "look isn't a look's id: give the id the last look answered with, a whole number")
+    }
+
+    /// A whole number as JSON wrote it: not true or false (JSONSerialization reads them as 1 and 0), nor 6.0.
+    static func whole(_ given: Any?) -> Int? {
+        guard let n = given as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(), !CFNumberIsFloatType(n) else { return nil }
+        return n.intValue
+    }
+
+    static let olderApp = "the RoamRun app running is older than this roamrun: it doesn't hold what is done to the look given. Quit it and open the RoamRun this command came with"
+
+    /// Whether the app's answer to "rules" is an older app's: one that doesn't hold an action to the look given.
+    static func older(_ said: DeviceControlWire.Response) -> Bool {
+        said.ok ? (said.rules ?? 0) < DeviceControlHub.rules : said.error == "unknown request"
+    }
 
     private func call(_ tool: String, _ arguments: [String: Any]) throws -> [[String: Any]] {
         func text(_ s: String) -> [[String: Any]] { [["type": "text", "text": s]] }
@@ -150,7 +176,7 @@ final class DeviceMCP: @unchecked Sendable {
             throw Failure(description: "no such device; saved: \(profiles.map(\.displayName).joined(separator: ", "))")
         }
         func number(_ key: String) throws -> Double {
-            guard let n = arguments[key] as? NSNumber else { throw Failure(description: "\(key) is missing") }
+            guard let n = arguments[key] as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() else { throw Failure(description: "\(key) is missing") }
             return n.doubleValue
         }
         /// Asks the app; its refusal becomes this tool's failure.
@@ -162,39 +188,41 @@ final class DeviceMCP: @unchecked Sendable {
             guard response.ok else { throw Failure(description: response.error ?? "failed") }
             return response
         }
-        /// A point given in the image a look returned, in the pixels of the look itself.
-        func real(_ x: Double, _ y: Double) throws -> (x: Double, y: Double) {
-            guard let sizes = shown[device.id] else { throw Failure(description: "look first: a point is given in the pixels of the image a look returns") }
-            // Said in the image's own size: the app would name the look's, which the caller never saw.
-            guard (0..<sizes.shown.width).contains(x), (0..<sizes.shown.height).contains(y) else {
-                throw Failure(description: "the point must be inside the image (\(Int(sizes.shown.width)) x \(Int(sizes.shown.height)))")
+        /// Before what is held to a look: an app that doesn't hold to it (older than this) isn't sent it.
+        func heldToLooks() throws {
+            let said: DeviceControlWire.Response
+            do { said = try send(.init(op: "rules", device: device.id)) } catch let failure as Failure where failure.description == "unknown request" {
+                throw Failure(description: Self.olderApp)
             }
-            return (x * sizes.real.width / sizes.shown.width, y * sizes.real.height / sizes.shown.height)
+            guard !Self.older(said) else { throw Failure(description: Self.olderApp) }
         }
         switch tool {
         case "look":
             let file = looks.appendingPathComponent("look-\(UUID().uuidString).png")
             defer { try? FileManager.default.removeItem(at: file) }
             let looked = try send(.init(op: "look", device: device.id, path: file.path))
-            guard let (jpeg, size, original) = Self.scaled(file) else { throw Failure(description: "couldn't read the look") }
-            shown[device.id] = (size, original, looked.look)
+            // The app's look is no larger than this: points read off the image are the look's own.
+            guard let (jpeg, size, _) = Self.scaled(file), let id = looked.look else { throw Failure(description: "couldn't read the look") }
             return [["type": "image", "data": jpeg.base64EncodedString(), "mimeType": "image/jpeg"]]
-                + text("\(Int(size.width)) x \(Int(size.height)). Points for tap and swipe are pixels of this image. It serves one action, within a minute: look again after it.")
+                + text("\(Int(size.width)) x \(Int(size.height)), look \(id). Points for tap and swipe are pixels of this image, given with look \(id). Within a minute it serves one tap, swipe, type or paste, and type and paste after that: look again before another tap or swipe.")
         case "tap":
-            let p = try real(try number("x"), try number("y"))
-            let look = shown[device.id]?.look
-            shown[device.id] = nil
-            _ = try send(.init(op: "tap", device: device.id, x: p.x, y: p.y, look: look))
+            let look = try Self.look(of: arguments)
+            let (x, y) = (try number("x"), try number("y"))
+            try heldToLooks()
+            _ = try send(.init(op: "tap", device: device.id, x: x, y: y, look: look))
             return text("tapped; look to see what it did")
         case "swipe":
-            let from = try real(try number("x1"), try number("y1")), to = try real(try number("x2"), try number("y2"))
-            let look = shown[device.id]?.look
-            shown[device.id] = nil
-            _ = try send(.init(op: "swipe", device: device.id, x: from.x, y: from.y, x2: to.x, y2: to.y,
-                               milliseconds: (arguments["milliseconds"] as? NSNumber)?.intValue, look: look))
+            let look = try Self.look(of: arguments)
+            let (x1, y1, x2, y2) = (try number("x1"), try number("y1"), try number("x2"), try number("y2"))
+            var ms: Int?
+            if let given = arguments["milliseconds"], !(given is NSNull) {
+                guard let n = Self.whole(given), (50...5000).contains(n) else { throw Failure(description: "milliseconds is a whole number, 50...5000") }
+                ms = n
+            }
+            try heldToLooks()
+            _ = try send(.init(op: "swipe", device: device.id, x: x1, y: y1, x2: x2, y2: y2, milliseconds: ms, look: look))
             return text("swiped; look to see what it did")
         case "elements":
-            shown[device.id] = nil   // the walk can scroll the screen
             let r = try send(.init(op: "elements", device: device.id, limit: (arguments["limit"] as? NSNumber)?.intValue))
             let captions = r.captions ?? []
             return text(captions.joined(separator: "\n") + (r.complete == true ? "" : "\n(\(captions.count) elements; the walk was cut short, there may be more)"))
@@ -204,8 +232,10 @@ final class DeviceMCP: @unchecked Sendable {
             guard tool != "type" || value.count <= Self.longestTyped else {
                 throw Failure(description: "too long to type here: \(Self.longestTyped) characters at most (half a minute or more). paste takes any length")
             }
-            shown[device.id] = nil
-            _ = try send(.init(op: tool, device: device.id, text: value))
+            // Into whatever has focus: held to the device's latest look. A button isn't.
+            let look = tool == "press" ? nil : try Self.look(of: arguments)
+            if look != nil { try heldToLooks() }
+            _ = try send(.init(op: tool, device: device.id, text: value, look: look))
             return text(tool == "type" ? DeviceControlWire.typed(value) ?? "sent; look to see what it did" : "sent; look to see what it did")
         default:
             throw Failure(description: "no such tool: \(tool)")
@@ -232,7 +262,10 @@ final class DeviceMCP: @unchecked Sendable {
 
     static let instructions = """
     Operates a real iPhone or iPad through RoamRun. Look, act, look again: each look serves one \
-    action, and points are pixels of the image the last look returned. These press what is really \
+    action, and points are pixels of the image the last look returned, given with the id it answered \
+    with. Type and paste give the id of the latest look too, within a minute of it (after a tap with \
+    it is fine), and are refused once something else was looked at or done since: they go to whatever \
+    has focus. Press goes to whatever is on the screen: look before it too. These press what is really \
     there — don't tap what spends money, posts, sends, deletes or signs in unless the user asked \
     for exactly that. A look shows whatever is on the screen (notifications, messages); don't pass \
     the image on. The device lists this as screen sharing, where its user can see it: until about \
@@ -244,27 +277,40 @@ final class DeviceMCP: @unchecked Sendable {
         var all = properties
         if name != "devices" { all["device"] = ["type": "string", "description": "The device's name in RoamRun (see `devices`)"] }
         return ["name": name, "description": description,
-                "inputSchema": ["type": "object", "properties": all, "required": (name == "devices" ? [] : ["device"]) + required]]
+                "inputSchema": ["type": "object", "properties": all, "required": (name == "devices" ? [] : ["device"]) + required],
+                "annotations": hints(name)]
+    }
+
+    /// What a client may take each tool to do, the same in `roamrunctl mcp`. `look` only reads: nothing it does on
+    /// the device lasts. `elements` may scroll. Destructive: whatever presses or types into what is
+    /// there, or can't be undone from here (`lock`).
+    static func hints(_ name: String) -> [String: Bool] {
+        ["readOnlyHint": ["devices", "look"].contains(name),
+         "destructiveHint": ["tap", "swipe", "type", "paste", "press"].contains(name)]
     }
 
     // Computed: JSON objects aren't Sendable, and a static stored one would have to be.
     private static var point: [String: Any] { ["type": "number", "description": "Pixels of the image the last look returned"] }
+    private static var lookGiven: [String: Any] { ["type": "integer", "description": "The id the last look answered with"] }
+    private static var lookLatest: [String: Any] {
+        ["type": "integer", "description": "The id of the device's latest look, less than a minute old, with nothing done since but by it: no other look, button, elements, action without this id, or action that failed (taps, swipes, types and pastes by it are fine)"]
+    }
 
     static var tools: [[String: Any]] { [
         tool("devices", "The devices saved in RoamRun, one name a line."),
-        tool("look", "The device's screen now, as an image. Do this before every tap or swipe: it serves one action."),
+        tool("look", "The device's screen now, as an image, and the look's id. Do this before every tap or swipe: it serves one, which gives that id."),
         tool("tap", "Tap a point of the last look. Operates the device: whatever is there gets pressed.",
-             ["x": point, "y": point], required: ["x", "y"]),
+             ["look": lookGiven, "x": point, "y": point], required: ["look", "x", "y"]),
         tool("swipe", "Drag from one point of the last look to another (to scroll, or move something). Operates the device.",
-             ["x1": point, "y1": point, "x2": point, "y2": point,
+             ["look": lookGiven, "x1": point, "y1": point, "x2": point, "y2": point,
               "milliseconds": ["type": "integer", "description": "How long the drag takes (50...5000, default 300)"]],
-             required: ["x1", "y1", "x2", "y2"]),
+             required: ["look", "x1", "y1", "x2", "y2"]),
         tool("elements", "What accessibility says is on the screen, one caption a line (\"Home, tab, selected\"). No positions: find a caption in a look to tap it. The screen may scroll to what is visited. Nothing on the home screen.",
              ["limit": ["type": "integer", "description": "How many at most (default 40)"]]),
         tool("type", "Type text on the device's keyboard, into whatever has its focus. US-keyboard characters only; a newline is Return. Right only while the device's keyboard is an English one — look first: under a Japanese one keys go to its conversion (even a space converts or confirms instead of being typed), the text comes out wrong, and a long one can throw the app out. Look after typing and check what arrived; where the keyboard may be Japanese, paste instead. Typed at the device's pace, at most about 16 characters a second, 500 a call: paste for anything longer.",
-             ["text": ["type": "string"]], required: ["text"]),
+             ["look": lookLatest, "text": ["type": "string"]], required: ["look", "text"]),
         tool("paste", "Put any text into whatever has the keyboard's focus, by the device's pasteboard (which it replaces). iOS then asks \"Allow Paste\" on the device each time: look, and tap it only if the user wants that.",
-             ["text": ["type": "string"]], required: ["text"]),
+             ["look": lookLatest, "text": ["type": "string"]], required: ["look", "text"]),
         tool("press", "Press a hardware button. `lock` can't be undone from here: the user has to unlock.",
              ["button": ["type": "string", "enum": ["home", "lock", "volume-up", "volume-down"]]], required: ["button"]),
     ] }

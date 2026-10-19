@@ -68,7 +68,9 @@ enum Proc {
     /// until reboot and can collide with the real one on the LAN.
     static func tied(_ path: String, _ args: [String]) -> Process {
         let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        // Not /bin/sh: its bash 3.2 ignores a signal while it sets a trap for it (trap.c,
+        // set_signal), and a TERM sent then was lost: the watchdog ran on, and its child with it.
+        task.executableURL = URL(fileURLWithPath: "/bin/dash")
         // The trap only raises a flag: a TERM between `&` and `c=$!` would find no pid to
         // kill, so the loop, which runs after `c` is set, does the killing. The TERM is
         // repeated until the child is gone: one sent before the child's exec meets the

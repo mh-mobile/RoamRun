@@ -32,6 +32,14 @@ const VERSION: &CStr = c"0.6.0";
 const LABEL: &str = "roamrun";
 /// Each call: a device that stops answering mid-way must not hang the caller.
 const DEADLINE: Duration = Duration::from_secs(20);
+/// A call that starts a screen stream: its steps that wait on the device have limits of their own
+/// and stop what they started, which a deadline falling inside them couldn't. This only ends what
+/// those don't.
+const STREAM_DEADLINE: Duration = Duration::from_secs(45);
+/// A look's PNG, its size the screen's (6 MB took 12 s, on the Mac's own Wi‑Fi, and 3.9 MB once
+/// 19 s). ponytail: a fixed limit; ending only when nothing arrives would need the service's
+/// stream wrapped.
+const SHOT_TIME: Duration = Duration::from_secs(60);
 /// The device's word on its screen's size: a look waits for it, and does without it.
 const SCREEN_WAIT: Duration = Duration::from_secs(5);
 /// Services device control needs, by the word that names them.
@@ -390,7 +398,7 @@ pub unsafe extern "C" fn rr_device_keyframe(device: *mut RRDevice, length: *mut 
         let mut link = device.link.lock().unwrap_or_else(|e| e.into_inner());
         if link.stop.raised() { return Err(STOPPED.into()); }
         device.runtime.block_on(async {
-            tokio::time::timeout(DEADLINE, keyframe(&mut link)).await.unwrap_or_else(|_| Err("timed out".into()))
+            tokio::time::timeout(STREAM_DEADLINE, keyframe(&mut link)).await.unwrap_or_else(|_| Err("timed out".into()))
         })
     });
     match result {
@@ -420,11 +428,12 @@ pub unsafe extern "C" fn rr_device_screenshot(device: *mut RRDevice, length: *mu
         if link.stop.raised() { return Err(STOPPED.into()); }
         let link = &mut *link;
         device.runtime.block_on(async {
-            tokio::time::timeout(DEADLINE, async {
-                let mut capture = ScreenCaptureServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)
-                    .await.map_err(|e| format!("screenshot service: {e:?}"))?;
-                capture.take_screenshot(None, ImageFormat::Png).await.map_err(|e| format!("screenshot: {e:?}"))
-            }).await.unwrap_or_else(|_| Err("timed out".into()))
+            let mut capture = tokio::time::timeout(DEADLINE, ScreenCaptureServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)).await
+                .map_err(|_| "screenshot service: timed out".to_string())?
+                .map_err(|e| format!("screenshot service: {e:?}"))?;
+            tokio::time::timeout(SHOT_TIME, capture.take_screenshot(None, ImageFormat::Png)).await
+                .map_err(|_| "screenshot: timed out".to_string())?
+                .map_err(|e| format!("screenshot: {e:?}"))
         })
     });
     match result {
@@ -487,6 +496,60 @@ pub fn install_given(path: &str) -> (u64, Duration) {
     (megabytes, Duration::from_secs(300 + 15 * megabytes))
 }
 
+/// The most an .ipa may unpack to, by what its archive says (the device unpacks it), and the most of each
+/// Info.plist read here (idevice reads all of each one it meets, however much it inflates to).
+const UNPACKED: u64 = 4 << 30;
+const INFO_PLIST: u64 = 1 << 20;
+
+/// The bundle identifier of the app in the .ipa at `path`, checked before anything of it is sent: `Payload`
+/// holds one `<name>.app` and nothing else but hidden files (a `.bundle` idevice would install as another kind of
+/// package; a name ending in `.app` is an app, hidden or not), the first Info.plist idevice takes a bundle
+/// identifier from is the app's, and it unpacks to `UNPACKED` at most.
+pub fn ipa_checked(path: &str) -> Result<String, String> {
+    ipa_within(path, UNPACKED, INFO_PLIST)
+}
+
+fn ipa_within(path: &str, unpacked: u64, info_plist: u64) -> Result<String, String> {
+    use futures_lite::io::{AssertAsync, AsyncReadExt, BufReader};
+    let not = |why: String| format!("{path} isn't an app's .ipa: {why}");
+    let file = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+    futures_lite::future::block_on(async {
+        // The same reader idevice finds the app with: what is checked is what it will read.
+        let mut zip = async_zip::base::read::seek::ZipFileReader::new(BufReader::new(AssertAsync::new(file))).await.map_err(|e| not(format!("{e}")))?;
+        let (mut app, mut plists, mut size) = (None, Vec::new(), 0u64);
+        for (index, entry) in zip.file().entries().iter().enumerate() {
+            let name = entry.filename().as_str().map_err(|_| not("a name in it isn't UTF-8".into()))?.trim_end_matches('/');
+            size = size.saturating_add(entry.uncompressed_size());
+            // Where idevice looks for the app's Info.plist: any name of three parts ending so.
+            if name.ends_with("Info.plist") && name.split('/').count() == 3 { plists.push((index, name.to_string(), entry.uncompressed_size())) }
+            let Some(top) = name.strip_prefix("Payload/").and_then(|rest| rest.split('/').next()) else { continue };
+            // A hidden file beside the app (Finder's .DS_Store) is nothing idevice takes; "._A.app" it could take for the app.
+            if top.starts_with('.') && !top.ends_with(".app") && !top.ends_with(".bundle") { continue }
+            if !top.ends_with(".app") || app.is_some_and(|app| app != top) {
+                return Err(not(format!("Payload/{top}{}: it holds one app (.app) and nothing else", app.map_or(String::new(), |app| format!(" beside {app}")))));
+            }
+            app = Some(top);
+        }
+        let app = app.ok_or_else(|| not("no Payload/<name>.app in it".into()))?.to_string();
+        if size > unpacked { return Err(not(format!("it says it unpacks to {} MB, more than {} MB", size >> 20, unpacked >> 20))) }
+        // As idevice reads them: in order, each whole, until one says a bundle identifier.
+        for (index, name, declared) in plists {
+            // By what comes out, not by what it says: what it says can be less.
+            let mut read = Vec::new();
+            if declared <= info_plist {
+                let entry = zip.reader_without_entry(index).await.map_err(|e| not(format!("{e}")))?;
+                entry.take(info_plist + 1).read_to_end(&mut read).await.map_err(|e| not(format!("{e}")))?;
+            }
+            if declared > info_plist || read.len() as u64 > info_plist { return Err(not(format!("{name} is more than {} KB", info_plist >> 10))) }
+            let info = plist::from_bytes::<plist::Value>(&read).map_err(|e| not(format!("{name} isn't a plist: {e}")))?;
+            let Some(id) = info.as_dictionary().and_then(|info| info.get("CFBundleIdentifier")?.as_string()) else { continue };
+            if name != format!("Payload/{app}/Info.plist") { return Err(not(format!("{name} is where the app's Info.plist would be looked for"))) }
+            return Ok(id.to_string());
+        }
+        Err(not("no Info.plist where the app's is looked for says a bundle identifier".into()))
+    })
+}
+
 /// What `rr_device_install` and `rr_device_launch` share: one thing asked of the device's app services.
 enum App<'a> { Install(&'a str), Launch(&'a str) }
 
@@ -528,14 +591,18 @@ fn app(device: &RRDevice, what: App) -> String {
     }
 }
 
-/// Installs the app at `path`, an .ipa or an .app folder on this machine, signed for the device already.
+/// Installs the app at `path`, an .ipa or an .app folder on this machine, signed for the device already. An .ipa
+/// that `ipa_checked` refuses is refused before anything is sent ("invalid").
 /// # Safety
 /// `device` came from rr_device_open and wasn't closed; `path` is null or a NUL-terminated string.
 #[no_mangle]
 pub unsafe extern "C" fn rr_device_install(device: *mut RRDevice, path: *const c_char) -> *mut c_char {
     let path = (!path.is_null()).then(|| unsafe { CStr::from_ptr(path) }.to_str().ok()).flatten();
     match (unsafe { device.as_ref() }, path) {
-        (Some(device), Some(path)) => c_string(app(device, App::Install(path))),
+        (Some(device), Some(path)) => c_string(match with_room(|| if std::path::Path::new(path).is_dir() { Ok(String::new()) } else { ipa_checked(path) }) {
+            Ok(_) => app(device, App::Install(path)),
+            Err(why) => format!("{{\"ok\":false,\"invalid\":true,\"error\":{}}}", quoted(&why)),
+        }),
         _ => c_string(failure("bad arguments")),
     }
 }
@@ -892,7 +959,8 @@ fn input_time(input: &Input) -> Duration {
         Input::Tap(..) => 100,
         Input::Swipe { ms, .. } => *ms as u64,
         Input::Type(strokes) => strokes.len() as u64 * 200,
-        Input::Paste(_) => 5_000,
+        // Sent once for each kind of text it is put in as (three), at 50 KB/s at least.
+        Input::Paste(text) => 5_000 + text.len() as u64 * 3 / 50,
         Input::Button(_, _, hold) => *hold,
     };
     Duration::from_millis(own) + Duration::from_secs(10)
@@ -900,13 +968,13 @@ fn input_time(input: &Input) -> Duration {
 
 /// The device drops input that isn't accompanied by a screen stream, so one runs with it: the
 /// one kept from before if frames still come on it, a new one otherwise. Getting that far has
-/// the deadline every call has; the input then gets the time its own length needs, so that the
+/// a stream's deadline; the input then gets the time its own length needs, so that the
 /// deadline doesn't fall in the middle of it.
 async fn perform(link: &mut Link, input: Input) -> Result<(), String> {
     // Without one where the caller said so (rr_device_bare_inputs): taps, keys and buttons were taken that way
     // on iOS 27.0, and no screen-sharing session then shows on the device or takes its sound.
     if !link.bare_inputs {
-        tokio::time::timeout(DEADLINE, stream_for_input(link)).await.unwrap_or_else(|_| Err("timed out".into()))?;
+        tokio::time::timeout(STREAM_DEADLINE, stream_for_input(link)).await.unwrap_or_else(|_| Err("timed out".into()))?;
     }
     // Told to stop while the stream was got ready (that can take seconds): nothing is sent.
     if link.stop.raised() { return Err(STOPPED.into()); }
@@ -1288,8 +1356,9 @@ async fn start_stream(link: &mut Link) -> Result<Stream, String> {
     if let Some(early) = link.stream_stopped.and_then(|at| AFTER_STOP.checked_sub(at.elapsed())) {
         tokio::time::sleep(early).await;
     }
-    let mut display = DisplayServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)
-        .await.map_err(|e| format!("display service: {e:?}"))?;
+    let mut display = tokio::time::timeout(STREAM_START, DisplayServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)).await
+        .map_err(|_| "display service: no answer".to_string())?
+        .map_err(|e| format!("display service: {e:?}"))?;
     let audio = link.handle.bind_udp(0).await.map_err(|e| format!("udp: {e:?}"))?;
     let video = link.handle.bind_udp(0).await.map_err(|e| format!("udp: {e:?}"))?;
     let (ours, theirs) = (link.handle.host_ip().to_string(), link.handle.peer_ip().to_string());
@@ -1322,7 +1391,8 @@ async fn start_stream(link: &mut Link) -> Result<Stream, String> {
     Ok(stream)
 }
 
-/// How long one half of a stream gets to start (they answer within a second when they do).
+/// How long one half of a stream gets to start (they answer within a second when they do), and
+/// the display service's connection.
 const STREAM_START: Duration = Duration::from_secs(5);
 
 /// How long a stream just started gets to send the key frame it opens with.
@@ -1548,6 +1618,22 @@ fn own_hardware(identifier: &str) -> (String, [u8; 6]) {
     (serial, mac)
 }
 
+/// Accepts failing since one last succeeded that end a wait: they are the listener's then, not a connection's.
+const ACCEPT_TRIES: u32 = 20;
+
+/// What an accept gave: a connection, or none for now. One that failed alone was a connection
+/// lost as it was taken, or no room for it just then, and the wait goes on (roamrunctl's too).
+pub fn taken_one<T>(accepted: std::io::Result<T>, failed: &mut u32) -> std::io::Result<Option<T>> {
+    match accepted {
+        Ok(came) => { *failed = 0; Ok(Some(came)) }
+        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+        Err(e) => {
+            *failed += 1;
+            if *failed < ACCEPT_TRIES { Ok(None) } else { Err(e) }
+        }
+    }
+}
+
 /// Whether a connection from `from` is one to answer. Written as IPv4 or as IPv4 in IPv6's
 /// form, an address is one address.
 fn taken(from: std::net::IpAddr, only: Option<std::net::IpAddr>) -> bool {
@@ -1556,11 +1642,15 @@ fn taken(from: std::net::IpAddr, only: Option<std::net::IpAddr>) -> bool {
 
 async fn accept_pairing(pairing: &RRPairing, show: &(impl Fn(&str) + Sync)) -> Result<(idevice::remote_pairing::PeerDevice, String), NotPaired> {
     let cancelled = || pairing.cancelled.load(Ordering::Relaxed);
+    let mut failed = 0;
     loop {
         let stream = loop {
             if cancelled() { return Err("cancelled".into()); }
             if let Ok(accepted) = tokio::time::timeout(TICK, pairing.listener.accept()).await {
-                let (stream, from) = accepted.map_err(|e| format!("can't accept: {e}"))?;
+                let Some((stream, from)) = taken_one(accepted, &mut failed).map_err(|e| format!("can't accept: {e}"))? else {
+                    tokio::time::sleep(TICK).await;
+                    continue;
+                };
                 if !taken(from.ip(), pairing.only) { continue; }
                 break stream;
             }
@@ -1620,6 +1710,87 @@ mod tests {
         assert_eq!(install_given(folder.join("inside/binary").to_str().unwrap()).0, 3);
         assert_eq!(install_given("/nowhere/at/all.ipa"), (0, Duration::from_secs(300)));
         std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    /// An .ipa of these files, deflated, written to a file of its own; its path.
+    fn ipa(name: &str, files: &[(&str, &[u8])]) -> String {
+        use async_zip::{base::write::ZipFileWriter, Compression, ZipEntryBuilder};
+        let bytes = futures_lite::future::block_on(async {
+            let mut zip = ZipFileWriter::new(Vec::new());
+            for (file, data) in files { zip.write_entry_whole(ZipEntryBuilder::new((*file).into(), Compression::Deflate), data).await.unwrap(); }
+            zip.close().await.unwrap()
+        });
+        let path = std::env::temp_dir().join(format!("rr-ipa-{}-{name}.ipa", std::process::id()));
+        std::fs::write(&path, bytes).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    const INFO: &[u8] = b"<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>io.example.app</string></dict></plist>";
+    const OTHER: &[u8] = b"<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>io.example.other</string></dict></plist>";
+    const GOOGLE: &[u8] = b"<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>BUNDLE_ID</key><string>io.example.app</string></dict></plist>";
+
+    #[test]
+    fn an_ipa_is_installed_only_as_one_app_with_its_info_plist_and_not_too_big() {
+        let checked = |name: &str, files: &[(&str, &[u8])]| { let path = ipa(name, files); let said = ipa_within(&path, 1 << 20, 1024); std::fs::remove_file(path).unwrap(); said };
+        let app = [("Payload/A.app/Info.plist", INFO), ("Payload/A.app/A", &b"binary"[..]), ("SwiftSupport/iphoneos/libswiftCore.dylib", &b"x"[..])];
+        assert_eq!(checked("good", &app), Ok("io.example.app".into()));
+        // Firebase's GoogleService-Info.plist beside the app's: idevice passes over a plist without an id.
+        assert_eq!(checked("firebase-first", &[("Payload/A.app/GoogleService-Info.plist", GOOGLE), ("Payload/A.app/Info.plist", INFO)]), Ok("io.example.app".into()));
+        assert_eq!(checked("firebase-after", &[("Payload/A.app/Info.plist", INFO), ("Payload/A.app/GoogleService-Info.plist", GOOGLE)]), Ok("io.example.app".into()));
+        assert_eq!(checked("array-first", &[("Payload/A.app/List-Info.plist", b"<plist version=\"1.0\"><array/></plist>"), ("Payload/A.app/Info.plist", INFO)]), Ok("io.example.app".into()));
+        let refused = |name: &str, files: &[(&str, &[u8])], why: &str| { let said = checked(name, files).unwrap_err(); assert!(said.contains(why), "{name}: {said}") };
+        // A .bundle: idevice would install it as another kind of package.
+        refused("bundle", &[("Payload/A.bundle/Info.plist", INFO)], "Payload/A.bundle");
+        refused("two-apps", &[("Payload/A.app/Info.plist", INFO), ("Payload/B.app/Info.plist", INFO)], "Payload/B.app beside A.app");
+        refused("stray", &[("Payload/A.app/Info.plist", INFO), ("Payload/readme.txt", b"x")], "Payload/readme.txt beside A.app");
+        refused("stray-first", &[("Payload/readme.txt", b"x"), ("Payload/A.app/Info.plist", INFO)], "Payload/readme.txt: it holds");
+        // A hidden file beside it is let be; one idevice could take for the app isn't.
+        assert_eq!(checked("ds-store", &[("Payload/.DS_Store", b"x"), ("Payload/A.app/Info.plist", INFO)]), Ok("io.example.app".into()));
+        refused("apple-double", &[("Payload/._A.app", b"x"), ("Payload/A.app/Info.plist", INFO)], "Payload/A.app beside ._A.app");
+        refused("hidden-bundle", &[("Payload/A.app/Info.plist", INFO), ("Payload/.B.bundle/x", b"x")], "Payload/.B.bundle");
+        // A name ending in .app is an app, hidden or not: alone, it is the one.
+        assert_eq!(checked("hidden-app", &[("Payload/.A.app/Info.plist", INFO)]), Ok("io.example.app".into()));
+        refused("no-app", &[("A.app/Info.plist", INFO)], "no Payload/<name>.app");
+        refused("no-plist", &[("Payload/A.app/A", b"binary")], "no Info.plist where the app's is looked for says");
+        // idevice takes the id of the first plist it meets that has one: before the app's, it isn't the app's.
+        refused("other-plist", &[("Symbols/x/Info.plist", OTHER), ("Payload/A.app/Info.plist", INFO)], "Symbols/x/Info.plist is where");
+        refused("look-alike", &[("Payload/A.app/FooInfo.plist", OTHER), ("Payload/A.app/Info.plist", INFO)], "Payload/A.app/FooInfo.plist is where");
+        assert_eq!(checked("other-plist-after", &[("Payload/A.app/Info.plist", INFO), ("Symbols/x/Info.plist", OTHER)]), Ok("io.example.app".into()));
+        assert_eq!(checked("look-alike-after", &[("Payload/A.app/Info.plist", INFO), ("Payload/A.app/FooInfo.plist", OTHER)]), Ok("io.example.app".into()));
+        // One it reads before the app's that it can't parse fails the install; one it reads whole is bounded too.
+        refused("unparsed-first", &[("Payload/A.app/GoogleService-Info.plist", b"not a plist"), ("Payload/A.app/Info.plist", INFO)], "Payload/A.app/GoogleService-Info.plist isn't a plist");
+        refused("big-first", &[("Payload/A.app/GoogleService-Info.plist", &vec![b' '; 2048]), ("Payload/A.app/Info.plist", INFO)], "Payload/A.app/GoogleService-Info.plist is more than 1 KB");
+        assert_eq!(checked("unparsed-after", &[("Payload/A.app/Info.plist", INFO), ("Payload/A.app/GoogleService-Info.plist", b"not a plist")]), Ok("io.example.app".into()));
+        assert_eq!(checked("big-after", &[("Payload/A.app/Info.plist", INFO), ("Payload/A.app/GoogleService-Info.plist", &vec![b' '; 2048])]), Ok("io.example.app".into()));
+        refused("elsewhere", &[("Payload/A.app/A", b"binary"), ("Symbols/x/Info.plist", INFO)], "Symbols/x/Info.plist is where");
+        refused("deeper", &[("Payload/A.app/Inner/Info.plist", INFO), ("Payload/A.app/A", b"binary")], "no Info.plist where the app's is looked for says");
+        refused("too-big", &[("Payload/A.app/Info.plist", INFO), ("Payload/A.app/A", &vec![0u8; 2 << 20])], "unpacks to 2 MB");
+        refused("big-plist", &[("Payload/A.app/Info.plist", &vec![b' '; 2048])], "more than 1 KB");
+        refused("no-id", &[("Payload/A.app/Info.plist", b"<plist version=\"1.0\"><dict/></plist>"), ("Payload/A.app/GoogleService-Info.plist", GOOGLE)], "no Info.plist where the app's is looked for says");
+        assert!(ipa_within("/nowhere/at/all.ipa", 1 << 20, 1024).is_err());
+        let not_zip = std::env::temp_dir().join(format!("rr-ipa-{}-text.ipa", std::process::id()));
+        std::fs::write(&not_zip, b"not a zip").unwrap();
+        assert!(ipa_within(not_zip.to_str().unwrap(), 1 << 20, 1024).unwrap_err().contains("isn't an app's .ipa"));
+        std::fs::remove_file(not_zip).unwrap();
+    }
+
+    #[test]
+    fn an_info_plist_is_read_no_further_than_its_bound_whatever_it_says() {
+        // An Info.plist that inflates to more than its archive says: the bound holds by what comes out.
+        let big = [INFO, &vec![b' '; 4096]].concat();
+        let path = ipa("lying", &[("Payload/A.app/Info.plist", &big)]);
+        let mut bytes = std::fs::read(&path).unwrap();
+        let said = (big.len() as u32).to_le_bytes();
+        // Its size, as the local header (at 22) and the central directory (at 24) say it, made 10.
+        for (signature, at) in [([0x50, 0x4b, 0x03, 0x04], 22), ([0x50, 0x4b, 0x01, 0x02], 24)] {
+            let start = bytes.windows(4).position(|w| w == signature).unwrap();
+            assert_eq!(bytes[start + at..start + at + 4], said);
+            bytes[start + at..start + at + 4].copy_from_slice(&10u32.to_le_bytes());
+        }
+        std::fs::write(&path, &bytes).unwrap();
+        let said = ipa_within(&path, 1 << 20, 1024);
+        std::fs::remove_file(path).unwrap();
+        assert!(said.as_ref().unwrap_err().contains("more than 1 KB"), "{said:?}");
     }
 
     fn io(kind: std::io::ErrorKind) -> idevice::IdeviceError { idevice::IdeviceError::Socket(std::io::Error::from(kind)) }
@@ -1741,6 +1912,38 @@ mod tests {
         let long = Input::Type(vec![(0x04, false); LONGEST_TYPED]);
         assert_eq!(input_time(&long), ten + Duration::from_secs(400));   // 2000 keys at 200 ms each
         assert!(input_time(&Input::Type(vec![(0x04, false); 5])) < DEADLINE);
+        // A paste is sent three times over: 1 MiB is 3 MiB, at 50 KB/s.
+        assert!(input_time(&Input::Paste("x".repeat(1 << 20))) > Duration::from_secs(60));
+        assert!(input_time(&Input::Paste("a few words".into())) < Duration::from_secs(16));
+    }
+
+    /// A call that starts a stream ends by its steps' own limits, each of which stops what it
+    /// started, before its deadline: cut in the middle, a stream started is dropped unstopped.
+    #[test]
+    fn a_stream_call_ends_by_its_own_limits_before_its_deadline() {
+        let start = AFTER_STOP + STREAM_START * 3 + STOP_WAIT;   // connecting, sound, video, and a half started stopped
+        let asked = (REPORT_WAIT + KEYFRAME_APART + KEYFRAME_WAIT) * 2;   // more than it can be
+        assert!(asked + STOP_WAIT + start + FIRST_KEYFRAME + STOP_WAIT < STREAM_DEADLINE, "keyframe");
+        assert!(Duration::from_millis(300) + STOP_WAIT + start * 2 < STREAM_DEADLINE, "stream_for_input");
+    }
+
+    /// A look has room for the slowest one measured on the Mac's own Wi‑Fi, three times over.
+    #[test]
+    fn a_look_has_room_for_a_big_screen_on_a_slower_link() {
+        assert!(SHOT_TIME >= Duration::from_secs(19) * 3);
+    }
+
+    /// A connection lost as it was taken doesn't end a wait for a pairing; a listener that
+    /// fails every time does.
+    #[test]
+    fn a_connection_lost_as_it_is_taken_doesnt_end_the_wait() {
+        let lost = || Err::<(), _>(std::io::Error::from(std::io::ErrorKind::ConnectionAborted));
+        let mut failed = 0;
+        assert!(matches!(taken_one(lost(), &mut failed), Ok(None)));
+        assert!(matches!(taken_one(Ok(()), &mut failed), Ok(Some(()))) && failed == 0);
+        assert!(matches!(taken_one(Err::<(), _>(std::io::ErrorKind::WouldBlock.into()), &mut failed), Ok(None)) && failed == 0);
+        for _ in 1..ACCEPT_TRIES { assert!(matches!(taken_one(lost(), &mut failed), Ok(None))); }
+        assert!(taken_one(lost(), &mut failed).is_err());
     }
 
     /// Every character a US keyboard has maps to its key, shifted or not; anything else to none.

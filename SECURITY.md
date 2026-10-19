@@ -71,9 +71,10 @@ bounded.
   - The offer's port is not checked to be Xcode's pairing port — only that it is
     1024 or above and answers. Give `pair introduce` only an offer from a Mac you
     trust; by name, it comes from the Mac you named.
-  - **The code doesn't prove which Mac is at the other end.** It is shown by
-    whatever listens on the named Mac's port and typed on the device; this Mac
-    sees neither. What you are trusting is the Mac you named: introduce one only
+  - **The code doesn't prove which Mac is at the other end.** For Xcode, it is
+    shown by whatever listens on the named Mac's port and typed on the device;
+    this Mac sees neither. For device control it is shown here, on the Mac that
+    introduces (see device control below). What you are trusting is the Mac you named: introduce one only
     if you would plug the device into it. For a Mac of your own, type only a code
     you read off its screen yourself.
   - The device shows the entry under that Mac's Tailscale name, which is this
@@ -258,7 +259,8 @@ bounded.
   - Not tried with a Mac shared in from another tailnet.
 - **roamrunctl can hold a pairing of its own.** `roamrunctl pair control --to` or
   `--with` (or `key import`) keeps the pairing in `~/.config/roamrunctl/devices`
-  (`%LOCALAPPDATA%\roamrunctl\devices` on Windows), a file only its owner can read; one that others can read is refused
+  (`$XDG_CONFIG_HOME/roamrunctl/devices` when that is an absolute path;
+  `%LOCALAPPDATA%\roamrunctl\devices` on Windows, `%APPDATA%`'s without it), a file only its owner can read; one that others can read is refused
   (on Windows the folder is the user's by what it inherits, and nothing more is checked).
   A program running as the same user — an agent that can run `roamrunctl` — uses the
   device as roamrunctl does. There is no switch per device there: holding the pairing
@@ -267,15 +269,47 @@ bounded.
   format, the passphrase taken from a file, a command or the environment, or typed at
   a terminal, not from the command line: the file alone, in a backup or a copied
   folder, then opens nothing — and a program that runs as the user and can read the
-  passphrase where it is kept is no further from the device than before. It looks by
+  passphrase where it is kept is no further from the device than before. A running `mcp`
+  keeps what it opened while the file is the same, as `sign` keeps what it serves. It looks by
   the device's own screenshot and sends inputs with no screen stream, so the device
-  shows no screen-sharing session meanwhile. Its MCP tools hold only `tap` and `swipe`
-  to a look just taken; `type`, `paste` and `press` go to whatever is on the screen.
+  shows no screen-sharing session meanwhile. Its MCP tools hold `tap`, `swipe`, `type` and
+  `paste` to the device's latest look, by its id, for a minute — a tap or swipe to one that
+  nothing went by yet — and let it go after anything else done there, or a failure that may
+  have reached the device; `press` goes to whatever is on the screen.
   A call taken back before its turn, or whose turn comes after the client went, isn't
   made. A device it has open is held to the saved file it was opened from: removed, or
   another saved under the name, it isn't operated under that name any more. Where the
   device doesn't say which way up it is and its picture is upright, a point is pressed
   as it is — on a device held upside down that would be the opposite point (not tried).
+- **roamrunctl can serve its MCP tools over HTTP.** `roamrunctl mcp --http <port> --allow
+  <who> [--allow <who>…] <devices>…`, started by a person and ended with Ctrl-C, listens on the machine's
+  Tailscale IPv4 address only, and doesn't start as root (not checked on Windows). A caller
+  is let in by what `tailscale whois` says of its address at each request — a tag given with `--allow`, or, for an untagged machine, its
+  user's login — and, with `--token-file`, by a token as well. Refused: a machine shared in
+  from another tailnet; the machine itself without the token (any of its users would
+  otherwise pass); any request with an `Origin` (a web page in a browser on the tailnet);
+  a `Host` other than the server's address or its own Tailscale names. A request's head has
+  to arrive within 10 s and its body within 30 s more (an upload's: 30 s plus 2 s a MiB, with
+  no more than 60 s between reads), and one address holds 17 of the 32
+  connections at most: one machine that can reach the port can't take them all, but two or
+  more that the tailnet's access rules let reach it can keep callers out for as long as they
+  keep connecting. Only the devices named are used — each only while it is saved as
+  it was when the server began — and `install` is offered only with `--allow-install`, from an
+  `.ipa` sent with `PUT /upload`, never a path on the machine. One upload is kept (1024 MiB at
+  most by default), in a folder made for the run that only its user can open (on Windows, the
+  user's own temporary folder); only the caller that sent it — by its Tailscale node's lasting
+  id — can install it, by the sha256 it was answered; it goes when its install ends, after
+  30 minutes unused, at Ctrl-C, or when another begins to come in. Whoever is let in with
+  `--allow-install` can replace the apps on those devices with any app signed for them. An
+  `.ipa` is checked before it is sent to a device, with every roamrunctl install: one app, no `.bundle`,
+  4 GiB unpacked at most by what it says. It is read whole into memory to be sent. A tap, swipe, type or paste names the
+  look it is of, and is refused after another look of that device, whoever took it. A tool call whose caller's
+  connection is gone when its turn comes isn't made. Whoever is let in operates those devices as roamrunctl does, while it runs.
+  Between the caller and the machine, a cloud's proxy sees the images, what is typed or
+  pasted, what is uploaded, and the token: with Codex Cloud it ends TLS itself. The token file has to be its
+  owner's alone (not checked on Windows). The log has one line a request — the caller's
+  address and identity, the method and tool, the outcome — and never the token, a body,
+  text, captions, images or uploads.
 - **roamrunctl can use a pairing whose key is on another machine.** `roamrunctl sign
   <devices> --for <machine>` runs where the keys are and listens on that machine's
   tailnet address (port 41831) for the one machine named, held to its address and to

@@ -344,13 +344,14 @@ file may be gone) — tell the user. That file is a key to the device — don't
 print it, copy it or leave it behind.
 
 ```sh
-roamrun look iPhone /tmp/now.png     # the screen now: prints the path, then "590 x 1280"
-roamrun tap iPhone 295 640           # a point in the pixels of that image
+roamrun look iPhone /tmp/now.png     # the screen now: prints the path, "590 x 1280", then "look 12"
+roamrun tap iPhone 295 640 --look 12 # a point in the pixels of that image, held to that look
 roamrun look iPhone /tmp/now.png     # what it became
 ```
 
 The same is there as MCP tools (`look` returns the image itself, scaled to what
-you are shown, and points are that image's pixels): the user adds it once with
+you are shown, and its id; points are that image's pixels, and `tap`, `swipe`,
+`type` and `paste` give the id as `"look": 12`): the user adds it once with
 `claude mcp add roamrun -- roamrun mcp`, or the like for another agent. Use the
 tools when you have them; the rules below hold for both.
 If your client shows the tool's image as a placeholder you can't see, use
@@ -360,8 +361,15 @@ shell runs in a sandbox that keeps it from the app (the app may well be
 running — don't try to start it): ask to run `roamrun` outside the sandbox, or
 have the user add the MCP tools, which run outside it.
 
-- **Each look serves one action.** `tap` and `swipe` are refused until there has
-  been a `look`, and any action (or `elements`) uses it up: look, act, look again.
+- **Each look serves one action.** `tap` and `swipe` are refused until there
+  has been a `look`, and any action (or `elements`) uses it up for them: look, act,
+  look again. Give the look's number with each `tap`, `swipe`, `type` and `paste`
+  (`--look 12` with the commands, after the text for `type` and `paste`;
+  `"look": 12` with the tools): after another agent's look, yours is refused —
+  look again. `type` and `paste` may still go by a look an action used (look, tap
+  a field, type), are refused once another look, a button, `elements` or an
+  action without the number came since, and wait a second after the last input
+  before they are sent.
   Read the point off the image you just looked at, in its own pixels (the size
   printed after the path); never reuse a point from an older one.
   The image is at most 1280 on its longer side, so that you are shown it as it

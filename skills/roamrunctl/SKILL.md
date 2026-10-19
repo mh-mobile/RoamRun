@@ -15,8 +15,9 @@ For the first, three machines are involved:
 - **the far Mac** — has Xcode and RoamRun, and is somewhere else (a cloud Mac, a Mac
   at the office). The pairing is made with it, and everything afterwards happens on it.
 - **this machine** — Windows, Linux, or a Mac without RoamRun, on the same Wi‑Fi as
-  the device. `roamrunctl` runs here. While introducing, it only carries the device's
-  connection; it gets no key and no access to the device.
+  the device. `roamrunctl` runs here. While introducing, it carries the device's
+  connection unread and saves nothing. For device control it shows the code to type, so
+  it is a machine the user trusts.
 - **the device** — an iPhone or iPad, with Tailscale connected.
 
 After a pairing, this machine is done. Bridging, building, launching and debugging are
@@ -183,7 +184,8 @@ devices remove <name>`. With `--passphrase` it is kept encrypted instead, which 
 a copy of the file, not the device from this machine. The passphrase then comes from
 `ROAMRUNCTL_PASSPHRASE_FILE`, `ROAMRUNCTL_PASSPHRASE_COMMAND` or `ROAMRUNCTL_PASSPHRASE`,
 else it is typed at a terminal at each command; `roamrunctl mcp` can't be typed to and
-takes it from one of the three only. Don't ask the user for a passphrase and don't print
+takes it from one of the three only (`mcp --http`, which the user starts, asks as it starts). What they give is one passphrase, used for every
+encrypted device. Don't ask the user for a passphrase and don't print
 one; if a command says none is given, say so and stop.
 
 **B. Another machine keeps the key, and signs for this one.** For when the key shouldn't
@@ -206,7 +208,8 @@ If the user's `pair control --with` ends with the other machine not having come 
 minutes, or the other machine says nobody waits, the usual reason is that this machine
 doesn't let the other in (Tailscale's rules, a firewall): on port 41830, and on a port
 that is another each time. B needs this machine able to write its own devices folder
-(`~/.config/roamrunctl/devices`; on Windows `%LOCALAPPDATA%\roamrunctl\devices`).
+(`~/.config/roamrunctl/devices`, or `$XDG_CONFIG_HOME/roamrunctl/devices` when that is an
+absolute path; on Windows `%LOCALAPPDATA%\roamrunctl\devices`, `%APPDATA%`'s without it).
 
 What B does and doesn't: the key isn't on this machine to be copied, and when the user ends
 `sign`, or removes the device on the key's machine, no new connection is made. While `sign` answers, any program on this machine
@@ -221,22 +224,87 @@ believed the first time it is used — use it only if the user named it.
 - `roamrunctl look <name> [file.png]` — the screen now, its longer side 1280 at most;
   prints the path, then its size. The file is whatever was on the screen: the user's.
 - `roamrunctl install <name> <app.ipa or .app>` — an app already built and signed for
-  that device (xtool's `dev build --ipa`, or Xcode's). It doesn't build or sign. One
-  install to a device at a time. It says how much it sends, then nothing until the app is
+  that device (xtool's `dev build --ipa`, or Xcode's). It doesn't build or sign. An .ipa
+  that isn't one app (`Payload/<name>.app` and nothing else, no `.bundle`) is refused before
+  anything is sent. One install to a device at a time. It says how much it sends, then nothing until the app is
   in: a megabyte takes three to four seconds on the device's Wi‑Fi (a large app, minutes),
   and it is given some four times that (five minutes and fifteen seconds a megabyte) — run
   it where it can wait.
 - `roamrunctl launch <name> <bundle id>` — one already running is ended first.
 - `roamrunctl mcp` — for an agent's MCP config (the command `roamrunctl`, the argument
   `mcp`): `devices`, `look`, `tap`, `swipe`, `elements`, `type`, `paste`, `press`,
-  `install`, `launch`. Look, act, look again: a look serves one tap or swipe, within a
-  minute, and points are pixels of the image it returned; turned since that look, the
-  device isn't pressed: look again. `type`, `paste` and `press`
-  aren't held to a look and go to whatever is on the screen: look before them too. A
+  `install`, `install_status`, `launch`. `install` answers once it has begun;
+  `install_status` says when the app is in (or why not), and until then every other call on
+  that device answers that it is installing — ask `install_status` now and then, then launch.
+  Look, act, look again: a look answers with an id (`look 12`) and
+  serves one tap or swipe, within a minute, which gives it (`"look": 12`) with points in
+  the pixels of the image it returned; looked at again since, by anyone, or turned since, the
+  device isn't pressed: look again. `type` and `paste` give the latest look's id too, within
+  the same minute (after a tap by it is fine, and so is more text) and are refused once
+  another look, a button, a launch, an install or `elements` came since: look again. After a
+  tap, swipe, type or paste, a tap or swipe needs a new look. `press` isn't held to a look and
+  goes to whatever is on the screen: look before it too. A
   call that fails may or may not have reached the device — look before doing it again.
   A call you take back before its turn isn't made.
   These press what is really there — don't tap what spends money, posts, sends, deletes
   or signs in unless the user asked for exactly that.
+
+**Over HTTP**, for an agent that reaches the machine only that way (one in a cloud on the
+user's tailnet): the user starts `roamrunctl mcp --http <port> --allow <tag or login>
+<devices>` there, and stops it with Ctrl-C — never you. You get its address and port (and a
+token, if they set one) from them. Each call is one `POST /mcp`, no `initialize` first:
+
+```sh
+rr() { curl -sS --max-time 120 -w '\n%{http_code}\n' -H 'Content-Type: application/json' ${RR_TOKEN:+-H} ${RR_TOKEN:+"Authorization: Bearer $RR_TOKEN"} --data-binary @- "http://<address>:<port>/mcp"; }
+# What a call answered: its HTTP status where it isn't 200, else its text; an image goes to look.jpg, readable by you alone.
+said() { python3 -c '
+import base64, json, os, sys
+*body, status = sys.stdin.read().rstrip("\n").split("\n")
+if status != "200": sys.exit("HTTP " + status + ": " + "\n".join(body)[:300])
+try: d = json.loads("\n".join(body))
+except ValueError: sys.exit("HTTP 200, cut short after " + str(len("\n".join(body))) + " characters")
+if "error" in d: sys.exit("error " + str(d["error"].get("code")) + ": " + str(d["error"].get("message")))
+r = d.get("result", {})
+for c in r.get("content", []):
+    if c.get("type") == "image":
+        fd = os.open("look.jpg", os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0), 0o600)
+        if hasattr(os, "fchmod"): os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb") as f: f.write(base64.b64decode(c["data"]))
+print(r.get("isError"), [c.get("text") for c in r.get("content", []) if c.get("type") == "text"])'; }
+# printf, not echo: echo in zsh and sh turns a \n in the text into a newline (a Return, typed).
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"device":"phone"}}}' | rr | said
+# It said "590 x 1280, look 12": a tap in the pixels of look.jpg gives that id.
+printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"tap","arguments":{"device":"phone","look":12,"x":295,"y":155}}}' | rr | said
+```
+
+Write a look's image to a file, as above, and view the file: never print the base64 (the
+screen may show messages or notifications: the file is yours alone to read). `HTTP 401`
+is a missing or wrong token, `HTTP 403` a caller it doesn't let in — say so, don't retry.
+`HTTP 503` did nothing (Tailscale didn't say who you are, or too many connections at once):
+try again in a moment. "not
+begun" did nothing; `HTTP 000` (no answer: a timeout, or the connection closed) or a 504
+may have done it — look before trying again. Keep
+the connection open until the answer comes: a call whose connection closed before its turn
+isn't made, and closing it is how a call is taken back with curl (`notifications/cancelled`
+counts only with the `Mcp-Session-Id` an `initialize` answered with, as MCP clients send it,
+and while the server holds fewer than 256 from the last minute). Give each tap, swipe, type and paste the id of your look: after another agent's look,
+yours is refused — look again. Only the devices
+the user named are there.
+
+`install` is there only if the user added `--allow-install`. It takes an .ipa you send first,
+as the body of a `PUT /upload` (1024 MiB at most, unless they set `--max-upload`), never a
+path:
+
+```sh
+curl -sS --max-time 2100 -w '\n%{http_code}\n' ${RR_TOKEN:+-H} ${RR_TOKEN:+"Authorization: Bearer $RR_TOKEN"} -T App.ipa "http://<address>:<port>/upload"
+# It answered {"upload":"<id>","size":…,"sha256":"<hex>"}: check the sha256 is your file's (sha256sum App.ipa; on a Mac, shasum -a 256 App.ipa), then give both.
+printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"install","arguments":{"device":"phone","upload":"<id>","sha256":"<hex>"}}}' | rr | said
+printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"install_status","arguments":{"device":"phone"}}}' | rr | said
+```
+
+An upload serves one install, by you alone. `409` is another upload coming in (send yours
+again once it's in), `413` one too big. One is kept at a time: if `install` says there's no
+such upload (another replaced it, or it waited 30 minutes), send it again.
 
 A look here is a picture the device makes, and inputs are sent without a screen stream:
 the device lists no screen-sharing session and what plays goes on sounding (listened to
@@ -247,9 +315,13 @@ Tailscale. Whether launching works on a device no Xcode ever met wasn't tried.
 
 Tried against a device, on Linux and macOS, in an earlier form of each: `pair control
 --with`, a key from a Mac, look, tap, type, a button, install, launch, `mcp`'s look and
-tap, and B. Not yet: `pair control --to`, `sign` as it is now and `ROAMRUNCTL_SIGNER`,
-`--passphrase`, the Introducer app or a Mac introducing this machine, the other `mcp`
-tools, and anything on Windows (it builds there). If one of those fails, say what it
+tap, and B. On macOS, in a later form: `pair control --to`, and `mcp --http` called from the
+machine itself with the token (look, tap, type, `elements`, calls taken back in a session;
+a button in a form just before this one; uploads and their refusals; an install over stdio
+and one from an upload, with `install_status`, and `launch` after). Not
+yet: `sign` as it is now and `ROAMRUNCTL_SIGNER`, `--passphrase`, the Introducer app or a
+Mac introducing this machine, `mcp`'s swipe and a paste that goes through, `mcp --http` from another machine or a cloud, and anything on
+Windows (it builds there). If one of those fails, say what it
 said; don't work around it.
 
 ## 6. What it doesn't do

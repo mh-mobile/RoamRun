@@ -380,11 +380,50 @@ extension TimingSensitive {
             _ = Proc.run("/usr/bin/pkill", ["-f", "sleep \(marker)"])
         }
 
+        /// The watchdog's shell must not lose a TERM sent while it sets its trap, as bash 3.2
+        /// (/bin/sh) does: it ignores the signal meanwhile, once for each signal named.
+        @Test func aTermWhileTheWatchdogSetsItsTrapIsntLost() async throws {
+            let shell = try #require(Proc.tied("/usr/bin/true", []).executableURL)
+            let marker = "42.\(Int.random(in: 100_000...999_999))"   // sleep's argument, to find strays
+            defer { _ = Proc.run("/usr/bin/pkill", ["-f", "^/bin/sleep \(marker)"]) }
+            // A long trap command named eight times: setting it takes long enough to be hit.
+            let script = #"b=x; i=0; while [ $i -lt 20 ]; do b=$b$b; i=$((i+1)); done; echo; trap "exit 3 #$b" TERM TERM TERM TERM TERM TERM TERM TERM; /bin/sleep "$0" >/dev/null 2>&1 & wait $!"#
+            // A round the TERM ended before the trap sends the next one later, a round the trap
+            // took sends it sooner: so the TERMs keep landing while it is set, however fast the machine.
+            var delay: useconds_t = 0, early = 0, trapped = 0
+            for round in 0..<200 where trapped < 30 {
+                let t = Process()
+                t.executableURL = shell
+                t.arguments = ["-c", script, marker]
+                let out = Pipe()
+                t.standardOutput = out
+                try t.run()
+                _ = out.fileHandleForReading.readData(ofLength: 1)   // about to set the trap
+                usleep(delay)
+                t.terminate()
+                let clock = ContinuousClock(), start = clock.now
+                while t.isRunning && clock.now - start < .seconds(5) { try await Task.sleep(for: .milliseconds(10)) }
+                if t.isRunning {
+                    Issue.record("round \(round): the TERM sent \(delay) µs after the echo was lost")
+                    kill(t.processIdentifier, SIGKILL)
+                    return
+                }
+                if t.terminationReason == .uncaughtSignal {
+                    early += 1
+                    delay += trapped == 0 ? 500 : 100
+                } else {
+                    #expect(t.terminationStatus == 3, "round \(round)")
+                    trapped += 1
+                    delay -= min(delay, 100)
+                }
+            }
+            #expect(early > 0 && trapped > 0, "early=\(early) trapped=\(trapped): the TERMs never straddled the trap")
+        }
+
         /// A child that ignores TERM: the watchdog can't stop it, so the caller does.
         @Test func aRegistrationThatWontStopIsKilledAndConfirmedGone() async throws {
             let t = Proc.tied("/bin/sh", ["-c", "trap '' TERM; exec /bin/sleep 30"])
             t.standardOutput = FileHandle.nullDevice
-            t.standardError = FileHandle.nullDevice   // the watchdog's "Killed: 9"
             try t.run()
             try await Task.sleep(for: .milliseconds(300))   // the trap is set
             let child = Proc.run("/usr/bin/pgrep", ["-P", "\(t.processIdentifier)"]).out
@@ -1119,6 +1158,11 @@ extension TimingSensitive.RelayOnLocalhost {
     #expect(d?.map(\.name) == ["my-iphone", "mac"])   // iOS first
     #expect(d?.first?.curAddr == "203.0.113.50:41641" && d?.last?.curAddr == "")
     #expect(TailscaleClient.devices(fromStatusJSON: "not json") == nil)
+}
+
+@Test func aPeerWithoutAMagicDNSNameIsNamedByItsHost() {
+    let json = #"{"Peer":{"k1":{"DNSName":"","HostName":"Ken's iPhone","OS":"iOS","TailscaleIPs":["100.64.0.10"]}}}"#
+    #expect(TailscaleClient.devices(fromStatusJSON: json)?.map(\.name) == ["Ken's iPhone"])
 }
 
 @Test func theDeviceWaitingIsFoundByItsAddressEvenWhenOnlyAnIPv6OneWasHeard() {
@@ -3852,6 +3896,78 @@ func aDeviceWithANewTailscaleAddressIsFollowed(answersThere: Bool) async {
     #expect(rig.world.scans == 0)
 }
 
+/// What the command line saved while the app runs is taken in as a save takes it, without one.
+@Test func whatTheCommandLineSavedIsTakenInAsASaveTakesIt() {
+    let a = inertProfile("iPhone")
+    var b = a; b.instanceName += "-b"
+    var c = a; c.instanceName += "-c"
+    // Saved anew twice while the app saves nothing: the second is what it holds, and its next save keeps.
+    let first = AppCoordinator.takenIn(disk: [b], saved: [a], mine: [a])
+    #expect(first.profiles == [b] && first.changed == [b] && first.new.isEmpty)
+    let second = AppCoordinator.takenIn(disk: [c], saved: first.base, mine: first.profiles)
+    #expect(second.profiles == [c] && ProfileStore.merge(base: second.base, wanted: second.profiles, disk: [c]) == [c])
+    // What the app changed and couldn't save stays, with what the command line changed.
+    var mine = a; mine.providerIP = "100.64.0.99"
+    let kept = AppCoordinator.takenIn(disk: [b], saved: [a], mine: [mine])
+    #expect(kept.profiles.first?.providerIP == "100.64.0.99" && kept.profiles.first?.instanceName == b.instanceName)
+    #expect(ProfileStore.merge(base: kept.base, wanted: kept.profiles, disk: [b]) == kept.profiles)
+    // One never seen here comes in, and a save after keeps it.
+    var other = inertProfile("iPad"); other.providerIP = "127.0.0.9"   // another device: another address
+    let added = AppCoordinator.takenIn(disk: [other, a], saved: [a], mine: [a])
+    #expect(added.new == [other] && added.profiles == [other, a] && added.changed.isEmpty)
+    #expect(ProfileStore.merge(base: added.base, wanted: added.profiles, disk: [other, a]) == [other, a])
+    // The app's own save read back: nothing to take in.
+    let own = AppCoordinator.takenIn(disk: [a], saved: [a], mine: [a])
+    #expect(own.new.isEmpty && own.changed.isEmpty)
+}
+
+/// A device saved again elsewhere: a running bridge is rebuilt now only where the device is somewhere
+/// else; at the same address it stays up and is rebuilt at its next start (#163).
+@Test func aRunningBridgeSavedAgainAtTheSameAddressWaitsForItsNextStart() {
+    var held = profile("iPhone"); held.providerIP = "100.64.0.9"; held.remotePairingPort = 50000
+    var announced = held; announced.instanceName = "renewed"; announced.txt["identifier"] = "another"; announced.udid = "00008130-000D00000000D004"
+    var port = held; port.remotePairingPort = 51000
+    var ip = held; ip.providerIP = "100.64.0.10"
+    let rows: [(String, saved: DeviceProfile, running: DeviceProfile?, waits: Bool)] = [
+        ("running, announcement and UDID saved anew", announced, held, true),
+        ("off", announced, nil, false),
+        ("running, another port", port, held, false),
+        ("running, another address", ip, held, false),
+    ]
+    for row in rows {
+        let decided = AppCoordinator.rebuilds([row.saved], running: row.running.map { [held.id: $0] } ?? [:])
+        #expect(decided.atStart == (row.waits ? [held.id] : []), "\(row.0)")
+        #expect(decided.now == (row.waits ? [] : [row.saved]), "\(row.0)")
+    }
+    // Two at once, each decided on its own.
+    var other = profile("iPad"); other.providerIP = "100.64.0.11"
+    var otherMoved = other; otherMoved.remotePairingPort = 51000
+    let both = AppCoordinator.rebuilds([announced, otherMoved], running: [held.id: held, other.id: other])
+    #expect(both.atStart == [held.id] && both.now == [otherMoved])
+
+    // At its next start, the one waiting is rebuilt with what was saved; a start rebuilds nothing more.
+    #expect(AppCoordinator.rebuiltAtStart(waiting: true, holding: held, saved: announced) == announced)
+    #expect(AppCoordinator.rebuiltAtStart(waiting: false, holding: held, saved: announced) == nil)
+    #expect(AppCoordinator.rebuiltAtStart(waiting: true, holding: announced, saved: announced) == nil)
+    #expect(AppCoordinator.rebuiltAtStart(waiting: true, holding: held, saved: nil) == nil)   // deleted meanwhile
+    #expect(AppCoordinator.rebuiltAtStart(waiting: true, holding: nil, saved: announced) == nil)
+}
+
+/// A host name two peers have isn't followed: without MagicDNS, iPhones share "iPhone".
+@MainActor @Test func aNameTwoPeersHaveIsntFollowed() async {
+    var p = inertProfile("iPhone"); p.providerHostName = "iPhone"
+    let rig = Rig(p)
+    defer { rig.done() }
+    rig.world.answering = ["127.0.0.2", "127.0.0.3"]
+    rig.world.advertAnswers = true
+    rig.world.peers = [MeshDevice(id: "1", name: "iPhone", os: "iOS", ips: ["127.0.0.2"], online: true),
+                       MeshDevice(id: "2", name: "iPhone", os: "iOS", ips: ["127.0.0.3"], online: true)]
+    var saved: DeviceProfile?
+    rig.bridge.onProfileChange = { saved = $0 }
+    await rig.bridge.start(.manual)
+    #expect(rig.bridge.profile.providerIP == "127.0.0.1" && saved == nil)
+}
+
 enum ClaimCase: String, CaseIterable {
     case erroredCLIAutomatic, erroredCLIManual, readyCLIManual, readyCLIFromACLI, erroredAppAutomatic, erroredCLIAutomaticFromACLI
 }
@@ -4061,6 +4177,17 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
     #expect(StatusFile.write(other.id, cli, in: other.dir, live: { _ in true }) == .written)
     await other.bridge.resumeIfAway()
     #expect(other.bridge.status == .off && yieldedTo == 4242)
+
+    // The app's bridge is started again by the app, which rebuilds one saved anew meanwhile.
+    let app = Rig()
+    defer { app.done() }
+    app.world.onLAN = true
+    await app.bridge.start(.manual)
+    var resumed = 0
+    app.bridge.onResume = { resumed += 1 }
+    app.world.onLAN = false
+    for _ in 0..<3 { await app.bridge.resumeIfAway() }
+    #expect(resumed == 1 && app.bridge.status == .local)
 }
 
 /// Three outcomes, so 2b can tell this Mac's problem from the device's.
@@ -4979,6 +5106,21 @@ private func silentPort() throws -> (fd: Int32, port: UInt16) {
     #expect(throws: CLI.ArgumentError.self) { try CLI.parse(["press", "iPhone", "-h2"]).get() }
 }
 
+/// `--look <n>` holds a command to look n, as the MCP tools are: what an agent sharing the device gives.
+/// After the text for type and paste (the word after the name is the text, whatever it is).
+@Test func aCommandMayNameItsLook() throws {
+    #expect(try CLI.parse(["tap", "iPhone", "1", "2", "--look", "5"]).get().values["--look"] == "5")
+    #expect(try CLI.parse(["swipe", "iPhone", "1", "2", "3", "4", "--look=6"]).get().values["--look"] == "6")
+    for command in ["type", "paste"] {
+        let parsed = try CLI.parse([command, "iPhone", "hello", "--look", "7"]).get()
+        #expect(parsed.words == ["iPhone", "hello"] && parsed.values["--look"] == "7", "\(command)")
+        // Right after the name it is the text, and the number one word too many.
+        #expect(throws: CLI.ArgumentError.self, "\(command)") { try CLI.parse([command, "iPhone", "--look", "7"]).get() }
+    }
+    #expect(throws: CLI.ArgumentError.self) { try CLI.parse(["press", "iPhone", "home", "--look", "5"]).get() }   // a button isn't held to one
+    #expect(throws: CLI.ArgumentError.self) { try CLI.parse(["look", "iPhone", "--look", "5"]).get() }
+}
+
 /// A device that isn't one: what the hub asks of it is counted, and a look can be held up.
 private final class StandInDevice: ControlledDevice, @unchecked Sendable {
     private let lock = NSLock()
@@ -5021,10 +5163,14 @@ private final class StandInDevice: ControlledDevice, @unchecked Sendable {
     }
     func close() {}
     private func count(_ call: String) { lock.withLock { counted.append(call) } }
+    /// What an input, or a look, throws when set (after it was sent, as the device's own do).
+    var failing: (any Error)?
+    var lookFailing: (any Error)?
     func look() throws -> CGImage {
         count("look")
         lookBegan.signal()
         held(hold)
+        if let lookFailing { throw lookFailing }
         return CGContext(data: nil, width: screen.width, height: screen.height, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
                          bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!.makeImage()!
     }
@@ -5033,15 +5179,16 @@ private final class StandInDevice: ControlledDevice, @unchecked Sendable {
     /// Where the last tap went, as fractions of the screen.
     var tapped: (x: Double, y: Double)?
     func elements(limit: Int) throws -> (captions: [String], complete: Bool) { count("elements"); return ([], true) }
-    func tap(x: Double, y: Double) throws { input("tap"); lock.withLock { tapped = (x, y) }; Thread.sleep(forTimeInterval: 0.01) }
-    func swipe(from: (x: Double, y: Double), to: (x: Double, y: Double), milliseconds: Int) throws { input("swipe") }
-    func type(_ text: String) throws { input("type") }
-    func paste(_ text: String) throws { input("paste") }
-    func press(_ button: String) throws { input("press") }
-    private func input(_ call: String) {
+    func tap(x: Double, y: Double) throws { try input("tap"); lock.withLock { tapped = (x, y) }; Thread.sleep(forTimeInterval: 0.01) }
+    func swipe(from: (x: Double, y: Double), to: (x: Double, y: Double), milliseconds: Int) throws { try input("swipe") }
+    func type(_ text: String) throws { try input("type") }
+    func paste(_ text: String) throws { try input("paste") }
+    func press(_ button: String) throws { try input("press") }
+    private func input(_ call: String) throws {
         count(call)
         typeBegan.signal()
         held(typeHold)
+        if let failing { throw failing }
     }
 }
 
@@ -5173,9 +5320,10 @@ private func standInHub(_ dir: URL, udid: String = "UDID-1", paired: Bool = true
     #expect(hub.answer(.init(op: "look", device: id, path: png)).ok)
     Thread.sleep(forTimeInterval: 0.5)
     let tap = hub.answer(.init(op: "tap", device: id, x: 10, y: 10))
-    #expect(!tap.ok && tap.error?.hasPrefix("look again") == true)
+    #expect(!tap.ok && tap.error == DeviceControlHub.lookOld)
+    // Let go of once found old: nothing more goes by it.
     let swipe = hub.answer(.init(op: "swipe", device: id, x: 10, y: 10, x2: 20, y2: 20))
-    #expect(!swipe.ok && swipe.error?.hasPrefix("look again") == true)
+    #expect(!swipe.ok && swipe.error == DeviceControlHub.lookFirst)
     #expect(!device.calls.contains("tap") && !device.calls.contains("swipe"))
     hub.lookStands = 60
     #expect(hub.answer(.init(op: "look", device: id, path: png)).ok)
@@ -5708,6 +5856,41 @@ private func lookFile(in dir: URL) -> String {
     #expect(try String(contentsOf: file, encoding: .utf8) == "new")
     try CLI.put(look: try made("first"), at: dir.appendingPathComponent("fresh.png"))
     #expect(try String(contentsOf: dir.appendingPathComponent("fresh.png"), encoding: .utf8) == "first")
+    // A name as long as a file's may be: what is made beside it first is no longer.
+    let long = dir.appendingPathComponent(String(repeating: "a", count: 251) + ".png")
+    try CLI.put(look: try made("long"), at: long)
+    #expect(try String(contentsOf: long, encoding: .utf8) == "long")
+}
+
+extension TimingSensitive {
+    /// Watched while looks keep taking its place (a new file each time, as a look's name is):
+    /// it is never there readable by others. A chmod after the write showed 644 within 50.
+    @Test func aLookIsNeverThereReadableByOthers() throws {
+        let dir = scratchDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("now.png")
+        let before = umask(0o022)
+        defer { umask(before) }
+        let modes = OSAllocatedUnfairLock<(seen: Set<mode_t>, done: Bool)>(initialState: ([], false))
+        let watcher = Thread {
+            while !modes.withLock({ $0.done }) {
+                var st = stat()
+                guard stat(file.path, &st) == 0 else { continue }
+                let mode = st.st_mode & 0o777
+                modes.withLock { _ = $0.seen.insert(mode) }
+            }
+        }
+        watcher.start()
+        for _ in 0..<200 {
+            try? FileManager.default.removeItem(at: file)
+            let made = dir.appendingPathComponent("made-\(UUID().uuidString).png")
+            try Data(count: 1000).write(to: made)
+            try CLI.put(look: made, at: file)
+        }
+        modes.withLock { $0.done = true }
+        while watcher.isExecuting { usleep(1000) }
+        #expect(modes.withLock { $0.seen } == [0o600])
+    }
 }
 
 /// A point is read off the look it came from: when another has looked since, the screen it was
@@ -5727,7 +5910,7 @@ private func lookFile(in dir: URL) -> String {
     let theirs = try #require(hub.answer(.init(op: "look", device: id, path: png)).look)   // another, meanwhile
     #expect(mine != theirs)
     let refused = hub.answer(.init(op: "tap", device: id, x: 10, y: 10, look: mine))
-    #expect(!refused.ok && refused.error == DeviceControlHub.lookedSince)
+    #expect(!refused.ok && refused.error == DeviceControlHub.lookedSince(mine))
     #expect(!hub.answer(.init(op: "swipe", device: id, x: 10, y: 10, x2: 20, y2: 20, look: mine)).ok)
     #expect(taps() == 0)
     // The other's look is still theirs to use: a refusal for what was asked doesn't spend it.
@@ -5737,6 +5920,174 @@ private func lookFile(in dir: URL) -> String {
     #expect(hub.answer(.init(op: "look", device: id, path: png)).ok)
     #expect(hub.answer(.init(op: "tap", device: id, x: 10, y: 10)).ok)
     #expect(taps() == 2)
+}
+
+/// Text goes by the look given while it is the device's latest, a tap by it before or not: look,
+/// tap a field, type. A tap or swipe doesn't go by a look a tap, swipe or text went by already.
+@Test func textGoesByTheLatestLookATapWentBy() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (hub, made) = try standInHub(dir)
+    defer { hub.stop() }
+    hub.settling = 0
+    let id = UUID()
+    hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
+    let device = try #require(made().first)
+    let png = lookFile(in: dir)
+    func sent(_ op: String) -> Int { device.calls.filter { $0 == op }.count }
+
+    let look = try #require(hub.answer(.init(op: "look", device: id, path: png)).look)
+    #expect(hub.answer(.init(op: "tap", device: id, x: 10, y: 10, look: look)).ok)
+    #expect(hub.answer(.init(op: "type", device: id, text: "a", look: look)).ok)
+    #expect(hub.answer(.init(op: "paste", device: id, text: "b", look: look)).ok)
+    #expect(hub.answer(.init(op: "type", device: id, text: "c", look: look)).ok)
+    #expect(hub.answer(.init(op: "tap", device: id, x: 10, y: 10, look: look)).error == DeviceControlHub.lookFirst)
+    #expect(hub.answer(.init(op: "swipe", device: id, x: 10, y: 10, x2: 20, y2: 20, look: look)).error == DeviceControlHub.lookFirst)
+    #expect(sent("tap") == 1 && sent("type") == 2 && sent("paste") == 1 && sent("swipe") == 0)
+    // Another look since, by whoever: text by the older one isn't sent, and the newer stands.
+    let newer = try #require(hub.answer(.init(op: "look", device: id, path: png)).look)
+    #expect(hub.answer(.init(op: "type", device: id, text: "d", look: look)).error == DeviceControlHub.notLatest(look, "type"))
+    #expect(hub.answer(.init(op: "paste", device: id, text: "d", look: look)).error == DeviceControlHub.notLatest(look, "paste"))
+    #expect(sent("type") == 2 && sent("paste") == 1)
+    #expect(hub.answer(.init(op: "tap", device: id, x: 10, y: 10, look: newer)).ok)
+    // Typed by hand (no look named): sent, and no tap goes by that look after it.
+    #expect(hub.answer(.init(op: "look", device: id, path: png)).ok)
+    #expect(hub.answer(.init(op: "type", device: id, text: "e")).ok)
+    #expect(hub.answer(.init(op: "tap", device: id, x: 10, y: 10)).error == DeviceControlHub.lookFirst)
+    // A tap by hand is of no one's look: text held to the latest isn't sent after it.
+    let latest = try #require(hub.answer(.init(op: "look", device: id, path: png)).look)
+    #expect(hub.answer(.init(op: "tap", device: id, x: 10, y: 10)).ok)
+    #expect(hub.answer(.init(op: "type", device: id, text: "g", look: latest)).error == DeviceControlHub.notLatest(latest, "type"))
+    // A look over a minute old: not sent, and let go of.
+    hub.lookStands = 0.2
+    let old = try #require(hub.answer(.init(op: "look", device: id, path: png)).look)
+    Thread.sleep(forTimeInterval: 0.3)
+    #expect(hub.answer(.init(op: "type", device: id, text: "f", look: old)).error == DeviceControlHub.lookOld)
+    #expect(hub.answer(.init(op: "type", device: id, text: "f", look: old)).error == DeviceControlHub.notLatest(old, "type"))
+    #expect(sent("type") == 3)
+}
+
+/// What ends a look — a button, the elements walked, another look though it failed, a failure
+/// once something was sent — and what leaves it: a refusal for what was asked, before anything went.
+@Test func whatEndsALookAndWhatLeavesIt() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (hub, made) = try standInHub(dir)
+    defer { hub.stop() }
+    hub.settling = 0
+    let id = UUID()
+    hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
+    let device = try #require(made().first)
+    let png = lookFile(in: dir)
+    func look() throws -> Int { try #require(hub.answer(.init(op: "look", device: id, path: png)).look) }
+    func typed(_ look: Int) -> DeviceControlWire.Response { hub.answer(.init(op: "type", device: id, text: "a", look: look)) }
+
+    for (op, request) in [("press", DeviceControlWire.Request(op: "press", device: id, text: "home")), ("elements", .init(op: "elements", device: id))] {
+        let seen = try look()
+        #expect(hub.answer(request).ok, "\(op)")
+        #expect(typed(seen).error == DeviceControlHub.notLatest(seen, "type"), "\(op)")
+    }
+    // A look that failed: what the one before saw may have moved meanwhile.
+    var seen = try look()
+    device.lookFailing = DeviceSession.Failure.message("no picture")
+    #expect(!hub.answer(.init(op: "look", device: id, path: png)).ok)
+    device.lookFailing = nil
+    #expect(typed(seen).error == DeviceControlHub.notLatest(seen, "type"))
+    // Refused for what it says, before anything was sent: the look stands.
+    seen = try look()
+    #expect(hub.answer(.init(op: "tap", device: id, x: 1000, y: 10, look: seen)).error?.hasPrefix("the point must be inside the image") == true)
+    #expect(hub.answer(.init(op: "type", device: id, look: seen)).error == "nothing to send")
+    device.failing = DeviceSession.Failure.invalid("can't type that")
+    #expect(typed(seen).error == "can't type that")
+    #expect(hub.answer(.init(op: "press", device: id, text: "home")).error == "can't type that")
+    device.failing = DeviceSession.Failure.notBegun("no connection")   // nor did one that never began
+    #expect(hub.answer(.init(op: "tap", device: id, x: 10, y: 10, look: seen)).error == "no connection")
+    device.failing = nil
+    #expect(hub.answer(.init(op: "tap", device: id, x: 10, y: 10, look: seen)).ok)   // not spent by them
+    #expect(typed(seen).ok)
+    // Failed once sent: it may have reached the device, and nothing more goes by that look.
+    device.failing = DeviceSession.Failure.message("timed out")
+    #expect(typed(seen).error == "timed out. It may or may not have reached the device: look before doing it again")
+    device.failing = nil
+    #expect(typed(seen).error == DeviceControlHub.notLatest(seen, "type"))
+    seen = try look()
+    device.failing = DeviceSession.Failure.message("timed out")
+    #expect(!hub.answer(.init(op: "tap", device: id, x: 10, y: 10, look: seen)).ok)
+    device.failing = nil
+    #expect(typed(seen).error == DeviceControlHub.notLatest(seen, "type"))
+}
+
+/// Text waits out the screen's moment after an input, as a look does: keys sent at once after a
+/// tap on a field were seen lost. A request refused before anything was sent isn't an input.
+@Test func textWaitsOutAMomentAfterAnInput() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (hub, made) = try standInHub(dir)
+    defer { hub.stop() }
+    hub.settling = 0.4
+    let id = UUID()
+    hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
+    let png = lookFile(in: dir)
+    func timed(_ request: DeviceControlWire.Request) -> (ok: Bool, took: TimeInterval) {
+        let began = Date()
+        let answer = hub.answer(request)
+        return (answer.ok, Date().timeIntervalSince(began))
+    }
+    let device = try #require(made().first)
+    let look = try #require(hub.answer(.init(op: "look", device: id, path: png)).look)
+    #expect(hub.answer(.init(op: "tap", device: id, x: 10, y: 10, look: look)).ok)
+    let typed = timed(.init(op: "type", device: id, text: "a", look: look))
+    #expect(typed.ok && typed.took >= 0.35, "\(typed.took)")
+    let byHand = timed(.init(op: "paste", device: id, text: "b"))
+    #expect(byHand.ok && byHand.took >= 0.35, "\(byHand.took)")
+    // Whoever asked left while it waited: not begun, by hand or by a look that stands; nor a look taken.
+    func leaving() -> @Sendable () -> Bool {
+        let asked = OSAllocatedUnfairLock(initialState: 0)
+        return { asked.withLock { $0 += 1; return $0 == 1 } }   // there at its turn, gone after
+    }
+    let (pasted, looked) = (device.calls.filter { $0 == "paste" }.count, device.calls.filter { $0 == "look" }.count)
+    #expect(hub.answer(.init(op: "look", device: id, path: png), wanted: leaving()).error == DeviceControlHub.notGiven)
+    #expect(device.calls.filter { $0 == "look" }.count == looked)
+    let standing = try #require(hub.answer(.init(op: "look", device: id, path: png)).look)
+    for given in [nil, standing] {
+        let left = hub.answer(.init(op: "paste", device: id, text: "x", look: given), wanted: leaving())
+        #expect(left.error?.hasPrefix(DeviceSession.stopped) == true, "\(String(describing: given))")
+    }
+    #expect(device.calls.filter { $0 == "paste" }.count == pasted)
+    // Long after the last input, and after a refusal only: nothing to wait out.
+    Thread.sleep(forTimeInterval: 0.5)
+    let fresh = try #require(hub.answer(.init(op: "look", device: id, path: png)).look)
+    #expect(!hub.answer(.init(op: "tap", device: id, x: 1000, y: 10, look: fresh)).ok)
+    device.failing = DeviceSession.Failure.invalid("can't type that")   // the device's own refusal, nothing sent
+    #expect(!hub.answer(.init(op: "type", device: id, text: "é", look: fresh)).ok)
+    device.failing = DeviceSession.Failure.notBegun("no connection")
+    #expect(!hub.answer(.init(op: "tap", device: id, x: 10, y: 10, look: fresh)).ok)
+    device.failing = nil
+    let soon = timed(.init(op: "type", device: id, text: "c", look: fresh))
+    #expect(soon.ok && soon.took < 0.2, "\(soon.took)")
+}
+
+/// What fails before a call begins says so: no connection had, a pairing not read, a session closed.
+@Test func whatFailsBeforeACallBeginsSaysSo() throws {
+    func notBegun(_ call: () throws -> Void) -> Bool {
+        do { try call(); return false } catch DeviceSession.Failure.notBegun(_) { return true } catch { return false }
+    }
+    let unread = DeviceSession(ip: "127.0.0.1", port: 1, pairing: { throw DeviceSession.Failure.message("unreadable") })
+    #expect(notBegun { try unread.tap(x: 0, y: 0) })
+    let nobody = DeviceSession(ip: "127.0.0.1", port: 1, pairing: { Data("x".utf8) })
+    #expect(notBegun { try nobody.press("home") })
+    nobody.close()
+    #expect(notBegun { try nobody.type("a") })
+}
+
+/// The rules a look is held to are said at once, of no device: what `roamrun mcp` asks before an action.
+@Test func theRulesAreSaidOfNoDevice() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (hub, _) = try standInHub(dir)
+    defer { hub.stop() }
+    let said = hub.answer(.init(op: "rules", device: UUID()))
+    #expect(said.ok && said.rules == DeviceControlHub.rules)
 }
 
 /// A listener for a folder whose last one has just stopped. Asked again for a moment: a process
@@ -6143,24 +6494,33 @@ private func listenerSoon(in dir: URL, _ handler: @escaping @Sendable (DeviceCon
 
 import ImageIO
 
-/// `roamrun mcp`: the handshake, the tool list, and a tap whose point — given in the image the
-/// look returned — reaches the app in the pixels of the look itself.
-@Test func theMCPServerScalesPointsBackToTheLook() throws {
+/// `roamrun mcp`: the handshake, the tool list, and the look a tap, swipe, type or paste gives,
+/// passed to the app as the client gave it: the app alone holds an action to a look, as it sees
+/// every caller's (one that acts on another's look is refused there, and the other's still goes).
+@Test func theMCPServerPassesTheClientsLookToTheApp() throws {
     let device = profile("iPhone")
     var asked: [DeviceControlWire.Request] = []
     var saved = [device]
+    var looks = 4, latest = 0
     let server = DeviceMCP(profiles: { saved }, looks: FileManager.default.temporaryDirectory) { request in
         asked.append(request)
-        if request.op == "look", let path = request.path {
-            // A screen twice the size a look returns: 2000 x 4000 comes back as 640 x 1280.
-            let context = CGContext(data: nil, width: 2000, height: 4000, bitsPerComponent: 8, bytesPerRow: 0,
+        switch request.op {
+        case "rules": return .init(ok: true, rules: DeviceControlHub.rules)
+        case "look":
+            // The app's look is no larger than a model is shown: 640 x 1280.
+            let context = CGContext(data: nil, width: 640, height: 1280, bitsPerComponent: 8, bytesPerRow: 0,
                                     space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
-            let out = CGImageDestinationCreateWithURL(URL(fileURLWithPath: path) as CFURL, "public.png" as CFString, 1, nil)!
+            let out = CGImageDestinationCreateWithURL(URL(fileURLWithPath: request.path!) as CFURL, "public.png" as CFString, 1, nil)!
             CGImageDestinationAddImage(out, context.makeImage()!, nil)
             CGImageDestinationFinalize(out)
-            return .init(ok: true, width: 2000, height: 4000)
+            looks += 1
+            latest = looks
+            return .init(ok: true, width: 640, height: 1280, look: looks)
+        case "tap", "swipe", "type", "paste":
+            // As the app holds to it: the latest look only.
+            return request.look == latest ? .init(ok: true) : .failure(DeviceControlHub.lookedSince(request.look ?? -1))
+        default: return .init(ok: true)
         }
-        return .init(ok: true)
     }
     func send(_ json: String) throws -> [String: Any] {
         let answer = try #require(server.handle(Data(json.utf8)))
@@ -6170,31 +6530,75 @@ import ImageIO
     func call(_ tool: String, _ arguments: String) throws -> [String: Any] {
         try result(#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"\#(tool)","arguments":\#(arguments)}}"#)
     }
+    func said(_ answer: [String: Any]) -> String { ((answer["content"] as? [[String: Any]])?.last?["text"] as? String) ?? "" }
 
     let hello = try result(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#)
     #expect(hello["protocolVersion"] as? String == "2025-06-18")
+    // A version not spoken here, or none, gets the newest that is: not an echo of what was asked.
+    func answered(_ params: String) throws -> String? {
+        try result(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":\#(params)}"#)["protocolVersion"] as? String
+    }
+    #expect(try answered(#"{"protocolVersion":"2024-11-05"}"#) == "2024-11-05")
+    #expect(try answered(#"{"protocolVersion":"2026-07-28"}"#) == "2025-11-25")
+    #expect(try answered("{}") == "2025-11-25")
+    #expect(try answered(#"{"protocolVersion":20251125}"#) == "2025-11-25")
     #expect(server.handle(Data(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#.utf8)) == nil)   // a notification gets no answer
+    // What can't be read is answered with JSON-RPC's error for it, not left unanswered.
+    func failed(_ message: String) throws -> (code: Int?, id: Any?) {
+        let answer = try send(message)
+        return ((answer["error"] as? [String: Any])?["code"] as? Int, answer["id"])
+    }
+    #expect(try failed("not json").code == -32700)
+    #expect(try failed("[]").code == -32600)
+    let noMethod = try failed(#"{"jsonrpc":"2.0","id":9}"#)
+    #expect(noMethod.code == -32600 && noMethod.id as? Int == 9)
+    #expect(try failed(#"{"jsonrpc":"2.0","id":10,"method":"no/such"}"#).code == -32601)
     let tools = try #require(try result(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)["tools"] as? [[String: Any]])
     #expect(Set(tools.compactMap { $0["name"] as? String }) == ["devices", "look", "tap", "swipe", "elements", "type", "paste", "press"])
+    func hinted(_ hint: String) -> Set<String> { Set(tools.filter { ($0["annotations"] as? [String: Bool])?[hint] == true }.compactMap { $0["name"] as? String }) }
+    #expect(hinted("readOnlyHint") == ["devices", "look"])
+    #expect(hinted("destructiveHint") == ["tap", "swipe", "type", "paste", "press"])
 
-    // No look yet: refused here, and the app isn't even asked.
-    #expect(try call("tap", #"{"device":"iPhone","x":10,"y":10}"#)["isError"] as? Bool == true)
+    // What holds an action to a look, and says which.
+    func required(_ name: String) -> [String] { (tools.first { $0["name"] as? String == name }?["inputSchema"] as? [String: Any])?["required"] as? [String] ?? [] }
+    for name in ["tap", "swipe", "type", "paste"] { #expect(required(name).contains("look"), "\(name)") }
+    #expect(!required("press").contains("look") && !required("look").contains("look"))
+
+    // No look given: refused here, and the app isn't even asked.
+    let missing = try call("tap", #"{"device":"iPhone","x":10,"y":10}"#)
+    #expect(missing["isError"] as? Bool == true && said(missing).hasPrefix("look is missing"))
+    #expect(try call("type", #"{"device":"iPhone","text":"a","look":true}"#)["isError"] as? Bool == true)   // JSON's true isn't 1
     #expect(asked.isEmpty)
 
     let look = try call("look", #"{"device":"iphone"}"#)   // names match as the CLI's do
     let content = try #require(look["content"] as? [[String: Any]])
     #expect(content.first?["type"] as? String == "image" && content.first?["mimeType"] as? String == "image/jpeg")
-    #expect((content.last?["text"] as? String)?.hasPrefix("640 x 1280") == true)
-
-    // A point outside the image is refused in the image's terms, the app not asked, the look kept.
-    let outside = try call("tap", #"{"device":"iPhone","x":640,"y":10}"#)
-    #expect(outside["isError"] as? Bool == true && ((outside["content"] as? [[String: Any]])?.first?["text"] as? String)?.contains("640 x 1280") == true)
-    #expect(asked.count == 1)
-    #expect(try call("tap", #"{"device":"iPhone","x":320,"y":640}"#)["isError"] as? Bool == false)
-    #expect(asked.last == .init(op: "tap", device: device.id, x: 1000, y: 2000))
-    // That look is spent: the next point needs a new one.
-    #expect(try call("tap", #"{"device":"iPhone","x":320,"y":640}"#)["isError"] as? Bool == true)
-    #expect(asked.count == 2)
+    #expect(said(look).hasPrefix("640 x 1280, look 5."))
+    // Another client's look meanwhile: a tap with the first is the app's to refuse; the newer still goes.
+    #expect(said(try call("look", #"{"device":"iPhone"}"#)).hasPrefix("640 x 1280, look 6."))
+    let older = try call("tap", #"{"device":"iPhone","look":5,"x":320,"y":640}"#)
+    #expect(older["isError"] as? Bool == true && said(older) == DeviceControlHub.lookedSince(5))
+    #expect(try call("tap", #"{"device":"iPhone","look":"6","x":320,"y":640}"#)["isError"] as? Bool == false)   // a number written as text
+    // The points as given: the image is the look.
+    #expect(asked.last == .init(op: "tap", device: device.id, x: 320, y: 640, look: 6))
+    #expect(asked.dropLast().last?.op == "rules")
+    #expect(try call("type", #"{"device":"iPhone","look":6,"text":"hi"}"#)["isError"] as? Bool == false)
+    #expect(asked.last == .init(op: "type", device: device.id, text: "hi", look: 6))
+    #expect(try call("paste", #"{"device":"iPhone","look":6,"text":"hi"}"#)["isError"] as? Bool == false)
+    #expect(asked.last == .init(op: "paste", device: device.id, text: "hi", look: 6))
+    #expect(try call("swipe", #"{"device":"iPhone","look":6,"x1":1,"y1":2,"x2":3,"y2":4,"milliseconds":2000}"#)["isError"] as? Bool == false)
+    #expect(asked.last == .init(op: "swipe", device: device.id, x: 1, y: 2, x2: 3, y2: 4, milliseconds: 2000, look: 6))
+    // A whole number only, as JSON writes one: not 6.0, nor a duration as text or out of its range.
+    let before = asked.count
+    #expect(said(try call("tap", #"{"device":"iPhone","look":6.0,"x":1,"y":1}"#)).hasPrefix("look isn't a look's id"))
+    #expect(said(try call("tap", #"{"device":"iPhone","look":6,"x":true,"y":1}"#)) == "x is missing")
+    for ms in [#""2000""#, "10", "300.5", "true"] {
+        let refused = try call("swipe", #"{"device":"iPhone","look":6,"x1":1,"y1":2,"x2":3,"y2":4,"milliseconds":\#(ms)}"#)
+        #expect(said(refused) == "milliseconds is a whole number, 50...5000", "\(ms)")
+    }
+    #expect(asked.count == before)
+    #expect(try call("press", #"{"device":"iPhone","button":"home"}"#)["isError"] as? Bool == false)
+    #expect(asked.last == .init(op: "press", device: device.id, text: "home"))
 
     #expect(try call("look", #"{"device":"nobody"}"#)["isError"] as? Bool == true)
     #expect(try send(#"{"jsonrpc":"2.0","id":9,"method":"resources/list"}"#)["error"] != nil)
@@ -6204,6 +6608,27 @@ import ImageIO
     let listed = try #require((try call("devices", "{}")["content"] as? [[String: Any]])?.first?["text"] as? String)
     #expect(listed == "iPhone\niPad")
     #expect(try call("look", #"{"device":"iPad"}"#)["isError"] as? Bool == false)
+}
+
+/// An app older than this `roamrun` doesn't hold text to a look: nothing held to one is sent to it.
+@Test func theMCPServerSendsNothingHeldToALookToAnOlderApp() throws {
+    let device = profile("iPhone")
+    var asked: [String] = []
+    let server = DeviceMCP(profiles: { [device] }, looks: FileManager.default.temporaryDirectory) { request in
+        asked.append(request.op)
+        return request.op == "rules" ? .failure("unknown request") : .init(ok: true)   // what an older app says
+    }
+    for (tool, arguments) in [("tap", #""look":1,"x":1,"y":1"#), ("swipe", #""look":1,"x1":1,"y1":1,"x2":2,"y2":2"#),
+                              ("type", #""look":1,"text":"a""#), ("paste", #""look":1,"text":"a""#)] {
+        let json = #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"\#(tool)","arguments":{"device":"iPhone",\#(arguments)}}}"#
+        let answer = try #require(server.handle(Data(json.utf8)))
+        let result = try #require((try JSONSerialization.jsonObject(with: answer) as? [String: Any])?["result"] as? [String: Any])
+        #expect(result["isError"] as? Bool == true && ((result["content"] as? [[String: Any]])?.first?["text"] as? String) == DeviceMCP.olderApp, "\(tool)")
+    }
+    #expect(asked == ["rules", "rules", "rules", "rules"])
+    // What the CLI's --look goes by too.
+    #expect(DeviceMCP.older(.failure("unknown request")) && DeviceMCP.older(.init(ok: true)) && DeviceMCP.older(.init(ok: true, rules: DeviceControlHub.rules - 1)))
+    #expect(!DeviceMCP.older(.init(ok: true, rules: DeviceControlHub.rules)) && !DeviceMCP.older(.failure("device control isn't set up for this device")))
 }
 
 /// What the CLI sends for each command reaches the app as it was written.
@@ -6448,6 +6873,17 @@ func everyDocumentedCommandParses(_ doc: String) throws {
     #expect(try read { $0.providerIP = "fd7a:115c:a1e0::1" } != nil)
     #expect(try read { $0.serviceType = "_ssh._tcp" } == nil)
     #expect(try read { $0.domain = "example.com" } == nil)
+}
+
+/// A blank line is no message: nothing is answered, as `roamrunctl mcp` does. A line that isn't
+/// JSON is answered with its error.
+@Test func theMCPServerAnswersWhatItCantReadAndNotABlankLine() {
+    let server = DeviceMCP(profiles: { [] }, looks: FileManager.default.temporaryDirectory) { _ in .init(ok: true) }
+    let written = OSAllocatedUnfairLock<[String]>(initialState: [])
+    var lines = ["", "   ", "not json"].makeIterator()
+    server.serve(lines: { lines.next() }, write: { answer in written.withLock { $0.append(String(decoding: answer, as: UTF8.self)) } })
+    #expect(written.withLock { $0.count } == 1)
+    #expect(written.withLock { $0.first?.contains("-32700") } == true)
 }
 
 /// The MCP server reads on while a tool runs: a call taken back before its turn isn't begun, and
@@ -6804,12 +7240,13 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
 @Test func theMCPToolTypesOnlySoMuch() throws {
     let device = profile("iPhone")
     var asked = 0
-    let server = DeviceMCP(profiles: { [device] }, looks: FileManager.default.temporaryDirectory) { _ in
+    let server = DeviceMCP(profiles: { [device] }, looks: FileManager.default.temporaryDirectory) { request in
+        if request.op == "rules" { return .init(ok: true, rules: DeviceControlHub.rules) }
         asked += 1
         return .init(ok: true)
     }
     func call(_ text: String) throws -> Bool {
-        let json = #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"type","arguments":{"device":"iPhone","text":"\#(text)"}}}"#
+        let json = #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"type","arguments":{"device":"iPhone","look":1,"text":"\#(text)"}}}"#
         let answer = try #require(server.handle(Data(json.utf8)))
         let result = try #require((try JSONSerialization.jsonObject(with: answer) as? [String: Any])?["result"] as? [String: Any])
         return result["isError"] as? Bool ?? true
@@ -6878,6 +7315,8 @@ func anInputIsInterruptedWhenItsAskerLeavesOrItsDeviceIsSwitchedOff(_ op: String
         #expect(source.contains("\"\(words)") || source.contains("format!(\"\(words)"), "\(words)")
     }
     #expect(!DeviceSession.leavesConnectionInDoubt(DeviceSession.Failure.message("stopped: told to stop where it was")))
+    #expect(!DeviceSession.leavesConnectionInDoubt(DeviceSession.Failure.notBegun("stopped: its device was switched off before it began")))
+    #expect(DeviceSession.leavesConnectionInDoubt(DeviceSession.Failure.notBegun("can't open")))
     #expect(DeviceSession.leavesConnectionInDoubt(DeviceSession.Failure.message("keys: BrokenPipe")))
 }
 

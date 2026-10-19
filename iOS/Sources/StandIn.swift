@@ -59,6 +59,8 @@ final class StandIn: @unchecked Sendable {
         case announced(name: String, port: UInt16)
         case connected(from: String)
         case refused(from: String)
+        /// From this device, while two of its connections are carried already.
+        case full(from: String)
         case farDidNotAnswer(String)
         /// Nothing of this is announced or listening any more.
         case ended(End)
@@ -76,6 +78,8 @@ final class StandIn: @unchecked Sendable {
     private var deadlineWork: DispatchWorkItem?
     private var ended = false
     private var loggedFirst = false
+    /// What was said of refused connections: each kind once for an address, and 16 at most, however many knock.
+    private var refusalsSaid = Set<Data>()
     private let anywhere: Bool
 
     /// `offer`: as it is to be announced (name substituted already). `farHost`: the far Mac's Tailscale
@@ -131,20 +135,25 @@ final class StandIn: @unchecked Sendable {
         listener.start(queue: queue)
     }
 
+    private func refuse(_ connection: NWConnection, _ endpoint: NWEndpoint, _ said: Event) {
+        connection.cancel()
+        var key = OwnAddresses.raw(endpoint) ?? Data(OwnAddresses.shown(endpoint).utf8)
+        if case .full = said { key.append(0) }
+        if refusalsSaid.count < 16, refusalsSaid.insert(key).inserted { onEvent(said) }
+    }
+
     private func take(_ connection: NWConnection) {
         guard !ended else { connection.cancel(); return }
         let endpoint = connection.currentPath?.remoteEndpoint ?? connection.endpoint
         let from = OwnAddresses.shown(endpoint)
         guard let raw = OwnAddresses.raw(endpoint), allowed.contains(raw) else {
             standInLog.notice("refused a connection from \(from, privacy: .public)")
-            connection.cancel()
-            onEvent(.refused(from: from))
+            refuse(connection, endpoint, .refused(from: from))
             return
         }
         guard pairs.count < 2 else {
             standInLog.notice("refused a third connection from \(from, privacy: .public)")
-            connection.cancel()
-            onEvent(.refused(from: "\(from) (two are being carried already)"))
+            refuse(connection, endpoint, .full(from: from))
             return
         }
         if !loggedFirst {

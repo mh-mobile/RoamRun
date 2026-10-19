@@ -48,10 +48,10 @@ final class Client: @unchecked Sendable {
     private let lock = NSLock()
     private var got = Data()
     private var closed = false, failed = false, ready = false
-    init(port: UInt16, from local: String? = nil, queue: DispatchQueue) {
+    init(port: UInt16, from local: String? = nil, host: String = "127.0.0.1", queue: DispatchQueue) {
         let params = NWParameters.tcp
         if let local { params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(local), port: .any) }
-        connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: params)
+        connection = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!, using: params)
         connection.stateUpdateHandler = { [self] st in
             switch st {
             case .ready: lock.withLock { ready = true }; receive()
@@ -174,10 +174,35 @@ func answerAfterFIN(_ c: NWConnection, size: Int, on queue: DispatchQueue) {
         let stranger = Client(port: portA, queue: queue)
         check(evA.wait { $0.contains { if case .refused = $0 { return true }; return false } }, "refused event")
         check(stranger.wait { _, closed, failed, _ in closed || failed }, "stranger's connection was closed")
+        let again = [Client(port: portA, queue: queue), Client(port: portA, queue: queue), Client(port: portA, queue: queue)]
+        func refusals(_ e: Events) -> Int { e.list.filter { if case .refused = $0 { return true }; return false }.count }
+        check(again.allSatisfy { $0.wait { _, closed, failed, _ in closed || failed } } && refusals(evA) == 1, "a stranger knocking again is said once")
+        let v6 = Client(port: portA, host: "::1", queue: queue)
+        check(v6.wait { _, closed, failed, _ in closed || failed } && evA.wait { _ in refusals(evA) == 2 }, "a stranger at another address (::1) is said too")
+        let v6again = Client(port: portA, host: "::1", queue: queue)
+        check(v6again.wait { _, closed, failed, _ in closed || failed } && refusals(evA) == 2, "and once")
         check(farHits.value == 0, "the fake far Mac saw no connection")
         a.end(.stopped); a.end(.stopped)
         check(evA.wait { $0.filter { $0 == .ended(.stopped) }.count == 1 }, "ended(.stopped) once (end is idempotent)")
         check(browse.wait { $0.contains("Rmv") && $0.contains(idA) }, "dns-sd -B sees Rmv after end")
+
+        // A third connection from the device while two are carried is refused, and said once as that.
+        print("-- third")
+        do {
+            let idT = UUID().uuidString
+            let evT = Events()
+            let t = StandIn(offer: offer(idT), farHost: "127.0.0.1", serviceType: type, allowed: [IPv4Address.loopback.rawValue], deadline: 60, anywhere: true) { evT.add($0) }
+            try! t.start()
+            check(evT.wait { $0.contains { if case .announced = $0 { return true }; return false } }, "announced")
+            let portT = evT.list.compactMap { if case .announced(_, let p) = $0 { return p }; return nil }.first!
+            let held = [Client(port: portT, queue: queue), Client(port: portT, queue: queue)]
+            check(held.allSatisfy { $0.wait { ready, _, _, _ in ready } } && evT.wait { $0.filter { if case .connected = $0 { return true }; return false }.count == 2 }, "two carried")
+            let more = [Client(port: portT, queue: queue), Client(port: portT, queue: queue)]
+            check(more.allSatisfy { $0.wait { _, closed, failed, _ in closed || failed } }
+                  && evT.wait { $0.filter { if case .full = $0 { return true }; return false }.count == 1 } && refusals(evT) == 0, "a third and a fourth: said once, as full")
+            t.end(.stopped)
+            check(evT.wait { $0.contains(.ended(.stopped)) }, "ended")
+        }
 
         // 2. A connection from an allowed address (127.0.0.1 only) is carried to the far Mac and echoed; .carried ends it.
         print("-- relay")
