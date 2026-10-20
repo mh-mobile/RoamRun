@@ -2,7 +2,7 @@ import Foundation
 import Network
 
 // Runs the engine on this Mac under the test type _rrtest._tcp (never the real one):
-//   xcrun swiftc -swift-version 6 -parse-as-library -o /tmp/relay-check iOS/Sources/StandIn.swift iOS/Sources/Introduction.swift iOS/Sources/Wire.swift iOS/Checks/relay-check.swift && /tmp/relay-check
+//   xcrun swiftc -swift-version 6 -parse-as-library -o /tmp/relay-check iOS/Sources/StandIn.swift Sources/RoamRun/Pairing/IntroductionLines.swift iOS/Sources/Wire.swift iOS/Checks/relay-check.swift && /tmp/relay-check
 
 final class Events: @unchecked Sendable {
     private let lock = NSLock()

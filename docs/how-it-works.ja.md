@@ -99,7 +99,8 @@ Apple Vision Pro は、向きが逆です。Vision Pro は、Mac に選ばれる
 | `Bridge/TunnelPortWatcher.swift` | `log stream` からトンネルのポートを見つけて、どのデバイスのものかを判定する |
 | `Bridge/InterfaceMonitor.swift` | LAN インターフェイスを選び、アドレスの変化を検知する |
 | `Bridge/ReachabilityProbe.swift` | TCP で接続できるかの確認と、RemotePairing のハンドシェイクの確認 |
-| `Pairing/Introductions.swift` | 離れた Mac の仲介。オファーとデバイスの情報を表す行と、代わりのレコードの公開 |
+| `Pairing/IntroductionLines.swift` | Mac どうしで運ぶ行（オファーとデバイス）の形式と、その決まり。Introducer アプリも、このファイルをコンパイルする |
+| `Pairing/Introductions.swift` | 離れた Mac の仲介。行からのデバイスの保存と、代わりのレコードの公開 |
 | `Pairing/PairByName.swift` | 互いの名前を指定した 2 台の Mac のやり取り（ポート 41830） |
 | `Pairing/ControlIntroductions.swift` | 別の Mac が仲介する場合の、デバイス操作のペアリング |
 | `Control/DeviceControlHub.swift` | デバイス操作。アプリが保つ接続と、ペアリング |

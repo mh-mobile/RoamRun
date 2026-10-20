@@ -151,8 +151,8 @@ Not tried: device control's pairing with a machine running `roamrunctl` as the f
 
 ## For developers
 
-`Sources/Introduction.swift` holds the formats of the lines and their rules, as
-`Sources/RoamRun/Pairing/Introductions.swift` does in the main app. Change them in both.
+The formats of the lines and their rules are in `../Sources/RoamRun/Pairing/IntroductionLines.swift`,
+the file the main app compiles too: `project.yml` adds it to the app.
 
 `Sources/Session.swift` holds one introduction: its stage, the code, and how it ended.
 `Sources/ContentView.swift` shows it: a first screen, the three steps while it runs, and how it
@@ -174,7 +174,7 @@ removed, the deadline, how the lines between the app and the far machine are rea
 addresses count as Tailscale's. Run it from `iOS/`:
 
 ```
-xcrun swiftc -swift-version 6 -parse-as-library -o /tmp/relay-check Sources/StandIn.swift Sources/Introduction.swift Sources/Wire.swift Checks/relay-check.swift && /tmp/relay-check
+xcrun swiftc -swift-version 6 -parse-as-library -o /tmp/relay-check Sources/StandIn.swift ../Sources/RoamRun/Pairing/IntroductionLines.swift Sources/Wire.swift Checks/relay-check.swift && /tmp/relay-check
 ```
 
 The icon is RoamRun's, edge to edge:

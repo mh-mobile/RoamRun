@@ -134,7 +134,8 @@ its own connections to the device.
 | `Bridge/TunnelPortWatcher.swift` | Finds tunnel ports in `log stream` and attributes them to their device |
 | `Bridge/InterfaceMonitor.swift` | Picks the LAN interface and notices when its address changes |
 | `Bridge/ReachabilityProbe.swift` | TCP reachability, and the RemotePairing handshake check |
-| `Pairing/Introductions.swift` | Introducing a far Mac: the offer and the device as lines, the stand-in |
+| `Pairing/IntroductionLines.swift` | The lines carried between Macs, the offer and the device, and their rules: the Introducer app compiles this file too |
+| `Pairing/Introductions.swift` | Introducing a far Mac: saving a device from its line, and the stand-in |
 | `Pairing/PairByName.swift` | The exchange between two Macs that name each other (port 41830) |
 | `Pairing/ControlIntroductions.swift` | Device control's pairing when another Mac introduces |
 | `Control/DeviceControlHub.swift` | Device control: the connections the app holds, and the pairing |

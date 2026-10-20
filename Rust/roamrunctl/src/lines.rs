@@ -1,4 +1,4 @@
-//! The two lines a person carries between Macs, as `Introductions.swift` reads and writes them.
+//! The two lines a person carries between Macs, as `IntroductionLines.swift` reads and writes them.
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
