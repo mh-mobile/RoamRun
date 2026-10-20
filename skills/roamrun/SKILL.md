@@ -188,7 +188,9 @@ jq -e '.[0].locked == false' /tmp/rr.json >/dev/null || { echo "ask the user to 
 A device is named as RoamRun saved it (`iPhone` here). When no saved device has
 that name, its Tailscale name (`iphone-15-pro`, as `roamrunctl` takes it) or its id
 works too; "no device named …" lists the saved names, each with its Tailscale
-name where that differs.
+name where that differs. A name saved in RoamRun wins over another device's
+Tailscale name, and roamrun says so. Two devices with one Tailscale name are
+refused: use the name RoamRun saved, or the id.
 
 `status --json` prints the JSON even when the device isn't ready (exit 1), so
 check the exit code, not just the file. `locked` is `null` when it couldn't be

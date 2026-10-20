@@ -195,9 +195,9 @@ roamrun screenshot <name> [file.png]       # save the device's screen as PNG and
 roamrun ota [<name>] <App.ipa> [--replace] # publish a build for a device to install by itself
 ```
 
-`<name>` is the name you gave the device in RoamRun, not the device's own name. It is
+`<name>` is the name you gave the device in RoamRun. It is
 case-insensitive and unique; `roamrun devices` lists the names, and the pencil on the device's page
-renames it. When no saved device has that name, the device's Tailscale name (`iphone-15-pro`, as `roamrunctl` takes it) works too, and so does its id or its first eight or more characters. A device is added in the app, or from the command line with
+renames it. The name in the device's Settings app is a separate one. When no saved device has that name, the device's Tailscale name (`iphone-15-pro`, as `roamrunctl` takes it) works too, and so does its id or its first eight or more characters. A device is added in the app, or from the command line with
 `roamrun devices add <line>` (a line that another Mac made), `roamrun key import <file>`,
 `roamrun pair xcode --with <name>` or `roamrun pair control --with <name>`. All four are described
 below.
