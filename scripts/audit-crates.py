@@ -13,6 +13,8 @@ KNOWN = {
     # Unmaintained, not unsound. A proc-macro's helper that age's messages (i18n-embed-fl) bring in:
     # it runs when roamrunctl is built, and nothing of it is in the binary.
     "RUSTSEC-2026-0173": "proc-macro-error2: build-time only (a proc-macro under age), not in the binary",
+    # Unmaintained too. i18n-config reads i18n.toml with it, only for age's proc-macros (i18n-embed-fl, -impl).
+    "RUSTSEC-2026-0374": "basic-toml: build-time only (under age's proc-macros), not in the binary",
 }
 
 def ask(url, body=None):
