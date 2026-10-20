@@ -101,7 +101,9 @@ Apple Vision Pro は、向きが逆です。Vision Pro は、Mac に選ばれる
 | `Pairing/Introductions.swift` | 離れた Mac の仲介。オファーとデバイスの情報を表す行と、代わりのレコードの公開 |
 | `Pairing/PairByName.swift` | 互いの名前を指定した 2 台の Mac のやり取り（ポート 41830） |
 | `Pairing/ControlIntroductions.swift` | 別の Mac が仲介する場合の、デバイス操作のペアリング |
-| `Control/DeviceControl.swift` | デバイス操作。アプリが保つ接続、ペアリング、CLI と MCP のツールが使うソケット |
+| `Control/DeviceControlHub.swift` | デバイス操作。アプリが保つ接続と、ペアリング |
+| `Control/DeviceControlWire.swift` | CLI と MCP のツールが、アプリに問い合わせるためのソケット |
+| `Control/SharedPairing.swift` | 別の Mac のために作ったペアリング。`roamrun key create` が書き出し、`key import` が読み込む |
 | `Control/DeviceControlKey.swift`、`Control/DeviceControlAllowed.swift` | 保存したペアリングを暗号化するキーチェーンの鍵と、スイッチがオンのデバイスの一覧 |
 | `Control/DeviceMCP.swift` | `roamrun mcp`。デバイス操作を MCP のツールとして提供する |
 | `OTA/OTA.swift`、`OTA/OTAPage.swift`、`OTA/OTAServer.swift` | OTA でのインストール。保存したビルドと署名の確認、インストール用のページと `itms-services` のマニフェスト、`tailscale serve` の後ろで動くローカルのサーバー |
