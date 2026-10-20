@@ -242,13 +242,10 @@ extension DeviceProfile {
 }
 
 extension Array where Element == DeviceProfile {
-    /// Why a (trimmed) name can't be used, or nil. The CLI takes a leading "-" for an option.
+    /// Why a (trimmed) name can't be used, or nil: `Introduction.nameProblem`, or taken.
     func nameProblem(_ name: String, except id: UUID? = nil) -> String? {
-        let n = name.trimmingCharacters(in: .whitespaces)
-        if n.isEmpty { return "Enter a name." }
-        if n.hasPrefix("-") { return "A name can't start with “-” (the CLI would read it as an option)." }
-        if n.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }) { return "A name can't contain control characters." }
-        if isNameTaken(n, except: id) { return "Another device already uses this name — pick a different one." }
+        if let problem = Introduction.nameProblem(name) { return problem }
+        if isNameTaken(name, except: id) { return "Another device already uses this name — pick a different one." }
         return nil
     }
 

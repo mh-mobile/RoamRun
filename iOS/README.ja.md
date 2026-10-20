@@ -114,7 +114,7 @@ iOS 27 の iPhone 15 Pro と、Tailscale 経由でつながる離れた Mac で�
 
 ## 開発者向け
 
-`Sources/Introduction.swift` には、行の形式と、その決まりが入っています。本体の `Sources/RoamRun/Pairing/Introductions.swift` にも、同じものがあります。変えるときは、両方を変えてください。
+行の形式と、その決まりは、`../Sources/RoamRun/Pairing/IntroductionLines.swift` にあります。本体のアプリも、同じファイルをコンパイルします。`project.yml` が、このファイルをアプリに加えます。
 
 `Sources/Session.swift` は、1 回の仲介の状態（段階、コード、終わり方）を持ちます。`Sources/ContentView.swift` は、その状態を画面にします。表示するのは、最初の画面、進行中の 3 つの段階、終わり方です。運ぶ行がある場合は、その行も表示します。離れた Mac なしで画面を見るには、デバッグビルドをシミュレータで次のように起動します。
 
@@ -138,7 +138,7 @@ SIMCTL_CHILD_INTRODUCER_PREVIEW=pairing xcrun simctl launch booted io.github.mh-
 `iOS/` で、次のコマンドを実行します。
 
 ```
-xcrun swiftc -swift-version 6 -parse-as-library -o /tmp/relay-check Sources/StandIn.swift Sources/Introduction.swift Sources/Wire.swift Checks/relay-check.swift && /tmp/relay-check
+xcrun swiftc -swift-version 6 -parse-as-library -o /tmp/relay-check Sources/StandIn.swift ../Sources/RoamRun/Pairing/IntroductionLines.swift Sources/Wire.swift Checks/relay-check.swift && /tmp/relay-check
 ```
 
 アイコンは RoamRun のもので、余白のない全面の絵です。次のコマンドで作ります。

@@ -1,8 +1,10 @@
 import Foundation
 
-// Mirrors Sources/RoamRun/Pairing/Introductions.swift (the line formats, their rules, and what a stand-in
-// announces); should become a shared SwiftPM target later. Keep the rules identical.
-// Only `device(from:)` differs: the saved-device name rules are inlined (no DeviceProfile here).
+// The Introducer app compiles this file too (iOS/project.yml): Foundation only.
+
+/// What one Mac hands another, as a line a person carries, so that a Mac that never shared a
+/// network with a device can be introduced to it. Neither holds a key, and neither says where
+/// anything is to go: the Mac that reads one finds that out from its own Tailscale.
 enum Introduction {
     /// A Mac's offer to pair, as Xcode announces it: what to announce in its place, and the
     /// port it listens on.
@@ -26,6 +28,35 @@ enum Introduction {
 
         static let prefix = "rr-device-v1:"
         static let keys: Set<String> = ["identifier", "authTag", "flags", "ver", "minVer"]
+    }
+
+    /// A device that waits to be picked by a Mac (Apple Vision Pro, with Remote Devices open): what
+    /// it announces. The reverse of an offer: the Mac far from it announces this in the device's place.
+    /// Which device it is isn't in it: that is the device handed over beside it.
+    struct Pairable: Codable, Equatable, Sendable {
+        var v = 1
+        var instance: String
+        var port: UInt16
+        var txt: [String: String]
+
+        static let prefix = "rr-pairable-v1:"
+        static let keys: Set<String> = ["identifier", "authTag", "model", "name", "ver", "minVer"]
+    }
+
+    static func line(_ pairable: Pairable) -> String { Pairable.prefix + packed(pairable) }
+
+    static func pairable(from line: String) -> Result<Pairable, Unreadable> {
+        let line = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        if line.hasPrefix(Device.prefix) { return .failure(.another("a saved device (for `roamrun devices add`)")) }
+        if line.hasPrefix(Offer.prefix) { return .failure(.another("a Mac's offer to pair (for `roamrun pair introduce`)")) }
+        guard line.hasPrefix(Pairable.prefix), let read: Pairable = unpacked(line.dropFirst(Pairable.prefix.count)), read.v == 1 else {
+            return .failure(.notOne)
+        }
+        if let problem = portProblem(read.port) ?? txtProblem(read.txt, keys: Pairable.keys) { return .failure(.refused(problem)) }
+        guard !read.instance.isEmpty, read.instance.utf8.count <= 63, shows(read.instance), !read.instance.contains("="), !read.instance.contains("\\") else {
+            return .failure(.refused("the name it announces under can't be used as it is"))
+        }
+        return .success(read)
     }
 
     static func line(_ offer: Offer) -> String { Offer.prefix + packed(offer) }
@@ -65,7 +96,8 @@ enum Introduction {
         return .success(device)
     }
 
-    /// The saved-device name rules of RoamRun's `[DeviceProfile].nameProblem`, less "already taken".
+    /// Why a saved device's name can't be used, but for being taken: `[DeviceProfile].nameProblem`
+    /// asks that too. The CLI takes a leading "-" for an option.
     static func nameProblem(_ name: String) -> String? {
         let n = name.trimmingCharacters(in: .whitespaces)
         if n.isEmpty { return "Enter a name." }
@@ -148,6 +180,8 @@ extension Introduction {
     /// What a Mac announces while it waits to be paired with.
     static let hostService = "_remotepairing-pairable-host._tcp"
     static let deviceService = "_remotepairing._tcp"
+    /// What a device announces while it waits for a Mac to pick it.
+    static let pairableService = "_remotepairing-manual-pairing._tcp"
 
     /// A stand-in's host name: under `.roamrun.local`, which is how a leftover helper is known for ours.
     static func standInHost(_ identifier: String) -> String {

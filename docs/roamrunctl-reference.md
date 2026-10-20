@@ -434,8 +434,8 @@ creation, and advertisement cleanup; then, for device control, the exchange with
 its offer advertised, the relay, the code shown, and exit 0. Ports 41830 and 53050
 on this Mac must be free.
 
-Related Mac-side implementations include `Introductions.swift`, `PairByName.swift`, and
-`ControlIntroductions.swift` in `Sources/RoamRun/Pairing/`.
+Related Mac-side implementations include `IntroductionLines.swift`, `Introductions.swift`,
+`PairByName.swift`, and `ControlIntroductions.swift` in `Sources/RoamRun/Pairing/`.
 
 ## What has not been tested
 
