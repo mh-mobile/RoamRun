@@ -8507,7 +8507,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ################################################################################
-rustls-webpki 0.103.15 (ISC)
+rustls-webpki 0.103.16 (ISC)
 #-------------------------------------------------------------------------------
 Except as otherwise noted, this project is licensed under the following
 (ISC-style) terms:
