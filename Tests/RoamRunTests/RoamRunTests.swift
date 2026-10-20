@@ -205,10 +205,10 @@ private func entry(pid: Int32, _ status: BridgeStatus) -> StatusFile.Entry {
 
 // MARK: - Device names
 
-private func profile(_ name: String) -> DeviceProfile {
+private func profile(_ name: String, host: String = "", provider: String = "tailscale") -> DeviceProfile {
     DeviceProfile(displayName: name, instanceName: "", serviceType: "_remotepairing._tcp", domain: "local",
-                  remotePairingPort: 49152, bonjourHost: "", txt: [:], providerID: "tailscale",
-                  providerHostName: "", providerIP: "")
+                  remotePairingPort: 49152, bonjourHost: "", txt: [:], providerID: provider,
+                  providerHostName: host, providerIP: "")
 }
 
 @Test func nameClashIgnoresCaseAndSurroundingSpaces() {
@@ -652,6 +652,26 @@ import ServiceManagement
     #expect(CLI.matches(String(a.id.uuidString.prefix(8)), in: [a, b]).map(\.id) == [a.id])
     let named = profile(b.id.uuidString.prefix(8).lowercased())                          // a name wins over an id prefix
     #expect(CLI.matches(String(b.id.uuidString.prefix(8)), in: [b, named]).map(\.id) == [named.id])
+}
+
+@Test func deviceLookupByTailscaleName() {
+    let phone = profile("iPhone", host: "iphone-15-pro"), vision = profile("Apple-Vision-Pro", host: "apple-vision-pro")
+    #expect(CLI.matches("iphone-15-pro", in: [phone, vision]).map(\.id) == [phone.id])
+    #expect(CLI.matches("IPHONE-15-PRO", in: [phone, vision]).map(\.id) == [phone.id])
+    #expect(CLI.matches("iphone-15-pro.tail1234.ts.net", in: [phone, vision]).map(\.id) == [phone.id])
+    #expect(CLI.matches("iphone-15-pro.tail1234.ts.net.", in: [phone, vision]).map(\.id) == [phone.id])
+    #expect(CLI.matches("iPhone", in: [phone, vision]).map(\.id) == [phone.id])
+    // A display name keeps meaning its device over another's Tailscale name.
+    let other = profile("iphone-15-pro", host: "ipad")
+    #expect(CLI.matches("iphone-15-pro", in: [phone, other]).map(\.id) == [other.id])
+    // Two devices under one Tailscale name: both, for find to refuse.
+    let again = profile("iPhone old", host: "iphone-15-pro")
+    #expect(Set(CLI.matches("iphone-15-pro", in: [phone, again]).map(\.id)) == [phone.id, again.id])
+    // A manual device's host is its IP, not a Tailscale name.
+    let manual = profile("Lab", host: "192.168.0.5", provider: "manual")
+    #expect(CLI.matches("192.168.0.5", in: [manual]).isEmpty)
+    // The id prefix still works when no name matches.
+    #expect(CLI.matches(String(phone.id.uuidString.prefix(8)), in: [phone, vision]).map(\.id) == [phone.id])
 }
 
 // MARK: - Output of other tools

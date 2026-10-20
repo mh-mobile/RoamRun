@@ -3041,10 +3041,17 @@ enum CLI {
 
     private static let noDevices = "No devices saved yet — add one in the RoamRun app."
 
-    /// By name (any case), else by an id prefix of 8+ characters (shorter is more likely a typo).
+    /// By name (any case), else by Tailscale name (also as its MagicDNS name), else by an id
+    /// prefix of 8+ characters (shorter is more likely a typo).
     nonisolated static func matches(_ name: String, in profiles: [DeviceProfile]) -> [DeviceProfile] {
         let byName = profiles.filter { $0.displayName.caseInsensitiveCompare(name) == .orderedSame }
-        guard byName.isEmpty, name.count >= 8 else { return byName }
+        if !byName.isEmpty { return byName }
+        let lower = name.lowercased()
+        let host = lower.hasSuffix(".ts.net") || lower.hasSuffix(".ts.net.") ? String(lower.prefix { $0 != "." }) : lower
+        let byHost = profiles.filter {
+            $0.providerID == MeshProvider.tailscale.rawValue && !$0.providerHostName.isEmpty && $0.providerHostName.lowercased() == host
+        }
+        guard byHost.isEmpty, name.count >= 8 else { return byHost }
         return profiles.filter { $0.id.uuidString.lowercased().hasPrefix(name.lowercased()) }
     }
 
@@ -3059,7 +3066,10 @@ enum CLI {
 
     private static func names(_ profiles: [DeviceProfile]) -> String {
         profiles.isEmpty ? noDevices
-            : "Saved: " + profiles.map { commandName($0) }.joined(separator: ", ")
+            : "Saved: " + profiles.map { p in
+                let host = p.providerID == MeshProvider.tailscale.rawValue ? p.providerHostName : ""
+                return commandName(p) + (host.isEmpty || host.caseInsensitiveCompare(p.displayName) == .orderedSame ? "" : " (\(host))")
+            }.joined(separator: ", ")
     }
 
     private static func owner(_ e: StatusFile.Entry) -> String {
