@@ -81,7 +81,12 @@ Apple Vision Pro は、向きが逆です。Vision Pro は、Mac に選ばれる
 | `App/AppCoordinator.swift` | アプリの状態。保存したデバイス、ブリッジの制御、デバイスがあるかどうかの確認、デバイス操作のペアリング、OTA のページ |
 | `App/Views/` | 画面。メインウインドウ、デバイスのページ、Add Device、Settings、メニューバー |
 | `App/LogStore.swift` | アクティビティログ |
-| `CLI/CLI.swift` | `roamrun` コマンド |
+| `CLI/CLI.swift` | `roamrun` コマンド。引数の解釈、使い方の表示、各コマンドへの振り分け、`init` |
+| `CLI/CLI+Pairing.swift` | `pair` と、`devices export` / `add`。Mac どうしのペアリングと仲介 |
+| `CLI/CLI+Status.swift` | `devices`、`status`、`doctor` |
+| `CLI/CLI+Bridge.swift` | `up` と `down`、バックグラウンドで動かすブリッジ |
+| `CLI/CLI+Install.swift` | `install`、`run`、`logs`、`ota` |
+| `CLI/CLI+Control.swift` | デバイス操作のコマンド。`look`、`tap`、`swipe`、`type` / `paste` / `press`、`elements`、`screenshot`、`key` |
 | `CLI/CLIInstaller.swift` | `/usr/local/bin/roamrun` を、アプリのバイナリにリンクする |
 | `CLI/TerminalQR.swift` | ターミナルに表示する QR コード |
 | `Bridge/ProxyBridge.swift` | 1 台のデバイスに対する 1 つのブリッジ。下の各部品を動かす |

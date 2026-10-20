@@ -116,7 +116,12 @@ its own connections to the device.
 | `App/AppCoordinator.swift` | The app's state: saved devices, bridge control, presence checks, device control's pairing, the over-the-air page |
 | `App/Views/` | The windows: main window, device page, Add Device, Settings, menu bar |
 | `App/LogStore.swift` | The activity log |
-| `CLI/CLI.swift` | The `roamrun` command |
+| `CLI/CLI.swift` | The `roamrun` command: its arguments, usage and dispatch, and `init` |
+| `CLI/CLI+Pairing.swift` | `pair`, and `devices export` / `add`: pairing and introducing across Macs |
+| `CLI/CLI+Status.swift` | `devices`, `status` and `doctor` |
+| `CLI/CLI+Bridge.swift` | `up` and `down`, and a bridge run in the background |
+| `CLI/CLI+Install.swift` | `install`, `run`, `logs` and `ota` |
+| `CLI/CLI+Control.swift` | Device control's commands: `look`, `tap`, `swipe`, `type` / `paste` / `press`, `elements`, `screenshot`, `key` |
 | `CLI/CLIInstaller.swift` | Links `/usr/local/bin/roamrun` to the app's binary |
 | `CLI/TerminalQR.swift` | A QR code drawn in the terminal |
 | `Bridge/ProxyBridge.swift` | One bridge for one device: it runs the parts below |
