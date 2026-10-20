@@ -1,6 +1,6 @@
 import Foundation
 
-// Mirrors Sources/RoamRun/Introductions.swift (the line formats, their rules, and what a stand-in
+// Mirrors Sources/RoamRun/Pairing/Introductions.swift (the line formats, their rules, and what a stand-in
 // announces); should become a shared SwiftPM target later. Keep the rules identical.
 // Only `device(from:)` differs: the saved-device name rules are inlined (no DeviceProfile here).
 enum Introduction {

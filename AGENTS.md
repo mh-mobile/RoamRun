@@ -23,7 +23,7 @@ see `skills/roamrun/SKILL.md` — installed with `roamrun init` or
 - `iOS/` is RoamRun Introducer, the app with which a device introduces a far Mac itself. It isn't
   part of `make app`: `cd iOS && xcodegen generate`, then Xcode (set a team). Its engine runs on a
   Mac under a test service type — the command is at the top of `iOS/Checks/relay-check.swift` — and
-  `iOS/Sources/Introduction.swift` mirrors `Sources/RoamRun/Introductions.swift`: change both
+  `iOS/Sources/Introduction.swift` mirrors `Sources/RoamRun/Pairing/Introductions.swift`: change both
   (and the code's short names: `codeURL` on the Mac, `Session.open` in the app).
 - `Rust/roamrunctl/` is `pair introduce` for a machine that has no RoamRun (its own crate and
   `Cargo.lock`; not part of `make app`): `cargo build --locked && cargo test` there, and
