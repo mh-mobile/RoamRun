@@ -118,7 +118,7 @@ extension OTA {
     }
 
     private static func row(_ build: Build, base: String, now: Date, newest: Bool) -> String {
-        var bits = [when(build.added, now: now), size(build.size)]
+        var bits = [when(build.added), size(build.size)]
         // Checked when it was stored, but a profile only lasts a year and these
         // are kept for months: the device would just refuse it with nothing said.
         let expired = (build.expires ?? .distantFuture) < now
@@ -138,7 +138,7 @@ extension OTA {
     }
 
     /// Read faster than a timestamp when you're walking.
-    static func when(_ date: Date, now: Date = .now) -> String {
+    static func when(_ date: Date) -> String {
         let cal = Calendar.current
         let time = date.formatted(date: .omitted, time: .shortened)
         if cal.isDateInToday(date) { return "Today \(time)" }

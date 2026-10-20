@@ -1282,8 +1282,6 @@ final class AppCoordinator: ObservableObject {
 
     // MARK: - Bridging
 
-    func bridge(for profile: DeviceProfile) -> ProxyBridge? { bridges[profile.id] }
-
     func startBridge(_ profile: DeviceProfile) {
         // Screenshot mode's fake devices are for looking at: no real bridge, no saved state.
         guard Snapshot.fakeProfiles == nil, let bridge = bridgeToStart(profile.id) else { return }
@@ -1441,7 +1439,6 @@ final class AppCoordinator: ObservableObject {
 
     func profile(_ id: UUID) -> DeviceProfile? { profiles.first { $0.id == id } }
 
-    func isNameTaken(_ name: String, except id: UUID? = nil) -> Bool { profiles.isNameTaken(name, except: id) }
     func uniqueName(_ base: String) -> String { profiles.uniqueName(base) }
 
     @discardableResult

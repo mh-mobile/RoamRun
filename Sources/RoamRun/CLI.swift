@@ -1279,18 +1279,18 @@ enum CLI {
                 guard name != nil, let p = targets.first, words.count == 3, let point = finite(words.dropFirst()) else {
                     fail("usage: roamrun tap <name> <x> <y> [--look <n>] — pixels of the last `roamrun look`. " + names(profiles))
                 }
-                operate(p, .init(op: "tap", device: p.id, x: point[0], y: point[1], look: lookGiven(parsed)))
+                operate(.init(op: "tap", device: p.id, x: point[0], y: point[1], look: lookGiven(parsed)))
             case "swipe":
                 guard name != nil, let p = targets.first, let numbers = finite(words.dropFirst()), (4...5).contains(numbers.count),
                       let ms = numbers.count == 5 ? Int(exactly: numbers[4].rounded()) : 300 else {
                     fail("usage: roamrun swipe <name> <x1> <y1> <x2> <y2> [milliseconds] [--look <n>] — pixels of the last `roamrun look`. " + names(profiles))
                 }
-                operate(p, .init(op: "swipe", device: p.id, x: numbers[0], y: numbers[1], x2: numbers[2], y2: numbers[3], milliseconds: ms, look: lookGiven(parsed)))
+                operate(.init(op: "swipe", device: p.id, x: numbers[0], y: numbers[1], x2: numbers[2], y2: numbers[3], milliseconds: ms, look: lookGiven(parsed)))
             case "type", "paste", "press":
                 guard name != nil, let p = targets.first, words.count == 2 else {
                     fail("usage: roamrun \(args[0]) <name> \(args[0] == "press" ? "<home|lock|volume-up|volume-down>" : "<text> [--look <n>]"). " + names(profiles))
                 }
-                operate(p, .init(op: args[0], device: p.id, text: words[words.startIndex + 1], look: args[0] == "press" ? nil : lookGiven(parsed)))
+                operate(.init(op: args[0], device: p.id, text: words[words.startIndex + 1], look: args[0] == "press" ? nil : lookGiven(parsed)))
             case "elements":
                 guard name != nil, let p = targets.first else { fail("usage: roamrun elements <name> [limit]. " + names(profiles)) }
                 elements(p, limit: words.count >= 2 ? Int(words[words.startIndex + 1]) : nil)
@@ -2114,7 +2114,7 @@ enum CLI {
     }
 
     /// Something done to the device: silent when it went (but see `typed`), the reason when it didn't.
-    private static func operate(_ profile: DeviceProfile, _ request: DeviceControlWire.Request) -> Never {
+    private static func operate(_ request: DeviceControlWire.Request) -> Never {
         // Held to a look: an app older than this doesn't hold to it, and isn't sent it.
         if request.look != nil, DeviceMCP.older(askApp(.init(op: "rules", device: request.device))) {
             stop("\(request.op) failed: \(DeviceMCP.olderApp)")
