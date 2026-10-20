@@ -13,7 +13,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
-use crate::mcp::{Server, VERSIONS};
+use crate::mcp::{Offered, Server, VERSIONS};
 use crate::tailscale::{self, Whois};
 
 /// A request's head at most, and a message's body.
@@ -473,7 +473,7 @@ pub struct Options {
 struct Shared {
     options: Options,
     /// The devices offered, each with its saved file as it was when this began (see `Server::offering`).
-    offered: Vec<(String, Option<Vec<u8>>)>,
+    offered: Vec<Offered>,
     /// Where a call on each device takes its turn.
     turns: HashMap<String, mpsc::Sender<Call>>,
     /// What was taken back (see `Cancelled`).
@@ -497,7 +497,7 @@ struct Shared {
 /// The devices named, each read as it will be held to: one only offered by a machine that signs isn't used here
 /// yet (whether to believe it is the user's to decide, at a terminal), one that can't be read isn't offered, and
 /// one device isn't offered under two names — it would have two turns and two latest looks.
-fn offerable(devices: &[String]) -> Result<Vec<(String, Option<Vec<u8>>)>, String> {
+fn offerable(devices: &[String]) -> Result<Vec<Offered>, String> {
     let mut at: HashMap<String, &String> = HashMap::new();
     devices.iter().map(|name| {
         let (ip, file) = crate::device::as_saved(name)?;
@@ -554,7 +554,8 @@ pub fn serve(options: Options) -> Result<String, String> {
 
 /// What `serve` does once it listens; `own_ip`, `names`, `own_id`: this machine on the tailnet (its names, a Host
 /// may give); `whois` says who a caller is (a test gives its own).
-fn run(listener: TcpListener, options: Options, offered: Vec<(String, Option<Vec<u8>>)>, own_ip: IpAddr, names: Vec<String>, own_id: String, head_within: Duration, whois: Box<dyn Fn(IpAddr) -> Result<Whois, String> + Send + Sync>, uploads: Option<Arc<Uploads>>) -> Result<String, String> {
+#[allow(clippy::too_many_arguments)]
+fn run(listener: TcpListener, options: Options, offered: Vec<Offered>, own_ip: IpAddr, names: Vec<String>, own_id: String, head_within: Duration, whois: Box<dyn Fn(IpAddr) -> Result<Whois, String> + Send + Sync>, uploads: Option<Arc<Uploads>>) -> Result<String, String> {
     let own = listener.local_addr().map_err(|e| e.to_string())?;
     let hosts = hosts(own.ip(), names, own.port());
     // A turn of its own for each device: a call on one doesn't wait for another's.

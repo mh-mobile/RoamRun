@@ -27,7 +27,8 @@ see `skills/roamrun/SKILL.md` — installed with `roamrun init` or
   Foundation only). The code's short names are written on both sides: `codeURL` on the Mac,
   `Session.open` in the app — change both.
 - `Rust/roamrunctl/` is `pair introduce` for a machine that has no RoamRun (its own crate and
-  `Cargo.lock`; not part of `make app`): `cargo build --locked && cargo test` there, and
+  `Cargo.lock`; not part of `make app`): `cargo build --locked && cargo test` there (CI also runs
+  `cargo clippy --locked --all-targets -- -D warnings`, in both crates), and
   `scripts/local-check.py` for the mechanics on this Mac. Its version is RoamRun's (its `build.rs`
   reads `Info.plist`). `make audit` covers its lock too, and `make licenses` writes its
   `THIRD-PARTY-LICENSES.txt`, which its archives carry: both after changing its `Cargo.lock`.
