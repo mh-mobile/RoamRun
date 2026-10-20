@@ -78,7 +78,8 @@ Apple Vision Pro は、向きが逆です。Vision Pro は、Mac に選ばれる
 | ファイル | 役割 |
 |---|---|
 | `App/RoamRunApp.swift` | エントリーポイント。`roamrun <command>` なら CLI を実行し、それ以外ならアプリを開く |
-| `App/AppCoordinator.swift` | アプリの状態。保存したデバイス、ブリッジの制御、デバイスがあるかどうかの確認、デバイス操作のペアリング、OTA のページ |
+| `App/AppCoordinator.swift` | アプリの状態。保存したデバイス、ブリッジの制御、デバイスがあるかどうかの確認、デバイス操作のペアリング |
+| `App/AppCoordinator+OTA.swift` | OTA のページ。そのサーバーと、`tailscale serve` への登録 |
 | `App/Views/` | 画面。メインウインドウ、デバイスのページ、Add Device、Settings、メニューバー |
 | `App/LogStore.swift` | アクティビティログ |
 | `CLI/CLI.swift` | `roamrun` コマンド |
