@@ -37,11 +37,6 @@ final class InterfaceMonitor: @unchecked Sendable {
         queue.sync { lastKnownIP = Self.currentIPv4(on: fixedInterface ?? Self.lanInterface) ?? "" }
     }
 
-    func stop() {
-        monitor?.cancel()
-        monitor = nil
-    }
-
     private func check() {
         guard let ip = Self.currentIPv4(on: fixedInterface ?? Self.lanInterface) else {
             // Remember the gap so getting the *same* IP back (sleep/wake,

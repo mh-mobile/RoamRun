@@ -33,7 +33,7 @@ public final class ScreenSizes: @unchecked Sendable {
 
 /// The frame without the stream's padding, which is on the right and at the bottom. A frame
 /// that is neither the screen's size nor a little more (either way round) is left alone.
-public func cut(_ image: CGImage, to screen: (width: Int, height: Int)?) -> CGImage {
+func cut(_ image: CGImage, to screen: (width: Int, height: Int)?) -> CGImage {
     guard let screen else { return image }
     for (w, h) in [(screen.width, screen.height), (screen.height, screen.width)]
     where (w...w + 32).contains(image.width) && (h...h + 32).contains(image.height) {
@@ -44,7 +44,6 @@ public func cut(_ image: CGImage, to screen: (width: Int, height: Int)?) -> CGIm
 
 final class Output: @unchecked Sendable {
     var pixels: CVImageBuffer?
-    var data = Data()
 }
 
 /// The NAL units of an Annex-B stream (each after a 00 00 01 start code).
@@ -66,7 +65,7 @@ func nalUnits(_ data: Data) -> [Data] {
 }
 
 /// One HEVC key frame (VPS, SPS, PPS and its slices) decoded to an image.
-public func decodeKeyFrame(_ annexB: Data) throws -> CGImage {
+func decodeKeyFrame(_ annexB: Data) throws -> CGImage {
     var sets: [UInt8: Data] = [:]   // 32 VPS, 33 SPS, 34 PPS
     var slices = Data()
     for unit in nalUnits(annexB) where !unit.isEmpty {

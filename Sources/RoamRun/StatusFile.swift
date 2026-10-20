@@ -30,7 +30,6 @@ enum StatusFile {
         var holdsDevice: Bool { kind != .error && kind != .local }
     }
 
-    static let url = ProfileStore.directory.appendingPathComponent("status.json")
     /// `dir` and `live` are for tests: a scratch folder, and owners that aren't RoamRun.app.
     typealias Liveness = (Entry) -> Bool
 
