@@ -3039,7 +3039,7 @@ enum CLI {
 
     // MARK: - Helpers
 
-    private static let noDevices = "No devices saved yet — add one in the RoamRun app."
+    nonisolated private static let noDevices = "No devices saved yet — add one in the RoamRun app."
 
     /// By name (any case), else by Tailscale name (a MagicDNS name counts as its first label,
     /// on the name typed and on what is saved), else by an id prefix of 8+ characters (shorter
@@ -3058,7 +3058,7 @@ enum CLI {
 
     /// First label of a MagicDNS name (`host.tailnet.ts.net`, trailing dot or not), lowercased.
     /// Any other name is lowercased, with a trailing dot dropped.
-    private static func tailscaleHost(_ name: String) -> String {
+    nonisolated private static func tailscaleHost(_ name: String) -> String {
         var lower = name.lowercased()
         while lower.hasSuffix(".") { lower.removeLast() }
         guard lower.hasSuffix(".ts.net") else { return lower }
