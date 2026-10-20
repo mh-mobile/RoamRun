@@ -131,7 +131,9 @@ its own connections to the device.
 | `Pairing/Introductions.swift` | Introducing a far Mac: the offer and the device as lines, the stand-in |
 | `Pairing/PairByName.swift` | The exchange between two Macs that name each other (port 41830) |
 | `Pairing/ControlIntroductions.swift` | Device control's pairing when another Mac introduces |
-| `Control/DeviceControl.swift` | Device control: the connections the app holds, the pairing, and the socket the CLI and MCP tools ask through |
+| `Control/DeviceControlHub.swift` | Device control: the connections the app holds, and the pairing |
+| `Control/DeviceControlWire.swift` | The socket the CLI and MCP tools ask the app through |
+| `Control/SharedPairing.swift` | A pairing made for another Mac: what `roamrun key create` writes and `key import` takes |
 | `Control/DeviceControlKey.swift`, `Control/DeviceControlAllowed.swift` | The Keychain key that saved pairings are sealed with, and the list of devices switched on |
 | `Control/DeviceMCP.swift` | `roamrun mcp`: device control as MCP tools |
 | `OTA/OTA.swift`, `OTA/OTAPage.swift`, `OTA/OTAServer.swift` | Over-the-air installs: stored builds and signing checks, the install page and its `itms-services` manifest, and the local server behind `tailscale serve` |
