@@ -113,7 +113,8 @@ its own connections to the device.
 | File | Role |
 |---|---|
 | `App/RoamRunApp.swift` | The entry point: `roamrun <command>` runs the CLI, anything else opens the app |
-| `App/AppCoordinator.swift` | The app's state: saved devices, bridge control, presence checks, device control's pairing, the over-the-air page |
+| `App/AppCoordinator.swift` | The app's state: saved devices, bridge control, presence checks, device control's pairing |
+| `App/AppCoordinator+OTA.swift` | The over-the-air page: its server, and its entry in `tailscale serve` |
 | `App/Views/` | The windows: main window, device page, Add Device, Settings, menu bar |
 | `App/LogStore.swift` | The activity log |
 | `CLI/CLI.swift` | The `roamrun` command: its arguments, usage and dispatch, and `init` |
