@@ -152,7 +152,7 @@ Not tried: device control's pairing with a machine running `roamrunctl` as the f
 ## For developers
 
 `Sources/Introduction.swift` holds the formats of the lines and their rules, as
-`Sources/RoamRun/Introductions.swift` does in the main app. Change them in both.
+`Sources/RoamRun/Pairing/Introductions.swift` does in the main app. Change them in both.
 
 `Sources/Session.swift` holds one introduction: its stage, the code, and how it ended.
 `Sources/ContentView.swift` shows it: a first screen, the three steps while it runs, and how it

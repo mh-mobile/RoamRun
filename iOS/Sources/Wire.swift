@@ -2,7 +2,7 @@ import Foundation
 import Network
 
 /// The introducing side of what `roamrun pair xcode --with` and `pair control --with` speak
-/// (Sources/RoamRun/PairByName.swift, `Home`): asks the far Mac for its offer, and later says a
+/// (Sources/RoamRun/Pairing/PairByName.swift, `Home`): asks the far Mac for its offer, and later says a
 /// pairing was tried, or hears what that Mac's app kept. No line is carried by hand.
 // ponytail: @unchecked Sendable because everything runs on the one serial `queue`.
 final class Wire: @unchecked Sendable {
