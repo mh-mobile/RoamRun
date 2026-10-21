@@ -197,7 +197,7 @@ roamrun ota [<name>] <App.ipa> [--replace] # publish a build for a device to ins
 
 `<name>` is the name you gave the device in RoamRun. It is
 case-insensitive and unique; `roamrun devices` lists the names, and the pencil on the device's page
-renames it. The name in the device's Settings app is a separate one. When no saved device has that name, the device's Tailscale name (`iphone-15-pro`, as `roamrunctl` takes it) works too, and so does its id or its first eight or more characters. A device is added in the app, or from the command line with
+renames it. The name in the device's Settings app is a separate one. When no saved device has that name, the device's Tailscale name (`iphone-15-pro`, as `roamrunctl` takes it, not the whole `iphone-15-pro.tail1234.ts.net`) works too, and so does its id or its first eight or more characters. A device is added in the app, or from the command line with
 `roamrun devices add <line>` (a line that another Mac made), `roamrun key import <file>`,
 `roamrun pair xcode --with <Tailscale name>` or `roamrun pair control --with <Tailscale name>`. All four are described
 below.
@@ -328,10 +328,11 @@ The rules:
 
 **For an agent** the same are MCP tools: `claude mcp add roamrun -- roamrun mcp`, or the like for
 another agent. The tools are `devices`, `look`, `tap`, `swipe`, `type`, `paste`, `press` and
-`elements`. They differ from the commands in three ways: `look` returns the picture to the agent,
+`elements`. They differ from the commands in four ways: `device` is the name saved in RoamRun, as
+`devices` lists it, not a Tailscale name or an id; `look` returns the picture to the agent,
 with the look's id, instead of writing a file; `type` takes 500 characters a call; and `tap`,
 `swipe`, `type` and `paste` must give that id (`"look": 12`), as `--look` does. An app older than
-the `roamrun` it is asked from gets none of these four.
+the `roamrun` it is asked from gets none of these four tools.
 
 **What the device does meanwhile.** Each look and each action runs a screen-sharing session on the
 device, which RoamRun keeps for about five seconds after the last one. The device showed it as
