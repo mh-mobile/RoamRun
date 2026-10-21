@@ -106,8 +106,11 @@ private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> { CLI.
     let phone = profile("iPhone", host: "iphone-15-pro"), vision = profile("Apple-Vision-Pro", host: "apple-vision-pro")
     #expect(CLI.matches("iphone-15-pro", in: [phone, vision]).map(\.id) == [phone.id])
     #expect(CLI.matches("IPHONE-15-PRO", in: [phone, vision]).map(\.id) == [phone.id])
-    #expect(CLI.matches("iphone-15-pro.tail1234.ts.net", in: [phone, vision]).map(\.id) == [phone.id])
-    #expect(CLI.matches("iphone-15-pro.tail1234.ts.net.", in: [phone, vision]).map(\.id) == [phone.id])
+    // A whole MagicDNS name names a tailnet, which the saved first label doesn't: no device's, in this
+    // tailnet or another (a device shared in may have the same first label).
+    #expect(CLI.matches("iphone-15-pro.tail1234.ts.net", in: [phone, vision]).isEmpty)
+    #expect(CLI.matches("iphone-15-pro.tail1234.ts.net.", in: [phone, vision]).isEmpty)
+    #expect(CLI.matches("iphone-15-pro.friend.ts.net", in: [phone, vision]).isEmpty)
     #expect(CLI.matches("iPhone", in: [phone, vision]).map(\.id) == [phone.id])
     // Shorter than an id prefix: the Tailscale name is tried before that length guard.
     let other = profile("iphone-15-pro", host: "ipad")
@@ -121,7 +124,7 @@ private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> { CLI.
     #expect(CLI.matches("iphone-15-pro", in: [mixed, vision]).map(\.id) == [mixed.id])
     var fqdn = phone; fqdn.providerHostName = "iPhone-15-Pro.Tail1234.TS.NET."
     #expect(CLI.matches("iphone-15-pro", in: [fqdn, vision]).map(\.id) == [fqdn.id])
-    #expect(CLI.matches("IPHONE-15-PRO.tail1234.ts.net", in: [fqdn]).map(\.id) == [fqdn.id])
+    #expect(CLI.matches("IPHONE-15-PRO.tail1234.ts.net", in: [fqdn]).isEmpty)
     // A dotted name that is not MagicDNS is not the first label.
     #expect(CLI.matches("iphone-15-pro.local", in: [phone, vision]).isEmpty)
     // Two devices under one Tailscale name: both, for find to refuse.
@@ -132,6 +135,10 @@ private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> { CLI.
     #expect(CLI.matches("192.168.0.5", in: [manual]).isEmpty)
     // The id prefix still works when no name matches.
     #expect(CLI.matches(String(phone.id.uuidString.prefix(8)), in: [phone, vision]).map(\.id) == [phone.id])
+    // A trailing dot is part of what was typed: "iPhone." is neither the saved name nor another's Tailscale name.
+    #expect(CLI.matches("iPhone.", in: [profile("iPhone"), profile("Old", host: "iphone")]).isEmpty)
+    // Nothing typed is no device, not one saved without a Tailscale name.
+    #expect(CLI.matches("", in: [profile(""), profile("Vision", host: ""), phone]).isEmpty)
 }
 
 @Test func savedListShowsATailscaleNameOnlyWhenItDiffers() {
@@ -140,6 +147,13 @@ private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> { CLI.
     let blank = profile("Vision", host: "")
     let manual = profile("Lab", host: "192.168.0.5", provider: "manual")
     #expect(CLI.names([phone, same, blank, manual]) == "Saved: iPhone (iphone-15-pro), iPad, Vision, Lab")
+    // As it is typed: a MagicDNS name's first label, in its case; without MagicDNS, a host name quoted for a shell.
+    var fqdn = phone; fqdn.providerHostName = "iPhone-15-Pro.Tail1234.TS.NET."
+    #expect(CLI.names([fqdn]) == "Saved: iPhone (iPhone-15-Pro)")
+    #expect(CLI.names([profile("Work", host: "Mike's iPhone")]) == #"Saved: Work ('Mike'\''s iPhone')"#)
+    // Not shown where it would name another device, or two.
+    #expect(CLI.names([phone, profile("iphone-15-pro", host: "ipad")]) == "Saved: iPhone, iphone-15-pro (ipad)")
+    #expect(CLI.names([phone, profile("Old", host: "iphone-15-pro")]) == "Saved: iPhone, Old")
 }
 
 @Test func aSavedNameHidesAnotherDevicesTailscaleNameOutLoud() {
@@ -160,6 +174,16 @@ private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> { CLI.
             + "iPhone (\(phone.id.uuidString.prefix(8))), 'iPhone old' (\(stale.id.uuidString.prefix(8)))")
     #expect(CLI.ambiguous("iPhone", in: [phone, stale]) == nil)
     #expect(CLI.ambiguous("missing", in: [phone, stale]) == nil)
+    // Two under one saved name (a mended list): renaming is the way out.
+    let twin = profile("iphone")
+    #expect(CLI.ambiguous("IPHONE", in: [phone, twin]) == "more than one device is named “IPHONE” in RoamRun — rename one in the app, or use its id: "
+            + "iPhone (\(phone.id.uuidString.prefix(8))), iphone (\(twin.id.uuidString.prefix(8)))")
+    // Two ids under one prefix: the whole ids, as their first eight characters are the same.
+    var a = profile("A"), b = profile("B")
+    a.id = UUID(uuidString: "0A1B2C3D-0000-4000-8000-000000000001")!
+    b.id = UUID(uuidString: "0A1B2C3D-0000-4000-8000-000000000002")!
+    #expect(CLI.ambiguous("0a1b2c3d", in: [a, b]) == "“0a1b2c3d” begins more than one device's id — give more of it: "
+            + "A (\(a.id.uuidString)), B (\(b.id.uuidString))")
 }
 
 @Test func namingADeviceDoesNotConsultTailscaleNames() {

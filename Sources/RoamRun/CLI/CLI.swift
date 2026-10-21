@@ -652,47 +652,53 @@ enum CLI {
 
     nonisolated static let noDevices = "No devices saved yet — add one in the RoamRun app."
 
-    /// By name (any case), else by Tailscale name (a MagicDNS name counts as its first label,
-    /// on the name typed and on what is saved), else by an id prefix of 8+ characters (shorter
-    /// is more likely a typo).
+    /// By name (any case), else by Tailscale name as saved, else by an id prefix of 8+ characters
+    /// (shorter is more likely a typo). The name is taken as typed: a whole MagicDNS name says a
+    /// tailnet, which the first label saved doesn't, so it is no device's.
     nonisolated static func matches(_ name: String, in profiles: [DeviceProfile]) -> [DeviceProfile] {
+        guard !name.isEmpty else { return [] }
         let byName = profiles.filter { $0.displayName.caseInsensitiveCompare(name) == .orderedSame }
         if !byName.isEmpty { return byName }
-        let host = tailscaleHost(name)
-        let byHost = profiles.filter {
-            $0.providerID == MeshProvider.tailscale.rawValue && !host.isEmpty && tailscaleHost($0.providerHostName) == host
-        }
-        guard byHost.isEmpty, name.count >= 8 else { return byHost }
         let lower = name.lowercased()
+        let byHost = profiles.filter { savedTailscaleName($0) == lower }
+        guard byHost.isEmpty, name.count >= 8 else { return byHost }
         return profiles.filter { $0.id.uuidString.lowercased().hasPrefix(lower) }
     }
 
-    /// First label of a MagicDNS name (`host.tailnet.ts.net`, trailing dot or not), lowercased.
-    /// Any other name is lowercased, with a trailing dot dropped.
-    nonisolated private static func tailscaleHost(_ name: String) -> String {
-        var lower = name.lowercased()
-        while lower.hasSuffix(".") { lower.removeLast() }
-        guard lower.hasSuffix(".ts.net") else { return lower }
-        return String(lower.prefix { $0 != "." })
+    /// The Tailscale name a device was saved with, lowercased; nil for one not on Tailscale.
+    nonisolated private static func savedTailscaleName(_ p: DeviceProfile) -> String? {
+        p.providerID == MeshProvider.tailscale.rawValue && !p.providerHostName.isEmpty ? tailscaleHost(p.providerHostName).lowercased() : nil
+    }
+
+    /// A saved Tailscale name as it is typed: a MagicDNS name's first label (`host.tailnet.ts.net`,
+    /// trailing dot or not), any other with a trailing dot dropped.
+    nonisolated private static func tailscaleHost(_ saved: String) -> String {
+        var name = saved
+        while name.hasSuffix(".") { name.removeLast() }
+        guard name.lowercased().hasSuffix(".ts.net") else { return name }
+        return String(name.prefix { $0 != "." })
     }
 
     /// Why `name` matches more than one saved device. `find` refuses with this; nil for one or none.
     nonisolated static func ambiguous(_ name: String, in profiles: [DeviceProfile]) -> String? {
         let found = matches(name, in: profiles)
         guard found.count > 1 else { return nil }
-        return "“\(name)” matches more than one device — use the name it has in RoamRun, or its id: "
-            + found.map { "\(commandName($0)) (\($0.id.uuidString.prefix(8)))" }.joined(separator: ", ")
+        func listed(_ id: (DeviceProfile) -> String) -> String { found.map { "\(commandName($0)) (\(id($0)))" }.joined(separator: ", ") }
+        if found[0].displayName.caseInsensitiveCompare(name) == .orderedSame {
+            return "more than one device is named “\(name)” in RoamRun — rename one in the app, or use its id: " + listed { String($0.id.uuidString.prefix(8)) }
+        }
+        if savedTailscaleName(found[0]) == name.lowercased() {
+            return "“\(name)” matches more than one device — use the name it has in RoamRun, or its id: " + listed { String($0.id.uuidString.prefix(8)) }
+        }
+        // Their first eight characters are the same: the whole ids.
+        return "“\(name)” begins more than one device's id — give more of it: " + listed(\.id.uuidString)
     }
 
     /// Said when the name saved in RoamRun hides a different device's Tailscale name. Nil otherwise.
     nonisolated static func shadowNote(_ name: String, in profiles: [DeviceProfile]) -> String? {
         let byName = profiles.filter { $0.displayName.caseInsensitiveCompare(name) == .orderedSame }
         guard byName.count == 1, let used = byName.first else { return nil }
-        let host = tailscaleHost(name)
-        let hidden = profiles.filter {
-            $0.id != used.id && $0.providerID == MeshProvider.tailscale.rawValue
-                && !host.isEmpty && tailscaleHost($0.providerHostName) == host
-        }
+        let hidden = profiles.filter { $0.id != used.id && savedTailscaleName($0) == name.lowercased() }
         guard !hidden.isEmpty else { return nil }
         let who = hidden.map { commandName($0) }.joined(separator: ", ")
         return "roamrun: using \(commandName(used)), its name in RoamRun; \(who) \(hidden.count == 1 ? "has" : "have") that Tailscale name"
@@ -704,11 +710,14 @@ enum CLI {
         return matches(name, in: profiles).first
     }
 
+    /// Each saved name, with the Tailscale name that names the same device alone where that differs.
     nonisolated static func names(_ profiles: [DeviceProfile]) -> String {
         profiles.isEmpty ? noDevices
             : "Saved: " + profiles.map { p in
-                let host = p.providerID == MeshProvider.tailscale.rawValue ? p.providerHostName : ""
-                return commandName(p) + (host.isEmpty || host.caseInsensitiveCompare(p.displayName) == .orderedSame ? "" : " (\(host))")
+                let host = savedTailscaleName(p) == nil ? "" : tailscaleHost(p.providerHostName)
+                let shown = !host.isEmpty && host.caseInsensitiveCompare(p.displayName) != .orderedSame
+                    && matches(host, in: profiles).map(\.id) == [p.id]
+                return commandName(p) + (shown ? " (\(shellName(host)))" : "")
             }.joined(separator: ", ")
     }
 
