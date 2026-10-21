@@ -84,16 +84,19 @@ pub fn upright(way: u8, sideways: bool, (x, y): (f64, f64)) -> Option<(f64, f64)
     }
 }
 
+/// A device offered over HTTP by its name, with its saved file as it was then (see `device::mark`).
+pub type Offered = (String, Option<Vec<u8>>);
+
 #[derive(Default)]
 pub struct Server {
     /// Each with its saved file as it was when it was opened: a name saved anew since isn't this device.
-    open: HashMap<String, (Device, Option<Vec<u8>>)>,
+    open: HashMap<String, crate::device::Held>,
     shown: HashMap<String, Shown>,
     acted: HashMap<String, Instant>,
     /// Over HTTP (`mcp --http`): the devices named there, each with its saved file as it was then (see
     /// `device::mark`) — the only ones listed and used, and only while that file is as it was; and no
     /// install from a path, which would name a file on this machine for whoever calls.
-    offered: Option<Vec<(String, Option<Vec<u8>>)>>,
+    offered: Option<Vec<Offered>>,
     /// Over HTTP with `--allow-install`: what is installed from, by its id.
     uploads: Option<Arc<Uploads>>,
     installs: HashMap<String, Install>,
@@ -193,7 +196,7 @@ fn is_call(line: &str) -> bool {
 impl Server {
     /// For `mcp --http`: these devices only, each while it is saved as `device::mark` gave it then, and installs
     /// only from `uploads` (`--allow-install`).
-    pub fn offering(offered: Vec<(String, Option<Vec<u8>>)>, uploads: Option<Arc<Uploads>>) -> Server {
+    pub fn offering(offered: Vec<Offered>, uploads: Option<Arc<Uploads>>) -> Server {
         Server { offered: Some(offered), uploads, ..Server::default() }
     }
 
