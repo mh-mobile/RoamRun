@@ -16,7 +16,11 @@ final class LogStore: ObservableObject {
         Self.logger.log("\(message, privacy: .private)")
         let stamp = Date.now.formatted(date: .omitted, time: .standard)
         lines.append((device, "\(stamp)  \(message)"))
-        if let device { appended[device, default: 0] += 1 }
-        if lines.count > limit { lines.removeFirst(lines.count - limit) }
+        if let device {
+            appended[device, default: 0] += 1
+        }
+        if lines.count > limit {
+            lines.removeFirst(lines.count - limit)
+        }
     }
 }

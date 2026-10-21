@@ -11,7 +11,11 @@ enum LocalNetwork {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var lastDenial: Date?
 
-    static var denied: Bool { isDenied(last: lock.withLock { lastDenial }, now: .now) }
+    static var denied: Bool {
+        isDenied(last: lock.withLock {
+            lastDenial
+        }, now: .now)
+    }
 
     /// The bridge's own detail, for callers that show the advice separately.
     static func withoutAdvice(_ detail: String) -> String {
@@ -20,7 +24,9 @@ enum LocalNetwork {
 
     static func note(_ path: NWPath?) {
         guard let path, path.status == .unsatisfied, path.unsatisfiedReason == .localNetworkDenied else { return }
-        lock.withLock { lastDenial = .now }
+        lock.withLock {
+            lastDenial = .now
+        }
     }
 
     /// Ages out instead of being cleared: once access is allowed again no probe
@@ -43,12 +49,16 @@ enum ReachabilityProbe {
             conn.stateUpdateHandler = { state in
                 switch state {
                 case .ready:
-                    box.done { conn.stateUpdateHandler = nil; conn.cancel(); cont.resume(returning: true) }
+                    box.done {
+                        conn.stateUpdateHandler = nil; conn.cancel(); cont.resume(returning: true)
+                    }
                 // Refused: no need to sit out the timeout. Other .waiting (the path still
                 // settling after wake or a network switch) may still turn .ready.
                 case .failed, .cancelled, .waiting(.posix(.ECONNREFUSED)):
                     LocalNetwork.note(conn.currentPath)
-                    box.done { conn.stateUpdateHandler = nil; conn.cancel(); cont.resume(returning: false) }
+                    box.done {
+                        conn.stateUpdateHandler = nil; conn.cancel(); cont.resume(returning: false)
+                    }
                 case .waiting:
                     LocalNetwork.note(conn.currentPath)
                 default:
@@ -57,7 +67,9 @@ enum ReachabilityProbe {
             }
             conn.start(queue: .global(qos: .utility))
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-                box.done { conn.stateUpdateHandler = nil; conn.cancel(); cont.resume(returning: false) }
+                box.done {
+                    conn.stateUpdateHandler = nil; conn.cancel(); cont.resume(returning: false)
+                }
             }
         }
     }
@@ -82,13 +94,19 @@ extension ReachabilityProbe {
         let conn = NWConnection(to: endpoint, using: .tcp)
         return await withCheckedContinuation { cont in
             let box = ProbeBox()
-            let finish: @Sendable (Bool) -> Void = { ok in box.done { conn.stateUpdateHandler = nil; conn.cancel(); cont.resume(returning: ok) } }
+            let finish: @Sendable (Bool) -> Void = { ok in
+                box.done {
+                    conn.stateUpdateHandler = nil; conn.cancel(); cont.resume(returning: ok)
+                }
+            }
             conn.stateUpdateHandler = { state in
                 switch state {
                 case .ready:
                     conn.send(content: payload, completion: .contentProcessed { _ in })
                     conn.receive(minimumIncompleteLength: 9, maximumLength: 64) { data, _, _, _ in
-                        finish(data.map { $0.starts(with: Data("RPPairing".utf8)) } ?? false)
+                        finish(data.map {
+                            $0.starts(with: Data("RPPairing".utf8))
+                        } ?? false)
                     }
                 // As in checkTCP: other .waiting (a path settling after wake) may still turn .ready.
                 case .failed, .cancelled, .waiting(.posix(.ECONNREFUSED)):
@@ -99,7 +117,9 @@ extension ReachabilityProbe {
                 }
             }
             conn.start(queue: .global(qos: .utility))
-            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { finish(false) }
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                finish(false)
+            }
         }
     }
 }
@@ -114,15 +134,17 @@ private final class ProbeBox: @unchecked Sendable {
             fired = true
             return true
         }
-        if first { body() }
+        if first {
+            body()
+        }
     }
 }
 
 extension ReachabilityProbe {
     enum PortScan: Equatable {
         case found(UInt16)
-        case notFound   // every port checked
-        case timedOut   // gave up before the end; the port may be further on
+        case notFound // every port checked
+        case timedOut // gave up before the end; the port may be further on
     }
 
     /// The device's RemotePairing port, which can change when it restarts: the
@@ -131,26 +153,39 @@ extension ReachabilityProbe {
     /// Every probe gets only the time left: a host that drops probes would
     /// otherwise cost 1.2 s per batch, ~80 s in all, plus 4 s per silent port.
     /// `from` is for tests: 49152… is also the Mac's ephemeral range, where their servers listen.
-    static func findRemotePairingPort(host: String, from first: UInt16 = 49152, limit: Duration = .seconds(30)) async -> PortScan {
+    static func findRemotePairingPort(host: String, from first: UInt16 = 49152,
+                                      limit: Duration = .seconds(30)) async -> PortScan
+    {
         let clock = ContinuousClock()
         let deadline = clock.now + limit
-        func left() -> TimeInterval { (deadline - clock.now) / .seconds(1) }
+        func left() -> TimeInterval {
+            (deadline - clock.now) / .seconds(1)
+        }
         var next = Int(first)
         while next <= 65535 {
             guard left() > 0, !Task.isCancelled else { return .timedOut }
-            let batch = UInt16(next)...UInt16(min(next + 255, 65535))
+            let batch = UInt16(next) ... UInt16(min(next + 255, 65535))
             let timeout = min(1.2, left())
             let open = await withTaskGroup(of: UInt16?.self) { group in
                 for port in batch {
-                    group.addTask { await ReachabilityProbe.checkTCP(host: host, port: port, timeout: timeout) ? port : nil }
+                    group
+                        .addTask {
+                            await ReachabilityProbe.checkTCP(host: host, port: port, timeout: timeout) ? port : nil
+                        }
                 }
                 var hits: [UInt16] = []
-                for await r in group { if let r { hits.append(r) } }
+                for await r in group {
+                    if let r {
+                        hits.append(r)
+                    }
+                }
                 return hits.sorted()
             }
             for port in open {
                 guard left() > 0, !Task.isCancelled else { return .timedOut }
-                if await speaksRemotePairing(host: host, port: port, timeout: min(4, left())) { return .found(port) }
+                if await speaksRemotePairing(host: host, port: port, timeout: min(4, left())) {
+                    return .found(port)
+                }
             }
             next += 256
         }

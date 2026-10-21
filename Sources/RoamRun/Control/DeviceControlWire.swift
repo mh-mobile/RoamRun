@@ -57,7 +57,9 @@ enum DeviceControlWire {
         var state: String?
         var code: String?
         var reason: String?
-        static func failure(_ why: String) -> Response { Response(ok: false, error: why) }
+        static func failure(_ why: String) -> Response {
+            Response(ok: false, error: why)
+        }
     }
 
     enum WireError: Error, CustomStringConvertible {
@@ -78,7 +80,8 @@ enum DeviceControlWire {
     /// or a link's, while the one it was is held open.
     static func names(_ path: String, theFileOf fd: Int32) -> Bool {
         var held = stat(), named = stat()
-        return fstat(fd, &held) == 0 && lstat(path, &named) == 0 && held.st_dev == named.st_dev && held.st_ino == named.st_ino
+        return fstat(fd, &held) == 0 && lstat(path, &named) == 0 && held.st_dev == named.st_dev && held.st_ino == named
+            .st_ino
     }
 
     /// The longest a line may be: a long paste, or many elements.
@@ -86,7 +89,9 @@ enum DeviceControlWire {
     /// What is said after a text was typed that a keyboard other than an English one takes otherwise:
     /// it was warned of before, and typed all the same — said here, where it is read.
     static func typed(_ text: String) -> String? {
-        guard text.contains(where: { $0 == " " || $0 == "\n" }) else { return nil }
+        guard text.contains(where: {
+            $0 == " " || $0 == "\n"
+        }) else { return nil }
         return "typed. If the device's keyboard wasn't an English one, its spaces and Returns converted or confirmed instead of being typed, and under an English one auto-correction may have changed a word it didn't know: look, and if the text isn't what you sent, clear it and use paste."
     }
 
@@ -114,8 +119,15 @@ enum DeviceControlWire {
 
     /// In a folder of its own that only this user can enter: what keeps others out, whatever
     /// mode the socket itself is made with.
-    static func socketFolder(in directory: URL) -> URL { directory.appendingPathComponent("control", isDirectory: true) }
-    static func socketPath(in directory: URL) -> String { socketFolder(in: directory).appendingPathComponent("sock").path }
+    static func socketFolder(in directory: URL) -> URL {
+        directory.appendingPathComponent("control", isDirectory: true)
+    }
+
+    static func socketPath(in directory: URL) -> String {
+        socketFolder(in: directory)
+            .appendingPathComponent("sock")
+            .path
+    }
 
     /// The pairing of our own with a device, where there is one: what makes it controllable.
     static func pairingFile(udid: String, in directory: URL) -> URL {
@@ -131,7 +143,9 @@ enum DeviceControlWire {
     /// A sealed pairing as it is on disk — read as the small file of its own it is: not through
     /// a link, not from a pipe or a device (reading those would wait), and no more than a
     /// pairing can be. nil for anything else: it is read while the hub's lock is held.
-    static func sealedBytes(_ file: URL) -> Data? { sealedRead(file).bytes }
+    static func sealedBytes(_ file: URL) -> Data? {
+        sealedRead(file).bytes
+    }
 
     /// The same, saying whether it is known what is there. Not known (it couldn't be opened or
     /// read for a reason of the moment — too many files open, an interrupt): not the same as
@@ -144,7 +158,9 @@ enum DeviceControlWire {
         guard fstat(fd, &s) == 0 else { return (nil, false) }
         guard s.st_mode & S_IFMT == S_IFREG, s.st_size < 1 << 20 else { return (nil, true) }
         var data = Data(count: Int(s.st_size))
-        let got = data.withUnsafeMutableBytes { pread(fd, $0.baseAddress, $0.count, 0) }
+        let got = data.withUnsafeMutableBytes {
+            pread(fd, $0.baseAddress, $0.count, 0)
+        }
         return got == data.count ? (data, true) : (nil, false)
     }
 
@@ -156,12 +172,19 @@ enum DeviceControlWire {
         hash.update(data: Data(udid.lowercased().utf8))
         hash.update(data: Data([0]))
         hash.update(data: sealed)
-        return hash.finalize().map { String(format: "%02x", $0) }.joined()
+        return hash.finalize()
+            .map {
+                String(format: "%02x", $0)
+            }
+            .joined()
     }
 
     /// What a UDID is made of. It names a file here and is handed to Xcode's tools.
     static func plausible(udid: String) -> Bool {
-        !udid.isEmpty && udid.utf8.count <= 64 && udid.unicodeScalars.allSatisfy { $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "-") }
+        !udid.isEmpty && udid.utf8.count <= 64 && udid.unicodeScalars
+            .allSatisfy {
+                $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "-")
+            }
     }
 
     private static func address(_ path: String) -> sockaddr_un? {
@@ -170,14 +193,18 @@ enum DeviceControlWire {
         let bytes = Array(path.utf8)
         // The kernel's limit; a path that doesn't fit can't be bound or reached.
         guard bytes.count < MemoryLayout.size(ofValue: address.sun_path) else { return nil }
-        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: bytes) }
+        withUnsafeMutableBytes(of: &address.sun_path) {
+            $0.copyBytes(from: bytes)
+        }
         return address
     }
 
     private static func withAddress<R>(_ path: String, _ body: (UnsafePointer<sockaddr>, socklen_t) -> R) -> R? {
         guard var address = address(path) else { return nil }
         return withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { body($0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                body($0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
         }
     }
 
@@ -189,7 +216,9 @@ enum DeviceControlWire {
             let n = read(fd, &buffer, buffer.count)
             guard n > 0 else { break }
             data.append(buffer, count: n)
-            if buffer[..<n].contains(0x0A) { break }
+            if buffer[..<n].contains(0x0A) {
+                break
+            }
         }
         return data
     }
@@ -219,26 +248,52 @@ enum DeviceControlWire {
         private var given = false
 
         /// For the next request.
-        func again() { lock.withLock { given = false } }
-        func giveUp() { lock.withLock { given = true; if fd >= 0 { shutdown(fd, SHUT_RDWR) } } }
-        fileprivate func began(_ fd: Int32) -> Bool { lock.withLock { self.fd = fd; return !given } }
-        fileprivate func ended() { lock.withLock { fd = -1 } }
+        func again() {
+            lock.withLock {
+                given = false
+            }
+        }
+
+        func giveUp() {
+            lock.withLock {
+                given = true; if fd >= 0 {
+                    shutdown(fd, SHUT_RDWR)
+                }
+            }
+        }
+
+        fileprivate func began(_ fd: Int32) -> Bool {
+            lock.withLock {
+                self.fd = fd; return !given
+            }
+        }
+
+        fileprivate func ended() {
+            lock.withLock {
+                fd = -1
+            }
+        }
     }
 
-    static func ask(_ request: Request, in directory: URL, asking: Asking? = nil, wait: TimeInterval = answerWait) throws -> Response {
+    static func ask(_ request: Request, in directory: URL, asking: Asking? = nil,
+                    wait: TimeInterval = answerWait) throws -> Response
+    {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw WireError.message("no socket") }
         defer { close(fd) }
         noSIGPIPE(fd)
         readWait(fd, wait)
-        guard withAddress(socketPath(in: directory), { connect(fd, $0, $1) }) == 0 else {
+        guard withAddress(socketPath(in: directory), {
+            connect(fd, $0, $1)
+        }) == 0 else {
             // Not there or nobody listening: no app. Refused by the system: a sandbox around this process.
             let why = errno
             throw why == EPERM || why == EACCES ? WireError.keptOut(String(cString: strerror(why))) : WireError.noApp
         }
-        defer { asking?.ended() }   // before the close above: a number given up later isn't this one's
+        defer { asking?.ended() } // before the close above: a number given up later isn't this one's
         guard asking?.began(fd) ?? true else { throw WireError.message("taken back") }
-        guard writeLine(request, to: fd) else { throw WireError.message("couldn't send the request (a number that isn't one?)") }
+        guard writeLine(request, to: fd)
+        else { throw WireError.message("couldn't send the request (a number that isn't one?)") }
         let line = readLine(fd)
         guard let response = try? JSONDecoder().decode(Response.self, from: line) else {
             throw WireError.message(line.isEmpty ? "the app didn't answer" : "the app's answer couldn't be read")
@@ -259,19 +314,28 @@ enum DeviceControlWire {
 
         /// For a handler that doesn't mind whether its asker is still there.
         convenience init?(directory: URL, handler: @escaping @Sendable (Request) -> Response) {
-            self.init(directory: directory, answering: { request, _ in handler(request) })
+            self.init(directory: directory, answering: { request, _ in
+                handler(request)
+            })
         }
 
         /// `answering` is given, with the request, a way to ask whether whoever sent it is
         /// still waiting: one that waited its turn behind another isn't begun for nobody.
-        init?(directory: URL, answering handler: @escaping @Sendable (Request, _ wanted: @escaping @Sendable () -> Bool) -> Response) {
+        init?(
+            directory: URL,
+            answering handler: @escaping @Sendable (Request, _ wanted: @escaping @Sendable () -> Bool) -> Response
+        ) {
             let path = DeviceControlWire.socketPath(in: directory)
             let fd = socket(AF_UNIX, SOCK_STREAM, 0)
             guard fd >= 0 else { return nil }
             // Not umask around bind(): that is the whole process's, and another thread's file
             // made meanwhile would get it too.
             let folder = DeviceControlWire.socketFolder(in: directory)
-            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            try? FileManager.default.createDirectory(
+                at: folder,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
             guard chmod(folder.path, 0o700) == 0 else { close(fd); return nil }
             // One at a time, by a lock the system lets go of when its holder ends: a copy started
             // beside the app doesn't take its socket, and one that is ending removes its own —
@@ -279,16 +343,25 @@ enum DeviceControlWire {
             // removed the socket its successor had made meanwhile.
             let held = open(folder.appendingPathComponent("listener.lock").path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
             guard held >= 0, flock(held, LOCK_EX | LOCK_NB) == 0 else {
-                if held >= 0 { close(held) }
+                if held >= 0 {
+                    close(held)
+                }
                 close(fd)
                 return nil
             }
-            unlink(path)   // a run's that ended without removing it
+            unlink(path) // a run's that ended without removing it
             // Looks a CLI was to move to their place and didn't (it was interrupted): screens aren't left lying.
-            for left in (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
-            where left.lastPathComponent.hasPrefix("look-") { try? FileManager.default.removeItem(at: left) }
+            for left in (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ??
+                []
+                where left.lastPathComponent.hasPrefix("look-")
+            {
+                try? FileManager.default.removeItem(at: left)
+            }
             DeviceControlWire.noSIGPIPE(fd)
-            guard DeviceControlWire.withAddress(path, { bind(fd, $0, $1) }) == 0, listen(fd, 64) == 0 else { close(fd); close(held); return nil }
+            guard DeviceControlWire.withAddress(path, {
+                      bind(fd, $0, $1)
+                  }) == 0,
+                  listen(fd, 64) == 0 else { close(fd); close(held); return nil }
             chmod(path, 0o600)
             self.fd = fd
             self.path = path
@@ -298,7 +371,11 @@ enum DeviceControlWire {
                     let client = accept(fd, nil, nil)
                     guard client >= 0 else {
                         // stop() closed it; anything else (a client that gave up) is one accept lost.
-                        if self?.stopped.withLock({ self?.isStopped }) ?? true { return }
+                        if self?.stopped.withLock({
+                            self?.isStopped
+                        }) ?? true {
+                            return
+                        }
                         usleep(50_000)
                         continue
                     }
@@ -306,7 +383,7 @@ enum DeviceControlWire {
                         defer { close(client) }
                         DeviceControlWire.readWait(client, DeviceControlWire.requestWait)
                         let line = DeviceControlWire.readLine(client)
-                        guard !line.isEmpty else { return }   // said nothing: nobody to answer
+                        guard !line.isEmpty else { return } // said nothing: nobody to answer
                         let request = try? JSONDecoder().decode(Request.self, from: line)
                         // Gone: the other end closed (it says nothing more once it has asked, so
                         // nothing to read and not "nothing yet" is its leaving).
@@ -314,7 +391,12 @@ enum DeviceControlWire {
                             var byte: UInt8 = 0
                             return recv(client, &byte, 1, MSG_PEEK | MSG_DONTWAIT) != 0
                         }
-                        DeviceControlWire.writeLine(request.map { handler($0, wanted) } ?? .failure("unreadable request"), to: client)
+                        DeviceControlWire.writeLine(
+                            request.map {
+                                handler($0, wanted)
+                            } ?? .failure("unreadable request"),
+                            to: client
+                        )
                     }
                 }
             }
@@ -322,10 +404,12 @@ enum DeviceControlWire {
 
         func stop() {
             // Once: asked again, the name may be a successor's by then.
-            guard stopped.withLock({ () -> Bool in defer { isStopped = true }; return !isStopped }) else { return }
+            guard stopped.withLock({ () -> Bool in
+                defer { isStopped = true }; return !isStopped
+            }) else { return }
             unlink(path)
             close(fd)
-            close(held)   // last: until here nobody else makes the socket
+            close(held) // last: until here nobody else makes the socket
         }
     }
 }

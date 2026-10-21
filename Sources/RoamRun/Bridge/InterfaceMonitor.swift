@@ -28,13 +28,17 @@ final class InterfaceMonitor: @unchecked Sendable {
             self?.check()
         }
         monitor.start(queue: queue)
-        queue.async { self.check() }
+        queue.async {
+            self.check()
+        }
     }
 
     /// The chosen interface changed: take its current address as known, without
     /// reporting a change (the caller restarts the bridges once).
     func resync() {
-        queue.sync { lastKnownIP = Self.currentIPv4(on: fixedInterface ?? Self.lanInterface) ?? "" }
+        queue.sync {
+            lastKnownIP = Self.currentIPv4(on: fixedInterface ?? Self.lanInterface) ?? ""
+        }
     }
 
     private func check() {
@@ -42,19 +46,25 @@ final class InterfaceMonitor: @unchecked Sendable {
             // Remember the gap so getting the *same* IP back (sleep/wake,
             // Wi-Fi rejoin) still counts as a change — listeners bound to
             // the vanished address don't come back on their own.
-            if let old = lastKnownIP, !old.isEmpty { onLost?() }
-            lastKnownIP = ""   // also when there was never an IP, so its arrival counts
+            if let old = lastKnownIP, !old.isEmpty {
+                onLost?()
+            }
+            lastKnownIP = "" // also when there was never an IP, so its arrival counts
             return
         }
         if ip != lastKnownIP {
             let old = lastKnownIP
             lastKnownIP = ip
-            if old != nil { onChange?(ip) }
+            if old != nil {
+                onChange?(ip)
+            }
         }
     }
 
     /// The app's defaults; the CLI reads the app's domain by suite name.
-    static var settings: UserDefaults? { AppID.settings }
+    static var settings: UserDefaults? {
+        AppID.settings
+    }
 
     /// The LAN interface Xcode's Bonjour sees and the relays listen on: the one
     /// chosen in Settings; else en0 whenever it has an address (every setup so far);
@@ -64,12 +74,24 @@ final class InterfaceMonitor: @unchecked Sendable {
     }
 
     nonisolated static func pickLAN(chosen: String?, available: Set<String>) -> String {
-        if let chosen, !chosen.isEmpty { return chosen }
-        if available.contains("en0") { return "en0" }
-        return available.filter { $0.hasPrefix("en") }.sorted { $0.localizedStandardCompare($1) == .orderedAscending }.first ?? "en0"
+        if let chosen, !chosen.isEmpty {
+            return chosen
+        }
+        if available.contains("en0") {
+            return "en0"
+        }
+        return available.filter {
+            $0.hasPrefix("en")
+        }
+        .sorted {
+            $0.localizedStandardCompare($1) == .orderedAscending
+        }
+        .first ?? "en0"
     }
 
-    static func currentIPv4(on interfaceName: String = lanInterface) -> String? { ipv4Addresses()[interfaceName] }
+    static func currentIPv4(on interfaceName: String = lanInterface) -> String? {
+        ipv4Addresses()[interfaceName]
+    }
 
     /// The netmask that goes with `ip` on the interface that has it ("255.255.255.0").
     static func netmask(of ip: String) -> String? {
@@ -79,10 +101,22 @@ final class InterfaceMonitor: @unchecked Sendable {
         func text(_ sa: UnsafeMutablePointer<sockaddr>) -> String {
             var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             // A netmask's sa_len can be shorter than a sockaddr_in: give the family's size.
-            getnameinfo(sa, socklen_t(MemoryLayout<sockaddr_in>.size), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
-            return host.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
+            getnameinfo(
+                sa,
+                socklen_t(MemoryLayout<sockaddr_in>.size),
+                &host,
+                socklen_t(host.count),
+                nil,
+                0,
+                NI_NUMERICHOST
+            )
+            return host.withUnsafeBufferPointer {
+                String(cString: $0.baseAddress!)
+            }
         }
-        for ptr in sequence(first: first, next: { $0.pointee.ifa_next }) {
+        for ptr in sequence(first: first, next: {
+            $0.pointee.ifa_next
+        }) {
             guard let sa = ptr.pointee.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET), text(sa) == ip,
                   let mask = ptr.pointee.ifa_netmask else { continue }
             mask.pointee.sa_family = UInt8(AF_INET)
@@ -97,13 +131,19 @@ final class InterfaceMonitor: @unchecked Sendable {
         guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return [:] }
         defer { freeifaddrs(ifaddr) }
         var result: [String: String] = [:]
-        for ptr in sequence(first: first, next: { $0.pointee.ifa_next }) {
+        for ptr in sequence(first: first, next: {
+            $0.pointee.ifa_next
+        }) {
             let addr = ptr.pointee
             guard let sa = addr.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET) else { continue }
             var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             getnameinfo(sa, socklen_t(sa.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
-            let ip = host.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
-            if !ip.hasPrefix("127.") { result[String(cString: addr.ifa_name)] = ip }
+            let ip = host.withUnsafeBufferPointer {
+                String(cString: $0.baseAddress!)
+            }
+            if !ip.hasPrefix("127.") {
+                result[String(cString: addr.ifa_name)] = ip
+            }
         }
         return result
     }

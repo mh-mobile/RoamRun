@@ -15,7 +15,9 @@ private final class IdleTimer: @unchecked Sendable {
     }
 
     func arm(_ seconds: TimeInterval) {
-        let work = DispatchWorkItem { [fire] in fire() }
+        let work = DispatchWorkItem { [fire] in
+            fire()
+        }
         lock.withLock {
             pending?.cancel()
             pending = work
@@ -24,7 +26,11 @@ private final class IdleTimer: @unchecked Sendable {
     }
 
     /// A finished connection's timer would otherwise sit there for the idle limit.
-    func cancel() { lock.withLock { pending?.cancel(); pending = nil } }
+    func cancel() {
+        lock.withLock {
+            pending?.cancel(); pending = nil
+        }
+    }
 }
 
 /// Serves the OTA page, the manifests and the .ipa files on loopback, for
@@ -37,35 +43,58 @@ final class OTAServer: @unchecked Sendable {
     private let lock = NSLock()
     private var live: [ObjectIdentifier: NWConnection] = [:]
 
-    private func closed(_ conn: NWConnection) { lock.withLock { live[ObjectIdentifier(conn)] = nil } }
+    private func closed(_ conn: NWConnection) {
+        lock.withLock {
+            live[ObjectIdentifier(conn)] = nil
+        }
+    }
+
     private let queue = DispatchQueue(label: "roamrun.ota")
     private var _listener: NWListener?
     private var listener: NWListener? {
-        get { lock.withLock { _listener } }
-        set { lock.withLock { _listener = newValue } }
+        get { lock.withLock {
+            _listener
+        } }
+        set { lock.withLock {
+            _listener = newValue
+        } }
     }
+
     /// The tailnet port `tailscale serve` publishes us on. Kept only so the
     /// coordinator can tell whether a running server is on the port configured
     /// now; URLs come from each request's Host header, which carries the port.
     let tailnetPort: Int
     private var _port: UInt16 = 0
     private(set) var port: UInt16 {
-        get { lock.withLock { _port } }
-        set { lock.withLock { _port = newValue } }
+        get { lock.withLock {
+            _port
+        } }
+        set { lock.withLock {
+            _port = newValue
+        } }
     }
 
     /// Where the builds are: `ota/` unless a test passes its own folder.
     private let root: URL?
-    init(tailnetPort: Int, root: URL? = nil) { self.tailnetPort = tailnetPort; self.root = root }
-    private var store: URL { root ?? OTA.directory }
+    init(tailnetPort: Int, root: URL? = nil) {
+        self.tailnetPort = tailnetPort; self.root = root
+    }
+
+    private var store: URL {
+        root ?? OTA.directory
+    }
 
     /// The MagicDNS name `tailscale serve` publishes us under; nil until it is known.
     /// Anything else in Host is not a request from the tailnet: a page on this
     /// Mac rebinding its own name to 127.0.0.1, say, would otherwise read the builds.
     private var _servedName: String?
     var servedName: String? {
-        get { lock.withLock { _servedName } }
-        set { lock.withLock { _servedName = newValue.map(Self.canonical) } }
+        get { lock.withLock {
+            _servedName
+        } }
+        set { lock.withLock {
+            _servedName = newValue.map(Self.canonical)
+        } }
     }
 
     /// The port it ended up on; nil if it couldn't listen at all.
@@ -75,7 +104,9 @@ final class OTAServer: @unchecked Sendable {
         let params = NWParameters.tcp
         params.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: .any)
         guard let listener = try? NWListener(using: params) else { return nil }
-        listener.newConnectionHandler = { [weak self] conn in self?.serve(conn) }
+        listener.newConnectionHandler = { [weak self] conn in
+            self?.serve(conn)
+        }
         let ready = DispatchSemaphore(value: 0)
         listener.stateUpdateHandler = { [weak self, weak listener] state in
             switch state {
@@ -89,7 +120,7 @@ final class OTAServer: @unchecked Sendable {
             default: break
             }
         }
-        self.listener = listener   // before it can fail: forget() only lets go of the listener it holds
+        self.listener = listener // before it can fail: forget() only lets go of the listener it holds
         listener.start(queue: queue)
         _ = ready.wait(timeout: .now() + 5)
         guard port > 0 else { stop(); return nil }
@@ -103,12 +134,20 @@ final class OTAServer: @unchecked Sendable {
         // Cancelling the listener only stops new ones. A download in flight would
         // otherwise sit there until the idle timer, because `pump` holds `self`
         // weakly and the chain simply stops when the server goes.
-        for conn in lock.withLock({ Array(live.values) }) { conn.cancel() }
+        for conn in lock.withLock({
+            Array(live.values)
+        }) {
+            conn.cancel()
+        }
     }
 
     /// Whether there is still a listener behind the port `tailscale serve` was
     /// told about. False after one failed post-ready, which nothing else notices.
-    var listening: Bool { lock.withLock { _listener != nil && _port > 0 } }
+    var listening: Bool {
+        lock.withLock {
+            _listener != nil && _port > 0
+        }
+    }
 
     /// Only if it is still the one we are using: a cancelled listener's late
     /// callback must not wipe the replacement.
@@ -142,13 +181,17 @@ final class OTAServer: @unchecked Sendable {
         // chunk of an .ipa until the app quits. Time without progress, not time
         // altogether: this exists for slow cellular, where a big .ipa legitimately
         // takes a long while.
-        let idle = IdleTimer(queue: queue) { [weak conn] in conn?.cancel() }
+        let idle = IdleTimer(queue: queue) { [weak conn] in
+            conn?.cancel()
+        }
         conn.stateUpdateHandler = { [weak self, weak conn] state in
             switch state {
-            case .failed: conn?.cancel()        // always ends at .cancelled, so `closed` runs once
+            case .failed: conn?.cancel() // always ends at .cancelled, so `closed` runs once
             case .cancelled:
                 idle.cancel()
-                if let conn { self?.closed(conn) }
+                if let conn {
+                    self?.closed(conn)
+                }
             default: break
             }
         }
@@ -165,7 +208,8 @@ final class OTAServer: @unchecked Sendable {
     /// middle of it, and a request line without its `Host` would make every link
     /// in the manifest point the device at itself.
     private func readHead(_ conn: NWConnection, soFar: Data, scanned: Int,
-                          idle: IdleTimer, by deadline: DispatchTime) {
+                          idle: IdleTimer, by deadline: DispatchTime)
+    {
         conn.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, done, _ in
             guard let self, let data, !data.isEmpty else { conn.cancel(); return }
             let head = soFar + data
@@ -183,7 +227,7 @@ final class OTAServer: @unchecked Sendable {
             }
             // Lossy on purpose: one byte that isn't UTF-8 used to mean the request
             // was never answered and the slot was held until the idle timer.
-            let (method, path, host) = Self.request(String(decoding: head[head.startIndex..<cut], as: UTF8.self))
+            let (method, path, host) = Self.request(String(decoding: head[head.startIndex ..< cut], as: UTF8.self))
             guard method == "GET" || method == "HEAD" else { return self.send(conn, status: "405 Method Not Allowed") }
             // Without it every link in the manifest would point the device at
             // itself, and the install would fail with nothing to go on.
@@ -191,7 +235,7 @@ final class OTAServer: @unchecked Sendable {
             guard Self.isServedName(host, servedName: self.servedName) else {
                 return self.send(conn, status: "421 Misdirected Request")
             }
-            let base = "https://\(host)"   // Host carries the port serve published us on
+            let base = "https://\(host)" // Host carries the port serve published us on
             self.route(conn, path: path, base: base, bodyWanted: method == "GET", idle: idle)
         }
     }
@@ -209,7 +253,9 @@ final class OTAServer: @unchecked Sendable {
     static func request(_ head: String) -> (String, String, String?) {
         let lines = head.split(separator: "\r\n", omittingEmptySubsequences: false)
         let parts = (lines.first ?? "").split(separator: " ")
-        let hosts = lines.dropFirst().filter { $0.lowercased().hasPrefix("host:") }
+        let hosts = lines.dropFirst().filter {
+            $0.lowercased().hasPrefix("host:")
+        }
         // Two of them is a request two proxies would read differently; neither is
         // iOS, so refuse rather than pick.
         let host = hosts.count == 1
@@ -225,7 +271,9 @@ final class OTAServer: @unchecked Sendable {
         // and pass as a name.
         let name = s.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
         guard !s.isEmpty, s.count < 256, let first = name.first, !first.isEmpty,
-              first.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "." || $0 == "-") }),
+              first.allSatisfy({
+                  $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "." || $0 == "-")
+              }),
               name.count == 1 || UInt16(name[1]) != nil else { return nil }
         return s
     }
@@ -234,7 +282,9 @@ final class OTAServer: @unchecked Sendable {
     /// aside); its port is whatever `serve` published.
     static func isServedName(_ host: String, servedName: String?) -> Bool {
         guard let servedName else { return false }
-        let name = host.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
+        let name = host.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+            .first
+            .map(String.init) ?? ""
         return canonical(name) == servedName
     }
 
@@ -260,7 +310,8 @@ final class OTAServer: @unchecked Sendable {
             send(conn, status: "200 OK", type: "text/html; charset=utf-8",
                  body: bodyWanted ? html : nil, length: Int64(html.count))
         case 3 where parts[2] == "icon.png":
-            let url = store.appendingPathComponent(parts[0]).appendingPathComponent(parts[1])
+            let url = store.appendingPathComponent(parts[0])
+                .appendingPathComponent(parts[1])
                 .appendingPathComponent("icon.png")
             guard let png = try? Data(contentsOf: url) else { return send(conn, status: "404 Not Found") }
             send(conn, status: "200 OK", type: "image/png", body: bodyWanted ? png : nil, length: Int64(png.count))
@@ -268,16 +319,25 @@ final class OTAServer: @unchecked Sendable {
             guard let known = OTA.builds(of: parts[0], in: root) else {
                 return send(conn, status: "503 Service Unavailable")
             }
-            guard let build = known.first(where: { $0.slug == parts[1] }) else {
+            guard let build = known.first(where: {
+                $0.slug == parts[1]
+            }) else {
                 return send(conn, status: "404 Not Found")
             }
             if parts[2] == "manifest.plist" {
                 guard let data = OTA.manifest(for: build, base: base) else {
                     return send(conn, status: "500 Internal Server Error")
                 }
-                send(conn, status: "200 OK", type: "application/xml", body: bodyWanted ? data : nil, length: Int64(data.count))
+                send(
+                    conn,
+                    status: "200 OK",
+                    type: "application/xml",
+                    body: bodyWanted ? data : nil,
+                    length: Int64(data.count)
+                )
             } else {
-                sendIPA(conn, at: store.appendingPathComponent(parts[0]).appendingPathComponent(parts[1])
+                sendIPA(conn, at: store.appendingPathComponent(parts[0])
+                    .appendingPathComponent(parts[1])
                     .appendingPathComponent("app.ipa"), bodyWanted: bodyWanted, idle: idle)
             }
         default:
@@ -287,19 +347,27 @@ final class OTAServer: @unchecked Sendable {
 
     /// Path components, with anything that could climb out of the directory gone.
     static func segments(_ path: String) -> [String] {
-        path.split(separator: "/").map(String.init)
-            .filter { !$0.hasPrefix(".") && !$0.contains("\0") }
+        path.split(separator: "/")
+            .map(String.init)
+            .filter {
+                !$0.hasPrefix(".") && !$0.contains("\0")
+            }
     }
 
     // MARK: - Writing
 
     private func send(_ conn: NWConnection, status: String, type: String = "text/plain; charset=utf-8",
-                      body: Data? = nil, length: Int64 = 0) {
+                      body: Data? = nil, length: Int64 = 0)
+    {
         var head = "HTTP/1.1 \(status)\r\nContent-Type: \(type)\r\nContent-Length: \(length)\r\n"
         head += "Cache-Control: no-store\r\nConnection: close\r\n\r\n"
         var out = Data(head.utf8)
-        if let body { out.append(body) }
-        conn.send(content: out, completion: .contentProcessed { _ in conn.cancel() })
+        if let body {
+            out.append(body)
+        }
+        conn.send(content: out, completion: .contentProcessed { _ in
+            conn.cancel()
+        })
     }
 
     /// Sent in pieces: an .ipa can be hundreds of megabytes and this runs inside
@@ -341,7 +409,7 @@ final class OTAServer: @unchecked Sendable {
             conn.cancel()
             return
         }
-        idle.arm(Self.idleLimit)   // it is moving, so it isn't idle
+        idle.arm(Self.idleLimit) // it is moving, so it isn't idle
         let chunk: Data
         do {
             chunk = try handle.read(upToCount: 256 * 1024) ?? Data()
@@ -355,7 +423,9 @@ final class OTAServer: @unchecked Sendable {
         }
         guard !chunk.isEmpty else {
             try? handle.close()
-            conn.send(content: nil, isComplete: true, completion: .contentProcessed { _ in conn.cancel() })
+            conn.send(content: nil, isComplete: true, completion: .contentProcessed { _ in
+                conn.cancel()
+            })
             return
         }
         conn.send(content: chunk, completion: .contentProcessed { [weak self] error in

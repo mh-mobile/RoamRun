@@ -33,10 +33,20 @@ final class DeviceControlAllowed: @unchecked Sendable {
     /// The Keychain's own by default; tests give stand-ins.
     init(read: @escaping () -> (OSStatus, Data?) = {
         var found: CFTypeRef?
-        let status = SecItemCopyMatching(item.merging([kSecReturnData as String: true]) { $1 } as CFDictionary, &found)
+        let status = SecItemCopyMatching(item.merging([kSecReturnData as String: true]) {
+            $1
+        } as CFDictionary, &found)
         return (status, found as? Data)
     }, write: @escaping (Data) -> OSStatus = { list in
-        let status = SecItemAdd(item.merging([kSecValueData as String: list, kSecAttrLabel as String: "RoamRun device control (devices switched on)"]) { $1 } as CFDictionary, nil)
+        let status = SecItemAdd(
+            item.merging([
+                kSecValueData as String: list,
+                kSecAttrLabel as String: "RoamRun device control (devices switched on)"
+            ]) {
+                $1
+            } as CFDictionary,
+            nil
+        )
         guard status == errSecDuplicateItem else { return status }
         return SecItemUpdate(item as CFDictionary, [kSecValueData as String: list] as CFDictionary)
     }) {
@@ -53,13 +63,22 @@ final class DeviceControlAllowed: @unchecked Sendable {
     /// that failed (refused) isn't taken for an empty list: asked again only when
     /// the user switches something on (`again`), not at every request — it may ask them each time.
     private func list(again: Bool) -> Set<String>? {
-        let (known, failed) = lock.withLock { (held, unreadable) }
-        if let known { return known }
-        if failed, !again { return nil }
+        let (known, failed) = lock.withLock {
+            (held, unreadable)
+        }
+        if let known {
+            return known
+        }
+        if failed, !again {
+            return nil
+        }
         let (status, data) = read()
         // Given, and not a list (an earlier build's, or garbled): nothing is on, and the next switch writes a list in its place.
         let found: Set<String>? = status == errSecItemNotFound ? []
-            : status == errSecSuccess ? (data.flatMap { try? JSONDecoder().decode(Set<String>.self, from: $0) } ?? []) : nil
+            : status == errSecSuccess ? (data.flatMap {
+                try? JSONDecoder().decode(Set<String>.self, from: $0)
+            } ?? []) :
+            nil
         // A Keychain that is locked (a login not finished, a session without the screen) can't ask
         // anyone and will answer later: read again at the next occasion, not held against it.
         lock.withLock {
@@ -73,14 +92,28 @@ final class DeviceControlAllowed: @unchecked Sendable {
     @Sendable func contains(_ mark: String) -> Bool {
         // Known already: answered without waiting behind a write for another device.
         // …nor behind one that is asking the user, when the list is known not to be readable.
-        let (isOff, known, failed) = lock.withLock { (off.contains(mark), held, unreadable) }
-        if isOff || failed { return false }
-        if let known { return known.contains(mark) }
-        return io.withLock { list(again: false)?.contains(mark) ?? false } && !lock.withLock { off.contains(mark) }
+        let (isOff, known, failed) = lock.withLock {
+            (off.contains(mark), held, unreadable)
+        }
+        if isOff || failed {
+            return false
+        }
+        if let known {
+            return known.contains(mark)
+        }
+        return io.withLock {
+            list(again: false)?.contains(mark) ?? false
+        } && !lock.withLock {
+            off.contains(mark)
+        }
     }
 
     /// As far as it has been read; nil before that, and when it couldn't be. Never waits.
-    @Sendable func known(_ mark: String) -> Bool? { lock.withLock { off.contains(mark) ? false : held?.contains(mark) } }
+    @Sendable func known(_ mark: String) -> Bool? {
+        lock.withLock {
+            off.contains(mark) ? false : held?.contains(mark)
+        }
+    }
 
     /// Off from this moment, before the Keychain is told (`set` follows): never waits.
     func offNow(_ mark: String) {
@@ -92,20 +125,43 @@ final class DeviceControlAllowed: @unchecked Sendable {
     }
 
     /// When something is asked: given to `set` for a switch-on that may wait its turn.
-    func now() -> UInt64 { lock.withLock { asked += 1; return asked } }
+    func now() -> UInt64 {
+        lock.withLock {
+            asked += 1; return asked
+        }
+    }
 
     /// The Keychain's list couldn't be read: nothing is on, and nothing can be switched until it can.
-    var isUnreadable: Bool { lock.withLock { unreadable } }
+    var isUnreadable: Bool {
+        lock.withLock {
+            unreadable
+        }
+    }
 
     /// The Keychain was locked when last asked (it is asked again by itself).
-    var isLocked: Bool { lock.withLock { locked } }
+    var isLocked: Bool {
+        lock.withLock {
+            locked
+        }
+    }
 
     /// Writes what an earlier write failed to, if anything: before the app ends.
     func flush() {
         io.withLock {
-            guard lock.withLock({ unwritten }), let now = lock.withLock({ held }) else { return }
-            let kept = (try? JSONEncoder().encode(now.subtracting(lock.withLock { off }))).map { write($0) == errSecSuccess } ?? false
-            lock.withLock { unwritten = !kept }
+            guard lock.withLock({
+                unwritten
+            }), let now = lock.withLock({
+                held
+            }) else { return }
+            let kept = (try? JSONEncoder().encode(now.subtracting(lock.withLock {
+                off
+            })))
+            .map {
+                write($0) == errSecSuccess
+            } ?? false
+            lock.withLock {
+                unwritten = !kept
+            }
         }
     }
 
@@ -113,11 +169,19 @@ final class DeviceControlAllowed: @unchecked Sendable {
     func prune(keeping inUse: Set<String>) {
         io.withLock {
             guard let now = list(again: false) else { return }
-            let next = now.intersection(inUse).subtracting(lock.withLock { off })
+            let next = now.intersection(inUse).subtracting(lock.withLock {
+                off
+            })
             // Also the chance to write what an earlier write failed to.
-            guard next != now || lock.withLock({ unwritten }) else { return }
-            let kept = (try? JSONEncoder().encode(next)).map { write($0) == errSecSuccess } ?? false
-            lock.withLock { held = next; unwritten = !kept }
+            guard next != now || lock.withLock({
+                unwritten
+            }) else { return }
+            let kept = (try? JSONEncoder().encode(next)).map {
+                write($0) == errSecSuccess
+            } ?? false
+            lock.withLock {
+                held = next; unwritten = !kept
+            }
         }
     }
 
@@ -130,31 +194,55 @@ final class DeviceControlAllowed: @unchecked Sendable {
         // Off from now — said now, when nobody said when: said earlier (the page), it is that
         // moment that counts, or a switch-on asked since would be taken for the older of the two.
         if !allowed {
-            if when == nil { offNow(mark) } else { lock.withLock { _ = off.insert(mark) } }
+            if when == nil {
+                offNow(mark)
+            } else {
+                lock.withLock {
+                    _ = off.insert(mark)
+                }
+            }
         }
         let when = when ?? now()
         /// Switched off since this switch-on was asked: the off stands.
-        func overtaken() -> Bool { allowed && (offAt[mark] ?? 0) > when }
+        func overtaken() -> Bool {
+            allowed && (offAt[mark] ?? 0) > when
+        }
         return io.withLock {
             // The Keychain is asked again (it may ask the user) only to switch on: off is off here
             // without it, and Remove doesn't put a question about a list that may not be ours.
             guard var next = list(again: allowed) else { return false }
             // Switched off since it was asked: nothing of it is taken, kept or written.
             let (lost, pending) = lock.withLock { () -> (Bool, Set<String>) in
-                if overtaken() { return (true, off) }
-                if allowed { off.remove(mark) }
+                if overtaken() {
+                    return (true, off)
+                }
+                if allowed {
+                    off.remove(mark)
+                }
                 return (false, off)
             }
-            if lost { return true }
+            if lost {
+                return true
+            }
             let was = next
             // With it goes whatever was switched off here and the Keychain hasn't been told
             // (it couldn't be read then): off isn't left to end with this run.
             next.subtract(pending)
-            if allowed { next.insert(mark) } else { next.remove(mark) }
-            guard next != was || lock.withLock({ unwritten }) else { return true }
-            let kept = (try? JSONEncoder().encode(next)).map { write($0) == errSecSuccess } ?? false
+            if allowed {
+                next.insert(mark)
+            } else {
+                next.remove(mark)
+            }
+            guard next != was || lock.withLock({
+                unwritten
+            }) else { return true }
+            let kept = (try? JSONEncoder().encode(next)).map {
+                write($0) == errSecSuccess
+            } ?? false
             lock.withLock {
-                if kept || !allowed { held = next }
+                if kept || !allowed {
+                    held = next
+                }
                 unwritten = !kept
             }
             return kept

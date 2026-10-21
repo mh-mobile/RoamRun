@@ -43,24 +43,47 @@ enum Introduction {
         static let keys: Set<String> = ["identifier", "authTag", "model", "name", "ver", "minVer"]
     }
 
-    static func line(_ pairable: Pairable) -> String { Pairable.prefix + packed(pairable) }
+    static func line(_ pairable: Pairable) -> String {
+        Pairable.prefix + packed(pairable)
+    }
 
     static func pairable(from line: String) -> Result<Pairable, Unreadable> {
         let line = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        if line.hasPrefix(Device.prefix) { return .failure(.another("a saved device (for `roamrun devices add`)")) }
-        if line.hasPrefix(Offer.prefix) { return .failure(.another("a Mac's offer to pair (for `roamrun pair introduce`)")) }
-        guard line.hasPrefix(Pairable.prefix), let read: Pairable = unpacked(line.dropFirst(Pairable.prefix.count)), read.v == 1 else {
+        if line.hasPrefix(Device.prefix) {
+            return .failure(.another("a saved device (for `roamrun devices add`)"))
+        }
+        if line
+            .hasPrefix(Offer.prefix)
+        {
+            return .failure(.another("a Mac's offer to pair (for `roamrun pair introduce`)"))
+        }
+        guard line.hasPrefix(Pairable.prefix), let read: Pairable = unpacked(line.dropFirst(Pairable.prefix.count)),
+              read.v == 1
+        else {
             return .failure(.notOne)
         }
-        if let problem = portProblem(read.port) ?? txtProblem(read.txt, keys: Pairable.keys) { return .failure(.refused(problem)) }
-        guard !read.instance.isEmpty, read.instance.utf8.count <= 63, shows(read.instance), !read.instance.contains("="), !read.instance.contains("\\") else {
+        if let problem = portProblem(read.port) ??
+            txtProblem(read.txt, keys: Pairable.keys)
+        {
+            return .failure(.refused(problem))
+        }
+        guard !read.instance.isEmpty, read.instance.utf8.count <= 63, shows(read.instance), !read.instance.contains(
+            "="
+        ),
+            !read.instance.contains("\\")
+        else {
             return .failure(.refused("the name it announces under can't be used as it is"))
         }
         return .success(read)
     }
 
-    static func line(_ offer: Offer) -> String { Offer.prefix + packed(offer) }
-    static func line(_ device: Device) -> String { Device.prefix + packed(device) }
+    static func line(_ offer: Offer) -> String {
+        Offer.prefix + packed(offer)
+    }
+
+    static func line(_ device: Device) -> String {
+        Device.prefix + packed(device)
+    }
 
     enum Unreadable: Error, Equatable {
         /// The other kind of line, or a key file's path: named, so the message can say which.
@@ -71,26 +94,51 @@ enum Introduction {
 
     static func offer(from line: String) -> Result<Offer, Unreadable> {
         let line = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        if line.hasPrefix(Device.prefix) { return .failure(.another("a saved device (for `roamrun devices add`)")) }
-        guard line.hasPrefix(Offer.prefix), let offer: Offer = unpacked(line.dropFirst(Offer.prefix.count)), offer.v == 1 else {
+        if line.hasPrefix(Device.prefix) {
+            return .failure(.another("a saved device (for `roamrun devices add`)"))
+        }
+        guard line.hasPrefix(Offer.prefix), let offer: Offer = unpacked(line.dropFirst(Offer.prefix.count)),
+              offer.v == 1
+        else {
             return .failure(.notOne)
         }
-        if let problem = portProblem(offer.port) ?? txtProblem(offer.txt, keys: Offer.keys) { return .failure(.refused(problem)) }
+        if let problem = portProblem(offer.port) ??
+            txtProblem(offer.txt, keys: Offer.keys)
+        {
+            return .failure(.refused(problem))
+        }
         return .success(offer)
     }
 
     static func device(from line: String) -> Result<Device, Unreadable> {
         let line = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        if line.hasPrefix(Offer.prefix) { return .failure(.another("a Mac's offer to pair (for `roamrun pair introduce`)")) }
-        guard line.hasPrefix(Device.prefix), let device: Device = unpacked(line.dropFirst(Device.prefix.count)), device.v == 1 else {
+        if line
+            .hasPrefix(Offer.prefix)
+        {
+            return .failure(.another("a Mac's offer to pair (for `roamrun pair introduce`)"))
+        }
+        guard line.hasPrefix(Device.prefix), let device: Device = unpacked(line.dropFirst(Device.prefix.count)),
+              device.v == 1
+        else {
             return .failure(.notOne)
         }
-        if let problem = portProblem(device.port) ?? txtProblem(device.txt, keys: Device.keys) { return .failure(.refused(problem)) }
-        if let problem = nameProblem(device.name) { return .failure(.refused("its name: \(problem)")) }
-        guard device.name.utf8.count <= 64, shows(device.name) else { return .failure(.refused("its name can't be shown as it is")) }
+        if let problem = portProblem(device.port) ??
+            txtProblem(device.txt, keys: Device.keys)
+        {
+            return .failure(.refused(problem))
+        }
+        if let problem = nameProblem(device.name) {
+            return .failure(.refused("its name: \(problem)"))
+        }
+        guard device.name.utf8.count <= 64,
+              shows(device.name) else { return .failure(.refused("its name can't be shown as it is")) }
         let peer = device.peer.lowercased()
-        guard (1...253).contains(peer.utf8.count), !peer.hasPrefix("-"), !peer.hasPrefix("."),
-              peer.unicodeScalars.allSatisfy({ $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "-" || $0 == ".") }) else {
+        guard (1 ... 253).contains(peer.utf8.count), !peer.hasPrefix("-"), !peer.hasPrefix("."),
+              peer.unicodeScalars
+                  .allSatisfy({
+                      $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "-" || $0 == ".")
+                  })
+        else {
             return .failure(.refused("its Tailscale name isn't one"))
         }
         return .success(device)
@@ -100,9 +148,19 @@ enum Introduction {
     /// asks that too. The CLI takes a leading "-" for an option.
     static func nameProblem(_ name: String) -> String? {
         let n = name.trimmingCharacters(in: .whitespaces)
-        if n.isEmpty { return "Enter a name." }
-        if n.hasPrefix("-") { return "A name can't start with “-” (the CLI would read it as an option)." }
-        if n.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }) { return "A name can't contain control characters." }
+        if n.isEmpty {
+            return "Enter a name."
+        }
+        if n.hasPrefix("-") {
+            return "A name can't start with “-” (the CLI would read it as an option)."
+        }
+        if n.unicodeScalars
+            .contains(where: {
+                $0.properties.generalCategory == .control
+            })
+        {
+            return "A name can't contain control characters."
+        }
         return nil
     }
 
@@ -126,12 +184,24 @@ enum Introduction {
             let ok: Bool
             switch key {
             case "identifier": ok = UUID(uuidString: value) != nil
-            case "authTag": ok = (1...32).contains(value.utf8.count) && value.unicodeScalars.allSatisfy { $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "+" || $0 == "/") }
-            case "model": ok = (1...40).contains(value.utf8.count) && value.unicodeScalars.allSatisfy { $0.isASCII && (CharacterSet.alphanumerics.contains($0) || ",._-".unicodeScalars.contains($0)) }
-            case "name": ok = (1...63).contains(value.utf8.count) && shows(value) && !value.contains("=") && !value.contains("\\")
-            default: ok = (1...6).contains(value.utf8.count) && value.unicodeScalars.allSatisfy { ("0"..."9").contains($0) }
+            case "authTag": ok = (1 ... 32).contains(value.utf8.count) && value.unicodeScalars
+                .allSatisfy {
+                    $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "+" || $0 == "/")
+                }
+            case "model": ok = (1 ... 40).contains(value.utf8.count) && value.unicodeScalars
+                .allSatisfy {
+                    $0.isASCII && (CharacterSet.alphanumerics.contains($0) || ",._-".unicodeScalars.contains($0))
+                }
+            case "name": ok = (1 ... 63).contains(value.utf8.count) && shows(value) && !value.contains("=") && !value
+                .contains("\\")
+            default: ok = (1 ... 6).contains(value.utf8.count) && value.unicodeScalars
+                .allSatisfy {
+                    ("0" ... "9").contains($0)
+                }
             }
-            if !ok { return "its announcement's \(key) isn't one" }
+            if !ok {
+                return "its announcement's \(key) isn't one"
+            }
         }
         return nil
     }
@@ -152,7 +222,8 @@ enum Introduction {
     static func shows(_ text: String) -> Bool {
         text.unicodeScalars.allSatisfy {
             switch $0.properties.generalCategory {
-            case .control, .format, .lineSeparator, .paragraphSeparator, .surrogate, .privateUse, .unassigned: return false
+            case .control, .format, .lineSeparator, .paragraphSeparator, .surrogate, .privateUse,
+                 .unassigned: return false
             default: return true
             }
         }
@@ -162,7 +233,12 @@ enum Introduction {
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
         let data = (try? encoder.encode(value)) ?? Data()
-        return data.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+        return data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(
+                of: "/",
+                with: "_"
+            )
             .replacingOccurrences(of: "=", with: "")
     }
 
@@ -194,7 +270,9 @@ extension Introduction {
     static func announced(_ offer: Offer, as tailscaleName: String) -> Offer {
         var out = offer
         let name = String(tailscaleName.prefix(63))
-        if !name.isEmpty, shows(name), !name.contains("="), !name.contains("\\") { out.txt["name"] = name }
+        if !name.isEmpty, shows(name), !name.contains("="), !name.contains("\\") {
+            out.txt["name"] = name
+        }
         return out
     }
 }

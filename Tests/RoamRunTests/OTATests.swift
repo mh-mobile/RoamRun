@@ -14,8 +14,12 @@ private func ask(_ port: UInt16, _ request: String, hold: TimeInterval = 0) asyn
     defer { conn.cancel() }
     conn.start(queue: .global())
     // A server that neither answers nor closes: the read below ends with the connection.
-    DispatchQueue.global().asyncAfter(deadline: .now() + hold + 30) { conn.cancel() }
-    if hold > 0 { try? await Task.sleep(for: .seconds(hold)) }
+    DispatchQueue.global().asyncAfter(deadline: .now() + hold + 30) {
+        conn.cancel()
+    }
+    if hold > 0 {
+        try? await Task.sleep(for: .seconds(hold))
+    }
     if !request.isEmpty {
         conn.send(content: Data(request.utf8), completion: .contentProcessed { _ in })
     }
@@ -26,8 +30,12 @@ private func ask(_ port: UInt16, _ request: String, hold: TimeInterval = 0) asyn
                 c.resume(returning: (d, isDone || err != nil))
             }
         }
-        if let chunk { got.append(chunk) }
-        if done { break }
+        if let chunk {
+            got.append(chunk)
+        }
+        if done {
+            break
+        }
     }
     return got.isEmpty ? nil : String(decoding: got, as: UTF8.self)
 }
@@ -36,7 +44,7 @@ extension TimingSensitive {
     @Suite(.serialized) struct OTAServerOverASocket {
         private func started() throws -> (OTAServer, UInt16) {
             let server = OTAServer(tailnetPort: 41443)
-            server.servedName = "m"   // the requests below name it as their Host
+            server.servedName = "m" // the requests below name it as their Host
             let port = try #require(server.start())
             return (server, port)
         }
@@ -78,8 +86,10 @@ extension TimingSensitive {
             // The cap is every connection there is, and a peer that connects and stays
             // quiet produces no callback to check a deadline in — which is why the
             // deadline is on the idle timer rather than inside the read loop.
-            let silent = (0..<OTAServer.maxConnections).map { _ in
-                Task { _ = await ask(port, "", hold: 30) }
+            let silent = (0 ..< OTAServer.maxConnections).map { _ in
+                Task {
+                    _ = await ask(port, "", hold: 30)
+                }
             }
             try await Task.sleep(for: .seconds(1))
             // One more is refused outright rather than queued behind them.
@@ -87,24 +97,32 @@ extension TimingSensitive {
             // And they are let go of well inside the idle limit, not held for 120 s.
             try await Task.sleep(for: .seconds(16))
             #expect(await ask(port, "GET /nope HTTP/1.1\r\nHost: m\r\n\r\n")?.hasPrefix("HTTP/1.1 404") == true)
-            for t in silent { t.cancel() }
+            for t in silent {
+                t.cancel()
+            }
         }
 
         @Test func stoppingTakesTheConnectionsWithIt() async throws {
             let (server, port) = try started()
             // Connected and waiting to be told something — and reading, so it can see
             // the close when it comes.
-            let quiet = Task { await ask(port, "") }
+            let quiet = Task {
+                await ask(port, "")
+            }
             try await Task.sleep(for: .seconds(1))
             // Cancelling the listener only stops new ones; a connection in flight used
             // to sit there until the idle timer, because the pump holds the server
             // weakly and the chain simply stops when the server goes.
             server.stop()
             let closed = await withTaskGroup(of: Bool.self) { group in
-                group.addTask { _ = await quiet.value; return true }
+                group.addTask {
+                    _ = await quiet.value; return true
+                }
                 // Well inside the 15 s the head deadline would take, so a pass here is
                 // `stop` having done it rather than the timer.
-                group.addTask { try? await Task.sleep(for: .seconds(5)); return false }
+                group.addTask {
+                    try? await Task.sleep(for: .seconds(5)); return false
+                }
                 defer { group.cancelAll() }
                 return await group.next() ?? false
             }
@@ -119,7 +137,9 @@ extension TimingSensitive {
 @Test func onlyBuildsIOSWillInstallOverTheAirAreAccepted() throws {
     func profile(_ entitlements: [String: Any], _ devices: [String]?) -> [String: Any] {
         var p: [String: Any] = ["Entitlements": entitlements]
-        if let devices { p["ProvisionedDevices"] = devices }
+        if let devices {
+            p["ProvisionedDevices"] = devices
+        }
         return p
     }
     let udid = "00008130-000D00000000D004"
@@ -128,7 +148,7 @@ extension TimingSensitive {
     #expect(try OTA.check(["ProvisionsAllDevices": true, "Entitlements": [:]], against: mine).coverage == .everyDevice)
     // Ad Hoc for this device.
     #expect(try OTA.check(profile(["get-task-allow": false], [udid]), against: mine).coverage
-            == .devices(covers: ["iPhone"], unchecked: []))
+        == .devices(covers: ["iPhone"], unchecked: []))
     // Which problem, not just "a problem": every one of these used to pass if the
     // build were rejected for some entirely different reason.
     #expect(throws: OTA.Problem.development("That build")) {
@@ -141,7 +161,8 @@ extension TimingSensitive {
     }
     #expect(throws: OTA.Problem.unreadable(
         "the provisioning profile in That build — the archive may be unsigned. " +
-        "Export it for Release Testing (Ad Hoc) or Enterprise.")) {
+            "Export it for Release Testing (Ad Hoc) or Enterprise."
+    )) {
         try OTA.check(nil, against: mine)
     }
 }
@@ -152,22 +173,22 @@ extension TimingSensitive {
     let a = "00008130-000D00000000D004", b = "00008120-001A2B3C4D5E6F70"
     let devices = [OTA.Device(name: "iPhone", udid: a),
                    OTA.Device(name: "iPad", udid: b),
-                   OTA.Device(name: "Vision Pro", udid: nil)]   // never bridged, so unknown
+                   OTA.Device(name: "Vision Pro", udid: nil)] // never bridged, so unknown
     let adHoc: [String: Any] = ["ProvisionedDevices": [a], "Entitlements": ["get-task-allow": false]]
     #expect(try OTA.check(adHoc, against: devices).coverage
-            == .devices(covers: ["iPhone"], unchecked: ["Vision Pro"]))
+        == .devices(covers: ["iPhone"], unchecked: ["Vision Pro"]))
     let both: [String: Any] = ["ProvisionedDevices": [a, b], "Entitlements": ["get-task-allow": false]]
     #expect(try OTA.check(both, against: devices).coverage
-            == .devices(covers: ["iPhone", "iPad"], unchecked: ["Vision Pro"]))
+        == .devices(covers: ["iPhone", "iPad"], unchecked: ["Vision Pro"]))
     // None of yours is an answer, not a refusal: the page is open to the whole
     // tailnet, and the profile may name a device this Mac has never seen.
     let other: [String: Any] = ["ProvisionedDevices": ["OTHER"], "Entitlements": ["get-task-allow": false]]
     #expect(try OTA.check(other, against: devices).coverage
-            == .noneOfYours(known: ["iPhone", "iPad"], unchecked: ["Vision Pro"]))
+        == .noneOfYours(known: ["iPhone", "iPad"], unchecked: ["Vision Pro"]))
     // Same when RoamRun knows no UDID at all, and when nothing is saved: neither
     // is a reason to refuse a build someone else's device can take.
     #expect(try OTA.check(adHoc, against: [devices[2]]).coverage
-            == .noneOfYours(known: [], unchecked: ["Vision Pro"]))
+        == .noneOfYours(known: [], unchecked: ["Vision Pro"]))
     #expect(try OTA.check(adHoc, against: []).coverage == .noneOfYours(known: [], unchecked: []))
     // Enterprise needs no device at all — not even a saved one.
     #expect(try OTA.check(["ProvisionsAllDevices": true], against: []).coverage == .everyDevice)
@@ -183,10 +204,11 @@ extension TimingSensitive {
     #expect(url == "https://mac.tail1234.ts.net/roamrun/com.example.App/\(build.slug)/app.ipa")
     let metadata = item?["metadata"] as? [String: String]
     #expect(metadata?["bundle-identifier"] == "com.example.App")
-    #expect(metadata?["kind"] == "software")          // iOS refuses the manifest without it
-    #expect(metadata?["bundle-version"] == "45")      // CFBundleVersion, not the marketing one
+    #expect(metadata?["kind"] == "software") // iOS refuses the manifest without it
+    #expect(metadata?["bundle-version"] == "45") // CFBundleVersion, not the marketing one
     #expect(metadata?["title"] == "App & Co")
-    #expect(OTA.installLink(for: build, base: "https://x/p").hasPrefix("itms-services://?action=download-manifest&url=https://x/p/"))
+    #expect(OTA.installLink(for: build, base: "https://x/p")
+        .hasPrefix("itms-services://?action=download-manifest&url=https://x/p/"))
 }
 
 @Test func aTitleXmlCantHoldNeverReachesTheManifest() throws {
@@ -242,8 +264,8 @@ extension TimingSensitive {
     // otherwise have the whole buffer rescanned on every one of them.
     let whole = Data("GET / HTTP/1.1\r\nHost: m\r\n\r\nbody".utf8)
     #expect(OTAServer.endOfHead(whole) == 23)
-    #expect(OTAServer.endOfHead(whole, from: 20) == 23)        // straddling the boundary
-    #expect(OTAServer.endOfHead(whole, from: 24) == nil)       // already past it
+    #expect(OTAServer.endOfHead(whole, from: 20) == 23) // straddling the boundary
+    #expect(OTAServer.endOfHead(whole, from: 24) == nil) // already past it
     #expect(OTAServer.endOfHead(Data("GET / HTTP/1.1\r\nHost: m\r\n".utf8)) == nil)
     #expect(OTAServer.endOfHead(Data()) == nil)
     // No Host, or two of them, and the manifest would send the device to itself.
@@ -282,8 +304,8 @@ extension TimingSensitive {
         .init(bundleID: "com.example.App", title: "App", version: v, build: b, added: .now, size: 1)
     }
     #expect(build("1.2.0", "45").label == "1.2.0 (45)")
-    #expect(build("1.2.0", "").label == "1.2.0")          // no build number to show
-    #expect(build("1.2.0", "1.2.0").label == "1.2.0")     // Xcode's default, not worth repeating
+    #expect(build("1.2.0", "").label == "1.2.0") // no build number to show
+    #expect(build("1.2.0", "1.2.0").label == "1.2.0") // Xcode's default, not worth repeating
     #expect(build("1.2.0", "45").label != build("1.2.0", "46").label)
 }
 
@@ -305,7 +327,7 @@ extension TimingSensitive {
 @Test func aBundleIdThatCouldNameSomewhereElseIsRefused() {
     #expect(OTA.isPlainName("com.example.App"))
     #expect(!OTA.isPlainName("../../../../tmp/x"))
-    #expect(!OTA.isPlainName(".hidden"))          // invisible to everything that walks the directory
+    #expect(!OTA.isPlainName(".hidden")) // invisible to everything that walks the directory
     #expect(!OTA.isPlainName("a/b"))
     #expect(!OTA.isPlainName(""))
     // A URL component too: `&` would end the itms-services query early, and
@@ -334,10 +356,10 @@ extension TimingSensitive {
     // otherwise decide the port is free and overwrite an entry of the user's.
     #expect(TailscaleClient.serving(port: 41443, inJSON: "not json") == .unknown)
     #expect(TailscaleClient.serving(port: 41443, inJSON: "") == .unknown)
-    #expect(TailscaleClient.serving(port: 41443, inJSON: "null") == .nothing)   // no serve config at all
+    #expect(TailscaleClient.serving(port: 41443, inJSON: "null") == .nothing) // no serve config at all
     // A port with only a sub-path of the user's on it is not an empty port.
     #expect(TailscaleClient.serving(port: 41443, inJSON: #"{"Web":{"m:41443":{"Handlers":{"/mine":{}}}}}"#)
-            == .mounted(roots: [], others: [.init(host: "m", path: "/mine")]))
+        == .mounted(roots: [], others: [.init(host: "m", path: "/mine")]))
     // Nor is one carrying a TCP forward, which has no Web entry at all: reading a
     // section we don't look at as "nothing here" is the same mistake one layer down.
     let forwarded = TailscaleClient.serving(port: 41443, inJSON: #"{"TCP":{"41443":{"TCPForward":"localhost:22"}}}"#)
@@ -350,7 +372,7 @@ extension TimingSensitive {
     // An entry for the port whose inside we can't read is not an empty port —
     // reading it that way is how RoamRun would take one that is in use.
     #expect(TailscaleClient.serving(port: 41443, inJSON: #"{"Web":{"m:41443":{"Handlers":"?"}}}"#)
-            .alongside("m") == ["m (unreadable)"])
+        .alongside("m") == ["m (unreadable)"])
     // Funnel is never something RoamRun turns on, and the port it picks can't be
     // published today — but that list is Tailscale's policy, and being wrong
     // about it means unreleased builds on the open internet.
@@ -381,7 +403,7 @@ extension TimingSensitive {
     // Refusing to publish because of it would end the feature at a rename.
     #expect(state.alongside("new").isEmpty)
     #expect(state.alongside("old").isEmpty)
-    #expect(state.root(on: "third") == nil)   // a name with nothing of its own
+    #expect(state.root(on: "third") == nil) // a name with nothing of its own
 }
 
 @Test func whetherOurRegistrationLandedIsNotAQuestionAboutOneName() {
@@ -390,8 +412,8 @@ extension TimingSensitive {
     // rename as "it didn't take" and throws away the proof of ownership.
     let state = TailscaleClient.serving(port: 41443, inJSON:
         #"{"Web":{"new:41443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:61816"}}}}}"#)
-    #expect(state.root(on: "old") == nil)                      // the question we must not ask here
-    #expect(state.isRegistered("http://127.0.0.1:61816"))      // the one we must
+    #expect(state.root(on: "old") == nil) // the question we must not ask here
+    #expect(state.isRegistered("http://127.0.0.1:61816")) // the one we must
     #expect(!state.isRegistered("http://127.0.0.1:1"))
     #expect(!TailscaleClient.Serving.nothing.isRegistered("http://127.0.0.1:61816"))
 }
@@ -399,13 +421,14 @@ extension TimingSensitive {
 @Test func everyServeChangeThisTickOwesComesBeforeLookingForLeftovers() {
     typealias D = AppCoordinator.Due
     func due(port: Bool = false, published: Bool, listening: Bool = true,
-             builds: Bool, failed: Bool = false) -> D {
+             builds: Bool, failed: Bool = false) -> D
+    {
         AppCoordinator.due(portChanged: port, published: published, listening: listening,
                            hasBuilds: builds, publishJustFailed: failed)
     }
     // The sweep shares one lock with all of these, so each has to come first.
     #expect(due(port: true, published: true, builds: true) == .releaseOldPort)
-    #expect(due(published: true, builds: false) == .stopServing)            // `ota/` deleted
+    #expect(due(published: true, builds: false) == .stopServing) // `ota/` deleted
     #expect(due(published: true, listening: false, builds: true) == .restartListener)
     #expect(due(published: false, builds: true) == .publish)
     // Both settled states, where nothing else wants it.
@@ -435,13 +458,13 @@ extension TimingSensitive {
     #expect(next(work) == .nothing)
     // A tick while the attempt holds the lock must not consume the sweep's turn.
     let whileRunning = work.offerSweep(due: next(work), changeInProgress: true,
-                                      wanted: true, hasRemembered: true)
+                                       wanted: true, hasRemembered: true)
     #expect(!whileRunning)
     #expect(work.yieldToSweep)
 
     // The completed attempt yields once; even a failed sweep lets publishing retry.
     let afterFinishing = work.offerSweep(due: next(work), changeInProgress: false,
-                                        wanted: true, hasRemembered: true)
+                                         wanted: true, hasRemembered: true)
     #expect(afterFinishing)
     #expect(next(work) == .publish)
     work.began()
@@ -451,7 +474,7 @@ extension TimingSensitive {
     work.registered()
     #expect(!work.yieldToSweep)
     #expect(AppCoordinator.due(portChanged: false, published: true, listening: true,
-                              hasBuilds: true, publishJustFailed: work.yieldToSweep) == .nothing)
+                               hasBuilds: true, publishJustFailed: work.yieldToSweep) == .nothing)
 }
 
 @Test func offeringCleanupConsumesTheTurnEvenWhenNoSweepIsNeeded() {
@@ -486,7 +509,7 @@ extension TimingSensitive {
 
 @Test func aSweepThatStartedEarlierCantCancelARequestMadeWhileItRan() {
     var work = AppCoordinator.StrayWork()
-    #expect(work.wanted)                       // something may always be left from a previous run
+    #expect(work.wanted) // something may always be left from a previous run
 
     // The ordinary case: it starts, finds nothing of ours, and stops asking.
     let first = work.generation
@@ -497,7 +520,7 @@ extension TimingSensitive {
     // while it ran points at the registration that sweep never saw.
     work.askAgain()
     let second = work.generation
-    work.askAgain()                            // e.g. recovery, after the sweep began
+    work.askAgain() // e.g. recovery, after the sweep began
     work.finished(true, startedAt: second)
     #expect(work.wanted)
 
@@ -535,7 +558,7 @@ extension TimingSensitive {
     #expect(OTAServer.hostLike("evil.example/../x") == nil)
     #expect(OTAServer.hostLike("user@evil.example") == nil)
     #expect(OTAServer.hostLike("mac.ts.net:notaport") == nil)
-    #expect(OTAServer.hostLike("mac.ts.net:99999") == nil)   // not a port
+    #expect(OTAServer.hostLike("mac.ts.net:99999") == nil) // not a port
     #expect(OTAServer.hostLike("a%2f.ts.net") == nil)
     #expect(OTAServer.hostLike(":41443") == nil)
     #expect(OTAServer.hostLike(String(repeating: "a", count: 300)) == nil)
@@ -579,7 +602,8 @@ extension TimingSensitive {
         try? FileManager.default.removeItem(at: root)
     }
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    try JSONEncoder().encode(build("1.0", "1", "1.0-1-x"))
+    try JSONEncoder()
+        .encode(build("1.0", "1", "1.0-1-x"))
         .write(to: dir.appendingPathComponent("meta.json"))
     #expect(OTA.builds(of: "com.example.App", in: root)?.count == 1)
 
@@ -587,7 +611,7 @@ extension TimingSensitive {
     try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: dir.path)
     try #require(!FileManager.default.isReadableFile(atPath: dir.appendingPathComponent("meta.json").path))
     #expect(OTA.appDirectories(in: root) == ["com.example.App"])
-    #expect(OTA.builds(of: "com.example.App", in: root) == nil)   // not `[]`, which serves "No builds yet"
+    #expect(OTA.builds(of: "com.example.App", in: root) == nil) // not `[]`, which serves "No builds yet"
     #expect(OTA.builds(in: root) == nil)
 }
 
@@ -602,18 +626,18 @@ extension TimingSensitive {
     #expect(landed.isRegistered(mine))
     // What that path actually leaves behind: no serve config at all.
     #expect(!TailscaleClient.serving(port: 41443, inJSON: "null").isRegistered(mine))
-    #expect(TailscaleClient.serving(port: 41443, inJSON: "null") != .unknown)   // so it is a failure, not a maybe
+    #expect(TailscaleClient.serving(port: 41443, inJSON: "null") != .unknown) // so it is a failure, not a maybe
     // And a status we couldn't read is neither.
     #expect(!TailscaleClient.serving(port: 41443, inJSON: "not json").isRegistered(mine))
     #expect(TailscaleClient.serving(port: 41443, inJSON: "not json") == .unknown)
 }
 
 @Test func aPortThatCantWorkIsIgnoredRatherThanRetriedForEver() {
-    #expect(AppCoordinator.otaPort(0) == 41443)         // unset
+    #expect(AppCoordinator.otaPort(0) == 41443) // unset
     #expect(AppCoordinator.otaPort(41444) == 41443 + 1)
-    #expect(AppCoordinator.otaPort(8443) == 41443)      // Funnel could publish it
-    #expect(AppCoordinator.otaPort(80) == 41443)        // tailscaled is root and would take it
-    #expect(AppCoordinator.otaPort(70000) == 41443)     // `tailscale serve` refuses it
+    #expect(AppCoordinator.otaPort(8443) == 41443) // Funnel could publish it
+    #expect(AppCoordinator.otaPort(80) == 41443) // tailscaled is root and would take it
+    #expect(AppCoordinator.otaPort(70000) == 41443) // `tailscale serve` refuses it
 }
 
 @Test func aFolderThatCantBeReadIsNotAnEmptyOne() throws {
@@ -627,9 +651,9 @@ extension TimingSensitive {
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: app.path)
         try? FileManager.default.removeItem(at: root)
     }
-    try #require(!FileManager.default.isReadableFile(atPath: app.path))   // not running as root
-    #expect(OTA.appDirectories(in: root) == nil)                                       // unreadable: ask again
-    #expect(OTA.appDirectories(in: root.appendingPathComponent("absent")) == [])     // gone: off
+    try #require(!FileManager.default.isReadableFile(atPath: app.path)) // not running as root
+    #expect(OTA.appDirectories(in: root) == nil) // unreadable: ask again
+    #expect(OTA.appDirectories(in: root.appendingPathComponent("absent")) == []) // gone: off
 }
 
 @Test func anExpiredProfileOrAnUnknownUdidIsRefusedBeforeTheDeviceSeesIt() throws {
@@ -649,7 +673,7 @@ extension TimingSensitive {
     // No UDID learned yet: the question can't be answered, so it comes back as
     // unanswered rather than as a refusal — the build may still be someone else's.
     #expect(try OTA.check(live, against: [OTA.Device(name: "iPhone", udid: nil)]).coverage
-            == .noneOfYours(known: [], unchecked: ["iPhone"]))
+        == .noneOfYours(known: [], unchecked: ["iPhone"]))
     // Enterprise covers every device, so a missing UDID doesn't matter there.
     #expect(try OTA.check(["ProvisionsAllDevices": true], against: []).expires == nil)
 }
@@ -658,11 +682,11 @@ extension TimingSensitive {
     // The app can hold a profile it loaded before `roamrun up` learned the UDID.
     // Writing its own nil back leaves `roamrun ota` unable to say what a build
     // covers, on a device that has been bridged.
-    let loaded = profile("iPhone")                     // what the app read: no UDID yet
+    let loaded = profile("iPhone") // what the app read: no UDID yet
     var onDisk = loaded
-    onDisk.udid = "00008130-000D00000000D004"          // what `roamrun up` wrote after that
+    onDisk.udid = "00008130-000D00000000D004" // what `roamrun up` wrote after that
     var renamed = loaded
-    renamed.displayName = "iPhone mh"                  // the app changed something else
+    renamed.displayName = "iPhone mh" // the app changed something else
     #expect(ProfileStore.merge(base: [loaded], wanted: [renamed], disk: [onDisk]).first?.udid == onDisk.udid)
     // A UDID this process did change is this process's answer.
     var cleared = renamed
@@ -682,7 +706,7 @@ extension TimingSensitive {
     let build = try JSONDecoder().decode(OTA.Build.self, from: Data(older.utf8))
     #expect(build.bundleID == "com.example.App")
     #expect(build.label == "1.0 (7)")
-    #expect(build.slug.isEmpty)   // the directory it was found in replaces this
+    #expect(build.slug.isEmpty) // the directory it was found in replaces this
     // And the other way: nothing but the bundle id is actually required.
     #expect(throws: Never.self) {
         try JSONDecoder().decode(OTA.Build.self, from: Data(#"{"bundleID":"com.example.App"}"#.utf8))
@@ -704,7 +728,7 @@ extension TimingSensitive {
     try Data("ipa".utf8).write(to: gone.appendingPathComponent("app.ipa"))
 
     // Through the production path, not a helper written for the test.
-    #expect(OTA.builds(of: "com.example.App", in: dir)?.isEmpty == true)   // neither decodes
+    #expect(OTA.builds(of: "com.example.App", in: dir)?.isEmpty == true) // neither decodes
     // A read never deletes: it is answering a request from the tailnet, and a
     // build being written is exactly what it would take away.
     #expect(FileManager.default.fileExists(atPath: kept.path))
@@ -729,7 +753,8 @@ private func fakeIPA(_ root: URL, _ bytes: String) throws -> String {
 }
 
 private func build(_ version: String, _ number: String, _ slug: String,
-                   added: Date = .now, size: Int64 = 1) -> OTA.Build {
+                   added: Date = .now, size: Int64 = 1) -> OTA.Build
+{
     OTA.Build(bundleID: "com.example.App", title: "App", version: version, build: number,
               added: added, size: size, expires: nil, slug: slug)
 }
@@ -765,7 +790,7 @@ private func sized(_ path: String, _ b: OTA.Build) -> OTA.Build {
     defer { try? FileManager.default.removeItem(at: root) }
     // `added` is taken before the lock, so a build that waited its turn can sort
     // behind every other one. Dropping it from the tail used to leave six.
-    for i in 0..<OTA.keepPerApp {
+    for i in 0 ..< OTA.keepPerApp {
         _ = try OTA.add(ipa: try fakeIPA(root.appendingPathComponent("src"), "n\(i)"),
                         build("1.\(i)", "1", "1.\(i)-1-x", added: .now), in: root)
     }
@@ -774,7 +799,9 @@ private func sized(_ path: String, _ b: OTA.Build) -> OTA.Build {
                            build("0.9", "1", "0.9-1-x", added: .distantPast), in: root)
     let after = OTA.builds(of: "com.example.App", in: root) ?? []
     #expect(after.count == OTA.keepPerApp)
-    #expect(after.contains { $0.slug == late.dir.lastPathComponent })   // the one just asked for stays
+    #expect(after.contains {
+        $0.slug == late.dir.lastPathComponent
+    }) // the one just asked for stays
 }
 
 @Test func aBuildThatWasNeverFinishedIsReapedByTheNextWriteNotByAReader() throws {
@@ -814,7 +841,8 @@ private func sized(_ path: String, _ b: OTA.Build) -> OTA.Build {
     try FileManager.default.createDirectory(at: orphan, withIntermediateDirectories: true)
     try Data("ipa".utf8).write(to: orphan.appendingPathComponent("app.ipa"))
     try FileManager.default.createDirectory(at: shut, withIntermediateDirectories: true)
-    try JSONEncoder().encode(build("1.0", "9", "1.0-9-locked"))
+    try JSONEncoder()
+        .encode(build("1.0", "9", "1.0-9-locked"))
         .write(to: shut.appendingPathComponent("meta.json"))
     try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: shut.path)
     try #require(!FileManager.default.isReadableFile(atPath: shut.appendingPathComponent("meta.json").path))
@@ -822,8 +850,8 @@ private func sized(_ path: String, _ b: OTA.Build) -> OTA.Build {
     // `add` is what runs the reap, under the lock.
     _ = try? OTA.add(ipa: try fakeIPA(root.appendingPathComponent("src"), "x"),
                      build("2.0", "1", "2.0-1-x"), in: root)
-    #expect(!FileManager.default.fileExists(atPath: orphan.path))   // never finished: reaped
-    #expect(FileManager.default.fileExists(atPath: shut.path))      // unreadable: left alone
+    #expect(!FileManager.default.fileExists(atPath: orphan.path)) // never finished: reaped
+    #expect(FileManager.default.fileExists(atPath: shut.path)) // unreadable: left alone
 }
 
 @Test func aFolderWithNoBuildsInItIsNotSomethingToPublish() throws {
@@ -833,7 +861,7 @@ private func sized(_ path: String, _ b: OTA.Build) -> OTA.Build {
     try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
     // What a failed first add leaves: the folder and the lock it took, nothing else.
     try Data().write(to: app.appendingPathComponent(".lock"))
-    #expect(OTA.appDirectories(in: root) == [])          // so the page isn't published for it
+    #expect(OTA.appDirectories(in: root) == []) // so the page isn't published for it
     try FileManager.default.createDirectory(at: app.appendingPathComponent("1.0-1-x"),
                                             withIntermediateDirectories: true)
     #expect(OTA.appDirectories(in: root) == ["com.example.App"])
@@ -848,15 +876,16 @@ private func sized(_ path: String, _ b: OTA.Build) -> OTA.Build {
     let app = root.appendingPathComponent("com.example.App")
     try FileManager.default.createDirectory(at: app.appendingPathComponent("1.0-1-x"),
                                             withIntermediateDirectories: true)
-    try JSONEncoder().encode(build("1.0", "1", "1.0-1-x"))
+    try JSONEncoder()
+        .encode(build("1.0", "1", "1.0-1-x"))
         .write(to: app.appendingPathComponent("1.0-1-x/meta.json"))
     #expect(OTA.builds(in: root)?.count == 1)
     // `fileExists` is false both for a path that isn't there and for one whose
     // parent you can't get into, so it can't be what tells these apart.
     try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: root.path)
-    try #require(!FileManager.default.isReadableFile(atPath: root.path))   // not running as root
+    try #require(!FileManager.default.isReadableFile(atPath: root.path)) // not running as root
     #expect(OTA.appDirectories(in: root) == nil)
-    #expect(OTA.builds(in: root) == nil)                 // the page answers 503, not "no builds yet"
+    #expect(OTA.builds(in: root) == nil) // the page answers 503, not "no builds yet"
 }
 
 @Test func anAppFolderThatCantBeOpenedIsNotAnAppThatIsGone() throws {
@@ -872,13 +901,14 @@ private func sized(_ path: String, _ b: OTA.Build) -> OTA.Build {
     }
     try FileManager.default.createDirectory(at: app.appendingPathComponent("1.0-1-x"),
                                             withIntermediateDirectories: true)
-    try JSONEncoder().encode(build("1.0", "1", "1.0-1-x"))
+    try JSONEncoder()
+        .encode(build("1.0", "1", "1.0-1-x"))
         .write(to: app.appendingPathComponent("1.0-1-x/meta.json"))
     #expect(OTA.appDirectories(in: root) == ["com.example.App"])
 
     try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: app.path)
     try #require(!FileManager.default.isReadableFile(atPath: app.path))
-    #expect(OTA.appDirectories(in: root) == nil)         // not `[]`, which reads as the off switch
+    #expect(OTA.appDirectories(in: root) == nil) // not `[]`, which reads as the off switch
     #expect(OTA.builds(in: root) == nil)
     #expect(OTA.builds(of: "com.example.App", in: root) == nil)
     // And `drop` says it couldn't look, rather than "there was nothing to remove".
@@ -931,7 +961,9 @@ private func sized(_ path: String, _ b: OTA.Build) -> OTA.Build {
     #expect(port > 0)
     #expect(TailscaleClient.listening(on: port))
     server.stop()
-    #expect(try await eventually { !TailscaleClient.listening(on: port) })
+    #expect(try await eventually {
+        !TailscaleClient.listening(on: port)
+    })
 }
 
 @Test func aBuildWhoseProfileRanOutWhileItSatThereSaysSo() {
@@ -944,7 +976,7 @@ private func sized(_ path: String, _ b: OTA.Build) -> OTA.Build {
     }
     #expect(page(.now.addingTimeInterval(-86_400)).contains("EXPIRED"))
     #expect(!page(.now.addingTimeInterval(86_400)).contains("EXPIRED"))
-    #expect(!page(nil).contains("EXPIRED"))   // Enterprise profiles carry no date we act on
+    #expect(!page(nil).contains("EXPIRED")) // Enterprise profiles carry no date we act on
 }
 
 @Test func aPortOutsideFunnelsThreeCanNeverReachTheInternet() {
@@ -974,12 +1006,16 @@ private func sized(_ path: String, _ b: OTA.Build) -> OTA.Build {
     #expect(AppCoordinator.remembering(seen, "port1") == ["port2", "port1"])
     // Bounded, newest kept.
     var many: [String] = []
-    for port in 1...9 { many = AppCoordinator.remembering(many, "port\(port)", keep: 5) }
+    for port in 1 ... 9 {
+        many = AppCoordinator.remembering(many, "port\(port)", keep: 5)
+    }
     #expect(many == ["port5", "port6", "port7", "port8", "port9"])
 }
 
 /// For page tests: icons are looked up here, so they never touch the real ota/ folder.
-private let absentOTA = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-absent-\(UUID().uuidString)")
+private let absentOTA = FileManager.default
+    .temporaryDirectory
+    .appendingPathComponent("roamrun-absent-\(UUID().uuidString)")
 
 @Test func theInstallPageKnowsOnlyItsTailnetName() {
     #expect(OTAServer.isServedName("mac.tail1.ts.net:41443", servedName: "mac.tail1.ts.net"))
@@ -994,7 +1030,8 @@ private let absentOTA = FileManager.default.temporaryDirectory.appendingPathComp
     defer { try? FileManager.default.removeItem(at: tmp) }
     let fm = FileManager.default
     for name in ["roamrun-ipa-old", "roamrun-install-old", "roamrun-ipa-fresh", "someone-elses",
-                 "roamrun-ipa-4242-X", "roamrun-ipa-4343-X", "roamrun-ipa-4444-X"] {
+                 "roamrun-ipa-4242-X", "roamrun-ipa-4343-X", "roamrun-ipa-4444-X"]
+    {
         try fm.createDirectory(at: tmp.appendingPathComponent(name), withIntermediateDirectories: true)
     }
     let longAgo = Date.now.addingTimeInterval(-7200)
@@ -1005,13 +1042,17 @@ private let absentOTA = FileManager.default.temporaryDirectory.appendingPathComp
         try fm.setAttributes([.creationDate: longAgo], ofItemAtPath: tmp.appendingPathComponent(n).path)
     }
     let before = longAgo.timeIntervalSince1970 - 5, after = Date.now.timeIntervalSince1970 - 60
-    CLI.sweepStaleUnpacks(in: tmp, started: { [4242: before, 4444: after][$0] })
-    #expect(fm.fileExists(atPath: tmp.appendingPathComponent("roamrun-ipa-4242-X").path))    // an install still running
-    #expect(!fm.fileExists(atPath: tmp.appendingPathComponent("roamrun-ipa-4343-X").path))   // its process is gone
-    #expect(!fm.fileExists(atPath: tmp.appendingPathComponent("roamrun-ipa-4444-X").path))   // its pid is another process's now
+    CLI.sweepStaleUnpacks(in: tmp, started: {
+        [4242: before, 4444: after][$0]
+    })
+    #expect(fm.fileExists(atPath: tmp.appendingPathComponent("roamrun-ipa-4242-X").path)) // an install still running
+    #expect(!fm.fileExists(atPath: tmp.appendingPathComponent("roamrun-ipa-4343-X").path)) // its process is gone
+    #expect(!fm
+        .fileExists(atPath: tmp.appendingPathComponent("roamrun-ipa-4444-X").path)) // its pid is another process's now
     #expect(!fm.fileExists(atPath: tmp.appendingPathComponent("roamrun-ipa-old").path))
-    #expect(!fm.fileExists(atPath: tmp.appendingPathComponent("roamrun-install-old").path))   // the signing check's unpacking
-    #expect(fm.fileExists(atPath: tmp.appendingPathComponent("roamrun-ipa-fresh").path))   // maybe an install running now
+    #expect(!fm
+        .fileExists(atPath: tmp.appendingPathComponent("roamrun-install-old").path)) // the signing check's unpacking
+    #expect(fm.fileExists(atPath: tmp.appendingPathComponent("roamrun-ipa-fresh").path)) // maybe an install running now
     #expect(fm.fileExists(atPath: tmp.appendingPathComponent("someone-elses").path))
 }
 
@@ -1034,7 +1075,15 @@ private let absentOTA = FileManager.default.temporaryDirectory.appendingPathComp
     let root = scratchDir()
     defer { try? FileManager.default.removeItem(at: root) }
     let slug = "1.0-1-20260101-000000"
-    let build = OTA.Build(bundleID: "com.example.App", title: "App", version: "1.0", build: "1", added: .now, size: 1, slug: slug)
+    let build = OTA.Build(
+        bundleID: "com.example.App",
+        title: "App",
+        version: "1.0",
+        build: "1",
+        added: .now,
+        size: 1,
+        slug: slug
+    )
     let dir = root.appendingPathComponent("com.example.App").appendingPathComponent(slug)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     try JSONEncoder().encode(build).write(to: dir.appendingPathComponent("meta.json"))
@@ -1045,11 +1094,10 @@ private let absentOTA = FileManager.default.temporaryDirectory.appendingPathComp
     #expect(OTA.builds(in: root)?.first?.builds.map(\.slug) == [slug])
 }
 
-
 /// `tailscale serve` and the record of what this Mac registered, faked. Calls are counted
 /// so a test sees what would have been run.
 private final class FakeServe: @unchecked Sendable {
-    var states: [Int: TailscaleClient.Serving] = [:]   // missing: .nothing
+    var states: [Int: TailscaleClient.Serving] = [:] // missing: .nothing
     var host: String? = "mac.ts.net"
     var offWorks = true
     /// What the port carries after an `off` that exited 0 (nil: nothing).
@@ -1058,31 +1106,53 @@ private final class FakeServe: @unchecked Sendable {
     var offs: [Int] = []
     var serves: [Int] = []
     var otaPort = 41443
-    init(record: [String] = []) { self.record = record }
+    init(record: [String] = []) {
+        self.record = record
+    }
 
     var tools: AppCoordinator.ServeTools {
         var t = AppCoordinator.ServeTools()
-        t.serving = { port, _ in self.states[port] ?? .nothing }
-        t.host = { _ in self.host }
+        t.serving = { port, _ in
+            self.states[port] ?? .nothing
+        }
+        t.host = { _ in
+            self.host
+        }
         t.off = { port, _ in
             self.offs.append(port)
-            if self.offWorks { self.states[port] = self.afterOff }
+            if self.offWorks {
+                self.states[port] = self.afterOff
+            }
             return self.offWorks
         }
-        t.serve = { port, target in self.serves.append(port); self.states[port] = mounted(port, target); return "" }
-        t.remember = { target, port in self.record.append("\(port) \(target)") }
-        t.remembered = { self.record }
-        t.forget = { target, port in
-            self.record.removeAll { let p = AppCoordinator.pair($0); return p.target == target && (p.port == nil || p.port == port) }
+        t.serve = { port, target in
+            self.serves.append(port); self.states[port] = mounted(port, target); return ""
         }
-        t.otaPort = { self.otaPort }
+        t.remember = { target, port in
+            self.record.append("\(port) \(target)")
+        }
+        t.remembered = {
+            self.record
+        }
+        t.forget = { target, port in
+            self.record
+                .removeAll {
+                    let p = AppCoordinator.pair($0); return p.target == target && (p.port == nil || p.port == port)
+                }
+        }
+        t.otaPort = {
+            self.otaPort
+        }
         return t
     }
 }
 
 /// A mount at `/` on `port` under mac.ts.net, proxying to `target`.
 private func mounted(_ port: Int, _ target: String) -> TailscaleClient.Serving {
-    TailscaleClient.serving(port: port, inJSON: #"{"Web":{"mac.ts.net:\#(port)":{"Handlers":{"/":{"Proxy":"\#(target)"}}}}}"#)
+    TailscaleClient.serving(
+        port: port,
+        inJSON: #"{"Web":{"mac.ts.net:\#(port)":{"Handlers":{"/":{"Proxy":"\#(target)"}}}}}"#
+    )
 }
 
 enum ReleaseCase: String, CaseIterable {
@@ -1102,24 +1172,24 @@ func releaseServeOutcomes(_ c: ReleaseCase) {
     case .oursOffWorks: fake.states[41443] = mounted(41443, mine)
     case .oursOffFails: fake.states[41443] = mounted(41443, mine); fake.offWorks = false
     case .someoneElses: fake.states[41443] = mounted(41443, "http://127.0.0.1:8788")
-    case .oursUnderAnOldName:   // the node was renamed: `off` would hit whatever took its place
+    case .oursUnderAnOldName: // the node was renamed: `off` would hit whatever took its place
         fake.states[41443] = TailscaleClient.serving(port: 41443,
-            inJSON: #"{"Web":{"old.ts.net:41443":{"Handlers":{"/":{"Proxy":"\#(mine)"}}}}}"#)
+                                                     inJSON: #"{"Web":{"old.ts.net:41443":{"Handlers":{"/":{"Proxy":"\#(mine)"}}}}}"#)
     case .noHostName: fake.states[41443] = mounted(41443, mine); fake.host = nil
     case .offSaysYesButStays: fake.states[41443] = mounted(41443, mine); fake.afterOff = mounted(41443, mine)
     case .offThenUnreadable: fake.states[41443] = mounted(41443, mine); fake.afterOff = .unknown
-    case .offThenSomeoneElses:   // ours went, and something else took `/` straight after
+    case .offThenSomeoneElses: // ours went, and something else took `/` straight after
         fake.states[41443] = mounted(41443, mine); fake.afterOff = mounted(41443, "http://127.0.0.1:8788")
     }
     let gone = AppCoordinator.releaseServe((port: 41443, target: mine), tools: fake.tools)
     let (expectGone, expectOff, expectForgotten): (Bool, Bool, Bool) = switch c {
-    case .unreadable: (false, false, false)        // couldn't look: claiming it's gone is how one survives
+    case .unreadable: (false, false, false) // couldn't look: claiming it's gone is how one survives
     case .alreadyGone: (true, false, true)
     case .oursOffWorks: (true, true, true)
-    case .oursOffFails: (false, true, false)       // still there: remembered, so the next run knows it
-    case .someoneElses, .oursUnderAnOldName: (true, false, true)   // not ours to remove; ours is gone
+    case .oursOffFails: (false, true, false) // still there: remembered, so the next run knows it
+    case .someoneElses, .oursUnderAnOldName: (true, false, true) // not ours to remove; ours is gone
     case .noHostName: (false, false, false)
-    case .offSaysYesButStays, .offThenUnreadable: (false, true, false)   // not seen gone: kept for the next sweep
+    case .offSaysYesButStays, .offThenUnreadable: (false, true, false) // not seen gone: kept for the next sweep
     case .offThenSomeoneElses: (true, true, true)
     }
     #expect(gone == expectGone, "\(c)")
@@ -1132,12 +1202,12 @@ func releaseServeOutcomes(_ c: ReleaseCase) {
 @Test func reclaimStraysRemovesOnlyOurLeftovers() {
     let old = "http://127.0.0.1:50001", live = "http://127.0.0.1:50002", older = "http://127.0.0.1:50003"
     let fake = FakeServe(record: ["41444 \(old)", "41446 \(older)", "41443 \(live)"])
-    fake.states[41444] = mounted(41444, old)               // a killed run's, after otaPort changed
-    fake.states[41443] = mounted(41443, live)              // this run's
-    fake.states[41446] = mounted(41446, "http://127.0.0.1:8788")   // ours was replaced by the user's
+    fake.states[41444] = mounted(41444, old) // a killed run's, after otaPort changed
+    fake.states[41443] = mounted(41443, live) // this run's
+    fake.states[41446] = mounted(41446, "http://127.0.0.1:8788") // ours was replaced by the user's
     fake.otaPort = 41443
     #expect(AppCoordinator.reclaimStrays(keeping: (port: 41443, target: live), tools: fake.tools) == true)
-    #expect(fake.offs == [41444])                          // never the live one, never the user's
+    #expect(fake.offs == [41444]) // never the live one, never the user's
     #expect(fake.record == ["41446 \(older)", "41443 \(live)"])
 
     // One port it couldn't read: not "done", so the sweep runs again later.
@@ -1160,7 +1230,9 @@ extension TimingSensitive.OTAServerOverASocket {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let ipa = Data("IPA-BYTES-\(UUID().uuidString)".utf8)
         try ipa.write(to: dir.appendingPathComponent("app.ipa"))
-        try JSONEncoder().encode(build("1.0", "1", "1.0-1-x", size: Int64(ipa.count))).write(to: dir.appendingPathComponent("meta.json"))
+        try JSONEncoder()
+            .encode(build("1.0", "1", "1.0-1-x", size: Int64(ipa.count)))
+            .write(to: dir.appendingPathComponent("meta.json"))
 
         let server = OTAServer(tailnetPort: 41443, root: root)
         server.servedName = "m"
@@ -1202,7 +1274,7 @@ extension TimingSensitive.OTAServerOverASocket {
     let busy = try app("com.example.Busy", staging: [(".adding-old", old)])
     let held = open(busy.appendingPathComponent(".lock").path, O_RDWR)
     defer { close(held) }
-    #expect(flock(held, LOCK_EX) == 0)                      // an add running there
+    #expect(flock(held, LOCK_EX) == 0) // an add running there
     OTA.sweepOthersStaging(in: store, besides: mine)
     #expect(!fm.fileExists(atPath: idle.appendingPathComponent(".adding-old").path))
     #expect(fm.fileExists(atPath: idle.appendingPathComponent(".adding-new").path))
@@ -1213,9 +1285,9 @@ extension TimingSensitive.OTAServerOverASocket {
 /// download doesn't, and nothing goes before five minutes whatever the rate.
 @Test func otaDownloadFloor() {
     #expect(!OTAServer.tooSlow(sent: 0, after: 299))
-    #expect(OTAServer.tooSlow(sent: 100_000, after: 300))           // ~330 B/s
-    #expect(!OTAServer.tooSlow(sent: 300 * 8 * 1024, after: 300))   // right at 8 KB/s
-    #expect(!OTAServer.tooSlow(sent: 50_000_000, after: 3600))      // ~14 KB/s for an hour
+    #expect(OTAServer.tooSlow(sent: 100_000, after: 300)) // ~330 B/s
+    #expect(!OTAServer.tooSlow(sent: 300 * 8 * 1024, after: 300)) // right at 8 KB/s
+    #expect(!OTAServer.tooSlow(sent: 50_000_000, after: 3600)) // ~14 KB/s for an hour
 }
 
 /// The write between two looks at whether OTA is still on: turned off before it, nothing
@@ -1224,7 +1296,9 @@ enum PublishCase: String, CaseIterable { case portChanged, offBefore, offDuring,
 
 @Test(arguments: PublishCase.allCases)
 func publishStepsAsideWhenTurnedOff(_ c: PublishCase) async {
-    final class Answers: @unchecked Sendable { var left: [Bool]; init(_ a: [Bool]) { left = a } }
+    final class Answers: @unchecked Sendable { var left: [Bool]; init(_ a: [Bool]) {
+        left = a
+    } }
     let mine = "http://127.0.0.1:61816"
     let fake = FakeServe()
     let answers = Answers(c == .offBefore ? [false] : c == .offDuring ? [true, false] : [true, true])

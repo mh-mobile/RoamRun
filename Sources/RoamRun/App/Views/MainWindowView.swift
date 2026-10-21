@@ -14,21 +14,45 @@ struct MainWindowView: View {
                     SidebarRow(profile: profile)
                         .tag(profile.id)
                         .contextMenu {
-                            Button("Remove Device…", role: .destructive) { pendingDelete = profile }
+                            Button("Remove Device…", role: .destructive) {
+                                pendingDelete = profile
+                            }
                         }
                 }
-                .onDelete { indexSet in pendingDelete = indexSet.first.map { coordinator.profiles[$0] } }
+                .onDelete { indexSet in
+                    pendingDelete = indexSet.first.map {
+                        coordinator.profiles[$0]
+                    }
+                }
             }
             .alert("Remove “\(pendingDelete?.displayName ?? "")”?", isPresented: Binding(
-                get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
-                Button("Remove", role: .destructive) { pendingDelete.map { coordinator.deleteProfile($0.id) } }
+                get: {
+                    pendingDelete != nil
+                }, set: {
+                    if !$0 {
+                        pendingDelete = nil
+                    }
+                }
+            )) {
+                Button("Remove", role: .destructive) {
+                    pendingDelete.map {
+                        coordinator.deleteProfile($0.id)
+                    }
+                }
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("The bridge stops and the saved pairing details are deleted. You can add the device again later.")
             }
             // A second alert on the same view is unreliable on macOS 13: host it separately.
             .background(Color.clear.alert("RoamRun needs attention", isPresented: Binding(
-                get: { coordinator.launchWarning != nil }, set: { if !$0 { coordinator.launchWarning = nil } })) {
+                get: {
+                    coordinator.launchWarning != nil
+                }, set: {
+                    if !$0 {
+                        coordinator.launchWarning = nil
+                    }
+                }
+            )) {
                 Button("OK") {}
             } message: {
                 Text(coordinator.launchWarning ?? "")
@@ -38,7 +62,9 @@ struct MainWindowView: View {
             .navigationSplitViewColumnWidth(min: 230, ideal: 250)
             .toolbar {
                 ToolbarItem {
-                    Button { showAddDevice = true } label: {
+                    Button {
+                        showAddDevice = true
+                    } label: {
                         Label("Add Device", systemImage: "plus")
                     }
                     .help("Add Device")
@@ -46,11 +72,14 @@ struct MainWindowView: View {
             }
         } detail: {
             if let id = coordinator.selectedID, let profile = coordinator.profile(id),
-               let bridge = coordinator.bridges[id] {
+               let bridge = coordinator.bridges[id]
+            {
                 DeviceDetailView(profile: profile, bridge: bridge)
-                    .id(profile.id)   // fresh view state (e.g. an ongoing scan) per device
+                    .id(profile.id) // fresh view state (e.g. an ongoing scan) per device
             } else if coordinator.profiles.isEmpty {
-                WelcomeView { showAddDevice = true }
+                WelcomeView {
+                    showAddDevice = true
+                }
             } else {
                 Text("Select a device")
                     .font(.title3)
@@ -62,10 +91,14 @@ struct MainWindowView: View {
             if coordinator.profiles.count > 1 {
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
-                        Button("Reconnect Active Bridges") { coordinator.reconnectActiveBridges() }
-                            .disabled(coordinator.runningProfiles.isEmpty)
-                        Button("Stop All Bridges", role: .destructive) { coordinator.stopAllBridges() }
-                            .disabled(coordinator.runningProfiles.isEmpty && coordinator.externalBridges.isEmpty)
+                        Button("Reconnect Active Bridges") {
+                            coordinator.reconnectActiveBridges()
+                        }
+                        .disabled(coordinator.runningProfiles.isEmpty)
+                        Button("Stop All Bridges", role: .destructive) {
+                            coordinator.stopAllBridges()
+                        }
+                        .disabled(coordinator.runningProfiles.isEmpty && coordinator.externalBridges.isEmpty)
                     } label: {
                         Label("All Bridges", systemImage: "ellipsis.circle")
                     }
@@ -73,22 +106,28 @@ struct MainWindowView: View {
                 }
             }
             ToolbarItem(placement: .primaryAction) {
-                Button { showSettings = true } label: {
+                Button {
+                    showSettings = true
+                } label: {
                     Label("Settings", systemImage: "gearshape")
                 }
                 .help("Settings")
             }
         }
         .sheet(isPresented: $showAddDevice) {
-            AddDeviceView { newID in coordinator.selectedID = newID }
-                .environmentObject(coordinator)
+            AddDeviceView { newID in
+                coordinator.selectedID = newID
+            }
+            .environmentObject(coordinator)
         }
         .sheet(isPresented: $showSettings) {
             SettingsView()
                 .environmentObject(coordinator)
         }
         .onAppear {
-            if coordinator.selectedID == nil { coordinator.selectedID = coordinator.profiles.first?.id }
+            if coordinator.selectedID == nil {
+                coordinator.selectedID = coordinator.profiles.first?.id
+            }
             switch Snapshot.sheet {
             case "add": showAddDevice = true
             case "settings": showSettings = true
@@ -99,7 +138,9 @@ struct MainWindowView: View {
             NSApp.setActivationPolicy(.regular)
             NSApp.activate(ignoringOtherApps: true)
         }
-        .onDisappear { NSApp.setActivationPolicy(.accessory) }
+        .onDisappear {
+            NSApp.setActivationPolicy(.accessory)
+        }
     }
 }
 
@@ -115,11 +156,13 @@ private struct SidebarRow: View {
                 .font(.title2)
                 .foregroundStyle(.secondary)
                 .frame(width: 24)
-                .accessibilityHidden(true)   // the name and status below say it
+                .accessibilityHidden(true) // the name and status below say it
             VStack(alignment: .leading, spacing: 2) {
                 Text(profile.displayName).fontWeight(.medium).lineLimit(1).help(profile.displayName)
                 let text = coordinator.statusText(of: profile.id)
-                Label(elsewhere.map { "\(text) · \($0)" } ?? text, systemImage: status.symbol)
+                Label(elsewhere.map {
+                    "\(text) · \($0)"
+                } ?? text, systemImage: status.symbol)
                     .labelStyle(StatusLabelStyle(color: status.color))
                     .font(.caption)
                     .spinning(status.isWorking)
@@ -131,7 +174,9 @@ private struct SidebarRow: View {
 
 extension View {
     /// Turns the status symbol while the bridge is working (macOS 15+).
-    func spinning(_ on: Bool) -> some View { modifier(Spinning(on: on)) }
+    func spinning(_ on: Bool) -> some View {
+        modifier(Spinning(on: on))
+    }
 }
 
 /// Still under Reduce Motion (Accessibility › Display).
@@ -188,12 +233,17 @@ private struct WelcomeView: View {
                 cliState = CLIInstaller.state
             }
             .buttonStyle(.link)
-            if let cliError { Text(cliError).font(.caption).foregroundStyle(.red) }
+            if let cliError {
+                Text(cliError).font(.caption).foregroundStyle(.red)
+            }
         case .installed:
-            Label("roamrun installed at \(CLIInstaller.installedPath ?? CLIInstaller.linkPath)", systemImage: "checkmark.circle.fill")
-                .labelStyle(StatusLabelStyle(color: .green))
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Label(
+                "roamrun installed at \(CLIInstaller.installedPath ?? CLIInstaller.linkPath)",
+                systemImage: "checkmark.circle.fill"
+            )
+            .labelStyle(StatusLabelStyle(color: .green))
+            .font(.caption)
+            .foregroundStyle(.secondary)
         default:
             EmptyView()
         }
@@ -207,12 +257,17 @@ private struct WelcomeView: View {
             VStack(spacing: 6) {
                 Text("Debug your iPhone from anywhere")
                     .font(.title2.weight(.semibold))
-                Text("Xcode's wireless debugging only works on the same Wi‑Fi.\nRoamRun carries it over Tailscale, so the device can be on any Wi‑Fi network.")
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.secondary)
+                Text(
+                    "Xcode's wireless debugging only works on the same Wi‑Fi.\nRoamRun carries it over Tailscale, so the device can be on any Wi‑Fi network."
+                )
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
             }
             VStack(alignment: .leading, spacing: 10) {
-                Step(n: 1, text: "Pair the device with this Mac once — over USB, or with Xcode 27 + iOS 27, Device Hub › Pair Nearby Device on the same Wi‑Fi.")
+                Step(
+                    n: 1,
+                    text: "Pair the device with this Mac once — over USB, or with Xcode 27 + iOS 27, Device Hub › Pair Nearby Device on the same Wi‑Fi."
+                )
                 Step(n: 2, text: "Install Tailscale on this Mac and the device, signed in to the same tailnet.")
                 Step(n: 3, text: "Add the device here while it's on this Mac's Wi‑Fi.")
             }

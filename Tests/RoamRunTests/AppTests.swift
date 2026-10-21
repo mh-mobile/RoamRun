@@ -4,13 +4,13 @@ import Testing
 
 @Test func settingsCarryOverFromTheOldBundleID() {
     let old: [String: Any] = ["networkInterface": "en1", "wasActiveIDs": ["A"]]
-    #expect(AppID.carriedOver(old: nil, new: nil) == nil)                         // nothing saved yet
+    #expect(AppID.carriedOver(old: nil, new: nil) == nil) // nothing saved yet
     #expect(AppID.carriedOver(old: [:], new: nil) == nil)
     #expect(AppID.carriedOver(old: old, new: nil)?["networkInterface"] as? String == "en1")
-    #expect(AppID.carriedOver(old: old, new: [:])?["networkInterface"] as? String == "en1")   // an empty domain file
-    #expect(AppID.carriedOver(old: old, new: ["networkInterface": "en0"]) == nil)             // never overwrites
-    var marked = old; marked[AppID.movedKey] = AppID.bundle                                     // already carried over once:
-    #expect(AppID.carriedOver(old: marked, new: nil) == nil)                                   // deleted settings stay deleted
+    #expect(AppID.carriedOver(old: old, new: [:])?["networkInterface"] as? String == "en1") // an empty domain file
+    #expect(AppID.carriedOver(old: old, new: ["networkInterface": "en0"]) == nil) // never overwrites
+    var marked = old; marked[AppID.movedKey] = AppID.bundle // already carried over once:
+    #expect(AppID.carriedOver(old: marked, new: nil) == nil) // deleted settings stay deleted
 }
 
 @Test func openAtLoginSurvivesALostRegistration() {
@@ -30,14 +30,25 @@ import Testing
 
 @Test func aLostLoginItemThisCopyCantRestoreShowsOff() {
     // Outside /Applications nothing registers it again: showing it on would be a promise nobody keeps.
-    #expect(AppCoordinator.loginItem(saved: true, status: .notRegistered, canRegister: false) == (on: false, register: false))
-    #expect(AppCoordinator.loginItem(saved: true, status: .notFound, canRegister: false) == (on: false, register: false))
+    #expect(AppCoordinator.loginItem(saved: true, status: .notRegistered, canRegister: false) == (
+        on: false,
+        register: false
+    ))
+    #expect(AppCoordinator.loginItem(saved: true, status: .notFound, canRegister: false) == (
+        on: false,
+        register: false
+    ))
     #expect(AppCoordinator.loginItem(saved: true, status: .enabled, canRegister: false) == (on: true, register: false))
-    #expect(AppCoordinator.loginItem(saved: true, status: .notRegistered, canRegister: true) == (on: true, register: true))
+    #expect(AppCoordinator.loginItem(saved: true, status: .notRegistered, canRegister: true) == (
+        on: true,
+        register: true
+    ))
     // Only an installed copy is invited to take the login item back; a build run
     // from a folder would take it from the one in /Applications.
-    #expect(AppCoordinator.lostLoginItemAdvice(bundlePath: "/Users/me/Applications/RoamRun.app").contains("Switch it on"))
-    #expect(!AppCoordinator.lostLoginItemAdvice(bundlePath: "/Users/me/src/RoamRun/RoamRun.app").contains("Switch it on"))
+    #expect(AppCoordinator.lostLoginItemAdvice(bundlePath: "/Users/me/Applications/RoamRun.app")
+        .contains("Switch it on"))
+    #expect(!AppCoordinator.lostLoginItemAdvice(bundlePath: "/Users/me/src/RoamRun/RoamRun.app")
+        .contains("Switch it on"))
 }
 
 @Test func quittingGivesTheLiveEntryBackWhileOnlyTheSweepRuns() {

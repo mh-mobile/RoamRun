@@ -7,11 +7,25 @@ import Network
 final class Events: @unchecked Sendable {
     private let lock = NSLock()
     private var all: [StandIn.Event] = []
-    func add(_ e: StandIn.Event) { lock.withLock { all.append(e) }; print("  event:", e) }
-    var list: [StandIn.Event] { lock.withLock { all } }
+    func add(_ e: StandIn.Event) {
+        lock.withLock {
+            all.append(e)
+        }; print("  event:", e)
+    }
+
+    var list: [StandIn.Event] {
+        lock.withLock {
+            all
+        }
+    }
+
     func wait(_ seconds: Double = 5, for test: @escaping ([StandIn.Event]) -> Bool) -> Bool {
         let until = Date().addingTimeInterval(seconds)
-        while Date() < until { if test(list) { return true }; Thread.sleep(forTimeInterval: 0.05) }
+        while Date() < until {
+            if test(list) {
+                return true
+            }; Thread.sleep(forTimeInterval: 0.05)
+        }
         return test(list)
     }
 }
@@ -28,14 +42,25 @@ final class Browse: @unchecked Sendable {
         process.standardOutput = pipe
         pipe.fileHandleForReading.readabilityHandler = { [self] h in
             let s = String(decoding: h.availableData, as: UTF8.self)
-            lock.withLock { text += s }
+            lock.withLock {
+                text += s
+            }
         }
         try! process.run()
     }
+
     func wait(_ seconds: Double = 6, forLine test: @escaping (String) -> Bool) -> Bool {
         let until = Date().addingTimeInterval(seconds)
         while Date() < until {
-            if lock.withLock({ text }).split(separator: "\n").contains(where: { test(String($0)) }) { return true }
+            if lock.withLock({
+                text
+            })
+            .split(separator: "\n")
+            .contains(where: {
+                test(String($0))
+            }) {
+                return true
+            }
             Thread.sleep(forTimeInterval: 0.1)
         }
         return false
@@ -50,31 +75,64 @@ final class Client: @unchecked Sendable {
     private var closed = false, failed = false, ready = false
     init(port: UInt16, from local: String? = nil, host: String = "127.0.0.1", queue: DispatchQueue) {
         let params = NWParameters.tcp
-        if let local { params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(local), port: .any) }
+        if let local {
+            params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(local), port: .any)
+        }
         connection = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!, using: params)
         connection.stateUpdateHandler = { [self] st in
             switch st {
-            case .ready: lock.withLock { ready = true }; receive()
-            case .failed, .waiting: lock.withLock { failed = true }
-            case .cancelled: lock.withLock { closed = true }
+            case .ready: lock.withLock {
+                    ready = true
+                }; receive()
+            case .failed, .waiting: lock.withLock {
+                    failed = true
+                }
+            case .cancelled: lock.withLock {
+                    closed = true
+                }
             default: break
             }
         }
         connection.start(queue: queue)
     }
+
     private func receive() {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [self] data, _, eof, err in
-            if let data { lock.withLock { got += data } }
-            if eof || err != nil { lock.withLock { closed = true }; return }
+            if let data {
+                lock.withLock {
+                    got += data
+                }
+            }
+            if eof || err != nil {
+                lock.withLock {
+                    closed = true
+                }; return
+            }
             receive()
         }
     }
-    func send(_ s: String) { connection.send(content: Data(s.utf8), completion: .contentProcessed { _ in }) }
-    func fin() { connection.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in }) }
+
+    func send(_ s: String) {
+        connection.send(content: Data(s.utf8), completion: .contentProcessed { _ in })
+    }
+
+    func fin() {
+        connection.send(
+            content: nil,
+            contentContext: .finalMessage,
+            isComplete: true,
+            completion: .contentProcessed { _ in }
+        )
+    }
+
     func wait(_ seconds: Double = 5, until test: @escaping (Bool, Bool, Bool, Data) -> Bool) -> Bool {
         let until = Date().addingTimeInterval(seconds)
         while Date() < until {
-            if lock.withLock({ test(ready, closed, failed, got) }) { return true }
+            if lock.withLock({
+                test(ready, closed, failed, got)
+            }) {
+                return true
+            }
             Thread.sleep(forTimeInterval: 0.05)
         }
         return false
@@ -84,21 +142,43 @@ final class Client: @unchecked Sendable {
 final class Counter: @unchecked Sendable {
     private let lock = NSLock()
     private var n = 0
-    func bump() { lock.withLock { n += 1 } }
-    var value: Int { lock.withLock { n } }
+    func bump() {
+        lock.withLock {
+            n += 1
+        }
+    }
+
+    var value: Int {
+        lock.withLock {
+            n
+        }
+    }
 }
 
 func check(_ ok: Bool, _ what: String) {
     print(ok ? "ok   " : "FAIL ", what)
-    if !ok { exit(1) }
+    if !ok {
+        exit(1)
+    }
 }
 
 /// Echoes until the client's FIN, then closes.
 func echo(_ c: NWConnection, on queue: DispatchQueue) {
     @Sendable func loop() {
         c.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, eof, err in
-            if let data, !data.isEmpty { c.send(content: data, completion: .contentProcessed { _ in }) }
-            if eof || err != nil { c.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in c.cancel() }); return }
+            if let data, !data.isEmpty {
+                c.send(content: data, completion: .contentProcessed { _ in })
+            }
+            if eof || err != nil {
+                c.send(
+                    content: nil,
+                    contentContext: .finalMessage,
+                    isComplete: true,
+                    completion: .contentProcessed { _ in
+                        c.cancel()
+                    }
+                ); return
+            }
             loop()
         }
     }
@@ -109,7 +189,16 @@ func echo(_ c: NWConnection, on queue: DispatchQueue) {
 func answerAfterFIN(_ c: NWConnection, size: Int, on queue: DispatchQueue) {
     @Sendable func loop() {
         c.receive(minimumIncompleteLength: 1, maximumLength: 65536) { _, _, eof, err in
-            if eof || err != nil { c.send(content: Data(count: size), contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in c.cancel() }); return }
+            if eof || err != nil {
+                c.send(
+                    content: Data(count: size),
+                    contentContext: .finalMessage,
+                    isComplete: true,
+                    completion: .contentProcessed { _ in
+                        c.cancel()
+                    }
+                ); return
+            }
             loop()
         }
     }
@@ -126,15 +215,25 @@ func answerAfterFIN(_ c: NWConnection, size: Int, on queue: DispatchQueue) {
         farParams.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         let far = try! NWListener(using: farParams)
         let farReady = DispatchSemaphore(value: 0)
-        far.stateUpdateHandler = { if case .ready = $0 { farReady.signal() } }
+        far.stateUpdateHandler = {
+            if case .ready = $0 {
+                farReady.signal()
+            }
+        }
         let farHits = Counter()
-        far.newConnectionHandler = { farHits.bump(); echo($0, on: queue) }
+        far.newConnectionHandler = {
+            farHits.bump(); echo($0, on: queue)
+        }
         far.start(queue: queue)
         check(farReady.wait(timeout: .now() + 5) == .success, "fake far Mac listens on 127.0.0.1:\(far.port!.rawValue)")
 
         func offer(_ id: String) -> Introduction.Offer {
-            let o = Introduction.Offer(port: far.port!.rawValue, txt: ["identifier": id, "authTag": "dGVzdA", "model": "Mac16,1",
-                                                                       "name": "Fake Offer Name", "flags": "1", "ver": "2", "minVer": "1"])
+            let o = Introduction.Offer(
+                port: far.port!.rawValue,
+                txt: ["identifier": id, "authTag": "dGVzdA", "model": "Mac16,1",
+                      "name": "Fake Offer Name", "flags": "1", "ver": "2",
+                      "minVer": "1"]
+            )
             check(Introduction.offer(from: Introduction.line(o)) == .success(o), "offer line round-trips")
             return Introduction.announced(o, as: "cloud-mac")
         }
@@ -143,126 +242,443 @@ func answerAfterFIN(_ c: NWConnection, size: Int, on queue: DispatchQueue) {
 
         // 1. A connection from an address not allowed is refused (allowlist empty: 127.0.0.1 is a stranger).
         print("-- wire")
-        check(Wire.answer(from: "rr-pair-v1 offer rr-xcode-offer-v1:abc") == .offer("rr-xcode-offer-v1:abc"), "an offer is read")
+        check(
+            Wire.answer(from: "rr-pair-v1 offer rr-xcode-offer-v1:abc") == .offer("rr-xcode-offer-v1:abc"),
+            "an offer is read"
+        )
         check(Wire.answer(from: "rr-pair-v1 ended no-offer") == .ended("no-offer"), "an ending is read")
         check(Wire.answer(from: "rr-pair-v1 saved") == .saved, "saved is read")
-        check(Wire.answer(from: "rr-pair-v2 saved") != .saved && Wire.answer(from: "rr-pair-v1 offer ") != .offer(""), "another version's line and an empty offer aren't")
+        check(
+            Wire.answer(from: "rr-pair-v2 saved") != .saved && Wire.answer(from: "rr-pair-v1 offer ") != .offer(""),
+            "another version's line and an empty offer aren't"
+        )
         check(Wire.answer(from: "rr-pair-v1 you iphone-15-pro.example.ts.net") == .you("iphone-15-pro.example.ts.net")
-              && Wire.answer(from: "rr-pair-v1 you -x") != .you("-x") && Wire.answer(from: "rr-pair-v1 you a b") != .you("a"), "this device's name is read, and only one that is a name")
-        check(Wire.answer(from: "rr-pair-v1 device?") == .wantDevice && Wire.answer(from: "rr-pair-v1 code 123456") == .code("123456"), "device control's question and code are read")
-        check(Wire.answer(from: "rr-pair-v1 code 12345a") != .code("12345a") && Wire.answer(from: "rr-pair-v1 result done on") == .done(on: true)
-              && Wire.answer(from: "rr-pair-v1 result failed not-paired") == .failed("not-paired"), "a code that isn't one isn't shown; results are read")
-        check(Wire.onTailnet(Data([100, 109, 91, 134])) && !Wire.onTailnet(Data([100, 128, 0, 1])) && !Wire.onTailnet(Data([203, 0, 113, 5])), "only 100.64/10 is Tailscale's IPv4")
-        check(Wire.onTailnet(Data([0xFD, 0x7A, 0x11, 0x5C, 0xA1, 0xE0] + [UInt8](repeating: 1, count: 10))) && !Wire.onTailnet(Data([UInt8](repeating: 0xFD, count: 16))), "only fd7a:115c:a1e0::/48 is Tailscale's IPv6")
-        check(!Wire.sentence(ended: "<b>anything it sent</b>").contains("anything"), "a word this app doesn't know isn't shown as it came")
-        let own = Introduction.Offer(port: 53050, txt: ["identifier": UUID().uuidString, "authTag": "dGVzdA", "model": "Mac16,1", "name": "Its Own Name", "flags": "1", "ver": "2", "minVer": "1"])
-        check(Wire.announced(own, for: "cloud-mac.example.ts.net").txt["name"] == "cloud-mac" && Wire.announced(own, for: "100.101.102.103").txt["name"] == "100.101.102.103", "announced under what the person called it, an address too")
-        check(Wire.saidAsTried(carried: true, success: false, line: false, title: "iOS stopped it in the background", farsWord: false)
-              && !Wire.saidAsTried(carried: true, success: false, line: false, title: "it didn't save this iPhone", farsWord: true)
-              && !Wire.saidAsTried(carried: false, success: false, line: false, title: nil, farsWord: false)
-              && !Wire.saidAsTried(carried: true, success: false, line: false, title: "A pairing was tried", farsWord: false), "after a pairing was carried, only an ending that says nothing of it is said as tried")
-        let unnamed = Introduction.Device(name: "iPhone", peer: Wire.unnamedPeer, port: 49152, txt: ["identifier": UUID().uuidString, "authTag": "dGVzdA", "flags": "1", "ver": "2", "minVer": "1"])
-        check(Introduction.device(from: Introduction.line(unnamed)) == .success(unnamed) && Wire.unnamedPeer.hasSuffix(".invalid"), "the name a line holds for a device the far Mac names is a line's, and no tailnet's")
+            && Wire.answer(from: "rr-pair-v1 you -x") != .you("-x") && Wire
+            .answer(from: "rr-pair-v1 you a b") != .you("a"),
+            "this device's name is read, and only one that is a name")
+        check(
+            Wire.answer(from: "rr-pair-v1 device?") == .wantDevice && Wire
+                .answer(from: "rr-pair-v1 code 123456") == .code("123456"),
+            "device control's question and code are read"
+        )
+        check(
+            Wire.answer(from: "rr-pair-v1 code 12345a") != .code("12345a") && Wire
+                .answer(from: "rr-pair-v1 result done on") == .done(on: true)
+                && Wire.answer(from: "rr-pair-v1 result failed not-paired") == .failed("not-paired"),
+            "a code that isn't one isn't shown; results are read"
+        )
+        check(
+            Wire.onTailnet(Data([100, 109, 91, 134])) && !Wire.onTailnet(Data([100, 128, 0, 1])) && !Wire
+                .onTailnet(Data([
+                    203,
+                    0,
+                    113,
+                    5
+                ])),
+            "only 100.64/10 is Tailscale's IPv4"
+        )
+        check(
+            Wire.onTailnet(Data([0xFD, 0x7A, 0x11, 0x5C, 0xA1, 0xE0] + [UInt8](repeating: 1, count: 10))) && !Wire
+                .onTailnet(Data([UInt8](
+                    repeating: 0xFD,
+                    count: 16
+                ))),
+            "only fd7a:115c:a1e0::/48 is Tailscale's IPv6"
+        )
+        check(
+            !Wire.sentence(ended: "<b>anything it sent</b>").contains("anything"),
+            "a word this app doesn't know isn't shown as it came"
+        )
+        let own = Introduction.Offer(
+            port: 53050,
+            txt: [
+                "identifier": UUID().uuidString,
+                "authTag": "dGVzdA",
+                "model": "Mac16,1",
+                "name": "Its Own Name",
+                "flags": "1",
+                "ver": "2",
+                "minVer": "1"
+            ]
+        )
+        check(
+            Wire.announced(own, for: "cloud-mac.example.ts.net").txt["name"] == "cloud-mac" && Wire.announced(
+                own,
+                for: "100.101.102.103"
+            )
+            .txt["name"] == "100.101.102.103",
+            "announced under what the person called it, an address too"
+        )
+        check(
+            Wire.saidAsTried(
+                carried: true,
+                success: false,
+                line: false,
+                title: "iOS stopped it in the background",
+                farsWord: false
+            )
+                && !Wire.saidAsTried(
+                    carried: true,
+                    success: false,
+                    line: false,
+                    title: "it didn't save this iPhone",
+                    farsWord: true
+                )
+                && !Wire.saidAsTried(carried: false, success: false, line: false, title: nil, farsWord: false)
+                && !Wire.saidAsTried(
+                    carried: true,
+                    success: false,
+                    line: false,
+                    title: "A pairing was tried",
+                    farsWord: false
+                ),
+            "after a pairing was carried, only an ending that says nothing of it is said as tried"
+        )
+        let unnamed = Introduction.Device(
+            name: "iPhone",
+            peer: Wire.unnamedPeer,
+            port: 49152,
+            txt: ["identifier": UUID().uuidString, "authTag": "dGVzdA", "flags": "1", "ver": "2", "minVer": "1"]
+        )
+        check(
+            Introduction.device(from: Introduction.line(unnamed)) == .success(unnamed) && Wire.unnamedPeer
+                .hasSuffix(".invalid"),
+            "the name a line holds for a device the far Mac names is a line's, and no tailnet's"
+        )
         print("-- refusal")
         let idA = UUID().uuidString
         let evA = Events()
-        let a = StandIn(offer: offer(idA), farHost: "127.0.0.1", serviceType: type, allowed: [], deadline: 60, anywhere: true) { evA.add($0) }
+        let a = StandIn(
+            offer: offer(idA),
+            farHost: "127.0.0.1",
+            serviceType: type,
+            allowed: [],
+            deadline: 60,
+            anywhere: true
+        ) {
+            evA.add($0)
+        }
         try! a.start()
-        check(evA.wait { $0.contains { if case .announced(let n, let p) = $0 { return n == idA && p >= 1024 }; return false } }, "announced under the identifier")
-        check(browse.wait { $0.contains("Add") && $0.contains(idA) }, "dns-sd -B sees Add")
-        let portA = evA.list.compactMap { if case .announced(_, let p) = $0 { return p }; return nil }.first!
+        check(
+            evA
+                .wait {
+                    $0.contains {
+                        if case .announced(let n, let p) = $0 {
+                            return n == idA && p >= 1024
+                        }; return false
+                    }
+                },
+            "announced under the identifier"
+        )
+        check(browse.wait {
+            $0.contains("Add") && $0.contains(idA)
+        }, "dns-sd -B sees Add")
+        let portA = evA.list
+            .compactMap {
+                if case .announced(_, let p) = $0 {
+                    return p
+                }; return nil
+            }
+            .first!
         let stranger = Client(port: portA, queue: queue)
-        check(evA.wait { $0.contains { if case .refused = $0 { return true }; return false } }, "refused event")
-        check(stranger.wait { _, closed, failed, _ in closed || failed }, "stranger's connection was closed")
-        let again = [Client(port: portA, queue: queue), Client(port: portA, queue: queue), Client(port: portA, queue: queue)]
-        func refusals(_ e: Events) -> Int { e.list.filter { if case .refused = $0 { return true }; return false }.count }
-        check(again.allSatisfy { $0.wait { _, closed, failed, _ in closed || failed } } && refusals(evA) == 1, "a stranger knocking again is said once")
+        check(evA.wait {
+            $0.contains {
+                if case .refused = $0 {
+                    return true
+                }; return false
+            }
+        }, "refused event")
+        check(stranger.wait { _, closed, failed, _ in
+            closed || failed
+        }, "stranger's connection was closed")
+        let again = [
+            Client(port: portA, queue: queue),
+            Client(port: portA, queue: queue),
+            Client(port: portA, queue: queue)
+        ]
+        func refusals(_ e: Events) -> Int {
+            e.list
+                .filter {
+                    if case .refused = $0 {
+                        return true
+                    }; return false
+                }
+                .count
+        }
+        check(
+            again.allSatisfy {
+                $0.wait { _, closed, failed, _ in
+                    closed || failed
+                }
+            } && refusals(evA) == 1,
+            "a stranger knocking again is said once"
+        )
         let v6 = Client(port: portA, host: "::1", queue: queue)
-        check(v6.wait { _, closed, failed, _ in closed || failed } && evA.wait { _ in refusals(evA) == 2 }, "a stranger at another address (::1) is said too")
+        check(
+            v6.wait { _, closed, failed, _ in
+                closed || failed
+            } && evA.wait { _ in
+                refusals(evA) == 2
+            },
+            "a stranger at another address (::1) is said too"
+        )
         let v6again = Client(port: portA, host: "::1", queue: queue)
-        check(v6again.wait { _, closed, failed, _ in closed || failed } && refusals(evA) == 2, "and once")
+        check(v6again.wait { _, closed, failed, _ in
+            closed || failed
+        } && refusals(evA) == 2, "and once")
         check(farHits.value == 0, "the fake far Mac saw no connection")
         a.end(.stopped); a.end(.stopped)
-        check(evA.wait { $0.filter { $0 == .ended(.stopped) }.count == 1 }, "ended(.stopped) once (end is idempotent)")
-        check(browse.wait { $0.contains("Rmv") && $0.contains(idA) }, "dns-sd -B sees Rmv after end")
+        check(evA.wait {
+            $0.filter {
+                $0 == .ended(.stopped)
+            }
+            .count == 1
+        }, "ended(.stopped) once (end is idempotent)")
+        check(browse.wait {
+            $0.contains("Rmv") && $0.contains(idA)
+        }, "dns-sd -B sees Rmv after end")
 
         // A third connection from the device while two are carried is refused, and said once as that.
         print("-- third")
         do {
             let idT = UUID().uuidString
             let evT = Events()
-            let t = StandIn(offer: offer(idT), farHost: "127.0.0.1", serviceType: type, allowed: [IPv4Address.loopback.rawValue], deadline: 60, anywhere: true) { evT.add($0) }
+            let t = StandIn(
+                offer: offer(idT),
+                farHost: "127.0.0.1",
+                serviceType: type,
+                allowed: [IPv4Address.loopback.rawValue],
+                deadline: 60,
+                anywhere: true
+            ) {
+                evT.add($0)
+            }
             try! t.start()
-            check(evT.wait { $0.contains { if case .announced = $0 { return true }; return false } }, "announced")
-            let portT = evT.list.compactMap { if case .announced(_, let p) = $0 { return p }; return nil }.first!
+            check(evT.wait {
+                $0.contains {
+                    if case .announced = $0 {
+                        return true
+                    }; return false
+                }
+            }, "announced")
+            let portT = evT.list
+                .compactMap {
+                    if case .announced(_, let p) = $0 {
+                        return p
+                    }; return nil
+                }
+                .first!
             let held = [Client(port: portT, queue: queue), Client(port: portT, queue: queue)]
-            check(held.allSatisfy { $0.wait { ready, _, _, _ in ready } } && evT.wait { $0.filter { if case .connected = $0 { return true }; return false }.count == 2 }, "two carried")
+            check(
+                held.allSatisfy {
+                    $0.wait { ready, _, _, _ in
+                        ready
+                    }
+                } && evT
+                    .wait {
+                        $0.filter {
+                            if case .connected = $0 {
+                                return true
+                            }; return false
+                        }
+                        .count == 2
+                    },
+                "two carried"
+            )
             let more = [Client(port: portT, queue: queue), Client(port: portT, queue: queue)]
-            check(more.allSatisfy { $0.wait { _, closed, failed, _ in closed || failed } }
-                  && evT.wait { $0.filter { if case .full = $0 { return true }; return false }.count == 1 } && refusals(evT) == 0, "a third and a fourth: said once, as full")
+            check(more.allSatisfy {
+                $0.wait { _, closed, failed, _ in
+                    closed || failed
+                }
+            }
+                && evT
+                .wait {
+                    $0.filter {
+                        if case .full = $0 {
+                            return true
+                        }; return false
+                    }
+                    .count == 1
+                } &&
+                refusals(evT) == 0, "a third and a fourth: said once, as full")
             t.end(.stopped)
-            check(evT.wait { $0.contains(.ended(.stopped)) }, "ended")
+            check(evT.wait {
+                $0.contains(.ended(.stopped))
+            }, "ended")
         }
 
         // 2. A connection from an allowed address (127.0.0.1 only) is carried to the far Mac and echoed; .carried ends it.
         print("-- relay")
         let idB = UUID().uuidString
         let evB = Events()
-        let b = StandIn(offer: offer(idB), farHost: "127.0.0.1", serviceType: type, allowed: [IPv4Address.loopback.rawValue], deadline: 60, anywhere: true) { evB.add($0) }
+        let b = StandIn(
+            offer: offer(idB),
+            farHost: "127.0.0.1",
+            serviceType: type,
+            allowed: [IPv4Address.loopback.rawValue],
+            deadline: 60,
+            anywhere: true
+        ) {
+            evB.add($0)
+        }
         try! b.start()
-        check(evB.wait { $0.contains { if case .announced(let n, _) = $0 { return n == idB }; return false } }, "announced")
-        check(browse.wait { $0.contains("Add") && $0.contains(idB) }, "dns-sd -B sees Add")
-        let portB = evB.list.compactMap { if case .announced(_, let p) = $0 { return p }; return nil }.first!
+        check(
+            evB.wait {
+                $0.contains {
+                    if case .announced(let n, _) = $0 {
+                        return n == idB
+                    }; return false
+                }
+            },
+            "announced"
+        )
+        check(browse.wait {
+            $0.contains("Add") && $0.contains(idB)
+        }, "dns-sd -B sees Add")
+        let portB = evB.list
+            .compactMap {
+                if case .announced(_, let p) = $0 {
+                    return p
+                }; return nil
+            }
+            .first!
         let device = Client(port: portB, queue: queue)
-        check(device.wait { ready, _, _, _ in ready }, "device connected")
-        check(evB.wait { $0.contains { if case .connected = $0 { return true }; return false } }, "connected event")
+        check(device.wait { ready, _, _, _ in
+            ready
+        }, "device connected")
+        check(evB.wait {
+            $0.contains {
+                if case .connected = $0 {
+                    return true
+                }; return false
+            }
+        }, "connected event")
         if OwnAddresses.all().contains(IPv4Address("127.0.0.2")!.rawValue) {
             let other = Client(port: portB, from: "127.0.0.2", queue: queue)
-            check(other.wait { ready, _, _, _ in ready }, "stranger on 127.0.0.2 connected")
-            check(evB.wait { $0.contains { if case .refused(let f) = $0 { return f.hasPrefix("127.0.0.2") }; return false } }, "connection from 127.0.0.2 refused")
+            check(other.wait { ready, _, _, _ in
+                ready
+            }, "stranger on 127.0.0.2 connected")
+            check(
+                evB
+                    .wait {
+                        $0.contains {
+                            if case .refused(let f) = $0 {
+                                return f.hasPrefix("127.0.0.2")
+                            }; return false
+                        }
+                    },
+                "connection from 127.0.0.2 refused"
+            )
         } else {
-            print("skip  127.0.0.2 isn't an address of this Mac (sudo ifconfig lo0 alias 127.0.0.2 would make it one); refusal was checked above")
+            print(
+                "skip  127.0.0.2 isn't an address of this Mac (sudo ifconfig lo0 alias 127.0.0.2 would make it one); refusal was checked above"
+            )
         }
         device.send("ping")
-        check(device.wait { _, _, _, got in got == Data("ping".utf8) }, "echo came back through the relay")
+        check(device.wait { _, _, _, got in
+            got == Data("ping".utf8)
+        }, "echo came back through the relay")
         device.fin()
-        check(device.wait { _, closed, _, _ in closed }, "FIN forwarded back: device saw the close")
-        check(evB.wait { $0.contains(.ended(.carried(up: 4, down: 4))) }, "ended(.carried(up: 4, down: 4))")
-        check(browse.wait { $0.contains("Rmv") && $0.contains(idB) }, "dns-sd -B sees Rmv within a few seconds of the end")
+        check(device.wait { _, closed, _, _ in
+            closed
+        }, "FIN forwarded back: device saw the close")
+        check(evB.wait {
+            $0.contains(.ended(.carried(up: 4, down: 4)))
+        }, "ended(.carried(up: 4, down: 4))")
+        check(
+            browse.wait {
+                $0.contains("Rmv") && $0.contains(idB)
+            },
+            "dns-sd -B sees Rmv within a few seconds of the end"
+        )
 
         // 2b. What the far Mac says last, after the device closed its side, arrives whole.
         print("-- last words")
         let late = try! NWListener(using: farParams)
         let lateReady = DispatchSemaphore(value: 0), size = 4 << 20
-        late.stateUpdateHandler = { if case .ready = $0 { lateReady.signal() } }
-        late.newConnectionHandler = { answerAfterFIN($0, size: size, on: queue) }
+        late.stateUpdateHandler = {
+            if case .ready = $0 {
+                lateReady.signal()
+            }
+        }
+        late.newConnectionHandler = {
+            answerAfterFIN($0, size: size, on: queue)
+        }
         late.start(queue: queue)
         check(lateReady.wait(timeout: .now() + 5) == .success, "a far Mac that answers after the close listens")
         var lastWords = Introduction.Offer(port: late.port!.rawValue, txt: offer(UUID().uuidString).txt)
         lastWords.txt["identifier"] = UUID().uuidString
-        for round in 1...3 {
+        for round in 1 ... 3 {
             let evL = Events()
-            let l = StandIn(offer: lastWords, farHost: "127.0.0.1", serviceType: type, allowed: [IPv4Address.loopback.rawValue], deadline: 60, anywhere: true) { evL.add($0) }
+            let l = StandIn(
+                offer: lastWords,
+                farHost: "127.0.0.1",
+                serviceType: type,
+                allowed: [IPv4Address.loopback.rawValue],
+                deadline: 60,
+                anywhere: true
+            ) {
+                evL.add($0)
+            }
             try! l.start()
-            check(evL.wait { $0.contains { if case .announced = $0 { return true }; return false } }, "announced (\(round))")
-            let portL = evL.list.compactMap { if case .announced(_, let p) = $0 { return p }; return nil }.first!
+            check(
+                evL.wait {
+                    $0.contains {
+                        if case .announced = $0 {
+                            return true
+                        }; return false
+                    }
+                },
+                "announced (\(round))"
+            )
+            let portL = evL.list
+                .compactMap {
+                    if case .announced(_, let p) = $0 {
+                        return p
+                    }; return nil
+                }
+                .first!
             let asker = Client(port: portL, queue: queue)
-            check(asker.wait { ready, _, _, _ in ready }, "connected (\(round))")
+            check(asker.wait { ready, _, _, _ in
+                ready
+            }, "connected (\(round))")
             asker.send("ping"); asker.fin()
-            check(asker.wait(10) { _, closed, _, got in closed && got.count == size }, "all \(size) bytes after the device's close came through (\(round))")
+            check(
+                asker.wait(10) { _, closed, _, got in
+                    closed && got.count == size
+                },
+                "all \(size) bytes after the device's close came through (\(round))"
+            )
             l.end(.stopped)
-            check(evL.wait { $0.contains { if case .ended = $0 { return true }; return false } }, "ended (\(round))")
+            check(evL.wait {
+                $0.contains {
+                    if case .ended = $0 {
+                        return true
+                    }; return false
+                }
+            }, "ended (\(round))")
         }
         late.cancel()
 
         // 2b'. A far Mac that resets after its answer ends the pair, though the device never closed its side.
         let rude = try! NWListener(using: farParams)
         let rudeReady = DispatchSemaphore(value: 0)
-        rude.stateUpdateHandler = { if case .ready = $0 { rudeReady.signal() } }
+        rude.stateUpdateHandler = {
+            if case .ready = $0 {
+                rudeReady.signal()
+            }
+        }
         rude.newConnectionHandler = { c in
             c.start(queue: queue)
             c.receive(minimumIncompleteLength: 1, maximumLength: 16) { _, _, _, _ in
-                c.send(content: Data("pong".utf8), completion: .contentProcessed { _ in queue.asyncAfter(deadline: .now() + 0.2) { c.forceCancel() } })
+                c.send(
+                    content: Data("pong".utf8),
+                    completion: .contentProcessed { _ in
+                        queue.asyncAfter(deadline: .now() + 0.2) {
+                            c.forceCancel()
+                        }
+                    }
+                )
             }
         }
         rude.start(queue: queue)
@@ -270,25 +686,77 @@ func answerAfterFIN(_ c: NWConnection, size: Int, on queue: DispatchQueue) {
         var reset = Introduction.Offer(port: rude.port!.rawValue, txt: lastWords.txt)
         reset.txt["identifier"] = UUID().uuidString
         let evR = Events()
-        let r = StandIn(offer: reset, farHost: "127.0.0.1", serviceType: type, allowed: [IPv4Address.loopback.rawValue], deadline: 60, anywhere: true) { evR.add($0) }
+        let r = StandIn(
+            offer: reset,
+            farHost: "127.0.0.1",
+            serviceType: type,
+            allowed: [IPv4Address.loopback.rawValue],
+            deadline: 60,
+            anywhere: true
+        ) {
+            evR.add($0)
+        }
         try! r.start()
-        check(evR.wait { $0.contains { if case .announced = $0 { return true }; return false } }, "announced")
-        let held = Client(port: evR.list.compactMap { if case .announced(_, let p) = $0 { return p }; return nil }.first!, queue: queue)
-        check(held.wait { ready, _, _, _ in ready }, "connected")
+        check(evR.wait {
+            $0.contains {
+                if case .announced = $0 {
+                    return true
+                }; return false
+            }
+        }, "announced")
+        let held = Client(
+            port: evR.list
+                .compactMap {
+                    if case .announced(_, let p) = $0 {
+                        return p
+                    }; return nil
+                }
+                .first!,
+            queue: queue
+        )
+        check(held.wait { ready, _, _, _ in
+            ready
+        }, "connected")
         held.send("ping")
-        check(held.wait { _, _, _, got in got == Data("pong".utf8) }, "its answer came through before the reset")
-        check(evR.wait(5) { $0.contains { if case .ended(.carried) = $0 { return true }; return false } }, "the reset ended it as carried, with the device's side still open")
-        check(held.wait { _, closed, failed, _ in closed || failed }, "and closed the device's connection")
+        check(held.wait { _, _, _, got in
+            got == Data("pong".utf8)
+        }, "its answer came through before the reset")
+        check(
+            evR.wait(5) {
+                $0.contains {
+                    if case .ended(.carried) = $0 {
+                        return true
+                    }; return false
+                }
+            },
+            "the reset ended it as carried, with the device's side still open"
+        )
+        check(held.wait { _, closed, failed, _ in
+            closed || failed
+        }, "and closed the device's connection")
         rude.cancel()
 
         // 2b''. The same when that Mac had closed its side first, and went altogether afterwards: no reader is left to notice.
         let gone = try! NWListener(using: farParams)
         let goneReady = DispatchSemaphore(value: 0)
-        gone.stateUpdateHandler = { if case .ready = $0 { goneReady.signal() } }
+        gone.stateUpdateHandler = {
+            if case .ready = $0 {
+                goneReady.signal()
+            }
+        }
         gone.newConnectionHandler = { c in
             c.start(queue: queue)
             c.receive(minimumIncompleteLength: 1, maximumLength: 16) { _, _, _, _ in
-                c.send(content: Data("pong".utf8), contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in queue.asyncAfter(deadline: .now() + 0.5) { c.forceCancel() } })
+                c.send(
+                    content: Data("pong".utf8),
+                    contentContext: .finalMessage,
+                    isComplete: true,
+                    completion: .contentProcessed { _ in
+                        queue.asyncAfter(deadline: .now() + 0.5) {
+                            c.forceCancel()
+                        }
+                    }
+                )
             }
         }
         gone.start(queue: queue)
@@ -296,27 +764,85 @@ func answerAfterFIN(_ c: NWConnection, size: Int, on queue: DispatchQueue) {
         var going = Introduction.Offer(port: gone.port!.rawValue, txt: lastWords.txt)
         going.txt["identifier"] = UUID().uuidString
         let evG = Events()
-        let g = StandIn(offer: going, farHost: "127.0.0.1", serviceType: type, allowed: [IPv4Address.loopback.rawValue], deadline: 60, anywhere: true) { evG.add($0) }
+        let g = StandIn(
+            offer: going,
+            farHost: "127.0.0.1",
+            serviceType: type,
+            allowed: [IPv4Address.loopback.rawValue],
+            deadline: 60,
+            anywhere: true
+        ) {
+            evG.add($0)
+        }
         try! g.start()
-        check(evG.wait { $0.contains { if case .announced = $0 { return true }; return false } }, "announced")
-        let kept = Client(port: evG.list.compactMap { if case .announced(_, let p) = $0 { return p }; return nil }.first!, queue: queue)
-        check(kept.wait { ready, _, _, _ in ready }, "connected")
+        check(evG.wait {
+            $0.contains {
+                if case .announced = $0 {
+                    return true
+                }; return false
+            }
+        }, "announced")
+        let kept = Client(
+            port: evG.list
+                .compactMap {
+                    if case .announced(_, let p) = $0 {
+                        return p
+                    }; return nil
+                }
+                .first!,
+            queue: queue
+        )
+        check(kept.wait { ready, _, _, _ in
+            ready
+        }, "connected")
         kept.send("ping")
-        check(kept.wait { _, _, _, got in got == Data("pong".utf8) }, "its answer came through")
-        check(evG.wait(5) { $0.contains { if case .ended(.carried) = $0 { return true }; return false } }, "its going ended it, with the device's side still open")
+        check(kept.wait { _, _, _, got in
+            got == Data("pong".utf8)
+        }, "its answer came through")
+        check(
+            evG.wait(5) {
+                $0.contains {
+                    if case .ended(.carried) = $0 {
+                        return true
+                    }; return false
+                }
+            },
+            "its going ended it, with the device's side still open"
+        )
         gone.cancel()
 
         // 2c. A refusal of the local network isn't final while the person may still be answering.
-        check(Wire.mayUseNetwork(looking: false, denied: true, waited: 0) == nil && Wire.mayUseNetwork(looking: false, denied: true, waited: 60) == false
-              && Wire.mayUseNetwork(looking: true, denied: false, waited: 3) == true && Wire.mayUseNetwork(looking: false, denied: false, waited: 5) == nil
-              && Wire.mayUseNetwork(looking: false, denied: false, waited: 120) == true, "a refusal waits half a minute for the person's answer")
+        check(
+            Wire.mayUseNetwork(looking: false, denied: true, waited: 0) == nil && Wire.mayUseNetwork(
+                looking: false,
+                denied: true,
+                waited: 60
+            ) == false
+                && Wire.mayUseNetwork(looking: true, denied: false, waited: 3) == true && Wire.mayUseNetwork(
+                    looking: false,
+                    denied: false,
+                    waited: 5
+                ) == nil
+                && Wire.mayUseNetwork(looking: false, denied: false, waited: 120) == true,
+            "a refusal waits half a minute for the person's answer"
+        )
 
         // 3. Deadline.
         print("-- deadline")
         let evC = Events()
-        let c = StandIn(offer: offer(UUID().uuidString), farHost: "127.0.0.1", serviceType: type, deadline: 1, anywhere: true) { evC.add($0) }
+        let c = StandIn(
+            offer: offer(UUID().uuidString),
+            farHost: "127.0.0.1",
+            serviceType: type,
+            deadline: 1,
+            anywhere: true
+        ) {
+            evC.add($0)
+        }
         try! c.start()
-        check(evC.wait(4) { $0.contains(.ended(.deadline)) }, "ended(.deadline)")
+        check(evC.wait(4) {
+            $0.contains(.ended(.deadline))
+        }, "ended(.deadline)")
 
         far.cancel()
         print("all checks passed")

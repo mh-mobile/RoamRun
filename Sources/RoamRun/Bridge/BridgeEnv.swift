@@ -6,26 +6,49 @@ import Network
 /// nothing on the Mac. Blocking tools stay synchronous here: callers keep running
 /// them off the main actor, as before.
 struct BridgeEnv: Sendable {
-    var now: @Sendable () -> Date = { .now }
+    var now: @Sendable () -> Date = {
+        .now
+    }
+
     /// The relays' clock for last-byte times (ns), running on through sleep (Relay.continuousNow).
-    var relayClock: @Sendable () -> UInt64 = { Relay.continuousNow() }
-    var lanIPv4: @Sendable () -> String? = { InterfaceMonitor.currentIPv4() }
-    var keepOnCellular: @Sendable () -> Bool = { DeviceNetwork.keepOnCellular }
-    var cliRunning: @Sendable () -> Bool = { CLI.isRunning }
+    var relayClock: @Sendable () -> UInt64 = {
+        Relay.continuousNow()
+    }
+
+    var lanIPv4: @Sendable () -> String? = {
+        InterfaceMonitor.currentIPv4()
+    }
+
+    var keepOnCellular: @Sendable () -> Bool = {
+        DeviceNetwork.keepOnCellular
+    }
+
+    var cliRunning: @Sendable () -> Bool = {
+        CLI.isRunning
+    }
+
     /// macOS refused a probe to this Wi‑Fi lately (process-wide).
-    var localNetworkDenied: @Sendable () -> Bool = { LocalNetwork.denied }
+    var localNetworkDenied: @Sendable () -> Bool = {
+        LocalNetwork.denied
+    }
 
     var checkTCP: @Sendable (_ host: String, _ port: UInt16) async -> Bool = {
         await ReachabilityProbe.checkTCP(host: $0, port: $1)
     }
+
     var findRemotePairingPort: @Sendable (_ host: String) async -> ReachabilityProbe.PortScan = {
         await ReachabilityProbe.findRemotePairingPort(host: $0)
     }
+
     /// A Bonjour instance that answers the RemotePairing handshake.
     var answers: @Sendable (_ endpoint: NWEndpoint) async -> Bool = {
         await ReachabilityProbe.speaksRemotePairing($0, timeout: 2)
     }
-    var isOnLAN: @MainActor (DeviceProfile) async -> Bool = { await ProxyBridge.isOnLAN($0) }
+
+    var isOnLAN: @MainActor (DeviceProfile) async -> Bool = {
+        await ProxyBridge.isOnLAN($0)
+    }
+
     /// `devicectl device info details`, which makes CoreDevice ask for a tunnel.
     var warmUp: @Sendable (_ udid: String) async -> Proc.Result = { udid in
         await Blocking.run {
@@ -35,22 +58,43 @@ struct BridgeEnv: Sendable {
     }
 
     // Blocking.
-    var ping: @Sendable (_ ip: String) -> TailscaleClient.Ping = { TailscaleClient.fromSettings().pingResult($0) }
-    var listDevices: @Sendable () throws -> [MeshDevice] = { try TailscaleClient.fromSettings().listDevices() }
+    var ping: @Sendable (_ ip: String) -> TailscaleClient.Ping = {
+        TailscaleClient.fromSettings().pingResult($0)
+    }
+
+    var listDevices: @Sendable () throws -> [MeshDevice] = {
+        try TailscaleClient.fromSettings().listDevices()
+    }
+
     /// The device's own advert remotepairingd resolved in the last 90 s, not `besides`.
     var recentAdvert: @Sendable (_ udid: String, _ besides: String) -> String? = {
         ProxyBridge.recentAdvert(udid: $0, besides: $1)
     }
-    var killOrphanedHelpers: @Sendable () -> Int = { DNSServiceProxy.killOrphanedHelpers() }
+
+    var killOrphanedHelpers: @Sendable () -> Int = {
+        DNSServiceProxy.killOrphanedHelpers()
+    }
 
     var subscribe: @MainActor (UUID, TunnelCoordinator.Subscriber) -> Bool = {
         TunnelCoordinator.shared.subscribe($0, $1)
     }
-    var unsubscribe: @MainActor (UUID) -> Void = { TunnelCoordinator.shared.unsubscribe($0) }
-    var makeRecord: @MainActor () -> any BonjourRecord = { DNSServiceProxy() }
+
+    var unsubscribe: @MainActor (UUID) -> Void = {
+        TunnelCoordinator.shared.unsubscribe($0)
+    }
+
+    var makeRecord: @MainActor () -> any BonjourRecord = {
+        DNSServiceProxy()
+    }
+
     /// Tunnel-port claims between RoamRun processes (system-wide notifications).
-    var postClaim: @MainActor (String) -> Void = { ProxyBridge.postClaim($0) }
-    var listenForClaims: @MainActor () -> Void = { ProxyBridge.listenForClaims() }
+    var postClaim: @MainActor (String) -> Void = {
+        ProxyBridge.postClaim($0)
+    }
+
+    var listenForClaims: @MainActor () -> Void = {
+        ProxyBridge.listenForClaims()
+    }
 
     static let live = BridgeEnv()
 }
@@ -73,7 +117,9 @@ enum Blocking {
             // A thread of our own has no autorelease pool: what Foundation autoreleases in the
             // tool (Process, pipes, strings) would leak, every check, for as long as RoamRun runs.
             Thread.detachNewThread {
-                let result = autoreleasepool { work() }
+                let result = autoreleasepool {
+                    work()
+                }
                 gate.leave()
                 done.resume(returning: result)
             }
@@ -86,7 +132,9 @@ enum Blocking {
         private var free: Int
         private var waiting: [CheckedContinuation<Void, Never>] = []
 
-        init(_ permits: Int) { free = permits }
+        init(_ permits: Int) {
+            free = permits
+        }
 
         func enter() async {
             await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
@@ -95,14 +143,18 @@ enum Blocking {
                     free -= 1
                     return true
                 }
-                if now { c.resume() }
+                if now {
+                    c.resume()
+                }
             }
         }
 
         /// The permit goes straight to the longest waiter, if any.
         func leave() {
             let next: CheckedContinuation<Void, Never>? = lock.withLock {
-                if waiting.isEmpty { free += 1; return nil }
+                if waiting.isEmpty {
+                    free += 1; return nil
+                }
                 return waiting.removeFirst()
             }
             next?.resume()

@@ -11,11 +11,13 @@ extension CLI {
     private static func refuseSecondUp(_ profile: DeviceProfile) {
         guard let e = otherUp(StatusFile.read()[profile.id], me: getpid()) else { return }
         if e.kind == .local {
-            print("\(profile.displayName) is on this Wi\u{2011}Fi and already watched by roamrun up (pid \(e.pid)) — it takes over when the device leaves.")
+            print(
+                "\(profile.displayName) is on this Wi\u{2011}Fi and already watched by roamrun up (pid \(e.pid)) — it takes over when the device leaves."
+            )
             exit(0)
         }
         stop("\(profile.displayName) is already handled by roamrun up (pid \(e.pid)): \(e.status). It keeps retrying; " +
-             "roamrun down \(commandName(profile)) stops it.")
+            "roamrun down \(commandName(profile)) stops it.")
     }
 
     /// The entry when it is another live `roamrun up`'s (`read` drops dead ones), in any state.
@@ -29,24 +31,31 @@ extension CLI {
             print("\(profile.displayName) is already bridged by \(owner(e)) — ready for Xcode.")
             exit(0)
         }
-        stop("\(profile.displayName) is being bridged by \(owner(e)) (\(e.status)). Use it once it's ready, or run roamrun down \(commandName(profile)) first.")
+        stop(
+            "\(profile.displayName) is being bridged by \(owner(e)) (\(e.status)). Use it once it's ready, or run roamrun down \(commandName(profile)) first."
+        )
     }
 
     static func down(_ profile: DeviceProfile) -> Never {
         guard let e = StatusFile.read()[profile.id] else {
             print("\(profile.displayName) is not bridged."); exit(0)
         }
-        let who = owner(e)   // before it exits and the pid stops resolving
+        let who = owner(e) // before it exits and the pid stops resolving
         // Always tell the app too: even when the CLI owns the device, the app
         // may still have it on its restore list and would take it back.
         for name in [stopNotification, legacyStopNotification] {
             DistributedNotificationCenter.default().postNotificationName(
-                name, object: profile.id.uuidString, userInfo: nil, deliverImmediately: true)
+                name, object: profile.id.uuidString, userInfo: nil, deliverImmediately: true
+            )
         }
-        if e.cli == true, e.pid != getpid() { kill(e.pid, SIGTERM) }   // its handler tears down dns-sd / log children
+        if e.cli == true, e.pid != getpid() {
+            kill(e.pid, SIGTERM)
+        } // its handler tears down dns-sd / log children
         // Wait for the owner to clear its status entry.
         var tries = 0
-        while StatusFile.read()[profile.id] != nil && tries < 50 { usleep(100_000); tries += 1 }
+        while StatusFile.read()[profile.id] != nil && tries < 50 {
+            usleep(100_000); tries += 1
+        }
         guard StatusFile.read()[profile.id] == nil else { stop("\(who) did not stop the bridge") }
         print("Stopped \(profile.displayName) (\(who)).")
         exit(0)
@@ -54,7 +63,9 @@ extension CLI {
 
     /// The display name is user/network supplied: keep it to one safe path component.
     static func fileSafe(_ name: String) -> String {
-        String(name.map { $0.isLetter || $0.isNumber || "-_ ".contains($0) ? $0 : "_" })
+        String(name.map {
+            $0.isLetter || $0.isNumber || "-_ ".contains($0) ? $0 : "_"
+        })
     }
 
     /// Internal: marks the background copy spawned by `up -d`.
@@ -69,9 +80,12 @@ extension CLI {
         // Two started together both found nobody, and the second rotated the first's log away
         // from under it: from the check to the child's own claim, one at a time per device.
         var turn = upTurn(for: profile.id, in: ProfileStore.directory)
-        refuseSecondUp(profile)   // before the log below is rotated away from the one running
+        refuseSecondUp(profile) // before the log below is rotated away from the one running
         let logURL = detachedLog(profile)
-        try? FileManager.default.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(
+            at: logURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
         // Keep the previous run's log (an earlier failure may point at it).
         let previous = logURL.appendingPathExtension("1")
         try? FileManager.default.removeItem(at: previous)
@@ -89,27 +103,38 @@ extension CLI {
 
         // Wait (≤60s) for Ready; a slower start keeps going in the background.
         var last = "", lastKind = BridgeStatus.off
-        for _ in 0..<120 {
+        for _ in 0 ..< 120 {
             usleep(500_000)
             guard child.isRunning else {
                 // It exits on an error retrying can't fix (see up); its last line says which.
-                let tail = (try? String(contentsOf: logURL, encoding: .utf8)).flatMap { $0.split(separator: "\n").last.map(String.init) }
+                let tail = (try? String(contentsOf: logURL, encoding: .utf8))
+                    .flatMap {
+                        $0.split(separator: "\n").last.map(String.init)
+                    }
                 stop("the background bridge exited\(tail.map { ": \($0)" } ?? "") — see \(logURL.path)")
             }
             guard let e = StatusFile.read()[profile.id], e.pid == child.processIdentifier else { continue }
-            endTurn(&turn)   // the child holds the device now: the next `up` sees it
-            if e.status != last { last = e.status; print("  \(e.status)") }
+            endTurn(&turn) // the child holds the device now: the next `up` sees it
+            if e.status != last {
+                last = e.status; print("  \(e.status)")
+            }
             lastKind = e.kind
-            if e.ready || e.kind == .local { break }
+            if e.ready || e.kind == .local {
+                break
+            }
         }
         let pid = child.processIdentifier
         switch lastKind {
         case .ready:
             print("\(profile.displayName) is bridged in the background (pid \(pid)).")
         case .local:
-            print("\(profile.displayName) is on this Wi‑Fi, so Xcode reaches it directly. The bridge waits in the background (pid \(pid)) and takes over when it leaves.")
+            print(
+                "\(profile.displayName) is on this Wi‑Fi, so Xcode reaches it directly. The bridge waits in the background (pid \(pid)) and takes over when it leaves."
+            )
         default:
-            print("\(profile.displayName) isn't ready yet (\(last.isEmpty ? "no status" : last)). The bridge keeps trying in the background (pid \(pid)).")
+            print(
+                "\(profile.displayName) isn't ready yet (\(last.isEmpty ? "no status" : last)). The bridge keeps trying in the background (pid \(pid))."
+            )
         }
         print("""
           Log:  \(logURL.path)
@@ -123,7 +148,11 @@ extension CLI {
     /// could be made — then as before, unserialized.
     nonisolated static func upTurn(for id: UUID, in directory: URL, wait: Bool = true) -> Int32? {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let fd = open(directory.appendingPathComponent("up-\(id.uuidString).lock").path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+        let fd = open(
+            directory.appendingPathComponent("up-\(id.uuidString).lock").path,
+            O_CREAT | O_RDWR | O_CLOEXEC,
+            0o600
+        )
         guard fd >= 0 else { return nil }
         guard flock(fd, wait ? LOCK_EX : LOCK_EX | LOCK_NB) == 0 else { close(fd); return nil }
         return fd
@@ -132,14 +161,17 @@ extension CLI {
     /// Ends a turn, once: asked again (each round of the wait asks) it closes nothing — the
     /// number may be another file's by then.
     nonisolated static func endTurn(_ turn: inout Int32?) {
-        if let fd = turn { close(fd) }
+        if let fd = turn {
+            close(fd)
+        }
         turn = nil
     }
 
     /// Where `up -d`'s bridge writes; the previous run's is kept beside it as `.log.1`.
     private static func detachedLog(_ profile: DeviceProfile) -> URL {
         let safeName = fileSafe(profile.displayName)
-        return FileManager.default.homeDirectoryForCurrentUser
+        return FileManager.default
+            .homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Logs/RoamRun", isDirectory: true)
             .appendingPathComponent("\(safeName.isEmpty ? profile.id.uuidString : safeName).log")
     }
@@ -148,7 +180,11 @@ extension CLI {
     /// would fill the disk. Past `limit`, the file becomes `.log.1` (replacing that) and a new
     /// one is opened under the same descriptors. A rename that fails changes nothing: the
     /// writing goes on where it was, and nothing is deleted.
-    nonisolated static func rotateLog(at url: URL, limit: Int64 = 10 << 20, fds: [Int32] = [STDOUT_FILENO, STDERR_FILENO]) {
+    nonisolated static func rotateLog(
+        at url: URL,
+        limit: Int64 = 10 << 20,
+        fds: [Int32] = [STDOUT_FILENO, STDERR_FILENO]
+    ) {
         var st = stat()
         guard let first = fds.first, fstat(first, &st) == 0, st.st_size > limit else { return }
         let fm = FileManager.default
@@ -161,17 +197,21 @@ extension CLI {
         let hadPrevious = fm.fileExists(atPath: previous.path)
         func undo() {
             if fm.fileExists(atPath: previous.path), !fm.fileExists(atPath: rolling.path) {
-                try? fm.moveItem(at: previous, to: rolling)   // step 3 had happened
+                try? fm.moveItem(at: previous, to: rolling) // step 3 had happened
             }
-            if hadPrevious { try? fm.moveItem(at: backup, to: previous) }
+            if hadPrevious {
+                try? fm.moveItem(at: backup, to: previous)
+            }
             try? fm.moveItem(at: rolling, to: url)
         }
         guard !hadPrevious || (try? fm.moveItem(at: previous, to: backup)) != nil else { return undo() }
         guard (try? fm.moveItem(at: rolling, to: previous)) != nil else { return undo() }
         let fresh = open(url.path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
-        guard fresh >= 0 else { return undo() }   // still writing to the renamed file: it gets its name back
+        guard fresh >= 0 else { return undo() } // still writing to the renamed file: it gets its name back
         try? fm.removeItem(at: backup)
-        for fd in fds { dup2(fresh, fd) }
+        for fd in fds {
+            dup2(fresh, fd)
+        }
         close(fresh)
     }
 
@@ -186,32 +226,44 @@ extension CLI {
             setsid()
             signal(SIGHUP, SIG_IGN)
             let log = detachedLog(profile)
-            logRotation = Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { _ in rotateLog(at: log) }
+            logRotation = Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { _ in
+                rotateLog(at: log)
+            }
         }
         let bridge = ProxyBridge(profile: profile)
         self.bridge = bridge
-        bridge.onLog = { m in if verbose { print("    \(m)") } }
+        bridge.onLog = { m in
+            if verbose {
+                print("    \(m)")
+            }
+        }
         bridge.onYield = { other in
             print("\(profile.displayName): another roamrun up (pid \(other.pid)) is already handling it — exiting.")
             exit(0)
         }
-        bridge.onUDID = { udid in   // the app saves it too; without this, CLI-only use never learns it
+        bridge.onUDID = { udid in // the app saves it too; without this, CLI-only use never learns it
             _ = ProfileStore().update { all in
-                guard let i = all.firstIndex(where: { $0.id == profile.id }), all[i].udid == nil else { return }
+                guard let i = all.firstIndex(where: {
+                    $0.id == profile.id
+                }), all[i].udid == nil else { return }
                 all[i].udid = udid
             }
         }
-        bridge.onProfileChange = { moved in   // save where the device answers now, as the app does
+        bridge.onProfileChange = { moved in // save where the device answers now, as the app does
             var found = false
             let saved = ProfileStore().update { all in
-                guard let i = all.firstIndex(where: { $0.id == moved.id }) else { return }
+                guard let i = all.firstIndex(where: {
+                    $0.id == moved.id
+                }) else { return }
                 found = true
                 all[i].providerIP = moved.providerIP
                 all[i].remotePairingPort = moved.remotePairingPort
                 all[i].providerHostName = moved.providerHostName
             }
-            guard found || !saved else { return }   // a lock we couldn't take never ran the closure
-            print("  \(moved.displayName) now answers at \(moved.providerIP):\(moved.remotePairingPort)\(saved ? " (saved)" : " (couldn't save it)")")
+            guard found || !saved else { return } // a lock we couldn't take never ran the closure
+            print(
+                "  \(moved.displayName) now answers at \(moved.providerIP):\(moved.remotePairingPort)\(saved ? " (saved)" : " (couldn't save it)")"
+            )
         }
 
         // Print status transitions, not a stream of identical lines.
@@ -224,9 +276,15 @@ extension CLI {
                 case .starting(let step): line += " — \(step)"
                 default: break
                 }
-                if bridge.status == .ready, let n = bridge.network { line += " · \(n.title)" }
-                if bridge.status == .ready { line += " — pick “\(profile.displayName)” in Xcode. Ctrl-C to stop." }
-                if bridge.status == .local { line += " — Xcode sees it directly; bridging resumes when it leaves." }
+                if bridge.status == .ready, let n = bridge.network {
+                    line += " · \(n.title)"
+                }
+                if bridge.status == .ready {
+                    line += " — pick “\(profile.displayName)” in Xcode. Ctrl-C to stop."
+                }
+                if bridge.status == .local {
+                    line += " — Xcode sees it directly; bridging resumes when it leaves."
+                }
                 if bridge.status == .waiting, bridge.pausedOnCellular {
                     line += " — on cellular, so the tunnel was closed to save data; it reconnects on Wi‑Fi."
                 }
@@ -236,26 +294,49 @@ extension CLI {
             }
         }
         // Same recovery as the app: retry errors, rebind when the Mac's IP changes, re-announce on wake.
-        let supervisor = BridgeSupervisor(all: { [bridge] }, wanted: { _ in true }, start: { list, reason in
+        let supervisor = BridgeSupervisor(all: {
+            [bridge]
+        }, wanted: { _ in
+            true
+        }, start: { list, reason in
             for b in list {
-                if StartPolicy.of(reason).restarts { b.stop() }
+                if StartPolicy.of(reason).restarts {
+                    b.stop()
+                }
                 b.requestStart(reason)
             }
         }, gaveUp: { b in
             // Retrying can't fix it (lost pairing, no admin rights): say why and stop.
-            let reason = { if case .error(let m) = b.state { m } else { "the bridge failed" } }()
-            b.stop()   // before printing: its "bridge stopped" line mustn't be the log's last
+            let reason = {
+                if case .error(let m) = b.state {
+                    m
+                } else {
+                    "the bridge failed"
+                }
+            }()
+            b.stop() // before printing: its "bridge stopped" line mustn't be the log's last
             FileHandle.standardError.write(Data("roamrun: \(reason)\n".utf8))
             exit(1)
         })
         supervisor.run()
         let wake = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification,
-                                                                     object: nil, queue: .main) { _ in
-            MainActor.assumeIsolated { supervisor.woke() }
+                                                                     object: nil, queue: .main)
+        { _ in
+            MainActor.assumeIsolated {
+                supervisor.woke()
+            }
         }
         let monitor = InterfaceMonitor()
-        monitor.onLost = { Task { @MainActor in supervisor.lanAddressLost() } }
-        monitor.onChange = { _ in Task { @MainActor in supervisor.lanAddressChanged() } }
+        monitor.onLost = {
+            Task { @MainActor in
+                supervisor.lanAddressLost()
+            }
+        }
+        monitor.onChange = { _ in
+            Task { @MainActor in
+                supervisor.lanAddressChanged()
+            }
+        }
         monitor.start()
 
         // Ctrl-C must tear down dns-sd / log children, or the fake Bonjour
@@ -274,7 +355,9 @@ extension CLI {
             src.resume()
             sources.append(src as AnyObject)
         }
-        keepAlive = [ticker, supervisor, monitor, wake] + sources + (logRotation.map { [$0] } ?? [])
+        keepAlive = [ticker, supervisor, monitor, wake] + sources + (logRotation.map {
+            [$0]
+        } ?? [])
 
         print("Bridging \(profile.displayName) over \(profile.providerIP)…")
         bridge.requestStart(.manual)

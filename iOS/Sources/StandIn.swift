@@ -13,11 +13,19 @@ enum OwnAddresses {
         var list: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&list) == 0, let first = list else { return out }
         defer { freeifaddrs(first) }
-        for p in sequence(first: first, next: { $0.pointee.ifa_next }) {
+        for p in sequence(first: first, next: {
+            $0.pointee.ifa_next
+        }) {
             guard let sa = p.pointee.ifa_addr else { continue }
             switch Int32(sa.pointee.sa_family) {
-            case AF_INET: out.insert(withUnsafeBytes(of: UnsafeRawPointer(sa).loadUnaligned(as: sockaddr_in.self).sin_addr) { Data($0) })
-            case AF_INET6: out.insert(withUnsafeBytes(of: UnsafeRawPointer(sa).loadUnaligned(as: sockaddr_in6.self).sin6_addr) { Data($0) })
+            case AF_INET: out
+                .insert(withUnsafeBytes(of: UnsafeRawPointer(sa).loadUnaligned(as: sockaddr_in.self).sin_addr) {
+                    Data($0)
+                })
+            case AF_INET6: out
+                .insert(withUnsafeBytes(of: UnsafeRawPointer(sa).loadUnaligned(as: sockaddr_in6.self).sin6_addr) {
+                    Data($0)
+                })
             default: break
             }
         }
@@ -36,7 +44,10 @@ enum OwnAddresses {
     }
 
     static func shown(_ endpoint: NWEndpoint?) -> String {
-        guard case .hostPort(let host, let port)? = endpoint else { return endpoint.map { String(describing: $0) } ?? "nowhere" }
+        guard case .hostPort(let host, let port)? = endpoint
+        else { return endpoint.map {
+            String(describing: $0)
+        } ?? "nowhere" }
         return "\(host):\(port)"
     }
 }
@@ -55,6 +66,7 @@ final class StandIn: @unchecked Sendable {
         case expired
         case announcementLost(String)
     }
+
     enum Event: Equatable {
         case announced(name: String, port: UInt16)
         case connected(from: String)
@@ -86,7 +98,9 @@ final class StandIn: @unchecked Sendable {
     /// IPv4 or MagicDNS name. `allowed`: whose connections are carried (this device's own addresses).
     /// `anywhere`: for the check on a Mac, whose far Mac is 127.0.0.1; otherwise what the name leads to must be an address of Tailscale's.
     init(offer: Introduction.Offer, farHost: String, serviceType: String = Introduction.hostService,
-         allowed: Set<Data> = OwnAddresses.all(), deadline: TimeInterval = 300, anywhere: Bool = false, onEvent: @escaping @Sendable (Event) -> Void) {
+         allowed: Set<Data> = OwnAddresses.all(), deadline: TimeInterval = 300, anywhere: Bool = false,
+         onEvent: @escaping @Sendable (Event) -> Void)
+    {
         self.anywhere = anywhere
         self.offer = offer
         self.farHost = farHost
@@ -101,7 +115,12 @@ final class StandIn: @unchecked Sendable {
         let params = NWParameters.tcp
         params.includePeerToPeer = false
         let listener = try NWListener(using: params, on: .any)
-        var service = NWListener.Service(name: offer.txt["identifier"], type: serviceType, domain: nil, txtRecord: NWTXTRecord(offer.txt))
+        var service = NWListener.Service(
+            name: offer.txt["identifier"],
+            type: serviceType,
+            domain: nil,
+            txtRecord: NWTXTRecord(offer.txt)
+        )
         service.noAutoRename = true
         listener.service = service
         listener.serviceRegistrationUpdateHandler = { [weak self] change in
@@ -120,16 +139,23 @@ final class StandIn: @unchecked Sendable {
             switch state {
             case .ready: standInLog.debug("listening on port \(listener.port?.rawValue ?? 0)")
             case .waiting(let error):
-                if case .dns(-65570) = error { self.endOnQueue(.announcementLost("Local Network permission needed")) }
-                else { standInLog.notice("waiting: \(error.localizedDescription, privacy: .public)") }
+                if case .dns(-65570) = error {
+                    self.endOnQueue(.announcementLost("Local Network permission needed"))
+                } else {
+                    standInLog.notice("waiting: \(error.localizedDescription, privacy: .public)")
+                }
             case .failed(let error): self.endOnQueue(.announcementLost(error.localizedDescription))
             case .setup, .cancelled: break
             @unknown default: break
             }
         }
-        listener.newConnectionHandler = { [weak self] connection in self?.take(connection) }
+        listener.newConnectionHandler = { [weak self] connection in
+            self?.take(connection)
+        }
         self.listener = listener
-        let work = DispatchWorkItem { [weak self] in self?.endOnQueue(.deadline) }
+        let work = DispatchWorkItem { [weak self] in
+            self?.endOnQueue(.deadline)
+        }
         deadlineWork = work
         queue.asyncAfter(deadline: .now() + deadline, execute: work)
         listener.start(queue: queue)
@@ -138,8 +164,12 @@ final class StandIn: @unchecked Sendable {
     private func refuse(_ connection: NWConnection, _ endpoint: NWEndpoint, _ said: Event) {
         connection.cancel()
         var key = OwnAddresses.raw(endpoint) ?? Data(OwnAddresses.shown(endpoint).utf8)
-        if case .full = said { key.append(0) }
-        if refusalsSaid.count < 16, refusalsSaid.insert(key).inserted { onEvent(said) }
+        if case .full = said {
+            key.append(0)
+        }
+        if refusalsSaid.count < 16, refusalsSaid.insert(key).inserted {
+            onEvent(said)
+        }
     }
 
     private func take(_ connection: NWConnection) {
@@ -159,10 +189,15 @@ final class StandIn: @unchecked Sendable {
         if !loggedFirst {
             // A device-only unknown worth learning: where a connection from Settings on this same device comes from.
             loggedFirst = true
-            standInLog.notice("first accepted connection: path \(String(describing: connection.currentPath?.remoteEndpoint), privacy: .public), endpoint \(String(describing: connection.endpoint), privacy: .public)")
+            standInLog
+                .notice(
+                    "first accepted connection: path \(String(describing: connection.currentPath?.remoteEndpoint), privacy: .public), endpoint \(String(describing: connection.endpoint), privacy: .public)"
+                )
         }
         onEvent(.connected(from: from))
-        let pair = Pair(inbound: connection, farHost: farHost, farPort: offer.port, anywhere: anywhere, queue: queue) { [weak self] pair, up, down, why in
+        let pair = Pair(inbound: connection, farHost: farHost, farPort: offer.port, anywhere: anywhere,
+                        queue: queue)
+        { [weak self] pair, up, down, why in
             self?.closed(pair, up: up, down: down, why: why)
         }
         pairs.append(pair)
@@ -170,21 +205,32 @@ final class StandIn: @unchecked Sendable {
     }
 
     private func closed(_ pair: Pair, up: Int, down: Int, why: String?) {
-        pairs.removeAll { $0 === pair }
+        pairs.removeAll {
+            $0 === pair
+        }
         guard !ended else { return }
         standInLog.notice("pair closed: \(up) bytes up, \(down) down\(why.map { " (\($0))" } ?? "", privacy: .public)")
-        if up > 0, down > 0 { endOnQueue(.carried(up: up, down: down)) }
-        else { onEvent(.farDidNotAnswer(why ?? "one-sided: \(up) bytes up, \(down) down")) }
+        if up > 0, down > 0 {
+            endOnQueue(.carried(up: up, down: down))
+        } else {
+            onEvent(.farDidNotAnswer(why ?? "one-sided: \(up) bytes up, \(down) down"))
+        }
     }
 
     /// Cancels the pairs and the listener (withdrawing the record); says so once.
-    func end(_ why: End) { queue.async { self.endOnQueue(why) } }
+    func end(_ why: End) {
+        queue.async {
+            self.endOnQueue(why)
+        }
+    }
 
     private func endOnQueue(_ why: End) {
         guard !ended else { return }
         ended = true
         deadlineWork?.cancel()
-        pairs.forEach { $0.close() }
+        pairs.forEach {
+            $0.close()
+        }
         pairs = []
         listener?.cancel()
         onEvent(.ended(why))
@@ -203,12 +249,23 @@ private final class Pair: @unchecked Sendable {
     private var readOut: [NWConnection] = []
     private var connectTimeout: DispatchWorkItem?
 
-    init(inbound: NWConnection, farHost: String, farPort: UInt16, anywhere: Bool, queue: DispatchQueue, onClose: @escaping @Sendable (Pair, Int, Int, String?) -> Void) {
+    init(
+        inbound: NWConnection,
+        farHost: String,
+        farPort: UInt16,
+        anywhere: Bool,
+        queue: DispatchQueue,
+        onClose: @escaping @Sendable (Pair, Int, Int, String?) -> Void
+    ) {
         self.anywhere = anywhere
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
         self.inbound = inbound
-        self.outbound = NWConnection(host: NWEndpoint.Host(farHost), port: NWEndpoint.Port(rawValue: farPort) ?? .any, using: NWParameters(tls: nil, tcp: tcp))
+        self.outbound = NWConnection(
+            host: NWEndpoint.Host(farHost),
+            port: NWEndpoint.Port(rawValue: farPort) ?? .any,
+            using: NWParameters(tls: nil, tcp: tcp)
+        )
         self.queue = queue
         self.farHost = farHost
         self.onClose = onClose
@@ -223,12 +280,20 @@ private final class Pair: @unchecked Sendable {
                 guard !connected else { return }
                 connectTimeout?.cancel()
                 // Not a byte of a pairing to an address that isn't Tailscale's, whatever the name led to.
-                guard anywhere || Wire.onTailnet(outbound.currentPath?.remoteEndpoint) else { fail("\(farHost) isn't an address on the tailnet"); return }
+                guard anywhere || Wire.onTailnet(outbound.currentPath?.remoteEndpoint)
+                else { fail("\(farHost) isn't an address on the tailnet"); return }
                 connected = true
-                pump(inbound, outbound) { self.up += $0 }
-                pump(outbound, inbound) { self.down += $0 }
+                pump(inbound, outbound) {
+                    self.up += $0
+                }
+                pump(outbound, inbound) {
+                    self.down += $0
+                }
             // Waiting is a refused or unreachable far port: nothing to wait for during a pairing.
-            case .waiting(let error), .failed(let error): ended(outbound, "\(farHost) didn't take it: \(error.localizedDescription)")
+            case .waiting(let error), .failed(let error): ended(
+                    outbound,
+                    "\(farHost) didn't take it: \(error.localizedDescription)"
+                )
             case .cancelled: close()
             case .setup, .preparing: break
             @unknown default: break
@@ -236,12 +301,16 @@ private final class Pair: @unchecked Sendable {
         }
         inbound.stateUpdateHandler = { [weak self] state in
             switch state {
-            case .failed(let error): if let self { ended(inbound, error.localizedDescription) }
+            case .failed(let error): if let self {
+                    ended(inbound, error.localizedDescription)
+                }
             case .cancelled: self?.close()
             default: break
             }
         }
-        let timeout = DispatchWorkItem { [weak self] in self?.fail("\(self?.farHost ?? "the far Mac") didn't answer in 10 s") }
+        let timeout = DispatchWorkItem { [weak self] in
+            self?.fail("\(self?.farHost ?? "the far Mac") didn't answer in 10 s")
+        }
         connectTimeout = timeout
         queue.asyncAfter(deadline: .now() + 10, execute: timeout)
         inbound.start(queue: queue)
@@ -252,15 +321,33 @@ private final class Pair: @unchecked Sendable {
         from.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
             guard let self else { return }
             let ended = isComplete || error != nil, broken = error != nil
-            if let error { failure = failure ?? error.localizedDescription }
-            if ended { readOut.append(from) }
+            if let error {
+                failure = failure ?? error.localizedDescription
+            }
+            if ended {
+                readOut.append(from)
+            }
             // Bytes can arrive together with the FIN: forward them first, the FIN after they are sent.
-            guard let data, !data.isEmpty else { ended ? endDirection(to, broken: broken) : pump(from, to, count: count); return }
+            guard let data, !data.isEmpty else { ended ? endDirection(to, broken: broken) : pump(
+                from,
+                to,
+                count: count
+            ); return }
             count(data.count)
             // The next receive waits for this send: backpressure.
             to.send(content: data, completion: .contentProcessed { [weak self] error in
                 guard let self else { return }
-                if let error { fail(error.localizedDescription) } else if ended { endDirection(to, broken: broken) } else { pump(from, to, count: count) }
+                if let error {
+                    fail(error.localizedDescription)
+                } else if ended {
+                    endDirection(to, broken: broken)
+                } else {
+                    pump(
+                        from,
+                        to,
+                        count: count
+                    )
+                }
             })
         }
     }
@@ -268,11 +355,20 @@ private final class Pair: @unchecked Sendable {
     /// `broken`: it ended on an error, not a FIN — a reset, say. Then the other direction has no one
     /// to go to either, and the pair is over once what was read has been passed on.
     private func endDirection(_ to: NWConnection, broken: Bool) {
-        to.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { [weak self] _ in  // forward the FIN
-            if broken { self?.close() }
-        })
+        to.send(
+            content: nil,
+            contentContext: .finalMessage,
+            isComplete: true,
+            completion: .contentProcessed { [weak self] _ in // forward the FIN
+                if broken {
+                    self?.close()
+                }
+            }
+        )
         endedDirections += 1
-        if endedDirections == 2 { close() }
+        if endedDirections == 2 {
+            close()
+        }
     }
 
     private func fail(_ why: String) {
@@ -284,7 +380,9 @@ private final class Pair: @unchecked Sendable {
     /// side had been read out: no reader is left to notice. Otherwise what it sent already is still
     /// to be read and passed on, and the reading says when it is over.
     private func ended(_ side: NWConnection, _ why: String) {
-        guard connected, !readOut.contains(where: { $0 === side }) else { fail(why); return }
+        guard connected, !readOut.contains(where: {
+            $0 === side
+        }) else { fail(why); return }
         failure = failure ?? why
     }
 

@@ -56,15 +56,29 @@ extension CLI {
             return .notSetUp
         }
         let r: DeviceControlWire.Response
-        do { r = try DeviceControlWire.ask(.init(op: "state", device: id), in: ProfileStore.directory, wait: DeviceControlWire.stateWait) } catch {
-            if case DeviceControlWire.WireError.keptOut = error { return .keptOut }
+        do { r = try DeviceControlWire.ask(
+            .init(op: "state", device: id),
+            in: ProfileStore.directory,
+            wait: DeviceControlWire.stateWait
+        ) } catch {
+            if case DeviceControlWire.WireError.keptOut = error {
+                return .keptOut
+            }
             return .noApp
         }
         // In the order the app's page says them: what must be mended first comes first.
-        if r.ok, r.refused == true { return .refused }
-        if r.ok, r.another == true { return .another }
-        if r.ok, r.listUnreadable == true { return .listUnreadable }
-        if r.ok, r.allowed == false { return .switchedOff }
+        if r.ok, r.refused == true {
+            return .refused
+        }
+        if r.ok, r.another == true {
+            return .another
+        }
+        if r.ok, r.listUnreadable == true {
+            return .listUnreadable
+        }
+        if r.ok, r.allowed == false {
+            return .switchedOff
+        }
         // A pairing the app hasn't picked up yet answers as not set up there.
         guard r.ok, r.open != true else { return r.ok ? .connected : .notConnected }
         return r.refused == true ? .refused : .notConnected
@@ -73,7 +87,9 @@ extension CLI {
     /// A pairing for another Mac: made in this process, written to `file` and kept nowhere here.
     /// Under an identity of its own, so the device lists it on its own and it can be removed
     /// there alone; this Mac's own pairing stays as it is.
-    static func createPairing(_ profile: DeviceProfile, others: [DeviceProfile], file: String, label: String?) -> Never {
+    static func createPairing(_ profile: DeviceProfile, others: [DeviceProfile], file: String,
+                              label: String?) -> Never
+    {
         let out = URL(fileURLWithPath: file).standardizedFileURL
         // The file is had before the pairing, and written through what was had: checked now and
         // written after the code was entered, another could be put there in between.
@@ -83,14 +99,18 @@ extension CLI {
         reserved = (strdup(out.path), fd)
         for sign in [SIGINT, SIGHUP, SIGTERM] {
             signal(sign) { sign in
-                if let made = CLI.reserved { CLI.removeReserved(made.path, made.fd) }
+                if let made = CLI.reserved {
+                    CLI.removeReserved(made.path, made.fd)
+                }
                 _exit(128 + sign)
             }
         }
         /// Nothing is left where the pairing was to go.
         func stop(_ why: String) -> Never {
-            out.path.withCString { CLI.removeReserved($0, fd) }
-            CLI.reserved = nil   // after: a signal in between still finds what to remove
+            out.path.withCString {
+                CLI.removeReserved($0, fd)
+            }
+            CLI.reserved = nil // after: a signal in between still finds what to remove
             close(fd)
             CLI.stop(why)
         }
@@ -98,24 +118,46 @@ extension CLI {
         setvbuf(stdout, nil, _IOLBF, 0)
         do {
             let listening = try DevicePairing(name: label, host: UUID().uuidString)
-            print("On \(profile.displayName) (iOS 27 or later, on this Mac's Wi‑Fi): Settings › Privacy & Security › Developer Mode › “\(listening.name)”.")
-            let paired = try listening.accept { print("Enter this code there: \($0)") }
-            let known = others.compactMap { o in o.udid.map { (udid: $0, name: o.displayName) } }
+            print(
+                "On \(profile.displayName) (iOS 27 or later, on this Mac's Wi‑Fi): Settings › Privacy & Security › Developer Mode › “\(listening.name)”."
+            )
+            let paired = try listening.accept {
+                print("Enter this code there: \($0)")
+            }
+            let known = others.compactMap { o in
+                o.udid.map {
+                    (udid: $0, name: o.displayName)
+                }
+            }
             let verdict = DeviceControlHub.verdict(expected: profile.udid, paired: paired.udid, others: known)
             let withdraw = "Remove “\(listening.name)” on it, in that list."
             switch verdict {
-            case .savedAs(let other): stop("\(paired.name) paired, which is saved here as “\(other)”, not “\(profile.displayName)”. Nothing was written. \(withdraw)")
-            case .nameless: stop("\(paired.name) paired without saying which device it is. Nothing was written. \(withdraw)")
-            case .another: stop("\(paired.name) paired, and it isn't “\(profile.displayName)” as that is saved here (another UDID). Nothing was written. \(withdraw)")
+            case .savedAs(let other): stop(
+                    "\(paired.name) paired, which is saved here as “\(other)”, not “\(profile.displayName)”. Nothing was written. \(withdraw)"
+                )
+            case .nameless: stop(
+                    "\(paired.name) paired without saying which device it is. Nothing was written. \(withdraw)"
+                )
+            case .another: stop(
+                    "\(paired.name) paired, and it isn't “\(profile.displayName)” as that is saved here (another UDID). Nothing was written. \(withdraw)"
+                )
             case .expected, .toProve: break
             }
             // Tried once from here: a pairing that connects nowhere isn't worth taking anywhere.
-            let check = DeviceSession(ip: profile.providerIP, port: profile.remotePairingPort, pairing: { paired.pairing })
+            let check = DeviceSession(
+                ip: profile.providerIP,
+                port: profile.remotePairingPort,
+                pairing: {
+                    paired.pairing
+                }
+            )
             defer { check.close() }
             var unreached: String?
             do { try check.connect() } catch { unreached = "\(error)" }
             if verdict == .toProve, let unreached {
-                stop("\(paired.name) paired, but that pairing opens no connection to “\(profile.displayName)” at \(profile.providerIP) (\(unreached)). Nothing was written. \(withdraw)")
+                stop(
+                    "\(paired.name) paired, but that pairing opens no connection to “\(profile.displayName)” at \(profile.providerIP) (\(unreached)). Nothing was written. \(withdraw)"
+                )
             }
             var device = profile
             device.udid = Self.sharedUDID(saved: profile.udid, paired: paired.udid)
@@ -128,10 +170,15 @@ extension CLI {
             guard DeviceControlWire.names(out.path, theFileOf: fd) else {
                 stop("\(out.path) was replaced while the pairing was made: the pairing isn't in it. \(withdraw)")
             }
-            reserved = nil   // done: an interrupt from here on leaves the file
+            reserved = nil // done: an interrupt from here on leaves the file
             close(fd)
-            print("Wrote \(out.path)" + (unreached.map { " (it couldn't be tried from here: \($0))" } ?? ", and it connects."))
-            print("It is a key to \(profile.displayName): whoever has it and reaches \(profile.providerIP) can see and operate the device. On the other Mac: roamrun key import <that file>")
+            print("Wrote \(out.path)" +
+                (unreached.map {
+                    " (it couldn't be tried from here: \($0))"
+                } ?? ", and it connects."))
+            print(
+                "It is a key to \(profile.displayName): whoever has it and reaches \(profile.providerIP) can see and operate the device. On the other Mac: roamrun key import <that file>"
+            )
             print("To withdraw it: remove “\(listening.name)” on the device, in that list.")
             exit(0)
         } catch {
@@ -146,14 +193,19 @@ extension CLI {
     /// Only what a signal handler may call.
     nonisolated static func removeReserved(_ path: UnsafePointer<CChar>, _ fd: Int32) {
         var held = stat(), named = stat()
-        if fstat(fd, &held) == 0, lstat(path, &named) == 0, held.st_dev == named.st_dev, held.st_ino == named.st_ino { unlink(path) }
+        if fstat(fd, &held) == 0, lstat(path, &named) == 0, held.st_dev == named.st_dev,
+           held.st_ino == named.st_ino
+        {
+            unlink(path)
+        }
     }
 
     /// A new file of the owner's alone, or nothing: never one that is there, never through a link.
     nonisolated static func reserve(_ path: String) throws -> Int32 {
         let fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard fd >= 0 else {
-            throw ArgumentError(message: errno == EEXIST ? "\(path) exists: name a file that doesn't" : "can't make \(path): \(String(cString: strerror(errno)))")
+            throw ArgumentError(message: errno == EEXIST ? "\(path) exists: name a file that doesn't" :
+                "can't make \(path): \(String(cString: strerror(errno)))")
         }
         return fd
     }
@@ -163,7 +215,9 @@ extension CLI {
             var done = 0
             while done < bytes.count {
                 let n = Darwin.write(fd, bytes.baseAddress! + done, bytes.count - done)
-                if n <= 0 { return false }
+                if n <= 0 {
+                    return false
+                }
                 done += n
             }
             return true
@@ -175,7 +229,9 @@ extension CLI {
     /// when the device named none.
     nonisolated static func sharedUDID(saved: String?, paired: String) -> String? {
         guard !paired.isEmpty else { return saved }
-        if let saved, saved.caseInsensitiveCompare(paired) == .orderedSame { return saved }
+        if let saved, saved.caseInsensitiveCompare(paired) == .orderedSame {
+            return saved
+        }
         return paired
     }
 
@@ -184,10 +240,18 @@ extension CLI {
         guard FileManager.default.fileExists(atPath: path) else { fail("\(path) doesn't exist") }
         let r = askApp(.init(op: "import", device: UUID(), path: path, text: name))
         // Not taken in, the file is where it was — and what it was.
-        guard r.ok else { stop("import failed: \(r.error ?? "no answer")\n\(path) was left as it is: a pairing in it is still a key to the device.") }
-        print("\(r.name ?? "The device") is saved with its pairing." + (r.error == nil ? " Try: roamrun look \(r.name.map(shellName) ?? "<name>")" : ""))
+        guard r.ok
+        else {
+            stop(
+                "import failed: \(r.error ?? "no answer")\n\(path) was left as it is: a pairing in it is still a key to the device."
+            )
+        }
+        print("\(r.name ?? "The device") is saved with its pairing." +
+            (r.error == nil ? " Try: roamrun look \(r.name.map(shellName) ?? "<name>")" : ""))
         // An app from before it said so says it by saying nothing else.
-        if r.removed == true || (r.removed == nil && r.error == nil) { print("\(path) is removed.") }
+        if r.removed == true || (r.removed == nil && r.error == nil) {
+            print("\(path) is removed.")
+        }
         // Said as it is: a key left where it was is not one that is gone, and a device not switched on isn't usable yet.
         if let more = r.error {
             FileHandle.standardError.write(Data("roamrun: \(more)\n".utf8))
@@ -210,7 +274,9 @@ extension CLI {
         let fd = try reserve(beside.path)
         var failed = write(data, to: fd) ? nil : errno
         close(fd)
-        if failed == nil, rename(beside.path, file.path) != 0 { failed = errno }
+        if failed == nil, rename(beside.path, file.path) != 0 {
+            failed = errno
+        }
         if let failed {
             unlink(beside.path)
             throw ArgumentError(message: String(cString: strerror(failed)))
@@ -221,7 +287,9 @@ extension CLI {
         do {
             return try DeviceControlWire.ask(request, in: ProfileStore.directory)
         } catch DeviceControlWire.WireError.noApp {
-            stop("the RoamRun app isn't running (or is a build without device control): it holds the connection to the device")
+            stop(
+                "the RoamRun app isn't running (or is a build without device control): it holds the connection to the device"
+            )
         } catch {
             stop("couldn't ask the RoamRun app: \(error)")
         }
@@ -231,20 +299,26 @@ extension CLI {
     static func look(_ profile: DeviceProfile, path: String?) -> Never {
         let f = DateFormatter()
         f.dateFormat = "yyyyMMdd-HHmmss"
-        let file = URL(fileURLWithPath: path ?? "\(fileSafe(profile.displayName))-look-\(f.string(from: .now)).png").standardizedFileURL
+        let file = URL(fileURLWithPath: path ?? "\(fileSafe(profile.displayName))-look-\(f.string(from: .now)).png")
+            .standardizedFileURL
         guard file.pathExtension.lowercased() == "png" else { fail("the file must end in .png") }
         // The app writes it where only RoamRun keeps things; it is this command, run by the user in
         // their own folder, that puts it there (the app would be asked for access to it instead).
-        let made = DeviceControlWire.socketFolder(in: ProfileStore.directory).appendingPathComponent("look-\(UUID().uuidString).png")
+        let made = DeviceControlWire.socketFolder(in: ProfileStore.directory)
+            .appendingPathComponent("look-\(UUID().uuidString).png")
         let r = askApp(.init(op: "look", device: profile.id, path: made.path))
         guard r.ok, let w = r.width, let h = r.height else { stop("look failed: \(r.error ?? "no answer")") }
         do { try put(look: made, at: file) } catch {
-            stop("look failed: can't write \(file.path) (\((error as? ArgumentError)?.message ?? error.localizedDescription))")
+            stop(
+                "look failed: can't write \(file.path) (\((error as? ArgumentError)?.message ?? error.localizedDescription))"
+            )
         }
         print(file.path)
         print("\(w) x \(h)")
         // Which look this is: given with --look, an action is held to it.
-        if let id = r.look { print("look \(id)") }
+        if let id = r.look {
+            print("look \(id)")
+        }
         exit(0)
     }
 
@@ -263,7 +337,9 @@ extension CLI {
         }
         let r = askApp(request)
         guard r.ok else { stop("\(request.op) failed: \(r.error ?? "no answer")") }
-        if request.op == "type", let note = request.text.flatMap(DeviceControlWire.typed) { print(note) }
+        if request.op == "type", let note = request.text.flatMap(DeviceControlWire.typed) {
+            print(note)
+        }
         exit(0)
     }
 
@@ -271,9 +347,12 @@ extension CLI {
     static func elements(_ profile: DeviceProfile, limit: Int?) -> Never {
         let r = askApp(.init(op: "elements", device: profile.id, limit: limit))
         guard r.ok, let captions = r.captions else { stop("elements failed: \(r.error ?? "no answer")") }
-        captions.forEach { print($0) }
+        captions.forEach {
+            print($0)
+        }
         if r.complete != true {
-            FileHandle.standardError.write(Data("roamrun: \(captions.count) elements; the walk was cut short, there may be more\n".utf8))
+            FileHandle.standardError
+                .write(Data("roamrun: \(captions.count) elements; the walk was cut short, there may be more\n".utf8))
         }
         exit(0)
     }
@@ -285,14 +364,25 @@ extension CLI {
         let file = URL(fileURLWithPath: path ?? "\(fileSafe(profile.displayName))-\(stamp).png").standardizedFileURL
         guard file.pathExtension.lowercased() == "png" else { fail("the file must end in .png") }
         let udid = reachableUDID(profile)
-        let capture = ["devicectl", "--quiet", "device", "capture", "screenshot", "--device", udid, "--destination", file.path]
+        let capture = [
+            "devicectl",
+            "--quiet",
+            "device",
+            "capture",
+            "screenshot",
+            "--device",
+            udid,
+            "--destination",
+            file.path
+        ]
         var r = Proc.run("/usr/bin/xcrun", capture, timeout: 60)
-        if r.status != 0, r.err.contains("CoreDeviceError") {   // e.g. the ~42s control-channel rebuild: once more
+        if r.status != 0, r.err.contains("CoreDeviceError") { // e.g. the ~42s control-channel rebuild: once more
             sleep(2)
             r = Proc.run("/usr/bin/xcrun", capture, timeout: 60)
         }
         guard r.status == 0, FileManager.default.fileExists(atPath: file.path) else {
-            stop("screenshot failed: " + (r.err.split(separator: "\n").first.map(String.init) ?? "devicectl exited \(r.status)"))
+            stop("screenshot failed: " +
+                (r.err.split(separator: "\n").first.map(String.init) ?? "devicectl exited \(r.status)"))
         }
         print(file.path)
         exit(0)

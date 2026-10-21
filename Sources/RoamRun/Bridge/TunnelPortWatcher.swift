@@ -56,18 +56,20 @@ final class TunnelPortWatcher: @unchecked Sendable {
         ])
         let pipe = Pipe(), errPipe = Pipe()
         task.standardOutput = pipe
-        task.standardError = errPipe   // e.g. "Must be admin to run 'stream' command"
+        task.standardError = errPipe // e.g. "Must be admin to run 'stream' command"
         reader = LineReader(pipe) { [weak self] line in
             guard let message = Self.message(inJSON: line) else { return }
             self?.handle(message)
         }
         let firstErr = FirstLine()
-        errReader = LineReader(errPipe) { firstErr.offer($0) }
+        errReader = LineReader(errPipe) {
+            firstErr.offer($0)
+        }
         let me = Weak(self)
         task.terminationHandler = { t in
             // Give the stderr reader a moment to deliver the reason.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                guard let self = me.value, self.process === t else { return }   // stop() isn't a failure
+                guard let self = me.value, self.process === t else { return } // stop() isn't a failure
                 self.process = nil
                 let err = firstErr.value
                 self.onExit?("log stream exited (status \(t.terminationStatus))" + (err.isEmpty ? "" : ": \(err)"))
@@ -89,11 +91,17 @@ final class TunnelPortWatcher: @unchecked Sendable {
     }
 
     func handle(_ line: String, now: Date = .now) {
-        pending.removeAll { now.timeIntervalSince($0.at) > 5 }   // a failed request never gets an endpoint
+        pending.removeAll {
+            now.timeIntervalSince($0.at) > 5
+        } // a failed request never gets an endpoint
         // Advert lines first: their instance name comes from the LAN.
         if line.contains(Self.advertMarker) {
             if let (instance, udid) = Self.advert(in: line) {
-                if let udid { onDevice?(instance, udid) } else { onUnrecognized?(instance) }
+                if let udid {
+                    onDevice?(instance, udid)
+                } else {
+                    onUnrecognized?(instance)
+                }
             }
             return
         }
@@ -104,12 +112,18 @@ final class TunnelPortWatcher: @unchecked Sendable {
             // ponytail: oldest-first, as for IPv4. An endpoint whose request already
             // expired takes the next one's turn, which then goes unattributed.
             let owners = Set(pending.map(\.udid))
-            if owners.count > 1 { ambiguousUntil = now + 5 }
+            if owners.count > 1 {
+                ambiguousUntil = now + 5
+            }
             if let v4, let port = UInt16(v4.2) {
                 onPort?(port, owners.count == 1 && now >= ambiguousUntil ? owners.first : nil, String(v4.1))
             }
             // Unknown whose request this answered, so the rest can't be trusted either.
-            if owners.count > 1 { pending.removeAll() } else if !pending.isEmpty { pending.removeFirst() }
+            if owners.count > 1 {
+                pending.removeAll()
+            } else if !pending.isEmpty {
+                pending.removeFirst()
+            }
         } else if let m = line.firstMatch(of: Self.establishPattern) {
             pending.append((String(m.1), now))
         } else if line.contains("Got tunnel endpoint") {
@@ -121,10 +135,18 @@ final class TunnelPortWatcher: @unchecked Sendable {
     /// remotepairingd's advert resolutions in the last `window`, oldest first.
     /// `phrase` narrows the query and goes into a log predicate: callers pass fixed text or plain hex.
     static func recentAdverts(last window: String, containing phrase: String = "Resolved bonjour advert",
-                              timeout: TimeInterval = 10) -> [(String, String?)] {
+                              timeout: TimeInterval = 10) -> [(String, String?)]
+    {
         Proc.run("/usr/bin/log", ["show", "--last", window, "--style", "ndjson", "--predicate",
                                   fromRemotepairingd + " AND eventMessage CONTAINS[c] \"\(phrase)\""], timeout: timeout)
-            .out.split(separator: "\n").compactMap { message(inJSON: String($0)) }.compactMap { advert(in: $0) }
+            .out
+            .split(separator: "\n")
+            .compactMap {
+                message(inJSON: String($0))
+            }
+            .compactMap {
+                advert(in: $0)
+            }
     }
 
     /// One record per line. `--style compact` prints a newline inside a message as
@@ -141,7 +163,8 @@ final class TunnelPortWatcher: @unchecked Sendable {
     /// (instance, UDID — nil when remotepairingd has no pairing for it).
     static func advert(in line: String) -> (String, String?)? {
         guard let r = line.range(of: advertMarker),
-              let m = line[r.upperBound...].trimmingCharacters(in: .whitespaces).wholeMatch(of: advertPattern) else { return nil }
+              let m = line[r.upperBound...].trimmingCharacters(in: .whitespaces).wholeMatch(of: advertPattern)
+        else { return nil }
         return (String(m.1), m.2.map(String.init))
     }
 }
@@ -149,8 +172,19 @@ final class TunnelPortWatcher: @unchecked Sendable {
 private final class FirstLine: @unchecked Sendable {
     private let lock = NSLock()
     private var line = ""
-    var value: String { lock.withLock { line } }
-    func offer(_ l: String) { lock.withLock { if line.isEmpty { line = l } } }
+    var value: String {
+        lock.withLock {
+            line
+        }
+    }
+
+    func offer(_ l: String) {
+        lock.withLock {
+            if line.isEmpty {
+                line = l
+            }
+        }
+    }
 }
 
 /// One `log stream` for every bridge in this process: each line is parsed once
@@ -162,8 +196,8 @@ final class TunnelCoordinator {
 
     struct Subscriber {
         var udid: () -> String?
-        var onPort: (UInt16, String) -> Void          // port, address dialed
-        var onDevice: (String, String) -> Void        // instance, UDID
+        var onPort: (UInt16, String) -> Void // port, address dialed
+        var onDevice: (String, String) -> Void // instance, UDID
         var onUnrecognized: (String) -> Void
         var onLog: (String) -> Void
         var onExit: (String) -> Void
@@ -175,29 +209,51 @@ final class TunnelCoordinator {
     /// False if `log stream` couldn't be started.
     func subscribe(_ id: UUID, _ s: Subscriber) -> Bool {
         subscribers[id] = s
-        if watcher != nil { return true }
+        if watcher != nil {
+            return true
+        }
         let w = TunnelPortWatcher()
-        w.onPort = { port, owner, host in Task { @MainActor in TunnelCoordinator.shared.route(port, owner: owner, host: host) } }
+        w.onPort = { port, owner, host in Task { @MainActor in TunnelCoordinator.shared.route(
+            port,
+            owner: owner,
+            host: host
+        ) } }
         w.onDevice = { instance, udid in
-            Task { @MainActor in TunnelCoordinator.shared.subscribers.values.forEach { $0.onDevice(instance, udid) } }
+            Task { @MainActor in
+                TunnelCoordinator.shared.subscribers.values.forEach {
+                    $0.onDevice(instance, udid)
+                }
+            }
         }
         w.onUnrecognized = { instance in
-            Task { @MainActor in TunnelCoordinator.shared.subscribers.values.forEach { $0.onUnrecognized(instance) } }
+            Task { @MainActor in
+                TunnelCoordinator.shared.subscribers.values.forEach {
+                    $0.onUnrecognized(instance)
+                }
+            }
         }
-        w.onLog = { m in Task { @MainActor in TunnelCoordinator.shared.subscribers.values.forEach { $0.onLog(m) } } }
+        w.onLog = { m in
+            Task { @MainActor in
+                TunnelCoordinator.shared.subscribers.values.forEach {
+                    $0.onLog(m)
+                }
+            }
+        }
         let exited = Weak(w)
         w.onExit = { m in
             Task { @MainActor in
                 let c = TunnelCoordinator.shared
-                guard let gone = exited.value, c.watcher === gone else { return }   // not a newer watcher's business
-                c.watcher = nil   // the next subscribe starts a fresh one
-                c.subscribers.values.forEach { $0.onExit(m) }
+                guard let gone = exited.value, c.watcher === gone else { return } // not a newer watcher's business
+                c.watcher = nil // the next subscribe starts a fresh one
+                c.subscribers.values.forEach {
+                    $0.onExit(m)
+                }
             }
         }
         watcher = w
         if let failure = w.start() {
             watcher = nil; subscribers[id] = nil
-            s.onLog(failure)   // said here: the subscriber is gone before any broadcast arrives
+            s.onLog(failure) // said here: the subscriber is gone before any broadcast arrives
             return false
         }
         return true
@@ -205,18 +261,42 @@ final class TunnelCoordinator {
 
     func unsubscribe(_ id: UUID) {
         subscribers[id] = nil
-        if subscribers.isEmpty { watcher?.stop(); watcher = nil }
+        if subscribers.isEmpty {
+            watcher?.stop(); watcher = nil
+        }
     }
 
     private func route(_ port: UInt16, owner: String?, host: String) {
-        let subs = subscribers.map { (id: $0.key, udid: $0.value.udid()) }
+        let subs = subscribers.map {
+            (id: $0.key, udid: $0.value.udid())
+        }
         // A known device that no bridge here is for (e.g. one on this Wi‑Fi Xcode uses directly): not ours, not news.
-        if let owner, !subs.contains(where: { $0.udid == nil || $0.udid?.caseInsensitiveCompare(owner) == .orderedSame }) { return }
+        if let owner,
+           !subs
+               .contains(where: {
+                   $0.udid == nil || $0.udid?.caseInsensitiveCompare(owner) == .orderedSame
+               })
+        {
+            return
+        }
         // Another process (the app, or a `roamrun up`) bridging a device: an unattributed port may be its.
-        let othersBridging = owner == nil || !subs.contains { $0.udid.map { $0.caseInsensitiveCompare(owner!) == .orderedSame } == true }
-            ? StatusFile.read().values.contains { $0.pid != getpid() && $0.holdsDevice } : false
+        let othersBridging = owner == nil || !subs
+            .contains {
+                $0.udid.map {
+                    $0.caseInsensitiveCompare(owner!) == .orderedSame
+                } == true
+            }
+            ? StatusFile.read().values.contains {
+                $0.pid != getpid() && $0.holdsDevice
+            } : false
         guard let id = Self.recipient(owner: owner, subscribers: subs, othersBridging: othersBridging) else {
-            if owner == nil { subscribers.values.first?.onLog("tunnel port \(port) not relayed: can't tell which bridged device it's for") }
+            if owner ==
+                nil
+            {
+                subscribers.values
+                    .first?
+                    .onLog("tunnel port \(port) not relayed: can't tell which bridged device it's for")
+            }
             return
         }
         subscribers[id]?.onPort(port, host)
@@ -224,13 +304,21 @@ final class TunnelCoordinator {
 
     /// Who relays a tunnel port. Known owner: the bridge for that UDID. Unknown owner (or a
     /// bridge that hasn't learned its UDID yet): only when that bridge is the only one anywhere.
-    nonisolated static func recipient(owner: String?, subscribers: [(id: UUID, udid: String?)], othersBridging: Bool) -> UUID? {
-        if let owner, let match = subscribers.first(where: { $0.udid?.caseInsensitiveCompare(owner) == .orderedSame }) {
+    nonisolated static func recipient(owner: String?, subscribers: [(id: UUID, udid: String?)],
+                                      othersBridging: Bool) -> UUID?
+    {
+        if let owner, let match = subscribers.first(where: {
+            $0.udid?.caseInsensitiveCompare(owner) == .orderedSame
+        }) {
             return match.id
         }
         guard !othersBridging else { return nil }
-        if owner == nil { return subscribers.count == 1 ? subscribers[0].id : nil }
-        let unknown = subscribers.filter { $0.udid == nil }
+        if owner == nil {
+            return subscribers.count == 1 ? subscribers[0].id : nil
+        }
+        let unknown = subscribers.filter {
+            $0.udid == nil
+        }
         return subscribers.count == 1 && unknown.count == 1 ? unknown[0].id : nil
     }
 }

@@ -33,7 +33,10 @@ final class BonjourCapture: ObservableObject {
     private var launchFailing = false
     private(set) var serviceType = "_remotepairing._tcp"
     /// For tests: the kind of record to read, without browsing for it.
-    func reads(_ type: String) { serviceType = type }
+    func reads(_ type: String) {
+        serviceType = type
+    }
+
     private var domain = "local"
 
     func start(serviceType: String = "_remotepairing._tcp", domain: String = "local") {
@@ -63,7 +66,7 @@ final class BonjourCapture: ObservableObject {
                 self.process = nil
                 self.onLog?("dns-sd -Z exited unexpectedly; restarting in 5s")
                 try? await Task.sleep(for: .seconds(5))
-                guard !self.stopped else { return }   // the sheet closed meanwhile
+                guard !self.stopped else { return } // the sheet closed meanwhile
                 self.start(serviceType: self.serviceType, domain: self.domain)
             }
         }
@@ -75,7 +78,9 @@ final class BonjourCapture: ObservableObject {
         } catch {
             // As if it had died at once: without this one failure ends scanning for good.
             // Said once per run of failures, not every 5 s.
-            if !launchFailing { onLog?("Failed to start dns-sd -Z: \(error.localizedDescription); retrying every 5s") }
+            if !launchFailing {
+                onLog?("Failed to start dns-sd -Z: \(error.localizedDescription); retrying every 5s")
+            }
             launchFailing = true
             Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(5))
@@ -87,7 +92,7 @@ final class BonjourCapture: ObservableObject {
 
     func stop() {
         stopped = true
-        launchFailing = false   // the next start's failure is news again
+        launchFailing = false // the next start's failure is news again
         scan += 1
         process?.terminate()
         process = nil
@@ -113,13 +118,20 @@ final class BonjourCapture: ObservableObject {
         var found: [String] = [], bytes: [UInt8]?
         var rest = Array(line.utf8)[...]
         while let byte = rest.popFirst() {
-            guard var open = bytes else { if byte == UInt8(ascii: "\"") { bytes = [] }; continue }
+            guard var open = bytes else {
+                if byte == UInt8(ascii: "\"") {
+                    bytes = []
+                }; continue
+            }
             if byte == UInt8(ascii: "\"") {
                 found.append(String(decoding: open, as: UTF8.self)); bytes = nil
             } else if byte == UInt8(ascii: "\\"), let next = rest.first {
                 let digits = rest.prefix(3)
-                if digits.count == 3, digits.allSatisfy({ (48...57).contains($0) }),
-                   let value = UInt8(String(decoding: digits, as: UTF8.self)) {
+                if digits.count == 3, digits.allSatisfy({
+                       (48 ... 57).contains($0)
+                   }),
+                   let value = UInt8(String(decoding: digits, as: UTF8.self))
+                {
                     open.append(value); rest = rest.dropFirst(3)
                 } else {
                     open.append(next); rest = rest.dropFirst()
@@ -132,10 +144,13 @@ final class BonjourCapture: ObservableObject {
         return found
     }
 
-    func parse(line: String) {   // internal for tests
+    func parse(line: String) { // internal for tests
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty, !trimmed.hasPrefix(";") else { return }
-        let tokens = trimmed.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+        let tokens = trimmed.split(whereSeparator: {
+            $0 == " " || $0 == "\t"
+        })
+        .map(String.init)
         guard tokens.count >= 3 else { return }
         let kind = tokens[1]
         let recordName = tokens[0]
@@ -146,14 +161,20 @@ final class BonjourCapture: ObservableObject {
             let instanceFQDN = tokens[2].trimmingCharacters(in: CharacterSet(charactersIn: ".").union(.whitespaces))
             guard !instanceFQDN.isEmpty else { return }
             makeRoom(for: instanceFQDN)
-            if ptrs.insert(instanceFQDN).inserted { emit(recordName: instanceFQDN) }
+            if ptrs.insert(instanceFQDN).inserted {
+                emit(recordName: instanceFQDN)
+            }
         case "SRV":
             // <instance>._type SRV 0 0 <port> <host>. ; comment
             guard tokens.count >= 6, let port = UInt16(tokens[4]) else { return }
             var host = tokens[5]
-            if let c = host.firstIndex(of: ";") { host = String(host[..<c]) }
+            if let c = host.firstIndex(of: ";") {
+                host = String(host[..<c])
+            }
             host = host.trimmingCharacters(in: .whitespaces)
-            if host.hasSuffix(".") { host.removeLast() }
+            if host.hasSuffix(".") {
+                host.removeLast()
+            }
             makeRoom(for: recordName)
             srvByRecord[recordName] = (host, port)
             emit(recordName: recordName)
@@ -166,20 +187,34 @@ final class BonjourCapture: ObservableObject {
                     dict[pair] = ""
                 }
             }
-            if !dict.isEmpty { makeRoom(for: recordName); txtByRecord[recordName] = dict }
+            if !dict.isEmpty {
+                makeRoom(for: recordName); txtByRecord[recordName] = dict
+            }
             emit(recordName: recordName)
         case "A", "AAAA":
             // <host>. A <ip>
             var host = recordName
-            if host.hasSuffix(".") { host.removeLast() }
+            if host.hasSuffix(".") {
+                host.removeLast()
+            }
             if ipsByHost[host] == nil, ipsByHost.count >= Self.cap,
-               let stalest = hostSeen.min(by: { $0.value < $1.value })?.key {
+               let stalest = hostSeen.min(by: {
+                   $0.value < $1.value
+               })?.key
+            {
                 ipsByHost[stalest] = nil; hostSeen[stalest] = nil
             }
             hostSeen[host] = .now
-            if !(ipsByHost[host] ?? []).contains(tokens[2]), (ipsByHost[host]?.count ?? 0) < 8 { ipsByHost[host, default: []].append(tokens[2]) }
+            if !(ipsByHost[host] ?? []).contains(tokens[2]), (ipsByHost[host]?.count ?? 0) < 8 {
+                ipsByHost[
+                    host,
+                    default: []
+                ].append(tokens[2])
+            }
             // host IPs may complete a pending service
-            for (rec, srv) in srvByRecord where srv.host == host { emit(recordName: rec) }
+            for (rec, srv) in srvByRecord where srv.host == host {
+                emit(recordName: rec)
+            }
         default:
             break
         }
@@ -187,7 +222,9 @@ final class BonjourCapture: ObservableObject {
 
     /// Marks `record` fresh; when the tables are full, forgets the least recently seen record.
     private func makeRoom(for record: String) {
-        if seen[record] == nil, seen.count >= Self.cap, let stalest = seen.min(by: { $0.value < $1.value })?.key {
+        if seen[record] == nil, seen.count >= Self.cap, let stalest = seen.min(by: {
+            $0.value < $1.value
+        })?.key {
             seen[stalest] = nil
             ptrs.remove(stalest)
             srvByRecord[stalest] = nil
@@ -201,8 +238,12 @@ final class BonjourCapture: ObservableObject {
     static func unescaped(_ name: String) -> String {
         var out: [UInt8] = [], bytes = Array(name.utf8), i = 0
         while i < bytes.count {
-            if bytes[i] == 0x5C, i + 3 < bytes.count, bytes[(i + 1)...(i + 3)].allSatisfy({ (0x30...0x39).contains($0) }),
-               let code = UInt8(String(decoding: bytes[(i + 1)...(i + 3)], as: UTF8.self)) {
+            if bytes[i] == 0x5C, i + 3 < bytes.count,
+               bytes[(i + 1) ... (i + 3)].allSatisfy({
+                   (0x30 ... 0x39).contains($0)
+               }),
+               let code = UInt8(String(decoding: bytes[(i + 1) ... (i + 3)], as: UTF8.self))
+            {
                 out.append(code); i += 4
             } else if bytes[i] == 0x5C, i + 1 < bytes.count {
                 out.append(bytes[i + 1]); i += 2
@@ -217,7 +258,9 @@ final class BonjourCapture: ObservableObject {
         guard ptrs.contains(recordName) || recordName.hasSuffix(".\(serviceType)") else { return }
         let instance = String(recordName.dropLast(recordName.hasSuffix(".\(serviceType)") ? serviceType.count + 1 : 0))
         guard let srv = srvByRecord[recordName] else { return }
-        if ownedHosts.contains(srv.host) { return }
+        if ownedHosts.contains(srv.host) {
+            return
+        }
         services[recordName] = CapturedService(
             instanceName: Self.unescaped(instance),
             serviceType: serviceType,

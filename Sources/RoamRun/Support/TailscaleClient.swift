@@ -4,7 +4,10 @@ enum MeshProvider: String, CaseIterable, Identifiable {
     case tailscale
     case manual
 
-    var id: String { rawValue }
+    var id: String {
+        rawValue
+    }
+
     var displayName: String {
         switch self {
         case .tailscale: return "Tailscale"
@@ -40,16 +43,33 @@ struct TailscaleClient {
     /// Kept once found; a miss is tried again a minute later, not on every call (each try
     /// blocks up to 3 s). A slow rc at login would otherwise leave the CLI unfound for good.
     static var shellPATH: String {
-        let (known, missedAt) = pathLock.withLock { (knownPATH, lastMiss) }
-        if let known { return known }
-        if let missedAt, Date.now.timeIntervalSince(missedAt) < 60 { return "" }
-        let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.hasPrefix("/") ? $0 : nil } ?? "/bin/zsh"
+        let (known, missedAt) = pathLock.withLock {
+            (knownPATH, lastMiss)
+        }
+        if let known {
+            return known
+        }
+        if let missedAt, Date.now.timeIntervalSince(missedAt) < 60 {
+            return ""
+        }
+        let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap {
+            $0.hasPrefix("/") ? $0 : nil
+        } ?? "/bin/zsh"
         let out = Proc.run(shell, ["-ilc", #"printf '\n__RR_PATH__%s' "$PATH""#], timeout: 3).out
         let found = out.range(of: "__RR_PATH__", options: .backwards)
-            .map { out[$0.upperBound...].trimmingCharacters(in: .newlines) } ?? ""
-        pathLock.withLock { if found.isEmpty { lastMiss = .now } else { knownPATH = found } }
+            .map {
+                out[$0.upperBound...].trimmingCharacters(in: .newlines)
+            } ?? ""
+        pathLock.withLock {
+            if found.isEmpty {
+                lastMiss = .now
+            } else {
+                knownPATH = found
+            }
+        }
         return found
     }
+
     private static let pathLock = NSLock()
     nonisolated(unsafe) private static var knownPATH: String?
     nonisolated(unsafe) private static var lastMiss: Date?
@@ -70,9 +90,11 @@ struct TailscaleClient {
         }
         // Last resort: our PATH, then the one the user's shell sets up.
         for path in [ProcessInfo.processInfo.environment["PATH"] ?? "", Self.shellPATH] {
-            for dir in path.split(separator: ":") where dir.hasPrefix("/") {   // never "." / relative
+            for dir in path.split(separator: ":") where dir.hasPrefix("/") { // never "." / relative
                 let candidate = "\(dir)/tailscale"
-                if FileManager.default.isExecutableFile(atPath: candidate) { return candidate }
+                if FileManager.default.isExecutableFile(atPath: candidate) {
+                    return candidate
+                }
             }
         }
         return nil
@@ -85,7 +107,9 @@ struct TailscaleClient {
         // Signed out or disconnected still prints valid JSON, just with no peers.
         // Left alone that reads as "running, 0 peers", and every check after it
         // blames the device instead of this Mac.
-        if let problem = Self.stateProblem(inStatusJSON: out) { throw TailscaleClientError.commandFailed(problem) }
+        if let problem = Self.stateProblem(inStatusJSON: out) {
+            throw TailscaleClientError.commandFailed(problem)
+        }
         guard let devices = Self.devices(fromStatusJSON: out) else {
             throw TailscaleClientError.commandFailed("tailscale status: bad JSON")
         }
@@ -96,7 +120,9 @@ struct TailscaleClient {
     func selfDNSName(timeout: TimeInterval = 5) throws -> String? {
         guard let path = resolvedPath() else { throw TailscaleClientError.cliNotFound }
         let out = try run(path, ["status", "--json"], timeout: timeout)
-        if let problem = Self.stateProblem(inStatusJSON: out) { throw TailscaleClientError.commandFailed(problem) }
+        if let problem = Self.stateProblem(inStatusJSON: out) {
+            throw TailscaleClientError.commandFailed(problem)
+        }
         guard let data = out.data(using: .utf8),
               let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let name = (root["Self"] as? [String: Any])?["DNSName"] as? String, !name.isEmpty else { return nil }
@@ -144,7 +170,9 @@ struct TailscaleClient {
         /// node has now.
         func root(on host: String) -> String? {
             guard case .mounted(let roots, _, _) = self else { return nil }
-            return roots.first { $0.host == host }?.target
+            return roots.first {
+                $0.host == host
+            }?.target
         }
 
         /// A mount that isn't a root. `host` is nil for one that isn't tied to a
@@ -160,8 +188,11 @@ struct TailscaleClient {
         /// scoping to one would read a rename as a failure.
         func isRegistered(_ target: String) -> Bool {
             guard case .mounted(let roots, _, _) = self else { return false }
-            return roots.contains { $0.target == target }
+            return roots.contains {
+                $0.target == target
+            }
         }
+
         /// Whether Tailscale Funnel is on for that port under this name. RoamRun
         /// never turns it on and picks a port Funnel can't publish — but that list
         /// is Tailscale's current policy, not a law, and a page of unreleased
@@ -181,7 +212,10 @@ struct TailscaleClient {
         /// resolves, so it is inert config, not a port in use.
         func alongside(_ host: String) -> [String] {
             guard case .mounted(_, let others, _) = self else { return [] }
-            return others.filter { $0.host == nil || $0.host == host }.map(\.path)
+            return others.filter {
+                $0.host == nil || $0.host == host
+            }
+            .map(\.path)
         }
 
         /// For the one sentence every caller has to write about a port it can't have.
@@ -190,7 +224,9 @@ struct TailscaleClient {
             case .unknown: return "something RoamRun couldn't read"
             case .nothing: return "nothing"
             case .mounted(let roots, let others, _):
-                let all = roots.map { $0.target.isEmpty ? "\($0.host)/" : $0.target } + others.map(\.path)
+                let all = roots.map {
+                    $0.target.isEmpty ? "\($0.host)/" : $0.target
+                } + others.map(\.path)
                 return all.count > 3 ? "\(all.count) mounts" : all.joined(separator: ", ")
             }
         }
@@ -215,7 +251,9 @@ struct TailscaleClient {
         guard let data = out.data(using: .utf8),
               let parsed = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
         else { return .unknown }
-        if parsed is NSNull { return .nothing }
+        if parsed is NSNull {
+            return .nothing
+        }
         guard let root = parsed as? [String: Any] else { return .unknown }
         var roots: [Serving.Root] = []
         var others: [Serving.Mount] = []
@@ -224,18 +262,23 @@ struct TailscaleClient {
         // a section we don't look at as "nothing here" is the same mistake one
         // layer down.
         if let tcp = (root["TCP"] as? [String: Any])?["\(port)"] as? [String: Any],
-           tcp["TCPForward"] != nil || tcp["TerminateTLS"] != nil {   // ipn.TCPPortHandler's keys
-            others.append(.init(host: nil, path: "TCP forwarding"))   // no Web entry of its own
+           tcp["TCPForward"] != nil || tcp["TerminateTLS"] != nil
+        { // ipn.TCPPortHandler's keys
+            others.append(.init(host: nil, path: "TCP forwarding")) // no Web entry of its own
         }
         // Every host key for that port, not the first the dictionary happens to
         // yield: a tailnet rename leaves the old name behind.
         var funnelled: [String] = []
         for (hostPort, on) in (root["AllowFunnel"] as? [String: Any] ?? [:])
-        where hostPort.hasSuffix(":\(port)") && (on as? Bool) == true {
+            where hostPort.hasSuffix(":\(port)") && (on as? Bool) == true
+        {
             funnelled.append(String(hostPort.dropLast(":\(port)".count)))
         }
-        for (hostPort, value) in (root["Web"] as? [String: Any] ?? [:]).sorted(by: { $0.key < $1.key })
-        where hostPort.hasSuffix(":\(port)") {
+        for (hostPort, value) in (root["Web"] as? [String: Any] ?? [:]).sorted(by: {
+            $0.key < $1.key
+        })
+            where hostPort.hasSuffix(":\(port)")
+        {
             // Every host's root, not the first one found: the second would
             // otherwise be invisible, and invisible is what gets overwritten.
             let host = String(hostPort.dropLast(":\(port)".count))
@@ -248,11 +291,21 @@ struct TailscaleClient {
             if let here = handlers["/"] as? [String: Any] {
                 roots.append(.init(host: host, target: (here["Proxy"] as? String) ?? ""))
             }
-            others += handlers.keys.filter { $0 != "/" }.map { .init(host: host, path: $0) }
+            others += handlers.keys
+                .filter {
+                    $0 != "/"
+                }
+                .map {
+                    .init(host: host, path: $0)
+                }
         }
         guard !roots.isEmpty || !others.isEmpty || !funnelled.isEmpty else { return .nothing }
-        return .mounted(roots: roots.sorted { $0.host < $1.host },
-                        others: others.sorted { $0.path < $1.path }, funnelled: funnelled.sorted())
+        return .mounted(roots: roots.sorted {
+            $0.host < $1.host
+        },
+        others: others.sorted {
+            $0.path < $1.path
+        }, funnelled: funnelled.sorted())
     }
 
     /// Whether RoamRun's own entry is there *and* something is listening behind
@@ -287,7 +340,7 @@ struct TailscaleClient {
     static func stateProblem(inStatusJSON out: String) -> String? {
         guard let data = out.data(using: .utf8),
               let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let state = root["BackendState"] as? String else { return nil }   // older versions: leave it be
+              let state = root["BackendState"] as? String else { return nil } // older versions: leave it be
         return stateProblem(state)
     }
 
@@ -321,13 +374,19 @@ struct TailscaleClient {
                                           dnsName: Self.undotted((p["DNSName"] as? String) ?? ""),
                                           userID: p["UserID"] as? Int,
                                           tags: (p["Tags"] as? [String]) ?? [],
-                                          stableID: (p["ID"] as? String).flatMap { $0.isEmpty ? nil : $0 }))
+                                          stableID: (p["ID"] as? String).flatMap {
+                                              $0.isEmpty ? nil : $0
+                                          }))
             }
         }
-        return devices.sorted { ($0.os == "iOS") != ($1.os == "iOS") ? $0.os == "iOS" : $0.name < $1.name }
+        return devices.sorted {
+            ($0.os == "iOS") != ($1.os == "iOS") ? $0.os == "iOS" : $0.name < $1.name
+        }
     }
 
-    private static func undotted(_ name: String) -> String { name.hasSuffix(".") ? String(name.dropLast()) : name }
+    private static func undotted(_ name: String) -> String {
+        name.hasSuffix(".") ? String(name.dropLast()) : name
+    }
 
     /// This Mac's place among its peers: what naming one of them, and saying whose it is, takes.
     struct Mesh: Equatable {
@@ -345,7 +404,9 @@ struct TailscaleClient {
         let own = root["Self"] as? [String: Any]
         var logins: [Int: String] = [:]
         for (id, user) in (root["User"] as? [String: Any]) ?? [:] {
-            if let id = Int(id), let login = (user as? [String: Any])?["LoginName"] as? String { logins[id] = login }
+            if let id = Int(id), let login = (user as? [String: Any])?["LoginName"] as? String {
+                logins[id] = login
+            }
         }
         return Mesh(ownIPs: (own?["TailscaleIPs"] as? [String]) ?? [], userID: own?["UserID"] as? Int,
                     suffix: ((root["CurrentTailnet"] as? [String: Any])?["MagicDNSSuffix"] as? String) ?? "",
@@ -355,8 +416,11 @@ struct TailscaleClient {
     func mesh() throws -> Mesh {
         guard let path = resolvedPath() else { throw TailscaleClientError.cliNotFound }
         let out = try run(path, ["status", "--json"])
-        if let problem = Self.stateProblem(inStatusJSON: out) { throw TailscaleClientError.commandFailed(problem) }
-        guard let mesh = Self.mesh(fromStatusJSON: out) else { throw TailscaleClientError.commandFailed("tailscale status: bad JSON") }
+        if let problem = Self.stateProblem(inStatusJSON: out) {
+            throw TailscaleClientError.commandFailed(problem)
+        }
+        guard let mesh = Self.mesh(fromStatusJSON: out)
+        else { throw TailscaleClientError.commandFailed("tailscale status: bad JSON") }
         return mesh
     }
 
@@ -389,7 +453,9 @@ struct TailscaleClient {
         let found = mesh.peers.filter { peer in
             let whole = peer.dnsName.lowercased()
             guard !whole.isEmpty else { return false }
-            if whole == wanted { return true }
+            if whole == wanted {
+                return true
+            }
             return !mesh.suffix.isEmpty && whole == wanted + "." + mesh.suffix.lowercased()
         }
         return found.count == 1 ? .one(found[0]) : found.isEmpty ? .none : .several(found.map(\.dnsName).sorted())
@@ -405,14 +471,20 @@ struct TailscaleClient {
     }
 
     static func holder(of peer: MeshDevice, in mesh: Mesh) -> Holder {
-        if !peer.tags.isEmpty { return .shared(peer.tags) }
+        if !peer.tags.isEmpty {
+            return .shared(peer.tags)
+        }
         guard let id = peer.userID else { return .unknown }
-        if id == mesh.userID { return .yours }
+        if id == mesh.userID {
+            return .yours
+        }
         return mesh.logins[id].map(Holder.user) ?? .unknown
     }
 
     /// Tailscale-level reachability (disco ping), independent of iPhone services.
-    func ping(_ ip: String) -> Bool { pingResult(ip) == .pong }
+    func ping(_ ip: String) -> Bool {
+        pingResult(ip) == .pong
+    }
 
     enum Ping: Equatable, Sendable {
         case pong
@@ -424,19 +496,24 @@ struct TailscaleClient {
 
     func pingResult(_ ip: String) -> Ping {
         guard let path = resolvedPath() else { return .couldNotRun("no tailscale CLI") }
-        let r = Proc.run(path, Self.pingArgs(ip), timeout: 8)   // the ping itself gives up at 3 s
+        let r = Proc.run(path, Self.pingArgs(ip), timeout: 8) // the ping itself gives up at 3 s
         return Self.ping(r)
     }
 
     /// Status -1 is a launch that failed (Proc.run). This Mac's own Tailscale being down,
     /// stopped or signed out is no answer about the device either.
     static func ping(_ r: Proc.Result) -> Ping {
-        if r.status == 0 && r.out.contains("pong") { return .pong }
-        if r.status == -1 || r.timedOut { return .couldNotRun(r.err) }
+        if r.status == 0 && r.out.contains("pong") {
+            return .pong
+        }
+        if r.status == -1 || r.timedOut {
+            return .couldNotRun(r.err)
+        }
         let said = (r.err + "\n" + r.out).lowercased()
         if ["local tailscale daemon", "local tailscale service", "tailscale is stopped", "logged out", "needslogin",
             "not logged in", "not yet approved", "unexpected state", "access denied", "permission denied"]
-            .contains(where: said.contains) {
+            .contains(where: said.contains)
+        {
             return .couldNotRun(r.err.isEmpty ? r.out : r.err)
         }
         return .noPong
@@ -457,15 +534,17 @@ struct TailscaleClient {
 
     /// "pong from my-iphone (100.64.0.10) via 192.168.1.42:41641 in 40ms" / "via DERP(tok) in …" / "via [fd00::1]:41641 in …"
     static func directHost(fromPing out: String) -> String? {
-        guard let line = out.split(separator: "\n").last(where: { $0.hasPrefix("pong") }),
+        guard let line = out.split(separator: "\n").last(where: {
+                  $0.hasPrefix("pong")
+              }),
               let via = line.range(of: " via ")?.upperBound,
               let port = line[via...].range(of: ":", options: .backwards)?.lowerBound,
               !line[via...].hasPrefix("DERP") else { return nil }
-        return line[via..<port].trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        return line[via ..< port].trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
     }
 
     private func run(_ path: String, _ args: [String], timeout: TimeInterval = 5) throws -> String {
-        let r = Proc.run(path, args, timeout: timeout)   // a wedged tailscaled must not hang a bridge start
+        let r = Proc.run(path, args, timeout: timeout) // a wedged tailscaled must not hang a bridge start
         guard r.status == 0 else {
             throw TailscaleClientError.commandFailed("tailscale \(args.joined(separator: " ")): \(r.err)")
         }

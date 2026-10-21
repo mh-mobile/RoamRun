@@ -15,8 +15,13 @@ struct CapturedService: Identifiable, Hashable {
     var txt: [String: String]
     var lastSeen: Date
 
-    var id: String { instanceName }
-    var shortHost: String { host.replacingOccurrences(of: ".local", with: "") }
+    var id: String {
+        instanceName
+    }
+
+    var shortHost: String {
+        host.replacingOccurrences(of: ".local", with: "")
+    }
 }
 
 /// A peer on the mesh VPN (Tailscale for now; shape is provider-agnostic).
@@ -38,18 +43,26 @@ struct MeshDevice: Identifiable, Hashable {
     /// Tailscale's lasting id for the machine; nil when it gave none. `id` falls back to other things.
     var stableID: String?
 
-    var ipv4: String? { ips.first(where: { $0.contains(".") }) }
+    var ipv4: String? {
+        ips.first(where: {
+            $0.contains(".")
+        })
+    }
 
     /// The device chosen once another host is picked: a choice made for the user follows the
     /// host — to no device where that host has none — and one they made stays.
     static func follow(chosen: String?, auto: String?, match: String?) -> (chosen: String?, auto: String?) {
         chosen == nil || chosen == auto ? (match, match) : (chosen, auto)
     }
+
     var pathDescription: String {
         curAddr.isEmpty ? "via DERP relay (\(relay.isEmpty ? "?" : relay)) — works, but slower" : "direct (\(curAddr))"
     }
+
     var label: String {
-        let suffix = ipv4.map { " (\($0))" } ?? ""
+        let suffix = ipv4.map {
+            " (\($0))"
+        } ?? ""
         return "\(name)\(suffix)\(online ? "" : " — offline")"
     }
 }
@@ -89,12 +102,18 @@ struct DeviceProfile: Identifiable, Codable, Equatable {
     /// devicectl's deviceType ("iPhone", "iPad", "realityDevice"), learned by UDID.
     var deviceType: String?
 
-    var symbol: String { Self.symbol(for: deviceType) }
+    var symbol: String {
+        Self.symbol(for: deviceType)
+    }
 
     static func symbol(for deviceType: String?) -> String {
         switch deviceType {
         case "iPad": return "ipad"
-        case "realityDevice": if #available(macOS 14, *) { return "vision.pro" } else { return "eyeglasses" }
+        case "realityDevice": if #available(macOS 14, *) {
+                return "vision.pro"
+            } else {
+                return "eyeglasses"
+            }
         default: return "iphone"
         }
     }
@@ -110,7 +129,9 @@ enum BridgeState: Equatable {
     case local
 
     var isActive: Bool {
-        if case .active = self { return true }
+        if case .active = self {
+            return true
+        }
         return false
     }
 }
@@ -120,11 +141,15 @@ enum BridgeState: Equatable {
 enum DeviceNetwork: String, Codable {
     case wifi, cellular
 
-    var title: String { self == .wifi ? "Wi‑Fi" : "Cellular" }
+    var title: String {
+        self == .wifi ? "Wi‑Fi" : "Cellular"
+    }
 
     /// Off unless the user turned it on: over cellular every Run is paid for.
     static let keepOnCellularKey = "keepDebuggingOnCellular"
-    static var keepOnCellular: Bool { AppID.settings?.bool(forKey: keepOnCellularKey) ?? false }
+    static var keepOnCellular: Bool {
+        AppID.settings?.bool(forKey: keepOnCellularKey) ?? false
+    }
 
     /// The control channel drops for ~0.5 s every ~40 s on Wi‑Fi too: only this long
     /// without it, with the tunnel still carrying traffic, is worth asking where the device is.
@@ -162,17 +187,25 @@ enum Link: Equatable {
     static let waitAfter: TimeInterval = 5
 
     static func next(_ link: Link, _ i: Inputs) -> Link {
-        if i.controlOpen { return .wifi }
-        if case .paused = link { return link }
+        if i.controlOpen {
+            return .wifi
+        }
+        if case .paused = link {
+            return link
+        }
         guard i.heard else { return i.controlGoneFor >= waitAfter ? .waiting : link }
         switch i.probe {
         case .answers: return .wifi
         case .silentReachable: return i.keepOnCellular ? .cellular : .paused(since: i.now)
-        case .unreachable, nil: break   // a device Tailscale can't reach is going, not on cellular
+        case .unreachable, nil: break // a device Tailscale can't reach is going, not on cellular
         }
-        if link == .cellular, !i.keepOnCellular { return .paused(since: i.now) }
+        if link == .cellular, !i.keepOnCellular {
+            return .paused(since: i.now)
+        }
         // Heard again after a long silence: which network is for the probe to say.
-        if link == .waiting { return i.controlGoneFor >= DeviceNetwork.cellularAfter ? .waiting : .wifi }
+        if link == .waiting {
+            return i.controlGoneFor >= DeviceNetwork.cellularAfter ? .waiting : .wifi
+        }
         return link
     }
 }
@@ -184,7 +217,9 @@ enum BridgeStatus: String, CaseIterable {
 
     /// Parses the title written to the shared status file.
     init(title: String) {
-        self = Self.allCases.first { $0.title == title } ?? .starting
+        self = Self.allCases.first {
+            $0.title == title
+        } ?? .starting
     }
 
     var title: String {
@@ -199,7 +234,9 @@ enum BridgeStatus: String, CaseIterable {
         }
     }
 
-    var isWorking: Bool { self == .starting || self == .preparing }
+    var isWorking: Bool {
+        self == .starting || self == .preparing
+    }
 
     var symbol: String {
         switch self {
@@ -244,20 +281,33 @@ extension DeviceProfile {
 extension Array where Element == DeviceProfile {
     /// Why a (trimmed) name can't be used, or nil: `Introduction.nameProblem`, or taken.
     func nameProblem(_ name: String, except id: UUID? = nil) -> String? {
-        if let problem = Introduction.nameProblem(name) { return problem }
-        if isNameTaken(name, except: id) { return "Another device already uses this name — pick a different one." }
+        if let problem = Introduction.nameProblem(name) {
+            return problem
+        }
+        if isNameTaken(name, except: id) {
+            return "Another device already uses this name — pick a different one."
+        }
         return nil
     }
 
     /// Names are how the CLI addresses devices, so they must be unique.
     func isNameTaken(_ name: String, except id: UUID? = nil) -> Bool {
         let n = name.trimmingCharacters(in: .whitespaces)
-        return contains { $0.id != id && $0.displayName.caseInsensitiveCompare(n) == .orderedSame }
+        return contains {
+            $0.id != id && $0.displayName.caseInsensitiveCompare(n) == .orderedSame
+        }
     }
 
     /// "iPhone", then "iPhone 2", "iPhone 3", …
     func uniqueName(_ base: String) -> String {
         guard isNameTaken(base) else { return base }
-        return (2...).lazy.map { "\(base) \($0)" }.first { !isNameTaken($0) }!
+        return (2...)
+            .lazy
+            .map {
+                "\(base) \($0)"
+            }
+            .first {
+                !isNameTaken($0)
+            }!
     }
 }

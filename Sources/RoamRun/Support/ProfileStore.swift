@@ -3,14 +3,19 @@ import Foundation
 final class ProfileStore {
     static let directory: URL = {
         #if DEBUG
-        // Tests pass their own folder. This one holds the person's real devices and status.
-        let runner = isTestRunner(ProcessInfo.processInfo.processName)
-        if runner { Thread.callStackSymbols.forEach { print("STACK", $0) } }
-        precondition(!runner, "a test reached the real Application Support folder; pass a scratch directory")
+            // Tests pass their own folder. This one holds the person's real devices and status.
+            let runner = isTestRunner(ProcessInfo.processInfo.processName)
+            if runner {
+                Thread.callStackSymbols.forEach {
+                    print("STACK", $0)
+                }
+            }
+            precondition(!runner, "a test reached the real Application Support folder; pass a scratch directory")
         #endif
         return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("RoamRun", isDirectory: true)
     }()
+
     /// The processes `swift test` runs tests in (Swift Testing's helper, XCTest's runner).
     static func isTestRunner(_ processName: String) -> Bool {
         ["xctest", "swiftpm-testing-helper"].contains(processName)
@@ -41,20 +46,35 @@ final class ProfileStore {
             unreadable = true
             return []
         }
-        if let profiles = try? JSONDecoder().decode([DeviceProfile].self, from: data) { return profiles }
+        if let profiles = try? JSONDecoder().decode([DeviceProfile].self, from: data) {
+            return profiles
+        }
         // One malformed entry shouldn't cost the others: keep what decodes (and a copy of the file below).
         let salvaged = ((try? JSONSerialization.jsonObject(with: data)) as? [Any])?.compactMap { item in
             // Only an object: anything else there isn't an error to catch, it stops the process.
-            (item as? [String: Any]).flatMap { try? JSONSerialization.data(withJSONObject: $0) }.flatMap { try? JSONDecoder().decode(DeviceProfile.self, from: $0) }
+            (item as? [String: Any])
+                .flatMap {
+                    try? JSONSerialization.data(withJSONObject: $0)
+                }
+                .flatMap { try? JSONDecoder().decode(
+                    DeviceProfile.self,
+                    from: $0
+                ) }
         }
         // The next save would replace it with an empty list: keep a copy, once per distinct content.
         let fm = FileManager.default
         let kept = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
-        if let same = kept.first(where: { $0.lastPathComponent.hasPrefix("profiles.json.unreadable") && (try? Data(contentsOf: $0)) == data }) {
+        if let same = kept
+            .first(where: {
+                $0.lastPathComponent.hasPrefix("profiles.json.unreadable") && (try? Data(contentsOf: $0)) == data
+            })
+        {
             keptUnreadable = same
         } else {
             let copy = url.appendingPathExtension("unreadable-\(Int(Date.now.timeIntervalSince1970))")
-            if (try? fm.copyItem(at: url, to: copy)) != nil { keptUnreadable = copy }
+            if (try? fm.copyItem(at: url, to: copy)) != nil {
+                keptUnreadable = copy
+            }
         }
         return salvaged ?? []
     }
@@ -63,7 +83,9 @@ final class ProfileStore {
     /// by any of them.
     func known(with mine: [DeviceProfile]) -> [DeviceProfile] {
         let ids = Set(mine.map(\.id))
-        return mine + load().filter { !ids.contains($0.id) }
+        return mine + load().filter {
+            !ids.contains($0.id)
+        }
     }
 
     /// Reads, changes and writes the list under the lock, so nothing another
@@ -77,7 +99,7 @@ final class ProfileStore {
             guard !unreadable else { return false }
             let before = all
             change(&all)
-            return all == before || save(all)   // nothing changed: nothing to write
+            return all == before || save(all) // nothing changed: nothing to write
         } ?? false
     }
 
@@ -91,7 +113,7 @@ final class ProfileStore {
             guard !unreadable else { return nil }
             let merged = Self.merge(base: base, wanted: wanted, disk: disk)
             return save(merged) ? merged : nil
-        } ?? nil   // the outer nil is a lock that couldn't be taken; both mean "not saved"
+        } ?? nil // the outer nil is a lock that couldn't be taken; both mean "not saved"
     }
 
     /// nil when the lock itself couldn't be taken.
@@ -118,14 +140,26 @@ final class ProfileStore {
         return unseen(base: base, wanted: wanted, disk: disk) + wanted.map { mine in
             guard let old = was[mine.id], let theirs = onDisk[mine.id] else { return mine }
             var out = mine
-            if mine.providerIP == old.providerIP { out.providerIP = theirs.providerIP }
-            if mine.remotePairingPort == old.remotePairingPort { out.remotePairingPort = theirs.remotePairingPort }
-            if mine.providerHostName == old.providerHostName { out.providerHostName = theirs.providerHostName }
+            if mine.providerIP == old.providerIP {
+                out.providerIP = theirs.providerIP
+            }
+            if mine.remotePairingPort == old.remotePairingPort {
+                out.remotePairingPort = theirs.remotePairingPort
+            }
+            if mine.providerHostName == old.providerHostName {
+                out.providerHostName = theirs.providerHostName
+            }
             // The announcement too: `roamrun devices add` puts a newer one in place while the app runs.
-            if mine.instanceName == old.instanceName, mine.txt == old.txt { out.instanceName = theirs.instanceName; out.txt = theirs.txt }
+            if mine.instanceName == old.instanceName,
+               mine.txt == old.txt
+            {
+                out.instanceName = theirs.instanceName; out.txt = theirs.txt
+            }
             // A UDID learned meanwhile is taken; one that is known isn't given up for none
             // (nothing of ours writes that, and the device's own pairing is named by it).
-            if mine.udid == old.udid, let learned = theirs.udid { out.udid = learned }
+            if mine.udid == old.udid, let learned = theirs.udid {
+                out.udid = learned
+            }
             return out
         }
     }
@@ -136,12 +170,16 @@ final class ProfileStore {
     static func unseen(base: [DeviceProfile], wanted: [DeviceProfile], disk: [DeviceProfile]) -> [DeviceProfile] {
         let was = Set(base.map(\.id)), wantedIDs = Set(wanted.map(\.id))
         return disk.filter { d in
-            !was.contains(d.id) && !wantedIDs.contains(d.id) && !wanted.contains { Self.sameDevice($0, d) }
+            !was.contains(d.id) && !wantedIDs.contains(d.id) && !wanted.contains {
+                Self.sameDevice($0, d)
+            }
         }
     }
 
     /// When profiles.json was last written, nil where there is none: a change says another process saved.
-    var written: Date? { (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date }
+    var written: Date? {
+        (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+    }
 
     /// The devices another process saved since `base` was read, which `mine` doesn't have (none from a file that can't be read).
     func savedElsewhere(base: [DeviceProfile], mine: [DeviceProfile]) -> [DeviceProfile] {
@@ -157,13 +195,16 @@ final class ProfileStore {
 
     /// Last one wins: a duplicated id would trap `Dictionary(uniqueKeysWithValues:)`.
     private static func byID(_ profiles: [DeviceProfile]) -> [UUID: DeviceProfile] {
-        profiles.reduce(into: [:]) { $0[$1.id] = $1 }
+        profiles.reduce(into: [:]) {
+            $0[$1.id] = $1
+        }
     }
 
     /// False if it couldn't be written (disk full, permissions). Private so that
     /// every write goes through the lock above.
     private func save(_ profiles: [DeviceProfile]) -> Bool {
-        guard let data = try? JSONEncoder().encode(profiles), (try? data.write(to: url, options: .atomic)) != nil else { return false }
+        guard let data = try? JSONEncoder().encode(profiles),
+              (try? data.write(to: url, options: .atomic)) != nil else { return false }
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         return true
     }

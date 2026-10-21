@@ -42,30 +42,34 @@ extension OTA {
     /// each app is open, older ones fold away. Read one-handed, so the newest
     /// build's button is the big one.
     static func indexHTML(_ groups: [(bundleID: String, builds: [Build])], base: String,
-                          now: Date = .now, in root: URL? = nil) -> String {
+                          now: Date = .now, in root: URL? = nil) -> String
+    {
         let body = groups.isEmpty ? """
-            <p class="empty">No builds yet. Run <code>roamrun ota &lt;name&gt; &lt;App.ipa&gt;</code> on the Mac.</p>
-            """ : groups.map { app in
+        <p class="empty">No builds yet. Run <code>roamrun ota &lt;name&gt; &lt;App.ipa&gt;</code> on the Mac.</p>
+        """ : groups.map { app in
             let newest = app.builds[0]
             let older = app.builds.dropFirst()
             let olderHTML = older.isEmpty ? "" : """
-                <details><summary>\(older.count) earlier \(older.count == 1 ? "build" : "builds")</summary>
-                \(older.map { row($0, base: base, now: now, newest: false) }.joined(separator: "\n"))
-                </details>
-                """
+            <details><summary>\(older.count) earlier \(older.count == 1 ? "build" : "builds")</summary>
+            \(older.map { row($0, base: base, now: now, newest: false) }.joined(separator: "\n"))
+            </details>
+            """
             let icon = OTA.hasIcon(newest, in: root)
-                ? #"<img class="icon" width="60" height="60" src="\#(escape(base))/\#(escape(app.bundleID))/\#(escape(newest.slug))/icon.png" alt="">"# : ""
+                ?
+                #"<img class="icon" width="60" height="60" src="\#(escape(base))/\#(escape(app.bundleID))/\#(escape(newest.slug))/icon.png" alt="">"# :
+                ""
             return """
-                <section>
-                  <div class="app">\(icon)<div>
-                    <h2>\(escape(newest.title))</h2>
-                    <p class="bundle">\(escape(app.bundleID))</p>
-                  </div></div>
-                  \(row(newest, base: base, now: now, newest: true))
-                  \(olderHTML)
-                </section>
-                """
-        }.joined(separator: "\n")
+            <section>
+              <div class="app">\(icon)<div>
+                <h2>\(escape(newest.title))</h2>
+                <p class="bundle">\(escape(app.bundleID))</p>
+              </div></div>
+              \(row(newest, base: base, now: now, newest: true))
+              \(olderHTML)
+            </section>
+            """
+        }
+        .joined(separator: "\n")
 
         return """
         <!doctype html>
@@ -129,20 +133,24 @@ extension OTA {
             ? #"<p class="gone">Can't be installed any more — its provisioning profile expired. Export the build again on the Mac.</p>"#
             : #"<a class="install" href="\#(escape(installLink(for: build, base: base)))">Install</a>"#
         return """
-            <div class="build\(newest ? " newest" : "")">
-              <div class="top"><span class="ver">\(escape(build.label))</span>\(newest ? #"<span class="tag">NEWEST</span>"# : "")</div>
-              <div class="meta">\(escape(bits.joined(separator: " · ")))</div>
-              \(action)
-            </div>
-            """
+        <div class="build\(newest ? " newest" : "")">
+          <div class="top"><span class="ver">\(escape(build.label))</span>\(newest ? #"<span class="tag">NEWEST</span>"# : "")</div>
+          <div class="meta">\(escape(bits.joined(separator: " · ")))</div>
+          \(action)
+        </div>
+        """
     }
 
     /// Read faster than a timestamp when you're walking.
     static func when(_ date: Date) -> String {
         let cal = Calendar.current
         let time = date.formatted(date: .omitted, time: .shortened)
-        if cal.isDateInToday(date) { return "Today \(time)" }
-        if cal.isDateInYesterday(date) { return "Yesterday \(time)" }
+        if cal.isDateInToday(date) {
+            return "Today \(time)"
+        }
+        if cal.isDateInYesterday(date) {
+            return "Yesterday \(time)"
+        }
         return date.formatted(date: .abbreviated, time: .shortened)
     }
 
@@ -152,7 +160,8 @@ extension OTA {
 
     /// The title comes from the .ipa, and the bundle id from its Info.plist.
     static func escape(_ s: String) -> String {
-        printable(s).replacingOccurrences(of: "&", with: "&amp;")
+        printable(s)
+            .replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")
             .replacingOccurrences(of: "\"", with: "&quot;")

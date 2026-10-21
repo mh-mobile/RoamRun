@@ -5,7 +5,6 @@
 //   xcrun swift scripts/make-icon.swift --ios <file.png>   (1024, edge to edge, opaque: iOS masks it)
 import AppKit
 
-
 func rgb(_ hex: UInt32, _ a: CGFloat = 1) -> CGColor {
     CGColor(red: CGFloat((hex >> 16) & 0xff) / 255, green: CGFloat((hex >> 8) & 0xff) / 255,
             blue: CGFloat(hex & 0xff) / 255, alpha: a)
@@ -14,11 +13,18 @@ func rgb(_ hex: UInt32, _ a: CGFloat = 1) -> CGColor {
 /// Everything is laid out on the 1024 macOS icon grid and scaled.
 func draw(_ ctx: CGContext, size: CGFloat, edgeToEdge: Bool = false) {
     ctx.scaleBy(x: size / 1024, y: size / 1024)
-    if edgeToEdge { ctx.scaleBy(x: 1024 / 824, y: 1024 / 824); ctx.translateBy(x: -100, y: -100) }
+    if edgeToEdge {
+        ctx.scaleBy(x: 1024 / 824, y: 1024 / 824); ctx.translateBy(x: -100, y: -100)
+    }
 
     // Body: standard macOS squircle-ish rounded rect (824pt, r≈185) with drop shadow.
     let body = CGRect(x: 100, y: 100, width: 824, height: 824)
-    let bodyPath = CGPath(roundedRect: body, cornerWidth: edgeToEdge ? 0 : 185, cornerHeight: edgeToEdge ? 0 : 185, transform: nil)
+    let bodyPath = CGPath(
+        roundedRect: body,
+        cornerWidth: edgeToEdge ? 0 : 185,
+        cornerHeight: edgeToEdge ? 0 : 185,
+        transform: nil
+    )
     ctx.saveGState()
     ctx.setShadow(offset: CGSize(width: 0, height: -12), blur: 28, color: rgb(0x000000, 0.35))
     ctx.addPath(bodyPath); ctx.setFillColor(rgb(0x1E3A8A)); ctx.fillPath()
@@ -42,7 +48,9 @@ func draw(_ ctx: CGContext, size: CGFloat, edgeToEdge: Bool = false) {
     }
     ctx.strokePath()
     ctx.setFillColor(rgb(0xFFFFFF, 0.12))
-    for p in lattice { ctx.fillEllipse(in: CGRect(x: p.x - 12, y: p.y - 12, width: 24, height: 24)) }
+    for p in lattice {
+        ctx.fillEllipse(in: CGRect(x: p.x - 12, y: p.y - 12, width: 24, height: 24))
+    }
     ctx.restoreGState()
 
     let white = rgb(0xFFFFFF)
@@ -107,4 +115,5 @@ for (name, px) in sizes {
     try rep.representation(using: .png, properties: [:])!
         .write(to: out.appendingPathComponent("icon_\(name).png"))
 }
+
 print("wrote \(out.path)")

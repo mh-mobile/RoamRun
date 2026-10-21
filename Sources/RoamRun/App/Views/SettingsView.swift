@@ -23,9 +23,12 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     TextField("Auto-detect", text: $cliPath)
                         .textFieldStyle(.roundedBorder)
-                    Text("Leave empty to find it automatically (Tailscale.app, Homebrew, /usr/local/bin). Set a path only if you installed the CLI elsewhere.")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    Text(
+                        "Leave empty to find it automatically (Tailscale.app, Homebrew, /usr/local/bin). Set a path only if you installed the CLI elsewhere."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.vertical, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -34,20 +37,36 @@ struct SettingsView: View {
             GroupBox("Network") {
                 VStack(alignment: .leading, spacing: 8) {
                     Picker("Interface", selection: $networkInterface) {
-                        Text("Automatic (\(InterfaceMonitor.pickLAN(chosen: nil, available: Set(interfaces.keys))))").tag("")
+                        Text("Automatic (\(InterfaceMonitor.pickLAN(chosen: nil, available: Set(interfaces.keys))))")
+                            .tag("")
                         // Also a chosen one that's gone now (e.g. an unplugged adapter), so the choice stays visible.
-                        ForEach(Set(interfaces.keys.filter { $0.hasPrefix("en") } + (networkInterface.isEmpty ? [] : [networkInterface])).sorted(), id: \.self) { name in
+                        ForEach(
+                            Set(interfaces.keys
+                                .filter {
+                                    $0.hasPrefix("en")
+                                } + (networkInterface.isEmpty ? [] : [networkInterface]))
+                                .sorted(),
+                            id: \.self
+                        ) { name in
                             Text("\(name) — \(interfaces[name] ?? "not connected")").tag(name)
                         }
                     }
-                    .onChange(of: networkInterface) { _ in coordinator.lanInterfaceChanged() }
-                    Text("Where the bridge listens: the network Xcode looks for devices on. Automatic uses en0 (Wi‑Fi on most Macs) when it's connected.")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    .onChange(of: networkInterface) { _ in
+                        coordinator.lanInterfaceChanged()
+                    }
+                    Text(
+                        "Where the bridge listens: the network Xcode looks for devices on. Automatic uses en0 (Wi‑Fi on most Macs) when it's connected."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                     Toggle("Keep debugging on cellular", isOn: $keepOnCellular)
-                    Text("When a device that is Ready for Xcode leaves Wi‑Fi, keep the session Xcode already has instead of closing it (not from On this Wi‑Fi: that session doesn't go through RoamRun). Every Run then uses the device's cellular data. A new session still needs Wi‑Fi.")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    Text(
+                        "When a device that is Ready for Xcode leaves Wi‑Fi, keep the session Xcode already has instead of closing it (not from On this Wi‑Fi: that session doesn't go through RoamRun). Every Run then uses the device's cellular data. A new session still needs Wi‑Fi."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.vertical, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -60,7 +79,8 @@ struct SettingsView: View {
                         Text(problem).font(.caption).foregroundStyle(.red)
                     }
                     Text("Keeps bridges you left on running in the menu bar after a restart.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 .padding(.vertical, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -81,9 +101,12 @@ struct SettingsView: View {
                     if let cliError {
                         Text(cliError).font(.caption).foregroundStyle(.red)
                     }
-                    Text("Run bridges from Terminal or over SSH: `roamrun up <name>`, `roamrun status`, `roamrun devices`.")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    Text(
+                        "Run bridges from Terminal or over SSH: `roamrun up <name>`, `roamrun status`, `roamrun devices`."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.vertical, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -91,9 +114,12 @@ struct SettingsView: View {
 
             GroupBox("Troubleshooting") {
                 VStack(alignment: .leading, spacing: 8) {
-                    Button("Clean Up Leftover Helpers") { coordinator.cleanUpLeftoverHelpers() }
+                    Button("Clean Up Leftover Helpers") {
+                        coordinator.cleanUpLeftoverHelpers()
+                    }
                     Text("Stops dns-sd / log processes left behind by a crash.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     RecentMessages(log: coordinator.logStore)
                 }
                 .padding(.vertical, 4)
@@ -103,8 +129,10 @@ struct SettingsView: View {
             HStack {
                 // Of the crates device control is built from, carried in the app.
                 if let licenses = Bundle.main.url(forResource: "THIRD-PARTY-LICENSES", withExtension: "txt") {
-                    Button("Open-Source Licenses…") { NSWorkspace.shared.open(licenses) }
-                        .buttonStyle(.link)
+                    Button("Open-Source Licenses…") {
+                        NSWorkspace.shared.open(licenses)
+                    }
+                    .buttonStyle(.link)
                 }
                 Spacer()
                 Button("Done") {
@@ -116,8 +144,12 @@ struct SettingsView: View {
         }
         .padding(20)
         .frame(width: 460)
-        .onAppear { cliPath = coordinator.tailscaleCLIPath }
-        .onDisappear { coordinator.tailscaleCLIPath = cliPath }   // Esc closes too
+        .onAppear {
+            cliPath = coordinator.tailscaleCLIPath
+        }
+        .onDisappear {
+            coordinator.tailscaleCLIPath = cliPath
+        } // Esc closes too
     }
 
     private var cliStatusText: String {
@@ -136,11 +168,17 @@ private struct RecentMessages: View {
     @ObservedObject var log: LogStore
 
     var body: some View {
-        let recent = log.lines.filter { $0.device == nil }.suffix(8).map(\.text)
+        let recent = log.lines
+            .filter {
+                $0.device == nil
+            }
+            .suffix(8)
+            .map(\.text)
         if !recent.isEmpty {
             Text("Recent messages").font(.caption.weight(.semibold)).padding(.top, 4)
             Text(recent.joined(separator: "\n"))
-                .font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary)
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         }
