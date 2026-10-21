@@ -310,6 +310,7 @@ fn hex(bytes: &[u8]) -> String { bytes.iter().map(|b| format!("{b:02x}")).collec
 /// The uploads' folder, made for this run, only its user's: one there already (another user's, in a shared /tmp)
 /// isn't taken.
 fn folder_made(folder: &Path) -> std::io::Result<()> {
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut made = std::fs::DirBuilder::new();
     #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut made, 0o700);
