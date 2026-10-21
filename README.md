@@ -199,7 +199,7 @@ roamrun ota [<name>] <App.ipa> [--replace] # publish a build for a device to ins
 case-insensitive and unique; `roamrun devices` lists the names, and the pencil on the device's page
 renames it. The name in the device's Settings app is a separate one. When no saved device has that name, the device's Tailscale name (`iphone-15-pro`, as `roamrunctl` takes it) works too, and so does its id or its first eight or more characters. A device is added in the app, or from the command line with
 `roamrun devices add <line>` (a line that another Mac made), `roamrun key import <file>`,
-`roamrun pair xcode --with <name>` or `roamrun pair control --with <name>`. All four are described
+`roamrun pair xcode --with <Tailscale name>` or `roamrun pair control --with <Tailscale name>`. All four are described
 below.
 
 What each command does, more exactly:
@@ -346,7 +346,7 @@ notifications and messages included, and locking the device does not stop it: th
 seen and operated too (seen), though unlocking still takes the passcode or Face ID.
 
 - The switch beside Device control on the device's page turns it off for every program, and back
-  on. It is on after Set Up, Pair Again, `roamrun key import <file>` and `roamrun pair control --with <name>`.
+  on. It is on after Set Up, Pair Again, `roamrun key import <file>` and `roamrun pair control --with <Tailscale name>`.
   Turn it off when nothing of yours is using the device.
 - A `look` written to a file is readable by you alone and stays until you delete it.
 - At every connection the Mac and the device verify each other. Something else answering at the

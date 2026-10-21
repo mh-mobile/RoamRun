@@ -146,8 +146,8 @@ roamrun ota [<name>] <App.ipa> [--replace] # デバイスが自分でインス�
 
 - `roamrun devices add <line>`（別の Mac が出力した行を渡す）
 - `roamrun key import <file>`
-- `roamrun pair xcode --with <name>`
-- `roamrun pair control --with <name>`
+- `roamrun pair xcode --with <Tailscale name>`
+- `roamrun pair control --with <Tailscale name>`
 
 各コマンドの細かい動作は、次のとおりです。
 
@@ -240,7 +240,7 @@ roamrun elements iPhone                   # アクセシビリティが返す画
 
 デバイス操作は、特定のエージェントやコマンドだけに許可されるものではありません。スイッチがオンの間は、**この Mac で実行したどのプログラムでも、アプリを通じてデバイスを見て操作できます**。ビルドスクリプト、パッケージのインストール処理、別のエージェントも含まれます。`look` には、画面に出ているものがすべて写ります。通知やメッセージも例外ではありません。デバイスをロックしても、操作は止まりません。ロック画面も見えて、操作できました（確認済み）。ただし、ロックの解除には、パスコードか Face ID が必要です。
 
-- デバイスのページの Device control の横にあるスイッチで、すべてのプログラムからの操作をまとめてオフにできます。もう一度押すと、オンに戻ります。Set Up、Pair Again、`roamrun key import <file>`、`roamrun pair control --with <name>` のあとは、スイッチがオンになっています。自分の作業でデバイスを使っていないときは、オフにしてください。
+- デバイスのページの Device control の横にあるスイッチで、すべてのプログラムからの操作をまとめてオフにできます。もう一度押すと、オンに戻ります。Set Up と Pair Again のあとは、スイッチがオンになっています。`roamrun key import <file>` と `roamrun pair control --with <Tailscale name>` のあとも同じです。自分の作業でデバイスを使っていないときは、オフにしてください。
 - `look` で保存したファイルは、本人だけが読めます。削除するまで残ります。
 - 接続のたびに、Mac とデバイスは互いを検証します。デバイスのアドレスで別のものが応答した場合は、接続を拒否し、入力も送りません。
 - ペアリングには、秘密鍵が含まれます。鍵の保管のしかたと、鍵を使える範囲は、[SECURITY.md](SECURITY.md)（英語）にあります。
