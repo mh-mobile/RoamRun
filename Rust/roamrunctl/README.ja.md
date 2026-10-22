@@ -47,7 +47,7 @@ curl -fsSL https://github.com/mh-mobile/RoamRun/releases/latest/download/roamrun
 ~/.local/bin/roamrunctl --version
 ```
 
-Intel の Mac では、2 か所の `aarch64` を `x86_64` に変えてください。Linux と同じく、`~/.local/bin` を `PATH` に追加するか、フルパスで実行します。バイナリには Developer ID の署名も公証もありません。`curl` でダウンロードした場合は、アーカイブと取り出したファイルのどちらにも `com.apple.quarantine` 属性は付かず、そのまま実行できます。ブラウザがダウンロードしたファイルに付けるのと同じこの属性をアーカイブに付けて試したところ、`tar` で取り出したバイナリにも付きました。macOS 27 の Apple シリコンの Mac では、どちらのバイナリも起動したとたんに終了させられました（終了ステータス 137）。バイナリに `xattr -d com.apple.quarantine roamrunctl` を実行したあとは、実行できました。
+Intel の Mac では、2 か所の `aarch64` を `x86_64` に変えてください。Linux と同じく、`~/.local/bin` を `PATH` に追加するか、フルパスで実行します。バイナリには Developer ID の署名も公証もありません。`curl` でダウンロードした場合は、アーカイブと取り出したファイルのどちらにも `com.apple.quarantine` 属性は付かず、そのまま実行できます。この属性を手でアーカイブに付けて試したところ、`tar` で取り出したバイナリにも付きました。macOS 27 の Apple シリコンの Mac では、どちらのバイナリも起動したとたんに終了させられました（終了ステータス 137）。バイナリに `xattr -d com.apple.quarantine roamrunctl` を実行したあとは、実行できました。ブラウザでのダウンロードは試していません。
 
 Homebrew では、macOS でも Linux でも、次のコマンドでインストールできます。`roamrunctl` はソースからビルドされます。
 
