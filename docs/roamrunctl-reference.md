@@ -504,10 +504,12 @@ against a real device at the time these notes were written:
   same upload were refused meanwhile, it was installed after 10 s, the upload's file was gone
   after, and the folder was removed at Ctrl-C. `launch` of it over stdio answered with its pid
   in 1.3 s.
-- `install --relay`, `launch --relay` and `install --launch` with a device. `install --relay`
-  was run only in the unit tests, against a server on 127.0.0.1 whose device can't be opened:
-  refused without the token before the `.ipa` was sent; with it, the upload taken and what
-  `install` answered printed.
+- `install --relay` and `launch --relay` from another machine, from a cloud, or on Linux or
+  Windows; `install --launch` without a relay. They were run on macOS from the machine itself,
+  against its own `mcp --http` with the token, on the iPhone 15 Pro (iOS 27.0, its app not in
+  front): without the token the upload was refused (401) before the `.ipa` was sent; with it,
+  `install --relay --launch` of a 1 MB `.ipa` took 6.7 s (the install 5 s) and launched it,
+  and `launch --relay` (the relay from `ROAMRUNCTL_RELAY`) answered in 0.6 s.
 - Tailscale userspace networking with no address available to bind.
 - Xcode pairing through `pair introduce` since the `--mac` → `--host` change.
 
