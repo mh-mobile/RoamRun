@@ -20,7 +20,7 @@ pub enum Devices {
 
 #[derive(Subcommand)]
 pub enum Key {
-    /// Save the device and the pairing of a file `roamrun key create` wrote, or one roamrunctl saved for a device on another machine; the file is removed
+    /// Save the device and the pairing of a file `roamrun key create` wrote, or one roamrunctl saved for a device on another machine; a file is removed once it is saved
     Import {
         /// The file, or - for standard input (a CI's secret, say)
         file: PathBuf,
