@@ -160,7 +160,10 @@ the using machine and the device, not through the key's machine.
   over Tailscale, stores the record, and removes the import file on success.
 - `key import` also takes an unencrypted record roamrunctl saved on another machine (a
   `devices/<name>.json` file), under its own name unless `--as` gives another; a record whose
-  key another machine keeps (B) is refused. With `-` in place of the file it reads standard
+  key another machine keeps (B) is refused. A file in this machine's own devices folder isn't
+  removed (imported `--as` another name, it is then saved under both). A byte order mark
+  before the JSON is passed over. With `--passphrase`, the passphrase is asked for before the
+  device is tried. With `-` in place of the file it reads standard
   input, and removes nothing: `printf '%s' "$KEY" | roamrunctl key import - --as ci` takes a
   CI's secret without writing it to a file. Line breaks outside the JSON's strings don't
   matter, so a secret whose lines were run together, or turned into spaces, is read the same.
