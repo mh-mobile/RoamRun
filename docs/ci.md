@@ -1,9 +1,10 @@
-# Installing and launching on a real device from CI
+# Installing and launching on a real device from GitHub Actions
 
 <p align="center">English | <a href="ci.ja.md">日本語</a></p>
 
-A CI job on a GitHub-hosted runner can install an app on your iPhone and launch it over Tailscale
-with the released `roamrunctl`, unchanged. There are two ways:
+A GitHub Actions job on a GitHub-hosted runner can install an app on your iPhone and launch it over
+Tailscale with the released `roamrunctl`, unchanged. Other CI services weren't tried. There are two
+ways:
 
 | | roamrunctl on the runner | A relay beside the device |
 |---|---|---|
@@ -13,9 +14,8 @@ with the released `roamrunctl`, unchanged. There are two ways:
 | What has to keep running | nothing | the relay, started by you |
 
 With a relay, the key never leaves your machine. With roamrunctl on the runner, nothing of yours
-runs while the job does. A repository can be set up for both, but a job uses one of them for a
-device (see the results below). "Relay" on this page is that machine beside the device, not
-Tailscale's DERP relays.
+runs while the job does. A repository can be set up for both. "Relay" on this page is that
+machine beside the device, not Tailscale's DERP relays.
 
 The job here doesn't build or sign the app. CI needs an `.ipa` already signed for the device (a
 development profile that lists it); `roamrunctl` checks the archive's shape, not its signature,
@@ -46,11 +46,23 @@ All on 2026-10-22 (UTC):
 | the runner alone | Linux's key: install 11 s, launch 3 s | — |
 | the relay alone, 2 minutes after that | — | Linux: upload 2 s, install 48 s, launch 1 s |
 
-The runner's installs took 9 to 15 seconds. The relay's were slow each time another machine had
-used the device within the 2 minutes before: its `install` was sent within 3 seconds after the
-runner's `launch` returned in the first and third runs, and about 2 minutes after it in the last.
-The one fast install came 5 minutes after the device was last used, by the same relay. What held
-the slow ones up on the device wasn't looked into. Drive a device from one machine at a time.
+The slow installs and the timeout fit an install over the app while it is in front on a charging
+device: in these runs the device lay on its charger with its screen on, and nothing ended the app a
+run had launched. Later, from the Mac with the device's log streamed
+(idevice's `syslog_relay`), it was seen why: iOS asked to end the app before replacing it, and the
+request "failed due to termination resistance"; the install waited until the app left the front.
+With roamrunctl 0.8.1 over the LAN:
+
+| Device | App | Install |
+|---|---|---|
+| charging | in front | waited (122 s, until the app was ended by hand; 315 s timeouts otherwise) |
+| not charging | in front | 4 s |
+| charging | not running | 5 s |
+
+Whether the app was in front before each run above wasn't recorded, so not every fast run is
+explained. roamrunctl 0.9.0 ends the app's running processes before it installs, and the same
+install took 4–5 s with the app in front on a charging device. With 0.8.1, don't leave the app in
+front on a charging device when a job installs it: end it, or leave the device off its charger.
 
 ## What both ways need
 

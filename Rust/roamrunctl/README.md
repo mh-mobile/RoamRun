@@ -260,8 +260,8 @@ roamrunctl mcp --http 9090 --allow tag:codex phone
 - What is shown and sent passes through whatever lies between: a cloud's proxy sees the
   images, the text typed or pasted, what is uploaded, and the token.
 
-Installing and launching from a CI job, with roamrunctl on the runner or through `mcp --http` on a
-machine beside the device, is in [docs/ci.md](../../docs/ci.md).
+Installing and launching from a GitHub Actions job, with roamrunctl on the runner or through
+`mcp --http` on a machine beside the device, is in [docs/ci.md](../../docs/ci.md).
 
 An optional [agent skill](https://github.com/mh-mobile/RoamRun/tree/main/skills/roamrunctl)
 provides instructions: `npx skills add mh-mobile/RoamRun`. Installing the skill does not
