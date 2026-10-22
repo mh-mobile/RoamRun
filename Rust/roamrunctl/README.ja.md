@@ -184,6 +184,8 @@ roamrunctl mcp --http 9090 --allow tag:codex phone
 - `--allow-install` を付けると、`install` も使えます。先に `.ipa` を `http://<そのアドレス>:9090/upload` に送ります（`curl -T App.ipa`）。その答えにある `upload` の id と `sha256` を、`install` に渡します。大きさの上限は 1024 MiB で、`--max-upload <MiB>` で変えられます。保持するアップロードは 1 つで、インストールできるのは送った呼び出し元だけです。インストールが終わったとき、30 分使われなかったとき、Ctrl-C で止めたときに消します。どの呼び出し元からでも、次のアップロードが届き始めたときにも消します。このフラグがなければ、HTTP でのインストールはできません。
 - 画像や、入力・貼り付けした文字、アップロードした `.ipa` は、途中にあるものを通ります。クラウド環境のプロキシには、画像も文字もアップロードもトークンも見えます。
 
+CI のジョブからインストールして起動する手順は、[docs/ci.ja.md](../../docs/ci.ja.md) にあります。ランナーで roamrunctl を動かすやり方と、このような relay に頼むやり方を載せています。
+
 エージェントに使い方を教える[スキル](https://github.com/mh-mobile/RoamRun/tree/main/skills/roamrunctl)も用意しています（`npx skills add mh-mobile/RoamRun`）。スキルを入れても、MCP サーバーの登録や起動は行われません。
 
 ### 鍵のファイル（A）
