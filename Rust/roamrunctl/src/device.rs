@@ -20,8 +20,9 @@ pub enum Devices {
 
 #[derive(Subcommand)]
 pub enum Key {
-    /// Save the device and the pairing of a file `roamrun key create` wrote; the file is removed
+    /// Save the device and the pairing of a file `roamrun key create` wrote, or one roamrunctl saved for a device on another machine; the file is removed
     Import {
+        /// The file, or - for standard input (a CI's secret, say)
         file: PathBuf,
         /// The name to save it under here
         #[arg(long = "as")]
@@ -235,15 +236,28 @@ struct SharedDevice {
     port: Option<u16>,
 }
 
-fn import(file: &Path, name: Option<String>, sealed: bool) -> Result<String, String> {
-    let text = std::fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?;
-    let shared: Shared = serde_json::from_str(&text).map_err(|_| format!("{} isn't a file `roamrun key create` wrote", file.display()))?;
-    if shared.version != 1 || shared.pairing.is_empty() || shared.device.ip.parse::<std::net::Ipv4Addr>().is_err() {
-        return Err(format!("{} isn't a file `roamrun key create` wrote", file.display()));
-    }
-    let name = name.unwrap_or_else(|| crate::hold::filed(&shared.device.name));
-    let saved = Saved { v: 1, name, ip: shared.device.ip, port: shared.device.port.unwrap_or(PORTS.start), pairing: shared.pairing, signer: None };
+/// What `key import` reads: a file `roamrun key create` wrote, or one saved here for a device on another machine.
+fn imported(text: &str, from: &str, name: Option<String>) -> Result<Saved, String> {
+    let refused = || format!("{from} isn't a file `roamrun key create` wrote, nor a device roamrunctl saved");
+    let saved = if let Ok(shared) = serde_json::from_str::<Shared>(text) {
+        if shared.version != 1 || shared.pairing.is_empty() || shared.device.ip.parse::<std::net::Ipv4Addr>().is_err() { return Err(refused()) }
+        let name = name.unwrap_or_else(|| crate::hold::filed(&shared.device.name));
+        Saved { v: 1, name, ip: shared.device.ip, port: shared.device.port.unwrap_or(PORTS.start), pairing: shared.pairing, signer: None }
+    } else {
+        let saved: Saved = serde_json::from_str(text).map_err(|_| refused())?;
+        if saved.v != 1 || saved.pairing.is_empty() || saved.ip.parse::<std::net::Ipv4Addr>().is_err() { return Err(refused()) }
+        if let Some(signer) = &saved.signer { return Err(format!("{from} holds no key: {signer} keeps it, and signs for the machine it was saved on")) }
+        Saved { name: name.unwrap_or(saved.name), ..saved }
+    };
     named(&saved.name)?;
+    Ok(saved)
+}
+
+fn import(file: &Path, name: Option<String>, sealed: bool) -> Result<String, String> {
+    let stdin = file == Path::new("-");
+    let from = if stdin { "standard input".to_string() } else { file.display().to_string() };
+    let text = if stdin { std::io::read_to_string(std::io::stdin()) } else { std::fs::read_to_string(file) }.map_err(|e| format!("{from}: {e}"))?;
+    let saved = imported(&text, &from, name)?;
     if kept(&saved.name)?.is_some() {
         return Err(format!("a device “{}” is saved here already: `roamrunctl devices remove {}` first, or --as another name", saved.name, saved.name));
     }
@@ -251,7 +265,7 @@ fn import(file: &Path, name: Option<String>, sealed: bool) -> Result<String, Str
     open(&saved)?;
     let passphrase = if sealed { Some(crate::secret::passphrase(&saved.name, true)?) } else { None };
     let path = save(&saved, passphrase.as_deref())?;
-    std::fs::remove_file(file).map_err(|e| format!("saved, but {} couldn't be removed ({e}): remove it yourself, it is a key", file.display()))?;
+    if !stdin { std::fs::remove_file(file).map_err(|e| format!("saved, but {} couldn't be removed ({e}): remove it yourself, it is a key", file.display()))?; }
     Ok(match passphrase {
         Some(_) => format!("Saved {} ({}), and it connects. Its pairing is kept under the passphrase, in {}: that keeps the file from being a key on its own, not from whoever has both.", saved.name, saved.ip, path.display()),
         None => format!("Saved {} ({}), and it connects. The key is {}, as it is: whoever can read it and reach the device can see and operate it.", saved.name, saved.ip, path.display()),
@@ -604,6 +618,25 @@ mod tests {
     fn a_tailscale_that_cant_say_is_said_so() {
         let why = offered_by(Err("Tailscale here isn't signed in: `tailscale up`".into())).err().unwrap_or_default();
         assert!(why.contains("isn't signed in"), "{why}");
+    }
+
+    #[test]
+    fn what_is_imported_is_a_key_create_file_or_a_device_saved_with_its_key() {
+        let shared = r#"{"roamrunPairing":1,"device":{"displayName":"Ann's iPhone","providerIP":"100.64.0.7","remotePairingPort":49153},"pairing":"<plist/>"}"#;
+        let saved = imported(shared, "-", None).unwrap();
+        assert_eq!((saved.name.as_str(), saved.ip.as_str(), saved.port), ("Ann-s-iPhone", "100.64.0.7", 49153));
+        // As roamrunctl saves it, pretty, and as a CI's secret may give it back: its lines run together.
+        let kept = serde_json::to_string_pretty(&Saved { v: 1, name: "ci".into(), ip: "100.64.0.8".into(), port: 49152, pairing: "<plist/>".into(), signer: None }).unwrap();
+        for text in [kept.clone(), kept.replace('\n', ""), kept.replace('\n', " ")] {
+            assert_eq!(imported(&text, "-", None).unwrap().name, "ci");
+        }
+        assert_eq!(imported(&kept, "-", Some("other".into())).unwrap().name, "other");
+        let signed = kept.replace(r#""pairing""#, r#""signer": "mac", "pairing""#);
+        assert!(imported(&signed, "-", None).err().unwrap_or_default().contains("holds no key"));
+        for text in ["", "{}", r#"{"roamrunPairing":2,"device":{"displayName":"a","providerIP":"100.64.0.7"},"pairing":"x"}"#, &kept.replace("100.64.0.8", "nowhere")] {
+            assert!(imported(text, "standard input", None).err().unwrap_or_default().starts_with("standard input isn't"), "{text}");
+        }
+        assert!(imported(&kept, "-", Some("../x".into())).is_err());
     }
 
     #[test]

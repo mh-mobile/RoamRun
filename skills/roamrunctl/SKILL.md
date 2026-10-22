@@ -175,7 +175,9 @@ Tailscale name where it asks for the far Mac's. `--with` needs a device that was
 with something before: `pair introduce` says "…'s own announcement wasn't seen on this
 LAN" otherwise, and the device is then paired once first, with Xcode or with `pair control
 --to` on the near machine (whether the latter alone is enough wasn't tried). (A Mac with RoamRun can make the pairing instead and hand it
-over: `roamrun key create <device> <file>` there, `roamrunctl key import <file>` here.)
+over: `roamrun key create <device> <file>` there, `roamrunctl key import <file>` here.
+`key import` also takes a `devices/<name>.json` roamrunctl saved on another machine, and
+`-` for standard input — a CI's secret: `printf '%s' "$KEY" | roamrunctl key import - --as ci`.)
 
 The saved pairing is then a key to the device, in a file of this user's (on Linux and
 macOS only its owner can read it; on Windows nothing is checked): **any program running
