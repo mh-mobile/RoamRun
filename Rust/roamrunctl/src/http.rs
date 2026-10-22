@@ -1209,10 +1209,12 @@ mod tests {
         let (ipa, token_file) = (std::env::temp_dir().join(format!("rr-relay-{id}.ipa")), std::env::temp_dir().join(format!("rr-relay-{id}.token")));
         std::fs::write(&ipa, crate::mcp::tests::ipa(crate::mcp::tests::INFO)).unwrap();
         crate::device::own_whole(&token_file, token.as_bytes()).unwrap();
-        // Without the token: refused before the .ipa is sent.
-        let without = crate::remote::Relay::new(&format!("http://{at}/mcp"), None).unwrap();
-        assert!(without.install("phone", &ipa, None).err().unwrap_or_default().contains("wants its token"));
-        assert!(files(&uploads).is_empty());
+        // Without the token (unless this environment gives one): refused before the .ipa is sent.
+        if std::env::var(crate::remote::TOKEN).is_err() {
+            let without = crate::remote::Relay::new(&format!("http://{at}/mcp"), None).unwrap();
+            assert!(without.install("phone", &ipa, None).err().unwrap_or_default().contains("wants its token"));
+            assert!(files(&uploads).is_empty());
+        }
         // With it: the upload is in, and what the install itself answered (the device offered here can't be used) is said.
         let relay = crate::remote::Relay::new(&at.to_string(), Some(&token_file)).unwrap();
         let why = relay.install("phone", &ipa, None).err().unwrap_or_default();

@@ -111,7 +111,9 @@ impl Relay {
         loop {
             std::thread::sleep(EVERY);
             let said = self.call("install_status", json!({ "device": name }))?;
-            if !said.starts_with("installing ") { return Ok((said, bundle)) }
+            if said.contains(" is installed on ") { return Ok((said, bundle)) }
+            // Not going on and not in (the relay was started again since, say): not taken for in.
+            if !said.starts_with("installing ") { return Err(said) }
             if Instant::now() >= until {
                 return Err(format!("not in after {} s: the relay goes on with it, and install_status there says how it ends", began.elapsed().as_secs()));
             }
