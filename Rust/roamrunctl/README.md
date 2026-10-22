@@ -191,7 +191,7 @@ machine's Tailscale name in the app.
 ```sh
 roamrunctl devices                    # list devices available here
 roamrunctl look phone shot.png        # save a PNG screenshot (longer side at most 1280 pixels)
-roamrunctl install phone App.ipa      # or a signed .app folder
+roamrunctl install phone App.ipa      # or a signed .app folder; --launch then launches it
 roamrunctl launch phone com.example.App
 ```
 
@@ -256,7 +256,10 @@ roamrunctl mcp --http 9090 --allow tag:codex phone
   is given. One upload is kept, and only its sender can install it. It is removed when the
   install ends, after 30 minutes unused, at Ctrl-C, or when another upload begins to come in,
   from any caller. Without the flag there is no install over
-  HTTP.
+  HTTP. From a machine with roamrunctl (a CI runner, say),
+  `roamrunctl install phone App.ipa --relay <that address>:9090 [--launch]` does the upload,
+  the install and the wait, with the token from `ROAMRUNCTL_TOKEN` or `--token-file`; and
+  `roamrunctl launch phone <bundle id> --relay <that address>:9090` launches.
 - What is shown and sent passes through whatever lies between: a cloud's proxy sees the
   images, the text typed or pasted, what is uploaded, and the token.
 

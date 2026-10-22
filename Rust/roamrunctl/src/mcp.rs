@@ -535,7 +535,7 @@ impl Server {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -843,10 +843,10 @@ mod tests {
         }
     }
 
-    const INFO: &[u8] = b"<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>io.example.app</string></dict></plist>";
+    pub(crate) const INFO: &[u8] = b"<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>io.example.app</string></dict></plist>";
 
     /// An .ipa of one app with this Info.plist, stored, as an archiver writes it.
-    fn ipa(info: &[u8]) -> Vec<u8> {
+    pub(crate) fn ipa(info: &[u8]) -> Vec<u8> {
         let name = b"Payload/A.app/Info.plist";
         let crc = !info.iter().fold(!0u32, |c, &b| (0..8).fold(c ^ b as u32, |c, _| if c & 1 == 1 { (c >> 1) ^ 0xedb8_8320 } else { c >> 1 }));
         let (size, name_len) = ((info.len() as u32).to_le_bytes(), (name.len() as u16).to_le_bytes());

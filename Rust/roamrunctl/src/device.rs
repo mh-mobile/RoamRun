@@ -486,14 +486,30 @@ fn names_here() -> Result<Vec<String>, String> {
     Ok(names)
 }
 
-/// `roamrunctl install`: an .ipa is checked before the device is opened, as MCP does.
-fn install(name: &str, path: &std::path::Path) -> Result<String, String> {
+/// `roamrunctl install`: an .ipa is checked before the device is opened, as MCP does. With `launch`, the app is then
+/// launched by the bundle identifier in it.
+fn install(name: &str, path: &std::path::Path, launch: bool) -> Result<String, String> {
     let path_text = path.to_string_lossy();
-    if path.is_file() { roamrun_device::ipa_checked(&path_text)?; }
+    let bundle = if path.is_file() { Some(roamrun_device::ipa_checked(&path_text)?) } else { None };
+    let bundle = match (launch, bundle) {
+        (false, _) => None,
+        (true, Some(bundle)) => Some(bundle),
+        (true, None) => Some(plist::Value::from_file(path.join("Info.plist")).ok().and_then(|info| Some(info.as_dictionary()?.get("CFBundleIdentifier")?.as_string()?.to_string()))
+            .ok_or_else(|| format!("{}/Info.plist says no bundle identifier to launch", path.display()))?),
+    };
     let device = opened(name)?;
     let (megabytes, given) = roamrun_device::install_given(&path_text);
     note!("Sending {} ({megabytes} MB) to {name}: nothing more is said until it is in, {} minutes at most. A megabyte took three to four seconds on the device's own Wi‑Fi.", path.display(), given.as_secs().div_ceil(60));
-    said(device.install(&path_text)).map(|_| format!("Installed {} on {name}.", path.display()))
+    said(device.install(&path_text))?;
+    let installed = format!("Installed {} on {name}.", path.display());
+    match bundle {
+        Some(bundle) => Ok(format!("{installed}\n{}", launched(&device, name, &bundle)?)),
+        None => Ok(installed),
+    }
+}
+
+fn launched(device: &Device, name: &str, bundle: &str) -> Result<String, String> {
+    said(device.launch(bundle)).map(|value| format!("Launched {bundle} on {name} (pid {}).", value["pid"]))
 }
 
 fn look(name: &str, file: Option<PathBuf>) -> Result<String, String> {
@@ -556,10 +572,15 @@ pub fn run(command: Command) -> i32 {
         }),
         Command::Key { command: Key::Import { file, name, passphrase } } => import(&file, name, passphrase),
         Command::Look { name, file } => look(&name, file),
-        Command::Install { name, path } => install(&name, &path),
-        Command::Launch { name, bundle } => opened(&name).and_then(|device| {
-            said(device.launch(&bundle)).map(|value| format!("Launched {bundle} on {name} (pid {}).", value["pid"]))
+        Command::Install { name, path, launch, relay: crate::Relayed { relay: Some(relay), token_file }, timeout } => crate::remote::Relay::new(&relay, token_file.as_deref()).and_then(|relay| {
+            let (said, bundle) = relay.install(&name, &path, timeout)?;
+            if !launch { return Ok(said) }
+            Ok(format!("{said}\n{}", relay.call("launch", serde_json::json!({ "device": name, "bundle": bundle }))?))
         }),
+        Command::Install { name, path, launch, .. } => install(&name, &path, launch),
+        Command::Launch { name, bundle, relay: crate::Relayed { relay: Some(relay), token_file } } => crate::remote::Relay::new(&relay, token_file.as_deref())
+            .and_then(|relay| relay.call("launch", serde_json::json!({ "device": name, "bundle": bundle }))),
+        Command::Launch { name, bundle, .. } => opened(&name).and_then(|device| launched(&device, &name, &bundle)),
         Command::Mcp { http: None, .. } => return crate::mcp::Server::default().serve(),
         Command::Mcp { http: Some(port), allow, token_file, allow_install, max_upload, devices } => allow.iter().map(|a| crate::http::allow(a)).collect::<Result<Vec<_>, _>>()
             .and_then(|allowed| Ok(crate::http::Options { port, allowed, token: token_file.as_deref().map(crate::http::token).transpose()?, devices, uploads: allow_install.then_some(max_upload << 20) }))
@@ -613,7 +634,7 @@ mod tests {
         let file = std::env::temp_dir().join(format!("rr-cli-{}.ipa", std::process::id()));
         std::fs::write(&file, b"not a zip").unwrap();
         // Not "doesn't answer": the device, which isn't there, isn't asked.
-        let said = install(&name, &file).unwrap_err();
+        let said = install(&name, &file, false).unwrap_err();
         assert!(said.contains("isn't an app's .ipa"), "{said}");
         std::fs::remove_file(file).unwrap();
         unstub(&name);

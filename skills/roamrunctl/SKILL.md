@@ -229,7 +229,12 @@ believed the first time it is used — use it only if the user named it.
   anything is sent. One install to a device at a time. It says how much it sends, then nothing until the app is
   in: a megabyte takes three to four seconds on the device's Wi‑Fi (a large app, minutes),
   and it is given some four times that (five minutes and fifteen seconds a megabyte) — run
-  it where it can wait.
+  it where it can wait. `--launch` then launches it, by the bundle identifier in it.
+- With `--relay <address>:<port>` (or `ROAMRUNCTL_RELAY`), `install` and `launch` go through
+  `roamrunctl mcp --http --allow-install` on the machine beside the device, which names the
+  device: `install <its name there> App.ipa --relay … [--launch] [--timeout <s>]` uploads the
+  .ipa, checks the sha256, installs and waits; the token comes from `ROAMRUNCTL_TOKEN` or
+  `--token-file`. An .ipa only.
 - `roamrunctl launch <name> <bundle id>` — one already running is ended first.
 - `roamrunctl mcp` — for an agent's MCP config (the command `roamrunctl`, the argument
   `mcp`): `devices`, `look`, `tap`, `swipe`, `elements`, `type`, `paste`, `press`,
@@ -301,6 +306,9 @@ curl -sS --max-time 2100 -w '\n%{http_code}\n' ${RR_TOKEN:+-H} ${RR_TOKEN:+"Auth
 printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"install","arguments":{"device":"phone","upload":"<id>","sha256":"<hex>"}}}' | rr | said
 printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"install_status","arguments":{"device":"phone"}}}' | rr | said
 ```
+
+Where roamrunctl is on the machine you run on, `roamrunctl install phone App.ipa --relay
+<address>:<port>` does all of this, and waits for the app to be in.
 
 An upload serves one install, by you alone. `409` is another upload coming in (send yours
 again once it's in), `413` one too big. One is kept at a time: if `install` says there's no

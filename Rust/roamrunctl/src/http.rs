@@ -1201,6 +1201,29 @@ mod tests {
     }
 
     #[test]
+    fn install_with_relay_sends_the_ipa_with_the_token_and_says_why_the_install_failed() {
+        let uploads = Uploads::new(64 * 1024).unwrap();
+        let token = "t".repeat(32);
+        let at = started_with(Some(&token), ci, Some(uploads.clone()));
+        let id = std::process::id();
+        let (ipa, token_file) = (std::env::temp_dir().join(format!("rr-relay-{id}.ipa")), std::env::temp_dir().join(format!("rr-relay-{id}.token")));
+        std::fs::write(&ipa, crate::mcp::tests::ipa(crate::mcp::tests::INFO)).unwrap();
+        crate::device::own_whole(&token_file, token.as_bytes()).unwrap();
+        // Without the token: refused before the .ipa is sent.
+        let without = crate::remote::Relay::new(&format!("http://{at}/mcp"), None).unwrap();
+        assert!(without.install("phone", &ipa, None).err().unwrap_or_default().contains("wants its token"));
+        assert!(files(&uploads).is_empty());
+        // With it: the upload is in, and what the install itself answered (the device offered here can't be used) is said.
+        let relay = crate::remote::Relay::new(&at.to_string(), Some(&token_file)).unwrap();
+        let why = relay.install("phone", &ipa, None).err().unwrap_or_default();
+        assert!(!why.is_empty() && !why.contains("the relay answered") && !why.contains("sha256"), "{why}");
+        assert_eq!(files(&uploads).len(), 1);
+        assert!(relay.call("launch", json!({ "device": "pad", "bundle": "io.example.app" })).err().unwrap_or_default().contains("isn't offered here"));
+        uploads.end();
+        let _ = (std::fs::remove_file(ipa), std::fs::remove_file(token_file));
+    }
+
+    #[test]
     fn an_install_names_its_own_upload_as_it_was_sent() {
         let uploads = Uploads::new(64 * 1024).unwrap();
         let at = started_with(None, n1_or_n2, Some(uploads.clone()));
