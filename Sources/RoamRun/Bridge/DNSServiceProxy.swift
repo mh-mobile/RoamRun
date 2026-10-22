@@ -23,9 +23,12 @@ final class DNSServiceProxy: @unchecked Sendable {
     @MainActor func previousExited() async -> Bool {
         guard let old = stopping else { return true }
         guard await Proc.ensureGone(old) else { return false }
-        if stopping === old { stopping = nil }
+        if stopping === old {
+            stopping = nil
+        }
         return true
     }
+
     /// `dns-sd -P` died on its own (not via stop()/renew()): the record is gone.
     /// -1: a renew couldn't replace it (the old one didn't stop, or the new one didn't launch).
     var onExit: ((Int32) -> Void)?
@@ -38,37 +41,91 @@ final class DNSServiceProxy: @unchecked Sendable {
     ///   - txt: captured TXT entries republished verbatim
     func register(instanceName: String, serviceType: String, domain: String,
                   port: UInt16, host: String, ip: String,
-                  txt: [String: String]) throws {
+                  txt: [String: String]) throws
+    {
         let args = Self.arguments(instanceName: instanceName, serviceType: serviceType, domain: domain, port: port,
                                   host: host, ip: ip, txt: txt, interfaces: InterfaceMonitor.ipv4Addresses())
         lastArgs = args
-        guard spawn(args) else { throw CocoaError(.executableLoad, userInfo: [NSLocalizedDescriptionKey: "dns-sd -P failed to launch"]) }
+        guard spawn(args) else { throw CocoaError(
+            .executableLoad,
+            userInfo: [NSLocalizedDescriptionKey: "dns-sd -P failed to launch"]
+        ) }
     }
 
     /// For a record that stands in for another Mac: on the one interface that holds `ip`, or not at all.
     func registerOnItsInterface(instanceName: String, serviceType: String, domain: String,
-                                port: UInt16, host: String, ip: String, txt: [String: String]) throws {
-        guard let args = Self.argumentsOnItsInterface(instanceName: instanceName, serviceType: serviceType, domain: domain, port: port,
-                                                      host: host, ip: ip, txt: txt, interfaces: InterfaceMonitor.ipv4Addresses()) else {
-            throw CocoaError(.featureUnsupported, userInfo: [NSLocalizedDescriptionKey: "no interface of this Mac has the address \(ip)"])
+                                port: UInt16, host: String, ip: String, txt: [String: String]) throws
+    {
+        guard let args = Self.argumentsOnItsInterface(
+            instanceName: instanceName,
+            serviceType: serviceType,
+            domain: domain,
+            port: port,
+            host: host,
+            ip: ip,
+            txt: txt,
+            interfaces: InterfaceMonitor.ipv4Addresses()
+        ) else {
+            throw CocoaError(
+                .featureUnsupported,
+                userInfo: [NSLocalizedDescriptionKey: "no interface of this Mac has the address \(ip)"]
+            )
         }
         lastArgs = args
-        guard spawn(args) else { throw CocoaError(.executableLoad, userInfo: [NSLocalizedDescriptionKey: "dns-sd -P failed to launch"]) }
+        guard spawn(args) else { throw CocoaError(
+            .executableLoad,
+            userInfo: [NSLocalizedDescriptionKey: "dns-sd -P failed to launch"]
+        ) }
     }
 
     /// nil where `arguments` would announce on every interface.
-    static func argumentsOnItsInterface(instanceName: String, serviceType: String, domain: String, port: UInt16, host: String, ip: String,
-                                        txt: [String: String], interfaces: [String: String]) -> [String]? {
-        let args = arguments(instanceName: instanceName, serviceType: serviceType, domain: domain, port: port, host: host, ip: ip,
-                             txt: txt, interfaces: interfaces)
+    static func argumentsOnItsInterface(
+        instanceName: String,
+        serviceType: String,
+        domain: String,
+        port: UInt16,
+        host: String,
+        ip: String,
+        txt: [String: String],
+        interfaces: [String: String]
+    ) -> [String]? {
+        let args = arguments(
+            instanceName: instanceName,
+            serviceType: serviceType,
+            domain: domain,
+            port: port,
+            host: host,
+            ip: ip,
+            txt: txt,
+            interfaces: interfaces
+        )
         return args.first == "-i" ? args : nil
     }
 
     /// `interfaces`: each interface's IPv4 address. With none holding `ip`, every interface, as dns-sd does by itself.
-    static func arguments(instanceName: String, serviceType: String, domain: String, port: UInt16, host: String, ip: String,
-                          txt: [String: String], interfaces: [String: String]) -> [String] {
-        let on = interfaces.filter { $0.value == ip }.keys.sorted().first.map { ["-i", $0] } ?? []
-        return on + ["-P", instanceName, serviceType, domain, String(port), host, ip] + txt.map { "\($0.key)=\($0.value)" }
+    static func arguments(
+        instanceName: String,
+        serviceType: String,
+        domain: String,
+        port: UInt16,
+        host: String,
+        ip: String,
+        txt: [String: String],
+        interfaces: [String: String]
+    ) -> [String] {
+        let on = interfaces.filter {
+            $0.value == ip
+        }
+        .keys
+        .sorted()
+        .first
+        .map {
+            ["-i", $0]
+        } ?? []
+        return on + ["-P", instanceName, serviceType, domain, String(port), host, ip] + txt
+            .map {
+                "\($0.key)=\($0.value)"
+            }
     }
 
     @discardableResult
@@ -90,9 +147,11 @@ final class DNSServiceProxy: @unchecked Sendable {
     }
 
     func stop() {
-        renewToken = nil   // a renew waiting to respawn must not bring the record back
+        renewToken = nil // a renew waiting to respawn must not bring the record back
         process?.terminate()
-        if let p = process { stopping = p }
+        if let p = process {
+            stopping = p
+        }
         process = nil
     }
 
@@ -106,7 +165,9 @@ final class DNSServiceProxy: @unchecked Sendable {
         let old = process
         process = nil
         old?.terminate()
-        if let old { stopping = old }   // a start right after must wait for it too
+        if let old {
+            stopping = old
+        } // a start right after must wait for it too
         let token = UUID()
         renewToken = token
         // Let the old registration go first, or mDNSResponder may rename ours; a stop()
@@ -115,11 +176,17 @@ final class DNSServiceProxy: @unchecked Sendable {
         let me = Weak(self)
         Task { @MainActor in
             var gone = true
-            if let old { gone = await Proc.ensureGone(old) }
+            if let old {
+                gone = await Proc.ensureGone(old)
+            }
             guard let self = me.value, self.renewToken == token, self.process == nil else { return }
             self.renewToken = nil
-            if gone, let old, self.stopping === old { self.stopping = nil }
-            if !gone || !self.spawn(self.lastArgs) { self.onExit?(-1) }
+            if gone, let old, self.stopping === old {
+                self.stopping = nil
+            }
+            if !gone || !self.spawn(self.lastArgs) {
+                self.onExit?(-1)
+            }
         }
     }
 
@@ -149,9 +216,12 @@ final class DNSServiceProxy: @unchecked Sendable {
         out.split(separator: "\n").compactMap { line in
             let l = line.trimmingCharacters(in: .whitespaces)
             let isProxy = l.contains("dns-sd") && l.contains("-P") && l.contains(".roamrun.local")
-            let isLogWatch = l.contains("log stream") && l.contains("Got tunnel endpoint") && l.contains("Resolved bonjour advert")
+            let isLogWatch = l.contains("log stream") && l.contains("Got tunnel endpoint") && l
+                .contains("Resolved bonjour advert")
             guard isProxy || isLogWatch else { return nil }
-            let parts = l.split(whereSeparator: { $0 == " " })
+            let parts = l.split(whereSeparator: {
+                $0 == " "
+            })
             guard parts.count > 2, let pid = Int32(parts[0]), parts[1] == "1" else { return nil }
             return pid
         }
@@ -161,7 +231,6 @@ final class DNSServiceProxy: @unchecked Sendable {
     static func orphanedHelperCount() -> Int {
         orphanedHelpers().count
     }
-
 }
 
 extension DNSServiceProxy: BonjourRecord {}

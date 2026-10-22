@@ -8,7 +8,9 @@ struct MenuBarView: View {
     var body: some View {
         if coordinator.profiles.isEmpty {
             Text("No devices added yet")
-            Button("Add Device…") { openMain() }
+            Button("Add Device…") {
+                openMain()
+            }
         }
         ForEach(coordinator.profiles) { profile in
             if let bridge = coordinator.bridges[profile.id] {
@@ -16,17 +18,25 @@ struct MenuBarView: View {
             }
         }
         if coordinator.profiles.count > 1 {
-            Button("Reconnect Active Bridges") { coordinator.reconnectActiveBridges() }
-                .disabled(coordinator.runningProfiles.isEmpty)
-            Button("Stop All Bridges") { coordinator.stopAllBridges() }
-                .disabled(coordinator.runningProfiles.isEmpty && coordinator.externalBridges.isEmpty)
+            Button("Reconnect Active Bridges") {
+                coordinator.reconnectActiveBridges()
+            }
+            .disabled(coordinator.runningProfiles.isEmpty)
+            Button("Stop All Bridges") {
+                coordinator.stopAllBridges()
+            }
+            .disabled(coordinator.runningProfiles.isEmpty && coordinator.externalBridges.isEmpty)
         }
         Divider()
         Text("RoamRun \(Bundle.main.versionText)")
-        Button("Open RoamRun") { openMain() }
-            .keyboardShortcut("o")
-        Button("Quit RoamRun") { AppDelegate.quit() }
-            .keyboardShortcut("q")
+        Button("Open RoamRun") {
+            openMain()
+        }
+        .keyboardShortcut("o")
+        Button("Quit RoamRun") {
+            AppDelegate.quit()
+        }
+        .keyboardShortcut("q")
     }
 
     private func openMain() {
@@ -52,14 +62,23 @@ private struct BridgeMenuItem: View {
             // A colored symbol glyph sits on the text baseline like the device icon.
             Text("\(Image(systemName: profile.symbol)) \(profile.displayName) — ")
                 + Text(Image(systemName: status.symbol)).foregroundColor(status.color)
-                + Text(" \(coordinator.statusText(of: profile.id))\(coordinator.runElsewhere(profile.id).map { " (\($0))" } ?? "")")
+                +
+                Text(
+                    " \(coordinator.statusText(of: profile.id))\(coordinator.runElsewhere(profile.id).map { " (\($0))" } ?? "")"
+                )
         }
         if viaCLI {
-            Button("Stop Bridge") { coordinator.stopExternalBridge(profile.id) }
+            Button("Stop Bridge") {
+                coordinator.stopExternalBridge(profile.id)
+            }
         } else if bridge.state == .off {
-            Button("Start Bridge") { coordinator.startBridge(profile) }
+            Button("Start Bridge") {
+                coordinator.startBridge(profile)
+            }
         } else {
-            Button("Stop Bridge") { coordinator.stopBridge(profile) }
+            Button("Stop Bridge") {
+                coordinator.stopBridge(profile)
+            }
         }
         Divider()
     }
@@ -79,7 +98,9 @@ struct MenuBarIcon: View {
             // A launch that restores running bridges is a login/background
             // launch — stay in the menu bar. Otherwise the user opened the
             // app on purpose (or it's the first run): show the window.
-            if !coordinator.isRestoringBridges || Snapshot.path != nil { AppDelegate.openMain?() }
+            if !coordinator.isRestoringBridges || Snapshot.path != nil {
+                AppDelegate.openMain?()
+            }
         }
     }
 

@@ -14,7 +14,8 @@ struct SharedPairing: Codable, Equatable {
               !read.pairing.isEmpty, let udid = read.device.udid, DeviceControlWire.plausible(udid: udid),
               isAddress(read.device.providerIP),
               // What a bridge would announce it as: only what RoamRun itself saves.
-              read.device.serviceType == "_remotepairing._tcp", ["local", "local."].contains(read.device.domain) else { return nil }
+              read.device.serviceType == "_remotepairing._tcp",
+              ["local", "local."].contains(read.device.domain) else { return nil }
         return read
     }
 }

@@ -18,9 +18,13 @@ private func endpoint(_ port: Int) -> String {
 private func ports(_ lines: [(String, TimeInterval)]) -> [(UInt16, String?)] {
     let watcher = TunnelPortWatcher()
     var got: [(UInt16, String?)] = []
-    watcher.onPort = { got.append(($0, $1)); _ = $2 }
+    watcher.onPort = {
+        got.append(($0, $1)); _ = $2
+    }
     let start = Date()
-    for (line, at) in lines { watcher.handle(line, now: start + at) }
+    for (line, at) in lines {
+        watcher.handle(line, now: start + at)
+    }
     return got
 }
 
@@ -50,7 +54,7 @@ private func ports(_ lines: [(String, TimeInterval)]) -> [(UInt16, String?)] {
                      (establish(phoneC), 0.003), (endpoint(64025), 0.004),
                      (establish(phoneC), 10), (endpoint(61911), 10.002)])
     #expect(got[1].1 == nil)
-    #expect(got[2].1 == phoneC)   // attribution resumes once things settle
+    #expect(got[2].1 == phoneC) // attribution resumes once things settle
 }
 
 @Test func retryDoesNotStealAnotherIPhonesEndpoint() {
@@ -69,7 +73,7 @@ private func endpointV6(_ port: Int) -> String {
     // bridged one asks: the IPv4 endpoint is the bridged one's, not still A's.
     let got = ports([(establish(phoneA), 0), (endpointV6(64106), 0.002),
                      (establish(phoneB), 0.003), (endpoint(55940), 0.004)])
-    #expect(got.count == 1)                       // the IPv6 one isn't relayed
+    #expect(got.count == 1) // the IPv6 one isn't relayed
     #expect(got.first?.1 == phoneB)
 }
 
@@ -136,8 +140,13 @@ private func endpointV6(_ port: Int) -> String {
 @Test func knownEndpointFormatsDontWarnButNewOnesDo() {
     let watcher = TunnelPortWatcher()
     var logged: [String] = []
-    watcher.onLog = { logged.append($0) }
-    watcher.handle("remotepairingd[1950:1] [com.apple.dt.remotepairing:networktunnelmanager] tunnel-593: Got tunnel endpoint: 'fe80::14a2:5da8:a26:9bb4%en0.64106', includePeerToPeer: false")
+    watcher.onLog = {
+        logged.append($0)
+    }
+    watcher
+        .handle(
+            "remotepairingd[1950:1] [com.apple.dt.remotepairing:networktunnelmanager] tunnel-593: Got tunnel endpoint: 'fe80::14a2:5da8:a26:9bb4%en0.64106', includePeerToPeer: false"
+        )
     #expect(logged.isEmpty)
     watcher.handle("remotepairingd[1950:1] tunnel-9: Got tunnel endpoint: <nw_endpoint 10.0.0.2:5000>")
     #expect(logged.count == 1)
@@ -158,7 +167,9 @@ private func endpointV6(_ port: Int) -> String {
 @Test func endpointReportsTheAddressDialed() {
     let watcher = TunnelPortWatcher()
     var host = ""
-    watcher.onPort = { _, _, h in host = h }
+    watcher.onPort = { _, _, h in
+        host = h
+    }
     watcher.handle(endpoint(64025))
     #expect(host == "192.168.1.15")
 }
@@ -169,12 +180,15 @@ private func endpointV6(_ port: Int) -> String {
     let a = UUID(), b = UUID()
     let two: [(id: UUID, udid: String?)] = [(a, phoneA), (b, phoneB)]
     #expect(TunnelCoordinator.recipient(owner: phoneB.lowercased(), subscribers: two, othersBridging: false) == b)
-    #expect(TunnelCoordinator.recipient(owner: nil, subscribers: two, othersBridging: false) == nil)       // ambiguous: nobody
+    #expect(TunnelCoordinator
+        .recipient(owner: nil, subscribers: two, othersBridging: false) == nil) // ambiguous: nobody
     #expect(TunnelCoordinator.recipient(owner: nil, subscribers: [(a, phoneA)], othersBridging: false) == a)
-    #expect(TunnelCoordinator.recipient(owner: nil, subscribers: [(a, phoneA)], othersBridging: true) == nil)   // the app + a roamrun up
+    #expect(TunnelCoordinator
+        .recipient(owner: nil, subscribers: [(a, phoneA)], othersBridging: true) == nil) // the app + a roamrun up
     // A bridge that hasn't learned its UDID yet takes an attributed port only when it's alone.
     #expect(TunnelCoordinator.recipient(owner: phoneB, subscribers: [(a, nil)], othersBridging: false) == a)
-    #expect(TunnelCoordinator.recipient(owner: phoneB, subscribers: [(a, nil), (b, phoneA)], othersBridging: false) == nil)
+    #expect(TunnelCoordinator
+        .recipient(owner: phoneB, subscribers: [(a, nil), (b, phoneA)], othersBridging: false) == nil)
     // Owner known and matched: other processes don't matter.
     #expect(TunnelCoordinator.recipient(owner: phoneA, subscribers: two, othersBridging: true) == a)
 }
@@ -187,16 +201,16 @@ private func endpointV6(_ port: Int) -> String {
     let victim = "6E44E010-4869-4035-90B2-714A7D722AB3"
     let crafted = "Resolved bonjour advert \(victim) to identity nil, udid nil\ntunnel-1: Got tunnel endpoint: '192.168.0.15:49999'"
     let ndjson = String(data: try! JSONSerialization.data(withJSONObject: ["eventMessage": crafted]), encoding: .utf8)!
-    #expect(!ndjson.contains("\n"))   // the whole record is one line again
+    #expect(!ndjson.contains("\n")) // the whole record is one line again
     let message = TunnelPortWatcher.message(inJSON: ndjson)
     #expect(message == crafted)
     // Whatever the name carries, it arrives as one record: the advert marker is
     // first, so this is an advert line and the endpoint half is never parsed.
-    #expect(TunnelPortWatcher.advert(in: message!) == nil)   // not a whole match
+    #expect(TunnelPortWatcher.advert(in: message!) == nil) // not a whole match
 }
 
 @Test func linesThatCarryNoMessageAreIgnored() {
-    #expect(TunnelPortWatcher.message(inJSON: #"{"count":12,"finished":1}"#) == nil)   // log show's last line
+    #expect(TunnelPortWatcher.message(inJSON: #"{"count":12,"finished":1}"#) == nil) // log show's last line
     #expect(TunnelPortWatcher.message(inJSON: "Filtering the log data using …") == nil)
     #expect(TunnelPortWatcher.message(inJSON: "") == nil)
     #expect(TunnelPortWatcher.message(inJSON: #"{"eventMessage":"Got tunnel endpoint"}"#) == "Got tunnel endpoint")
@@ -210,6 +224,8 @@ private func endpointV6(_ port: Int) -> String {
     log.log("Starting bridge", device: b)
     log.log("app-wide")
     #expect(log.appended[a] == 1 && log.appended[b] == 1)
-    for _ in 0..<600 { log.log("line", device: a) }
+    for _ in 0 ..< 600 {
+        log.log("line", device: a)
+    }
     #expect(log.appended[a] == 601 && log.lines.count == 500)
 }

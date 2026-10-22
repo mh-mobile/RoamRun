@@ -87,13 +87,17 @@ enum PairWire {
 
     /// Six ASCII digits and nothing else: what is shown as a code is never anything but one.
     static func isCode(_ text: String) -> Bool {
-        text.utf8.count == 6 && text.utf8.allSatisfy { (0x30...0x39).contains($0) }
+        text.utf8.count == 6 && text.utf8.allSatisfy {
+            (0x30 ... 0x39).contains($0)
+        }
     }
 
     /// nil for another version's line, or anything not one of these.
     static func message(from line: String) -> Message? {
         guard line.hasPrefix(prefix) else { return nil }
-        let words = line.dropFirst(prefix.count).split(separator: " ", omittingEmptySubsequences: false).map(String.init)
+        let words = line.dropFirst(prefix.count)
+            .split(separator: " ", omittingEmptySubsequences: false)
+            .map(String.init)
         switch (words.first, words.count) {
         case ("offer?", 1): return .wantOffer
         case ("saved", 1): return .saved
@@ -105,10 +109,15 @@ enum PairWire {
         case ("device?", 1): return .wantDevice
         case ("device", 2) where !words[1].isEmpty: return .device(words[1])
         case ("pairable", 2) where !words[1].isEmpty: return .pairable(words[1])
-        case ("attempt", 2): return UUID(uuidString: words[1]).map { .attempt($0.uuidString) }
+        case ("attempt", 2): return UUID(uuidString: words[1]).map {
+                .attempt($0.uuidString)
+            }
         case ("code", 2): return isCode(words[1]) ? .code(words[1]) : nil
-        case ("result", 3) where words[1] == "done" && ["on", "off"].contains(words[2]): return .result(.done(on: words[2] == "on"))
-        case ("result", 3) where words[1] == "failed": return Refusal(rawValue: words[2]).map { .result(.failed($0)) }
+        case ("result", 3)
+            where words[1] == "done" && ["on", "off"].contains(words[2]): return .result(.done(on: words[2] == "on"))
+        case ("result", 3) where words[1] == "failed": return Refusal(rawValue: words[2]).map {
+                .result(.failed($0))
+            }
         default: return nil
         }
     }
@@ -120,7 +129,11 @@ final class PairLink: @unchecked Sendable {
         case line(String), closed, timeout, tooLong
         /// The line as one of the two Macs' messages; nil for anything else.
         var message: PairWire.Message? {
-            if case .line(let text) = self { PairWire.message(from: text) } else { nil }
+            if case .line(let text) = self {
+                PairWire.message(from: text)
+            } else {
+                nil
+            }
         }
     }
 
@@ -134,45 +147,62 @@ final class PairLink: @unchecked Sendable {
         var on: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
     }
+
     deinit { close() }
 
     func close() {
         lock.lock(); defer { lock.unlock() }
-        if open { open = false; Darwin.close(fd) }
+        if open {
+            open = false; Darwin.close(fd)
+        }
     }
 
     /// The whole line within `seconds`, however slowly it comes; `stop` ends the wait early (as a timeout).
-    func read(within seconds: TimeInterval, stop: () -> Bool = { false }) -> Read {
+    func read(within seconds: TimeInterval, stop: () -> Bool = {
+        false
+    }) -> Read {
         let end = Date().addingTimeInterval(seconds)
         while true {
             if let nl = buffer.firstIndex(of: 0x0A) {
                 guard nl - buffer.startIndex <= PairWire.maxLine else { return .tooLong }
-                let line = String(decoding: buffer[buffer.startIndex..<nl], as: UTF8.self)
-                buffer.removeSubrange(buffer.startIndex...nl)
+                let line = String(decoding: buffer[buffer.startIndex ..< nl], as: UTF8.self)
+                buffer.removeSubrange(buffer.startIndex ... nl)
                 return .line(line)
             }
-            if buffer.count > PairWire.maxLine { return .tooLong }
+            if buffer.count > PairWire.maxLine {
+                return .tooLong
+            }
             let left = end.timeIntervalSinceNow
-            if left <= 0 || stop() { return .timeout }
+            if left <= 0 || stop() {
+                return .timeout
+            }
             var p = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
             guard poll(&p, 1, Int32(min(left, 0.25) * 1000)) > 0 else { continue }
             var chunk = [UInt8](repeating: 0, count: 1024)
             let n = recv(fd, &chunk, chunk.count, 0)
-            if n <= 0 { return .closed }
+            if n <= 0 {
+                return .closed
+            }
             buffer.append(contentsOf: chunk[..<n])
         }
     }
 
     @discardableResult
-    func send(_ message: PairWire.Message) -> Bool { write(PairWire.line(message) + "\n") }
+    func send(_ message: PairWire.Message) -> Bool {
+        write(PairWire.line(message) + "\n")
+    }
 
     @discardableResult
     func write(_ text: String) -> Bool {
         let bytes = Array(text.utf8)
         var sent = 0
         while sent < bytes.count {
-            let n = bytes[sent...].withUnsafeBytes { Darwin.send(fd, $0.baseAddress, $0.count, 0) }
-            if n <= 0 { return false }
+            let n = bytes[sent...].withUnsafeBytes {
+                Darwin.send(fd, $0.baseAddress, $0.count, 0)
+            }
+            if n <= 0 {
+                return false
+            }
             sent += n
         }
         return true
@@ -202,7 +232,9 @@ final class PairLink: @unchecked Sendable {
     }
 
     /// nil when nothing answers within `seconds`.
-    static func connect(to ip: String, port: UInt16, interface: String?, within seconds: TimeInterval = 5) -> PairLink? {
+    static func connect(to ip: String, port: UInt16, interface: String?,
+                        within seconds: TimeInterval = 5) -> PairLink?
+    {
         guard var a = address(ip, port) else { return nil }
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else { return nil }
@@ -210,7 +242,11 @@ final class PairLink: @unchecked Sendable {
         let flags = fcntl(fd, F_GETFL)
         _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
         let r = withUnsafePointer(to: &a) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(
+                fd,
+                $0,
+                socklen_t(MemoryLayout<sockaddr_in>.size)
+            ) }
         }
         if r != 0 {
             guard errno == EINPROGRESS else { Darwin.close(fd); return nil }
@@ -235,7 +271,11 @@ final class PairLink: @unchecked Sendable {
             throw RelayError.bindFailed("couldn't keep to \(interface ?? "")")
         }
         let bound = withUnsafePointer(to: &a) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(
+                fd,
+                $0,
+                socklen_t(MemoryLayout<sockaddr_in>.size)
+            ) }
         }
         guard bound == 0, listen(fd, 4) == 0 else {
             let why = String(cString: strerror(errno))
@@ -244,7 +284,9 @@ final class PairLink: @unchecked Sendable {
         }
         var got = sockaddr_in(), len = socklen_t(MemoryLayout<sockaddr_in>.size)
         _ = withUnsafeMutablePointer(to: &got) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &len) }
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getsockname(fd, $0, &len)
+            }
         }
         return (fd, UInt16(bigEndian: got.sin_port))
     }
@@ -257,6 +299,7 @@ final class PairLink: @unchecked Sendable {
         init(ip: String, port: UInt16, interface: String?) throws {
             (fd, self.port) = try PairLink.listening(ip: ip, port: port, interface: interface)
         }
+
         deinit { Darwin.close(fd) }
 
         /// The next connection and the address it came from; nil when none comes within `seconds`.
@@ -265,12 +308,16 @@ final class PairLink: @unchecked Sendable {
             guard poll(&p, 1, Int32(seconds * 1000)) > 0 else { return nil }
             var from = sockaddr_in(), len = socklen_t(MemoryLayout<sockaddr_in>.size)
             let c = withUnsafeMutablePointer(to: &from) {
-                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.accept(fd, $0, &len) }
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    Darwin.accept(fd, $0, &len)
+                }
             }
             guard c >= 0 else { return nil }
             var text = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
             inet_ntop(AF_INET, &from.sin_addr, &text, socklen_t(text.count))
-            return (PairLink(fd: c), text.withUnsafeBufferPointer { String(cString: $0.baseAddress!) })
+            return (PairLink(fd: c), text.withUnsafeBufferPointer {
+                String(cString: $0.baseAddress!)
+            })
         }
     }
 }
@@ -298,6 +345,7 @@ enum PairByName {
             /// The connection went after the offer did: the other Mac may come back.
             case dropped
         }
+
         enum End: Equatable, Sendable {
             case saved, unsaved
             case ended(PairWire.Reason)
@@ -318,7 +366,10 @@ enum PairByName {
         /// For a device that waits to be picked: stands in for it here until a pairing was tried (nil), or says why not.
         /// Given what the device announces, and the device as it will be saved.
         var standIn: (@Sendable (String, String) async -> PairWire.Reason?)?
-        var stopped: @Sendable () -> Bool = { false }
+        var stopped: @Sendable () -> Bool = {
+            false
+        }
+
         var say: @Sendable (Event) -> Void = { _ in }
         /// How long a connection may still begin.
         var connectWindow: TimeInterval = 600
@@ -334,8 +385,12 @@ enum PairByName {
             let until = Date().addingTimeInterval(connectWindow)
             var told = false
             while true {
-                if stopped() { return .stopped }
-                if Date() >= until { return .noOne }
+                if stopped() {
+                    return .stopped
+                }
+                if Date() >= until {
+                    return .noOne
+                }
                 guard let (link, from) = listener.accept(within: 0.25) else { continue }
                 defer { link.close() }
                 // The address first: a stranger costs no question to Tailscale.
@@ -349,8 +404,12 @@ enum PairByName {
                     // Said, so the other Mac doesn't take this one for a RoamRun that doesn't know the word.
                     guard let standIn else { link.send(.ended(.failed)); continue }
                     // The device first: it is the one stood in for, and without it nothing could be saved.
-                    guard link.send(.wantDevice), case .device(let device)? = link.read(within: lineWait, stop: stopped).message else { continue }
-                    if let why = await standIn(waits, device) { link.send(.ended(why)); return .ended(why) }
+                    guard link.send(.wantDevice),
+                          case .device(let device)? = link.read(within: lineWait, stop: stopped).message
+                    else { continue }
+                    if let why = await standIn(waits, device) {
+                        link.send(.ended(why)); return .ended(why)
+                    }
                     let ok = await save(device)
                     link.send(ok ? .saved : .unsaved)
                     return ok ? .saved : .unsaved
@@ -362,20 +421,30 @@ enum PairByName {
                     switch await offers() {
                     case .one(let line): offer = line
                     case .several:
-                        if rescanned { link.send(.ended(.ambiguous)); return .ambiguous }
+                        if rescanned {
+                            link.send(.ended(.ambiguous)); return .ambiguous
+                        }
                         rescanned = true
                         await rescan()
                     case .none:
-                        if !told { told = true; say(.waitingForOffer) }
+                        if !told {
+                            told = true; say(.waitingForOffer)
+                        }
                         try? await Task.sleep(for: pause)
                     }
                 }
                 guard let offer else {
                     // Said, so the other Mac doesn't go on asking a Mac that has stopped.
-                    if stopped() { link.send(.ended(.stopped)) } else if Date() >= until { link.send(.ended(.noOffer)) }
+                    if stopped() {
+                        link.send(.ended(.stopped))
+                    } else if Date() >= until {
+                        link.send(.ended(.noOffer))
+                    }
                     continue
                 }
-                if let named { link.send(.you(named)) }
+                if let named {
+                    link.send(.you(named))
+                }
                 guard link.send(.offer(offer)) else { continue }
                 say(.offerSent)
                 switch link.read(within: resultWindow, stop: stopped) {
@@ -419,7 +488,10 @@ enum PairByName {
         var connect: @Sendable () -> PairLink?
         /// The device to be introduced, as a line: given to a Mac that asks for it first.
         var device: String?
-        var stopped: @Sendable () -> Bool = { false }
+        var stopped: @Sendable () -> Bool = {
+            false
+        }
+
         var say: @Sendable (Event) -> Void = { _ in }
         var window: TimeInterval = 600
         var lineWait: TimeInterval = 10
@@ -430,10 +502,16 @@ enum PairByName {
             let until = Date().addingTimeInterval(window)
             var told = false
             while true {
-                if stopped() { return .stopped }
-                if Date() >= until { return .noOne }
+                if stopped() {
+                    return .stopped
+                }
+                if Date() >= until {
+                    return .noOne
+                }
                 guard let link = connect() else {
-                    if !told { told = true; say(.waiting) }
+                    if !told {
+                        told = true; say(.waiting)
+                    }
                     try? await Task.sleep(for: pause)
                     continue
                 }
@@ -450,7 +528,8 @@ enum PairByName {
                         guard let device, link.send(.device(device)) else { link.close(); return .garbled }
                         switch link.read(within: until.timeIntervalSinceNow, stop: stopped).message {
                         case .offer(let offer):
-                            guard case .attempt(let id) = link.read(within: lineWait, stop: stopped).message else { link.close(); return .garbled }
+                            guard case .attempt(let id) = link.read(within: lineWait, stop: stopped).message
+                            else { link.close(); return .garbled }
                             return .control(offer, attempt: id, link)
                         case .ended(let why): link.close(); return .ended(why)
                         case .result(.failed(let why)): link.close(); return .refused(why)
@@ -486,10 +565,16 @@ enum PairByName {
             let until = Date().addingTimeInterval(window)
             var told = false, hungUp = 0
             while true {
-                if stopped() { return .stopped }
-                if Date() >= until { return .noOne }
+                if stopped() {
+                    return .stopped
+                }
+                if Date() >= until {
+                    return .noOne
+                }
                 guard let link = connect() else {
-                    if !told { told = true; say(.waiting) }
+                    if !told {
+                        told = true; say(.waiting)
+                    }
                     try? await Task.sleep(for: pause)
                     continue
                 }
@@ -515,9 +600,13 @@ enum PairByName {
                     }
                 case .closed:
                     hungUp += 1
-                    if hungUp >= 2 { return .tooOld }
+                    if hungUp >= 2 {
+                        return .tooOld
+                    }
                     try? await Task.sleep(for: pause)
-                case .timeout: if stopped() { return .stopped }
+                case .timeout: if stopped() {
+                        return .stopped
+                    }
                 case .tooLong: return .garbled
                 }
             }
@@ -552,11 +641,13 @@ enum PairByName {
             /// The app doesn't answer, or doesn't know the attempt.
             case unknown
         }
+
         enum Event: Equatable, Sendable {
             case refused(from: String), unsure(from: String), connected, offerSent(attempt: String), codeSent
             /// The device came and didn't pair: the other Mac is waited for again.
             case again
         }
+
         enum End: Equatable, Sendable {
             case done(on: Bool)
             case failed(PairWire.Refusal)
@@ -577,7 +668,10 @@ enum PairByName {
         /// A code typed wrong, or the pairing refused by the device, isn't the end here: the
         /// other Mac's command is run again and this one has waited. So many times at most.
         var tries = 5
-        var stopped: @Sendable () -> Bool = { false }
+        var stopped: @Sendable () -> Bool = {
+            false
+        }
+
         var say: @Sendable (Event) -> Void = { _ in }
         var connectWindow: TimeInterval = 600
         /// From the offer to the result: the other Mac's check, its five minutes, and the keeping here.
@@ -589,8 +683,12 @@ enum PairByName {
             var until = Date().addingTimeInterval(connectWindow)
             var tried = 0
             retries: while true {
-                if stopped() { return .stopped }
-                if Date() >= until { return .noOne }
+                if stopped() {
+                    return .stopped
+                }
+                if Date() >= until {
+                    return .noOne
+                }
                 guard let (link, from) = listener.accept(within: 0.25) else { continue }
                 defer { link.close() }
                 guard from == peer.ip else { say(.refused(from: from)); continue }
@@ -598,7 +696,9 @@ enum PairByName {
                 guard holder == peer.id else { say(.refused(from: from)); continue }
                 say(.connected)
                 let first = link.read(within: lineWait, stop: stopped).message
-                if case .pairable? = first { link.send(.ended(.failed)); continue }
+                if case .pairable? = first {
+                    link.send(.ended(.failed)); continue
+                }
                 guard first == .wantOffer, link.send(.wantDevice),
                       case .device(let device) = link.read(within: lineWait, stop: stopped).message else { continue }
                 // Begun: whatever happens to this connection from here, it isn't taken up again.
@@ -609,7 +709,8 @@ enum PairByName {
                     return .failed(why)
                 case .offer(let offer, let id):
                     attempt = id
-                    guard link.send(.offer(offer)), link.send(.attempt(attempt)) else { return await given(up: attempt) }
+                    guard link.send(.offer(offer)),
+                          link.send(.attempt(attempt)) else { return await given(up: attempt) }
                     say(.offerSent(attempt: attempt))
                 }
                 let end = Date().addingTimeInterval(resultWindow)
@@ -635,7 +736,9 @@ enum PairByName {
                     // The app gone: not waited out. What it kept, if it had begun to, isn't known here.
                     case .unknown:
                         silent += 1
-                        if silent >= 3 { return .lost(.unknown) }
+                        if silent >= 3 {
+                            return .lost(.unknown)
+                        }
                     case .code(let digits) where !passed:
                         // A code that didn't get to where it is shown isn't one to wait on.
                         guard PairWire.isCode(digits), link.send(.code(digits)) else { return await given(up: attempt) }
@@ -646,7 +749,12 @@ enum PairByName {
                     switch link.read(within: pause, stop: stopped) {
                     case .timeout: continue
                     case .line(let text):
-                        if case .ended(let why) = PairWire.message(from: text) { return await given(up: attempt, as: .ended(why)) }
+                        if case .ended(let why) = PairWire.message(from: text) {
+                            return await given(
+                                up: attempt,
+                                as: .ended(why)
+                            )
+                        }
                         return await given(up: attempt)
                     case .closed, .tooLong: return await given(up: attempt)
                     }

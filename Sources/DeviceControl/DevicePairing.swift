@@ -36,11 +36,16 @@ public final class DevicePairing: @unchecked Sendable {
         var error: UnsafeMutablePointer<CChar>?
         guard let listening = rr_pairing_listen_on(name, Self.model, host, socket, only, &said, &error) else {
             defer { rr_string_free(error) }
-            throw DeviceSession.Failure.message(error.map { String(cString: $0) } ?? "can't listen")
+            throw DeviceSession.Failure.message(error.map {
+                String(cString: $0)
+            } ?? "can't listen")
         }
         defer { rr_string_free(said) }
-        guard let said, let object = try? JSONSerialization.jsonObject(with: Data(String(cString: said).utf8)) as? [String: Any],
-              let port = (object["port"] as? Int).flatMap(UInt16.init(exactly:)), let txt = object["txt"] as? [String: String] else {
+        guard let said,
+              let object = try? JSONSerialization.jsonObject(with: Data(String(cString: said).utf8)) as? [String: Any],
+              let port = (object["port"] as? Int).flatMap(UInt16.init(exactly:)),
+              let txt = object["txt"] as? [String: String]
+        else {
             rr_pairing_free(listening)
             throw DeviceSession.Failure.message("unreadable advert")
         }
@@ -59,7 +64,9 @@ public final class DevicePairing: @unchecked Sendable {
         var error: UnsafeMutablePointer<CChar>?
         guard let listening = rr_pairing_listen(name, Self.model, host, &said, &error) else {
             defer { rr_string_free(error) }
-            throw DeviceSession.Failure.message(error.map { String(cString: $0) } ?? "can't listen")
+            throw DeviceSession.Failure.message(error.map {
+                String(cString: $0)
+            } ?? "can't listen")
         }
         defer { rr_string_free(said) }
         // This initializer's until the object is whole: every way out before that frees them here.
@@ -67,13 +74,17 @@ public final class DevicePairing: @unchecked Sendable {
         var whole = false
         defer {
             if !whole {
-                if let advert { DNSServiceRefDeallocate(advert) }
+                if let advert {
+                    DNSServiceRefDeallocate(advert)
+                }
                 rr_pairing_free(listening)
             }
         }
-        guard let said, let object = try? JSONSerialization.jsonObject(with: Data(String(cString: said).utf8)) as? [String: Any],
+        guard let said,
+              let object = try? JSONSerialization.jsonObject(with: Data(String(cString: said).utf8)) as? [String: Any],
               let port = object["port"] as? Int, let identifier = object["identifier"] as? String,
-              let txt = object["txt"] as? [String: String] else {
+              let txt = object["txt"] as? [String: String]
+        else {
             throw DeviceSession.Failure.message("unreadable advert")
         }
         // Held by mDNSResponder for as long as the reference lives; nothing to wait on.
@@ -98,7 +109,9 @@ public final class DevicePairing: @unchecked Sendable {
     }
 
     deinit {
-        if let advert { DNSServiceRefDeallocate(advert) }
+        if let advert {
+            DNSServiceRefDeallocate(advert)
+        }
         rr_pairing_free(pairing)
     }
 
@@ -112,15 +125,25 @@ public final class DevicePairing: @unchecked Sendable {
             Unmanaged<Code>.fromOpaque(context).takeUnretainedValue().show(String(cString: digits))
         }, box.toOpaque()) else { throw DeviceSession.Failure.message("no answer") }
         defer { rr_string_free(json) }
-        guard let object = try? JSONSerialization.jsonObject(with: Data(String(cString: json).utf8)) as? [String: Any] else {
+        guard let object = try? JSONSerialization.jsonObject(with: Data(String(cString: json).utf8)) as? [String: Any]
+        else {
             throw DeviceSession.Failure.message("unreadable answer")
         }
-        guard object["ok"] as? Bool == true, let udid = object["udid"] as? String, let pairing = object["pairing"] as? String else {
+        guard object["ok"] as? Bool == true, let udid = object["udid"] as? String,
+              let pairing = object["pairing"] as? String
+        else {
             let why = object["error"] as? String ?? "failed"
-            if object["incomplete"] as? Bool == true { throw NotCompleted(description: why) }
+            if object["incomplete"] as? Bool == true {
+                throw NotCompleted(description: why)
+            }
             throw DeviceSession.Failure.message(why)
         }
-        return Paired(udid: udid, name: object["name"] as? String ?? "", model: object["model"] as? String ?? "", pairing: Data(pairing.utf8))
+        return Paired(
+            udid: udid,
+            name: object["name"] as? String ?? "",
+            model: object["model"] as? String ?? "",
+            pairing: Data(pairing.utf8)
+        )
     }
 
     /// The device came, was shown a code, and didn't take the pairing: a wrong code, a refusal,
@@ -128,22 +151,33 @@ public final class DevicePairing: @unchecked Sendable {
     /// connection that broke, of which the device's side isn't known.
     public struct NotCompleted: Error, CustomStringConvertible, Sendable {
         public let description: String
-        public init(description: String) { self.description = description }
+        public init(description: String) {
+            self.description = description
+        }
     }
 
-    public func cancel() { rr_pairing_cancel(pairing) }
+    public func cancel() {
+        rr_pairing_cancel(pairing)
+    }
 
     private final class Code {
         let show: @Sendable (String) -> Void
-        init(show: @escaping @Sendable (String) -> Void) { self.show = show }
+        init(show: @escaping @Sendable (String) -> Void) {
+            self.show = show
+        }
     }
 
     /// DNS-SD's TXT form: each "key=value" behind its length.
     public static func txtRecord(_ pairs: [String: String]) -> Data {
-        pairs.sorted { $0.key < $1.key }.reduce(into: Data()) { data, pair in
+        pairs.sorted {
+            $0.key < $1.key
+        }
+        .reduce(into: Data()) { data, pair in
             // 255 bytes at most, cut between characters: half of one isn't text.
             var entry = "\(pair.key)=\(pair.value)"
-            while entry.utf8.count > 255 { entry.removeLast() }
+            while entry.utf8.count > 255 {
+                entry.removeLast()
+            }
             data.append(UInt8(entry.utf8.count))
             data.append(contentsOf: entry.utf8)
         }
@@ -155,7 +189,9 @@ public final class DevicePairing: @unchecked Sendable {
         sysctlbyname("hw.model", nil, &size, nil, 0)
         var bytes = [CChar](repeating: 0, count: max(size, 1))
         sysctlbyname("hw.model", &bytes, &size, nil, 0)
-        let model = bytes.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
+        let model = bytes.withUnsafeBufferPointer {
+            String(cString: $0.baseAddress!)
+        }
         return model.isEmpty ? "Mac" : model
     }
 }

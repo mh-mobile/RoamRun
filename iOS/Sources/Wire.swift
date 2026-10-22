@@ -53,12 +53,18 @@ final class Wire: @unchecked Sendable {
     private var timer: DispatchWorkItem?
 
     init(farHost: String) {
-        connection = NWConnection(host: NWEndpoint.Host(farHost), port: NWEndpoint.Port(rawValue: Self.port) ?? .any, using: .tcp)
+        connection = NWConnection(
+            host: NWEndpoint.Host(farHost),
+            port: NWEndpoint.Port(rawValue: Self.port) ?? .any,
+            using: .tcp
+        )
     }
 
     static func answer(from line: String) -> Answer {
         guard line.hasPrefix(prefix) else { return .none("it answered with something this app doesn't know") }
-        let words = line.dropFirst(prefix.count).split(separator: " ", omittingEmptySubsequences: false).map(String.init)
+        let words = line.dropFirst(prefix.count)
+            .split(separator: " ", omittingEmptySubsequences: false)
+            .map(String.init)
         switch (words.first, words.count) {
         case ("offer", 2) where !words[1].isEmpty: return .offer(words[1])
         case ("ended", 2): return .ended(words[1])
@@ -67,8 +73,14 @@ final class Wire: @unchecked Sendable {
         case ("you", 2) where isPeerName(words[1]): return .you(words[1])
         case ("device?", 1): return .wantDevice
         case ("attempt", 2): return .attempt
-        case ("code", 2) where words[1].utf8.count == 6 && words[1].utf8.allSatisfy({ (0x30...0x39).contains($0) }): return .code(words[1])
-        case ("result", 3) where words[1] == "done" && ["on", "off"].contains(words[2]): return .done(on: words[2] == "on")
+        case ("code", 2)
+            where words[1].utf8.count == 6 && words[1]
+            .utf8
+            .allSatisfy({
+                (0x30 ... 0x39).contains($0)
+            }): return .code(words[1])
+        case ("result", 3)
+            where words[1] == "done" && ["on", "off"].contains(words[2]): return .done(on: words[2] == "on")
         case ("result", 3) where words[1] == "failed": return .failed(words[2])
         default: return .none("it answered with something this app doesn't know")
         }
@@ -98,8 +110,11 @@ final class Wire: @unchecked Sendable {
 
     /// A Tailscale name as a device's line may hold one (the far Mac's own rule for it).
     static func isPeerName(_ name: String) -> Bool {
-        (1...253).contains(name.utf8.count) && !name.hasPrefix("-") && !name.hasPrefix(".")
-            && name.unicodeScalars.allSatisfy { $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "-" || $0 == ".") }
+        (1 ... 253).contains(name.utf8.count) && !name.hasPrefix("-") && !name.hasPrefix(".")
+            && name.unicodeScalars
+            .allSatisfy {
+                $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "-" || $0 == ".")
+            }
     }
 
     /// What a line says of this device's Tailscale name where the far Mac says it itself: no name on a tailnet.
@@ -126,17 +141,27 @@ final class Wire: @unchecked Sendable {
     /// nil: not known yet. A refusal isn't the answer for half a minute: iOS may refuse before the
     /// person has answered its question, and allows once they have.
     static func mayUseNetwork(looking: Bool, denied: Bool, waited: Int) -> Bool? {
-        if denied { return waited >= 60 ? false : nil }
+        if denied {
+            return waited >= 60 ? false : nil
+        }
         return looking || waited >= 120 ? true : nil
     }
 
     /// An address Tailscale gives: 100.64.0.0/10 or fd7a:115c:a1e0::/48.
     static func onTailnet(_ raw: Data) -> Bool {
         let b = [UInt8](raw)
-        if b.count == 4 { return b[0] == 100 && b[1] & 0xC0 == 64 }
+        if b.count == 4 {
+            return b[0] == 100 && b[1] & 0xC0 == 64
+        }
         guard b.count == 16 else { return false }
-        if b[0..<10].allSatisfy({ $0 == 0 }), b[10] == 0xFF, b[11] == 0xFF { return b[12] == 100 && b[13] & 0xC0 == 64 }
-        return Array(b[0..<6]) == [0xFD, 0x7A, 0x11, 0x5C, 0xA1, 0xE0]
+        if b[0 ..< 10].allSatisfy({
+            $0 == 0
+        }), b[10] == 0xFF,
+           b[11] == 0xFF
+        {
+            return b[12] == 100 && b[13] & 0xC0 == 64
+        }
+        return Array(b[0 ..< 6]) == [0xFD, 0x7A, 0x11, 0x5C, 0xA1, 0xE0]
     }
 
     static func onTailnet(_ endpoint: NWEndpoint?) -> Bool {
@@ -160,12 +185,15 @@ final class Wire: @unchecked Sendable {
                     guard !self.ready else { return }
                     self.ready = true
                     // Whatever the name led to, nothing is said to an address that isn't Tailscale's.
-                    guard Self.onTailnet(self.connection.currentPath?.remoteEndpoint) else { self.answer(.unreached("that name isn't an address on the tailnet")); return }
+                    guard Self.onTailnet(self.connection.currentPath?.remoteEndpoint)
+                    else { self.answer(.unreached("that name isn't an address on the tailnet")); return }
                     self.write("offer?")
                     self.expect(within: 620, .none("it made no offer in 10 minutes"))
                     self.read()
                 case .waiting(.posix(.ECONNREFUSED)), .failed(.posix(.ECONNREFUSED)): self.answer(.notWaiting)
-                case .waiting(let error), .failed(let error): self.answer(self.ready ? .none(error.localizedDescription) : .unreached(error.localizedDescription))
+                case .waiting(let error),
+                     .failed(let error): self
+                    .answer(self.ready ? .none(error.localizedDescription) : .unreached(error.localizedDescription))
                 default: break
                 }
             }
@@ -201,19 +229,25 @@ final class Wire: @unchecked Sendable {
             stream = nil
             timer?.cancel()
             guard let reason, ready else { connection.cancel(); return }
-            write("ended " + reason) { [connection] in connection.cancel() }
+            write("ended " + reason) { [connection] in
+                connection.cancel()
+            }
         }
     }
 
     private func expect(within seconds: TimeInterval, _ otherwise: Answer) {
         timer?.cancel()
-        let item = DispatchWorkItem { [weak self] in self?.answer(otherwise) }
+        let item = DispatchWorkItem { [weak self] in
+            self?.answer(otherwise)
+        }
         timer = item
         queue.asyncAfter(deadline: .now() + seconds, execute: item)
     }
 
     private func write(_ text: String, then: (@Sendable () -> Void)? = nil) {
-        connection.send(content: Data((Self.prefix + text + "\n").utf8), completion: .contentProcessed { _ in then?() })
+        connection.send(content: Data((Self.prefix + text + "\n").utf8), completion: .contentProcessed { _ in
+            then?()
+        })
     }
 
     private func read() {
@@ -227,24 +261,37 @@ final class Wire: @unchecked Sendable {
         guard buffer.count <= 4096 else { answer(.none("it said too much")); return }
         connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self] data, _, complete, error in
             guard let self else { return }
-            if let data, !data.isEmpty { self.buffer.append(data); self.read() }
-            else if let error { self.answer(.none(error.localizedDescription)) }
-            else if complete { self.answer(self.heard ? .none("the connection closed") : .turnedAway) }
-            else { self.read() }
+            if let data, !data.isEmpty {
+                self.buffer.append(data); self.read()
+            } else if let error {
+                self.answer(.none(error.localizedDescription))
+            } else if complete {
+                self.answer(self.heard ? .none("the connection closed") : .turnedAway)
+            } else {
+                self.read()
+            }
         }
     }
 
     private func answer(_ answer: Answer) {
-        if answer.last { timer?.cancel(); connection.cancel() }
+        if answer.last {
+            timer?.cancel(); connection.cancel()
+        }
         if let each = stream {
-            if answer.last { stream = nil }
+            if answer.last {
+                stream = nil
+            }
             each(answer)
-            if stream != nil { read() }
+            if stream != nil {
+                read()
+            }
             return
         }
         guard let completion = pending else { return }
         // Its name comes before its offer: said, and the offer still waited for.
-        if case .you = answer { completion(answer); read(); return }
+        if case .you = answer {
+            completion(answer); read(); return
+        }
         pending = nil
         timer?.cancel()
         completion(answer)

@@ -20,7 +20,7 @@ SIGN_ID ?= -
 NOTARY_PROFILE ?=
 SIGN_FLAGS = --force --options runtime $(if $(filter -,$(SIGN_ID))$(findstring Apple Development,$(SIGN_ID)),,--timestamp)
 
-.PHONY: all build app run dmg release-dmg icon install-cli test clean device-lib device-probe licenses audit roamrunctl-archives lint-ja
+.PHONY: all build app run dmg release-dmg icon install-cli test clean device-lib device-probe licenses audit roamrunctl-archives lint-ja format
 
 all: app
 
@@ -49,6 +49,20 @@ app: build
 # The Japanese documents through textlint (scripts/lint-ja.sh says what it sees and what it can't).
 lint-ja:
 	scripts/lint-ja.sh
+
+# The Swift sources through SwiftFormat (.swiftformat says how), for development: CI doesn't run it.
+# The version is pinned and fetched into .build once, checked against its SHA-256.
+SWIFTFORMAT_VERSION = 0.64.0
+SWIFTFORMAT_SHA256 = 95ea62625d0b898a7af870293311ae6f09e4a3147ecd900593687e4b9ab2fd98
+SWIFTFORMAT = .build/swiftformat-$(SWIFTFORMAT_VERSION)/swiftformat
+$(SWIFTFORMAT):
+	mkdir -p $(@D)
+	curl -sSfL -o $(@D)/swiftformat.zip https://github.com/nicklockwood/SwiftFormat/releases/download/$(SWIFTFORMAT_VERSION)/swiftformat.zip
+	echo "$(SWIFTFORMAT_SHA256)  $(@D)/swiftformat.zip" | shasum -a 256 -c -
+	unzip -oq $(@D)/swiftformat.zip -d $(@D) && rm $(@D)/swiftformat.zip
+
+format: $(SWIFTFORMAT)
+	$(SWIFTFORMAT) .
 
 test: device-lib
 	cd Rust/RoamRunDevice && $(CARGO) test --locked --target-dir $(CURDIR)/.build/device

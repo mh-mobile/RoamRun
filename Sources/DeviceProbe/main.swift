@@ -28,6 +28,7 @@ if verb == "selftest" {
     selfTest()
     exit(0)
 }
+
 if verb == "pair" {
     guard let file = args.first else { exit(2) }
     setvbuf(stdout, nil, _IOLBF, 0)
@@ -35,9 +36,15 @@ if verb == "pair" {
         let name = args.count > 1 ? args[1] : "RoamRun (\(Host.current().localizedName ?? "Mac"))"
         let pairing = try DevicePairing(name: name, host: name)
         print("waiting: pick \"\(pairing.name)\" on the device")
-        let paired = try pairing.accept { print("code: \($0)") }
+        let paired = try pairing.accept {
+            print("code: \($0)")
+        }
         // As it is, its owner's only: a developer's tool, the file is theirs to look after.
-        guard FileManager.default.createFile(atPath: file, contents: paired.pairing, attributes: [.posixPermissions: 0o600]) else {
+        guard FileManager.default.createFile(
+            atPath: file,
+            contents: paired.pairing,
+            attributes: [.posixPermissions: 0o600]
+        ) else {
             throw FrameError.message("can't write \(file)")
         }
         print("paired: \(paired.name) (\(paired.model)) \(paired.udid) -> \(file)")
@@ -47,16 +54,24 @@ if verb == "pair" {
         exit(1)
     }
 }
+
 guard args.count >= 3, let port = UInt16(args[1]) else { exit(2) }
 let rest = Array(args.dropFirst(3))
 let clock = DateFormatter()
 clock.dateFormat = "HH:mm:ss"
 setvbuf(stdout, nil, _IOLBF, 0)
 let pairingFile = URL(fileURLWithPath: args[2])
-let session = DeviceSession(ip: args[0], port: port, pairing: { try Data(contentsOf: pairingFile) })
-session.onEvent = { print("  [\(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium))] \($0)") }
+let session = DeviceSession(ip: args[0], port: port, pairing: {
+    try Data(contentsOf: pairingFile)
+})
+session
+    .onEvent = {
+        print("  [\(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium))] \($0)")
+    }
 
-func ms(_ since: Date) -> Int { Int(Date().timeIntervalSince(since) * 1000) }
+func ms(_ since: Date) -> Int {
+    Int(Date().timeIntervalSince(since) * 1000)
+}
 
 /// One frame, saved to `path`; false when it couldn't be had.
 @discardableResult
@@ -64,7 +79,12 @@ func save(to path: String, _ label: String) -> Bool {
     let started = Date()
     do {
         let image = try session.look()
-        guard let out = CGImageDestinationCreateWithURL(URL(fileURLWithPath: path) as CFURL, UTType.png.identifier as CFString, 1, nil) else {
+        guard let out = CGImageDestinationCreateWithURL(
+            URL(fileURLWithPath: path) as CFURL,
+            UTType.png.identifier as CFString,
+            1,
+            nil
+        ) else {
             throw FrameError.message("can't write \(path)")
         }
         CGImageDestinationAddImage(out, image, nil)
@@ -87,12 +107,15 @@ func operate(_ what: String, after: String?, _ body: () throws -> Void) {
         return
     }
     if let after {
-        Thread.sleep(forTimeInterval: 0.7)   // let the interface settle before looking
+        Thread.sleep(forTimeInterval: 0.7) // let the interface settle before looking
         save(to: after, "after")
     }
 }
 
-let number = { (i: Int) in i < rest.count ? Double(rest[i]) : nil }
+let number = { (i: Int) in
+    i < rest.count ? Double(rest[i]) : nil
+}
+
 switch verb {
 case "info":
     do { print(try session.info()) } catch { print("can't open: \(error)") }
@@ -100,16 +123,22 @@ case "look":
     guard let path = rest.first else { exit(2) }
     // A third word: seconds to wait between frames (the stream is stopped after 15 unused).
     let pause = number(2) ?? 0
-    for n in 1...max(rest.count > 1 ? Int(rest[1]) ?? 1 : 1, 1) {
-        if n > 1, pause > 0 { Thread.sleep(forTimeInterval: pause) }
+    for n in 1 ... max(rest.count > 1 ? Int(rest[1]) ?? 1 : 1, 1) {
+        if n > 1, pause > 0 {
+            Thread.sleep(forTimeInterval: pause)
+        }
         save(to: path, "frame \(n)")
     }
     print((try? session.info()) ?? "")
 case "elements":
     do {
         let started = Date()
-        let found = try session.elements(limit: rest.first.flatMap { Int($0) } ?? 40)
-        for (n, caption) in found.captions.enumerated() { print("\(n): \(caption)") }
+        let found = try session.elements(limit: rest.first.flatMap {
+            Int($0)
+        } ?? 40)
+        for (n, caption) in found.captions.enumerated() {
+            print("\(n): \(caption)")
+        }
         print("\(found.captions.count) elements, complete: \(found.complete), \(ms(started)) ms")
     } catch { print("elements: \(error)") }
 case "hold":
@@ -122,7 +151,9 @@ case "hold":
             try? FileManager.default.removeItem(atPath: command)
             let words = line.split(whereSeparator: \.isWhitespace).map(String.init)
             if words.count == 3, words[0] == "tap", let x = Double(words[1]), let y = Double(words[2]) {
-                operate("\(clock.string(from: Date())) tap \(x) \(y)", after: nil) { try session.tap(x: x, y: y) }
+                operate("\(clock.string(from: Date())) tap \(x) \(y)", after: nil) {
+                    try session.tap(x: x, y: y)
+                }
             }
         }
         save(to: dir + "/hold.png", clock.string(from: Date()))
@@ -130,19 +161,32 @@ case "hold":
     }
 case "tap":
     guard let x = number(0), let y = number(1) else { exit(2) }
-    operate("tap", after: rest.count > 2 ? rest[2] : nil) { try session.tap(x: x, y: y) }
+    operate("tap", after: rest.count > 2 ? rest[2] : nil) {
+        try session.tap(x: x, y: y)
+    }
 case "swipe":
-    guard let x1 = number(0), let y1 = number(1), let x2 = number(2), let y2 = number(3), let duration = number(4) else { exit(2) }
-    operate("swipe", after: rest.count > 5 ? rest[5] : nil) { try session.swipe(from: (x1, y1), to: (x2, y2), milliseconds: Int(duration)) }
+    guard let x1 = number(0), let y1 = number(1), let x2 = number(2), let y2 = number(3),
+          let duration = number(4) else { exit(2) }
+    operate("swipe", after: rest.count > 5 ? rest[5] : nil) { try session.swipe(
+        from: (x1, y1),
+        to: (x2, y2),
+        milliseconds: Int(duration)
+    ) }
 case "type":
     guard let text = rest.first else { exit(2) }
-    operate("type", after: rest.count > 1 ? rest[1] : nil) { try session.type(text) }
+    operate("type", after: rest.count > 1 ? rest[1] : nil) {
+        try session.type(text)
+    }
 case "paste":
     guard let text = rest.first else { exit(2) }
-    operate("paste", after: rest.count > 1 ? rest[1] : nil) { try session.paste(text) }
+    operate("paste", after: rest.count > 1 ? rest[1] : nil) {
+        try session.paste(text)
+    }
 case "button":
     guard let name = rest.first else { exit(2) }
-    operate("button", after: rest.count > 1 ? rest[1] : nil) { try session.press(name) }
+    operate("button", after: rest.count > 1 ? rest[1] : nil) {
+        try session.press(name)
+    }
 default:
     exit(2)
 }
@@ -151,22 +195,53 @@ session.close()
 /// The recovery rules against scripted outcomes. Stops at the first that doesn't hold.
 func selfTest() {
     struct Boom: Error {}
-    func run(repeatable: Bool, outcomes: [Bool], reopens: Bool) -> (result: Bool, attempts: Int, pauses: Int, reopened: Int) {
+    func run(repeatable: Bool, outcomes: [Bool],
+             reopens: Bool) -> (result: Bool, attempts: Int, pauses: Int, reopened: Int)
+    {
         var (attempts, pauses, reopened) = (0, 0, 0)
         let outcome: Void? = try? Recovery.run(repeatable: repeatable, attempt: { () throws -> Void in
             defer { attempts += 1 }
-            if attempts < outcomes.count, !outcomes[attempts] { throw Boom() }
-        }, pause: { pauses += 1 }, reopen: { reopened += 1; return reopens })
+            if attempts < outcomes.count, !outcomes[attempts] {
+                throw Boom()
+            }
+        }, pause: {
+            pauses += 1
+        }, reopen: {
+            reopened += 1; return reopens
+        })
         return (outcome != nil, attempts, pauses, reopened)
     }
-    func check(_ what: String, _ got: (result: Bool, attempts: Int, pauses: Int, reopened: Int), _ want: (Bool, Int, Int, Int)) {
-        precondition(got.result == want.0 && got.attempts == want.1 && got.pauses == want.2 && got.reopened == want.3, "\(what): got \(got)")
+    func check(
+        _ what: String,
+        _ got: (result: Bool, attempts: Int, pauses: Int, reopened: Int),
+        _ want: (Bool, Int, Int, Int)
+    ) {
+        precondition(
+            got.result == want.0 && got.attempts == want.1 && got.pauses == want.2 && got.reopened == want.3,
+            "\(what): got \(got)"
+        )
         print("ok  \(what)")
     }
     check("a read that works is run once", run(repeatable: true, outcomes: [true], reopens: true), (true, 1, 0, 0))
-    check("a read that fails once is tried again on the same connection", run(repeatable: true, outcomes: [false, true], reopens: true), (true, 2, 1, 0))
-    check("a read that fails twice gets a new connection", run(repeatable: true, outcomes: [false, false, true], reopens: true), (true, 3, 1, 1))
-    check("with no new connection to be had, it fails without a third try", run(repeatable: true, outcomes: [false, false, true], reopens: false), (false, 2, 1, 1))
-    check("an input that fails is not repeated", run(repeatable: false, outcomes: [false, true], reopens: true), (false, 1, 0, 0))
+    check(
+        "a read that fails once is tried again on the same connection",
+        run(repeatable: true, outcomes: [false, true], reopens: true),
+        (true, 2, 1, 0)
+    )
+    check(
+        "a read that fails twice gets a new connection",
+        run(repeatable: true, outcomes: [false, false, true], reopens: true),
+        (true, 3, 1, 1)
+    )
+    check(
+        "with no new connection to be had, it fails without a third try",
+        run(repeatable: true, outcomes: [false, false, true], reopens: false),
+        (false, 2, 1, 1)
+    )
+    check(
+        "an input that fails is not repeated",
+        run(repeatable: false, outcomes: [false, true], reopens: true),
+        (false, 1, 0, 0)
+    )
     check("an input that works is run once", run(repeatable: false, outcomes: [true], reopens: true), (true, 1, 0, 0))
 }

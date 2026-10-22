@@ -23,11 +23,22 @@ enum StatusFile {
         var network: String? = nil
 
         /// From `state`, else from the title an older version wrote.
-        var kind: BridgeStatus { state.flatMap(BridgeStatus.init(rawValue:)) ?? BridgeStatus(title: status) }
-        var isError: Bool { kind == .error }
-        var deviceNetwork: DeviceNetwork? { network.flatMap(DeviceNetwork.init(rawValue:)) }
+        var kind: BridgeStatus {
+            state.flatMap(BridgeStatus.init(rawValue:)) ?? BridgeStatus(title: status)
+        }
+
+        var isError: Bool {
+            kind == .error
+        }
+
+        var deviceNetwork: DeviceNetwork? {
+            network.flatMap(DeviceNetwork.init(rawValue:))
+        }
+
         /// Errored or standing aside (iPhone on this LAN): doesn't hold the device.
-        var holdsDevice: Bool { kind != .error && kind != .local }
+        var holdsDevice: Bool {
+            kind != .error && kind != .local
+        }
     }
 
     /// `dir` and `live` are for tests: a scratch folder, and owners that aren't RoamRun.app.
@@ -38,7 +49,9 @@ enum StatusFile {
     /// PIDs get SIGTERM from `roamrun down` and the app's Stop button.
     static func read(in dir: URL = ProfileStore.directory, live: Liveness = isRoamRun) -> [UUID: Entry] {
         guard let data = try? Data(contentsOf: dir.appendingPathComponent("status.json")) else { return [:] }
-        return decode(data).filter { live($0.value) }
+        return decode(data).filter {
+            live($0.value)
+        }
     }
 
     /// Entry by entry: one bad entry (e.g. from another version) mustn't hide the others.
@@ -48,7 +61,7 @@ enum StatusFile {
         var all: [UUID: Entry] = [:]
         for i in stride(from: 0, to: raw.count - 1, by: 2) {
             guard let key = raw[i] as? String, let id = UUID(uuidString: key),
-                  let value = raw[i + 1] as? [String: Any],   // anything else stops the process, uncaught
+                  let value = raw[i + 1] as? [String: Any], // anything else stops the process, uncaught
                   let d = try? JSONSerialization.data(withJSONObject: value),
                   let e = try? JSONDecoder().decode(Entry.self, from: d) else { continue }
             all[id] = e
@@ -66,18 +79,30 @@ enum StatusFile {
     /// replace another owner; automatic app claims also defer to an errored/local CLI.
     @discardableResult
     static func write(_ id: UUID, _ entry: Entry?, in dir: URL = ProfileStore.directory, live: Liveness = isRoamRun,
-                      claim: Bool = false, deferToCLI: Bool = false) -> WriteResult {
+                      claim: Bool = false, deferToCLI: Bool = false) -> WriteResult
+    {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent("status.json")
         let fd = open(dir.appendingPathComponent("status.lock").path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
         guard fd >= 0 else { return .failed("can't open status.lock: \(String(cString: strerror(errno)))") }
         defer { close(fd) }
-        guard flock(fd, LOCK_EX) == 0 else { return .failed("can't lock status.lock: \(String(cString: strerror(errno)))") }
+        guard flock(fd, LOCK_EX) == 0
+        else { return .failed("can't lock status.lock: \(String(cString: strerror(errno)))") }
         defer { flock(fd, LOCK_UN) }
         var all = read(in: dir, live: live)
-        if let held = all[id], !mayReplace(held, with: entry, by: getpid(), claim: claim, deferToCLI: deferToCLI) { return .heldBy(held) }
+        if let held = all[id],
+           !mayReplace(held, with: entry, by: getpid(), claim: claim, deferToCLI: deferToCLI)
+        {
+            return .heldBy(held)
+        }
         // One bridge per device, not per profile: two saved profiles can name the same iPhone.
-        if let twin = entry.flatMap({ sameDevice(as: $0, id: id, in: all, deferToCLI: deferToCLI) }) { return .heldBy(twin) }
+        if let twin = entry
+            .flatMap({
+                sameDevice(as: $0, id: id, in: all, deferToCLI: deferToCLI)
+            })
+        {
+            return .heldBy(twin)
+        }
         all[id] = entry
         do {
             try JSONEncoder().encode(all).write(to: url, options: .atomic)
@@ -94,12 +119,14 @@ enum StatusFile {
     static func sameDevice(as entry: Entry, id: UUID, in all: [UUID: Entry], deferToCLI: Bool = false) -> Entry? {
         guard entry.holdsDevice, let udid = entry.udid else { return nil }
         return all.first { $0.key != id && ($0.value.holdsDevice || (deferToCLI && $0.value.cli == true))
-            && $0.value.udid?.caseInsensitiveCompare(udid) == .orderedSame }?.value
+            && $0.value.udid?.caseInsensitiveCompare(udid) == .orderedSame
+        }?.value
     }
 
     /// Only an explicit claim may take an errored or standing-aside device over.
     static func mayReplace(_ held: Entry, with entry: Entry?, by pid: Int32,
-                           claim: Bool = false, deferToCLI: Bool = false) -> Bool {
+                           claim: Bool = false, deferToCLI: Bool = false) -> Bool
+    {
         held.pid == pid || (claim && entry != nil && !held.holdsDevice && !(deferToCLI && held.cli == true))
     }
 
@@ -110,7 +137,6 @@ enum StatusFile {
         return e.pid
     }
 
-
     static func isRoamRun(_ e: Entry) -> Bool {
         guard e.pid > 1 else { return false }
         var buf = [CChar](repeating: 0, count: 4096)
@@ -119,8 +145,13 @@ enum StatusFile {
         // never shows here). The path alone isn't enough: PIDs are reused, and every
         // `roamrun` command is a RoamRun too, so a dead owner's entry could point at
         // an innocent one — which `down` would then SIGTERM.
-        let path = buf.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
-        return path.hasSuffix(".app/Contents/MacOS/RoamRun") && sameProcess(entry: e.started, live: startTime(of: e.pid))
+        let path = buf.withUnsafeBufferPointer {
+            String(cString: $0.baseAddress!)
+        }
+        return path.hasSuffix(".app/Contents/MacOS/RoamRun") && sameProcess(
+            entry: e.started,
+            live: startTime(of: e.pid)
+        )
     }
 
     /// This process's start time, written into every entry we own.
