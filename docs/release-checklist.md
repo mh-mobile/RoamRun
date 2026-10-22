@@ -269,8 +269,8 @@ tunnel and Xcode has to run again.
     with Ctrl-C while announced: nothing left announced (`dns-sd -B
     _remotepairing-pairable-host._tcp` on a Mac there). On a machine with wired and Wi‑Fi both on
     the device's network, if one is at hand: it says its other address, and `--on <that>` takes
-    it. After the release: each install command of roamrunctl's README — Linux, Windows, `brew
-    install mh-mobile/tap/roamrunctl`, `cargo install` — then `roamrunctl --version`.
+    it. After the release: each install command of roamrunctl's README — Linux, Windows, macOS,
+    `brew install mh-mobile/tap/roamrunctl`, `cargo install` — then `roamrunctl --version`.
 
 30a. roamrunctl holding a device (when `Rust/roamrunctl` or `Rust/RoamRunDevice` changed). Pairing
     commands run by yourself, in a terminal of your own. On a Linux machine on the device's Wi‑Fi:

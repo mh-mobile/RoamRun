@@ -161,15 +161,16 @@ release-dmg:
 	mv $(PENDING_DMG) $(DMG)
 	@echo "Release $(DMG) is signed, notarized and stapled, built from $$(git rev-parse HEAD) (gh release create --target)"
 
-# roamrunctl's archives for a release: the ones CI built from this very commit (Linux, Windows),
-# and their checksums. The Mac's is built by Homebrew, from source. Only a push's run:
-# a pull request's builds its merge with the base, not this commit, and the weekly one none. CI keeps them 14 days: after that, run the commit's CI again.
+# roamrunctl's archives for a release: the ones CI built from this very commit (Linux, Windows,
+# macOS), and their checksums. Only a push's run: a pull request's builds its merge with the base,
+# not this commit, and the weekly one none. CI keeps them 14 days: after that, run the commit's CI again.
 roamrunctl-archives:
 	@run=$$(gh run list --workflow CI --commit $$(git rev-parse HEAD) --event push --status success --json databaseId --jq '.[0].databaseId // empty'); \
 	[ -n "$$run" ] || { echo "no CI run of a push has passed for $$(git rev-parse HEAD) yet (a release is built from a commit on main)"; exit 1; }; \
 	rm -rf roamrunctl-dist && gh run download $$run --pattern 'roamrunctl-*' --dir roamrunctl-dist
 	cd roamrunctl-dist && for d in */; do mv "$$d"* . && rmdir "$$d"; done \
-		&& ls roamrunctl-linux-x86_64.tar.gz roamrunctl-linux-aarch64.tar.gz roamrunctl-windows-x86_64.zip roamrunctl-windows-aarch64.zip >/dev/null \
+		&& ls roamrunctl-linux-x86_64.tar.gz roamrunctl-linux-aarch64.tar.gz roamrunctl-windows-x86_64.zip roamrunctl-windows-aarch64.zip \
+			roamrunctl-macos-aarch64.tar.gz roamrunctl-macos-x86_64.tar.gz >/dev/null \
 		&& shasum -a 256 roamrunctl-*.tar.gz roamrunctl-*.zip > roamrunctl-SHA256SUMS
 	@ls roamrunctl-dist; echo "These go into the release with the dmg: gh release create v$(VERSION) RoamRun-$(VERSION).dmg roamrunctl-dist/* …"
 

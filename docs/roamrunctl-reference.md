@@ -19,7 +19,8 @@ the using machine and the device, not through the key's machine.
 ## Installing
 
 - Release archives: `roamrunctl-linux-x86_64.tar.gz`, `roamrunctl-linux-aarch64.tar.gz`,
-  `roamrunctl-windows-x86_64.zip`, and `roamrunctl-windows-aarch64.zip`. They include the binary,
+  `roamrunctl-windows-x86_64.zip`, `roamrunctl-windows-aarch64.zip`,
+  `roamrunctl-macos-aarch64.tar.gz`, and `roamrunctl-macos-x86_64.tar.gz`. They include the binary,
   README, `SKILL.md`, and license notices. `roamrunctl-SHA256SUMS` contains their checksums.
 - The Linux release binaries are static. If `roamrunctl` is not found after installing to
   `~/.local/bin`, add that directory to your `PATH` or run `~/.local/bin/roamrunctl` directly.
@@ -28,6 +29,10 @@ the using machine and the device, not through the key's machine.
   The binaries are not code-signed. In one run on Windows 11, Windows Firewall asked whether to
   let it in the first time it advertised, and was allowed for private and public networks; in a
   PowerShell run as administrator it asked nothing.
+- The macOS binaries are not signed with a Developer ID or notarized. Downloaded with `curl`,
+  they carry no `com.apple.quarantine` attribute. Carrying it, on an Apple silicon Mac with
+  macOS 27, they were killed as soon as they started, until `xattr -d com.apple.quarantine`
+  removed it (the README's Install has the run).
 - `cargo install --locked --git ...` requires Rust 1.89 or later and a C compiler. This is a
   source build, not the release's static Linux build. `roamrunctl` is not published on
   crates.io; the Homebrew formula is in `mh-mobile/tap`, not Homebrew core.
