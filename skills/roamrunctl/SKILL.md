@@ -304,7 +304,8 @@ path:
 curl -sS --max-time 2100 -w '\n%{http_code}\n' ${RR_TOKEN:+-H} ${RR_TOKEN:+"Authorization: Bearer $RR_TOKEN"} -T App.ipa "http://<address>:<port>/upload"
 # It answered {"upload":"<id>","size":…,"sha256":"<hex>"}: check the sha256 is your file's (sha256sum App.ipa; on a Mac, shasum -a 256 App.ipa), then give both.
 printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"install","arguments":{"device":"phone","upload":"<id>","sha256":"<hex>"}}}' | rr | said
-printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"install_status","arguments":{"device":"phone"}}}' | rr | said
+# install answered "… (install <its id>) …": ask of that install, and another caller's isn't taken for yours.
+printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"install_status","arguments":{"device":"phone","install":"<its id>"}}}' | rr | said
 ```
 
 Where roamrunctl is on the machine you run on, `roamrunctl install phone App.ipa --relay

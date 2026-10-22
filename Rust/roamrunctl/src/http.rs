@@ -1215,8 +1215,15 @@ mod tests {
             assert!(without.install("phone", &ipa, None).err().unwrap_or_default().contains("wants its token"));
             assert!(files(&uploads).is_empty());
         }
-        // With it: the upload is in, and what the install itself answered (the device offered here can't be used) is said.
+        // With it, but out of time already: nothing is sent.
         let relay = crate::remote::Relay::new(&at.to_string(), Some(&token_file)).unwrap();
+        assert!(relay.install("phone", &ipa, Some(0)).err().unwrap_or_default().contains("out of time"));
+        assert!(files(&uploads).is_empty());
+        // By a name that gives more than one address (localhost: ::1 too, on some systems), its IPv4 one is reached:
+        // the server answers (a Host that isn't its own, 400).
+        let named = crate::remote::Relay::new(&format!("localhost:{}", at.port()), Some(&token_file)).unwrap();
+        assert!(named.call("devices", json!({})).err().unwrap_or_default().contains("answered 400"));
+        // With it: the upload is in, and what the install itself answered (the device offered here can't be used) is said.
         let why = relay.install("phone", &ipa, None).err().unwrap_or_default();
         assert!(!why.is_empty() && !why.contains("the relay answered") && !why.contains("sha256"), "{why}");
         assert_eq!(files(&uploads).len(), 1);

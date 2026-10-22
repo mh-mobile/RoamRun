@@ -490,7 +490,7 @@ fn names_here() -> Result<Vec<String>, String> {
 /// launched by the bundle identifier in it.
 fn install(name: &str, path: &std::path::Path, launch: bool) -> Result<String, String> {
     let path_text = path.to_string_lossy();
-    let bundle = if path.is_file() { Some(roamrun_device::ipa_checked(&path_text)?) } else { None };
+    let bundle = if std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?.is_file() { Some(roamrun_device::ipa_checked(&path_text)?) } else { None };
     let bundle = match (launch, bundle) {
         (false, _) => None,
         (true, Some(bundle)) => Some(bundle),
@@ -502,10 +502,10 @@ fn install(name: &str, path: &std::path::Path, launch: bool) -> Result<String, S
     note!("Sending {} ({megabytes} MB) to {name}: nothing more is said until it is in, {} minutes at most. A megabyte took three to four seconds on the device's own Wi‑Fi.", path.display(), given.as_secs().div_ceil(60));
     said(device.install(&path_text))?;
     let installed = format!("Installed {} on {name}.", path.display());
-    match bundle {
-        Some(bundle) => Ok(format!("{installed}\n{}", launched(&device, name, &bundle)?)),
-        None => Ok(installed),
-    }
+    let Some(bundle) = bundle else { return Ok(installed) };
+    // In, whatever the launch does.
+    let _ = writeln!(std::io::stdout(), "{installed}");
+    launched(&device, name, &bundle)
 }
 
 fn launched(device: &Device, name: &str, bundle: &str) -> Result<String, String> {
@@ -572,15 +572,24 @@ pub fn run(command: Command) -> i32 {
         }),
         Command::Key { command: Key::Import { file, name, passphrase } } => import(&file, name, passphrase),
         Command::Look { name, file } => look(&name, file),
-        Command::Install { name, path, launch, relay: crate::Relayed { relay: Some(relay), token_file }, timeout } => crate::remote::Relay::new(&relay, token_file.as_deref()).and_then(|relay| {
-            let (said, bundle) = relay.install(&name, &path, timeout)?;
-            if !launch { return Ok(said) }
-            Ok(format!("{said}\n{}", relay.call("launch", serde_json::json!({ "device": name, "bundle": bundle }))?))
-        }),
-        Command::Install { name, path, launch, .. } => install(&name, &path, launch),
-        Command::Launch { name, bundle, relay: crate::Relayed { relay: Some(relay), token_file } } => crate::remote::Relay::new(&relay, token_file.as_deref())
-            .and_then(|relay| relay.call("launch", serde_json::json!({ "device": name, "bundle": bundle }))),
-        Command::Launch { name, bundle, .. } => opened(&name).and_then(|device| launched(&device, &name, &bundle)),
+        Command::Install { name, path, launch, relay, timeout } => match relay.given() {
+            Ok(Some((relay, token_file))) => crate::remote::Relay::new(&relay, token_file.as_deref()).and_then(|relay| {
+                let (said, bundle) = relay.install(&name, &path, timeout)?;
+                if !launch { return Ok(said) }
+                // In, whatever the launch does.
+                let _ = writeln!(std::io::stdout(), "{said}");
+                relay.call("launch", serde_json::json!({ "device": name, "bundle": bundle }))
+            }),
+            Ok(None) if timeout.is_some() => Err("--timeout goes with --relay, and ROAMRUNCTL_RELAY is empty".into()),
+            Ok(None) => install(&name, &path, launch),
+            Err(why) => Err(why),
+        },
+        Command::Launch { name, bundle, relay } => match relay.given() {
+            Ok(Some((relay, token_file))) => crate::remote::Relay::new(&relay, token_file.as_deref())
+                .and_then(|relay| relay.call("launch", serde_json::json!({ "device": name, "bundle": bundle }))),
+            Ok(None) => opened(&name).and_then(|device| launched(&device, &name, &bundle)),
+            Err(why) => Err(why),
+        },
         Command::Mcp { http: None, .. } => return crate::mcp::Server::default().serve(),
         Command::Mcp { http: Some(port), allow, token_file, allow_install, max_upload, devices } => allow.iter().map(|a| crate::http::allow(a)).collect::<Result<Vec<_>, _>>()
             .and_then(|allowed| Ok(crate::http::Options { port, allowed, token: token_file.as_deref().map(crate::http::token).transpose()?, devices, uploads: allow_install.then_some(max_upload << 20) }))

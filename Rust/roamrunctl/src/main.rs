@@ -129,6 +129,17 @@ pub struct Relayed {
     pub token_file: Option<std::path::PathBuf>,
 }
 
+impl Relayed {
+    /// The relay and its token file, where one is named: an empty one (ROAMRUNCTL_RELAY set to nothing) is none.
+    pub fn given(self) -> Result<Option<(String, Option<std::path::PathBuf>)>, String> {
+        match (self.relay.filter(|relay| !relay.trim().is_empty()), self.token_file) {
+            (Some(relay), token_file) => Ok(Some((relay, token_file))),
+            (None, Some(_)) => Err("--token-file goes with --relay, and ROAMRUNCTL_RELAY is empty".into()),
+            (None, None) => Ok(None),
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum Pair {
     /// Stand in on this LAN for the offer to pair of a machine elsewhere (the host: a far Mac, or a machine with roamrunctl) — with Xcode, or for device control, as it asks — and carry the device's connection to it
@@ -758,6 +769,17 @@ async fn device_seen(announcement: &announce::Announcement, seen: &Seen, lan: Ip
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_empty_relay_is_none() {
+        let given = |args: &[&str]| match Cli::try_parse_from(args).map(|cli| cli.command) {
+            Ok(Command::Launch { relay, .. }) => relay.given(),
+            _ => Err("not parsed".into()),
+        };
+        assert_eq!(given(&["roamrunctl", "launch", "a", "b", "--relay", ""]), Ok(None));
+        assert_eq!(given(&["roamrunctl", "launch", "a", "b", "--relay", "100.64.0.1:9090"]).map(|g| g.map(|(relay, _)| relay)), Ok(Some("100.64.0.1:9090".into())));
+        assert!(given(&["roamrunctl", "launch", "a", "b", "--relay", " ", "--token-file", "t"]).is_err());
+    }
 
     #[test]
     fn subnets() {

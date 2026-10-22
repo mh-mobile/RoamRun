@@ -1,7 +1,7 @@
 //! `install` and `launch` with `--relay`: through `roamrunctl mcp --http` on the machine beside the device.
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -15,8 +15,10 @@ const EVERY: Duration = if cfg!(test) { Duration::from_millis(50) } else { Durat
 /// A request the relay answers 503 (it couldn't tell who this is just then) is tried this often, this far apart.
 const TRIES: u32 = 5;
 const APART: Duration = if cfg!(test) { Duration::from_millis(50) } else { Duration::from_secs(3) };
-/// The most one answer is waited for, and one write.
+/// The most one answer is waited for, and one write; a connection; an answer to `Expect: 100-continue`.
 const ANSWER: Duration = Duration::from_secs(120);
+const CONNECT: Duration = Duration::from_secs(10);
+const CONTINUE: Duration = if cfg!(test) { Duration::from_millis(300) } else { Duration::from_secs(10) };
 
 pub struct Relay {
     /// host:port, as connected to and as the Host the server checks.
@@ -39,34 +41,57 @@ impl Relay {
     }
 
     /// One request, tried again while the relay answers 503: its status and body. `body` gives a body anew for each try.
-    fn ask(&self, method: &str, path: &str, body: &dyn Fn() -> std::io::Result<(u64, Box<dyn Read>)>) -> Result<(u16, String), String> {
+    fn ask(&self, method: &str, path: &str, body: &dyn Fn() -> std::io::Result<(u64, Box<dyn Read>)>, until: Instant) -> Result<(u16, String), String> {
         let mut tries = 0;
         loop {
-            let (status, said) = self.once(method, path, body)?;
+            let (status, said) = self.once(method, path, body, until)?;
             tries += 1;
-            if status != 503 || tries == TRIES { return Ok((status, said)) }
+            if status != 503 || tries == TRIES || Instant::now() + APART >= until { return Ok((status, said)) }
             std::thread::sleep(APART);
         }
     }
 
-    fn once(&self, method: &str, path: &str, body: &dyn Fn() -> std::io::Result<(u64, Box<dyn Read>)>) -> Result<(u16, String), String> {
+    /// One request, over by `until`.
+    fn once(&self, method: &str, path: &str, body: &dyn Fn() -> std::io::Result<(u64, Box<dyn Read>)>, until: Instant) -> Result<(u16, String), String> {
         let failed = |e: std::io::Error| format!("the relay at {}: {e}", self.host);
-        let at = self.host.to_socket_addrs().map_err(failed)?.next().ok_or_else(|| format!("the relay at {}: no address", self.host))?;
-        let stream = TcpStream::connect_timeout(&at, Duration::from_secs(10)).map_err(failed)?;
-        stream.set_read_timeout(Some(ANSWER)).and_then(|()| stream.set_write_timeout(Some(ANSWER))).map_err(failed)?;
+        let left = || until.checked_duration_since(Instant::now()).filter(|left| !left.is_zero()).ok_or_else(|| format!("the relay at {}: out of time (--timeout), nothing more was sent", self.host));
+        // It listens on IPv4 alone: each IPv4 address the name gives is tried.
+        let mut stream = Err(format!("the relay at {}: no IPv4 address", self.host));
+        for at in self.host.to_socket_addrs().map_err(failed)?.filter(SocketAddr::is_ipv4) {
+            stream = TcpStream::connect_timeout(&at, CONNECT.min(left()?)).map_err(failed);
+            if stream.is_ok() { break }
+        }
+        let stream = stream?;
+        let wait = |most: Duration| -> Result<(), String> { let most = most.min(left()?); stream.set_read_timeout(Some(most)).and_then(|()| stream.set_write_timeout(Some(most))).map_err(failed) };
         let (length, mut content) = body().map_err(|e| e.to_string())?;
         let token = self.token.as_ref().map_or(String::new(), |token| format!("Authorization: Bearer {token}\r\n"));
         // With Expect, a refusal (the token, who this is, the size) comes before the body is sent.
         let kind = if path == "/upload" { "application/octet-stream" } else { "application/json" };
         let head = format!("{method} {path} HTTP/1.1\r\nHost: {}\r\n{token}Content-Type: {kind}\r\nContent-Length: {length}\r\nExpect: 100-continue\r\nConnection: close\r\n\r\n", self.host);
+        wait(ANSWER)?;
         (&stream).write_all(head.as_bytes()).map_err(failed)?;
+        // A server that doesn't answer the Expect is sent the body all the same, after a while.
+        wait(CONTINUE)?;
+        let early = match stream.peek(&mut [0]) {
+            Ok(_) => true,
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => false,
+            Err(e) => return Err(failed(e)),
+        };
+        wait(ANSWER)?;
         let mut reader = BufReader::new(&stream);
-        let mut answer = answer_head(&mut reader).map_err(failed)?;
-        if answer.0 == 100 {
-            std::io::copy(&mut content.as_mut().take(length), &mut &stream).map_err(failed)?;
-            answer = answer_head(&mut reader).map_err(failed)?;
-        }
-        let (status, length) = answer;
+        let refused = if early { Some(answer_head(&mut reader).map_err(failed)?).filter(|(status, _)| *status != 100) } else { None };
+        let (status, length) = match refused {
+            Some(answer) => answer,
+            None => {
+                let sent = std::io::copy(&mut content.as_mut().take(length), &mut Until(&stream, until));
+                // Refused while it was sent (answered, then closed): that answer, not the broken pipe.
+                match (answer_head(&mut reader), sent) {
+                    (Ok(answer), _) => answer,
+                    (Err(_), Err(e)) if Instant::now() >= until => return Err(format!("{}, while it was sent ({e})", left().err().unwrap_or_default())),
+                    (Err(_), Err(e)) | (Err(e), Ok(_)) => return Err(failed(e)),
+                }
+            }
+        };
         let mut said = Vec::new();
         match length {
             Some(length) => reader.take(length).read_to_end(&mut said),
@@ -77,8 +102,12 @@ impl Relay {
 
     /// One tool's answer, as text: an error where the tool says it failed.
     pub fn call(&self, tool: &str, arguments: Value) -> Result<String, String> {
+        self.call_by(tool, arguments, Instant::now() + ANSWER)
+    }
+
+    fn call_by(&self, tool: &str, arguments: Value, until: Instant) -> Result<String, String> {
         let line = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": tool, "arguments": arguments } }).to_string();
-        let (status, said) = self.ask("POST", "/mcp", &|| Ok((line.len() as u64, Box::new(std::io::Cursor::new(line.clone().into_bytes())))))?;
+        let (status, said) = self.ask("POST", "/mcp", &|| Ok((line.len() as u64, Box::new(std::io::Cursor::new(line.clone().into_bytes())))), until)?;
         if status != 200 { return Err(refused(tool, status, &said)) }
         let said: Value = serde_json::from_str(&said).map_err(|_| format!("{tool}: the relay's answer isn't JSON"))?;
         if let Some(message) = said["error"]["message"].as_str() { return Err(format!("{tool}: {message}")) }
@@ -86,12 +115,12 @@ impl Relay {
         if said["result"]["isError"] == true { Err(text) } else { Ok(text) }
     }
 
-    /// Sends the .ipa at `path`, installs it on the relay's device `name` and waits for it to be in, until `timeout`
-    /// (else what the relay gives the upload and the install, and a minute more). What `install_status` said, and the
-    /// app's bundle identifier.
+    /// Sends the .ipa at `path`, installs it on the relay's device `name` and waits for it to be in, all within `timeout`
+    /// (else what the relay gives the upload and the install, and a minute more). What `install_status` said of this
+    /// install, and the app's bundle identifier.
     pub fn install(&self, name: &str, path: &Path, timeout: Option<u64>) -> Result<(String, String), String> {
         let began = Instant::now();
-        if !path.is_file() { return Err(format!("{}: through a relay, an .ipa (not an .app folder)", path.display())) }
+        if !std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?.is_file() { return Err(format!("{}: through a relay, an .ipa (not an .app folder)", path.display())) }
         let text = path.to_string_lossy();
         let bundle = roamrun_device::ipa_checked(&text)?;
         let (megabytes, given) = roamrun_device::install_given(&text);
@@ -101,24 +130,43 @@ impl Relay {
         std::io::copy(&mut opened().map_err(|e| format!("{}: {e}", path.display()))?.1, &mut hash).map_err(|e| format!("{}: {e}", path.display()))?;
         let sha256: String = sha2::Digest::finalize(hash).iter().map(|b| format!("{b:02x}")).collect();
         note!("Sending {} ({megabytes} MB) to the relay at {}", path.display(), self.host);
-        let (status, said) = self.ask("PUT", "/upload", &opened)?;
+        let (status, said) = self.ask("PUT", "/upload", &opened, until)?;
         if status != 200 { return Err(refused("the upload", status, &said)) }
         let said: Value = serde_json::from_str(&said).map_err(|_| "the relay's answer to the upload isn't JSON".to_string())?;
         // What arrived is what was sent: else nothing is installed.
         if said["sha256"].as_str() != Some(sha256.as_str()) { return Err(format!("the relay's sha256 of the upload isn't {}'s: nothing was installed", path.display())) }
         let upload = said["upload"].as_str().ok_or("the relay's answer to the upload has no id")?;
-        note!("{}", self.call("install", json!({ "device": name, "upload": upload, "sha256": sha256 }))?);
+        let begun = self.call_by("install", json!({ "device": name, "upload": upload, "sha256": sha256 }), until)?;
+        note!("{begun}");
+        // Asked of by its id: another caller's install on the device meanwhile, of the same app even, isn't taken for this one.
+        let id = install_id(&begun).ok_or("the relay doesn't say which install this is (it needs roamrunctl 0.9.0 or later): not waited for")?;
         loop {
             std::thread::sleep(EVERY);
-            let said = self.call("install_status", json!({ "device": name }))?;
-            if said.contains(" is installed on ") { return Ok((said, bundle)) }
-            // Not going on and not in (the relay was started again since, say): not taken for in.
-            if !said.starts_with("installing ") { return Err(said) }
             if Instant::now() >= until {
                 return Err(format!("not in after {} s: the relay goes on with it, and install_status there says how it ends", began.elapsed().as_secs()));
             }
+            let said = self.call_by("install_status", json!({ "device": name, "install": id }), until)?;
+            if said.contains(" is installed on ") { return Ok((said, bundle)) }
+            if !said.starts_with("installing ") { return Err(said) }
         }
     }
+}
+
+/// The id in what `install` answered: "… (install <id>) …".
+fn install_id(begun: &str) -> Option<&str> {
+    begun.split_once("(install ").and_then(|(_, rest)| rest.split_once(')')).map(|(id, _)| id).filter(|id| !id.is_empty())
+}
+
+/// Writes until `.1`, then fails: an upload that would go on past the deadline stops.
+struct Until<'a>(&'a TcpStream, Instant);
+
+impl Write for Until<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if Instant::now() >= self.1 { return Err(std::io::ErrorKind::TimedOut.into()) }
+        let mut stream = self.0;
+        stream.write(bytes)
+    }
+    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
 }
 
 /// The status line and the length of an answer, its head read.
@@ -162,5 +210,43 @@ mod tests {
         for at in ["100.64.0.1", "https://100.64.0.1:9090/mcp", ":9090", "100.64.0.1:http", ""] {
             assert!(Relay::new(at, None).is_err(), "{at}");
         }
+    }
+
+    #[test]
+    fn an_install_is_known_by_the_id_it_was_answered_with() {
+        assert_eq!(install_id("installing a.b (1 MB) on phone (install 0f3a), for 315 s at most"), Some("0f3a"));
+        assert_eq!(install_id("installing a.b (1 MB) on phone, for 315 s at most"), None);
+        assert_eq!(install_id("(install )"), None);
+    }
+
+    #[test]
+    fn a_path_that_isnt_there_is_said_so() {
+        let said = Relay::new("127.0.0.1:9", None).unwrap().install("phone", Path::new("/nowhere/at/all.ipa"), None).err().unwrap_or_default();
+        assert!(said.starts_with("/nowhere/at/all.ipa: ") && !said.contains(".app folder"), "{said}");
+    }
+
+    /// A server that answers no `Expect: 100-continue` is sent the body after a while, and answered.
+    #[test]
+    fn a_body_goes_without_100_continue() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let at = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(&stream);
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" { break }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") { length = value.trim().parse().unwrap() }
+            }
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).unwrap();
+            let answer = json!({ "jsonrpc": "2.0", "id": 1, "result": { "content": [{ "type": "text", "text": "phone" }] } }).to_string();
+            (&stream).write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{answer}", answer.len()).as_bytes()).unwrap();
+        });
+        let began = Instant::now();
+        assert_eq!(Relay::new(&at.to_string(), None).unwrap().call("devices", json!({})).as_deref(), Ok("phone"));
+        assert!(began.elapsed() < Duration::from_secs(5));
     }
 }
