@@ -339,7 +339,9 @@ tunnel and Xcode has to run again.
     with `--allow-install` added, `curl -T <an .ipa signed for the device> -H "Authorization:
     Bearer $(cat t)" http://<address>:<port>/upload` → its `sha256` is the file's (`sha256sum`;
     `shasum -a 256` on a Mac, `Get-FileHash` on Windows); `install` with that `upload` and
-    `sha256` → answered at once; `install_status` until it says installed. Ctrl-C → no
+    `sha256` → answered at once; `install_status` until it says installed. With the device on
+    its charger and the app just launched in front, `roamrunctl install` of it again → installed
+    in seconds, not waiting. Ctrl-C → no
     `roamrunctl-uploads-*` left in the temporary folder (`ls "${TMPDIR:-/tmp}"`; `dir %TEMP%` on
     Windows).
     Last, as it takes the place of that pairing on the device: the device paired once more, under

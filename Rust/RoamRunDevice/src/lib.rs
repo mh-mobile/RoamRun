@@ -551,7 +551,8 @@ fn ipa_within(path: &str, unpacked: u64, info_plist: u64) -> Result<String, Stri
 }
 
 /// What `rr_device_install` and `rr_device_launch` share: one thing asked of the device's app services.
-enum App<'a> { Install(&'a str), Launch(&'a str) }
+/// An install carries the app's bundle identifier where it is known: its running processes are ended first.
+enum App<'a> { Install(&'a str, Option<String>), Launch(&'a str) }
 
 fn app(device: &RRDevice, what: App) -> String {
     let result = with_room(|| {
@@ -560,17 +561,11 @@ fn app(device: &RRDevice, what: App) -> String {
         let link = &mut *link;
         device.runtime.block_on(async {
             // An install sends the whole app: longer than a call's deadline, and longer the more there is of it.
-            let given = match what { App::Install(path) => install_given(path).1, App::Launch(_) => Duration::from_secs(300) };
+            let given = match what { App::Install(path, _) => install_given(path).1, App::Launch(_) => Duration::from_secs(300) };
             tokio::time::timeout(given, async {
                 match what {
-                    App::Install(path) => {
-                        // An app folder is laid over what an earlier, cut-short install of that name left where
-                        // the device keeps them: cleared first, or the app taken in is the two mixed.
-                        if let Some(name) = std::path::Path::new(path).file_name().and_then(|n| n.to_str()).filter(|_| std::path::Path::new(path).is_dir()) {
-                            if let Ok(mut files) = idevice::afc::AfcClient::connect_rsd(&mut link.handle, &mut link.handshake).await {
-                                let _ = files.remove_all(format!("PublicStaging/{name}")).await;
-                            }
-                        }
+                    App::Install(path, bundle) => {
+                        if let Some(bundle) = bundle { end_running(link, &bundle).await }
                         idevice::utils::installation::install_package_rsd(&mut link.handle, &mut link.handshake, path, None)
                             .await.map(|()| String::new()).map_err(|e| format!("install: {e:?}"))
                     }
@@ -591,6 +586,33 @@ fn app(device: &RRDevice, what: App) -> String {
     }
 }
 
+/// The app's running processes, ended before it is replaced. iOS ends them itself, but not one in front while the
+/// device charges: it waits until the app isn't, which held installs for minutes (iOS 27.0). Ended here first, as
+/// Xcode does; where anything of it fails, the install goes on as it would have. Where the app is is asked of
+/// installation_proxy: AppService's list of apps didn't answer over this connection.
+async fn end_running(link: &mut Link, bundle: &str) {
+    let Ok(mut lookup) = idevice::installation_proxy::InstallationProxyClient::connect_rsd(&mut link.handle, &mut link.handshake).await else { return };
+    let found = lookup.get_apps(Some("User"), Some(vec![bundle.to_string()])).await.ok();
+    let Some(app) = found.as_ref().and_then(|found| found.get(bundle)?.as_dictionary()?.get("Path")?.as_string()) else { return };
+    let Ok(mut apps) = idevice::core_device::AppServiceClient::connect_rsd(&mut link.handle, &mut link.handshake).await else { return };
+    let Ok(processes) = apps.list_processes().await else { return };
+    for pid in inside(app, processes.iter().map(|p| (p.pid, p.executable_url.as_ref().map(|u| u.relative.as_str())))) {
+        let _ = apps.send_signal(pid, 9).await;
+    }
+}
+
+/// The pids of `processes` (pid, executable URL) whose executable is inside the app at `app` on the device.
+fn inside<'a>(app: &str, processes: impl Iterator<Item = (u32, Option<&'a str>)>) -> Vec<u32> {
+    let within = format!("file://{}/", app.trim_end_matches('/'));
+    processes.filter(|(_, url)| url.is_some_and(|url| url.starts_with(&within))).map(|(pid, _)| pid).collect()
+}
+
+/// An .app folder's bundle identifier, where its Info.plist gives one.
+fn app_bundle(folder: &str) -> Option<String> {
+    let info = plist::Value::from_file(std::path::Path::new(folder).join("Info.plist")).ok()?;
+    info.as_dictionary()?.get("CFBundleIdentifier")?.as_string().map(str::to_string)
+}
+
 /// Installs the app at `path`, an .ipa or an .app folder on this machine, signed for the device already. An .ipa
 /// that `ipa_checked` refuses is refused before anything is sent ("invalid").
 /// # Safety
@@ -599,8 +621,8 @@ fn app(device: &RRDevice, what: App) -> String {
 pub unsafe extern "C" fn rr_device_install(device: *mut RRDevice, path: *const c_char) -> *mut c_char {
     let path = (!path.is_null()).then(|| unsafe { CStr::from_ptr(path) }.to_str().ok()).flatten();
     match (unsafe { device.as_ref() }, path) {
-        (Some(device), Some(path)) => c_string(match with_room(|| if std::path::Path::new(path).is_dir() { Ok(String::new()) } else { ipa_checked(path) }) {
-            Ok(_) => app(device, App::Install(path)),
+        (Some(device), Some(path)) => c_string(match with_room(|| if std::path::Path::new(path).is_dir() { Ok(app_bundle(path)) } else { ipa_checked(path).map(Some) }) {
+            Ok(bundle) => app(device, App::Install(path, bundle)),
             Err(why) => format!("{{\"ok\":false,\"invalid\":true,\"error\":{}}}", quoted(&why)),
         }),
         _ => c_string(failure("bad arguments")),
@@ -1699,6 +1721,31 @@ async fn accept_pairing(pairing: &RRPairing, show: &(impl Fn(&str) + Sync)) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_processes_of_the_app_replaced_are_ended() {
+        let app = "/private/var/containers/Bundle/Application/DF24/RoamRunIntroducer.app";
+        let processes: [(u32, Option<&str>); 5] = [
+            (10, Some("file:///private/var/containers/Bundle/Application/DF24/RoamRunIntroducer.app/RoamRunIntroducer")),
+            (11, Some("file:///private/var/containers/Bundle/Application/DF24/RoamRunIntroducer.app/PlugIns/W.appex/W")),
+            // Another app whose name begins the same, another install of the name, and one without a URL.
+            (12, Some("file:///private/var/containers/Bundle/Application/DF24/RoamRunIntroducer.app2/X")),
+            (13, Some("file:///private/var/containers/Bundle/Application/5806/RoamRunIntroducer.app/RoamRunIntroducer")),
+            (14, None),
+        ];
+        assert_eq!(inside(app, processes.into_iter()), vec![10, 11]);
+        assert_eq!(inside(&format!("{app}/"), processes.into_iter()), vec![10, 11]);
+    }
+
+    #[test]
+    fn an_app_folders_bundle_identifier_is_read_from_its_info_plist() {
+        let folder = std::env::temp_dir().join(format!("rr-bundle-{}.app", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        assert_eq!(app_bundle(folder.to_str().unwrap()), None);
+        plist::Value::Dictionary([("CFBundleIdentifier".to_string(), plist::Value::String("io.example.app".into()))].into_iter().collect()).to_file_xml(folder.join("Info.plist")).unwrap();
+        assert_eq!(app_bundle(folder.to_str().unwrap()).as_deref(), Some("io.example.app"));
+        std::fs::remove_dir_all(folder).unwrap();
+    }
 
     #[test]
     fn an_install_is_given_longer_the_more_there_is_to_send() {
