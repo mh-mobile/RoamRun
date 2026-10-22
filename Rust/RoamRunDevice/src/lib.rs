@@ -572,7 +572,7 @@ fn app(device: &RRDevice, what: App) -> String {
                                 let _ = files.remove_all(format!("PublicStaging/{name}")).await;
                             }
                         }
-                        // Not answered within this, the install goes on without it: it mustn't spend the install's time.
+                        // At most 10 s of the install's time: not answered within it, the install goes on without it.
                         if let Some(bundle) = bundle { let _ = tokio::time::timeout(Duration::from_secs(10), end_running(link, &bundle)).await; }
                         idevice::utils::installation::install_package_rsd(&mut link.handle, &mut link.handshake, path, None)
                             .await.map(|()| String::new()).map_err(|e| format!("install: {e:?}"))
