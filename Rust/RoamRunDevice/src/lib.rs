@@ -565,7 +565,15 @@ fn app(device: &RRDevice, what: App) -> String {
             tokio::time::timeout(given, async {
                 match what {
                     App::Install(path, bundle) => {
-                        if let Some(bundle) = bundle { end_running(link, &bundle).await }
+                        // An app folder is laid over what an earlier, cut-short install of that name left where
+                        // the device keeps them: cleared first, or the app taken in is the two mixed.
+                        if let Some(name) = std::path::Path::new(path).file_name().and_then(|n| n.to_str()).filter(|_| std::path::Path::new(path).is_dir()) {
+                            if let Ok(mut files) = idevice::afc::AfcClient::connect_rsd(&mut link.handle, &mut link.handshake).await {
+                                let _ = files.remove_all(format!("PublicStaging/{name}")).await;
+                            }
+                        }
+                        // Not answered within this, the install goes on without it: it mustn't spend the install's time.
+                        if let Some(bundle) = bundle { let _ = tokio::time::timeout(Duration::from_secs(10), end_running(link, &bundle)).await; }
                         idevice::utils::installation::install_package_rsd(&mut link.handle, &mut link.handshake, path, None)
                             .await.map(|()| String::new()).map_err(|e| format!("install: {e:?}"))
                     }
@@ -587,8 +595,8 @@ fn app(device: &RRDevice, what: App) -> String {
 }
 
 /// The app's running processes, ended before it is replaced. iOS ends them itself, but not one in front while the
-/// device charges: it waits until the app isn't, which held installs for minutes (iOS 27.0). Ended here first, as
-/// Xcode does; where anything of it fails, the install goes on as it would have. Where the app is is asked of
+/// device charges: it waits until the app isn't, which held installs for minutes (iOS 27.0). Ended here first;
+/// where anything of it fails, the install goes on as it would have. Where the app is is asked of
 /// installation_proxy: AppService's list of apps didn't answer over this connection.
 async fn end_running(link: &mut Link, bundle: &str) {
     let Ok(mut lookup) = idevice::installation_proxy::InstallationProxyClient::connect_rsd(&mut link.handle, &mut link.handshake).await else { return };
