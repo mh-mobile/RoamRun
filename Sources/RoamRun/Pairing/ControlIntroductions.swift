@@ -29,7 +29,8 @@ final class ControlIntroductions: @unchecked Sendable {
         var how: PairWire.Refusal
         var why: String
         init(_ how: PairWire.Refusal, _ why: String) {
-            self.how = how; self.why = why
+            self.how = how
+            self.why = why
         }
     }
 
@@ -69,10 +70,10 @@ final class ControlIntroductions: @unchecked Sendable {
     }
 
     var keep: @Sendable (DeviceProfile, DevicePairing.Paired, _ wanted: @Sendable () -> Bool)
-        -> Result<Kept, NotKept> = { _, _, _ in .failure(.init(
-            .failed,
-            "stopping"
-        )) }
+        -> Result<Kept, NotKept> = { _, _, _ in
+            .failure(.init(.failed, "stopping"))
+        }
+
     /// Not asked how it stands for this long, the command that began it is gone.
     var quiet: TimeInterval = 15
     var longest: TimeInterval = 720
@@ -184,8 +185,7 @@ final class ControlIntroductions: @unchecked Sendable {
             let paired = try { () throws -> DevicePairing.Paired in
                 guard let listener = lock.withLock({
                     attempts[id]?.listener
-                })
-                else { throw DeviceSession.Failure.message("stopped") }
+                }) else { throw DeviceSession.Failure.message("stopped") }
                 return try listener.accept { [self] code in
                     lock.withLock {
                         attempts[id]?.code = code
@@ -245,7 +245,8 @@ final class ControlIntroductions: @unchecked Sendable {
             }
             guard let over else { return }
             if over {
-                _ = cancel(id); return
+                _ = cancel(id)
+                return
             }
         }
     }
@@ -280,12 +281,9 @@ final class ControlIntroductions: @unchecked Sendable {
         }
         listener?.cancel()
         // Answered once it has stopped, or says it is being kept: a moment at most.
-        for _ in 0 ..< 20
-            where lock
-            .withLock({
-                attempts[id]?.state == .waiting && attempts[id]?.listener != nil
-            })
-        {
+        for _ in 0 ..< 20 where lock.withLock({
+            attempts[id]?.state == .waiting && attempts[id]?.listener != nil
+        }) {
             Thread.sleep(forTimeInterval: 0.1)
         }
         return status(id)

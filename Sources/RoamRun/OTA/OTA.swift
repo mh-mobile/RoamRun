@@ -278,10 +278,9 @@ enum OTA {
         let payload = dir.appendingPathComponent("Payload")
         guard let app = appBundle(in: payload) else { return nil }
         let appDir = payload.appendingPathComponent(app)
-        let icons = (try? FileManager.default.contentsOfDirectory(atPath: appDir.path))?
-            .filter {
-                $0.hasPrefix("AppIcon")
-            } ?? []
+        let icons = (try? FileManager.default.contentsOfDirectory(atPath: appDir.path))?.filter {
+            $0.hasPrefix("AppIcon")
+        } ?? []
         guard let best = biggestIcon(icons),
               let png = inside(appDir.appendingPathComponent(best), dir) else { return nil }
         return repack(png)
@@ -347,7 +346,9 @@ enum OTA {
             throw Problem.failed("couldn't lock \(app.path) (\(String(cString: strerror(errno)))) — " +
                 "storing without it could lose a build another roamrun is writing")
         }
-        defer { flock(lock, LOCK_UN); close(lock) }
+        defer { flock(lock, LOCK_UN)
+            close(lock)
+        }
         var held = flock(lock, LOCK_EX)
         while held != 0 && errno == EINTR {
             held = flock(lock, LOCK_EX)
@@ -583,7 +584,9 @@ enum OTA {
             catch CocoaError.fileReadNoSuchFile { return nil }
             catch let error as NSError where error.domain == NSPOSIXErrorDomain && error.code == Int(ENOENT) {
                 return nil
-            } catch { unreadable = true; return nil }
+            } catch { unreadable = true
+                return nil
+            }
             // Undecodable may be readable by a later version, so it stays.
             guard var build = try? JSONDecoder().decode(Build.self, from: data) else { return nil }
             build.slug = slug // where it actually is, whatever the name was built from

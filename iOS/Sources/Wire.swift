@@ -73,12 +73,9 @@ final class Wire: @unchecked Sendable {
         case ("you", 2) where isPeerName(words[1]): return .you(words[1])
         case ("device?", 1): return .wantDevice
         case ("attempt", 2): return .attempt
-        case ("code", 2)
-            where words[1].utf8.count == 6 && words[1]
-            .utf8
-            .allSatisfy({
-                (0x30 ... 0x39).contains($0)
-            }): return .code(words[1])
+        case ("code", 2) where words[1].utf8.count == 6 && words[1].utf8.allSatisfy({
+            (0x30 ... 0x39).contains($0)
+        }): return .code(words[1])
         case ("result", 3)
             where words[1] == "done" && ["on", "off"].contains(words[2]): return .done(on: words[2] == "on")
         case ("result", 3) where words[1] == "failed": return .failed(words[2])
@@ -111,8 +108,7 @@ final class Wire: @unchecked Sendable {
     /// A Tailscale name as a device's line may hold one (the far Mac's own rule for it).
     static func isPeerName(_ name: String) -> Bool {
         (1 ... 253).contains(name.utf8.count) && !name.hasPrefix("-") && !name.hasPrefix(".")
-            && name.unicodeScalars
-            .allSatisfy {
+            && name.unicodeScalars.allSatisfy {
                 $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "-" || $0 == ".")
             }
     }
@@ -156,9 +152,7 @@ final class Wire: @unchecked Sendable {
         guard b.count == 16 else { return false }
         if b[0 ..< 10].allSatisfy({
             $0 == 0
-        }), b[10] == 0xFF,
-           b[11] == 0xFF
-        {
+        }), b[10] == 0xFF, b[11] == 0xFF {
             return b[12] == 100 && b[13] & 0xC0 == 64
         }
         return Array(b[0 ..< 6]) == [0xFD, 0x7A, 0x11, 0x5C, 0xA1, 0xE0]
@@ -186,7 +180,9 @@ final class Wire: @unchecked Sendable {
                     self.ready = true
                     // Whatever the name led to, nothing is said to an address that isn't Tailscale's.
                     guard Self.onTailnet(self.connection.currentPath?.remoteEndpoint)
-                    else { self.answer(.unreached("that name isn't an address on the tailnet")); return }
+                    else { self.answer(.unreached("that name isn't an address on the tailnet"))
+                        return
+                    }
                     self.write("offer?")
                     self.expect(within: 620, .none("it made no offer in 10 minutes"))
                     self.read()
@@ -228,7 +224,9 @@ final class Wire: @unchecked Sendable {
             pending = nil
             stream = nil
             timer?.cancel()
-            guard let reason, ready else { connection.cancel(); return }
+            guard let reason, ready else { connection.cancel()
+                return
+            }
             write("ended " + reason) { [connection] in
                 connection.cancel()
             }
@@ -258,11 +256,14 @@ final class Wire: @unchecked Sendable {
             answer(Self.answer(from: line))
             return
         }
-        guard buffer.count <= 4096 else { answer(.none("it said too much")); return }
+        guard buffer.count <= 4096 else { answer(.none("it said too much"))
+            return
+        }
         connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self] data, _, complete, error in
             guard let self else { return }
             if let data, !data.isEmpty {
-                self.buffer.append(data); self.read()
+                self.buffer.append(data)
+                self.read()
             } else if let error {
                 self.answer(.none(error.localizedDescription))
             } else if complete {
@@ -275,7 +276,8 @@ final class Wire: @unchecked Sendable {
 
     private func answer(_ answer: Answer) {
         if answer.last {
-            timer?.cancel(); connection.cancel()
+            timer?.cancel()
+            connection.cancel()
         }
         if let each = stream {
             if answer.last {
@@ -290,7 +292,9 @@ final class Wire: @unchecked Sendable {
         guard let completion = pending else { return }
         // Its name comes before its offer: said, and the offer still waited for.
         if case .you = answer {
-            completion(answer); read(); return
+            completion(answer)
+            read()
+            return
         }
         pending = nil
         timer?.cancel()

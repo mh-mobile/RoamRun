@@ -134,10 +134,9 @@ enum Introduction {
               shows(device.name) else { return .failure(.refused("its name can't be shown as it is")) }
         let peer = device.peer.lowercased()
         guard (1 ... 253).contains(peer.utf8.count), !peer.hasPrefix("-"), !peer.hasPrefix("."),
-              peer.unicodeScalars
-                  .allSatisfy({
-                      $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "-" || $0 == ".")
-                  })
+              peer.unicodeScalars.allSatisfy({
+                  $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "-" || $0 == ".")
+              })
         else {
             return .failure(.refused("its Tailscale name isn't one"))
         }
@@ -154,11 +153,9 @@ enum Introduction {
         if n.hasPrefix("-") {
             return "A name can't start with “-” (the CLI would read it as an option)."
         }
-        if n.unicodeScalars
-            .contains(where: {
-                $0.properties.generalCategory == .control
-            })
-        {
+        if n.unicodeScalars.contains(where: {
+            $0.properties.generalCategory == .control
+        }) {
             return "A name can't contain control characters."
         }
         return nil
@@ -184,18 +181,15 @@ enum Introduction {
             let ok: Bool
             switch key {
             case "identifier": ok = UUID(uuidString: value) != nil
-            case "authTag": ok = (1 ... 32).contains(value.utf8.count) && value.unicodeScalars
-                .allSatisfy {
+            case "authTag": ok = (1 ... 32).contains(value.utf8.count) && value.unicodeScalars.allSatisfy {
                     $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "+" || $0 == "/")
                 }
-            case "model": ok = (1 ... 40).contains(value.utf8.count) && value.unicodeScalars
-                .allSatisfy {
+            case "model": ok = (1 ... 40).contains(value.utf8.count) && value.unicodeScalars.allSatisfy {
                     $0.isASCII && (CharacterSet.alphanumerics.contains($0) || ",._-".unicodeScalars.contains($0))
                 }
             case "name": ok = (1 ... 63).contains(value.utf8.count) && shows(value) && !value.contains("=") && !value
                 .contains("\\")
-            default: ok = (1 ... 6).contains(value.utf8.count) && value.unicodeScalars
-                .allSatisfy {
+            default: ok = (1 ... 6).contains(value.utf8.count) && value.unicodeScalars.allSatisfy {
                     ("0" ... "9").contains($0)
                 }
             }

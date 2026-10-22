@@ -21,7 +21,10 @@ import UniformTypeIdentifiers
 //     (iOS 27+, same network): on the device, Settings > Privacy & Security > Developer Mode
 //     lists [name]; the code printed here is entered there. Sends the device no input.
 var args = Array(CommandLine.arguments.dropFirst())
-guard let verb = args.first else { print("see the top of Sources/DeviceProbe/main.swift"); exit(0) }
+guard let verb = args.first else { print("see the top of Sources/DeviceProbe/main.swift")
+    exit(0)
+}
+
 args.removeFirst()
 
 if verb == "selftest" {
@@ -64,10 +67,9 @@ let pairingFile = URL(fileURLWithPath: args[2])
 let session = DeviceSession(ip: args[0], port: port, pairing: {
     try Data(contentsOf: pairingFile)
 })
-session
-    .onEvent = {
-        print("  [\(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium))] \($0)")
-    }
+session.onEvent = {
+    print("  [\(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium))] \($0)")
+}
 
 func ms(_ since: Date) -> Int {
     Int(Date().timeIntervalSince(since) * 1000)
@@ -167,11 +169,9 @@ case "tap":
 case "swipe":
     guard let x1 = number(0), let y1 = number(1), let x2 = number(2), let y2 = number(3),
           let duration = number(4) else { exit(2) }
-    operate("swipe", after: rest.count > 5 ? rest[5] : nil) { try session.swipe(
-        from: (x1, y1),
-        to: (x2, y2),
-        milliseconds: Int(duration)
-    ) }
+    operate("swipe", after: rest.count > 5 ? rest[5] : nil) {
+        try session.swipe(from: (x1, y1), to: (x2, y2), milliseconds: Int(duration))
+    }
 case "type":
     guard let text = rest.first else { exit(2) }
     operate("type", after: rest.count > 1 ? rest[1] : nil) {
@@ -207,7 +207,8 @@ func selfTest() {
         }, pause: {
             pauses += 1
         }, reopen: {
-            reopened += 1; return reopens
+            reopened += 1
+            return reopens
         })
         return (outcome != nil, attempts, pauses, reopened)
     }

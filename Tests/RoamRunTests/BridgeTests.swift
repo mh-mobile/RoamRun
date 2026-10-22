@@ -171,20 +171,14 @@ func linkFollowsTheTable(_ row: Int) {
 /// behind any other VPN would read as unreachable, and never be paused.
 @Test func aSilentPortOnAnyMeshStillCountsAsReachedWhenTheDeviceTalks() async {
     let pinged = Counter()
-    #expect(await ProxyBridge.stillReached(
-        tailscale: false,
-        heardJustNow: true,
-        ping: {
-            pinged.bump(); return .noPong
-        }
-    ))
-    #expect(!(await ProxyBridge.stillReached(
-        tailscale: false,
-        heardJustNow: false,
-        ping: {
-            pinged.bump(); return .pong
-        }
-    )))
+    #expect(await ProxyBridge.stillReached(tailscale: false, heardJustNow: true, ping: {
+        pinged.bump()
+        return .noPong
+    }))
+    #expect(!(await ProxyBridge.stillReached(tailscale: false, heardJustNow: false, ping: {
+        pinged.bump()
+        return .pong
+    })))
     #expect(pinged.value == 0) // Manual IP: never a tailscale ping
     #expect(await ProxyBridge.stillReached(tailscale: true, heardJustNow: false, ping: {
         .pong
@@ -193,20 +187,12 @@ func linkFollowsTheTable(_ row: Int) {
         .noPong
     })))
     // A ping that couldn't run (no CLI, it hung) says nothing: the device's bytes decide (2b: F2).
-    #expect(await ProxyBridge.stillReached(
-        tailscale: true,
-        heardJustNow: true,
-        ping: {
-            .couldNotRun("no tailscale CLI")
-        }
-    ))
-    #expect(!(await ProxyBridge.stillReached(
-        tailscale: true,
-        heardJustNow: false,
-        ping: {
-            .couldNotRun("no tailscale CLI")
-        }
-    )))
+    #expect(await ProxyBridge.stillReached(tailscale: true, heardJustNow: true, ping: {
+        .couldNotRun("no tailscale CLI")
+    }))
+    #expect(!(await ProxyBridge.stillReached(tailscale: true, heardJustNow: false, ping: {
+        .couldNotRun("no tailscale CLI")
+    })))
 }
 
 /// Paused on cellular, the stuck-renewal path never looks for the device elsewhere, however
@@ -224,7 +210,8 @@ func linkFollowsTheTable(_ row: Int) {
     let rig = Rig()
     defer { rig.done() }
     rig.bridge.memory.onCellular = true
-    rig.world.answering = []; rig.world.ping = .pong
+    rig.world.answering = []
+    rig.world.ping = .pong
     await rig.bridge.start(.retry)
     #expect(rig.world.scans == 0 && rig.bridge.status == .error)
     await rig.bridge.start(.manual) // a person asked: look
@@ -241,7 +228,8 @@ func linkFollowsTheTable(_ row: Int) {
     await rig.bridge.start(.retry)
     #expect(rig.bridge.status == .local && !rig.bridge.memory.onCellular)
     let m = DeviceMemory()
-    m.adopt("00008130-000D00000000D004"); m.onCellular = true
+    m.adopt("00008130-000D00000000D004")
+    m.onCellular = true
     m.adopt("00008101-000A00000000A001")
     #expect(!m.onCellular)
 }
@@ -302,7 +290,8 @@ func whatFollowsReadyIsSaidAsOneChange(_ c: AfterReady) async {
 /// with the port the scan found there; a scan that finds nothing keeps the old address.
 @MainActor @Test(arguments: [true, false])
 func aNewAddressAndPortAreFoundTogether(scanFinds: Bool) async {
-    var p = inertProfile("iPhone"); p.providerHostName = "iphone"
+    var p = inertProfile("iPhone")
+    p.providerHostName = "iphone"
     let rig = Rig(p)
     defer { rig.done() }
     rig.world.answering = []
@@ -340,7 +329,8 @@ func aNewAddressAndPortAreFoundTogether(scanFinds: Bool) async {
     #expect(!(rig.entry()?.detail.contains("Tailscale on this Mac") ?? true))
     // Recovered with no ping made (the device answered straight away): no stale message.
     rig.world.ping = .couldNotRun("failed to connect to local Tailscale daemon")
-    await rig.bridge.start(.manual); await rig.bridge.start(.manual)
+    await rig.bridge.start(.manual)
+    await rig.bridge.start(.manual)
     rig.world.answering = ["127.0.0.1"]
     await rig.bridge.start(.manual)
     #expect(rig.bridge.status == .waiting && !(rig.entry()?.detail.contains("Tailscale on this Mac") ?? true))
@@ -349,12 +339,14 @@ func aNewAddressAndPortAreFoundTogether(scanFinds: Bool) async {
 /// Recovered at a new address after two pings that couldn't run: the count starts over, so a
 /// later error for another reason doesn't carry the stale Mac-side message (2c review).
 @MainActor @Test func aRecoveryAtANewAddressClearsTheMacSideCount() async {
-    var p = inertProfile("iPhone"); p.providerHostName = "iphone"
+    var p = inertProfile("iPhone")
+    p.providerHostName = "iphone"
     let rig = Rig(p)
     defer { rig.done() }
     rig.world.answering = []
     rig.world.ping = .couldNotRun("failed to connect to local Tailscale daemon")
-    await rig.bridge.start(.manual); await rig.bridge.start(.manual)
+    await rig.bridge.start(.manual)
+    await rig.bridge.start(.manual)
     #expect(rig.entry()?.detail.contains("Tailscale on this Mac") == true)
     rig.world.peers = [MeshDevice(id: "1", name: "iphone", os: "iOS", ips: ["127.0.0.2"], online: true)]
     rig.world.advertAnswers = true // RemotePairing answers at the new address
@@ -460,7 +452,8 @@ func aNewAddressAndPortAreFoundTogether(scanFinds: Bool) async {
         0
     }
     e.subscribe = { id, s in
-        watcher.subscribers[id] = s; return true
+        watcher.subscribers[id] = s
+        return true
     }
     e.unsubscribe = { id in
         watcher.subscribers[id] = nil
@@ -569,13 +562,16 @@ private final class World: @unchecked Sendable {
             w.ping
         }
         e.isOnLAN = { _ in
-            w.pathChecks += 1; return w.onLAN
+            w.pathChecks += 1
+            return w.onLAN
         }
         e.cliRunning = {
             w.cli
         }
         e.findRemotePairingPort = { host in
-            w.scans += 1; w.scannedHost = host; return w.scan
+            w.scans += 1
+            w.scannedHost = host
+            return w.scan
         }
         e.listDevices = {
             w.peers
@@ -595,7 +591,8 @@ private final class World: @unchecked Sendable {
     }
 
     func done() {
-        bridge.stop(); try? FileManager.default.removeItem(at: dir)
+        bridge.stop()
+        try? FileManager.default.removeItem(at: dir)
     }
 }
 
@@ -614,9 +611,14 @@ func startOutcomes(_ c: StartCase) async {
     case .answers: break
     case .onThisWiFi: rig.world.onLAN = true
     case .silentAndUnreached: rig.world.answering = []
-    case .silentScanFindsNothing: rig.world.answering = []; rig.world.ping = .pong
-    case .silentScanTimesOut: rig.world.answering = []; rig.world.ping = .pong; rig.world.scan = .timedOut
-    case .silentScanFindsAPort: rig.world.answering = []; rig.world.ping = .pong; rig.world.scan = .found(found)
+    case .silentScanFindsNothing: rig.world.answering = []
+        rig.world.ping = .pong
+    case .silentScanTimesOut: rig.world.answering = []
+        rig.world.ping = .pong
+        rig.world.scan = .timedOut
+    case .silentScanFindsAPort: rig.world.answering = []
+        rig.world.ping = .pong
+        rig.world.scan = .found(found)
     case .noLANAddress: rig.world.lan = nil
     }
     var saved: DeviceProfile?
@@ -650,7 +652,9 @@ func startOutcomes(_ c: StartCase) async {
 func aFruitlessScanIsNotRepeatedForTenMinutesOnThisBridge(_ result: ReachabilityProbe.PortScan) async {
     let rig = Rig()
     defer { rig.done() }
-    rig.world.answering = []; rig.world.ping = .pong; rig.world.scan = result
+    rig.world.answering = []
+    rig.world.ping = .pong
+    rig.world.scan = result
     await rig.bridge.start(.retry)
     #expect(rig.world.scans == 1)
     rig.world.now += 599
@@ -664,7 +668,9 @@ func aFruitlessScanIsNotRepeatedForTenMinutesOnThisBridge(_ result: Reachability
 
     let fresh = Rig()
     defer { fresh.done() }
-    fresh.world.answering = []; fresh.world.ping = .pong; fresh.world.scan = result
+    fresh.world.answering = []
+    fresh.world.ping = .pong
+    fresh.world.scan = result
     await fresh.bridge.start(.manual)
     #expect(fresh.world.scans == 1)
 }
@@ -674,7 +680,8 @@ func aFruitlessScanIsNotRepeatedForTenMinutesOnThisBridge(_ result: Reachability
 /// answers there (2c: F37); a name now on a device that doesn't answer leaves the address alone.
 @MainActor @Test(arguments: [true, false])
 func aDeviceWithANewTailscaleAddressIsFollowed(answersThere: Bool) async {
-    var p = inertProfile("iPhone"); p.providerHostName = "iphone"
+    var p = inertProfile("iPhone")
+    p.providerHostName = "iphone"
     let rig = Rig(p)
     defer { rig.done() }
     rig.world.answering = ["127.0.0.2"]
@@ -698,20 +705,24 @@ func aDeviceWithANewTailscaleAddressIsFollowed(answersThere: Bool) async {
 /// What the command line saved while the app runs is taken in as a save takes it, without one.
 @Test func whatTheCommandLineSavedIsTakenInAsASaveTakesIt() {
     let a = inertProfile("iPhone")
-    var b = a; b.instanceName += "-b"
-    var c = a; c.instanceName += "-c"
+    var b = a
+    b.instanceName += "-b"
+    var c = a
+    c.instanceName += "-c"
     // Saved anew twice while the app saves nothing: the second is what it holds, and its next save keeps.
     let first = AppCoordinator.takenIn(disk: [b], saved: [a], mine: [a])
     #expect(first.profiles == [b] && first.changed == [b] && first.new.isEmpty)
     let second = AppCoordinator.takenIn(disk: [c], saved: first.base, mine: first.profiles)
     #expect(second.profiles == [c] && ProfileStore.merge(base: second.base, wanted: second.profiles, disk: [c]) == [c])
     // What the app changed and couldn't save stays, with what the command line changed.
-    var mine = a; mine.providerIP = "100.64.0.99"
+    var mine = a
+    mine.providerIP = "100.64.0.99"
     let kept = AppCoordinator.takenIn(disk: [b], saved: [a], mine: [mine])
     #expect(kept.profiles.first?.providerIP == "100.64.0.99" && kept.profiles.first?.instanceName == b.instanceName)
     #expect(ProfileStore.merge(base: kept.base, wanted: kept.profiles, disk: [b]) == kept.profiles)
     // One never seen here comes in, and a save after keeps it.
-    var other = inertProfile("iPad"); other.providerIP = "127.0.0.9" // another device: another address
+    var other = inertProfile("iPad")
+    other.providerIP = "127.0.0.9" // another device: another address
     let added = AppCoordinator.takenIn(disk: [other, a], saved: [a], mine: [a])
     #expect(added.new == [other] && added.profiles == [other, a] && added.changed.isEmpty)
     #expect(ProfileStore.merge(base: added.base, wanted: added.profiles, disk: [other, a]) == [other, a])
@@ -723,11 +734,17 @@ func aDeviceWithANewTailscaleAddressIsFollowed(answersThere: Bool) async {
 /// A device saved again elsewhere: a running bridge is rebuilt now only where the device is somewhere
 /// else; at the same address it stays up and is rebuilt at its next start (#163).
 @Test func aRunningBridgeSavedAgainAtTheSameAddressWaitsForItsNextStart() {
-    var held = profile("iPhone"); held.providerIP = "100.64.0.9"; held.remotePairingPort = 50000
-    var announced = held; announced.instanceName = "renewed"; announced.txt["identifier"] = "another"; announced
-        .udid = "00008130-000D00000000D004"
-    var port = held; port.remotePairingPort = 51000
-    var ip = held; ip.providerIP = "100.64.0.10"
+    var held = profile("iPhone")
+    held.providerIP = "100.64.0.9"
+    held.remotePairingPort = 50000
+    var announced = held
+    announced.instanceName = "renewed"
+    announced.txt["identifier"] = "another"
+    announced.udid = "00008130-000D00000000D004"
+    var port = held
+    port.remotePairingPort = 51000
+    var ip = held
+    ip.providerIP = "100.64.0.10"
     let rows: [(String, saved: DeviceProfile, running: DeviceProfile?, waits: Bool)] = [
         ("running, announcement and UDID saved anew", announced, held, true),
         ("off", announced, nil, false),
@@ -742,8 +759,10 @@ func aDeviceWithANewTailscaleAddressIsFollowed(answersThere: Bool) async {
         #expect(decided.now == (row.waits ? [] : [row.saved]), "\(row.0)")
     }
     // Two at once, each decided on its own.
-    var other = profile("iPad"); other.providerIP = "100.64.0.11"
-    var otherMoved = other; otherMoved.remotePairingPort = 51000
+    var other = profile("iPad")
+    other.providerIP = "100.64.0.11"
+    var otherMoved = other
+    otherMoved.remotePairingPort = 51000
     let both = AppCoordinator.rebuilds([announced, otherMoved], running: [held.id: held, other.id: other])
     #expect(both.atStart == [held.id] && both.now == [otherMoved])
 
@@ -757,7 +776,8 @@ func aDeviceWithANewTailscaleAddressIsFollowed(answersThere: Bool) async {
 
 /// A host name two peers have isn't followed: without MagicDNS, iPhones share "iPhone".
 @MainActor @Test func aNameTwoPeersHaveIsntFollowed() async {
-    var p = inertProfile("iPhone"); p.providerHostName = "iPhone"
+    var p = inertProfile("iPhone")
+    p.providerHostName = "iPhone"
     let rig = Rig(p)
     defer { rig.done() }
     rig.world.answering = ["127.0.0.2", "127.0.0.3"]
@@ -862,7 +882,9 @@ func claimOutcomes(_ c: ClaimCase) async {
     rig.watcher.subscribers[rig.id]?.onDevice(mine, other)
     #expect(rig.bridge.status == .error && !rig.bridge.autoRetry && rig.bridge.udid == saved)
     // The point of stopping is the reason: which device, what is wrong, what to do.
-    guard case .error(let said) = rig.bridge.state else { Issue.record("no reason given"); return }
+    guard case .error(let said) = rig.bridge.state else { Issue.record("no reason given")
+        return
+    }
     #expect(said.contains("another device") && said.contains("Remove iPhone") && said.contains("add it again"))
 }
 
@@ -933,7 +955,8 @@ func renewalsWhileWaiting(ping: TailscaleClient.Ping) async {
 
 /// Renamed on Tailscale at the same address: the new name is followed and saved.
 @MainActor @Test func aTailscaleRenameIsFollowed() async {
-    var p = inertProfile("iPhone"); p.providerHostName = "iphone"
+    var p = inertProfile("iPhone")
+    p.providerHostName = "iphone"
     let rig = Rig(p)
     defer { rig.done() }
     rig.world.answering = []
@@ -1038,7 +1061,9 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
 @MainActor @Test func aDeviceMemoryForgetsOnlyForAnotherDevice() {
     let m = DeviceMemory()
     let checked = Date(timeIntervalSinceReferenceDate: 800_000_000)
-    m.homeAdvert = "ADVERT"; m.block = .pairingLost; m.lastFullCheck = checked
+    m.homeAdvert = "ADVERT"
+    m.block = .pairingLost
+    m.lastFullCheck = checked
     m.pauseScans(of: "100.64.0.10:49152", until: .distantFuture)
     m.adopt("00008130-000D00000000D004") // first learned: the same device
     #expect(m.homeAdvert == "ADVERT" && !m.autoRetry && m.lastFullCheck == checked)
@@ -1078,7 +1103,8 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
 /// first, and a profile that names another device starts it over.
 @MainActor @Test func aRebuiltBridgeKeepsTheAdvertUnlessTheDeviceChanged() async {
     let memory = DeviceMemory()
-    var p = inertProfile("iPhone"); p.udid = "00008130-000D00000000D004"
+    var p = inertProfile("iPhone")
+    p.udid = "00008130-000D00000000D004"
     let first = Rig(p, memory: memory)
     first.world.onLAN = true
     await first.bridge.start(.manual) // standing aside
@@ -1090,7 +1116,8 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
     let same = Rig(p, memory: memory)
     defer { same.done() }
     #expect(same.bridge.memory.homeAdvert == "REAL-ADVERT" && same.bridge.memory.lastFullCheck == checked)
-    var other = p; other.udid = "00008101-000A00000000A001"
+    var other = p
+    other.udid = "00008101-000A00000000A001"
     let replaced = Rig(other, memory: memory)
     defer { replaced.done() }
     #expect(memory.homeAdvert == nil && memory.udid == "00008101-000A00000000A001")
@@ -1101,13 +1128,16 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
 @MainActor @Test func theScanPauseFollowsTheEndpointAcrossBridges() async {
     let memory = DeviceMemory()
     let first = Rig(memory: memory)
-    first.world.answering = []; first.world.ping = .pong
+    first.world.answering = []
+    first.world.ping = .pong
     await first.bridge.start(.manual)
     #expect(first.world.scans == 1)
     first.done()
 
     let same = Rig(first.bridge.profile, memory: memory, keepPort: true)
-    same.world.answering = []; same.world.ping = .pong; same.world.now = first.world.now
+    same.world.answering = []
+    same.world.ping = .pong
+    same.world.now = first.world.now
     await same.bridge.start(.edit)
     #expect(same.world.scans == 0) // paused: same endpoint
     same.done()
@@ -1116,7 +1146,9 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
     moved.remotePairingPort += 1
     let other = Rig(moved, memory: memory, keepPort: true)
     defer { other.done() }
-    other.world.answering = []; other.world.ping = .pong; other.world.now = first.world.now
+    other.world.answering = []
+    other.world.ping = .pong
+    other.world.now = first.world.now
     await other.bridge.start(.edit)
     #expect(other.world.scans == 1) // another endpoint: not paused
 }
@@ -1146,7 +1178,9 @@ func anAdvertSeenWhileBridgedSendsItHome(stale: Bool) async {
         rig.bridge.bindsInFlight == 0 && rig.bridge.tunnelRelayPorts.min() == far
     })
     #expect(rig.bridge.tunnelRelayPorts == Set(far ... (far + 16)))
-    guard case .active(let control, _) = rig.bridge.state else { Issue.record("not active"); return }
+    guard case .active(let control, _) = rig.bridge.state else { Issue.record("not active")
+        return
+    }
     #expect(rig.bridge.coveredPortsForTests == rig.bridge.tunnelRelayPorts.union([control]))
 }
 
@@ -1171,7 +1205,8 @@ func startPolicyTable(_ r: StartReason) {
         DeviceMemory.backoff(afterFailures: $0)
     } == [30, 60, 120, 240, 480, 600, 600])
     let m = DeviceMemory(), t = Date(timeIntervalSinceReferenceDate: 800_000_000)
-    m.failed(at: t, unreachable: true); m.failed(at: t, unreachable: true)
+    m.failed(at: t, unreachable: true)
+    m.failed(at: t, unreachable: true)
     #expect(!m.retryDue(now: t + 59) && m.retryDue(now: t + 60))
     m.resetBackoff()
     #expect(m.retryDue(now: t) && m.failures == 0)
@@ -1251,7 +1286,8 @@ func startPolicyTable(_ r: StartReason) {
     #expect(started.isEmpty)
     rig.world.answering = ["127.0.0.1"]
     #expect(await eventuallyOnMain {
-        sup.retry(); return started.contains(.retry)
+        sup.retry()
+        return started.contains(.retry)
     })
     #expect(rig.bridge.memory.failures == 0)
 }
@@ -1277,7 +1313,8 @@ func startPolicyTable(_ r: StartReason) {
         rig.world.now
     })
     for _ in 0 ..< 3 {
-        sup.retry(); try? await Task.sleep(for: .milliseconds(50))
+        sup.retry()
+        try? await Task.sleep(for: .milliseconds(50))
     }
     #expect(started == 0)
     rig.world.now += 61
@@ -1316,7 +1353,9 @@ func startPolicyTable(_ r: StartReason) {
     defer { rig.done() }
     await rig.bridge.start(.manual)
     rig.watcher.subscribers[rig.id]?.onExit("log stream exited (status 64): Must be admin")
-    guard case .error(let why) = rig.bridge.state else { Issue.record("not an error"); return }
+    guard case .error(let why) = rig.bridge.state else { Issue.record("not an error")
+        return
+    }
     var gaveUp = 0
     let sup = BridgeSupervisor(all: {
         [rig.bridge]
@@ -1388,7 +1427,8 @@ func claimByReason(_ r: StartReason, fromCLI: Bool) {
         $0.done()
     } }
     for r in [on, off, stuck] {
-        r.world.lan = nil; await r.bridge.start(.manual)
+        r.world.lan = nil
+        await r.bridge.start(.manual)
     } // errored: no LAN address
     await active.bridge.start(.manual)
     // A block retrying can't clear, on `stuck`: no admin rights for `log stream`.

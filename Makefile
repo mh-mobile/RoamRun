@@ -62,6 +62,8 @@ $(SWIFTFORMAT):
 	unzip -oq $(@D)/swiftformat.zip -d $(@D) && rm $(@D)/swiftformat.zip
 
 format: $(SWIFTFORMAT)
+	# Closure bodies first: once wrap has broken a long closure at its arguments, they aren't split.
+	$(SWIFTFORMAT) . --rules wrapClosureBodies,indent,trailingSpace
 	$(SWIFTFORMAT) .
 
 test: device-lib

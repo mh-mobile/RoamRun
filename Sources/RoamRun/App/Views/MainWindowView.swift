@@ -228,8 +228,9 @@ private struct WelcomeView: View {
         switch cliState {
         case .notInstalled:
             Button("Also install the roamrun command for Terminal…") {
-                do { try CLIInstaller.install(); cliError = nil }
-                catch { cliError = error.localizedDescription }
+                do { try CLIInstaller.install()
+                    cliError = nil
+                } catch { cliError = error.localizedDescription }
                 cliState = CLIInstaller.state
             }
             .buttonStyle(.link)

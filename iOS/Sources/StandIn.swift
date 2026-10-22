@@ -44,8 +44,7 @@ enum OwnAddresses {
     }
 
     static func shown(_ endpoint: NWEndpoint?) -> String {
-        guard case .hostPort(let host, let port)? = endpoint
-        else { return endpoint.map {
+        guard case .hostPort(let host, let port)? = endpoint else { return endpoint.map {
             String(describing: $0)
         } ?? "nowhere" }
         return "\(host):\(port)"
@@ -173,7 +172,9 @@ final class StandIn: @unchecked Sendable {
     }
 
     private func take(_ connection: NWConnection) {
-        guard !ended else { connection.cancel(); return }
+        guard !ended else { connection.cancel()
+            return
+        }
         let endpoint = connection.currentPath?.remoteEndpoint ?? connection.endpoint
         let from = OwnAddresses.shown(endpoint)
         guard let raw = OwnAddresses.raw(endpoint), allowed.contains(raw) else {
@@ -281,7 +282,9 @@ private final class Pair: @unchecked Sendable {
                 connectTimeout?.cancel()
                 // Not a byte of a pairing to an address that isn't Tailscale's, whatever the name led to.
                 guard anywhere || Wire.onTailnet(outbound.currentPath?.remoteEndpoint)
-                else { fail("\(farHost) isn't an address on the tailnet"); return }
+                else { fail("\(farHost) isn't an address on the tailnet")
+                    return
+                }
                 connected = true
                 pump(inbound, outbound) {
                     self.up += $0
@@ -328,11 +331,9 @@ private final class Pair: @unchecked Sendable {
                 readOut.append(from)
             }
             // Bytes can arrive together with the FIN: forward them first, the FIN after they are sent.
-            guard let data, !data.isEmpty else { ended ? endDirection(to, broken: broken) : pump(
-                from,
-                to,
-                count: count
-            ); return }
+            guard let data, !data.isEmpty else { ended ? endDirection(to, broken: broken) : pump(from, to, count: count)
+                return
+            }
             count(data.count)
             // The next receive waits for this send: backpressure.
             to.send(content: data, completion: .contentProcessed { [weak self] error in
@@ -382,7 +383,9 @@ private final class Pair: @unchecked Sendable {
     private func ended(_ side: NWConnection, _ why: String) {
         guard connected, !readOut.contains(where: {
             $0 === side
-        }) else { fail(why); return }
+        }) else { fail(why)
+            return
+        }
         failure = failure ?? why
     }
 

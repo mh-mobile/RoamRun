@@ -43,10 +43,9 @@ import DeviceControl
         .deletingLastPathComponent()
         .deletingLastPathComponent()
         .deletingLastPathComponent()
-    let app = { (file: String) in (try? String(
-        contentsOf: root.appendingPathComponent("iOS/Sources/" + file),
-        encoding: .utf8
-    )) ?? "" }
+    let app = { (file: String) in
+        (try? String(contentsOf: root.appendingPathComponent("iOS/Sources/" + file), encoding: .utf8)) ?? ""
+    }
     let said = app("Session.swift")
         .matches(of: /saying: "([a-z-]+)"|noLine = "([a-z-]+)"/)
         .compactMap {
@@ -111,11 +110,15 @@ private final class Counted<T: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var items: [T] = []
     func add(_ item: T) {
-        lock.lock(); items.append(item); lock.unlock()
+        lock.lock()
+        items.append(item)
+        lock.unlock()
     }
 
     var all: [T] {
-        lock.lock(); defer { lock.unlock() }; return items
+        lock.lock()
+        defer { lock.unlock() }
+        return items
     }
 }
 
@@ -133,20 +136,17 @@ private func farMac(peer: PairByName.Peer = .init(ip: "127.0.0.1", id: "home"),
 {
     PairByName.Far(peer: peer, owner: owner, offers: offers, rescan: rescan,
                    save: {
-                       saved.add($0); return saves
+                       saved.add($0)
+                       return saves
                    }, say: {
                        events.add($0)
                    },
                    connectWindow: connectWindow, resultWindow: resultWindow, lineWait: 1, pause: .milliseconds(20))
 }
 
-private func homeMac(
-    _ port: UInt16,
-    owner: @escaping @Sendable (String) -> String? = { _ in
-        "far"
-    },
-    window: TimeInterval = 5
-) -> PairByName.Home {
+private func homeMac(_ port: UInt16, owner: @escaping @Sendable (String) -> String? = { _ in
+    "far"
+}, window: TimeInterval = 5) -> PairByName.Home {
     PairByName.Home(peer: .init(ip: "127.0.0.1", id: "far"), owner: owner,
                     connect: {
                         PairLink.connect(to: "127.0.0.1", port: port, interface: nil, within: 1)
@@ -166,16 +166,15 @@ extension TimingSensitive {
         @Test func theOfferIsWaitedForThenTheDeviceIsSavedOnce() async throws {
             let listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
             let asked = Counted<Int>(), saved = Counted<String>(), events = Counted<PairByName.Far.Event>()
-            let far = farMac(
-                offers: {
-                    asked.add(1); return asked.all.count < 4 ? .none : .one("offer-1")
-                },
-                saved: saved,
-                events: events
-            )
+            let far = farMac(offers: {
+                asked.add(1)
+                return asked.all.count < 4 ? .none : .one("offer-1")
+            }, saved: saved, events: events)
             let end = started(far, listener)
             guard case .offer(let offer, let link) = await homeMac(listener.port).fetch()
-            else { Issue.record("no offer"); return }
+            else { Issue.record("no offer")
+                return
+            }
             #expect(offer == "offer-1")
             #expect(asked.all.count >= 4)
             #expect(PairByName.Home.handOver("device-1", on: link) == .saved)
@@ -191,13 +190,16 @@ extension TimingSensitive {
             let saved = Counted<String>(), stoodIn = Counted<String>(), read = Counted<Int>()
             var far = farMac(saved: saved)
             far.standIn = {
-                stoodIn.add($0 + " for " + $1); return nil
+                stoodIn.add($0 + " for " + $1)
+                return nil
             }
             var end = started(far, listener)
-            var home = homeMac(listener.port); home.device = "device-1"
+            var home = homeMac(listener.port)
+            home.device = "device-1"
             // What the device announces is read once that Mac has answered, not before.
             #expect(await home.hand(pairable: {
-                read.add(1); return "waits-1"
+                read.add(1)
+                return "waits-1"
             }, resultWindow: 5) == .saved)
             #expect(await end.value == .saved && stoodIn.all == ["waits-1 for device-1"] && saved
                 .all == ["device-1"] && read.all.count == 1)
@@ -208,22 +210,23 @@ extension TimingSensitive {
                 nil
             }
             end = started(far, listener)
-            home = homeMac(listener.port); home.device = "device-1"
-            #expect(await home.hand(
-                pairable: {
-                    try? await Task.sleep(for: .milliseconds(1500)); return "waits-1"
-                },
-                resultWindow: 5
-            ) == .saved)
+            home = homeMac(listener.port)
+            home.device = "device-1"
+            #expect(await home.hand(pairable: {
+                try? await Task.sleep(for: .milliseconds(1500))
+                return "waits-1"
+            }, resultWindow: 5) == .saved)
             #expect(await end.value == .saved)
 
             // Stood in, and not kept: said as that.
             listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
-            var forgetful = farMac(saves: false); forgetful.standIn = { _, _ in
+            var forgetful = farMac(saves: false)
+            forgetful.standIn = { _, _ in
                 nil
             }
             end = started(forgetful, listener)
-            home = homeMac(listener.port); home.device = "device-1"
+            home = homeMac(listener.port)
+            home.device = "device-1"
             #expect(await home.hand(pairable: {
                 "waits-1"
             }, resultWindow: 5) == .unsaved)
@@ -235,7 +238,8 @@ extension TimingSensitive {
                 .unreachable
             }
             end = started(far, listener)
-            home = homeMac(listener.port); home.device = "device-1"
+            home = homeMac(listener.port)
+            home.device = "device-1"
             #expect(await home.hand(pairable: {
                 "waits-1"
             }, resultWindow: 5) == .ended(.unreachable))
@@ -246,7 +250,8 @@ extension TimingSensitive {
             far.standIn = nil
             far.connectWindow = 2
             end = started(far, listener)
-            home = homeMac(listener.port); home.device = "device-1"
+            home = homeMac(listener.port)
+            home.device = "device-1"
             #expect(await home.hand(pairable: {
                 "waits-1"
             }, resultWindow: 5) == .ended(.failed))
@@ -255,15 +260,15 @@ extension TimingSensitive {
             // One that hangs up without a word, twice, is taken for a RoamRun from before.
             listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
             let old = Task.detached { [listener] in
-                for _ in 0 ..<
-                    2
-                {
+                for _ in 0 ..< 2 {
                     if let (link, _) = listener.accept(within: 10) {
-                        _ = link.read(within: 10); link.close()
+                        _ = link.read(within: 10)
+                        link.close()
                     }
                 }
             }
-            home = homeMac(listener.port); home.device = "device-1"
+            home = homeMac(listener.port)
+            home.device = "device-1"
             #expect(await home.hand(pairable: {
                 "waits-1"
             }, resultWindow: 5) == .tooOld)
@@ -272,11 +277,13 @@ extension TimingSensitive {
             // The device stopped waiting by the time that Mac answered: nothing is sent.
             listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
             far.standIn = {
-                stoodIn.add($0 + " for " + $1); return nil
+                stoodIn.add($0 + " for " + $1)
+                return nil
             }
             far.connectWindow = 2
             end = started(far, listener)
-            home = homeMac(listener.port); home.device = "device-1"
+            home = homeMac(listener.port)
+            home.device = "device-1"
             #expect(await home.hand(pairable: {
                 nil
             }, resultWindow: 5) == .notWaiting)
@@ -292,9 +299,13 @@ extension TimingSensitive {
             listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: "lo0")
             let gone = Task.detached { [listener] in
                 guard let (link, _) = listener.accept(within: 10) else { return }
-                _ = link.read(within: 10); link.send(.wantDevice); _ = link.read(within: 10); link.close()
+                _ = link.read(within: 10)
+                link.send(.wantDevice)
+                _ = link.read(within: 10)
+                link.close()
             }
-            home = homeMac(listener.port); home.device = "device-1"
+            home = homeMac(listener.port)
+            home.device = "device-1"
             #expect(await home.hand(pairable: {
                 "waits-1"
             }, resultWindow: 5) == .wentAway)
@@ -320,14 +331,10 @@ extension TimingSensitive {
             // Another address: turned away without a question to Tailscale.
             var listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
             let questions = Counted<String>(), events = Counted<PairByName.Far.Event>()
-            var far = farMac(
-                peer: .init(ip: "127.0.0.9", id: "home"),
-                owner: {
-                    questions.add($0); return "home"
-                },
-                events: events,
-                connectWindow: 2
-            )
+            var far = farMac(peer: .init(ip: "127.0.0.9", id: "home"), owner: {
+                questions.add($0)
+                return "home"
+            }, events: events, connectWindow: 2)
             let none = started(far, listener)
             let stranger = try #require(PairLink.connect(to: "127.0.0.1", port: listener.port, interface: nil))
             stranger.send(.wantOffer)
@@ -340,21 +347,19 @@ extension TimingSensitive {
             // away each time; then the Mac itself gets through.
             listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
             let answers = Counted<Int>(), saved = Counted<String>(), turned = Counted<PairByName.Far.Event>()
-            far = farMac(
-                owner: { _ in
-                    answers.add(1); return [1: "another", 2: nil][answers.all.count] ?? "home"
-                },
-                saved: saved,
-                events: turned
-            )
+            far = farMac(owner: { _ in
+                answers.add(1)
+                return [1: "another", 2: nil][answers.all.count] ?? "home"
+            }, saved: saved, events: turned)
             let end = started(far, listener)
             for _ in 1 ... 2 {
                 let link = try #require(PairLink.connect(to: "127.0.0.1", port: listener.port, interface: nil))
                 link.send(.wantOffer)
                 #expect(link.read(within: 10) == .closed)
             }
-            guard case .offer(_, let link) = await homeMac(listener.port).fetch()
-            else { Issue.record("no offer"); return }
+            guard case .offer(_, let link) = await homeMac(listener.port).fetch() else { Issue.record("no offer")
+                return
+            }
             #expect(PairByName.Home.handOver("device-1", on: link) == .saved)
             #expect(await end.value == .saved)
             #expect(saved.all == ["device-1"])
@@ -375,8 +380,9 @@ extension TimingSensitive {
             let other = try #require(PairLink.connect(to: "127.0.0.1", port: listener.port, interface: nil))
             other.send(.saved)
             #expect(other.read(within: 10) == .closed)
-            guard case .offer(_, let link) = await homeMac(listener.port).fetch()
-            else { Issue.record("no offer"); return }
+            guard case .offer(_, let link) = await homeMac(listener.port).fetch() else { Issue.record("no offer")
+                return
+            }
             #expect(PairByName.Home.handOver("device-1", on: link) == .saved)
             #expect(await end.value == .saved)
         }
@@ -392,7 +398,9 @@ extension TimingSensitive {
             })
             let one = started(far, listener)
             guard case .offer(let offer, let link) = await homeMac(listener.port).fetch()
-            else { Issue.record("no offer"); return }
+            else { Issue.record("no offer")
+                return
+            }
             #expect(offer == "offer-new")
             #expect(PairByName.Home.handOver("device-1", on: link) == .saved)
             #expect(await one.value == .saved)
@@ -404,7 +412,9 @@ extension TimingSensitive {
             })
             let two = started(far, listener)
             guard case .ended(.ambiguous) = await homeMac(listener.port).fetch()
-            else { Issue.record("an offer was chosen"); return }
+            else { Issue.record("an offer was chosen")
+                return
+            }
             #expect(await two.value == .ambiguous)
         }
 
@@ -416,8 +426,9 @@ extension TimingSensitive {
             let first = try #require(PairLink.connect(to: "127.0.0.1", port: listener.port, interface: nil))
             first.send(.wantOffer)
             first.close()
-            guard case .offer(_, let link) = await homeMac(listener.port).fetch()
-            else { Issue.record("no offer"); return }
+            guard case .offer(_, let link) = await homeMac(listener.port).fetch() else { Issue.record("no offer")
+                return
+            }
             // Dropped with the offer taken: nothing asks again, and the far Mac stops once a connection may no longer begin.
             link.close()
             #expect(await end.value == .noOne)
@@ -434,7 +445,9 @@ extension TimingSensitive {
             let end = started(farMac(offers: {
                 .none
             }, connectWindow: 2.5), listener)
-            guard case .ended(.noOffer) = await homeMac(listener.port).fetch() else { Issue.record("not told"); return }
+            guard case .ended(.noOffer) = await homeMac(listener.port).fetch() else { Issue.record("not told")
+                return
+            }
             #expect(await end.value == .noOne)
         }
 
@@ -453,7 +466,9 @@ extension TimingSensitive {
             (link, _) = try #require(listener.accept(within: 10))
             _ = link.read(within: 10)
             link.send(.offer("offer-1"))
-            guard case .offer(let offer, let mine) = await fetched else { Issue.record("no offer"); return }
+            guard case .offer(let offer, let mine) = await fetched else { Issue.record("no offer")
+                return
+            }
             #expect(offer == "offer-1")
             mine.close()
             #expect(listener.accept(within: 0.5).map { _ in
@@ -465,8 +480,9 @@ extension TimingSensitive {
             let listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
             let saved = Counted<String>()
             let end = started(farMac(saved: saved, connectWindow: 1.5, resultWindow: 8), listener)
-            guard case .offer(_, let link) = await homeMac(listener.port).fetch()
-            else { Issue.record("no offer"); return }
+            guard case .offer(_, let link) = await homeMac(listener.port).fetch() else { Issue.record("no offer")
+                return
+            }
             try await Task.sleep(for: .seconds(2)) // standing in, past the first window
             #expect(PairByName.Home.handOver("device-1", on: link) == .saved)
             #expect(await end.value == .saved)
@@ -477,16 +493,18 @@ extension TimingSensitive {
             let saved = Counted<String>()
             var far = farMac(saved: saved)
             let ended = started(far, listener)
-            guard case .offer(_, let link) = await homeMac(listener.port).fetch()
-            else { Issue.record("no offer"); return }
+            guard case .offer(_, let link) = await homeMac(listener.port).fetch() else { Issue.record("no offer")
+                return
+            }
             link.send(.ended(.deadline))
             #expect(await ended.value == .ended(.deadline))
 
             listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
             far = farMac(saved: saved, resultWindow: 0.4)
             let silent = started(far, listener)
-            guard case .offer(_, let quiet) = await homeMac(listener.port).fetch()
-            else { Issue.record("no offer"); return }
+            guard case .offer(_, let quiet) = await homeMac(listener.port).fetch() else { Issue.record("no offer")
+                return
+            }
             #expect(await silent.value == .noResult)
             quiet.close()
             #expect(saved.all.isEmpty)
@@ -495,8 +513,9 @@ extension TimingSensitive {
             listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
             far = farMac(saved: saved, saves: false)
             let refused = started(far, listener)
-            guard case .offer(_, let third) = await homeMac(listener.port).fetch()
-            else { Issue.record("no offer"); return }
+            guard case .offer(_, let third) = await homeMac(listener.port).fetch() else { Issue.record("no offer")
+                return
+            }
             #expect(PairByName.Home.handOver("device-1", on: third) == .unsaved)
             #expect(await refused.value == .unsaved)
         }
@@ -510,32 +529,42 @@ extension TimingSensitive {
             }).fetch()
             var (link, _) = try #require(listener.accept(within: 10))
             #expect(link.read(within: 10) == .closed)
-            guard case .notThatMac = await wrong else { Issue.record("asked a stranger"); return }
+            guard case .notThatMac = await wrong else { Issue.record("asked a stranger")
+                return
+            }
             async let unnamed = homeMac(port, owner: { _ in
                 nil
             }).fetch()
             (link, _) = try #require(listener.accept(within: 10))
             #expect(link.read(within: 10) == .closed)
-            guard case .notThatMac = await unnamed else { Issue.record("asked a stranger"); return }
+            guard case .notThatMac = await unnamed else { Issue.record("asked a stranger")
+                return
+            }
 
             // Another version answering.
             async let garbled = homeMac(port).fetch()
             (link, _) = try #require(listener.accept(within: 10))
             #expect(link.read(within: 10) == .line(PairWire.line(.wantOffer)))
             link.send(.saved)
-            guard case .garbled = await garbled else { Issue.record("took it"); return }
+            guard case .garbled = await garbled else { Issue.record("took it")
+                return
+            }
 
             // No one there in time.
             listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
             port = listener.port
-            guard case .noOne = await homeMac(port &+ 1, window: 0.3).fetch() else { Issue.record("someone?"); return }
+            guard case .noOne = await homeMac(port &+ 1, window: 0.3).fetch() else { Issue.record("someone?")
+                return
+            }
 
             // The device handed over, and the answer lost: unknown, not "not saved".
             async let fetched = homeMac(port).fetch()
             (link, _) = try #require(listener.accept(within: 10))
             _ = link.read(within: 10)
             link.send(.offer("offer-1"))
-            guard case .offer(_, let mine) = await fetched else { Issue.record("no offer"); return }
+            guard case .offer(_, let mine) = await fetched else { Issue.record("no offer")
+                return
+            }
             async let answer = Task.detached {
                 PairByName.Home.handOver("device-1", on: mine, within: 1)
             }
@@ -549,7 +578,8 @@ extension TimingSensitive {
             let listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
             let from = try #require(PairLink.connect(to: "127.0.0.1", port: listener.port, interface: nil))
             let (to, _) = try #require(listener.accept(within: 10))
-            from.send(.saved); from.send(.unsaved)
+            from.send(.saved)
+            from.send(.unsaved)
             #expect(to.read(within: 10) == .line(PairWire.line(.saved)))
             #expect(to.read(within: 10) == .line(PairWire.line(.unsaved)))
             #expect(to.read(within: 0.2) == .timeout)
@@ -658,11 +688,9 @@ extension TimingSensitive {
     ] {
         #expect(offered(name) && Introduction.hostName(name).utf8.count <= 63, "\(name)")
     }
-    #expect(Introduction.hostName("RoamRun (" + String(repeating: "開", count: 30) + ")")
-        .unicodeScalars
-        .allSatisfy {
-            $0 != "\u{FFFD}"
-        }) // cut between characters
+    #expect(Introduction.hostName("RoamRun (" + String(repeating: "開", count: 30) + ")").unicodeScalars.allSatisfy {
+        $0 != "\u{FFFD}"
+    }) // cut between characters
 }
 
 /// A pairing that shows its code, then waits to be told the device paired.
@@ -768,7 +796,8 @@ private final class Turn: @unchecked Sendable {
     func release(_ id: UUID) {
         lock.withLock {
             if holder == id {
-                holder = nil; given.add(id)
+                holder = nil
+                given.add(id)
             }
         }
     }
@@ -778,10 +807,9 @@ private func introductions(
     _ pairing: IntroducedPairing,
     turn: Turn = Turn(),
     keep: @escaping @Sendable (@Sendable () -> Bool)
-        -> Result<ControlIntroductions.Kept, ControlIntroductions.NotKept> = { _ in .success(.init(
-            name: "iPhone",
-            on: true
-        )) }
+        -> Result<ControlIntroductions.Kept, ControlIntroductions.NotKept> = { _ in
+            .success(.init(name: "iPhone", on: true))
+        }
 ) -> ControlIntroductions {
     let made = ControlIntroductions()
     made.listen = { _, _, _ in
@@ -839,14 +867,13 @@ extension TimingSensitive {
         @Test func theAppOffersShowsItsCodeOnlyToWhoAsksAndSaysWhatItKept() {
             let pairing = IntroducedPairing(), i = introductions(pairing), id = UUID()
             let started = begin(i, id)
-            #expect(started.ok && started.offer
-                .map {
-                    if case .success = Introduction.offer(from: $0) {
-                        true
-                    } else {
-                        false
-                    }
-                } == true)
+            #expect(started.ok && started.offer.map {
+                if case .success = Introduction.offer(from: $0) {
+                    true
+                } else {
+                    false
+                }
+            } == true)
             #expect(begin(i, id).offer == started.offer) // its answer lost: asked again, the same offer
             #expect(until {
                 how(i, id).state == "code"
@@ -870,7 +897,8 @@ extension TimingSensitive {
                 let pairing = IntroducedPairing(), i = introductions(pairing)
                 let opened = Counted<Int>()
                 i.listen = { _, _, _ in
-                    opened.add(1); return .init(listener: pairing, port: 50123, txt: offerTXT)
+                    opened.add(1)
+                    return .init(listener: pairing, port: 50123, txt: offerTXT)
                 }
                 if refuse == 0 {
                     i.held = { _ in
@@ -909,7 +937,8 @@ extension TimingSensitive {
             var pairing = IntroducedPairing()
             let kept = Counted<Int>()
             var i = introductions(pairing) { _ in
-                kept.add(1); return .success(.init(name: "iPhone", on: true))
+                kept.add(1)
+                return .success(.init(name: "iPhone", on: true))
             }
             var id = UUID()
             #expect(begin(i, id).ok)
@@ -922,7 +951,8 @@ extension TimingSensitive {
             let keeping = DispatchSemaphore(value: 0), go = DispatchSemaphore(value: 0)
             // (What keeps it asks, as the app's does, whether it is still wanted: a stop that came too late doesn't make it say no.)
             i = introductions(pairing) { wanted in
-                keeping.signal(); held(go)
+                keeping.signal()
+                held(go)
                 return wanted() ? .success(.init(name: "iPhone", on: false)) : .failure(.init(.cancelled, "stopped"))
             }
             id = UUID()
@@ -935,8 +965,7 @@ extension TimingSensitive {
             go.signal()
             #expect(until {
                 how(i, id).state == "done"
-            } && how(i, id)
-                .allowed == false) // kept, and switched off: said as that
+            } && how(i, id).allowed == false) // kept, and switched off: said as that
         }
 
         @Test func aCommandThatStopsAskingIsTakenForGoneButNotWhileTheAppKeepsWhatPaired() {
@@ -948,21 +977,24 @@ extension TimingSensitive {
             #expect(until {
                 pairing.wasCancelled
             })
-            #expect(until { how(i, id).reason == PairWire.Refusal.cancelled.rawValue
+            #expect(until {
+                how(i, id).reason == PairWire.Refusal.cancelled.rawValue
             }) // said once the listener has let go
 
             // Asked often enough, it stays; and while it keeps, silence stops nothing.
             pairing = IntroducedPairing()
             let keeping = DispatchSemaphore(value: 0), go = DispatchSemaphore(value: 0)
-            i = introductions(pairing) { wanted in keeping.signal(); held(go); return wanted() ? .success(.init(
-                name: "iPhone",
-                on: true
-            )) : .failure(.init(.cancelled, "stopped")) }
+            i = introductions(pairing) { wanted in
+                keeping.signal()
+                held(go)
+                return wanted() ? .success(.init(name: "iPhone", on: true)) : .failure(.init(.cancelled, "stopped"))
+            }
             i.quiet = 1
             id = UUID()
             #expect(begin(i, id).ok)
             for _ in 0 ..< 8 {
-                usleep(200_000); _ = how(i, id)
+                usleep(200_000)
+                _ = how(i, id)
             }
             #expect(!pairing.wasCancelled)
             pairing.pairNow()
@@ -980,7 +1012,8 @@ extension TimingSensitive {
             id = UUID()
             #expect(begin(i, id).ok)
             for _ in 0 ..< 250 where !pairing.wasCancelled {
-                usleep(40_000); _ = how(i, id)
+                usleep(40_000)
+                _ = how(i, id)
             }
             #expect(pairing.wasCancelled)
         }
@@ -991,17 +1024,18 @@ extension TimingSensitive {
             var pairing = IntroducedPairing(), turn = Turn()
             var i = introductions(pairing, turn: turn)
             let opened = Counted<Int>(), first = pairing
-            i.listen = { _, _, _ in opened.add(1); usleep(100_000); return .init(
-                listener: first,
-                port: 50123,
-                txt: offerTXT
-            ) }
+            i.listen = { _, _, _ in
+                opened.add(1)
+                usleep(100_000)
+                return .init(listener: first, port: 50123, txt: offerTXT)
+            }
             let answers = Counted<Bool>(), both = DispatchGroup()
             for _ in 0 ..< 2 {
                 both.enter()
                 let mine = i
                 Thread.detachNewThread {
-                    answers.add(begin(mine, UUID()).ok); both.leave()
+                    answers.add(begin(mine, UUID()).ok)
+                    both.leave()
                 }
             }
             #expect(both.wait(timeout: .now() + 10) == .success)
@@ -1016,14 +1050,18 @@ extension TimingSensitive {
             } && turn.given.all.count == 1)
 
             // Stopped, or the device came and didn't pair: given back too, and said as which.
-            pairing = IntroducedPairing(); turn = Turn(); i = introductions(pairing, turn: turn)
+            pairing = IntroducedPairing()
+            turn = Turn()
+            i = introductions(pairing, turn: turn)
             var attempt = UUID()
             #expect(begin(i, attempt).ok)
             _ = i.answer(.init(op: "pair-cancel", device: attempt))
             #expect(until {
                 turn.held == nil
             })
-            pairing = IntroducedPairing(); turn = Turn(); i = introductions(pairing, turn: turn)
+            pairing = IntroducedPairing()
+            turn = Turn()
+            i = introductions(pairing, turn: turn)
             attempt = UUID()
             #expect(begin(i, attempt).ok)
             pairing.fail()
@@ -1031,7 +1069,9 @@ extension TimingSensitive {
                 how(i, attempt).reason == PairWire.Refusal.notPaired.rawValue
             } && turn.held == nil)
             // A connection that broke isn't the device's answer: not said as one to simply try again.
-            pairing = IntroducedPairing(); turn = Turn(); i = introductions(pairing, turn: turn)
+            pairing = IntroducedPairing()
+            turn = Turn()
+            i = introductions(pairing, turn: turn)
             attempt = UUID()
             #expect(begin(i, attempt).ok)
             pairing.breakOff()
@@ -1042,13 +1082,13 @@ extension TimingSensitive {
 
             // Keeping what paired takes longer than anything may: the turn is kept all the same — a
             // pairing begun meanwhile could have the device drop the one being kept — and given back when it ends.
-            pairing = IntroducedPairing(); turn = Turn()
+            pairing = IntroducedPairing()
+            turn = Turn()
             let keeping = DispatchSemaphore(value: 0), go = DispatchSemaphore(value: 0)
             i = introductions(pairing, turn: turn) { wanted in
-                keeping.signal(); held(go); return wanted() ? .success(.init(
-                    name: "iPhone",
-                    on: true
-                )) : .failure(.init(.cancelled, "stopped"))
+                keeping.signal()
+                held(go)
+                return wanted() ? .success(.init(name: "iPhone", on: true)) : .failure(.init(.cancelled, "stopped"))
             }
             i.longest = 1
             attempt = UUID()
@@ -1075,7 +1115,9 @@ extension TimingSensitive {
                 return .init(listener: made, port: 50123, txt: offerTXT)
             }
             i.keep = { _, _, _ in
-                keeping.signal(); held(go); return .success(.init(name: "iPhone", on: true))
+                keeping.signal()
+                held(go)
+                return .success(.init(name: "iPhone", on: true))
             }
             i.tick = 0.02
             let id = UUID()
@@ -1098,10 +1140,12 @@ extension TimingSensitive {
             let pairing = IntroducedPairing(), i = introductions(pairing)
             let opened = Counted<Int>(), readying = DispatchSemaphore(value: 0), go = DispatchSemaphore(value: 0)
             i.ready = {
-                readying.signal(); held(go)
+                readying.signal()
+                held(go)
             }
             i.listen = { _, _, _ in
-                opened.add(1); return .init(listener: pairing, port: 50123, txt: offerTXT)
+                opened.add(1)
+                return .init(listener: pairing, port: 50123, txt: offerTXT)
             }
             let id = UUID(), first = Counted<Bool>()
             Thread.detachNewThread {
@@ -1137,28 +1181,21 @@ extension TimingSensitive {
 
 private let anAttempt = "6BF40D22-D414-41D0-BE80-7567AE75B2BC"
 
-private func farControl(
-    start: @escaping @Sendable (String) async -> PairByName.FarControl.Started = { _ in .offer(
-        "offer-1",
-        attempt: anAttempt
-    ) },
-    status: @escaping @Sendable () async -> PairByName.FarControl.Status,
-    cancelled: Counted<Int> = .init(),
-    events: Counted<PairByName.FarControl.Event> = .init(),
-    owner: @escaping @Sendable (String) -> String? = { _ in
-        "home"
-    },
-    resultWindow: TimeInterval = 5,
-    tries: Int = 5
-) -> PairByName.FarControl {
+private func farControl(start: @escaping @Sendable (String) async -> PairByName.FarControl.Started = { _ in
+    .offer("offer-1", attempt: anAttempt)
+},
+status: @escaping @Sendable () async -> PairByName.FarControl.Status,
+cancelled: Counted<Int> = .init(), events: Counted<PairByName.FarControl.Event> = .init(),
+owner: @escaping @Sendable (String) -> String? = { _ in
+    "home"
+},
+resultWindow: TimeInterval = 5, tries: Int = 5) -> PairByName.FarControl {
     PairByName.FarControl(peer: .init(ip: "127.0.0.1", id: "home"), owner: owner,
                           start: start, status: { _ in
                               await status()
                           }, cancel: { _ in
                               cancelled.add(1)
-                          },
-                          tries: tries,
-                          say: {
+                          }, tries: tries, say: {
                               events.add($0)
                           },
                           connectWindow: 5, resultWindow: resultWindow, lineWait: 1, pause: 0.05)
@@ -1189,18 +1226,20 @@ extension TimingSensitive.DeviceControlIntroduced {
         let given = Counted<String>(), asks = Counted<Int>(), cancelled = Counted<Int>(),
             events = Counted<PairByName.FarControl.Event>()
         let far = farControl(start: {
-                                 given.add($0); return .offer("offer-1", attempt: anAttempt)
+                                 given.add($0)
+                                 return .offer("offer-1", attempt: anAttempt)
                              },
-                             status: { asks.add(1); return [
-                                 1: .waiting,
-                                 2: .code("246810"),
-                                 3: .code("246810"),
-                                 4: .checking
-                             ][asks.all.count] ?? .done(on: true) },
+                             status: {
+                                 asks.add(1)
+                                 return [1: .waiting, 2: .code("246810"), 3: .code("246810"),
+                                         4: .checking][asks.all.count] ?? .done(on: true)
+                             },
                              cancelled: cancelled, events: events)
         let end = startedControl(far, listener)
         guard case .control(let offer, let attempt, let link) = await homeForControl(listener.port).fetch()
-        else { Issue.record("no offer"); return }
+        else { Issue.record("no offer")
+            return
+        }
         #expect(offer == "offer-1" && attempt == "6BF40D22-D414-41D0-BE80-7567AE75B2BC" && given.all == ["device-1"])
         #expect(link.read(within: 10).message == .code("246810"))
         #expect(link.read(within: 10)
@@ -1215,7 +1254,9 @@ extension TimingSensitive.DeviceControlIntroduced {
         let saved = Counted<String>()
         let xcode = started(farMac(saved: saved), listener)
         guard case .offer(_, let link) = await homeForControl(listener.port).fetch()
-        else { Issue.record("not the Xcode turn"); return }
+        else { Issue.record("not the Xcode turn")
+            return
+        }
         #expect(PairByName.Home.handOver("device-1", on: link) == .saved)
         #expect(await xcode.value == .saved)
 
@@ -1226,7 +1267,9 @@ extension TimingSensitive.DeviceControlIntroduced {
         })
         let end = startedControl(far, listener)
         guard case .garbled = await homeForControl(listener.port, device: nil).fetch()
-        else { Issue.record("went on without a device"); return }
+        else { Issue.record("went on without a device")
+            return
+        }
         end.cancel()
     }
 
@@ -1238,21 +1281,21 @@ extension TimingSensitive.DeviceControlIntroduced {
         }, status: {
             .unknown
         }), listener)
-        guard case .refused(.exists) = await homeForControl(listener.port).fetch()
-        else { Issue.record("not told why"); return }
+        guard case .refused(.exists) = await homeForControl(listener.port).fetch() else { Issue.record("not told why")
+            return
+        }
         #expect(await end.value == .failed(.exists))
 
         // The other Mac says it stopped (its five minutes): the app is told to stop.
         listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
         let cancelled1 = Counted<Int>()
-        end = startedControl(
-            farControl(status: {
-                cancelled1.all.isEmpty ? .waiting : .failed(.cancelled)
-            }, cancelled: cancelled1),
-            listener
-        )
+        end = startedControl(farControl(status: {
+            cancelled1.all.isEmpty ? .waiting : .failed(.cancelled)
+        }, cancelled: cancelled1), listener)
         guard case .control(_, _, let link) = await homeForControl(listener.port).fetch()
-        else { Issue.record("no offer"); return }
+        else { Issue.record("no offer")
+            return
+        }
         link.send(.ended(.deadline))
         #expect(await end.value == .ended(.deadline))
         #expect(cancelled1.all.count == 1)
@@ -1264,7 +1307,9 @@ extension TimingSensitive.DeviceControlIntroduced {
             .checking
         }, cancelled: cancelled2), listener)
         guard case .control(_, _, let second) = await homeForControl(listener.port).fetch()
-        else { Issue.record("no offer"); return }
+        else { Issue.record("no offer")
+            return
+        }
         second.close()
         #expect(await end.value == .lost(.checking))
         #expect(cancelled2.all.count == 1)
@@ -1272,14 +1317,13 @@ extension TimingSensitive.DeviceControlIntroduced {
         // …and when it had been kept by then, that is what is said.
         listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
         let cancelled3 = Counted<Int>()
-        end = startedControl(
-            farControl(status: {
-                cancelled3.all.isEmpty ? .checking : .done(on: true)
-            }, cancelled: cancelled3),
-            listener
-        )
+        end = startedControl(farControl(status: {
+            cancelled3.all.isEmpty ? .checking : .done(on: true)
+        }, cancelled: cancelled3), listener)
         guard case .control(_, _, let third) = await homeForControl(listener.port).fetch()
-        else { Issue.record("no offer"); return }
+        else { Issue.record("no offer")
+            return
+        }
         third.close()
         #expect(await end.value == .done(on: true))
     }
@@ -1307,11 +1351,15 @@ extension TimingSensitive.DeviceControlIntroduced {
         )
         let end = startedControl(far, listener)
         guard case .control(let first, let one, let link) = await homeForControl(listener.port).fetch()
-        else { Issue.record("no offer"); return }
+        else { Issue.record("no offer")
+            return
+        }
         #expect(link.read(within: 10).message == .result(.failed(.notPaired)))
         link.close()
         guard case .control(let second, let two, let again) = await homeForControl(listener.port).fetch()
-        else { Issue.record("not waited for again"); return }
+        else { Issue.record("not waited for again")
+            return
+        }
         #expect(first == "offer-1" && second == "offer-2" && one != two && begun.all == [one, two])
         #expect(again.read(within: 10).message == .result(.done(on: true)))
         #expect(await end.value == .done(on: true))
@@ -1324,7 +1372,9 @@ extension TimingSensitive.DeviceControlIntroduced {
         }, tries: 2), other)
         for _ in 1 ... 2 {
             guard case .control(_, _, let link) = await homeForControl(other.port).fetch()
-            else { Issue.record("no offer"); return }
+            else { Issue.record("no offer")
+                return
+            }
             #expect(link.read(within: 10).message == .result(.failed(.notPaired)))
             link.close()
         }
@@ -1333,8 +1383,9 @@ extension TimingSensitive.DeviceControlIntroduced {
         ended = startedControl(farControl(status: {
             .failed(.notKept)
         }), other)
-        guard case .control(_, _, let last) = await homeForControl(other.port).fetch()
-        else { Issue.record("no offer"); return }
+        guard case .control(_, _, let last) = await homeForControl(other.port).fetch() else { Issue.record("no offer")
+            return
+        }
         #expect(last.read(within: 10).message == .result(.failed(.notKept)))
         #expect(await ended.value == .failed(.notKept))
     }
@@ -1342,15 +1393,13 @@ extension TimingSensitive.DeviceControlIntroduced {
     @Test func aCodeThatIsNotOneOrCannotBeSentEndsTheAttempt() async throws {
         let listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
         let cancelled = Counted<Int>()
-        let end = startedControl(
-            farControl(status: {
-                           cancelled.all.isEmpty ? .code("12\u{1B}[2J") : .failed(.cancelled)
-                       },
-                       cancelled: cancelled),
-            listener
-        )
+        let end = startedControl(farControl(status: {
+            cancelled.all.isEmpty ? .code("12\u{1B}[2J") : .failed(.cancelled)
+        }, cancelled: cancelled), listener)
         guard case .control(_, _, let link) = await homeForControl(listener.port).fetch()
-        else { Issue.record("no offer"); return }
+        else { Issue.record("no offer")
+            return
+        }
         #expect(link.read(within: 10) == .closed) // nothing that isn't a code is passed on
         #expect(await end.value == .lost(.failed(.cancelled)))
         #expect(cancelled.all.count == 1)
@@ -1363,7 +1412,9 @@ extension TimingSensitive.DeviceControlIntroduced {
             .checking
         }, resultWindow: 0.4), listener)
         guard case .control(_, _, let link) = await homeForControl(listener.port).fetch()
-        else { Issue.record("no offer"); return }
+        else { Issue.record("no offer")
+            return
+        }
         #expect(await end.value == .lost(.checking))
         link.close()
 
@@ -1373,7 +1424,9 @@ extension TimingSensitive.DeviceControlIntroduced {
             .unknown
         }, resultWindow: 30), listener)
         guard case .control(_, _, let second) = await homeForControl(listener.port).fetch()
-        else { Issue.record("no offer"); return }
+        else { Issue.record("no offer")
+            return
+        }
         let asked = Date()
         #expect(await gone.value == .lost(.unknown))
         #expect(Date().timeIntervalSince(asked) < 10) // after a few questions, not at the end of all the time there is
@@ -1383,15 +1436,13 @@ extension TimingSensitive.DeviceControlIntroduced {
     @Test func noResultInTimeIsSaidAndTheAppStopped() async throws {
         let listener = try PairLink.Listener(ip: "127.0.0.1", port: 0, interface: nil)
         let cancelled = Counted<Int>()
-        let end = startedControl(
-            farControl(status: {
-                cancelled.all.isEmpty ? .waiting : .failed(.cancelled)
-            }, cancelled: cancelled,
-            resultWindow: 0.4),
-            listener
-        )
+        let end = startedControl(farControl(status: {
+            cancelled.all.isEmpty ? .waiting : .failed(.cancelled)
+        }, cancelled: cancelled, resultWindow: 0.4), listener)
         guard case .control(_, _, let link) = await homeForControl(listener.port).fetch()
-        else { Issue.record("no offer"); return }
+        else { Issue.record("no offer")
+            return
+        }
         #expect(await end.value == .noResult)
         #expect(cancelled.all.count == 1)
         link.close()

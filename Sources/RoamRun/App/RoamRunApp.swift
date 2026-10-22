@@ -49,11 +49,9 @@ enum Entry {
         // bare — the app's own launch runs …/MacOS/RoamRun. Any other argument
         // also means the command line; only ones macOS adds start the app.
         let invokedAsCLI = (CommandLine.arguments.first as NSString?)?.lastPathComponent == "roamrun"
-        if invokedAsCLI || args.first
-            .map({ first in
-                !["-psn_", "-NS", "-Apple"].contains(where: first.hasPrefix)
-            }) == true
-        {
+        if invokedAsCLI || args.first.map({ first in
+            !["-psn_", "-NS", "-Apple"].contains(where: first.hasPrefix)
+        }) == true {
             CLI.run(args.isEmpty ? ["help"] : args)
         } else {
             // A RoamRun from before 0.1.12 (the old bundle id) would restore the same

@@ -213,11 +213,11 @@ final class TunnelCoordinator {
             return true
         }
         let w = TunnelPortWatcher()
-        w.onPort = { port, owner, host in Task { @MainActor in TunnelCoordinator.shared.route(
-            port,
-            owner: owner,
-            host: host
-        ) } }
+        w.onPort = { port, owner, host in
+            Task { @MainActor in
+                TunnelCoordinator.shared.route(port, owner: owner, host: host)
+            }
+        }
         w.onDevice = { instance, udid in
             Task { @MainActor in
                 TunnelCoordinator.shared.subscribers.values.forEach {
@@ -252,7 +252,8 @@ final class TunnelCoordinator {
         }
         watcher = w
         if let failure = w.start() {
-            watcher = nil; subscribers[id] = nil
+            watcher = nil
+            subscribers[id] = nil
             s.onLog(failure) // said here: the subscriber is gone before any broadcast arrives
             return false
         }
@@ -262,7 +263,8 @@ final class TunnelCoordinator {
     func unsubscribe(_ id: UUID) {
         subscribers[id] = nil
         if subscribers.isEmpty {
-            watcher?.stop(); watcher = nil
+            watcher?.stop()
+            watcher = nil
         }
     }
 
@@ -271,21 +273,17 @@ final class TunnelCoordinator {
             (id: $0.key, udid: $0.value.udid())
         }
         // A known device that no bridge here is for (e.g. one on this Wi‑Fi Xcode uses directly): not ours, not news.
-        if let owner,
-           !subs
-               .contains(where: {
-                   $0.udid == nil || $0.udid?.caseInsensitiveCompare(owner) == .orderedSame
-               })
-        {
+        if let owner, !subs.contains(where: {
+            $0.udid == nil || $0.udid?.caseInsensitiveCompare(owner) == .orderedSame
+        }) {
             return
         }
         // Another process (the app, or a `roamrun up`) bridging a device: an unattributed port may be its.
-        let othersBridging = owner == nil || !subs
-            .contains {
-                $0.udid.map {
-                    $0.caseInsensitiveCompare(owner!) == .orderedSame
-                } == true
-            }
+        let othersBridging = owner == nil || !subs.contains {
+            $0.udid.map {
+                $0.caseInsensitiveCompare(owner!) == .orderedSame
+            } == true
+        }
             ? StatusFile.read().values.contains {
                 $0.pid != getpid() && $0.holdsDevice
             } : false

@@ -56,19 +56,16 @@ final class ProfileStore {
                 .flatMap {
                     try? JSONSerialization.data(withJSONObject: $0)
                 }
-                .flatMap { try? JSONDecoder().decode(
-                    DeviceProfile.self,
-                    from: $0
-                ) }
+                .flatMap {
+                    try? JSONDecoder().decode(DeviceProfile.self, from: $0)
+                }
         }
         // The next save would replace it with an empty list: keep a copy, once per distinct content.
         let fm = FileManager.default
         let kept = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
-        if let same = kept
-            .first(where: {
-                $0.lastPathComponent.hasPrefix("profiles.json.unreadable") && (try? Data(contentsOf: $0)) == data
-            })
-        {
+        if let same = kept.first(where: {
+            $0.lastPathComponent.hasPrefix("profiles.json.unreadable") && (try? Data(contentsOf: $0)) == data
+        }) {
             keptUnreadable = same
         } else {
             let copy = url.appendingPathExtension("unreadable-\(Int(Date.now.timeIntervalSince1970))")
@@ -150,10 +147,9 @@ final class ProfileStore {
                 out.providerHostName = theirs.providerHostName
             }
             // The announcement too: `roamrun devices add` puts a newer one in place while the app runs.
-            if mine.instanceName == old.instanceName,
-               mine.txt == old.txt
-            {
-                out.instanceName = theirs.instanceName; out.txt = theirs.txt
+            if mine.instanceName == old.instanceName, mine.txt == old.txt {
+                out.instanceName = theirs.instanceName
+                out.txt = theirs.txt
             }
             // A UDID learned meanwhile is taken; one that is known isn't given up for none
             // (nothing of ours writes that, and the device's own pairing is named by it).

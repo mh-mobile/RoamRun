@@ -122,10 +122,9 @@ final class DNSServiceProxy: @unchecked Sendable {
         .map {
             ["-i", $0]
         } ?? []
-        return on + ["-P", instanceName, serviceType, domain, String(port), host, ip] + txt
-            .map {
-                "\($0.key)=\($0.value)"
-            }
+        return on + ["-P", instanceName, serviceType, domain, String(port), host, ip] + txt.map {
+            "\($0.key)=\($0.value)"
+        }
     }
 
     @discardableResult

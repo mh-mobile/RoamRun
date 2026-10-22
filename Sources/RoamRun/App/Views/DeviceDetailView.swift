@@ -57,10 +57,9 @@ struct DeviceDetailView: View {
                 // Return can reach a disabled alert button: say why instead of closing on nothing.
                 if !coordinator.rename(profile.id, to: newName) {
                     let why = coordinator.profiles.nameProblem(newName, except: profile.id) ?? "This device is no longer saved."
-                    DispatchQueue.main
-                        .async {
-                            renameRefusal = why
-                        } // once this alert has gone: two at once may not show
+                    DispatchQueue.main.async {
+                        renameRefusal = why
+                    } // once this alert has gone: two at once may not show
                 }
             }
             .disabled(coordinator.profiles.nameProblem(newName, except: profile.id) != nil)
@@ -71,16 +70,13 @@ struct DeviceDetailView: View {
             } ?? "")
                 + Text("Used in the menu and the CLI (roamrun up <name>). Must be unique and not start with “-”.")
         }
-        .alert(
-            "Couldn't Rename",
-            isPresented: Binding(get: {
-                renameRefusal != nil
-            }, set: {
-                if !$0 {
-                    renameRefusal = nil
-                }
-            })
-        ) {
+        .alert("Couldn't Rename", isPresented: Binding(get: {
+            renameRefusal != nil
+        }, set: {
+            if !$0 {
+                renameRefusal = nil
+            }
+        })) {
             Button("OK") {}
         } message: {
             Text(renameRefusal ?? "")

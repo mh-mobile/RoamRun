@@ -14,7 +14,8 @@ func rgb(_ hex: UInt32, _ a: CGFloat = 1) -> CGColor {
 func draw(_ ctx: CGContext, size: CGFloat, edgeToEdge: Bool = false) {
     ctx.scaleBy(x: size / 1024, y: size / 1024)
     if edgeToEdge {
-        ctx.scaleBy(x: 1024 / 824, y: 1024 / 824); ctx.translateBy(x: -100, y: -100)
+        ctx.scaleBy(x: 1024 / 824, y: 1024 / 824)
+        ctx.translateBy(x: -100, y: -100)
     }
 
     // Body: standard macOS squircle-ish rounded rect (824pt, r≈185) with drop shadow.
@@ -27,23 +28,28 @@ func draw(_ ctx: CGContext, size: CGFloat, edgeToEdge: Bool = false) {
     )
     ctx.saveGState()
     ctx.setShadow(offset: CGSize(width: 0, height: -12), blur: 28, color: rgb(0x000000, 0.35))
-    ctx.addPath(bodyPath); ctx.setFillColor(rgb(0x1E3A8A)); ctx.fillPath()
+    ctx.addPath(bodyPath)
+    ctx.setFillColor(rgb(0x1E3A8A))
+    ctx.fillPath()
     ctx.restoreGState()
 
     ctx.saveGState()
-    ctx.addPath(bodyPath); ctx.clip()
+    ctx.addPath(bodyPath)
+    ctx.clip()
     let bg = CGGradient(colorsSpace: nil, colors: [rgb(0x312E81), rgb(0x2563EB), rgb(0x06B6D4)] as CFArray,
                         locations: [0, 0.55, 1])!
     ctx.drawLinearGradient(bg, start: CGPoint(x: 180, y: 924), end: CGPoint(x: 844, y: 100),
                            options: edgeToEdge ? [.drawsBeforeStartLocation, .drawsAfterEndLocation] : [])
 
     // Faint mesh lattice in the background.
-    ctx.setStrokeColor(rgb(0xFFFFFF, 0.08)); ctx.setLineWidth(6)
+    ctx.setStrokeColor(rgb(0xFFFFFF, 0.08))
+    ctx.setLineWidth(6)
     let lattice: [CGPoint] = [CGPoint(x: 220, y: 780), CGPoint(x: 420, y: 860), CGPoint(x: 640, y: 800),
                               CGPoint(x: 820, y: 700), CGPoint(x: 300, y: 560)]
     for (i, a) in lattice.enumerated() {
         for b in lattice[(i + 1)...] where hypot(a.x - b.x, a.y - b.y) < 330 {
-            ctx.move(to: a); ctx.addLine(to: b)
+            ctx.move(to: a)
+            ctx.addLine(to: b)
         }
     }
     ctx.strokePath()
@@ -57,13 +63,16 @@ func draw(_ ctx: CGContext, size: CGFloat, edgeToEdge: Bool = false) {
     ctx.setShadow(offset: CGSize(width: 0, height: -6), blur: 16, color: rgb(0x0B1030, 0.35))
 
     // Laptop (left): screen outline + base.
-    ctx.setStrokeColor(white); ctx.setFillColor(white); ctx.setLineWidth(26)
+    ctx.setStrokeColor(white)
+    ctx.setFillColor(white)
+    ctx.setLineWidth(26)
     let screen = CGRect(x: 205, y: 330, width: 290, height: 200)
     ctx.addPath(CGPath(roundedRect: screen, cornerWidth: 22, cornerHeight: 22, transform: nil))
     ctx.strokePath()
     let base = CGMutablePath()
     base.addRoundedRect(in: CGRect(x: 170, y: 270, width: 360, height: 36), cornerWidth: 18, cornerHeight: 18)
-    ctx.addPath(base); ctx.fillPath()
+    ctx.addPath(base)
+    ctx.fillPath()
 
     // iPhone (right): body outline + island.
     let phone = CGRect(x: 640, y: 250, width: 170, height: 320)
@@ -75,7 +84,8 @@ func draw(_ ctx: CGContext, size: CGFloat, edgeToEdge: Bool = false) {
 
     // The bridge: a dashed arc over the gap, anchored by two nodes.
     let from = CGPoint(x: 350, y: 580), to = CGPoint(x: 725, y: 615)
-    ctx.setLineWidth(22); ctx.setLineCap(.round)
+    ctx.setLineWidth(22)
+    ctx.setLineCap(.round)
     ctx.setLineDash(phase: 0, lengths: [2, 44])
     ctx.move(to: from)
     ctx.addCurve(to: to, control1: CGPoint(x: 400, y: 800), control2: CGPoint(x: 680, y: 820))
@@ -87,7 +97,9 @@ func draw(_ ctx: CGContext, size: CGFloat, edgeToEdge: Bool = false) {
 }
 
 if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "--ios" {
-    guard CommandLine.arguments.count > 2 else { print("usage: make-icon.swift --ios <file.png>"); exit(1) }
+    guard CommandLine.arguments.count > 2 else { print("usage: make-icon.swift --ios <file.png>")
+        exit(1)
+    }
     let ctx = CGContext(data: nil, width: 1024, height: 1024, bitsPerComponent: 8, bytesPerRow: 0,
                         space: CGColorSpace(name: CGColorSpace.sRGB)!,
                         bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!

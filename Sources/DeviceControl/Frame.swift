@@ -19,12 +19,11 @@ public final class ScreenSizes: @unchecked Sendable {
     }
 
     public func size(of udid: String, now: Date = Date()) -> (width: Int, height: Int)? {
-        let (size, due) = lock
-            .withLock {
-                (known[udid], failed[udid].map {
-                    now.timeIntervalSince($0) >= retry
-                } ?? true)
-            }
+        let (size, due) = lock.withLock {
+            (known[udid], failed[udid].map {
+                now.timeIntervalSince($0) >= retry
+            } ?? true)
+        }
         if let size {
             return size
         }
@@ -114,12 +113,14 @@ func decodeKeyFrame(_ annexB: Data) throws -> CGImage {
     guard CMBlockBufferCreateWithMemoryBlock(allocator: nil, memoryBlock: nil, blockLength: count, blockAllocator: nil,
                                              customBlockSource: nil, offsetToData: 0, dataLength: count, flags: 0,
                                              blockBufferOut: &block) == noErr, let block,
-                                          slices.withUnsafeBytes({ CMBlockBufferReplaceDataBytes(
-                                              with: $0.baseAddress!,
-                                              blockBuffer: block,
-                                              offsetIntoDestination: 0,
-                                              dataLength: count
-                                          ) }) == noErr
+                                          slices.withUnsafeBytes({
+                                              CMBlockBufferReplaceDataBytes(
+                                                  with: $0.baseAddress!,
+                                                  blockBuffer: block,
+                                                  offsetIntoDestination: 0,
+                                                  dataLength: count
+                                              )
+                                          }) == noErr
     else { throw FrameError.message("block buffer") }
     var size = count
     guard CMSampleBufferCreateReady(allocator: nil, dataBuffer: block, formatDescription: format, sampleCount: 1,

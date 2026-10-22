@@ -121,10 +121,12 @@ final class BonjourCapture: ObservableObject {
             guard var open = bytes else {
                 if byte == UInt8(ascii: "\"") {
                     bytes = []
-                }; continue
+                }
+                continue
             }
             if byte == UInt8(ascii: "\"") {
-                found.append(String(decoding: open, as: UTF8.self)); bytes = nil
+                found.append(String(decoding: open, as: UTF8.self))
+                bytes = nil
             } else if byte == UInt8(ascii: "\\"), let next = rest.first {
                 let digits = rest.prefix(3)
                 if digits.count == 3, digits.allSatisfy({
@@ -132,13 +134,16 @@ final class BonjourCapture: ObservableObject {
                    }),
                    let value = UInt8(String(decoding: digits, as: UTF8.self))
                 {
-                    open.append(value); rest = rest.dropFirst(3)
+                    open.append(value)
+                    rest = rest.dropFirst(3)
                 } else {
-                    open.append(next); rest = rest.dropFirst()
+                    open.append(next)
+                    rest = rest.dropFirst()
                 }
                 bytes = open
             } else {
-                open.append(byte); bytes = open
+                open.append(byte)
+                bytes = open
             }
         }
         return found
@@ -188,7 +193,8 @@ final class BonjourCapture: ObservableObject {
                 }
             }
             if !dict.isEmpty {
-                makeRoom(for: recordName); txtByRecord[recordName] = dict
+                makeRoom(for: recordName)
+                txtByRecord[recordName] = dict
             }
             emit(recordName: recordName)
         case "A", "AAAA":
@@ -202,7 +208,8 @@ final class BonjourCapture: ObservableObject {
                    $0.value < $1.value
                })?.key
             {
-                ipsByHost[stalest] = nil; hostSeen[stalest] = nil
+                ipsByHost[stalest] = nil
+                hostSeen[stalest] = nil
             }
             hostSeen[host] = .now
             if !(ipsByHost[host] ?? []).contains(tokens[2]), (ipsByHost[host]?.count ?? 0) < 8 {
@@ -238,17 +245,19 @@ final class BonjourCapture: ObservableObject {
     static func unescaped(_ name: String) -> String {
         var out: [UInt8] = [], bytes = Array(name.utf8), i = 0
         while i < bytes.count {
-            if bytes[i] == 0x5C, i + 3 < bytes.count,
-               bytes[(i + 1) ... (i + 3)].allSatisfy({
+            if bytes[i] == 0x5C, i + 3 < bytes.count, bytes[(i + 1) ... (i + 3)].allSatisfy({
                    (0x30 ... 0x39).contains($0)
                }),
                let code = UInt8(String(decoding: bytes[(i + 1) ... (i + 3)], as: UTF8.self))
             {
-                out.append(code); i += 4
+                out.append(code)
+                i += 4
             } else if bytes[i] == 0x5C, i + 1 < bytes.count {
-                out.append(bytes[i + 1]); i += 2
+                out.append(bytes[i + 1])
+                i += 2
             } else {
-                out.append(bytes[i]); i += 1
+                out.append(bytes[i])
+                i += 1
             }
         }
         return String(decoding: out, as: UTF8.self)

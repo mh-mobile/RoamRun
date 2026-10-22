@@ -79,7 +79,9 @@ public final class DeviceSession: @unchecked Sendable {
     public var onEvent: (@Sendable (String) -> Void)?
 
     public init(ip: String, port: UInt16, pairing: @escaping @Sendable () throws -> Data) {
-        self.ip = ip; self.port = port; self.pairing = pairing
+        self.ip = ip
+        self.port = port
+        self.pairing = pairing
     }
 
     /// Raised when this is closed, and for the call under way by `interrupt`: a long text stops between two keys, instead of
@@ -260,28 +262,23 @@ public final class DeviceSession: @unchecked Sendable {
     }
 
     public func swipe(from: (x: Double, y: Double), to: (x: Double, y: Double), milliseconds: Int) throws {
-        _ = try answer(repeatable: false) { rr_device_swipe(
-            $0,
-            from.x,
-            from.y,
-            to.x,
-            to.y,
-            UInt32(clamping: max(milliseconds, 0))
-        ) }
+        _ = try answer(repeatable: false) {
+            rr_device_swipe($0, from.x, from.y, to.x, to.y, UInt32(clamping: max(milliseconds, 0)))
+        }
     }
 
     public func type(_ text: String) throws {
-        try whole(text); _ = try answer(repeatable: false) { rr_device_type(
-            $0,
-            text
-        ) }
+        try whole(text)
+        _ = try answer(repeatable: false) {
+            rr_device_type($0, text)
+        }
     }
 
     public func paste(_ text: String) throws {
-        try whole(text); _ = try answer(repeatable: false) { rr_device_paste(
-            $0,
-            text
-        ) }
+        try whole(text)
+        _ = try answer(repeatable: false) {
+            rr_device_paste($0, text)
+        }
     }
 
     /// The library takes text up to its first NUL: text with one would arrive cut short, and be reported sent.
@@ -334,13 +331,9 @@ public final class DeviceSession: @unchecked Sendable {
             refused = !"\(error)".hasPrefix(Self.stopped)
             throw Failure.notBegun("\(error)")
         }
-        guard let opened = pairing.withUnsafeBytes({ rr_device_open(
-            ip,
-            port,
-            $0.bindMemory(to: UInt8.self).baseAddress,
-            $0.count,
-            &error
-        ) }) else {
+        guard let opened = pairing.withUnsafeBytes({
+            rr_device_open(ip, port, $0.bindMemory(to: UInt8.self).baseAddress, $0.count, &error)
+        }) else {
             defer { rr_string_free(error) }
             let why = error.map {
                 String(cString: $0)

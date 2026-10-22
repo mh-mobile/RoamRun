@@ -94,7 +94,9 @@ final class DeviceMCP: @unchecked Sendable {
                 let answer = self.handle(message)
                 // Taken back while it ran: it is not answered either.
                 let wanted = self.calls.withLock { () -> Bool in
-                    defer { self.running = nil; self.runningTakenBack = false }
+                    defer { self.running = nil
+                        self.runningTakenBack = false
+                    }
                     return !self.runningTakenBack
                 }
                 if wanted, let answer {
@@ -223,12 +225,11 @@ final class DeviceMCP: @unchecked Sendable {
             return text(profiles.isEmpty ? "No devices saved in RoamRun." : profiles.map(\.displayName)
                 .joined(separator: "\n"))
         }
-        let named = (arguments["device"] as? String)
-            .map { name in
-                profiles.filter {
-                    $0.displayName.caseInsensitiveCompare(name) == .orderedSame
-                }
-            } ?? []
+        let named = (arguments["device"] as? String).map { name in
+            profiles.filter {
+                $0.displayName.caseInsensitiveCompare(name) == .orderedSame
+            }
+        } ?? []
         // Two under one name (a list that was mended gives them a default one): neither is guessed at.
         guard named.count < 2 else {
             throw Failure(

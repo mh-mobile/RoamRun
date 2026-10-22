@@ -43,7 +43,8 @@ extension CLI {
         /// Not a mistake in the command, but how things are (exit 1, not 2).
         let happened: Bool
         init(_ why: String, happened: Bool = false) {
-            self.why = why; self.happened = happened
+            self.why = why
+            self.happened = happened
         }
     }
 
@@ -334,7 +335,8 @@ extension CLI {
     static func controlAttempt(_ id: String?) -> Never {
         let attempt: UUID
         if let id {
-            guard let read = UUID(uuidString: id) else { fail("that isn't an attempt's id") }; attempt = read
+            guard let read = UUID(uuidString: id) else { fail("that isn't an attempt's id") }
+            attempt = read
         } else {
             attempt = UUID()
         }
@@ -359,11 +361,13 @@ extension CLI {
     /// offer, that too. The last thing said before waiting; a window it doesn't fit is said, not drawn in.
     nonisolated private static func drawCode(_ url: String?, for whom: String) {
         guard let url
-        else {
-            note("No code: Tailscale gives this Mac no name to put in one. Type the name in the app instead."); return
+        else { note("No code: Tailscale gives this Mac no name to put in one. Type the name in the app instead.")
+            return
         }
         guard isatty(STDERR_FILENO) != 0
-        else { note("No code is drawn where this isn't a terminal. For the app: \(url)"); return }
+        else { note("No code is drawn where this isn't a terminal. For the app: \(url)")
+            return
+        }
         let lines = TerminalQR.lines(url, level: "L"), (across, down) = TerminalQR.room(for: lines)
         var window = winsize()
         if ioctl(STDERR_FILENO, TIOCGWINSZ, &window) == 0, window.ws_row > 0,
@@ -399,13 +403,9 @@ extension CLI {
             fail("--peer says which device a Mac introduces; \(other.dnsName) is the device itself")
         }
         // Its name here is its Tailscale name: found taken before anything waits, not after the code was typed.
-        if itself, let label,
-           ProfileStore()
-               .load()
-               .contains(where: {
-                   $0.displayName.caseInsensitiveCompare(label) == .orderedSame && $0.providerIP != ip
-               })
-        {
+        if itself, let label, ProfileStore().load().contains(where: {
+            $0.displayName.caseInsensitiveCompare(label) == .orderedSame && $0.providerIP != ip
+        }) {
             stop(
                 "another device is saved here as \(label), which is the name \(other.dnsName) would get: rename that one first (the RoamRun app, on its page)"
             )
@@ -649,13 +649,9 @@ extension CLI {
             )
         }
         // Its name here is its Tailscale name: found taken before anything waits.
-        if itself, let label,
-           ProfileStore()
-               .load()
-               .contains(where: {
-                   $0.displayName.caseInsensitiveCompare(label) == .orderedSame && $0.providerIP != ip
-               })
-        {
+        if itself, let label, ProfileStore().load().contains(where: {
+            $0.displayName.caseInsensitiveCompare(label) == .orderedSame && $0.providerIP != ip
+        }) {
             stop(
                 "another device is saved here as \(label), which is the name \(other.dnsName) would get: rename that one first (the RoamRun app, on its page)"
             )
@@ -752,7 +748,9 @@ extension CLI {
                         replacing: nil,
                         peer: nil,
                         store: ProfileStore()
-                    ); return true } catch {
+                    )
+                    return true
+                    } catch {
                         note("roamrun: not saved: \(error.why)")
                         // Only a line that reads as a device is shown: what came is the other Mac's to write.
                         if let shown = Introduction.shown(line) {
@@ -808,14 +806,12 @@ extension CLI {
             exit(0)
         case .unsaved: exit(1)
         // This Mac's own stand-in, said above as it happened: not the other Mac's doing.
-        case .ended(.stopped)
-            where stoodIn.withLock({
-                $0
-            }): stop("stopped before this Mac connected to the device; nothing was saved")
-        case .ended(.deadline)
-            where stoodIn
-            .withLock({ $0
-            }): stop("this Mac didn't connect to the device in 5 minutes; nothing was saved. Run both commands again")
+        case .ended(.stopped) where stoodIn.withLock({
+            $0
+        }): stop("stopped before this Mac connected to the device; nothing was saved")
+        case .ended(.deadline) where stoodIn.withLock({
+            $0
+        }): stop("this Mac didn't connect to the device in 5 minutes; nothing was saved. Run both commands again")
         case .ended where stoodIn.withLock({
             $0
         }): stop("nothing was saved")
@@ -928,10 +924,9 @@ extension CLI {
                 $0.ips.contains(ip)
             }?.curAddr ?? ""
         if endpoint.isEmpty {
-            endpoint = Introduction
-                .endpoint(pinged: await Blocking.run {
-                    (try? TailscaleClient.fromSettings().directHost(ip)) ?? nil
-                })
+            endpoint = Introduction.endpoint(pinged: await Blocking.run {
+                (try? TailscaleClient.fromSettings().directHost(ip)) ?? nil
+            })
         }
         let parts = endpoint.split(separator: ":")
         guard parts.count == 2, parts[0].contains(".") else {
@@ -985,11 +980,9 @@ extension CLI {
             return .offerRefused
         }
         let who: String
-        switch (try? TailscaleClient.fromSettings().mesh())
-            .map({
-                TailscaleClient.holder(of: device, in: $0)
-            }) ?? .unknown
-        {
+        switch (try? TailscaleClient.fromSettings().mesh()).map({
+            TailscaleClient.holder(of: device, in: $0)
+        }) ?? .unknown {
         case .yours: who = "your device"
         case .user(let login): who = "\(login)'s device"
         case .shared(let tags): who = "a shared device (\(tags.joined(separator: ", ")))"
@@ -1023,13 +1016,9 @@ extension CLI {
             instance: read.instance,
             endsWhenCarried: false
         )
-        let introducer = Introducer(
-            plan,
-            record: DNSServiceProxy(),
-            addressNow: {
-                InterfaceMonitor.currentIPv4(on: interface)
-            }
-        ) { event in
+        let introducer = Introducer(plan, record: DNSServiceProxy(), addressNow: {
+            InterfaceMonitor.currentIPv4(on: interface)
+        }) { event in
             switch event {
             case .announced(let interface, _, _):
                 note("""
@@ -1080,10 +1069,11 @@ extension CLI {
             }
         }
         try? log.run()
-        defer {
-            watch.cancel(); if log.isRunning {
+        defer { watch.cancel()
+            if log.isRunning {
                 log.terminate()
-            }; _ = reader
+            }
+            _ = reader
         }
         do { try await introducer.start() } catch where !introducer.ended {
             note("Couldn't announce it: \(error.localizedDescription)")
@@ -1269,14 +1259,11 @@ extension CLI {
                 if case .success(let read) = Introduction.offer(from: line) {
                     offer = read
                 }
-                drawCode(
-                    whole.flatMap { name in
-                        offer.flatMap {
-                            Introduction.codeURL(mac: name, offer: $0)
-                        }
-                    },
-                    for: "the device"
-                )
+                drawCode(whole.flatMap { name in
+                    offer.flatMap {
+                        Introduction.codeURL(mac: name, offer: $0)
+                    }
+                }, for: "the device")
                 exit(0)
             }
         case .several: stop(
@@ -1352,10 +1339,9 @@ extension CLI {
         // A device nothing has talked to has no address in Tailscale's list: a ping gives it one.
         if endpoint.isEmpty {
             let ip = profile.providerIP
-            endpoint = Introduction
-                .endpoint(pinged: await Blocking.run {
-                    (try? TailscaleClient.fromSettings().directHost(ip)) ?? nil
-                })
+            endpoint = Introduction.endpoint(pinged: await Blocking.run {
+                (try? TailscaleClient.fromSettings().directHost(ip)) ?? nil
+            })
         }
         let accept = Introduction.accept(deviceEndpoint: endpoint, local: local, mask: mask)
         // Not from the whole LAN: any host there could then reach the port the offer names on that Mac.

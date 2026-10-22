@@ -52,7 +52,8 @@ extension AppCoordinator {
 
     nonisolated static func isOurs(_ target: String, on port: Int, in record: [String] = remembered()) -> Bool {
         record.contains {
-            let p = pair($0); return p.target == target && (p.port == nil || p.port == port)
+            let p = pair($0)
+            return p.target == target && (p.port == nil || p.port == port)
         }
     }
 
@@ -111,7 +112,9 @@ extension AppCoordinator {
             pair($0).port
         } + [tools.otaPort()]).sorted() {
             let state = tools.serving(port, 10)
-            guard state != .unknown else { asked = false; continue }
+            guard state != .unknown else { asked = false
+                continue
+            }
             guard let target = state.root(on: host), isOurs(target, on: port, in: tools.remembered()) else { continue }
             // The one this run is serving from, confirmed or not.
             if live?.port == port, live?.target == target {
@@ -190,7 +193,8 @@ extension AppCoordinator {
 
     nonisolated static func endServeChange() {
         publishLock.withLock {
-            changingServe = false; sweeping = false
+            changingServe = false
+            sweeping = false
         }
     }
 
@@ -200,7 +204,9 @@ extension AppCoordinator {
     /// would only leave that entry behind when the process exits.
     nonisolated static func beginReleaseAtQuit() -> (allowed: Bool, owns: Bool) {
         publishLock.withLock {
-            guard changingServe else { changingServe = true; return (true, true) }
+            guard changingServe else { changingServe = true
+                return (true, true)
+            }
             return (sweeping, false)
         }
     }
@@ -358,7 +364,9 @@ extension AppCoordinator {
                 self.otaServer = server
                 return true
             }
-            guard wanted else { server.stop(); return }
+            guard wanted else { server.stop()
+                return
+            }
             let mine = "http://127.0.0.1:\(port)"
             // Only ever replace an entry we can prove we made — ours from a run
             // that ended without releasing it. Anything else on that port is the
@@ -578,7 +586,8 @@ extension AppCoordinator {
         let host: String
         switch state {
         case .unknown: return false // couldn't look; saying it's gone is how one survives
-        case .nothing: tools.forget(published.target, published.port); return true
+        case .nothing: tools.forget(published.target, published.port)
+            return true
         case .mounted:
             // `off` removes this node's current name's mount and nothing else, so
             // that is the only entry we may claim — a root of ours under a name the

@@ -102,7 +102,8 @@ private func entry(pid: Int32, _ status: BridgeStatus) -> StatusFile.Entry {
         tunnelPorts: [],
         updated: .now
     )
-    var app = cli; app.cli = false
+    var app = cli
+    app.cli = false
     #expect(HomeRule.yields(meCLI: false, myPID: 100, to: cli)) // the app yields to roamrun up
     #expect(!HomeRule.yields(meCLI: true, myPID: 300, to: app)) // roamrun up keeps it
     #expect(HomeRule.yields(meCLI: true, myPID: 300, to: cli)) // of two CLIs the newer steps back
@@ -192,17 +193,18 @@ private func entry(pid: Int32, _ status: BridgeStatus) -> StatusFile.Entry {
     #expect(StatusFile.write(errored, e(other, .error), in: dir, live: live) == .written)
     #expect(StatusFile.write(errored, e(getpid(), .starting), in: dir, live: live, claim: true) == .written)
     // A second profile for the same iPhone (same UDID) can't bridge it too; standing aside is fine.
-    func withUDID(_ x: StatusFile.Entry) -> StatusFile
-        .Entry
-    {
-        var x = x; x.udid = "00008130-000d00000000d004"; return x
+    func withUDID(_ x: StatusFile.Entry) -> StatusFile.Entry {
+        var x = x
+        x.udid = "00008130-000d00000000d004"
+        return x
     }
     let first = UUID(), second = UUID()
     #expect(StatusFile.write(first, withUDID(e(other, .ready)), in: dir, live: live) == .written)
     #expect(holder(StatusFile.write(second, withUDID(e(getpid(), .starting)), in: dir, live: live)) == other)
     #expect(StatusFile.write(second, withUDID(e(getpid(), .local)), in: dir, live: live) == .written)
     // Can't write at all: a failure, not a silent success.
-    let file = dir.appendingPathComponent("not-a-dir"); try Data().write(to: file)
+    let file = dir.appendingPathComponent("not-a-dir")
+    try Data().write(to: file)
     if case .failed = StatusFile.write(id, e(getpid(), .starting), in: file, live: live) {}
     else {
         Issue.record("expected .failed")
@@ -228,7 +230,8 @@ private func entry(pid: Int32, _ status: BridgeStatus) -> StatusFile.Entry {
     let json = #"{"pid":1,"status":"Ready for Xcode","detail":"","ready":true,"tunnelPorts":[],"updated":0}"#
     let e = try JSONDecoder().decode(StatusFile.Entry.self, from: Data(json.utf8))
     #expect(e.deviceNetwork == nil)
-    var cellular = e; cellular.network = "cellular"
+    var cellular = e
+    cellular.network = "cellular"
     let back = try JSONDecoder().decode(StatusFile.Entry.self, from: JSONEncoder().encode(cellular))
     #expect(back.deviceNetwork == .cellular)
 }

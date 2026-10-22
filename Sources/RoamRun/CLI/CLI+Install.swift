@@ -187,17 +187,19 @@ extension CLI {
             try? FileManager.default.removeItem(at: dir)
         } // exit() skips defer
         let unzip = Proc.run("/usr/bin/ditto", ["-x", "-k", path, dir.path], timeout: 300)
-        guard unzip.status == 0
-        else {
-            cleanUp(); stop("couldn't unpack \(path): \(firstLine(unzip.err) ?? "ditto exited \(unzip.status)")")
+        guard unzip.status == 0 else { cleanUp()
+            stop("couldn't unpack \(path): \(firstLine(unzip.err) ?? "ditto exited \(unzip.status)")")
         }
         let payload = dir.appendingPathComponent("Payload")
         guard let app = OTA.appBundle(in: payload)
-        else { cleanUp(); stop("\(path) has no Payload/*.app inside — not an iOS app archive?") }
+        else { cleanUp()
+            stop("\(path) has no Payload/*.app inside — not an iOS app archive?")
+        }
         // A crafted archive could make Payload or Payload/X.app a link to somewhere else on this Mac.
         let appURL = payload.appendingPathComponent(app)
         guard appURL.resolvingSymlinksInPath().path.hasPrefix(dir.resolvingSymlinksInPath().path + "/Payload/") else {
-            cleanUp(); stop("\(path)'s Payload/\(app) links outside the archive — not installing it")
+            cleanUp()
+            stop("\(path)'s Payload/\(app) links outside the archive — not installing it")
         }
         // Checked on this very .app: a separate partial unpack could land on another
         // bundle of a multi-app archive and vouch for one that isn't installed.
@@ -244,21 +246,22 @@ extension CLI {
         let name = shown ?? path
         switch provisioning(of: path) {
         case .appStore:
-            cleanUp(); stop(
+            cleanUp()
+            stop(
                 "\(name) is signed for App Store / TestFlight and can't be installed directly. Export it for Debugging, Release Testing (Ad Hoc) or Enterprise."
             )
         case .devices(let list) where !list.contains(where: {
             $0.caseInsensitiveCompare(udid) == .orderedSame
         }):
-            cleanUp(); stop(
+            cleanUp()
+            stop(
                 "\(name) isn't signed for \(profile.displayName) (UDID \(udid) is not in its provisioning profile). Add the device to the profile and export again."
             )
         case .unknown:
             let info = NSDictionary(contentsOfFile: (path as NSString).appendingPathComponent("Info.plist"))
             if (info?["DTPlatformName"] as? String)?.hasSuffix("simulator") == true {
-                cleanUp(); stop(
-                    "\(name) is a Simulator build — build for a device (Any iOS Device / the device itself)."
-                )
+                cleanUp()
+                stop("\(name) is a Simulator build — build for a device (Any iOS Device / the device itself).")
             }
             FileHandle.standardError
                 .write(
@@ -300,10 +303,9 @@ extension CLI {
             let here = (try? FileManager.default.contentsOfDirectory(atPath: ".")) ?? []
             let workspaces = here.filter {
                 $0.hasSuffix(".xcworkspace")
-            },
-                projects = here.filter {
-                    $0.hasSuffix(".xcodeproj")
-                }
+            }, projects = here.filter {
+                $0.hasSuffix(".xcodeproj")
+            }
             if workspaces.count == 1 {
                 container = ["-workspace", workspaces[0]]
             } else if workspaces.isEmpty, projects.count == 1 {

@@ -53,7 +53,8 @@ func everyDocumentedCommandParses(_ doc: String) throws {
     var fenced = false
     for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
         if line.hasPrefix("```") {
-            fenced.toggle(); continue
+            fenced.toggle()
+            continue
         }
         if fenced {
             code.append(String(line))

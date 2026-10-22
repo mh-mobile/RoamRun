@@ -151,9 +151,11 @@ final class PairLink: @unchecked Sendable {
     deinit { close() }
 
     func close() {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
+        defer { lock.unlock() }
         if open {
-            open = false; Darwin.close(fd)
+            open = false
+            Darwin.close(fd)
         }
     }
 
@@ -238,22 +240,27 @@ final class PairLink: @unchecked Sendable {
         guard var a = address(ip, port) else { return nil }
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else { return nil }
-        guard tie(fd, to: interface) else { Darwin.close(fd); return nil }
+        guard tie(fd, to: interface) else { Darwin.close(fd)
+            return nil
+        }
         let flags = fcntl(fd, F_GETFL)
         _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
         let r = withUnsafePointer(to: &a) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(
-                fd,
-                $0,
-                socklen_t(MemoryLayout<sockaddr_in>.size)
-            ) }
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
         }
         if r != 0 {
-            guard errno == EINPROGRESS else { Darwin.close(fd); return nil }
+            guard errno == EINPROGRESS else { Darwin.close(fd)
+                return nil
+            }
             var p = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
             var err: Int32 = 0, len = socklen_t(MemoryLayout<Int32>.size)
             guard poll(&p, 1, Int32(seconds * 1000)) > 0,
-                  getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) == 0, err == 0 else { Darwin.close(fd); return nil }
+                  getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) == 0, err == 0
+            else { Darwin.close(fd)
+                return nil
+            }
         }
         _ = fcntl(fd, F_SETFL, flags)
         return PairLink(fd: fd)
@@ -271,11 +278,9 @@ final class PairLink: @unchecked Sendable {
             throw RelayError.bindFailed("couldn't keep to \(interface ?? "")")
         }
         let bound = withUnsafePointer(to: &a) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(
-                fd,
-                $0,
-                socklen_t(MemoryLayout<sockaddr_in>.size)
-            ) }
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
         }
         guard bound == 0, listen(fd, 4) == 0 else {
             let why = String(cString: strerror(errno))
@@ -394,21 +399,30 @@ enum PairByName {
                 guard let (link, from) = listener.accept(within: 0.25) else { continue }
                 defer { link.close() }
                 // The address first: a stranger costs no question to Tailscale.
-                guard from == peer.ip else { say(.refused(from: from)); continue }
-                guard let holder = owner(from) else { say(.unsure(from: from)); continue }
-                guard holder == peer.id else { say(.refused(from: from)); continue }
+                guard from == peer.ip else { say(.refused(from: from))
+                    continue
+                }
+                guard let holder = owner(from) else { say(.unsure(from: from))
+                    continue
+                }
+                guard holder == peer.id else { say(.refused(from: from))
+                    continue
+                }
                 say(.connected)
                 // Longer for the first line: before it, the other Mac looks once more at what the device announces.
                 let first = link.read(within: lineWait * 3, stop: stopped)
                 if case .pairable(let waits)? = first.message {
                     // Said, so the other Mac doesn't take this one for a RoamRun that doesn't know the word.
-                    guard let standIn else { link.send(.ended(.failed)); continue }
+                    guard let standIn else { link.send(.ended(.failed))
+                        continue
+                    }
                     // The device first: it is the one stood in for, and without it nothing could be saved.
                     guard link.send(.wantDevice),
                           case .device(let device)? = link.read(within: lineWait, stop: stopped).message
                     else { continue }
                     if let why = await standIn(waits, device) {
-                        link.send(.ended(why)); return .ended(why)
+                        link.send(.ended(why))
+                        return .ended(why)
                     }
                     let ok = await save(device)
                     link.send(ok ? .saved : .unsaved)
@@ -422,13 +436,15 @@ enum PairByName {
                     case .one(let line): offer = line
                     case .several:
                         if rescanned {
-                            link.send(.ended(.ambiguous)); return .ambiguous
+                            link.send(.ended(.ambiguous))
+                            return .ambiguous
                         }
                         rescanned = true
                         await rescan()
                     case .none:
                         if !told {
-                            told = true; say(.waitingForOffer)
+                            told = true
+                            say(.waitingForOffer)
                         }
                         try? await Task.sleep(for: pause)
                     }
@@ -510,36 +526,52 @@ enum PairByName {
                 }
                 guard let link = connect() else {
                     if !told {
-                        told = true; say(.waiting)
+                        told = true
+                        say(.waiting)
                     }
                     try? await Task.sleep(for: pause)
                     continue
                 }
-                guard owner(peer.ip) == peer.id else { link.close(); return .notThatMac }
+                guard owner(peer.ip) == peer.id else { link.close()
+                    return .notThatMac
+                }
                 say(.connected)
-                guard link.send(.wantOffer) else { link.close(); continue }
+                guard link.send(.wantOffer) else { link.close()
+                    continue
+                }
                 switch link.read(within: until.timeIntervalSinceNow, stop: stopped) {
                 case .line(let line):
                     switch PairWire.message(from: line) {
                     case .offer(let offer): return .offer(offer, link)
-                    case .ended(let why): link.close(); return .ended(why)
+                    case .ended(let why): link.close()
+                        return .ended(why)
                     case .wantDevice:
                         // From here on nothing is asked again: that Mac has begun.
-                        guard let device, link.send(.device(device)) else { link.close(); return .garbled }
+                        guard let device, link.send(.device(device)) else { link.close()
+                            return .garbled
+                        }
                         switch link.read(within: until.timeIntervalSinceNow, stop: stopped).message {
                         case .offer(let offer):
                             guard case .attempt(let id) = link.read(within: lineWait, stop: stopped).message
-                            else { link.close(); return .garbled }
+                            else { link.close()
+                                return .garbled
+                            }
                             return .control(offer, attempt: id, link)
-                        case .ended(let why): link.close(); return .ended(why)
-                        case .result(.failed(let why)): link.close(); return .refused(why)
-                        default: link.close(); return .garbled
+                        case .ended(let why): link.close()
+                            return .ended(why)
+                        case .result(.failed(let why)): link.close()
+                            return .refused(why)
+                        default: link.close()
+                            return .garbled
                         }
-                    default: link.close(); return .garbled
+                    default: link.close()
+                        return .garbled
                     }
-                case .closed: link.close(); try? await Task.sleep(for: pause)
+                case .closed: link.close()
+                    try? await Task.sleep(for: pause)
                 case .timeout: link.close()
-                case .tooLong: link.close(); return .garbled
+                case .tooLong: link.close()
+                    return .garbled
                 }
             }
         }
@@ -573,7 +605,8 @@ enum PairByName {
                 }
                 guard let link = connect() else {
                     if !told {
-                        told = true; say(.waiting)
+                        told = true
+                        say(.waiting)
                     }
                     try? await Task.sleep(for: pause)
                     continue
@@ -691,13 +724,20 @@ enum PairByName {
                 }
                 guard let (link, from) = listener.accept(within: 0.25) else { continue }
                 defer { link.close() }
-                guard from == peer.ip else { say(.refused(from: from)); continue }
-                guard let holder = owner(from) else { say(.unsure(from: from)); continue }
-                guard holder == peer.id else { say(.refused(from: from)); continue }
+                guard from == peer.ip else { say(.refused(from: from))
+                    continue
+                }
+                guard let holder = owner(from) else { say(.unsure(from: from))
+                    continue
+                }
+                guard holder == peer.id else { say(.refused(from: from))
+                    continue
+                }
                 say(.connected)
                 let first = link.read(within: lineWait, stop: stopped).message
                 if case .pairable? = first {
-                    link.send(.ended(.failed)); continue
+                    link.send(.ended(.failed))
+                    continue
                 }
                 guard first == .wantOffer, link.send(.wantDevice),
                       case .device(let device) = link.read(within: lineWait, stop: stopped).message else { continue }

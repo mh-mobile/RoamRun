@@ -243,11 +243,14 @@ import ImageIO
     #expect(SharedPairing.read(data) == shared)
     #expect(SharedPairing.read(Data("<plist/>".utf8)) == nil) // a bare pairing
     #expect(SharedPairing.read(try JSONEncoder().encode(device)) == nil) // a device alone
-    var nameless = shared; nameless.device.udid = nil
+    var nameless = shared
+    nameless.device.udid = nil
     #expect(SharedPairing.read(try JSONEncoder().encode(nameless)) == nil) // nothing to name the pairing by
-    var empty = shared; empty.pairing = ""
+    var empty = shared
+    empty.pairing = ""
     #expect(SharedPairing.read(try JSONEncoder().encode(empty)) == nil)
-    var later = shared; later.roamrunPairing = 2
+    var later = shared
+    later.roamrunPairing = 2
     #expect(SharedPairing.read(try JSONEncoder().encode(later)) == nil) // a form this RoamRun doesn't know
 }
 
@@ -349,12 +352,15 @@ import ImageIO
     ))
     // One whose UDID isn't known yet, at that address or by that advert: that one — and still
     // without a UDID: it is saved only once the pairing has connected.
-    var at = came; at.providerIP = "100.64.0.2"
+    var at = came
+    at.providerIP = "100.64.0.2"
     #expect(try saved.placement(of: at, udid: "U2", as: nil).get() == DevicePlacement(profile: unknown, isNew: false))
-    var advert = came; advert.instanceName = "b"
+    var advert = came
+    advert.instanceName = "b"
     #expect(try saved.placement(of: advert, udid: "U2", as: "Other").get().profile.udid == nil)
     // A device known by another UDID isn't taken for it by its address.
-    var sameAddress = came; sameAddress.providerIP = "100.64.0.1"
+    var sameAddress = came
+    sameAddress.providerIP = "100.64.0.1"
     #expect(try saved.placement(of: sameAddress, udid: "U3", as: nil).get().isNew)
     // None: one to add, new here, under the name asked for.
     let new = try saved.placement(of: came, udid: "U9", as: " Work phone ").get()
@@ -362,9 +368,12 @@ import ImageIO
         .displayName == "Work phone")
     #expect(new.profile.providerIP == came.providerIP && new.profile.instanceName == came.instanceName)
     // A name taken here: refused, with what to do.
-    var clash = came; clash.displayName = "iphone"
+    var clash = came
+    clash.displayName = "iphone"
     guard case .failure(let why) = saved.placement(of: clash, udid: "U9", as: nil)
-    else { Issue.record("placed under a taken name"); return }
+    else { Issue.record("placed under a taken name")
+        return
+    }
     #expect("\(why)".contains("--as"))
     #expect(try saved.placement(of: clash, udid: "U9", as: "Second").get().isNew)
 }
@@ -429,15 +438,12 @@ import ImageIO
     let saved = Data(repeating: 7, count: 32)
     func key(make: Bool, read: [(OSStatus, Data?)], add: OSStatus = errSecSuccess) -> (key: Data?, added: Int) {
         var reads = read[...], added = 0
-        let key = try? DeviceControlKey.key(
-            make: make,
-            read: {
-                reads.popFirst() ?? (errSecItemNotFound, nil)
-            },
-            add: { _ in
-                added += 1; return add
-            }
-        )
+        let key = try? DeviceControlKey.key(make: make, read: {
+            reads.popFirst() ?? (errSecItemNotFound, nil)
+        }, add: { _ in
+            added += 1
+            return add
+        })
         return (key?.withUnsafeBytes {
             Data($0)
         }, added)
@@ -541,7 +547,8 @@ import ImageIO
                                add: { fresh in
                                    kept.withLock {
                                        $0 = fresh
-                                   }; return errSecSuccess
+                                   }
+                                   return errSecSuccess
                                })
     let first = try key.key(make: false).withUnsafeBytes {
         Data($0)
@@ -579,7 +586,8 @@ import ImageIO
                                add: { _ in
                                    added.withLock {
                                        $0 += 1
-                                   }; return errSecSuccess
+                                   }
+                                   return errSecSuccess
                                })
     #expect(try key.key(make: true).withUnsafeBytes {
         Data($0)
@@ -609,15 +617,11 @@ import ImageIO
     // Made by another in between: taken only if it is one.
     var reads = [(errSecItemNotFound, Data?.none), (errSecSuccess, Data(repeating: 1, count: 5))][...]
     #expect(throws: (any Error).self) {
-        try DeviceControlKey.key(
-            make: true,
-            read: {
-                reads.popFirst() ?? (errSecItemNotFound, nil)
-            },
-            add: { _ in
-                errSecDuplicateItem
-            }
-        )
+        try DeviceControlKey.key(make: true, read: {
+            reads.popFirst() ?? (errSecItemNotFound, nil)
+        }, add: { _ in
+            errSecDuplicateItem
+        })
     }
 }
 
@@ -796,7 +800,8 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
             all.withLock {
                 $0.append(step)
             }
-            switch step { case .done, .failed: ended.signal(); default: break }
+            switch step { case .done, .failed: ended.signal()
+            default: break }
         }, {
             all.withLock {
                 $0
@@ -832,7 +837,8 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
         let (hub, _) = try standInHub(dir, paired: false) { device in
             device.connectHold = hold
             Thread.detachNewThread {
-                held(device.connectBegan); began.signal()
+                held(device.connectBegan)
+                began.signal()
             }
         }
         defer { hub.stop() }
@@ -903,7 +909,9 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     hub.pair(request, as: "x", attempt: first) { step in
         switch step { case .done, .failed: firstEnd.withLock {
                 $0 = step
-            }; ended.signal(); default: break }
+            }
+            ended.signal()
+        default: break }
     }
     hub.cancelPairing(first)
     hub.pair(request, as: "x", attempt: second) { _ in }
@@ -914,7 +922,8 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
         }
         .forEach {
             $0.pairNow()
-        }; usleep(10_000)
+        }
+        usleep(10_000)
     }
     #expect(soon(ended))
     if case .done = firstEnd.withLock({
@@ -1012,10 +1021,7 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     #expect(first.set("mark-late", true, asked: waiting) && !first.contains("mark-late"))
     #expect(try JSONDecoder().decode(Set<String>.self, from: try #require(stored.withLock {
         $0
-    })) == [
-        a,
-        b
-    ]) // nor written as on
+    })) == [a, b]) // nor written as on
     #expect(first.set("mark-late", true) && first.contains("mark-late") && first.set("mark-late", false))
     // Refused: nobody is on, it is said, and switching writes nothing over what is there.
     reads.withLock {
@@ -1202,7 +1208,8 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     let (hub, _) = try standInHub(dir, paired: false) { device in
         device.connectHold = hold
         Thread.detachNewThread {
-            held(device.connectBegan); began.signal()
+            held(device.connectBegan)
+            began.signal()
         }
     }
     defer { hub.stop() }
@@ -1220,7 +1227,8 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     }
     let ended = DispatchSemaphore(value: 0)
     hub.pair(request, as: "x", attempt: attempt) { step in
-        switch step { case .done, .failed: ended.signal(); default: break }
+        switch step { case .done, .failed: ended.signal()
+        default: break }
     }
     #expect(soon(listener.waiting))
     listener.pairNow()

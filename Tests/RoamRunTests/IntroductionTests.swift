@@ -14,7 +14,8 @@ import Testing
     #expect(try! Introduction.offer(from: "  \(line)\n").get() == offer)
 
     var mine = txt
-    mine["model"] = nil; mine["name"] = nil
+    mine["model"] = nil
+    mine["name"] = nil
     let device = Introduction.Device(name: "iPhone", peer: "iphone-15-pro", port: 49152, txt: mine)
     #expect(try! Introduction.device(from: Introduction.line(device)).get() == device)
 
@@ -24,7 +25,8 @@ import Testing
     {
         if case .failure(let e) = r {
             return e
-        }; return nil
+        }
+        return nil
     }
     if case .another = refused(Introduction.offer(from: Introduction.line(device))) {}
     else {
@@ -38,7 +40,8 @@ import Testing
     #expect(refused(Introduction.offer(from: "rr-xcode-offer-v1:" + String(repeating: "A", count: 5000))) == .notOne)
 
     func offerProblem(_ change: (inout Introduction.Offer) -> Void) -> Bool {
-        var o = offer; change(&o)
+        var o = offer
+        change(&o)
         if case .refused = refused(Introduction.offer(from: Introduction.line(o))) {
             return true
         }
@@ -60,18 +63,16 @@ import Testing
         $0.txt["identifier"] = "not-a-uuid"
     } && offerProblem {
         $0.txt["authTag"] = "a b"
-    } &&
-        offerProblem {
-            $0.txt["authTag"] = ""
-        })
+    } && offerProblem {
+        $0.txt["authTag"] = ""
+    })
     #expect(offerProblem {
         $0.txt["ver"] = "26; rm"
     } && offerProblem {
         $0.txt["flags"] = ""
-    } &&
-        offerProblem {
-            $0.txt["model"] = "Mac 1"
-        })
+    } && offerProblem {
+        $0.txt["model"] = "Mac 1"
+    })
     // The name is shown on the device: nothing that hides, reorders or breaks what is read.
     for bad in [
         "a\u{202E}b",
@@ -92,7 +93,8 @@ import Testing
     })
 
     func deviceProblem(_ change: (inout Introduction.Device) -> Void) -> Bool {
-        var d = device; change(&d)
+        var d = device
+        change(&d)
         if case .refused = refused(Introduction.device(from: Introduction.line(d))) {
             return true
         }
@@ -107,20 +109,18 @@ import Testing
         $0.name = "-rf"
     } && deviceProblem {
         $0.name = "a\u{202E}b"
-    } &&
-        deviceProblem {
-            $0.name = " "
-        })
+    } && deviceProblem {
+        $0.name = " "
+    })
     #expect(deviceProblem {
         $0.peer = "a b"
     } && deviceProblem {
         $0.peer = ""
     } && deviceProblem {
         $0.peer = "-x"
-    } &&
-        deviceProblem {
-            $0.peer = "100.64.0.2/../x"
-        })
+    } && deviceProblem {
+        $0.peer = "100.64.0.2/../x"
+    })
     #expect(!deviceProblem {
         $0.peer = "iPhone-15-Pro.tail1.ts.net"
     })
@@ -198,16 +198,22 @@ import Testing
         "ver": "26",
         "minVer": "8"
     ]
-    saved.providerHostName = "iphone-15-pro"; saved.udid = "00008130-000D00000000D004"
-    guard let device = Introduction.device(of: saved) else { Issue.record("a whole device not handed over"); return }
+    saved.providerHostName = "iphone-15-pro"
+    saved.udid = "00008130-000D00000000D004"
+    guard let device = Introduction.device(of: saved) else { Issue.record("a whole device not handed over")
+        return
+    }
     #expect(device.name == "iPhone" && device.peer == "iphone-15-pro" && device.port == saved.remotePairingPort)
     #expect(!Introduction.line(device).contains("00008130") && Introduction.line(device).hasPrefix("rr-device-v1:"))
-    var half = saved; half.txt["authTag"] = nil
-    var unnamed = saved; unnamed.providerHostName = ""
+    var half = saved
+    half.txt["authTag"] = nil
+    var unnamed = saved
+    unnamed.providerHostName = ""
     #expect(Introduction.device(of: half) == nil && Introduction.device(of: unnamed) == nil)
     // Saved by its address: what stands where its Tailscale name would is that address, and no Mac knows a device by it.
-    var byAddress = saved; byAddress.providerID = MeshProvider.manual.rawValue; byAddress.providerHostName = saved
-        .providerIP
+    var byAddress = saved
+    byAddress.providerID = MeshProvider.manual.rawValue
+    byAddress.providerHostName = saved.providerIP
     #expect(Introduction.device(of: byAddress) == nil)
 
     // A device nothing has talked to has no address in Tailscale's list; a ping's answer stands in for it.
@@ -241,24 +247,30 @@ import Testing
     ) == nil)
     // Paired again, nothing moved: what is saved says it all already — under any name, with a UDID or without.
     guard var kept = made else { return }
-    kept.displayName = "Another name"; kept.udid = "00008130-000D00000000D004"
+    kept.displayName = "Another name"
+    kept.udid = "00008130-000D00000000D004"
     #expect(Introduction.unchanged(kept, by: device, as: kept))
-    var elsewhere = kept; elsewhere.providerIP = "100.64.0.10"
+    var elsewhere = kept
+    elsewhere.providerIP = "100.64.0.10"
     #expect(!Introduction.unchanged(kept, by: device, as: elsewhere))
-    var renamed = kept; renamed
-        .providerHostName = "phone-renamed" // its Tailscale name changed: export would hand on the old one
+    var renamed = kept
+    renamed.providerHostName = "phone-renamed" // its Tailscale name changed: export would hand on the old one
     #expect(!Introduction.unchanged(kept, by: device, as: renamed))
-    var moved = device; moved.port += 1
+    var moved = device
+    moved.port += 1
     #expect(!Introduction.unchanged(kept, by: moved, as: kept))
     // Announced anew, under another name with its own tag: not unchanged, and nothing else moved.
-    var anew = device; anew.txt["identifier"] = "0A0A0A0A-D414-41D0-BE80-7567AE75B2BC"; anew.txt["authTag"] = "other"
+    var anew = device
+    anew.txt["identifier"] = "0A0A0A0A-D414-41D0-BE80-7567AE75B2BC"
+    anew.txt["authTag"] = "other"
     #expect(!Introduction.unchanged(kept, by: anew, as: kept) && Introduction.announcedAnew(kept, by: anew, as: kept))
     #expect(!Introduction.announcedAnew(kept, by: anew, as: elsewhere) && !Introduction.announcedAnew(
         kept,
         by: anew,
         as: renamed
     ))
-    moved = anew; moved.txt["ver"] = "99"
+    moved = anew
+    moved.txt["ver"] = "99"
     #expect(!Introduction.unchanged(kept, by: moved, as: kept) && !Introduction.announcedAnew(
         kept,
         by: moved,
@@ -270,7 +282,8 @@ import Testing
     guard let new = made else { return }
     var list: [DeviceProfile] = []
     #expect(Introduction.add(new, from: device, to: &list) == .added)
-    var again = new; again.id = UUID()
+    var again = new
+    again.id = UUID()
     #expect(Introduction.add(again, from: device, to: &list) == .unchanged("Test iPhone"))
     #expect(Introduction.add(again, from: moved, to: &list) == .already("Test iPhone"))
     #expect(list.count == 1 && list[0].instanceName == new.instanceName)
@@ -283,26 +296,34 @@ import Testing
     #expect(list[0].instanceName == "0A0A0A0A-D414-41D0-BE80-7567AE75B2BC" && list[0].txt["authTag"] == "other")
     #expect(Introduction.add(renewed, from: anew, to: &list) == .unchanged("Test iPhone"))
     // Not for a line turned to another device than it names, nor where two saved ones match it: refused as before.
-    var again2 = anew; again2.txt["identifier"] = "0B0B0B0B-D414-41D0-BE80-7567AE75B2BC"
+    var again2 = anew
+    again2.txt["identifier"] = "0B0B0B0B-D414-41D0-BE80-7567AE75B2BC"
     guard var turned = Introduction.profile(from: again2, peer: peer, name: "Whatever") else { return }
     turned.id = UUID()
     #expect(Introduction.add(turned, from: again2, to: &list, renewing: false) == .already("Test iPhone"))
     var pairOfThem = list
-    var twin = list[0]; twin.id = UUID(); twin.displayName = "Twin"; twin.providerIP = "100.64.0.50"; twin
-        .instanceName = again2.txt["identifier"]!
+    var twin = list[0]
+    twin.id = UUID()
+    twin.displayName = "Twin"
+    twin.providerIP = "100.64.0.50"
+    twin.instanceName = again2.txt["identifier"]!
     pairOfThem.insert(twin, at: 0)
     #expect(Introduction.add(turned, from: again2, to: &pairOfThem, renewing: true) == .already("Twin"))
     #expect(pairOfThem.map(\.instanceName) == [twin.instanceName, list[0].instanceName] && list[0]
         .instanceName == "0A0A0A0A-D414-41D0-BE80-7567AE75B2BC")
     // The app, running, saves over what the CLI renewed: an announcement it left alone stays the newer one on disk.
-    var appHas = list[0]; appHas.instanceName = new.instanceName; appHas.txt = new.txt
-    var appWants = appHas; appWants.displayName = "Renamed in the app"
+    var appHas = list[0]
+    appHas.instanceName = new.instanceName
+    appHas.txt = new.txt
+    var appWants = appHas
+    appWants.displayName = "Renamed in the app"
     let kept2 = ProfileStore.merge(base: [appHas], wanted: [appWants], disk: list)
     #expect(kept2.count == 1 && kept2[0].displayName == "Renamed in the app" && kept2[0].instanceName == list[0]
         .instanceName && kept2[0].txt == list[0].txt)
     // …and one it changed itself is its own.
-    var appChanged = appHas; appChanged.instanceName = "0C0C0C0C-D414-41D0-BE80-7567AE75B2BC"; appChanged
-        .txt["identifier"] = appChanged.instanceName
+    var appChanged = appHas
+    appChanged.instanceName = "0C0C0C0C-D414-41D0-BE80-7567AE75B2BC"
+    appChanged.txt["identifier"] = appChanged.instanceName
     #expect(ProfileStore.merge(base: [appHas], wanted: [appChanged], disk: list)[0].instanceName == appChanged
         .instanceName)
     // From the device itself: the line's own names are placeholders, and the one named here is what is saved.
@@ -311,7 +332,9 @@ import Testing
         Introduction.line(placed),
         ofDevice: "iphone-15-pro.example.ts.net",
         named: "iphone-15-pro"
-    )) else { Issue.record("a device's own line didn't read"); return }
+    )) else { Issue.record("a device's own line didn't read")
+        return
+    }
     #expect(named.peer == "iphone-15-pro.example.ts.net" && named.name == "iphone-15-pro" && named.txt == device
         .txt && named.port == device.port)
     #expect(Introduction.line("not a line", ofDevice: "x", named: "y") == "not a line")
@@ -343,8 +366,10 @@ import Testing
         "v": "26",
         "w": "17"
     ])
-    var other = new; other.id = UUID(); other.instanceName = "0F0F0F0F-D414-41D0-BE80-7567AE75B2BC"; other
-        .txt["identifier"] = other.instanceName
+    var other = new
+    other.id = UUID()
+    other.instanceName = "0F0F0F0F-D414-41D0-BE80-7567AE75B2BC"
+    other.txt["identifier"] = other.instanceName
     other.providerIP = "100.64.0.77"
     if case .nameProblem = Introduction.add(other, from: device, to: &list) {}
     else {
@@ -355,22 +380,30 @@ import Testing
     // Put in a saved device's place: not when the line is for another saved device, nor when the one to replace is gone.
     var two = [new, other]
     two[1].displayName = "Other iPhone"
-    var forOther = other; forOther.id = UUID(); forOther.remotePairingPort += 1
+    var forOther = other
+    forOther.id = UUID()
+    forOther.remotePairingPort += 1
     #expect(Introduction.replace(new.id, with: forOther, in: &two) == .already("Other iPhone"))
     #expect(two[0].instanceName == new.instanceName)
     #expect(Introduction.replace(two[1].id, with: forOther, in: &two) == .replaced)
     #expect(two[1].remotePairingPort == forOther.remotePairingPort && two[1].displayName == "Other iPhone")
     #expect(Introduction.replace(UUID(), with: forOther, in: &two) == .gone)
     // One saved by its address becomes the Tailscale device the line names: it can then be exported.
-    two[1].providerID = MeshProvider.manual.rawValue; two[1].providerHostName = two[1].providerIP; two[1].udid = "00008130-000D00000000D004"
+    two[1].providerID = MeshProvider.manual.rawValue
+    two[1].providerHostName = two[1].providerIP
+    two[1].udid = "00008130-000D00000000D004"
     #expect(Introduction.device(of: two[1]) == nil)
     #expect(Introduction.replace(two[1].id, with: forOther, in: &two) == .replaced)
     #expect(Introduction.device(of: two[1]) != nil && two[1].providerHostName == forOther.providerHostName)
     #expect(two[1].udid == "00008130-000D00000000D004") // the same device's: what it is stays
 
     // A device saved long since is tried, for an introduction, where it was found a moment ago — and saved there once that held.
-    var old = new; old.remotePairingPort = 50000; old.providerIP = "100.64.0.9"
-    var now = new; now.remotePairingPort = 51000; now.providerIP = "100.64.0.9"
+    var old = new
+    old.remotePairingPort = 50000
+    old.providerIP = "100.64.0.9"
+    var now = new
+    now.remotePairingPort = 51000
+    now.providerIP = "100.64.0.9"
     #expect(AppCoordinator.tryAt(saved: old, given: now, fresh: true) == ("100.64.0.9", 51000))
     #expect(AppCoordinator.tryAt(saved: old, given: now, fresh: false) == (
         "100.64.0.9",
@@ -424,7 +457,8 @@ import Testing
     }
     #expect(Introduction.current(among: []) == .none)
     #expect(Introduction.current(among: [service([:])]) == .none)
-    var partial = txt; partial["authTag"] = nil
+    var partial = txt
+    partial["authTag"] = nil
     #expect(Introduction.current(among: [service(partial)]) == .none)
     #expect(Introduction.current(among: [service(txt)]) == .one(Introduction.line(Introduction.Offer(
         port: 50000,
@@ -435,14 +469,16 @@ import Testing
         port: 50000,
         txt: txt
     ))))
-    var second = txt; second["identifier"] = "0F0F0F0F-D414-41D0-BE80-7567AE75B2BC"
+    var second = txt
+    second["identifier"] = "0F0F0F0F-D414-41D0-BE80-7567AE75B2BC"
     #expect(Introduction.current(among: [service(txt), service(second, "b")]) == .several)
 }
 
 /// Add Device's second step follows the row picked while the choice there was made for the user.
 @Test func aChoiceMadeForTheUserFollowsTheRowAndTheirOwnStays() {
     func follow(_ chosen: String?, _ auto: String?, _ match: String?) -> [String?] {
-        let r = MeshDevice.follow(chosen: chosen, auto: auto, match: match); return [r.chosen, r.auto]
+        let r = MeshDevice.follow(chosen: chosen, auto: auto, match: match)
+        return [r.chosen, r.auto]
     }
     #expect(follow(nil, nil, "a") == ["a", "a"])
     #expect(follow("a", "a", "b") == ["b", "b"])
@@ -471,7 +507,8 @@ import Testing
     }?.instanceName == "mine")
     // Heard with the address: nothing is looked up.
     #expect(CLI.waiting([other, mine], at: "192.168.0.9") { _ in
-        Issue.record("looked up"); return []
+        Issue.record("looked up")
+        return []
     }?.instanceName == "other")
     #expect(CLI.waiting([other, mine], at: "192.168.0.30") {
         names[$0] ?? []

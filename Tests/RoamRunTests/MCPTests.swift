@@ -22,12 +22,9 @@ import ImageIO
         )
     }
     var asked: [DeviceControlWire.Request] = []
-    let server = DeviceMCP(
-        profiles: {
-            [device("Device"), device("device"), device("iPad")]
-        },
-        looks: FileManager.default.temporaryDirectory
-    ) { request in
+    let server = DeviceMCP(profiles: {
+        [device("Device"), device("device"), device("iPad")]
+    }, looks: FileManager.default.temporaryDirectory) { request in
         asked.append(request)
         return .init(ok: true)
     }
@@ -130,19 +127,8 @@ import ImageIO
         try #require(try result(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)["tools"] as? [[String: Any]])
     #expect(Set(tools.compactMap {
         $0["name"] as? String
-    }) == [
-        "devices",
-        "look",
-        "tap",
-        "swipe",
-        "elements",
-        "type",
-        "paste",
-        "press"
-    ])
-    func hinted(_ hint: String)
-        -> Set<String>
-    {
+    }) == ["devices", "look", "tap", "swipe", "elements", "type", "paste", "press"])
+    func hinted(_ hint: String) -> Set<String> {
         Set(tools.filter {
             ($0["annotations"] as? [String: Bool])?[hint] == true
         }
@@ -154,13 +140,10 @@ import ImageIO
     #expect(hinted("destructiveHint") == ["tap", "swipe", "type", "paste", "press"])
 
     // What holds an action to a look, and says which.
-    func required(_ name: String)
-        -> [String]
-    {
+    func required(_ name: String) -> [String] {
         (tools.first {
             $0["name"] as? String == name
-        }?["inputSchema"] as? [String: Any])?["required"] as? [String] ??
-            []
+        }?["inputSchema"] as? [String: Any])?["required"] as? [String] ?? []
     }
     for name in ["tap", "swipe", "type", "paste"] {
         #expect(required(name).contains("look"), "\(name)")
@@ -267,16 +250,13 @@ import ImageIO
     }
     let written = OSAllocatedUnfairLock<[String]>(initialState: [])
     var lines = ["", "   ", "not json"].makeIterator()
-    server.serve(
-        lines: {
-            lines.next()
-        },
-        write: { answer in
-            written.withLock {
-                $0.append(String(decoding: answer, as: UTF8.self))
-            }
+    server.serve(lines: {
+        lines.next()
+    }, write: { answer in
+        written.withLock {
+            $0.append(String(decoding: answer, as: UTF8.self))
         }
-    )
+    })
     #expect(written.withLock {
         $0.count
     } == 1)
@@ -301,10 +281,12 @@ import ImageIO
             [device]
         }, looks: FileManager.default.temporaryDirectory) { request in
             let n = sent.withLock {
-                $0.append(request.text ?? ""); return $0.count
+                $0.append(request.text ?? "")
+                return $0.count
             }
             if n == 1 {
-                first.signal(); held(free)
+                first.signal()
+                held(free)
             }
             return .init(ok: true)
         }

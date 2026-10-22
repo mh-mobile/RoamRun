@@ -96,11 +96,9 @@ enum StatusFile {
             return .heldBy(held)
         }
         // One bridge per device, not per profile: two saved profiles can name the same iPhone.
-        if let twin = entry
-            .flatMap({
-                sameDevice(as: $0, id: id, in: all, deferToCLI: deferToCLI)
-            })
-        {
+        if let twin = entry.flatMap({
+            sameDevice(as: $0, id: id, in: all, deferToCLI: deferToCLI)
+        }) {
             return .heldBy(twin)
         }
         all[id] = entry

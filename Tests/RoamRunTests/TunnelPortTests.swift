@@ -19,7 +19,8 @@ private func ports(_ lines: [(String, TimeInterval)]) -> [(UInt16, String?)] {
     let watcher = TunnelPortWatcher()
     var got: [(UInt16, String?)] = []
     watcher.onPort = {
-        got.append(($0, $1)); _ = $2
+        got.append(($0, $1))
+        _ = $2
     }
     let start = Date()
     for (line, at) in lines {

@@ -77,8 +77,7 @@ final class DeviceControlAllowed: @unchecked Sendable {
         let found: Set<String>? = status == errSecItemNotFound ? []
             : status == errSecSuccess ? (data.flatMap {
                 try? JSONDecoder().decode(Set<String>.self, from: $0)
-            } ?? []) :
-            nil
+            } ?? []) : nil
         // A Keychain that is locked (a login not finished, a session without the screen) can't ask
         // anyone and will answer later: read again at the next occasion, not held against it.
         lock.withLock {
@@ -127,7 +126,8 @@ final class DeviceControlAllowed: @unchecked Sendable {
     /// When something is asked: given to `set` for a switch-on that may wait its turn.
     func now() -> UInt64 {
         lock.withLock {
-            asked += 1; return asked
+            asked += 1
+            return asked
         }
     }
 
@@ -155,8 +155,7 @@ final class DeviceControlAllowed: @unchecked Sendable {
             }) else { return }
             let kept = (try? JSONEncoder().encode(now.subtracting(lock.withLock {
                 off
-            })))
-            .map {
+            }))).map {
                 write($0) == errSecSuccess
             } ?? false
             lock.withLock {
@@ -180,7 +179,8 @@ final class DeviceControlAllowed: @unchecked Sendable {
                 write($0) == errSecSuccess
             } ?? false
             lock.withLock {
-                held = next; unwritten = !kept
+                held = next
+                unwritten = !kept
             }
         }
     }

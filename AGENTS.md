@@ -14,7 +14,7 @@ see `skills/roamrun/SKILL.md` — installed with `roamrun init` or
   After changing `Cargo.lock`: `make licenses`, and commit the file it writes; and `make audit`
   (CI runs it too, and every Monday): an advisory against a crate it pins is either a reason
   to change the crate or, looked into, a line in `scripts/audit-crates.py` saying why not.
-- `make format` runs SwiftFormat over the Swift sources: line breaks, indentation and spaces only (the
+- `make format` runs SwiftFormat over the Swift sources: line breaks, indentation and spaces (the
   Makefile pins its version, `.swiftformat` lists its rules). Run it before a commit; CI doesn't check it.
 - Device control keeps a key and a list (which devices are switched on) in the
   Keychain, which asks about a build signed ad hoc after every rebuild. `make app` signs with an Apple Development certificate
