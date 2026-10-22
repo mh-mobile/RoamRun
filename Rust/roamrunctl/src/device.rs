@@ -645,6 +645,9 @@ mod tests {
         // Not "doesn't answer": the device, which isn't there, isn't asked.
         let said = install(&name, &file, false).unwrap_err();
         assert!(said.contains("isn't an app's .ipa"), "{said}");
+        // One that isn't there is said so, not taken for an .app folder.
+        let said = install(&name, Path::new("/nowhere/at/all.ipa"), false).unwrap_err();
+        assert!(said.starts_with("/nowhere/at/all.ipa: "), "{said}");
         std::fs::remove_file(file).unwrap();
         unstub(&name);
     }

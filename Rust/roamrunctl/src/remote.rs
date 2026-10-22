@@ -217,6 +217,7 @@ mod tests {
         assert_eq!(install_id("installing a.b (1 MB) on phone (install 0f3a), for 315 s at most"), Some("0f3a"));
         assert_eq!(install_id("installing a.b (1 MB) on phone, for 315 s at most"), None);
         assert_eq!(install_id("(install )"), None);
+        assert_eq!(install_id(&crate::mcp::begun("a.b", 1, "phone", "3f2a9c0e1b7d4a65", Duration::from_secs(315))), Some("3f2a9c0e1b7d4a65"));
     }
 
     #[test]

@@ -119,6 +119,11 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
     json!({ "name": name, "description": description, "inputSchema": { "type": "object", "properties": properties, "required": needs }, "annotations": hints(name) })
 }
 
+/// What `install` answers once it has begun: `remote` reads the id back from it.
+pub fn begun(what: &str, megabytes: u64, name: &str, id: &str, given: Duration) -> String {
+    format!("installing {what} ({megabytes} MB) on {name} (install {id}), for {} s at most: install_status says how it goes. Until it ends, other calls on {name} answer that it is installing.", given.as_secs())
+}
+
 /// What a client may take each tool to do, the same in `roamrun mcp`. `look` only reads: nothing it does on
 /// the device lasts. `elements` may scroll. Destructive: whatever presses or types into what is there,
 /// can't be undone from here (`lock`), ends an app, or replaces one.
@@ -513,7 +518,7 @@ impl Server {
         let id: String = crate::hold::random::<8>()?.iter().map(|b| format!("{b:02x}")).collect();
         let going = std::thread::spawn(move || { let said = device.install(&path); drop(upload); said });
         self.installs.insert(name.to_string(), Install { id: id.clone(), what: what.clone(), bundle, megabytes, given, began: Instant::now(), going: Some(going), ended: None });
-        Ok(format!("installing {what} ({megabytes} MB) on {name} (install {id}), for {} s at most: install_status says how it goes. Until it ends, other calls on {name} answer that it is installing.", given.as_secs()))
+        Ok(begun(&what, megabytes, name, &id, given))
     }
 
     /// The device's install, while it goes on: what any other call on it is answered.
