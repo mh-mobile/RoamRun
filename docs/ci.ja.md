@@ -1,39 +1,46 @@
 # CI から実機にインストールして起動する
 
-GitHub がホストするランナーの CI ジョブから、Tailscale 越しにあなたの iPhone へアプリをインストールし、起動できます。使うのは公開済みの `roamrunctl` です。やり方は 2 つあり、同じ設定の中で両方を用意しておくこともできます。
+<p align="center"><a href="ci.md">English</a> | 日本語</p>
+
+GitHub がホストするランナーの CI ジョブから、Tailscale 越しに自分の iPhone へアプリをインストールし、起動できます。使うのは、リリース版の `roamrunctl` をそのままです。やり方は 2 つあります。
 
 | | ランナーで roamrunctl を動かす | デバイスのそばの relay に頼む |
 |---|---|---|
-| デバイスとやりとりするもの | ランナー | あなたのマシン（`roamrunctl mcp --http`） |
+| デバイスとやりとりするもの | ランナー | 手元のマシン（`roamrunctl mcp --http` を動かす） |
 | CI に置くもの | ペアリング（デバイスの鍵）と Tailscale の OAuth クライアント | relay のトークンと Tailscale の OAuth クライアント |
-| ランナーから届く必要がある先 | デバイス（ペアリングのポートと、デバイスが指定するトンネルのポート） | relay の 1 つのポート |
-| 動かしておくもの | なし | relay（あなたが起動する） |
+| ランナーから届く必要がある先 | デバイス（ペアリング用ポートと、デバイスが指定するトンネル用のポート） | relay の 1 つのポート |
+| 動かしておくもの | なし | relay（自分で起動する） |
 
-relay に頼むやり方では、鍵があなたのマシンから出ません。ランナーで動かすやり方では、あなたのマシンを用意しなくて済みます。どちらも 2026-10-22（UTC）に、下に書く形で実行しました。
+relay に頼むやり方では、鍵が手元のマシンから出ません。ランナーで動かすやり方では、ジョブの間に手元で動かしておくものがありません。1 つのリポジトリに両方を用意しておくことはできますが、1 台のデバイスに対してジョブで使うのは片方だけにします（理由は下の結果にあります）。このページの「relay」は、デバイスのそばに置くそのマシンのことです。Tailscale の DERP によるリレーのことではありません。
 
-このページでは、アプリのビルドや署名は扱いません。CI には、そのデバイス向けに署名済みの `.ipa`（そのデバイスを含む開発用プロファイルで署名したもの）が必要です。`roamrunctl` はそれを確かめて、そのままインストールします。
+このページのジョブは、アプリのビルドや署名をしません。CI には、そのデバイス向けに署名済みの `.ipa`（そのデバイスを含む開発用プロファイルで署名したもの）が必要です。`roamrunctl` が確かめるのはアーカイブの構成だけで、署名は確かめずにそのままインストールします。下の実行では、ジョブは自分のリポジトリのリリースから `.ipa` を取得しました（`gh release download`）。
 
 ## 実行した環境と結果
 
-- デバイス：iPhone 15 Pro（iOS 27.0）。ロックを解除して画面をつけたまま、自宅の Wi‑Fi と充電器につないでおきました。
+どれも 2026-10-22（UTC）に実行しました。
+
+- デバイス：iPhone 15 Pro（iOS 27.0）。ロックを解除して画面をつけたまま、Wi-Fi と充電器につないでおきました。
 - CI：GitHub Actions の `ubuntu-24.04`。非公開のリポジトリで、ジョブは手動（`workflow_dispatch`）で起動しました。roamrunctl はリリースの 0.8.1（`roamrunctl-linux-x86_64.tar.gz`）です。
-- relay：デバイスと同じ Wi‑Fi にある MacBook Pro。Homebrew で入れた roamrunctl 0.8.1 を、macOS のターミナルで動かしました。relay はほかのマシンでも構いませんが、試したのはこの 1 台だけです。
+- relay：どちらもデバイスと同じ Wi-Fi にあるマシンです。1 台目は MacBook Pro で、Homebrew で入れた roamrunctl 0.8.1 を macOS のターミナルで動かしました。2 台目は Ubuntu 24.04（arm64）の仮想マシンで、README の Linux 用の手順で roamrunctl 0.8.1 を入れました。
+- ランナー用のペアリング：RoamRun の入った Mac で作ったものと、その Ubuntu のマシンで作ったものの 2 つです。
 - アプリ：1 MB の `.ipa`。
-- Tailscale：Tailnet のポリシーは既定の「すべて許可」のままです。ランナーは `tag:ci` のタグで参加しました。どの実行でも、デバイスと relay への経路は DERP サーバー（東京）から始まり、数秒で直接の経路に切り替わりました。
+- Tailscale：tailnet のポリシーは「すべて許可」のままです。ランナーは `tag:ci` のタグで参加しました。どの実行でも、デバイスと relay への経路は DERP サーバー（東京）から始まり、数秒で直接の経路に切り替わりました。
 
 | 実行 | ランナーで roamrunctl | relay |
 |---|---|---|
-| 両方（relay は直後） | 取り込み 3 秒、インストール 15 秒、起動 4 秒 | インストールが 315 秒でタイムアウト |
-| relay だけ | — | アップロード 1 秒、インストール 6 秒、起動 1 秒 |
-| もう一度両方 | 取り込み 3 秒、インストール 9 秒、起動 3 秒 | アップロード 2 秒、インストール 71 秒、起動 1 秒 |
+| 両方（ランナーの直後に relay） | Mac の鍵：鍵の取り込み 3 秒、インストール 15 秒、起動 4 秒 | Mac：アップロード 2 秒、インストールは上限の 315 秒でタイムアウト |
+| relay だけ | — | Mac：アップロード 1 秒、インストール 6 秒、起動 1 秒 |
+| もう一度両方 | Mac の鍵：鍵の取り込み 3 秒、インストール 9 秒、起動 3 秒 | Mac：アップロード 2 秒、インストール 71 秒、起動 1 秒 |
+| ランナーだけ | Linux の鍵：インストール 11 秒、起動 3 秒 | — |
+| その 2 分後に relay だけ | — | Linux：アップロード 2 秒、インストール 48 秒、起動 1 秒 |
 
-relay のインストールが遅かった 2 回は、どちらもランナーの起動が終わってから 3 秒以内に始まっていました。デバイスの側で何が止めていたのかは調べていません。1 台のデバイスは、一度に 1 台のマシンから使うようにしてください。ワークフローでも、1 台のデバイスにはどちらか一方のやり方だけを使います。
+ランナーでのインストールは、9〜15 秒で終わりました。relay でのインストールが遅かったのは、どれも、その前の 2 分以内に別のマシンがデバイスを使っていたときです。1 回目と 3 回目は、ランナー側の `launch` が終わってから 3 秒以内に、relay へ `install` を送っていました。最後の 1 回は、その約 2 分後です。速かった 1 回は、同じ relay が最後にデバイスを使ってから 5 分後でした。遅かったときにデバイスの側で何が止めていたのかは、調べていません。1 台のデバイスは、一度に 1 台のマシンから使ってください。
 
 ## どちらのやり方にも必要なもの
 
 ### Tailscale：タグと OAuth クライアント
 
-1. Tailnet のポリシー（Access controls）で、CI 用のタグを作ります。
+1. tailnet のポリシー（Access controls）で、CI 用のタグを作ります。
 
    ```json
    "tagOwners": {
@@ -44,7 +51,7 @@ relay のインストールが遅かった 2 回は、どちらもランナー�
 2. Settings › Trust credentials で、OAuth クライアントを新しく作ります。権限は **Keys › Auth Keys › Write** だけにし、タグに `tag:ci` を選びます。
 3. 発行された 2 つの値を、`TS_OAUTH_CLIENT_ID` と `TS_OAUTH_SECRET` という名前でリポジトリのシークレットに登録します。登録先は Settings › Secrets and variables › Actions の Repository secrets です。
 
-ジョブは [tailscale/github-action](https://github.com/tailscale/github-action) で Tailnet に参加します。
+ジョブは [tailscale/github-action](https://github.com/tailscale/github-action) で tailnet に参加します。
 
 ```yaml
 - uses: tailscale/github-action@v4
@@ -54,7 +61,7 @@ relay のインストールが遅かった 2 回は、どちらもランナー�
     tags: tag:ci
 ```
 
-ポリシーが「すべて許可」のままだと、ジョブが動いている間、ランナーは Tailnet のどのマシンにも届きます。必要な先だけに届くようにするには、`tag:ci` の grants を書きます。relay に頼むなら、届く先は relay のそのポートだけです。ランナーで動かすなら、デバイスへの TCP を開けます。デバイスのペアリングのポートは 49152〜49167 のどれかで、トンネルのポートは、接続のたびにデバイスが別のものを指定します。このように絞ったポリシーは試していません。
+ポリシーが「すべて許可」のままだと、ジョブが動いている間、ランナーは tailnet のどのマシンにも届きます。必要な先だけに届くようにするには、`tag:ci` の grants を書きます。relay に頼むなら、届く先は relay が待ち受ける 1 つのポートだけです。ランナーで動かすなら、デバイスへの TCP 接続を許可します。ペアリング用ポートは 49152〜49167 のどれかで、トンネル用のポートは、接続のたびにデバイスが別のものを指定します。このように絞ったポリシーは試していません。
 
 ### ワークフロー
 
@@ -66,27 +73,41 @@ concurrency:
   cancel-in-progress: false
 ```
 
-上の実行は、どれも手動で起動しました。フォークから出されたプルリクエストで動くワークフローには、GitHub はシークレットを渡しません。
+上の実行は、どれも手動で起動しました。フォークから出されたプルリクエストで動くワークフローには、GitHub はシークレットを渡しません。どちらのやり方もシークレットを使うので、そうしたワークフローでは動きません。
 
 ## ランナーで roamrunctl を動かす
 
 ### CI 用のペアリング
 
-RoamRun の入った Mac で、デバイスを同じ Wi‑Fi につなぎ、ロックを解除してから実行します。
+**RoamRun の入った Mac で作る場合**は、デバイスを同じ Wi-Fi につなぎ、ロックを解除してから実行します（`iPhone` は RoamRun でのデバイスの名前です）。
 
 ```sh
-roamrun key create iPhone ci-key.json --as ci
+roamrun key create iPhone ~/ci-key.json --as ci
 ```
 
-デバイスの 設定 › プライバシーとセキュリティ › デベロッパモード で「ci」を選び、表示されたコードを入力します。できたファイルをシークレットに登録し、手元からは消します。
+デバイスの 設定 › プライバシーとセキュリティ › デベロッパモード で「ci」を選び、ターミナルに表示されたコードを入力します。できたファイルをシークレットに登録し、手元からは消します。
 
 ```sh
-gh secret set ROAMRUN_CI_KEY --repo <owner>/<repo> < ci-key.json && rm ci-key.json
+gh secret set ROAMRUN_CI_KEY --repo <owner>/<repo> < ~/ci-key.json && rm ~/ci-key.json
 ```
 
-このシークレットはデバイスの鍵です。それを読むワークフローを動かせて、デバイスに届く人なら、誰でもデバイスを見て操作できます。取り消すときは、デバイスの一覧から「ci」を削除します。Mac を使わずに作ったペアリングは、CI の鍵として試していません。デバイスと同じ Wi‑Fi にあるマシンで `roamrunctl pair control --to` を実行して作るものです。
+**roamrunctl の入った Linux のマシンで作る場合**は、デバイスと同じ Wi-Fi で実行します（`iphone-15-pro` はデバイスの Tailscale 上の名前です）。設定のフォルダを別にすると、別のペアリングになります。roamrunctl は、ペアリングに使う自分の識別子をそのフォルダに置くからです。
 
-### ジョブの手順
+```sh
+export XDG_CONFIG_HOME=$(mktemp -d) && echo "$XDG_CONFIG_HOME" && roamrunctl pair control --to iphone-15-pro --as ci-linux
+```
+
+デバイスの 設定 › プライバシーとセキュリティ › デベロッパモード でそのマシンの Tailscale 上の名前を選び、ターミナルに表示されたコードを入力します。最初は、Tailscale がデバイスに直接届かないと言って断られました。そのマシンの LAN からはデバイスに届いていましたが、`tailscale ping iphone-15-pro` はタイムアウトしていました。そのマシンで `sudo systemctl restart tailscaled` を実行すると ping が直接届くようになり、ペアリングも通りました。できたファイルは、Mac から SSH で読んでシークレットに登録し、フォルダごと消しました。
+
+```sh
+ssh admin@ubuntu-standin cat /tmp/tmp.XXXXXXXXXX/roamrunctl/devices/ci-linux.json | gh secret set ROAMRUN_CI_KEY_LINUX --repo <owner>/<repo> && ssh admin@ubuntu-standin rm -rf /tmp/tmp.XXXXXXXXXX
+```
+
+どちらのシークレットも、デバイスの鍵です。それを読むワークフローを動かせて、デバイスに届く人なら、誰でもデバイスを見て操作できます。取り消すときは、デバイスのデベロッパモードの一覧から、その名前を削除します。
+
+### ランナーの手順
+
+Mac で作った鍵は、`key import` で取り込みます。`key import` が受け付けるのは、`roamrun key create` が書いたファイルだけです。デバイスにつながることを確かめてからペアリングを保存し、保存できたら読んだファイルを消します。
 
 ```yaml
 - name: Install and launch
@@ -103,19 +124,36 @@ gh secret set ROAMRUN_CI_KEY --repo <owner>/<repo> < ci-key.json && rm ci-key.js
     "$rr" launch ci com.example.MyApp
 ```
 
-`key import` は、デバイスにつながることを確かめてからペアリングを保存し、読んだファイルを消します。`umask 077` は、鍵を書き出したファイルを、ランナーのユーザーだけが読めるようにするためのものです。
+Linux のマシンで作った鍵は、roamrunctl がデバイスを保存したファイルそのものです。なので、roamrunctl がデバイスを置くフォルダに、中に書かれた名前のファイルとして置きます。
+
+```yaml
+- name: Install and launch
+  env:
+    ROAMRUN_CI_KEY_LINUX: ${{ secrets.ROAMRUN_CI_KEY_LINUX }}
+  run: |
+    curl -sSfL "https://github.com/mh-mobile/RoamRun/releases/download/v0.8.1/roamrunctl-linux-x86_64.tar.gz" | tar xz
+    rr="$PWD/roamrunctl-linux-x86_64/roamrunctl"
+    export XDG_CONFIG_HOME="$RUNNER_TEMP/config"
+    umask 077
+    mkdir -p "$XDG_CONFIG_HOME/roamrunctl/devices"
+    printf '%s' "$ROAMRUN_CI_KEY_LINUX" > "$XDG_CONFIG_HOME/roamrunctl/devices/ci-linux.json"
+    "$rr" install ci-linux app/MyApp.ipa
+    "$rr" launch ci-linux com.example.MyApp
+```
+
+`XDG_CONFIG_HOME` を指定すると、roamrunctl が保存するものはジョブの一時フォルダに置かれます。`umask 077` は、鍵を書き出したファイルを、ランナーのユーザーだけが読めるようにするためのものです。roamrunctl は、ほかの人が読める保存ファイルのデバイスを使いません。`app/MyApp.ipa` と `com.example.MyApp` は、自分のアプリとそのバンドル ID に置き換えてください。
 
 ## デバイスのそばの relay に頼む
 
 ### relay で用意すること
 
-1. relay 専用のペアリングを、デバイスと同じ Wi‑Fi で作ります。
+1. relay 専用のペアリングを、デバイスと同じ Wi-Fi で作ります。
 
    ```sh
    roamrunctl pair control --to iphone-15-pro --as relay
    ```
 
-   デバイスの 設定 › プライバシーとセキュリティ › デベロッパモード で relay の Tailscale の名前を選び、表示されたコードを入力します。MacBook Pro では、Claude アプリのターミナルから実行したときはデバイスの一覧に出ず、macOS のターミナルから実行すると出ました。macOS は、ローカルネットワークへのアクセスをアプリごとに尋ねます。
+   デバイスの 設定 › プライバシーとセキュリティ › デベロッパモード で relay の Tailscale 上の名前を選び、ターミナルに表示されたコードを入力します。`relay` は、そのマシンにデバイスを保存するときの名前です。下のサーバーとジョブの呼び出しでも、この名前でデバイスを指します。MacBook Pro では、Claude アプリのターミナルから実行したときは、デバイスのその一覧に Mac が出ませんでした。macOS のターミナルから実行すると出ました。
 
 2. トークンを作り、同じトークンをシークレットにも登録します。
 
@@ -124,17 +162,20 @@ gh secret set ROAMRUN_CI_KEY --repo <owner>/<repo> < ci-key.json && rm ci-key.js
    gh secret set RELAY_TOKEN --repo <owner>/<repo> < ~/.config/roamrunctl/ci-token
    ```
 
+   Ubuntu の relay には、同じトークンを Mac からコピーしました。
+   `ssh admin@ubuntu-standin 'mkdir -p ~/.config/roamrunctl && umask 077 && cat > ~/.config/roamrunctl/ci-token' < ~/.config/roamrunctl/ci-token`
+
 3. サーバーを起動し、動かしたままにします（Ctrl-C で止まります）。
 
    ```sh
    roamrunctl mcp --http 9090 --allow tag:ci --token-file ~/.config/roamrunctl/ci-token --allow-install relay
    ```
 
-   要求ごとに 1 行、時刻、呼び出し元のアドレスとタグ、ツール、結果、かかった時間を書き出します。サービスとして動かすこと（launchd や systemd）は試していません。
+   起動するときに、待ち受けるアドレス（`http://<Tailscale の IPv4 アドレス>:9090/mcp`）を表示します。そのあとは要求ごとに 1 行を標準エラー出力に書き出します。時刻、呼び出し元のアドレスと Tailscale が答えた相手、ツール、結果、かかった時間です。サービスとして動かすこと（launchd や systemd）は試していません。
 
-### ジョブの手順
+### relay を呼ぶ手順
 
-ジョブは `.ipa` をアップロードしてインストールを始め、終わるまで 5 秒ごとに様子を尋ねてから起動します。`RELAY` は relay の Tailscale の IPv4 アドレスとポートです。サーバーはそのアドレスでしか待ち受けません。
+ジョブは `.ipa` をアップロードしてインストールを始め、終わるまで 5 秒ごとに `install_status` を呼んでから起動します。`RELAY` は、サーバーが表示したアドレスとポートです。アップロードとインストールは、同じジョブの中で行います。アップロードしたものをインストールできるのは、アップロードした呼び出し元（Tailscale のノード）だけです。GitHub がホストするランナーは、ジョブが変わると別のノードです。
 
 ```yaml
 - name: Install and launch through the relay
@@ -158,6 +199,7 @@ gh secret set ROAMRUN_CI_KEY --repo <owner>/<repo> < ci-key.json && rm ci-key.js
       done
       return 1
     }
+    call devices '{}'
     up=$(curl -sS --max-time 2100 -w '\n%{http_code}' -H "Authorization: Bearer $token" -T app/MyApp.ipa "$base/upload") || true
     [ "${up##*$'\n'}" = 200 ] || { echo "${up%$'\n'*}"; exit 1; }
     id=$(printf '%s' "${up%$'\n'*}" | jq -r .upload); sha=$(printf '%s' "${up%$'\n'*}" | jq -r .sha256)
@@ -172,12 +214,12 @@ gh secret set ROAMRUN_CI_KEY --repo <owner>/<repo> < ci-key.json && rm ci-key.js
     call launch '{"device":"relay","bundle":"com.example.MyApp"}'
 ```
 
-ツールを呼ぶ前に `initialize` を送る必要はありません。アップロードしたものをインストールできるのは、アップロードしたランナーだけで、そのとき答えられた sha256 を渡す必要があります。ツールの答え方やアップロードの上限は、[roamrunctl-reference.ja.md](roamrunctl-reference.ja.md) にあります。
+ツールを呼ぶ前に `initialize` を送る必要はありません。このループは 10 分で諦めます。relay がインストールに与える時間は、5 分と、1 MB あたり 15 秒の合計です。約 20 MB を超える `.ipa` では、ループを長くしてください。ツールの答え方やアップロードの上限は、[roamrunctl-reference.ja.md](roamrunctl-reference.ja.md#http-で使う-mcp) にあります。
 
 ## 試していないこと
 
-- デバイスがロックされている、スリープしている、モバイル通信だけでつながっている場合。iPad。
-- Linux や Windows の relay。relay をサービスとして動かすこと。
+- デバイスがロックされている、またはスリープしている場合。iPad。（モバイル通信だけでつながっているデバイスは、こうした接続を受け付けません。roamrunctl の README にあるとおりです。）
+- Windows の relay。relay をサービスとして動かすこと。
 - macOS や Windows のランナー。セルフホストのランナー。
 - `tag:ci` に必要な先だけに絞った Tailscale のポリシー。
 - CI からの 1 MB より大きい `.ipa`。上書きでインストールしたときに、アプリのデータが残るかどうか。
