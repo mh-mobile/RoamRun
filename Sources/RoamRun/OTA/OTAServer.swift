@@ -28,7 +28,8 @@ private final class IdleTimer: @unchecked Sendable {
     /// A finished connection's timer would otherwise sit there for the idle limit.
     func cancel() {
         lock.withLock {
-            pending?.cancel(); pending = nil
+            pending?.cancel()
+            pending = nil
         }
     }
 }
@@ -77,7 +78,8 @@ final class OTAServer: @unchecked Sendable {
     /// Where the builds are: `ota/` unless a test passes its own folder.
     private let root: URL?
     init(tailnetPort: Int, root: URL? = nil) {
-        self.tailnetPort = tailnetPort; self.root = root
+        self.tailnetPort = tailnetPort
+        self.root = root
     }
 
     private var store: URL {
@@ -110,7 +112,8 @@ final class OTAServer: @unchecked Sendable {
         let ready = DispatchSemaphore(value: 0)
         listener.stateUpdateHandler = { [weak self, weak listener] state in
             switch state {
-            case .ready: self?.port = listener?.port?.rawValue ?? 0; ready.signal()
+            case .ready: self?.port = listener?.port?.rawValue ?? 0
+                ready.signal()
             case .failed, .cancelled:
                 // Also after it was ready: leaving the port set would make start()
                 // hand back a dead one for ever, with `tailscale serve` still
@@ -123,7 +126,9 @@ final class OTAServer: @unchecked Sendable {
         self.listener = listener // before it can fail: forget() only lets go of the listener it holds
         listener.start(queue: queue)
         _ = ready.wait(timeout: .now() + 5)
-        guard port > 0 else { stop(); return nil }
+        guard port > 0 else { stop()
+            return nil
+        }
         return port
     }
 
@@ -176,7 +181,9 @@ final class OTAServer: @unchecked Sendable {
             live[ObjectIdentifier(conn)] = conn
             return true
         }
-        guard accepted else { conn.cancel(); return }
+        guard accepted else { conn.cancel()
+            return
+        }
         // A peer that stops reading would otherwise hold a file handle and a
         // chunk of an .ipa until the app quits. Time without progress, not time
         // altogether: this exists for slow cellular, where a big .ipa legitimately
@@ -211,7 +218,9 @@ final class OTAServer: @unchecked Sendable {
                           idle: IdleTimer, by deadline: DispatchTime)
     {
         conn.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, done, _ in
-            guard let self, let data, !data.isEmpty else { conn.cancel(); return }
+            guard let self, let data, !data.isEmpty else { conn.cancel()
+                return
+            }
             let head = soFar + data
             guard head.count <= 32 * 1024 else { return self.send(conn, status: "431 Request Header Fields Too Large") }
             // Only the bytes that are new, less the three the terminator could
@@ -219,7 +228,9 @@ final class OTAServer: @unchecked Sendable {
             // whole buffer rescanned each time, which is quadratic in what it sends.
             let from = max(0, scanned - 3)
             guard let cut = Self.endOfHead(head, from: from) else {
-                guard !done else { conn.cancel(); return }
+                guard !done else { conn.cancel()
+                    return
+                }
                 let now = DispatchTime.now()
                 guard now < deadline else { return self.send(conn, status: "408 Request Timeout") }
                 idle.arm(Double(deadline.uptimeNanoseconds - now.uptimeNanoseconds) / 1e9)
@@ -390,7 +401,10 @@ final class OTAServer: @unchecked Sendable {
         let head = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n" +
             "Content-Length: \(size)\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
         conn.send(content: Data(head.utf8), completion: .contentProcessed { [weak self] error in
-            guard error == nil else { try? handle.close(); conn.cancel(); return }
+            guard error == nil else { try? handle.close()
+                conn.cancel()
+                return
+            }
             self?.pump(conn, handle, idle, since: .now(), sent: 0)
         })
     }
@@ -429,7 +443,10 @@ final class OTAServer: @unchecked Sendable {
             return
         }
         conn.send(content: chunk, completion: .contentProcessed { [weak self] error in
-            guard error == nil else { try? handle.close(); conn.cancel(); return }
+            guard error == nil else { try? handle.close()
+                conn.cancel()
+                return
+            }
             self?.pump(conn, handle, idle, since: since, sent: sent + Int64(chunk.count))
         })
     }

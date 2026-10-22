@@ -162,9 +162,11 @@ private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> {
     // A display name keeps meaning its device over another's Tailscale name.
     #expect(CLI.matches("iphone-15-pro", in: [phone, other]).map(\.id) == [other.id])
     // Saved in another case, or as the MagicDNS name Tailscale prints.
-    var mixed = phone; mixed.providerHostName = "iPhone-15-Pro"
+    var mixed = phone
+    mixed.providerHostName = "iPhone-15-Pro"
     #expect(CLI.matches("iphone-15-pro", in: [mixed, vision]).map(\.id) == [mixed.id])
-    var fqdn = phone; fqdn.providerHostName = "iPhone-15-Pro.Tail1234.TS.NET."
+    var fqdn = phone
+    fqdn.providerHostName = "iPhone-15-Pro.Tail1234.TS.NET."
     #expect(CLI.matches("iphone-15-pro", in: [fqdn, vision]).map(\.id) == [fqdn.id])
     #expect(CLI.matches("IPHONE-15-PRO.tail1234.ts.net", in: [fqdn]).isEmpty)
     // A dotted name that is not MagicDNS is not the first label.
@@ -190,7 +192,8 @@ private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> {
     let manual = profile("Lab", host: "192.168.0.5", provider: "manual")
     #expect(CLI.names([phone, same, blank, manual]) == "Saved: iPhone (iphone-15-pro), iPad, Vision, Lab")
     // As it is typed: a MagicDNS name's first label, in its case; without MagicDNS, a host name quoted for a shell.
-    var fqdn = phone; fqdn.providerHostName = "iPhone-15-Pro.Tail1234.TS.NET."
+    var fqdn = phone
+    fqdn.providerHostName = "iPhone-15-Pro.Tail1234.TS.NET."
     #expect(CLI.names([fqdn]) == "Saved: iPhone (iPhone-15-Pro)")
     #expect(CLI.names([profile("Work", host: "Mike's iPhone")]) == #"Saved: Work ('Mike'\''s iPhone')"#)
     // Not shown where it would name another device, or two.
@@ -629,9 +632,7 @@ private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> {
         $0.count == m.count
     })
     // A finder's top edge is seven dark modules over five light ones; the bottom right has none.
-    func finder(_ y: Int,
-                _ x: Int) -> Bool
-    {
+    func finder(_ y: Int, _ x: Int) -> Bool {
         m[y][x ..< x + 7].allSatisfy {
             $0
         } && !m[y + 1][x + 1 ..< x + 6].contains(true)

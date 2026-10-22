@@ -16,7 +16,10 @@ public final class DevicePairing: @unchecked Sendable {
         public var pairing: Data
 
         public init(udid: String, name: String, model: String, pairing: Data) {
-            self.udid = udid; self.name = name; self.model = model; self.pairing = pairing
+            self.udid = udid
+            self.name = name
+            self.model = model
+            self.pairing = pairing
         }
     }
 

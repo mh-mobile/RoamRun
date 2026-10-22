@@ -28,11 +28,9 @@
         static let identifier: String = {
             let permitted = Bundle.main
                 .object(forInfoDictionaryKey: "BGTaskSchedulerPermittedIdentifiers") as? [String] ?? []
-            if let wildcard = permitted
-                .first(where: {
-                    $0.hasSuffix(".introduce.*")
-                })
-            {
+            if let wildcard = permitted.first(where: {
+                $0.hasSuffix(".introduce.*")
+            }) {
                 return String(wildcard.dropLast()) + "session"
             }
             return (Bundle.main.bundleIdentifier ?? "io.github.mh-mobile.roamrun.introducer") + ".introduce.session"
@@ -47,7 +45,9 @@
                 MainActor.assumeIsolated {
                     guard let self else { return }
                     // With the continued task attached, the grace window only ends; that task carries on.
-                    guard self.task == nil, self.active else { self.endGrace(); return }
+                    guard self.task == nil, self.active else { self.endGrace()
+                        return
+                    }
                     self.expire {}
                 }
             }
@@ -62,7 +62,9 @@
                     log.error("register refused for \(Self.identifier, privacy: .public)")
                 }
             }
-            guard registered == true else { limited = true; return }
+            guard registered == true else { limited = true
+                return
+            }
             let request = BGContinuedProcessingTaskRequest(
                 identifier: Self.identifier,
                 title: title,
@@ -97,7 +99,9 @@
         private func attach(_ task: BGContinuedProcessingTask?) {
             guard let task else { return }
             // One at a time, and none for an introduction that is over.
-            guard active, self.task == nil else { task.setTaskCompleted(success: false); return }
+            guard active, self.task == nil else { task.setTaskCompleted(success: false)
+                return
+            }
             self.task = task
             task.expirationHandler = { [weak self] in
                 // Whatever queue iOS calls this on.
@@ -113,12 +117,11 @@
             tick()
             // Progress that moves is what keeps the scheduler from taking the task for stalled.
             ticker?.invalidate()
-            ticker = Timer
-                .scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
-                    MainActor.assumeIsolated {
-                        self?.tick()
-                    }
+            ticker = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.tick()
                 }
+            }
         }
 
         /// Says it is over, and gives what that starts (the record withdrawn, the far Mac told) a moment before letting go.

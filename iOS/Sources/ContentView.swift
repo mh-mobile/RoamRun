@@ -175,8 +175,7 @@ private struct StartView: View {
                     VStack(spacing: 12) {
                         Button(action: scan) {
                             Label("Scan the Mac's Code", systemImage: "qrcode.viewfinder")
-                        }
-                        .buttonStyle(Primary())
+                        }.buttonStyle(Primary())
                         Button("Enter Its Name", action: edit).buttonStyle(Secondary())
                     }
                 } else {
@@ -221,12 +220,10 @@ private struct StartView: View {
                     HStack(spacing: 12) {
                         Button(action: scan) {
                             Label("Scan a Code", systemImage: "qrcode.viewfinder")
-                        }
-                        .buttonStyle(Secondary())
+                        }.buttonStyle(Secondary())
                         Button(action: edit) {
                             Label("Edit", systemImage: "slider.horizontal.3")
-                        }
-                        .buttonStyle(Secondary())
+                        }.buttonStyle(Secondary())
                     }
                 }
 
@@ -459,15 +456,13 @@ private struct OutcomeView: View {
                             Button {
                                 UIPasteboard.general.string = line
                                 copied = true
-                            } label: { Label(
-                                copied ? "Copied" : "Copy",
-                                systemImage: copied ? "checkmark" : "doc.on.doc"
-                            ) }
+                            } label: {
+                                Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
+                            }
                             .buttonStyle(Secondary())
                             ShareLink(item: line) {
                                 Label("Share", systemImage: "square.and.arrow.up")
-                            }
-                            .buttonStyle(Secondary())
+                            }.buttonStyle(Secondary())
                         }
                     }
                     .card()

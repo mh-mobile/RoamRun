@@ -10,7 +10,8 @@ final class Events: @unchecked Sendable {
     func add(_ e: StandIn.Event) {
         lock.withLock {
             all.append(e)
-        }; print("  event:", e)
+        }
+        print("  event:", e)
     }
 
     var list: [StandIn.Event] {
@@ -24,7 +25,8 @@ final class Events: @unchecked Sendable {
         while Date() < until {
             if test(list) {
                 return true
-            }; Thread.sleep(forTimeInterval: 0.05)
+            }
+            Thread.sleep(forTimeInterval: 0.05)
         }
         return test(list)
     }
@@ -83,7 +85,8 @@ final class Client: @unchecked Sendable {
             switch st {
             case .ready: lock.withLock {
                     ready = true
-                }; receive()
+                }
+                receive()
             case .failed, .waiting: lock.withLock {
                     failed = true
                 }
@@ -106,7 +109,8 @@ final class Client: @unchecked Sendable {
             if eof || err != nil {
                 lock.withLock {
                     closed = true
-                }; return
+                }
+                return
             }
             receive()
         }
@@ -177,12 +181,14 @@ func echo(_ c: NWConnection, on queue: DispatchQueue) {
                     completion: .contentProcessed { _ in
                         c.cancel()
                     }
-                ); return
+                )
+                return
             }
             loop()
         }
     }
-    c.start(queue: queue); loop()
+    c.start(queue: queue)
+    loop()
 }
 
 /// Says `size` bytes once the client has closed its side, then closes.
@@ -197,12 +203,14 @@ func answerAfterFIN(_ c: NWConnection, size: Int, on queue: DispatchQueue) {
                     completion: .contentProcessed { _ in
                         c.cancel()
                     }
-                ); return
+                )
+                return
             }
             loop()
         }
     }
-    c.start(queue: queue); loop()
+    c.start(queue: queue)
+    loop()
 }
 
 @main struct RelayCheck {
@@ -222,7 +230,8 @@ func answerAfterFIN(_ c: NWConnection, size: Int, on queue: DispatchQueue) {
         }
         let farHits = Counter()
         far.newConnectionHandler = {
-            farHits.bump(); echo($0, on: queue)
+            farHits.bump()
+            echo($0, on: queue)
         }
         far.start(queue: queue)
         check(farReady.wait(timeout: .now() + 5) == .success, "fake far Mac listens on 127.0.0.1:\(far.port!.rawValue)")
@@ -359,17 +368,14 @@ func answerAfterFIN(_ c: NWConnection, size: Int, on queue: DispatchQueue) {
             evA.add($0)
         }
         try! a.start()
-        check(
-            evA
-                .wait {
-                    $0.contains {
-                        if case .announced(let n, let p) = $0 {
-                            return n == idA && p >= 1024
-                        }; return false
-                    }
-                },
-            "announced under the identifier"
-        )
+        check(evA.wait {
+            $0.contains {
+                if case .announced(let n, let p) = $0 {
+                    return n == idA && p >= 1024
+                }
+                return false
+            }
+        }, "announced under the identifier")
         check(browse.wait {
             $0.contains("Add") && $0.contains(idA)
         }, "dns-sd -B sees Add")
@@ -377,7 +383,8 @@ func answerAfterFIN(_ c: NWConnection, size: Int, on queue: DispatchQueue) {
             .compactMap {
                 if case .announced(_, let p) = $0 {
                     return p
-                }; return nil
+                }
+                return nil
             }
             .first!
         let stranger = Client(port: portA, queue: queue)
@@ -385,7 +392,8 @@ func answerAfterFIN(_ c: NWConnection, size: Int, on queue: DispatchQueue) {
             $0.contains {
                 if case .refused = $0 {
                     return true
-                }; return false
+                }
+                return false
             }
         }, "refused event")
         check(stranger.wait { _, closed, failed, _ in
@@ -401,33 +409,29 @@ func answerAfterFIN(_ c: NWConnection, size: Int, on queue: DispatchQueue) {
                 .filter {
                     if case .refused = $0 {
                         return true
-                    }; return false
+                    }
+                    return false
                 }
                 .count
         }
-        check(
-            again.allSatisfy {
-                $0.wait { _, closed, failed, _ in
-                    closed || failed
-                }
-            } && refusals(evA) == 1,
-            "a stranger knocking again is said once"
-        )
-        let v6 = Client(port: portA, host: "::1", queue: queue)
-        check(
-            v6.wait { _, closed, failed, _ in
+        check(again.allSatisfy {
+            $0.wait { _, closed, failed, _ in
                 closed || failed
-            } && evA.wait { _ in
-                refusals(evA) == 2
-            },
-            "a stranger at another address (::1) is said too"
-        )
+            }
+        } && refusals(evA) == 1, "a stranger knocking again is said once")
+        let v6 = Client(port: portA, host: "::1", queue: queue)
+        check(v6.wait { _, closed, failed, _ in
+            closed || failed
+        } && evA.wait { _ in
+            refusals(evA) == 2
+        }, "a stranger at another address (::1) is said too")
         let v6again = Client(port: portA, host: "::1", queue: queue)
         check(v6again.wait { _, closed, failed, _ in
             closed || failed
         } && refusals(evA) == 2, "and once")
         check(farHits.value == 0, "the fake far Mac saw no connection")
-        a.end(.stopped); a.end(.stopped)
+        a.end(.stopped)
+        a.end(.stopped)
         check(evA.wait {
             $0.filter {
                 $0 == .ended(.stopped)
@@ -458,49 +462,47 @@ func answerAfterFIN(_ c: NWConnection, size: Int, on queue: DispatchQueue) {
                 $0.contains {
                     if case .announced = $0 {
                         return true
-                    }; return false
+                    }
+                    return false
                 }
             }, "announced")
             let portT = evT.list
                 .compactMap {
                     if case .announced(_, let p) = $0 {
                         return p
-                    }; return nil
+                    }
+                    return nil
                 }
                 .first!
             let held = [Client(port: portT, queue: queue), Client(port: portT, queue: queue)]
-            check(
-                held.allSatisfy {
-                    $0.wait { ready, _, _, _ in
-                        ready
+            check(held.allSatisfy {
+                $0.wait { ready, _, _, _ in
+                    ready
+                }
+            } && evT.wait {
+                $0.filter {
+                    if case .connected = $0 {
+                        return true
                     }
-                } && evT
-                    .wait {
-                        $0.filter {
-                            if case .connected = $0 {
-                                return true
-                            }; return false
-                        }
-                        .count == 2
-                    },
-                "two carried"
-            )
+                    return false
+                }
+                .count == 2
+            }, "two carried")
             let more = [Client(port: portT, queue: queue), Client(port: portT, queue: queue)]
             check(more.allSatisfy {
                 $0.wait { _, closed, failed, _ in
                     closed || failed
                 }
             }
-                && evT
-                .wait {
+                && evT.wait {
                     $0.filter {
                         if case .full = $0 {
                             return true
-                        }; return false
+                        }
+                        return false
                     }
                     .count == 1
-                } &&
-                refusals(evT) == 0, "a third and a fourth: said once, as full")
+                } && refusals(evT) == 0, "a third and a fourth: said once, as full")
             t.end(.stopped)
             check(evT.wait {
                 $0.contains(.ended(.stopped))
@@ -522,16 +524,14 @@ func answerAfterFIN(_ c: NWConnection, size: Int, on queue: DispatchQueue) {
             evB.add($0)
         }
         try! b.start()
-        check(
-            evB.wait {
-                $0.contains {
-                    if case .announced(let n, _) = $0 {
-                        return n == idB
-                    }; return false
+        check(evB.wait {
+            $0.contains {
+                if case .announced(let n, _) = $0 {
+                    return n == idB
                 }
-            },
-            "announced"
-        )
+                return false
+            }
+        }, "announced")
         check(browse.wait {
             $0.contains("Add") && $0.contains(idB)
         }, "dns-sd -B sees Add")
@@ -539,7 +539,8 @@ func answerAfterFIN(_ c: NWConnection, size: Int, on queue: DispatchQueue) {
             .compactMap {
                 if case .announced(_, let p) = $0 {
                     return p
-                }; return nil
+                }
+                return nil
             }
             .first!
         let device = Client(port: portB, queue: queue)
@@ -550,7 +551,8 @@ func answerAfterFIN(_ c: NWConnection, size: Int, on queue: DispatchQueue) {
             $0.contains {
                 if case .connected = $0 {
                     return true
-                }; return false
+                }
+                return false
             }
         }, "connected event")
         if OwnAddresses.all().contains(IPv4Address("127.0.0.2")!.rawValue) {
@@ -558,17 +560,14 @@ func answerAfterFIN(_ c: NWConnection, size: Int, on queue: DispatchQueue) {
             check(other.wait { ready, _, _, _ in
                 ready
             }, "stranger on 127.0.0.2 connected")
-            check(
-                evB
-                    .wait {
-                        $0.contains {
-                            if case .refused(let f) = $0 {
-                                return f.hasPrefix("127.0.0.2")
-                            }; return false
-                        }
-                    },
-                "connection from 127.0.0.2 refused"
-            )
+            check(evB.wait {
+                $0.contains {
+                    if case .refused(let f) = $0 {
+                        return f.hasPrefix("127.0.0.2")
+                    }
+                    return false
+                }
+            }, "connection from 127.0.0.2 refused")
         } else {
             print(
                 "skip  127.0.0.2 isn't an address of this Mac (sudo ifconfig lo0 alias 127.0.0.2 would make it one); refusal was checked above"
@@ -585,12 +584,9 @@ func answerAfterFIN(_ c: NWConnection, size: Int, on queue: DispatchQueue) {
         check(evB.wait {
             $0.contains(.ended(.carried(up: 4, down: 4)))
         }, "ended(.carried(up: 4, down: 4))")
-        check(
-            browse.wait {
-                $0.contains("Rmv") && $0.contains(idB)
-            },
-            "dns-sd -B sees Rmv within a few seconds of the end"
-        )
+        check(browse.wait {
+            $0.contains("Rmv") && $0.contains(idB)
+        }, "dns-sd -B sees Rmv within a few seconds of the end")
 
         // 2b. What the far Mac says last, after the device closed its side, arrives whole.
         print("-- last words")
@@ -621,40 +617,38 @@ func answerAfterFIN(_ c: NWConnection, size: Int, on queue: DispatchQueue) {
                 evL.add($0)
             }
             try! l.start()
-            check(
-                evL.wait {
-                    $0.contains {
-                        if case .announced = $0 {
-                            return true
-                        }; return false
+            check(evL.wait {
+                $0.contains {
+                    if case .announced = $0 {
+                        return true
                     }
-                },
-                "announced (\(round))"
-            )
+                    return false
+                }
+            }, "announced (\(round))")
             let portL = evL.list
                 .compactMap {
                     if case .announced(_, let p) = $0 {
                         return p
-                    }; return nil
+                    }
+                    return nil
                 }
                 .first!
             let asker = Client(port: portL, queue: queue)
             check(asker.wait { ready, _, _, _ in
                 ready
             }, "connected (\(round))")
-            asker.send("ping"); asker.fin()
-            check(
-                asker.wait(10) { _, closed, _, got in
-                    closed && got.count == size
-                },
-                "all \(size) bytes after the device's close came through (\(round))"
-            )
+            asker.send("ping")
+            asker.fin()
+            check(asker.wait(10) { _, closed, _, got in
+                closed && got.count == size
+            }, "all \(size) bytes after the device's close came through (\(round))")
             l.end(.stopped)
             check(evL.wait {
                 $0.contains {
                     if case .ended = $0 {
                         return true
-                    }; return false
+                    }
+                    return false
                 }
             }, "ended (\(round))")
         }
@@ -671,14 +665,11 @@ func answerAfterFIN(_ c: NWConnection, size: Int, on queue: DispatchQueue) {
         rude.newConnectionHandler = { c in
             c.start(queue: queue)
             c.receive(minimumIncompleteLength: 1, maximumLength: 16) { _, _, _, _ in
-                c.send(
-                    content: Data("pong".utf8),
-                    completion: .contentProcessed { _ in
-                        queue.asyncAfter(deadline: .now() + 0.2) {
-                            c.forceCancel()
-                        }
+                c.send(content: Data("pong".utf8), completion: .contentProcessed { _ in
+                    queue.asyncAfter(deadline: .now() + 0.2) {
+                        c.forceCancel()
                     }
-                )
+                })
             }
         }
         rude.start(queue: queue)
@@ -701,19 +692,18 @@ func answerAfterFIN(_ c: NWConnection, size: Int, on queue: DispatchQueue) {
             $0.contains {
                 if case .announced = $0 {
                     return true
-                }; return false
+                }
+                return false
             }
         }, "announced")
-        let held = Client(
-            port: evR.list
-                .compactMap {
-                    if case .announced(_, let p) = $0 {
-                        return p
-                    }; return nil
+        let held = Client(port: evR.list
+            .compactMap {
+                if case .announced(_, let p) = $0 {
+                    return p
                 }
-                .first!,
-            queue: queue
-        )
+                return nil
+            }
+            .first!, queue: queue)
         check(held.wait { ready, _, _, _ in
             ready
         }, "connected")
@@ -721,16 +711,14 @@ func answerAfterFIN(_ c: NWConnection, size: Int, on queue: DispatchQueue) {
         check(held.wait { _, _, _, got in
             got == Data("pong".utf8)
         }, "its answer came through before the reset")
-        check(
-            evR.wait(5) {
-                $0.contains {
-                    if case .ended(.carried) = $0 {
-                        return true
-                    }; return false
+        check(evR.wait(5) {
+            $0.contains {
+                if case .ended(.carried) = $0 {
+                    return true
                 }
-            },
-            "the reset ended it as carried, with the device's side still open"
-        )
+                return false
+            }
+        }, "the reset ended it as carried, with the device's side still open")
         check(held.wait { _, closed, failed, _ in
             closed || failed
         }, "and closed the device's connection")
@@ -779,19 +767,18 @@ func answerAfterFIN(_ c: NWConnection, size: Int, on queue: DispatchQueue) {
             $0.contains {
                 if case .announced = $0 {
                     return true
-                }; return false
+                }
+                return false
             }
         }, "announced")
-        let kept = Client(
-            port: evG.list
-                .compactMap {
-                    if case .announced(_, let p) = $0 {
-                        return p
-                    }; return nil
+        let kept = Client(port: evG.list
+            .compactMap {
+                if case .announced(_, let p) = $0 {
+                    return p
                 }
-                .first!,
-            queue: queue
-        )
+                return nil
+            }
+            .first!, queue: queue)
         check(kept.wait { ready, _, _, _ in
             ready
         }, "connected")
@@ -799,16 +786,14 @@ func answerAfterFIN(_ c: NWConnection, size: Int, on queue: DispatchQueue) {
         check(kept.wait { _, _, _, got in
             got == Data("pong".utf8)
         }, "its answer came through")
-        check(
-            evG.wait(5) {
-                $0.contains {
-                    if case .ended(.carried) = $0 {
-                        return true
-                    }; return false
+        check(evG.wait(5) {
+            $0.contains {
+                if case .ended(.carried) = $0 {
+                    return true
                 }
-            },
-            "its going ended it, with the device's side still open"
-        )
+                return false
+            }
+        }, "its going ended it, with the device's side still open")
         gone.cancel()
 
         // 2c. A refusal of the local network isn't final while the person may still be answering.

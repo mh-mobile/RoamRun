@@ -142,7 +142,8 @@ struct AddDeviceView: View {
             refusal = nil
         }
         .onChange(of: provider) { _ in
-            refusal = nil; followSelection()
+            refusal = nil
+            followSelection()
         }
         // The chosen Tailscale device gone from a refreshed list: no choice, not a blank one.
         .onChange(of: coordinator.tailscaleDevices) { devices in

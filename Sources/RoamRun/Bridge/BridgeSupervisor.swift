@@ -274,7 +274,8 @@ final class DeviceMemory {
     var onCellular = false
 
     func clearScanPause() {
-        scanPause = nil; onCellular = false
+        scanPause = nil
+        onCellular = false
     }
 
     func scansPaused(of endpoint: String, now: Date) -> Bool {

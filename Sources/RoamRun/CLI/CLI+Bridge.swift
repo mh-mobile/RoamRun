@@ -38,7 +38,8 @@ extension CLI {
 
     static func down(_ profile: DeviceProfile) -> Never {
         guard let e = StatusFile.read()[profile.id] else {
-            print("\(profile.displayName) is not bridged."); exit(0)
+            print("\(profile.displayName) is not bridged.")
+            exit(0)
         }
         let who = owner(e) // before it exits and the pid stops resolving
         // Always tell the app too: even when the CLI owns the device, the app
@@ -54,7 +55,8 @@ extension CLI {
         // Wait for the owner to clear its status entry.
         var tries = 0
         while StatusFile.read()[profile.id] != nil && tries < 50 {
-            usleep(100_000); tries += 1
+            usleep(100_000)
+            tries += 1
         }
         guard StatusFile.read()[profile.id] == nil else { stop("\(who) did not stop the bridge") }
         print("Stopped \(profile.displayName) (\(who)).")
@@ -107,16 +109,16 @@ extension CLI {
             usleep(500_000)
             guard child.isRunning else {
                 // It exits on an error retrying can't fix (see up); its last line says which.
-                let tail = (try? String(contentsOf: logURL, encoding: .utf8))
-                    .flatMap {
-                        $0.split(separator: "\n").last.map(String.init)
-                    }
+                let tail = (try? String(contentsOf: logURL, encoding: .utf8)).flatMap {
+                    $0.split(separator: "\n").last.map(String.init)
+                }
                 stop("the background bridge exited\(tail.map { ": \($0)" } ?? "") — see \(logURL.path)")
             }
             guard let e = StatusFile.read()[profile.id], e.pid == child.processIdentifier else { continue }
             endTurn(&turn) // the child holds the device now: the next `up` sees it
             if e.status != last {
-                last = e.status; print("  \(e.status)")
+                last = e.status
+                print("  \(e.status)")
             }
             lastKind = e.kind
             if e.ready || e.kind == .local {
@@ -154,7 +156,9 @@ extension CLI {
             0o600
         )
         guard fd >= 0 else { return nil }
-        guard flock(fd, wait ? LOCK_EX : LOCK_EX | LOCK_NB) == 0 else { close(fd); return nil }
+        guard flock(fd, wait ? LOCK_EX : LOCK_EX | LOCK_NB) == 0 else { close(fd)
+            return nil
+        }
         return fd
     }
 

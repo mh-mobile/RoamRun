@@ -18,7 +18,8 @@ extension Introduction {
     /// drawn in a terminal holds (the line itself makes one too large for it).
     static func codeURL(mac: String, offer: Offer? = nil) -> String? {
         var url = URLComponents()
-        url.scheme = "roamrun-introducer"; url.host = mac
+        url.scheme = "roamrun-introducer"
+        url.host = mac
         if let offer {
             url.queryItems = [URLQueryItem(name: "p", value: String(offer.port))]
                 + [
@@ -41,13 +42,12 @@ extension Introduction {
     /// known to be elsewhere. Xcode's names a host the browse gives no address for, so the
     /// caller also asks whether the port is listened on here.
     static func ownOffers(among services: [CapturedService], ownIPs: Set<String>) -> [CapturedService] {
-        services
-            .filter {
-                $0.serviceType == hostService && ($0.hostIPs.isEmpty || !ownIPs.isDisjoint(with: $0.hostIPs))
-            }
-            .sorted {
-                $0.instanceName < $1.instanceName
-            }
+        services.filter {
+            $0.serviceType == hostService && ($0.hostIPs.isEmpty || !ownIPs.isDisjoint(with: $0.hostIPs))
+        }
+        .sorted {
+            $0.instanceName < $1.instanceName
+        }
     }
 
     /// Whose connections a stand-in takes: the device's alone when its address on this LAN is
@@ -143,7 +143,8 @@ extension Introduction {
                   })
                   .count == 1,
                   announcedAnew(all[i], by: device, as: new) else { return .already(all[i].displayName) }
-            all[i].instanceName = new.instanceName; all[i].txt = new.txt
+            all[i].instanceName = new.instanceName
+            all[i].txt = new.txt
             return .renewed(all[i].displayName)
         }
         if let problem = all.nameProblem(new.displayName) {
@@ -166,16 +167,16 @@ extension Introduction {
         guard let i = all.firstIndex(where: {
             $0.id == id
         }) else { return .gone }
-        if let other = all
-            .first(where: {
-                $0.id != id && ProfileStore.sameDevice($0, new)
-            })
-        {
+        if let other = all.first(where: {
+            $0.id != id && ProfileStore.sameDevice($0, new)
+        }) {
             return .already(other.displayName)
         }
-        all[i].instanceName = new.instanceName; all[i].txt = new.txt
+        all[i].instanceName = new.instanceName
+        all[i].txt = new.txt
         all[i].remotePairingPort = new.remotePairingPort
-        all[i].providerIP = new.providerIP; all[i].providerHostName = new.providerHostName
+        all[i].providerIP = new.providerIP
+        all[i].providerHostName = new.providerHostName
         all[i].providerID = new.providerID // one saved by its address is a Tailscale device from here on
         return .replaced
     }
@@ -193,10 +194,9 @@ extension Introduction {
     static func announcedAnew(_ saved: DeviceProfile, by device: Device, as new: DeviceProfile) -> Bool {
         guard let have = Introduction.device(of: saved) else { return false }
         func lasting(_ txt: [String: String]) -> [String: String] {
-            txt
-                .filter {
-                    $0.key != "identifier" && $0.key != "authTag"
-                }
+            txt.filter {
+                $0.key != "identifier" && $0.key != "authTag"
+            }
         }
         return have.port == device.port && lasting(have.txt) == lasting(device.txt)
             && saved.providerIP == new.providerIP && saved.providerHostName == new.providerHostName
@@ -287,10 +287,13 @@ final class Introducer {
                                       self?.pair(event)
                                   }
                               })
-            do { try await relay.start() } catch { failure = error.localizedDescription; continue }
+            do { try await relay.start() } catch { failure = error.localizedDescription
+                continue
+            }
             // Ended while that waited: nothing may be announced after it was said nothing is.
             if ended {
-                relay.stop(); throw CancellationError()
+                relay.stop()
+                throw CancellationError()
             }
             self.relay = relay
             break
@@ -335,7 +338,8 @@ final class Introducer {
                     try? await Task.sleep(for: .seconds(2))
                     guard let self, !Task.isCancelled else { return }
                     if self.addressNow() != local {
-                        await self.end(.addressLost); return
+                        await self.end(.addressLost)
+                        return
                     }
                 }
             },

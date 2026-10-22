@@ -53,7 +53,9 @@ extension TimingSensitive {
         /// waves, and never more than two at once.
         @Test func blockingWorkBeyondTheLimitWaitsItsTurn() async {
             let gate = Blocking.Gate(2)
-            final class Count: @unchecked Sendable { let l = NSLock(); var now = 0, peak = 0 }
+            final class Count: @unchecked Sendable { let l = NSLock()
+                var now = 0, peak = 0
+            }
             let count = Count()
             let clock = ContinuousClock(), start = clock.now
             await withTaskGroup(of: Void.self) { group in
@@ -61,7 +63,8 @@ extension TimingSensitive {
                     group.addTask {
                         await gate.enter()
                         count.l.withLock {
-                            count.now += 1; count.peak = max(count.peak, count.now)
+                            count.now += 1
+                            count.peak = max(count.peak, count.now)
                         }
                         try? await Task.sleep(for: .milliseconds(500))
                         count.l.withLock {

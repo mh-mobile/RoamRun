@@ -27,12 +27,9 @@ final class DeviceControlKey: @unchecked Sendable {
         } as CFDictionary, &found)
         return (status, found as? Data)
     }, add: @escaping (Data) -> OSStatus = { fresh in
-        SecItemAdd(
-            item
-                .merging([kSecValueData as String: fresh, kSecAttrLabel as String: "RoamRun device control"]) { $1
-                } as CFDictionary,
-            nil
-        )
+        SecItemAdd(item.merging([kSecValueData as String: fresh, kSecAttrLabel as String: "RoamRun device control"]) {
+            $1
+        } as CFDictionary, nil)
     }) {
         self.read = read
         self.add = add
@@ -55,14 +52,11 @@ final class DeviceControlKey: @unchecked Sendable {
             }
             var last = errSecSuccess
             do {
-                let key = try Self.key(
-                    make: make,
-                    read: {
-                        let r = read(); last = r.0; return r
-                    },
-                    add: add,
-                    atHand: held
-                )
+                let key = try Self.key(make: make, read: {
+                    let r = read()
+                    last = r.0
+                    return r
+                }, add: add, atHand: held)
                 held = key
                 refused = nil
                 return key

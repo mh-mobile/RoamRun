@@ -31,9 +31,10 @@ final class DeviceFinder: @unchecked Sendable {
     func start() {
         browser.stateUpdateHandler = { [weak self] state in
             switch state {
-            case .ready: self?.looking = true; self?.denied = false
-            case .waiting(.dns(-65570)),
-                 .failed(.dns(-65570)): self?.denied = true; self?.looking = false // Local Network permission
+            case .ready: self?.looking = true
+                self?.denied = false
+            case .waiting(.dns(-65570)), .failed(.dns(-65570)): self?.denied = true
+                self?.looking = false // Local Network permission
             default: break
             }
         }
@@ -48,7 +49,8 @@ final class DeviceFinder: @unchecked Sendable {
     func stop() {
         browser.cancel()
         queue.async {
-            self.resolution?.cancel(); self.resolution = nil
+            self.resolution?.cancel()
+            self.resolution = nil
         }
     }
 
@@ -78,8 +80,7 @@ final class DeviceFinder: @unchecked Sendable {
         switch Wire.mayUseNetwork(looking: looking, denied: denied, waited: waited) {
         case false?: completion(false)
         // Ready, and still so a moment later: a refusal arrives just after, and is waited on like any.
-        case true?: queue
-            .asyncAfter(deadline: .now() + 0.3) {
+        case true?: queue.asyncAfter(deadline: .now() + 0.3) {
                 self.denied ? self.ask(completion, waited: waited + 1) : completion(true)
             }
         case nil: queue.asyncAfter(deadline: .now() + 0.5) { [weak self] in
@@ -90,14 +91,14 @@ final class DeviceFinder: @unchecked Sendable {
 
     private func arm(_ box: Resolution, waited: Int) {
         if denied {
-            box.end(.denied); return
+            box.end(.denied)
+            return
         }
-        if looking || waited >=
-            60
-        {
+        if looking || waited >= 60 {
             queue.asyncAfter(deadline: .now() + 5) { [weak self] in
                 box.end(self?.denied == true ? .denied : .notSeen)
-            }; return
+            }
+            return
         }
         queue.asyncAfter(deadline: .now() + 1) { [weak self] in
             self?.arm(box, waited: waited + 1)

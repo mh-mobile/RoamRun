@@ -139,7 +139,9 @@ enum Blocking {
         func enter() async {
             await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
                 let now: Bool = lock.withLock {
-                    guard free > 0 else { waiting.append(c); return false }
+                    guard free > 0 else { waiting.append(c)
+                        return false
+                    }
                     free -= 1
                     return true
                 }
@@ -153,7 +155,8 @@ enum Blocking {
         func leave() {
             let next: CheckedContinuation<Void, Never>? = lock.withLock {
                 if waiting.isEmpty {
-                    free += 1; return nil
+                    free += 1
+                    return nil
                 }
                 return waiting.removeFirst()
             }

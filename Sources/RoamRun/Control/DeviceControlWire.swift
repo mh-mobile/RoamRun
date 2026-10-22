@@ -181,10 +181,9 @@ enum DeviceControlWire {
 
     /// What a UDID is made of. It names a file here and is handed to Xcode's tools.
     static func plausible(udid: String) -> Bool {
-        !udid.isEmpty && udid.utf8.count <= 64 && udid.unicodeScalars
-            .allSatisfy {
-                $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "-")
-            }
+        !udid.isEmpty && udid.utf8.count <= 64 && udid.unicodeScalars.allSatisfy {
+            $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "-")
+        }
     }
 
     private static func address(_ path: String) -> sockaddr_un? {
@@ -256,7 +255,8 @@ enum DeviceControlWire {
 
         func giveUp() {
             lock.withLock {
-                given = true; if fd >= 0 {
+                given = true
+                if fd >= 0 {
                     shutdown(fd, SHUT_RDWR)
                 }
             }
@@ -264,7 +264,8 @@ enum DeviceControlWire {
 
         fileprivate func began(_ fd: Int32) -> Bool {
             lock.withLock {
-                self.fd = fd; return !given
+                self.fd = fd
+                return !given
             }
         }
 
@@ -336,7 +337,9 @@ enum DeviceControlWire {
                 withIntermediateDirectories: true,
                 attributes: [.posixPermissions: 0o700]
             )
-            guard chmod(folder.path, 0o700) == 0 else { close(fd); return nil }
+            guard chmod(folder.path, 0o700) == 0 else { close(fd)
+                return nil
+            }
             // One at a time, by a lock the system lets go of when its holder ends: a copy started
             // beside the app doesn't take its socket, and one that is ending removes its own —
             // tried by asking whether something answers, an ending one answered no and then
@@ -359,9 +362,11 @@ enum DeviceControlWire {
             }
             DeviceControlWire.noSIGPIPE(fd)
             guard DeviceControlWire.withAddress(path, {
-                      bind(fd, $0, $1)
-                  }) == 0,
-                  listen(fd, 64) == 0 else { close(fd); close(held); return nil }
+                bind(fd, $0, $1)
+            }) == 0, listen(fd, 64) == 0 else { close(fd)
+                close(held)
+                return nil
+            }
             chmod(path, 0o600)
             self.fd = fd
             self.path = path
@@ -391,12 +396,9 @@ enum DeviceControlWire {
                             var byte: UInt8 = 0
                             return recv(client, &byte, 1, MSG_PEEK | MSG_DONTWAIT) != 0
                         }
-                        DeviceControlWire.writeLine(
-                            request.map {
-                                handler($0, wanted)
-                            } ?? .failure("unreadable request"),
-                            to: client
-                        )
+                        DeviceControlWire.writeLine(request.map {
+                            handler($0, wanted)
+                        } ?? .failure("unreadable request"), to: client)
                     }
                 }
             }
@@ -405,7 +407,8 @@ enum DeviceControlWire {
         func stop() {
             // Once: asked again, the name may be a successor's by then.
             guard stopped.withLock({ () -> Bool in
-                defer { isStopped = true }; return !isStopped
+                defer { isStopped = true }
+                return !isStopped
             }) else { return }
             unlink(path)
             close(fd)

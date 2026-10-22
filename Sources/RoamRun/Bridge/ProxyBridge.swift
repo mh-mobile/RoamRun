@@ -211,7 +211,8 @@ final class ProxyBridge: ObservableObject {
             // Stopped for a restart, or rebuilt: still say why, and stay an error (the CLI
             // gives up on one; the app shows it).
             if case .error = state {} else if let why = memory.blockMessage {
-                state = .error(why); publishStatus()
+                state = .error(why)
+                publishStatus()
             }
             return
         }
@@ -331,7 +332,9 @@ final class ProxyBridge: ObservableObject {
                 lastError = error.localizedDescription
             }
         }
-        guard gen == generation else { control?.stop(); return }
+        guard gen == generation else { control?.stop()
+            return
+        }
         guard let control else {
             setState(.error("No usable local port: \(lastError)"))
             return
@@ -457,7 +460,8 @@ final class ProxyBridge: ObservableObject {
     func requestStart(_ reason: StartReason) {
         let g = generation
         Task {
-            guard g == generation else { return }; await start(reason)
+            guard g == generation else { return }
+            await start(reason)
         }
     }
 
@@ -509,11 +513,11 @@ final class ProxyBridge: ObservableObject {
             let relay = Relay(localIP: localIP, localPort: localPort, remoteIP: profile.providerIP,
                               remotePort: remotePort, spare: tunnelPort != nil, clock: env.relayClock,
                               onOpenCountChange: onOpenCountChange,
-                              onFailure: { [weak self] relay in Task { @MainActor in self?.relayFailed(
-                                  relay,
-                                  tunnelPort: tunnelPort,
-                                  gen: gen
-                              ) } })
+                              onFailure: { [weak self] relay in
+                                  Task { @MainActor in
+                                      self?.relayFailed(relay, tunnelPort: tunnelPort, gen: gen)
+                                  }
+                              })
             do {
                 try await relay.start()
                 return relay
@@ -550,8 +554,7 @@ final class ProxyBridge: ObservableObject {
         let me = getpid()
         guard StatusFile.read(in: statusDir, live: live).values.contains(where: {
             $0.pid != me && $0.holdsDevice
-        })
-        else { return false }
+        }) else { return false }
         post("\(me) \(window.lowerBound)-\(window.upperBound)")
         return true
     }
@@ -690,7 +693,9 @@ final class ProxyBridge: ObservableObject {
         // Bounded whatever the log says; the window above keeps normal use near 49.
         // coveredPorts includes binds still in flight, and the control port (hence - 1).
         guard coveredPorts.count - 1 + ports.count <= 64
-        else { log("tunnel port \(port) ignored: 64 relays already open"); return }
+        else { log("tunnel port \(port) ignored: 64 relays already open")
+            return
+        }
         coveredPorts.formUnion(ports)
         log("live tunnel port \(port) discovered, relaying \(ports.first!)-\(ports.last!)")
         let gen = generation
@@ -725,19 +730,21 @@ final class ProxyBridge: ObservableObject {
                     }
                     do {
                         let pair = try bound.get()
-                        guard gen == generation else { pair.stop(); return } // bridge stopped meanwhile
+                        guard gen == generation else { pair.stop()
+                            return
+                        } // bridge stopped meanwhile
                         if yielded.remove(p) != nil {
-                            pair.stop(); continue
+                            pair.stop()
+                            continue
                         } // given away while binding
                         tunnelRelays[p] = pair
                         opened.append(p)
                         tunnelReady = true
                     } catch {
                         guard gen == generation else { return }
-                        if pass == 0, announced, tunnelRelays[p] == nil,
-                           !yielded.contains(p)
-                        {
-                            again.append(p); continue
+                        if pass == 0, announced, tunnelRelays[p] == nil, !yielded.contains(p) {
+                            again.append(p)
+                            continue
                         }
                         yielded.remove(p)
                         // Still covered while a relay is on it (an earlier bind of the same port
@@ -1137,7 +1144,9 @@ final class ProxyBridge: ObservableObject {
     /// Waiting for a minute with the record up usually means remotepairingd
     /// gave up on this device ("Not attempting to reconnect…"). Re-announce.
     private func renewIfStuck() {
-        guard state.isActive else { stuckRenewals = 0; return }
+        guard state.isActive else { stuckRenewals = 0
+            return
+        }
         switch link {
         case .wifi, .cellular:
             stuckRenewals = 0
@@ -1324,7 +1333,8 @@ final class ProxyBridge: ObservableObject {
         }
         if env.localNetworkDenied() {
             if !saidLocalNetworkDenied {
-                saidLocalNetworkDenied = true; log(LocalNetwork.advice)
+                saidLocalNetworkDenied = true
+                log(LocalNetwork.advice)
             }
         } else {
             saidLocalNetworkDenied = false
@@ -1381,12 +1391,11 @@ final class ProxyBridge: ObservableObject {
         let ip = profile.providerIP
         // Not Tailscale (a manual IP): no ping, whose answer would only be thrown away.
         let tailscale = profile.providerID == MeshProvider.tailscale.rawValue
-        let direct = tailscale ? await Blocking
-            .run {
-                Result {
-                    try TailscaleClient.fromSettings().directHost(ip)
-                }
-            } : nil
+        let direct = tailscale ? await Blocking.run {
+            Result {
+                try TailscaleClient.fromSettings().directHost(ip)
+            }
+        } : nil
         guard tailscale, case .success(let found)? = direct else {
             // ponytail: no Tailscale CLI (or a manual IP) — probe the host name seen at Add. Misses a
             // renamed iPhone and can hit another iPhone of the same name; set the CLI path to avoid.

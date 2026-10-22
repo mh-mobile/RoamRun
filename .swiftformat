@@ -1,9 +1,11 @@
 # make format runs SwiftFormat (the version the Makefile pins) with these: line breaks, indentation and
-# spaces only. Closure bodies go on their own line, so a breakpoint can stop in one.
+# spaces, and a `;` between statements made a line break. Closure bodies go on their own line, so a
+# breakpoint can stop in one.
 --swift-version 6.0
 --min-version 0.64.0
 --max-width 120
 --indent 4
 --wrap-closure-bodies always
---rules blankLineAfterImports,blankLinesAroundMark,blankLinesAtEndOfScope,blankLinesAtStartOfScope,blankLinesBetweenChainedFunctions,blankLinesBetweenImports,blankLinesBetweenScopes,braces,consecutiveBlankLines,consecutiveSpaces,elseOnSameLine,emptyBraces,indent,leadingDelimiters,linebreaks,spaceAroundBraces,spaceAroundBrackets,spaceAroundComments,spaceAroundGenerics,spaceAroundOperators,spaceAroundParens,spaceInsideBraces,spaceInsideBrackets,spaceInsideComments,spaceInsideGenerics,spaceInsideParens,trailingSpace,wrap,wrapArguments,wrapAttributes,wrapClosureBodies,wrapFunctionBodies,wrapIfExpressionBodies,wrapIfStatementBodies,wrapLoopBodies,wrapMultilineFunctionChains,wrapMultilineStatementBraces,wrapPropertyBodies
+--semicolons never
+--rules blankLineAfterImports,blankLinesAroundMark,blankLinesAtEndOfScope,blankLinesAtStartOfScope,blankLinesBetweenChainedFunctions,blankLinesBetweenImports,blankLinesBetweenScopes,braces,consecutiveBlankLines,consecutiveSpaces,elseOnSameLine,emptyBraces,indent,linebreaks,semicolons,spaceAroundBraces,spaceAroundBrackets,spaceAroundComments,spaceAroundGenerics,spaceAroundOperators,spaceAroundParens,spaceInsideBraces,spaceInsideBrackets,spaceInsideComments,spaceInsideGenerics,spaceInsideParens,trailingSpace,wrap,wrapArguments,wrapAttributes,wrapClosureBodies,wrapFunctionBodies,wrapIfExpressionBodies,wrapIfStatementBodies,wrapLoopBodies,wrapMultilineFunctionChains,wrapMultilineStatementBraces,wrapPropertyBodies
 --exclude .build,Rust,RoamRun.app,dmg-root,roamrunctl-dist

@@ -116,12 +116,14 @@ extension TimingSensitive {
             server.stop()
             let closed = await withTaskGroup(of: Bool.self) { group in
                 group.addTask {
-                    _ = await quiet.value; return true
+                    _ = await quiet.value
+                    return true
                 }
                 // Well inside the 15 s the head deadline would take, so a pass here is
                 // `stop` having done it rather than the timer.
                 group.addTask {
-                    try? await Task.sleep(for: .seconds(5)); return false
+                    try? await Task.sleep(for: .seconds(5))
+                    return false
                 }
                 defer { group.cancelAll() }
                 return await group.next() ?? false
@@ -1126,7 +1128,9 @@ private final class FakeServe: @unchecked Sendable {
             return self.offWorks
         }
         t.serve = { port, target in
-            self.serves.append(port); self.states[port] = mounted(port, target); return ""
+            self.serves.append(port)
+            self.states[port] = mounted(port, target)
+            return ""
         }
         t.remember = { target, port in
             self.record.append("\(port) \(target)")
@@ -1135,10 +1139,10 @@ private final class FakeServe: @unchecked Sendable {
             self.record
         }
         t.forget = { target, port in
-            self.record
-                .removeAll {
-                    let p = AppCoordinator.pair($0); return p.target == target && (p.port == nil || p.port == port)
-                }
+            self.record.removeAll {
+                let p = AppCoordinator.pair($0)
+                return p.target == target && (p.port == nil || p.port == port)
+            }
         }
         t.otaPort = {
             self.otaPort
@@ -1170,16 +1174,21 @@ func releaseServeOutcomes(_ c: ReleaseCase) {
     case .unreadable: fake.states[41443] = .unknown
     case .alreadyGone: break
     case .oursOffWorks: fake.states[41443] = mounted(41443, mine)
-    case .oursOffFails: fake.states[41443] = mounted(41443, mine); fake.offWorks = false
+    case .oursOffFails: fake.states[41443] = mounted(41443, mine)
+        fake.offWorks = false
     case .someoneElses: fake.states[41443] = mounted(41443, "http://127.0.0.1:8788")
     case .oursUnderAnOldName: // the node was renamed: `off` would hit whatever took its place
         fake.states[41443] = TailscaleClient.serving(port: 41443,
                                                      inJSON: #"{"Web":{"old.ts.net:41443":{"Handlers":{"/":{"Proxy":"\#(mine)"}}}}}"#)
-    case .noHostName: fake.states[41443] = mounted(41443, mine); fake.host = nil
-    case .offSaysYesButStays: fake.states[41443] = mounted(41443, mine); fake.afterOff = mounted(41443, mine)
-    case .offThenUnreadable: fake.states[41443] = mounted(41443, mine); fake.afterOff = .unknown
+    case .noHostName: fake.states[41443] = mounted(41443, mine)
+        fake.host = nil
+    case .offSaysYesButStays: fake.states[41443] = mounted(41443, mine)
+        fake.afterOff = mounted(41443, mine)
+    case .offThenUnreadable: fake.states[41443] = mounted(41443, mine)
+        fake.afterOff = .unknown
     case .offThenSomeoneElses: // ours went, and something else took `/` straight after
-        fake.states[41443] = mounted(41443, mine); fake.afterOff = mounted(41443, "http://127.0.0.1:8788")
+        fake.states[41443] = mounted(41443, mine)
+        fake.afterOff = mounted(41443, "http://127.0.0.1:8788")
     }
     let gone = AppCoordinator.releaseServe((port: 41443, target: mine), tools: fake.tools)
     let (expectGone, expectOff, expectForgotten): (Bool, Bool, Bool) = switch c {
@@ -1296,9 +1305,11 @@ enum PublishCase: String, CaseIterable { case portChanged, offBefore, offDuring,
 
 @Test(arguments: PublishCase.allCases)
 func publishStepsAsideWhenTurnedOff(_ c: PublishCase) async {
-    final class Answers: @unchecked Sendable { var left: [Bool]; init(_ a: [Bool]) {
-        left = a
-    } }
+    final class Answers: @unchecked Sendable { var left: [Bool]
+        init(_ a: [Bool]) {
+            left = a
+        }
+    }
     let mine = "http://127.0.0.1:61816"
     let fake = FakeServe()
     let answers = Answers(c == .offBefore ? [false] : c == .offDuring ? [true, false] : [true, true])

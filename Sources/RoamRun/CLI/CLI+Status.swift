@@ -62,12 +62,11 @@ extension CLI {
     {
         let udid = e?.udid ?? p.udid
         let usable = e?.ready == true || e?.kind == .local // on this Wi-Fi: Xcode sees it directly
-        let core = deep && usable ? udid
-            .flatMap { u in
-                coreState.map {
-                    $0(u)
-                } ?? coreDeviceState(u, by: deadline)
-            } : nil
+        let core = deep && usable ? udid.flatMap { u in
+            coreState.map {
+                $0(u)
+            } ?? coreDeviceState(u, by: deadline)
+        } : nil
         let r = readiness(e, udid: udid, core: core, deep: deep)
         return Row(
             name: p.displayName,
@@ -181,7 +180,9 @@ extension CLI {
             })
             exit(0)
         }
-        guard !profiles.isEmpty else { print(noDevices); exit(0) }
+        guard !profiles.isEmpty else { print(noDevices)
+            exit(0)
+        }
         let w = max(4, profiles.map(\.displayName.count).max() ?? 4)
         print("NAME".padding(toLength: w + 2, withPad: " ", startingAt: 0)
             + "VPN ADDRESS      UDID                       ID                                    STATUS")
@@ -233,7 +234,9 @@ extension CLI {
             }
         }
         rows = zip(rows, controls).map { r, c in
-            var r = r; r.deviceControl = c?.key; return r
+            var r = r
+            r.deviceControl = c?.key
+            return r
         }
         // Not connected for this Mac's own Tailscale being down reads, from the app's side, like
         // the device being away: asked once, and said, where a device not connected goes over it.
@@ -244,10 +247,9 @@ extension CLI {
                 let overTailscale = targets.contains {
                     $0.providerID == MeshProvider.tailscale.rawValue
                 }
-                mesh = .some(overTailscale ? Self
-                    .meshProblem {
-                        try TailscaleClient.fromSettings().listDevices()
-                    } : nil)
+                mesh = .some(overTailscale ? Self.meshProblem {
+                    try TailscaleClient.fromSettings().listDevices()
+                } : nil)
             }
             return ControlState.notConnectedLine(mesh: mesh ?? nil)
         }), uniquingKeysWith: { a, _ in
@@ -354,7 +356,9 @@ extension CLI {
                 $0.result == "fail"
             }
             if json {
-                struct Report: Encodable { let healthy: Bool; let checks: [Check] }
+                struct Report: Encodable { let healthy: Bool
+                    let checks: [Check]
+                }
                 printJSON(Report(healthy: healthy, checks: checks))
             } else {
                 print(healthy ? "\n" + paint("All good.", 32) :
@@ -517,10 +521,9 @@ extension CLI {
             let adverts = { (phrase: String) in
                 TunnelPortWatcher.recentAdverts(last: "15m", containing: phrase)
             }
-            let ours = plain(p.instanceName) ? adverts("Resolved bonjour advert \(p.instanceName) to identity")
-                .last {
-                    $0.0 == p.instanceName
-                } : nil
+            let ours = plain(p.instanceName) ? adverts("Resolved bonjour advert \(p.instanceName) to identity").last {
+                $0.0 == p.instanceName
+            } : nil
             if let ours, ours.1 == nil {
                 check(false, "This Mac does not recognize the device's pairing (identity nil)",
                       fix: "Put the device on this Mac's Wi-Fi, remove it in RoamRun and add it again; a Mac never on its Wi-Fi takes it again from one that is (`roamrun devices export <name>` there, `roamrun devices add <line> --replace <name>` here). If Xcode lost it too, pair it in Xcode first (from afar: `roamrun pair xcode`, and have this Mac introduced again).")
@@ -630,7 +633,8 @@ extension CLI {
         } ?? false
         var unreadable = false
         switch served {
-        case .unknown: mine = true; unreadable = true
+        case .unknown: mine = true
+            unreadable = true
         case .nothing: mine = true // nothing of the user's to get in the way
         case .mounted:
             let here = host.flatMap {

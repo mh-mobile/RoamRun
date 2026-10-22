@@ -30,10 +30,7 @@ final class EchoServer: @unchecked Sendable {
     init(silent: Bool = false, port: UInt16? = nil) throws {
         listener = try port.map {
             try NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: $0)!)
-        } ?? NWListener(
-            using: .tcp,
-            on: .any
-        )
+        } ?? NWListener(using: .tcp, on: .any)
         listener.newConnectionHandler = { [lock, weak self] c in
             lock.withLock {
                 self?.conns.append(c)
@@ -67,7 +64,8 @@ final class EchoServer: @unchecked Sendable {
                         cont.resume(returning: listener.port!.rawValue)
                     }
                 case .failed, .waiting, .cancelled: once.run {
-                        listener.cancel(); cont.resume(returning: 0)
+                        listener.cancel()
+                        cont.resume(returning: 0)
                     }
                 default: break
                 }
@@ -86,7 +84,8 @@ final class EchoServer: @unchecked Sendable {
     }
 
     func stop() {
-        listener.cancel(); closeAll()
+        listener.cancel()
+        closeAll()
     }
 }
 
@@ -101,10 +100,13 @@ func eventually(_ condition: () -> Bool) async throws -> Bool {
 }
 
 final class OnceBox: @unchecked Sendable {
-    private let lock = NSLock(); private var done = false
+    private let lock = NSLock()
+    private var done = false
     func run(_ body: () -> Void) {
         if lock.withLock({
-            let first = !done; done = true; return first
+            let first = !done
+            done = true
+            return first
         }) {
             body()
         }
@@ -125,11 +127,9 @@ func freeBase(in band: ClosedRange<UInt16>, count: Int = 20) -> UInt16 {
         addr.sin_port = port.bigEndian
         addr.sin_addr.s_addr = INADDR_LOOPBACK.bigEndian
         return withUnsafePointer(to: &addr) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(
-                fd,
-                $0,
-                socklen_t(MemoryLayout<sockaddr_in>.size)
-            ) == 0 }
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0
+            }
         }
     }
     for _ in 0 ..< 200 {
@@ -261,14 +261,9 @@ func silentPort() throws -> (fd: Int32, port: UInt16) {
     address.sin_addr.s_addr = inet_addr("127.0.0.1")
     var length = socklen_t(MemoryLayout<sockaddr_in>.size)
     let bound = withUnsafeMutablePointer(to: &address) {
-        $0
-            .withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                bind(fd, $0, length) == 0 && listen(fd, 4) == 0 && getsockname(
-                    fd,
-                    $0,
-                    &length
-                ) == 0
-            }
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            bind(fd, $0, length) == 0 && listen(fd, 4) == 0 && getsockname(fd, $0, &length) == 0
+        }
     }
     try #require(bound)
     return (fd, UInt16(bigEndian: address.sin_port))
@@ -319,7 +314,8 @@ final class StandInDevice: ControlledDevice, @unchecked Sendable {
         connectBegan.signal()
         held(connectHold)
         lock.withLock {
-            open = true; goneWhenChecked = false
+            open = true
+            goneWhenChecked = false
         }
     }
 
@@ -375,13 +371,16 @@ final class StandInDevice: ControlledDevice, @unchecked Sendable {
     /// Where the last tap went, as fractions of the screen.
     var tapped: (x: Double, y: Double)?
     func elements(limit: Int) throws -> (captions: [String], complete: Bool) {
-        count("elements"); return ([], true)
+        count("elements")
+        return ([], true)
     }
 
     func tap(x: Double, y: Double) throws {
-        try input("tap"); lock.withLock {
+        try input("tap")
+        lock.withLock {
             tapped = (x, y)
-        }; Thread.sleep(forTimeInterval: 0.01)
+        }
+        Thread.sleep(forTimeInterval: 0.01)
     }
 
     func swipe(from: (x: Double, y: Double), to: (x: Double, y: Double), milliseconds: Int) throws {

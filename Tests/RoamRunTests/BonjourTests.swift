@@ -41,7 +41,8 @@ import Testing
     {
         if case .failure(let e) = r {
             return e
-        }; return nil
+        }
+        return nil
     }
     let offer = Introduction.line(Introduction.Offer(port: 53050, txt: txt.merging(["flags": "1"]) { a, _ in
         a
@@ -53,7 +54,8 @@ import Testing
     #expect(refused(Introduction.offer(from: line)) == .notOne && refused(Introduction.device(from: line)) == .notOne)
     #expect(refused(Introduction.pairable(from: String(line.dropLast(9)))) == .notOne)
     func bad(_ change: (inout Introduction.Pairable) -> Void) -> Bool {
-        var p = pairable; change(&p)
+        var p = pairable
+        change(&p)
         if case .refused = refused(Introduction.pairable(from: Introduction.line(p))) {
             return true
         }
@@ -70,10 +72,9 @@ import Testing
         $0.instance = ""
     } && bad {
         $0.instance = "a=b"
-    } && bad { $0.instance = String(
-        repeating: "n",
-        count: 64
-    ) } && bad {
+    } && bad {
+        $0.instance = String(repeating: "n", count: 64)
+    } && bad {
         $0.instance = "a\u{202E}b"
     })
     // Which device it is isn't in the line: nothing in it names a host.
@@ -100,7 +101,8 @@ import Testing
         lastSeen: Date()
     )
     #expect(Introduction.pairable(seen) == pairable)
-    var short = seen; short.txt["authTag"] = nil
+    var short = seen
+    short.txt["authTag"] = nil
     #expect(Introduction.pairable(short) == nil)
 }
 

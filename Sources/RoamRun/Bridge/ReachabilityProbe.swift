@@ -50,14 +50,18 @@ enum ReachabilityProbe {
                 switch state {
                 case .ready:
                     box.done {
-                        conn.stateUpdateHandler = nil; conn.cancel(); cont.resume(returning: true)
+                        conn.stateUpdateHandler = nil
+                        conn.cancel()
+                        cont.resume(returning: true)
                     }
                 // Refused: no need to sit out the timeout. Other .waiting (the path still
                 // settling after wake or a network switch) may still turn .ready.
                 case .failed, .cancelled, .waiting(.posix(.ECONNREFUSED)):
                     LocalNetwork.note(conn.currentPath)
                     box.done {
-                        conn.stateUpdateHandler = nil; conn.cancel(); cont.resume(returning: false)
+                        conn.stateUpdateHandler = nil
+                        conn.cancel()
+                        cont.resume(returning: false)
                     }
                 case .waiting:
                     LocalNetwork.note(conn.currentPath)
@@ -68,7 +72,9 @@ enum ReachabilityProbe {
             conn.start(queue: .global(qos: .utility))
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
                 box.done {
-                    conn.stateUpdateHandler = nil; conn.cancel(); cont.resume(returning: false)
+                    conn.stateUpdateHandler = nil
+                    conn.cancel()
+                    cont.resume(returning: false)
                 }
             }
         }
@@ -96,7 +102,9 @@ extension ReachabilityProbe {
             let box = ProbeBox()
             let finish: @Sendable (Bool) -> Void = { ok in
                 box.done {
-                    conn.stateUpdateHandler = nil; conn.cancel(); cont.resume(returning: ok)
+                    conn.stateUpdateHandler = nil
+                    conn.cancel()
+                    cont.resume(returning: ok)
                 }
             }
             conn.stateUpdateHandler = { state in
@@ -168,10 +176,9 @@ extension ReachabilityProbe {
             let timeout = min(1.2, left())
             let open = await withTaskGroup(of: UInt16?.self) { group in
                 for port in batch {
-                    group
-                        .addTask {
-                            await ReachabilityProbe.checkTCP(host: host, port: port, timeout: timeout) ? port : nil
-                        }
+                    group.addTask {
+                        await ReachabilityProbe.checkTCP(host: host, port: port, timeout: timeout) ? port : nil
+                    }
                 }
                 var hits: [UInt16] = []
                 for await r in group {

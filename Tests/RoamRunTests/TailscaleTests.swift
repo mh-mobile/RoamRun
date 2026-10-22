@@ -41,7 +41,9 @@ import Testing
       "d":{"ID":"n4","DNSName":"cloud-mac.tail2.ts.net.","OS":"macOS","UserID":11,"TailscaleIPs":["100.64.0.5"]},
       "e":{"ID":"n5","HostName":"cloud-mac","OS":"macOS","UserID":7,"TailscaleIPs":["100.64.0.6"]}}}
     """#
-    guard let mesh = TailscaleClient.mesh(fromStatusJSON: json) else { Issue.record("no mesh"); return }
+    guard let mesh = TailscaleClient.mesh(fromStatusJSON: json) else { Issue.record("no mesh")
+        return
+    }
     #expect(mesh.ownIPs == ["100.64.0.1", "fd7a::1"] && mesh.userID == 7 && mesh.suffix == "tail1.ts.net")
     func named(_ name: String) -> TailscaleClient.NamedPeer {
         TailscaleClient.peer(named: name, in: mesh)
@@ -49,7 +51,8 @@ import Testing
     func id(_ name: String) -> String? {
         if case .one(let p) = named(name) {
             return p.id
-        }; return nil
+        }
+        return nil
     }
     // The short name means this tailnet's; another tailnet's needs its whole name. A name a
     // device only gives itself (no DNSName) names nothing.

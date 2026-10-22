@@ -122,12 +122,11 @@ final class AppCoordinator: ObservableObject {
         for p in profiles {
             install(newBridge(p))
         }
-        deviceControl
-            .onLog = { [weak self] message, id in
-                Task { @MainActor in
-                    self?.logStore.log(message, device: id)
-                }
+        deviceControl.onLog = { [weak self] message, id in
+            Task { @MainActor in
+                self?.logStore.log(message, device: id)
             }
+        }
         deviceControl.onUnreached = { [weak self] id, why in
             Task { @MainActor in
                 self?.controlUnreached(id, why)
@@ -141,14 +140,12 @@ final class AppCoordinator: ObservableObject {
         }
         deviceControl.allowed = DeviceControlAllowed.shared.contains
         // Unreadable is off, as every request finds it; not read yet is not yet known.
-        deviceControl
-            .allowedKnown = {
-                DeviceControlAllowed.shared.known($0) ?? (DeviceControlAllowed.shared.isUnreadable ? false : nil)
-            }
-        deviceControl
-            .allowedUnreadable = {
-                DeviceControlAllowed.shared.isUnreadable || DeviceControlAllowed.shared.isLocked
-            }
+        deviceControl.allowedKnown = {
+            DeviceControlAllowed.shared.known($0) ?? (DeviceControlAllowed.shared.isUnreadable ? false : nil)
+        }
+        deviceControl.allowedUnreadable = {
+            DeviceControlAllowed.shared.isUnreadable || DeviceControlAllowed.shared.isLocked
+        }
         deviceControl.onReplaced = { [switching] mark in
             DeviceControlAllowed.shared.offNow(mark) // from this moment, whatever the queue is waiting on
             switching.async {
@@ -202,11 +199,9 @@ final class AppCoordinator: ObservableObject {
         introductions.keep = { [weak self] device, paired, wanted in
             self?.keepIntroduced(device, paired, wanted: wanted) ?? .failure(.init(.failed, "stopping"))
         }
-        deviceControl.onImport = { [weak self] path, name, wanted in self?.importPairing(
-            path: path,
-            as: name,
-            wanted: wanted
-        ) ?? .failure("stopping") }
+        deviceControl.onImport = { [weak self] path, name, wanted in
+            self?.importPairing(path: path, as: name, wanted: wanted) ?? .failure("stopping")
+        }
         syncDeviceControl()
         // A screenshot run stands beside the app that is running: it takes neither its socket nor
         // its devices (a connection is a screen-sharing session on the device).
@@ -376,18 +371,13 @@ final class AppCoordinator: ObservableObject {
         }, uniquingKeysWith: { a, _ in
             a
         })
-        return (
-            merged,
-            disk,
-            merged.filter {
-                had[$0.id] == nil
-            },
-            merged.filter { p in
-                had[p.id].map {
-                    $0 != p
-                } ?? false
-            }
-        )
+        return (merged, disk, merged.filter {
+            had[$0.id] == nil
+        }, merged.filter { p in
+            had[p.id].map {
+                $0 != p
+            } ?? false
+        })
     }
 
     /// Devices saved anew elsewhere: a running bridge (it holds its profile by value) is rebuilt now
@@ -436,7 +426,9 @@ final class AppCoordinator: ObservableObject {
         if e.cli == true {
             // The cached entry above was validated when it was polled, not now: a PID
             // that has been reused since would get the signal meant for the bridge.
-            guard StatusFile.isRoamRun(e) else { externalBridges[id] = nil; return }
+            guard StatusFile.isRoamRun(e) else { externalBridges[id] = nil
+                return
+            }
             kill(e.pid, SIGTERM) // its handler cleans up
         } else {
             DistributedNotificationCenter.default().postNotificationName(
@@ -607,7 +599,8 @@ final class AppCoordinator: ObservableObject {
             changed[i].udid = udid
         }
         if let at {
-            changed[i].providerIP = at.ip; changed[i].remotePairingPort = at.port
+            changed[i].providerIP = at.ip
+            changed[i].remotePairingPort = at.port
         }
         return save(changed) ? changed[i] : nil
     }
@@ -693,11 +686,11 @@ final class AppCoordinator: ObservableObject {
     ) -> Result<TakenIn, NotTaken> {
         // Where it goes is worked out first and saved last: a pairing that doesn't connect leaves
         // the saved devices as they were.
-        let placed = DispatchQueue.main.sync { MainActor.assumeIsolated { profiles.placement(
-            of: given,
-            udid: udid,
-            as: name
-        ) } }
+        let placed = DispatchQueue.main.sync {
+            MainActor.assumeIsolated {
+                profiles.placement(of: given, udid: udid, as: name)
+            }
+        }
         let place: DevicePlacement
         switch placed {
         case .success(let p): place = p
@@ -780,15 +773,11 @@ final class AppCoordinator: ObservableObject {
         }
         let asked = DeviceControlAllowed.shared.now()
         // On is what it is known as afterwards: a switch-off that came meanwhile (Remove, the page) stands.
-        let on = switching
-            .sync {
-                mark
-                    .map {
-                        DeviceControlAllowed.shared.set($0, true, asked: asked) && DeviceControlAllowed.shared
-                            .known($0) == true
-                    } ??
-                    false
-            }
+        let on = switching.sync {
+            mark.map {
+                DeviceControlAllowed.shared.set($0, true, asked: asked) && DeviceControlAllowed.shared.known($0) == true
+            } ?? false
+        }
         return .success(.init(saved: saved, on: on, replacedMeanwhile: mark == nil))
     }
 
@@ -987,10 +976,9 @@ final class AppCoordinator: ObservableObject {
             .value
             var changed = false
             for i in profiles.indices where profiles[i].deviceType == nil {
-                if let u = profiles[i].udid,
-                   let t = types[u.uppercased()]
-                {
-                    profiles[i].deviceType = t; changed = true
+                if let u = profiles[i].udid, let t = types[u.uppercased()] {
+                    profiles[i].deviceType = t
+                    changed = true
                 }
             }
             if changed {
@@ -1038,11 +1026,13 @@ final class AppCoordinator: ObservableObject {
         var filled = false
         for i in profiles.indices where profiles[i].udid == nil {
             if let u = udids[profiles[i].instanceName] {
-                profiles[i].udid = u; filled = true
+                profiles[i].udid = u
+                filled = true
             }
         }
         if filled {
-            persist(); learnDeviceTypes()
+            persist()
+            learnDeviceTypes()
         }
         advertTypes = udids.compactMapValues {
             knownTypes[$0].flatMap {
@@ -1342,10 +1332,9 @@ final class AppCoordinator: ObservableObject {
     }
 
     private func controlTarget(_ p: DeviceProfile) -> DeviceControlHub.Target? {
-        controlUDID(p)
-            .map {
-                .init(id: p.id, name: p.displayName, ip: p.providerIP, port: p.remotePairingPort, udid: $0)
-            }
+        controlUDID(p).map {
+            .init(id: p.id, name: p.displayName, ip: p.providerIP, port: p.remotePairingPort, udid: $0)
+        }
     }
 
     /// The device's UDID, which names its pairing: saved with it, or as whoever bridges it now has learned it
@@ -1401,8 +1390,7 @@ final class AppCoordinator: ObservableObject {
                                         misses: controlScanMisses[id] ?? 0) else { return }
         controlScans[id] = Date()
         Task {
-            _ =
-                await scanRemotePairingPort(profile)
+            _ = await scanRemotePairingPort(profile)
         } // logs what it finds; a port that moved is saved, and the hub told
     }
 
@@ -1438,13 +1426,9 @@ final class AppCoordinator: ObservableObject {
     /// The switch on the page: of the pairing the device's session connects with. Off, also of
     /// whatever else goes by the device's name here.
     func switchControl(_ profile: DeviceProfile, _ allowed: Bool) {
-        setControlAllowed(
-            profile.id,
-            marks: allowed ? [deviceControl.mark(of: profile.id)].compactMap {
-                $0
-            } : controlMarks(profile),
-            allowed
-        )
+        setControlAllowed(profile.id, marks: allowed ? [deviceControl.mark(of: profile.id)].compactMap {
+            $0
+        } : controlMarks(profile), allowed)
     }
 
     /// Every mark that could be this device's pairing: its session's, what this run sealed for it, what is saved now.
@@ -1454,10 +1438,9 @@ final class AppCoordinator: ObservableObject {
                           udid.flatMap(deviceControl.sealedMark(udid:)),
                           udid.flatMap {
                               DeviceControlHub.pairingMark(udid: $0, in: ProfileStore.directory)
-                          }]
-                          .compactMap {
-                              $0
-                          }))
+                          }].compactMap {
+                $0
+            }))
     }
 
     /// Whether the switch's list may be cut down to what the sessions hold: only while the list
@@ -1605,13 +1588,9 @@ final class AppCoordinator: ObservableObject {
             case .save where i != nil, .known:
                 let had = profiles[i!].udid
                 profiles[i!].udid = had ?? udid
-                if Self.keepsPairing(
-                    savedNow: persist(),
-                    onDisk: savedProfiles.first {
-                        $0.id == id
-                    }?.udid,
-                    paired: udid
-                ) {
+                if Self.keepsPairing(savedNow: persist(), onDisk: savedProfiles.first {
+                    $0.id == id
+                }?.udid, paired: udid) {
                     // Set up to be used: on until the user switches it off. The pairing this run sealed, as it wrote it.
                     setControlAllowed(id, marks: [deviceControl.sealedMark(udid: udid)].compactMap {
                         $0
@@ -1737,7 +1716,9 @@ final class AppCoordinator: ObservableObject {
         }
         let on = status == .enabled || status == .requiresApproval
         if on != launchAtLogin {
-            syncingLoginItem = true; launchAtLogin = on; syncingLoginItem = false
+            syncingLoginItem = true
+            launchAtLogin = on
+            syncingLoginItem = false
         }
     }
 

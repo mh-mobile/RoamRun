@@ -39,7 +39,8 @@ enum Proc {
         let box = OutputBox()
         timers.asyncAfter(deadline: .now() + timeout) {
             if task.isRunning {
-                box.timedOut = true; task.terminate()
+                box.timedOut = true
+                task.terminate()
             }
         }
         timers.asyncAfter(deadline: .now() + timeout + 2) { // ignored TERM
@@ -227,7 +228,8 @@ extension Proc {
                 return src
             }
             lock.withLock {
-                active = true; sources = srcs
+                active = true
+                sources = srcs
             }
         }
 

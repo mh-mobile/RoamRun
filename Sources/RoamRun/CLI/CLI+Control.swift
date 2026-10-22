@@ -144,13 +144,9 @@ extension CLI {
             case .expected, .toProve: break
             }
             // Tried once from here: a pairing that connects nowhere isn't worth taking anywhere.
-            let check = DeviceSession(
-                ip: profile.providerIP,
-                port: profile.remotePairingPort,
-                pairing: {
-                    paired.pairing
-                }
-            )
+            let check = DeviceSession(ip: profile.providerIP, port: profile.remotePairingPort, pairing: {
+                paired.pairing
+            })
             defer { check.close() }
             var unreached: String?
             do { try check.connect() } catch { unreached = "\(error)" }
@@ -172,10 +168,9 @@ extension CLI {
             }
             reserved = nil // done: an interrupt from here on leaves the file
             close(fd)
-            print("Wrote \(out.path)" +
-                (unreached.map {
-                    " (it couldn't be tried from here: \($0))"
-                } ?? ", and it connects."))
+            print("Wrote \(out.path)" + (unreached.map {
+                " (it couldn't be tried from here: \($0))"
+            } ?? ", and it connects."))
             print(
                 "It is a key to \(profile.displayName): whoever has it and reaches \(profile.providerIP) can see and operate the device. On the other Mac: roamrun key import <that file>"
             )

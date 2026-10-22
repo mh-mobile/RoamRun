@@ -40,14 +40,9 @@ struct SettingsView: View {
                         Text("Automatic (\(InterfaceMonitor.pickLAN(chosen: nil, available: Set(interfaces.keys))))")
                             .tag("")
                         // Also a chosen one that's gone now (e.g. an unplugged adapter), so the choice stays visible.
-                        ForEach(
-                            Set(interfaces.keys
-                                .filter {
-                                    $0.hasPrefix("en")
-                                } + (networkInterface.isEmpty ? [] : [networkInterface]))
-                                .sorted(),
-                            id: \.self
-                        ) { name in
+                        ForEach(Set(interfaces.keys.filter {
+                            $0.hasPrefix("en")
+                        } + (networkInterface.isEmpty ? [] : [networkInterface])).sorted(), id: \.self) { name in
                             Text("\(name) — \(interfaces[name] ?? "not connected")").tag(name)
                         }
                     }
@@ -92,8 +87,9 @@ struct SettingsView: View {
                         Text(cliStatusText).foregroundStyle(.secondary)
                         Spacer()
                         Button(cliState == .notInstalled ? "Install…" : "Reinstall") {
-                            do { try CLIInstaller.install(); cliError = nil }
-                            catch { cliError = error.localizedDescription }
+                            do { try CLIInstaller.install()
+                                cliError = nil
+                            } catch { cliError = error.localizedDescription }
                             cliState = CLIInstaller.state
                         }
                         .disabled(cliState == .installed || cliState == .blockedByFile)

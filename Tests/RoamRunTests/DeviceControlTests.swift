@@ -55,11 +55,9 @@ import ImageIO
             $0.copyBytes(from: path)
         }
         let result = withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(
-                fd,
-                $0,
-                socklen_t(MemoryLayout<sockaddr_un>.size)
-            ) }
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
         }
         try #require(result == 0)
         return fd
@@ -202,7 +200,8 @@ import ImageIO
         for _ in 0 ..< 3000 {
             if what() {
                 return true
-            }; usleep(10_000)
+            }
+            usleep(10_000)
         }
         return false
     }
@@ -698,7 +697,8 @@ extension TimingSensitive {
         let asked = OSAllocatedUnfairLock(initialState: 0)
         return {
             asked.withLock {
-                $0 += 1; return $0 == 1
+                $0 += 1
+                return $0 == 1
             }
         } // there at its turn, gone after
     }
@@ -743,7 +743,9 @@ extension TimingSensitive {
 /// What fails before a call begins says so: no connection had, a pairing not read, a session closed.
 @Test func whatFailsBeforeACallBeginsSaysSo() throws {
     func notBegun(_ call: () throws -> Void) -> Bool {
-        do { try call(); return false } catch DeviceSession.Failure.notBegun(_) { return true } catch { return false }
+        do { try call()
+            return false
+        } catch DeviceSession.Failure.notBegun(_) { return true } catch { return false }
     }
     let unread = DeviceSession(ip: "127.0.0.1", port: 1, pairing: {
         throw DeviceSession.Failure.message("unreadable")
@@ -837,11 +839,9 @@ private func listenerSoon(
         for _ in 0 ..< 100 where listening.isEmpty {
             let made = OSAllocatedUnfairLock<[DeviceControlWire.Listener]>(initialState: [])
             DispatchQueue.concurrentPerform(iterations: 8) { n in
-                if let l = DeviceControlWire
-                    .Listener(directory: dir, handler: { _ in
-                        .init(ok: true, name: "\(n)")
-                    })
-                {
+                if let l = DeviceControlWire.Listener(directory: dir, handler: { _ in
+                    .init(ok: true, name: "\(n)")
+                }) {
                     made.withLock {
                         $0.append(l)
                     }
@@ -900,11 +900,11 @@ private func listenerSoon(
     withUnsafeMutableBytes(of: &address.sun_path) {
         $0.copyBytes(from: path.utf8.prefix($0.count - 1))
     }
-    let connected = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(
-        fd,
-        $0,
-        socklen_t(MemoryLayout<sockaddr_un>.size)
-    ) } }
+    let connected = withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+        }
+    }
     #expect(connected == 0)
     let line = try JSONEncoder()
         .encode(DeviceControlWire.Request(op: "press", device: id, text: "lock")) + Data("\n".utf8)
@@ -950,10 +950,10 @@ private func listenerSoon(
     let list = [known, unknown]
     var asked: [[DeviceProfile]] = []
     // Its UDID known already: nothing to change, and still asked to be written.
-    #expect(AppCoordinator
-        .keepSaved(known.id, udid: "0000-abcd", in: list, save: {
-            asked.append($0); return true
-        }) == known)
+    #expect(AppCoordinator.keepSaved(known.id, udid: "0000-abcd", in: list, save: {
+        asked.append($0)
+        return true
+    }) == known)
     #expect(asked == [list])
     #expect(AppCoordinator.keepSaved(known.id, udid: "0000-abcd", in: list, save: { _ in
         false
@@ -961,14 +961,13 @@ private func listenerSoon(
     // Not known yet: written with it, or not kept.
     asked = []
     #expect(AppCoordinator.keepSaved(unknown.id, udid: "U2", in: list, save: {
-        asked.append($0); return true
-    })?
-        .udid == "U2")
+        asked.append($0)
+        return true
+    })?.udid == "U2")
     #expect(asked.first?
         .first {
             $0.id == unknown.id
-        }?.udid == "U2" && asked.first?
-        .first {
+        }?.udid == "U2" && asked.first?.first {
             $0.id == known.id
         } == known)
     #expect(AppCoordinator.keepSaved(unknown.id, udid: "U2", in: list, save: { _ in
@@ -977,7 +976,8 @@ private func listenerSoon(
     // Removed meanwhile: nothing to keep, and nothing asked.
     asked = []
     #expect(AppCoordinator.keepSaved(UUID(), udid: "U2", in: list, save: {
-        asked.append($0); return true
+        asked.append($0)
+        return true
     }) == nil)
     #expect(asked.isEmpty)
 }
@@ -1001,7 +1001,8 @@ private func listenerSoon(
     var answers: [(width: Int, height: Int)?] = [nil, nil, (1179, 2556)]
     var asked = 0
     let sizes = ScreenSizes(ask: { _ in
-        asked += 1; return answers.removeFirst()
+        asked += 1
+        return answers.removeFirst()
     }, retry: 60)
     let t0 = Date()
     #expect(sizes.size(of: "A", now: t0) == nil && asked == 1)
@@ -1086,7 +1087,8 @@ private func listenerSoon(
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
     let listener = try #require(listenerSoon(in: dir) { _ in
-        Thread.sleep(forTimeInterval: 3); return .init(ok: true)
+        Thread.sleep(forTimeInterval: 3)
+        return .init(ok: true)
     })
     defer { listener.stop() }
     let began = Date()
@@ -1180,14 +1182,12 @@ private func listenerSoon(
     let png = lookFile(in: dir)
     let asked = OSAllocatedUnfairLock(initialState: 0)
     // There when its turn came, gone once the look was taken.
-    let answer = hub.answer(
-        .init(op: "look", device: id, path: png),
-        wanted: {
-            asked.withLock {
-                $0 += 1; return $0 == 1
-            }
+    let answer = hub.answer(.init(op: "look", device: id, path: png), wanted: {
+        asked.withLock {
+            $0 += 1
+            return $0 == 1
         }
-    )
+    })
     #expect(answer.error == DeviceControlHub.notGiven)
     #expect(!FileManager.default.fileExists(atPath: png))
     #expect(hub.answer(.init(op: "look", device: id, path: png)).ok)
@@ -1210,8 +1210,7 @@ private func listenerSoon(
     #expect(hub.answer(.init(op: "import", device: UUID(), path: "/x"), wanted: {
         false
     })
-    .error == DeviceControlHub
-    .nobodyWaits)
+    .error == DeviceControlHub.nobodyWaits)
 }
 
 /// A request given up while it waits its turn: the app finds its asker gone. Given up before
@@ -1347,14 +1346,11 @@ func anInputIsInterruptedWhenItsAskerLeavesOrItsDeviceIsSwitchedOff(_ op: String
         #expect(hub.answer(.init(op: "look", device: id, path: lookFile(in: dir))).ok) // a point is read off one
         let answered = DispatchSemaphore(value: 0)
         Thread.detachNewThread {
-            _ = hub.answer(
-                .init(op: op, device: id, x: 10, y: 10, x2: 20, y2: 20, text: "home"),
-                wanted: {
-                    there.withLock {
-                        $0
-                    }
+            _ = hub.answer(.init(op: op, device: id, x: 10, y: 10, x2: 20, y2: 20, text: "home"), wanted: {
+                there.withLock {
+                    $0
                 }
-            )
+            })
             answered.signal()
         }
         #expect(soon(device.typeBegan))
@@ -1405,7 +1401,8 @@ func anInputIsInterruptedWhenItsAskerLeavesOrItsDeviceIsSwitchedOff(_ op: String
             attempts += 1
             throw DeviceSession.Failure.message("stopped: told to stop where it was")
         }, pause: {}, reopen: {
-            reopened += 1; return true
+            reopened += 1
+            return true
         })
     }
     #expect(attempts == 1 && reopened == 0)
@@ -1415,18 +1412,21 @@ func anInputIsInterruptedWhenItsAskerLeavesOrItsDeviceIsSwitchedOff(_ op: String
             attempts += 1
             throw DeviceSession.Failure.message("frames: timed out")
         }, pause: {}, reopen: {
-            reopened += 1; return true
+            reopened += 1
+            return true
         })
     }
     #expect(attempts == 3 && reopened == 1)
     // An input may have arrived: it is sent once, whatever its failure.
-    attempts = 0; reopened = 0
+    attempts = 0
+    reopened = 0
     #expect(throws: (any Error).self) {
         try Recovery.run(repeatable: false, attempt: { () -> Int in
             attempts += 1
             throw DeviceSession.Failure.message("frames: timed out")
         }, pause: {}, reopen: {
-            reopened += 1; return true
+            reopened += 1
+            return true
         })
     }
     #expect(attempts == 1 && reopened == 0)

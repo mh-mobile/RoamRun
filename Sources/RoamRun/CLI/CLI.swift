@@ -204,7 +204,8 @@ enum CLI {
                 exit(2)
             }
             if wantsHelp(args) {
-                print(usage); exit(0)
+                print(usage)
+                exit(0)
             }
             if args[0] == "version" || args[0] == "--version" {
                 // Through the /usr/local/bin link, Bundle.main isn't the app: resolve it.
@@ -295,11 +296,13 @@ enum CLI {
                         )
                     }
                     if let home = parsed.values["--with"] {
-                        Task { await offerControlPairing(
-                            with: home,
-                            peer: parsed.values["--peer"],
-                            qr: parsed.flags.contains("--qr")
-                        ) }
+                        Task {
+                            await offerControlPairing(
+                                with: home,
+                                peer: parsed.values["--peer"],
+                                qr: parsed.flags.contains("--qr")
+                            )
+                        }
                     } else if let id = parsed.values["--attempt"] {
                         controlAttempt(id)
                     } else if parsed.flags.contains("--last") {
@@ -359,10 +362,9 @@ enum CLI {
                             await introduce(offer: words[1], mac: mac, to: p)
                         }
                     } else {
-                        Task { await introduceByName(
-                            mac: mac,
-                            to: p
-                        ) }
+                        Task {
+                            await introduceByName(mac: mac, to: p)
+                        }
                     }
                 default:
                     fail(
@@ -443,17 +445,14 @@ enum CLI {
             case "mcp":
                 // Off the main thread: it reads stdin until the client closes it.
                 let asking = DeviceControlWire.Asking()
-                let server = DeviceMCP(
-                    profiles: {
-                        store.load()
-                    },
-                    looks: DeviceControlWire.socketFolder(in: ProfileStore.directory),
-                    asking: asking
-                ) {
+                let server = DeviceMCP(profiles: {
+                    store.load()
+                }, looks: DeviceControlWire.socketFolder(in: ProfileStore.directory), asking: asking) {
                     try DeviceControlWire.ask($0, in: ProfileStore.directory, asking: asking)
                 }
                 Thread.detachNewThread {
-                    server.serve(); exit(0)
+                    server.serve()
+                    exit(0)
                 }
             case "look":
                 guard name != nil,
@@ -498,7 +497,8 @@ enum CLI {
                 guard name != nil,
                       let p = targets.first else { fail("usage: roamrun elements <name> [limit]. " + names(profiles)) }
                 elements(p, limit: words.count >= 2 ? Int(words[words.startIndex + 1]) : nil)
-            default: print(usage); exit(0)
+            default: print(usage)
+                exit(0)
             }
         }
         // RunLoop, not dispatchMain(): the status Timers need a running run loop.
@@ -716,7 +716,9 @@ enum CLI {
     /// Through the tunnel like everything else: works over the bridge.
     /// What keeps this Mac off Tailscale, as its own word; nil when it is on it.
     nonisolated static func meshProblem(_ list: () throws -> [MeshDevice]) -> String? {
-        do { _ = try list(); return nil } catch { return error.localizedDescription }
+        do { _ = try list()
+            return nil
+        } catch { return error.localizedDescription }
     }
 
     // Device control: the app holds the connection; these ask it.
@@ -731,8 +733,7 @@ enum CLI {
     nonisolated static func shellName(_ name: String) -> String {
         guard name.isEmpty || !name.allSatisfy({
             $0.isASCII && ($0.isLetter || $0.isNumber || "._-".contains($0))
-        })
-        else { return name }
+        }) else { return name }
         return "'" + name.replacingOccurrences(of: "'", with: #"'\''"#) + "'"
     }
 
@@ -808,7 +809,8 @@ enum CLI {
             stop("skill not found in the app bundle — build with `make app`")
         }
         if args.contains("--print") {
-            FileHandle.standardOutput.write(skill); exit(0)
+            FileHandle.standardOutput.write(skill)
+            exit(0)
         }
 
         let home = homeDir
@@ -850,9 +852,12 @@ enum CLI {
             let existing = try? String(contentsOf: file, encoding: .utf8)
             let ours = existing?.hasPrefix("---\nname: roamrun\n") ?? false
             if args.contains("--uninstall") {
-                guard ours else { print("Skipped \(dir.path): no RoamRun skill there"); continue }
+                guard ours else { print("Skipped \(dir.path): no RoamRun skill there")
+                    continue
+                }
                 do { try fm.removeItem(at: file) } catch {
-                    print("Couldn't remove \(file.path): \(error.localizedDescription)"); continue
+                    print("Couldn't remove \(file.path): \(error.localizedDescription)")
+                    continue
                 }
                 rmdir(dir.path) // only if now empty
                 print("Removed \(file.path)")
@@ -934,10 +939,9 @@ enum CLI {
                 }
         }
         if savedTailscaleName(found[0]) == name.lowercased() {
-            return "“\(name)” matches more than one device — use the name it has in RoamRun, or its id: " +
-                listed {
-                    String($0.id.uuidString.prefix(8))
-                }
+            return "“\(name)” matches more than one device — use the name it has in RoamRun, or its id: " + listed {
+                String($0.id.uuidString.prefix(8))
+            }
         }
         // Their first eight characters are the same: the whole ids.
         return "“\(name)” begins more than one device's id — give more of it: " + listed(\.id.uuidString)

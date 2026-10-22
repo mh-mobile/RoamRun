@@ -153,10 +153,10 @@ final class DeviceControlHub: @unchecked Sendable {
     private var targets: [Target] = []
     private var pairing: (any PairingListener)?
     /// Makes the listener a device pairs with; tests give a stand-in.
-    var listening: @Sendable (_ name: String, _ host: String) throws -> any PairingListener = { try DevicePairing(
-        name: $0,
-        host: $1
-    ) }
+    var listening: @Sendable (_ name: String, _ host: String) throws -> any PairingListener = {
+        try DevicePairing(name: $0, host: $1)
+    }
+
     /// Pairings that were to be removed and whose file wouldn't go: not used again by this
     /// process, whatever is on disk. Lowercased UDIDs, under a lock of their own: they are asked
     /// about from under `lock`.
@@ -282,7 +282,9 @@ final class DeviceControlHub: @unchecked Sendable {
             }
             ended.signal()
         }
-        defer { done.signal(); ended.wait() } // not left asking about an asker whose connection is closed
+        defer { done.signal()
+            ended.wait()
+        } // not left asking about an asker whose connection is closed
         return try body()
     }
 
@@ -316,8 +318,7 @@ final class DeviceControlHub: @unchecked Sendable {
                 // A device renamed keeps its connection (away from Wi‑Fi no new one could be made);
                 // one moved to another address, removed or unpaired doesn't.
                 // …nor one whose saved pairing is another than its session's by now.
-                if let t = saved[id], t.reaches(h.target),
-                   !unremovedLock.withLock({
+                if let t = saved[id], t.reaches(h.target), !unremovedLock.withLock({
                        unremoved.contains(t.udid.lowercased())
                    }),
                    pairingChanged(from: h.mark, udid: t.udid) != true
@@ -346,10 +347,7 @@ final class DeviceControlHub: @unchecked Sendable {
     private func hasPairing(udid: String) -> Bool {
         !unremovedLock.withLock({
             unremoved.contains(udid.lowercased())
-        }) && DeviceControlWire.hasPairing(
-            udid: udid,
-            in: directory
-        )
+        }) && DeviceControlWire.hasPairing(udid: udid, in: directory)
     }
 
     /// The session held for a device, if any.
@@ -471,12 +469,12 @@ final class DeviceControlHub: @unchecked Sendable {
                 }
                 return step(.failed("Another pairing is under way."))
             }
-            defer {
-                lock
-                    .withLock {
-                        pairing = nil; pairingUnderWay = nil; pairingKept = nil; pairingsCancelled.remove(attempt)
-                    }
-            }
+            defer { lock.withLock {
+                pairing = nil
+                pairingUnderWay = nil
+                pairingKept = nil
+                pairingsCancelled.remove(attempt)
+            } }
             do {
                 // Before the device is asked anything: once it pairs it knows no older pairing of
                 // ours, and a Keychain that then refuses would leave it with none this Mac holds.
@@ -485,10 +483,10 @@ final class DeviceControlHub: @unchecked Sendable {
                 let sealing = try key(true)
                 let listening = try self.listening(name, Self.hostID(in: directory))
                 // A cancel that came before there was anything to cancel still counts.
-                if lock
-                    .withLock({ () -> Bool in
-                        pairing = listening; return pairingsCancelled.contains(attempt) })
-                {
+                if lock.withLock({ () -> Bool in
+                    pairing = listening
+                    return pairingsCancelled.contains(attempt)
+                }) {
                     listening.cancel()
                 }
                 step(.waiting(listening.name))
@@ -633,7 +631,8 @@ final class DeviceControlHub: @unchecked Sendable {
         lock.withLock {
             targets.removeAll {
                 $0.id == target.id
-            }; targets.append(target)
+            }
+            targets.append(target)
         }
         reopen(target.id)
         // Connected when this returns, as it just was: asked how it stands, it says so.
@@ -672,13 +671,9 @@ final class DeviceControlHub: @unchecked Sendable {
 
     /// The file a pairing was read from is removed once it is taken in. nil when it is gone; else
     /// what to tell whoever brought it: it is still a key to the device.
-    static func removeTaken(
-        _ file: URL,
-        readThrough fd: Int32,
-        remove: (URL) throws -> Void = {
-            try FileManager.default.removeItem(at: $0)
-        }
-    ) -> String? {
+    static func removeTaken(_ file: URL, readThrough fd: Int32, remove: (URL) throws -> Void = {
+        try FileManager.default.removeItem(at: $0)
+    }) -> String? {
         let still = "it still lets whoever has it see and operate the device"
         guard DeviceControlWire.names(file.path, theFileOf: fd) else {
             return "\(file.path) came to name another file while it was read: what the pairing was read from wasn't removed, and may be there under another name — \(still)"
@@ -778,14 +773,13 @@ final class DeviceControlHub: @unchecked Sendable {
         let file = DeviceControlWire.pairingFile(udid: udid, in: directory)
         // A folder that can't be written to keeps the file; the file itself can still be emptied.
         let dropped: Dropped = Self.remove(file) ? .removed : truncate(file.path, 0) == 0 ? .emptied : .left
-        unremovedLock
-            .withLock {
-                if dropped == .left {
-                    unremoved.insert(udid.lowercased())
-                } else {
-                    unremoved.remove(udid.lowercased())
-                }
+        unremovedLock.withLock {
+            if dropped == .left {
+                unremoved.insert(udid.lowercased())
+            } else {
+                unremoved.remove(udid.lowercased())
             }
+        }
         switch dropped {
         case .removed: break
         case .emptied: onLog?(
@@ -853,11 +847,7 @@ final class DeviceControlHub: @unchecked Sendable {
             if let t = targets.first(where: {
                 $0.id == id
             }), let (session, mark) = session(for: t) {
-                held[id] = Held(
-                    target: t,
-                    session: session,
-                    mark: mark
-                )
+                held[id] = Held(target: t, session: session, mark: mark)
             }
             return old
         }
@@ -995,11 +985,10 @@ final class DeviceControlHub: @unchecked Sendable {
     private func keepOpen() {
         let now = Date()
         let due = lock.withLock { () -> [(UUID, any ControlledDevice)] in
-            let due = held
-                .filter {
-                    !$0.value.connecting && $0.value.nextTry <= now && !$0.value.session.isOpen && !$0.value.session
-                        .isRefused
-                }
+            let due = held.filter {
+                !$0.value.connecting && $0.value.nextTry <= now && !$0.value.session.isOpen && !$0.value.session
+                    .isRefused
+            }
             for id in due.keys {
                 held[id]?.connecting = true
             }
@@ -1136,11 +1125,9 @@ final class DeviceControlHub: @unchecked Sendable {
 
     /// `wanted`: whether whoever asked is still there. A request that waited its turn and whose
     /// asker has left meanwhile (interrupted, or tired of waiting) isn't begun.
-    func answer(_ request: DeviceControlWire.Request,
-                wanted: @escaping @Sendable () -> Bool = {
-                    true
-                }) -> DeviceControlWire.Response
-    {
+    func answer(_ request: DeviceControlWire.Request, wanted: @escaping @Sendable () -> Bool = {
+        true
+    }) -> DeviceControlWire.Response {
         let notSetUp = DeviceControlWire.Response
             .failure(
                 "device control isn't set up for this device: the user sets it up in the RoamRun app, on the device's page"
@@ -1185,8 +1172,7 @@ final class DeviceControlHub: @unchecked Sendable {
                 held[request.device].map {
                     ($0, $0.target.name)
                 }
-            })
-            else { return notSetUp }
+            }) else { return notSetUp }
             // By the pairing the session connects with, whatever is saved under the device's name by now.
             let mark = h.mark
             guard allowed(mark) else { return .failure(Self.switchedOff) }
@@ -1239,7 +1225,9 @@ final class DeviceControlHub: @unchecked Sendable {
             }
             guard let given else { return nil } // by hand: whatever was looked at last
             guard let size = h.looked, size.id == given else { return .failure(Self.notLatest(given, request.op)) }
-            guard Date().timeIntervalSince(size.at) <= lookStands else { end(); return .failure(Self.lookOld) }
+            guard Date().timeIntervalSince(size.at) <= lookStands else { end()
+                return .failure(Self.lookOld)
+            }
             return nil
         }
         /// The look a point is read against: one no tap or swipe went by yet, the one given, still good.
@@ -1257,19 +1245,20 @@ final class DeviceControlHub: @unchecked Sendable {
                 begun = true
                 let walked = h.session
                 let limit = Self.elementLimit(request.limit)
-                let found = try Self
-                    .whileWanted(wanted, else: {
-                        walked.interrupt()
-                    }) {
-                        try walked.elements(limit: limit)
-                    }
+                let found = try Self.whileWanted(wanted, else: {
+                    walked.interrupt()
+                }) {
+                    try walked.elements(limit: limit)
+                }
                 return .init(ok: true, captions: found.captions, complete: found.complete)
             case "swipe":
                 // A request refused for what it says leaves the look to be used: it is spent by what reaches the device.
                 guard pointable() != nil, let size = h.looked else { return .failure(Self.lookFirst) }
                 guard request.look ?? size.id == size.id
                 else { return .failure(Self.lookedSince(request.look ?? size.id)) }
-                guard Date().timeIntervalSince(size.at) <= lookStands else { end(); return .failure(Self.lookOld) }
+                guard Date().timeIntervalSince(size.at) <= lookStands else { end()
+                    return .failure(Self.lookOld)
+                }
                 guard let from = Self.fraction(x: request.x, y: request.y, of: (size.width, size.height)),
                       let to = Self.fraction(x: request.x2, y: request.y2, of: (size.width, size.height))
                 else {
@@ -1281,11 +1270,9 @@ final class DeviceControlHub: @unchecked Sendable {
                 begun = true
                 try Self.whileWanted(wanted, else: {
                     session.interrupt()
-                }) { try session.swipe(
-                    from: from,
-                    to: to,
-                    milliseconds: duration
-                ) }
+                }) {
+                    try session.swipe(from: from, to: to, milliseconds: duration)
+                }
                 went()
                 return .init(ok: true)
             case "type", "paste", "press":
@@ -1351,7 +1338,8 @@ final class DeviceControlHub: @unchecked Sendable {
                     return .failure(Self.notGiven)
                 }
                 let id = lock.withLock { () -> Int in
-                    looks += 1; return looks
+                    looks += 1
+                    return looks
                 }
                 h.looked = (image.width, image.height, id, Date(), false)
                 return .init(ok: true, width: image.width, height: image.height, look: id)
@@ -1361,7 +1349,9 @@ final class DeviceControlHub: @unchecked Sendable {
                 // Of this look, when the caller says which: another's look since shows a screen this one never saw.
                 guard request.look ?? size.id == size.id
                 else { return .failure(Self.lookedSince(request.look ?? size.id)) }
-                guard Date().timeIntervalSince(size.at) <= lookStands else { end(); return .failure(Self.lookOld) }
+                guard Date().timeIntervalSince(size.at) <= lookStands else { end()
+                    return .failure(Self.lookOld)
+                }
                 guard let point = Self.fraction(x: request.x, y: request.y, of: (size.width, size.height)) else {
                     return .failure("the point must be inside the image (\(size.width) x \(size.height))")
                 }
@@ -1381,7 +1371,8 @@ final class DeviceControlHub: @unchecked Sendable {
             // otherwise (an interruption among them), it may have reached the device: nothing more goes by it.
             if let failure = error as? DeviceSession.Failure {
                 switch failure {
-                case .invalid, .notBegun: begun = false; return .failure("\(error)")
+                case .invalid, .notBegun: begun = false
+                    return .failure("\(error)")
                 case .message: break
                 }
             }

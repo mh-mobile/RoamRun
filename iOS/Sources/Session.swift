@@ -96,8 +96,7 @@ final class Session {
         let lower = host.lowercased(), labels = lower.split(separator: ".", omittingEmptySubsequences: false)
         guard lower.utf8.count <= 253, labels.allSatisfy({ label in
             (1 ... 63).contains(label.utf8.count) && !label.hasPrefix("-")
-                && label.unicodeScalars
-                .allSatisfy {
+                && label.unicodeScalars.allSatisfy {
                     $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "-")
                 }
         }) else { return other }
@@ -115,10 +114,12 @@ final class Session {
     func open(_ url: URL) -> Bool {
         // Nothing is opened over a line still to be carried: it can't be had again.
         guard !running, outcome?.line == nil else { return false }
-        guard url.scheme == "roamrun-introducer",
-              let host = url.host() else { notice = "That code isn't one from roamrun."; return false }
+        guard url.scheme == "roamrun-introducer", let host = url.host() else { notice = "That code isn't one from roamrun."
+            return false
+        }
         if let problem = Self.hostProblem(host) {
-            notice = "That code names “\(host)”. \(problem)"; return false
+            notice = "That code names “\(host)”. \(problem)"
+            return false
         }
         var line: String?
         if let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems, !items.isEmpty {
@@ -142,8 +143,9 @@ final class Session {
                 }
             })
             let made = Introduction.line(Introduction.Offer(port: UInt16(given["p"] ?? "") ?? 0, txt: txt))
-            guard case .success = Introduction.offer(from: made)
-            else { notice = "That code's offer isn't one this app takes."; return false }
+            guard case .success = Introduction.offer(from: made) else { notice = "That code's offer isn't one this app takes."
+                return false
+            }
             line = made
         }
         outcome = nil
@@ -158,20 +160,23 @@ final class Session {
         guard !running else { return }
         let host = far.trimmingCharacters(in: .whitespaces)
         if let problem = Self.hostProblem(host) {
-            notice = problem; return
+            notice = problem
+            return
         }
         var pasted: Introduction.Offer?
         if byLine {
             switch Introduction.offer(from: offerLine) {
             case .success(let read): pasted = read
-            case .failure(.another(let what)): notice = "That line is \(what), not a Mac's offer to pair."; return
-            case .failure(.notOne): notice = "That isn't a line from `roamrun pair xcode`."; return
-            case .failure(.refused(let why)): notice = "That offer isn't taken: \(why)."; return
+            case .failure(.another(let what)): notice = "That line is \(what), not a Mac's offer to pair."
+                return
+            case .failure(.notOne): notice = "That isn't a line from `roamrun pair xcode`."
+                return
+            case .failure(.refused(let why)): notice = "That offer isn't taken: \(why)."
+                return
             }
-            if let problem = Self
-                .peerProblem(peerName.trimmingCharacters(in: .whitespaces))
-            {
-                notice = problem; return
+            if let problem = Self.peerProblem(peerName.trimmingCharacters(in: .whitespaces)) {
+                notice = problem
+                return
             }
         }
         UserDefaults.standard.set(host, forKey: SavedField.far)
@@ -181,8 +186,16 @@ final class Session {
         running = true
         kind = .xcode
         stage = .asking
-        code = nil; hint = nil; limited = false; outcome = nil; notice = nil; log = []
-        begun = false; carried = false; announced = false; ownName = nil
+        code = nil
+        hint = nil
+        limited = false
+        outcome = nil
+        notice = nil
+        log = []
+        begun = false
+        carried = false
+        announced = false
+        ownName = nil
         keeper.onExpire = { [weak self] in
             self?.expired(run)
         }
@@ -211,9 +224,12 @@ final class Session {
             Task { @MainActor in
                 guard let self, self.live(run) else { return }
                 self.hint = nil
-                guard allowed else { self.finish(Self.noLocalNetwork); return }
+                guard allowed else { self.finish(Self.noLocalNetwork)
+                    return
+                }
                 if let offer {
-                    self.start(offer, run); return
+                    self.start(offer, run)
+                    return
                 }
                 self.note("Asking \(host) for its offer.")
                 let wire = Wire(farHost: host)
@@ -241,7 +257,8 @@ final class Session {
         outcome = nil
         // An offer carried by hand is spent once a pairing was tried with it: the far Mac's sheet is over.
         if byLine, carried {
-            byLine = false; offerLine = ""
+            byLine = false
+            offerLine = ""
         }
     }
 
@@ -298,13 +315,11 @@ final class Session {
             Task {
                 _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert])
             }
-            finder?
-                .line(name: UIDevice.current.name, peer: Wire.unnamedPeer) { [weak self] found in Task { @MainActor in
-                    self?.answerDevice(
-                        found,
-                        run
-                    )
-                } }
+            finder?.line(name: UIDevice.current.name, peer: Wire.unnamedPeer) { [weak self] found in
+                Task { @MainActor in
+                    self?.answerDevice(found, run)
+                }
+            }
         case .ended(let why): finish(.init(
                 tone: .failure,
                 title: "\(name) isn't offering to pair",
@@ -638,17 +653,26 @@ final class Session {
     #if DEBUG
         /// For looking at a screen without a far Mac: INTRODUCER_PREVIEW=pairing|code|finishing|done|byhand|failed.
         func preview(_ what: String) {
-            far = "cloud-mac.example.ts.net"; host = far; announcedName = "cloud-mac"
+            far = "cloud-mac.example.ts.net"
+            host = far
+            announcedName = "cloud-mac"
             log = [
                 "Asking cloud-mac.example.ts.net for its offer.",
                 "Announced as “cloud-mac”.",
                 "A device connected from 192.168.1.20:50123."
             ]
             switch what {
-            case "asking": running = true; stage = .asking
-            case "pairing": running = true; stage = .pairing; hint = "Connected. Type the code Device Hub shows on cloud-mac."
-            case "code": running = true; kind = .control; stage = .pairing; code = "456640"
-            case "finishing": running = true; stage = .finishing
+            case "asking": running = true
+                stage = .asking
+            case "pairing": running = true
+                stage = .pairing
+                hint = "Connected. Type the code Device Hub shows on cloud-mac."
+            case "code": running = true
+                kind = .control
+                stage = .pairing
+                code = "456640"
+            case "finishing": running = true
+                stage = .finishing
             case "done": outcome = .init(
                     tone: .success,
                     title: "cloud-mac knows this iPhone",
