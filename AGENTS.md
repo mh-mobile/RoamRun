@@ -14,6 +14,8 @@ see `skills/roamrun/SKILL.md` — installed with `roamrun init` or
   After changing `Cargo.lock`: `make licenses`, and commit the file it writes; and `make audit`
   (CI runs it too, and every Monday): an advisory against a crate it pins is either a reason
   to change the crate or, looked into, a line in `scripts/audit-crates.py` saying why not.
+- `make format` runs SwiftFormat over the Swift sources: line breaks, indentation and spaces (the
+  Makefile pins its version, `.swiftformat` lists its rules). Run it before a commit; CI doesn't check it.
 - Device control keeps a key and a list (which devices are switched on) in the
   Keychain, which asks about a build signed ad hoc after every rebuild. `make app` signs with an Apple Development certificate
   when the keychain holds one (else ad hoc); `SIGN_ID=` picks another.
@@ -23,10 +25,12 @@ see `skills/roamrun/SKILL.md` — installed with `roamrun init` or
 - `iOS/` is RoamRun Introducer, the app with which a device introduces a far Mac itself. It isn't
   part of `make app`: `cd iOS && xcodegen generate`, then Xcode (set a team). Its engine runs on a
   Mac under a test service type — the command is at the top of `iOS/Checks/relay-check.swift` — and
-  `iOS/Sources/Introduction.swift` mirrors `Sources/RoamRun/Introductions.swift`: change both
-  (and the code's short names: `codeURL` on the Mac, `Session.open` in the app).
+  it compiles the Mac's `Sources/RoamRun/Pairing/IntroductionLines.swift` (the line formats; keep it
+  Foundation only). The code's short names are written on both sides: `codeURL` on the Mac,
+  `Session.open` in the app — change both.
 - `Rust/roamrunctl/` is `pair introduce` for a machine that has no RoamRun (its own crate and
-  `Cargo.lock`; not part of `make app`): `cargo build --locked && cargo test` there, and
+  `Cargo.lock`; not part of `make app`): `cargo build --locked && cargo test` there (CI also runs
+  `cargo clippy --locked --all-targets -- -D warnings`, in both crates), and
   `scripts/local-check.py` for the mechanics on this Mac. Its version is RoamRun's (its `build.rs`
   reads `Info.plist`). `make audit` covers its lock too, and `make licenses` writes its
   `THIRD-PARTY-LICENSES.txt`, which its archives carry: both after changing its `Cargo.lock`.
@@ -118,6 +122,8 @@ AND category == "input"'`. Text that arrives short with a line here was dropped 
 - Never mention inspecting or reverse-engineering other products in anything
   committed (README, comments, commit messages). Credit public sources only.
 - Keep comments short; no multi-line narration of what the code already says.
+- A closure's body goes on its own line, not after the `{` on the call's line: a breakpoint can then
+  stop in it alone. `make format` keeps it so.
 - A document says what the code does or what was run, and says so of what wasn't run. A Japanese
   document is written as Japanese from those facts, not translated sentence by sentence, and goes
   through `make lint-ja` (textlint, Node 20 or later): that sees the shape of sentences, not whether

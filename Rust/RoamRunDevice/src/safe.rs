@@ -136,41 +136,6 @@ fn with_what(error: &str, said: &str) -> String {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{readable, Device};
-
-    /// Text with a NUL in it is refused before anything is sent, and said so ("invalid"): roamrunctl's
-    /// MCP keeps the device's connection for it (and, for type and paste, the look they spent).
-    #[test]
-    fn a_nul_is_refused_before_anything_is_sent() {
-        let none = Device(std::ptr::null_mut());   // never reached: the text is refused first
-        for said in [none.type_text("a\0b"), none.paste("a\0b"), none.button("home\0"), none.launch("a\0b")] {
-            assert!(said.starts_with(r#"{"ok":false,"invalid":true,"#), "{said}");
-        }
-    }
-
-    #[test]
-    fn a_refusal_is_said_in_its_own_words() {
-        // As the screenshot service refused a format.
-        let dictionary = r#"screenshot: CoreDevice(DeviceError("Dictionary({\"code\": Integer(4864), \"userInfo\": Dictionary({\"NSDebugDescription\": String(\"Cannot initialize ScreenshotImageFormat from invalid String value jpeg\"), \"NSCodingPath\": String(\"x\")})})"))"#;
-        assert_eq!(readable(&dictionary.replace("\\\"", "\"")), "screenshot: Cannot initialize ScreenshotImageFormat from invalid String value jpeg");
-        // As the display service refused a stream during a call: an archive of a dictionary.
-        let mut archive = plist::Dictionary::new();
-        archive.insert("$objects".into(), plist::Value::Array(vec![
-            "$null".into(), "NSLocalizedDescription".into(), "A phone or VoIP call is currently in progress on the device.".into(), "NSDictionary".into(), "NSObject".into(),
-        ]));
-        let mut bytes = Vec::new();
-        plist::Value::Dictionary(archive).to_writer_binary(&mut bytes).unwrap();
-        let numbers: Vec<String> = bytes.iter().map(u8::to_string).collect();
-        let refused = format!("audio start: CoreDevice(DeviceError(\"Dictionary({{\\\"userInfoWithNSSecureCoding\\\": Data([{}])}})\"))", numbers.join(", "));
-        assert_eq!(readable(&refused), "audio start: A phone or VoIP call is currently in progress on the device.");
-        // What isn't either comes back as it is.
-        assert_eq!(readable("timed out"), "timed out");
-        assert_eq!(readable("x: Data([1, 2, 3])"), "x: Data([1, 2, 3])");
-    }
-}
-
 /// A pairing a device comes to make: this side listens, shows a code, and keeps the key that comes of it.
 pub struct Pairing(*mut RRPairing);
 
@@ -207,5 +172,40 @@ impl Pairing {
 impl Drop for Pairing {
     fn drop(&mut self) {
         unsafe { rr_pairing_free(self.0) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{readable, Device};
+
+    /// Text with a NUL in it is refused before anything is sent, and said so ("invalid"): roamrunctl's
+    /// MCP keeps the device's connection for it (and, for type and paste, the look they spent).
+    #[test]
+    fn a_nul_is_refused_before_anything_is_sent() {
+        let none = Device(std::ptr::null_mut());   // never reached: the text is refused first
+        for said in [none.type_text("a\0b"), none.paste("a\0b"), none.button("home\0"), none.launch("a\0b")] {
+            assert!(said.starts_with(r#"{"ok":false,"invalid":true,"#), "{said}");
+        }
+    }
+
+    #[test]
+    fn a_refusal_is_said_in_its_own_words() {
+        // As the screenshot service refused a format.
+        let dictionary = r#"screenshot: CoreDevice(DeviceError("Dictionary({\"code\": Integer(4864), \"userInfo\": Dictionary({\"NSDebugDescription\": String(\"Cannot initialize ScreenshotImageFormat from invalid String value jpeg\"), \"NSCodingPath\": String(\"x\")})})"))"#;
+        assert_eq!(readable(&dictionary.replace("\\\"", "\"")), "screenshot: Cannot initialize ScreenshotImageFormat from invalid String value jpeg");
+        // As the display service refused a stream during a call: an archive of a dictionary.
+        let mut archive = plist::Dictionary::new();
+        archive.insert("$objects".into(), plist::Value::Array(vec![
+            "$null".into(), "NSLocalizedDescription".into(), "A phone or VoIP call is currently in progress on the device.".into(), "NSDictionary".into(), "NSObject".into(),
+        ]));
+        let mut bytes = Vec::new();
+        plist::Value::Dictionary(archive).to_writer_binary(&mut bytes).unwrap();
+        let numbers: Vec<String> = bytes.iter().map(u8::to_string).collect();
+        let refused = format!("audio start: CoreDevice(DeviceError(\"Dictionary({{\\\"userInfoWithNSSecureCoding\\\": Data([{}])}})\"))", numbers.join(", "));
+        assert_eq!(readable(&refused), "audio start: A phone or VoIP call is currently in progress on the device.");
+        // What isn't either comes back as it is.
+        assert_eq!(readable("timed out"), "timed out");
+        assert_eq!(readable("x: Data([1, 2, 3])"), "x: Data([1, 2, 3])");
     }
 }

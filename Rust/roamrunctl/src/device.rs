@@ -167,8 +167,11 @@ fn read(name: &str, path: &Path, sealed: bool) -> Result<(Saved, Vec<u8>), Strin
     Ok((saved, file))
 }
 
-/// What each device's sealed file opened to: (name, the file, what it opened to).
-static OPENED: std::sync::Mutex<Vec<(String, Vec<u8>, Vec<u8>)>> = std::sync::Mutex::new(Vec::new());
+/// A device's name, its sealed file, and what the file opened to.
+type Opened = (String, Vec<u8>, Vec<u8>);
+
+/// What each device's sealed file opened to.
+static OPENED: std::sync::Mutex<Vec<Opened>> = std::sync::Mutex::new(Vec::new());
 
 /// What a sealed file opened to, kept for this process while the file is the same: `mcp --http` opens a device
 /// again after a failure, on a thread where no terminal can be asked, and a passphrase command isn't run again.
@@ -425,13 +428,16 @@ pub fn as_saved(name: &str) -> Result<(String, Vec<u8>), String> {
     read(name, &path, sealed).map(|(saved, file)| (saved.ip, file))
 }
 
+/// A device opened, and its saved file as it was then (None: one only a machine that signs offers).
+pub type Held = (Device, Option<Vec<u8>>);
+
 pub fn opened(name: &str) -> Result<Device, String> {
     held(name).map(|(device, _)| device)
 }
 
 /// The device saved here under `name`, opened, and its file as read; None where none is saved. Never one only a
 /// machine that signs offers: `mcp --http` holds to what it offered, and asks no other machine.
-pub fn held_here(name: &str) -> Result<Option<(Device, Option<Vec<u8>>)>, String> {
+pub fn held_here(name: &str) -> Result<Option<Held>, String> {
     let Some((path, sealed)) = kept(name)? else { return Ok(None) };
     let (saved, file) = read(name, &path, sealed)?;
     Ok(Some((open(&saved)?, Some(file))))
@@ -440,7 +446,7 @@ pub fn held_here(name: &str) -> Result<Option<(Device, Option<Vec<u8>>)>, String
 /// The device named, opened, and the file it was opened from (see `mark`). One another machine signs for is
 /// saved here the first time it opens, without its key: from then on only that machine is asked, and only
 /// that device is taken for it.
-pub fn held(name: &str) -> Result<(Device, Option<Vec<u8>>), String> {
+pub fn held(name: &str) -> Result<Held, String> {
     let (saved, mut file) = load(name)?;
     let device = open(&saved)?;
     if file.is_none() {

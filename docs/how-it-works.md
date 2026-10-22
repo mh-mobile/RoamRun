@@ -108,36 +108,45 @@ its own connections to the device.
 
 ## Source layout
 
-`Sources/RoamRun/` holds the app and the CLI, which are one binary.
+`Sources/RoamRun/` holds the app and the CLI, which are one binary, in a folder for each part.
 
 | File | Role |
 |---|---|
-| `RoamRunApp.swift` | The entry point: `roamrun <command>` runs the CLI, anything else opens the app |
-| `CLI.swift` | The `roamrun` command |
-| `CLIInstaller.swift` | Links `/usr/local/bin/roamrun` to the app's binary |
-| `AppCoordinator.swift` | The app's state: saved devices, bridge control, presence checks, device control's pairing, the over-the-air page |
-| `Views/` | The windows: main window, device page, Add Device, Settings, menu bar |
-| `ProfileStore.swift`, `Models.swift` | Saved devices and the captured Bonjour record |
-| `StatusFile.swift` | Bridge status shared by the app and the CLI: who has which device |
-| `LogStore.swift` | The activity log |
-| `ProxyBridge.swift` | One bridge for one device: it runs the parts below |
-| `BridgeSupervisor.swift`, `BridgeEnv.swift` | When a bridge is started again, and what a bridge reaches outside itself (swapped in tests) |
-| `BonjourCapture.swift` | Parses the `dns-sd -Z` zone dump |
-| `DNSServiceProxy.swift` | The stand-in advertisement, through a `dns-sd -P` child process, and the cleanup of ones left behind |
-| `Relays.swift` | The TCP relay. A bridge's accepts connections from this Mac only; a stand-in's, from the device only |
-| `TunnelPortWatcher.swift` | Finds tunnel ports in `log stream` and attributes them to their device |
-| `InterfaceMonitor.swift` | Picks the LAN interface and notices when its address changes |
-| `ReachabilityProbe.swift` | TCP reachability, and the RemotePairing handshake check |
-| `TailscaleClient.swift` | Asks `tailscale` for status, ping, whois and what it serves |
-| `Proc.swift` | Runs helper tools |
-| `Introductions.swift` | Introducing a far Mac: the offer and the device as lines, the stand-in |
-| `PairByName.swift` | The exchange between two Macs that name each other (port 41830) |
-| `ControlIntroductions.swift` | Device control's pairing when another Mac introduces |
-| `TerminalQR.swift` | A QR code drawn in the terminal |
-| `DeviceControl.swift` | Device control: the connections the app holds, the pairing, and the socket the CLI and MCP tools ask through |
-| `DeviceControlKey.swift`, `DeviceControlAllowed.swift` | The Keychain key that saved pairings are sealed with, and the list of devices switched on |
-| `DeviceMCP.swift` | `roamrun mcp`: device control as MCP tools |
-| `OTA.swift`, `OTAPage.swift`, `OTAServer.swift` | Over-the-air installs: stored builds and signing checks, the install page and its `itms-services` manifest, and the local server behind `tailscale serve` |
+| `App/RoamRunApp.swift` | The entry point: `roamrun <command>` runs the CLI, anything else opens the app |
+| `App/AppCoordinator.swift` | The app's state: saved devices, bridge control, presence checks, device control's pairing |
+| `App/AppCoordinator+OTA.swift` | The over-the-air page: its server, and its entry in `tailscale serve` |
+| `App/Views/` | The windows: main window, device page, Add Device, Settings, menu bar |
+| `App/LogStore.swift` | The activity log |
+| `CLI/CLI.swift` | The `roamrun` command: its arguments, usage and dispatch, and `init` |
+| `CLI/CLI+Pairing.swift` | `pair`, and `devices export` / `add`: pairing and introducing across Macs |
+| `CLI/CLI+Status.swift` | `devices`, `status` and `doctor` |
+| `CLI/CLI+Bridge.swift` | `up` and `down`, and a bridge run in the background |
+| `CLI/CLI+Install.swift` | `install`, `run`, `logs` and `ota` |
+| `CLI/CLI+Control.swift` | Device control's commands: `look`, `tap`, `swipe`, `type` / `paste` / `press`, `elements`, `screenshot`, `key` |
+| `CLI/CLIInstaller.swift` | Links `/usr/local/bin/roamrun` to the app's binary |
+| `CLI/TerminalQR.swift` | A QR code drawn in the terminal |
+| `Bridge/ProxyBridge.swift` | One bridge for one device: it runs the parts below |
+| `Bridge/StatusFile.swift` | Bridge status shared by the app and the CLI: who has which device |
+| `Bridge/BridgeSupervisor.swift`, `Bridge/BridgeEnv.swift` | When a bridge is started again, and what a bridge reaches outside itself (swapped in tests) |
+| `Bridge/BonjourCapture.swift` | Parses the `dns-sd -Z` zone dump |
+| `Bridge/DNSServiceProxy.swift` | The stand-in advertisement, through a `dns-sd -P` child process, and the cleanup of ones left behind |
+| `Bridge/Relays.swift` | The TCP relay. A bridge's accepts connections from this Mac only; a stand-in's, from the device only |
+| `Bridge/TunnelPortWatcher.swift` | Finds tunnel ports in `log stream` and attributes them to their device |
+| `Bridge/InterfaceMonitor.swift` | Picks the LAN interface and notices when its address changes |
+| `Bridge/ReachabilityProbe.swift` | TCP reachability, and the RemotePairing handshake check |
+| `Pairing/IntroductionLines.swift` | The lines carried between Macs, the offer and the device, and their rules: the Introducer app compiles this file too |
+| `Pairing/Introductions.swift` | Introducing a far Mac: saving a device from its line, and the stand-in |
+| `Pairing/PairByName.swift` | The exchange between two Macs that name each other (port 41830) |
+| `Pairing/ControlIntroductions.swift` | Device control's pairing when another Mac introduces |
+| `Control/DeviceControlHub.swift` | Device control: the connections the app holds, and the pairing |
+| `Control/DeviceControlWire.swift` | The socket the CLI and MCP tools ask the app through |
+| `Control/SharedPairing.swift` | A pairing made for another Mac: what `roamrun key create` writes and `key import` takes |
+| `Control/DeviceControlKey.swift`, `Control/DeviceControlAllowed.swift` | The Keychain key that saved pairings are sealed with, and the list of devices switched on |
+| `Control/DeviceMCP.swift` | `roamrun mcp`: device control as MCP tools |
+| `OTA/OTA.swift`, `OTA/OTAPage.swift`, `OTA/OTAServer.swift` | Over-the-air installs: stored builds and signing checks, the install page and its `itms-services` manifest, and the local server behind `tailscale serve` |
+| `Support/ProfileStore.swift`, `Support/Models.swift` | Saved devices and the captured Bonjour record |
+| `Support/TailscaleClient.swift` | Asks `tailscale` for status, ping, whois and what it serves |
+| `Support/Proc.swift` | Runs helper tools |
 
 Elsewhere:
 

@@ -1,4 +1,4 @@
-//! The two lines a person carries between Macs, as `Introductions.swift` reads and writes them.
+//! The two lines a person carries between Macs, as `IntroductionLines.swift` reads and writes them.
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -83,7 +83,7 @@ pub fn device(line: &str) -> Result<Device, String> {
     Ok(device)
 }
 
-/// Why a name can't be saved on a Mac (`nameProblem` in Models.swift, and the line's own bounds).
+/// Why a name can't be saved on a Mac (`Introduction.nameProblem` in IntroductionLines.swift, and the line's own bounds).
 pub fn name_problem(name: &str) -> Option<String> {
     let n = name.trim();
     if n.is_empty() {

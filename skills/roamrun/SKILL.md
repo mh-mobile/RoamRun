@@ -185,6 +185,14 @@ UDID=$(jq -er '.[0].udid // empty' /tmp/rr.json) || exit 1         # for xcodebu
 jq -e '.[0].locked == false' /tmp/rr.json >/dev/null || { echo "ask the user to unlock the iPhone"; exit 1; }
 ```
 
+A device is named as RoamRun saved it (`iPhone` here). When no saved device has
+that name, its Tailscale name (`iphone-15-pro`, as `roamrunctl` takes it — not the
+whole `iphone-15-pro.tail1234.ts.net`) or its id works too; "no device named …"
+lists the saved names, each with its Tailscale name where that differs and names
+that device alone. A name saved in RoamRun wins over another device's
+Tailscale name, and roamrun says so. Two devices with one Tailscale name are
+refused: use the name RoamRun saved, or the id.
+
 `status --json` prints the JSON even when the device isn't ready (exit 1), so
 check the exit code, not just the file. `locked` is `null` when it couldn't be
 read — treat that like locked.
@@ -352,8 +360,9 @@ roamrun look iPhone /tmp/now.png     # what it became
 The same is there as MCP tools (`look` returns the image itself, scaled to what
 you are shown, and its id; points are that image's pixels, and `tap`, `swipe`,
 `type` and `paste` give the id as `"look": 12`): the user adds it once with
-`claude mcp add roamrun -- roamrun mcp`, or the like for another agent. Use the
-tools when you have them; the rules below hold for both.
+`claude mcp add roamrun -- roamrun mcp`, or the like for another agent. Their
+`device` is the name RoamRun saved, as `devices` lists it — not a Tailscale name
+or an id. Use the tools when you have them; the rules below hold for both.
 If your client shows the tool's image as a placeholder you can't see, use
 `roamrun look` and read the file instead, and then act with the commands too.
 If a command says this process isn't allowed to reach the RoamRun app, your

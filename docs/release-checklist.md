@@ -15,6 +15,7 @@ On top, by what the release changed:
 |---|---|
 | Bridge start/stop, helpers, status file, `up`/`down` | 5, 6, 8 |
 | `run`, `logs`, launch options | 7 |
+| How `<name>` finds a device (RoamRun name, Tailscale name, id) | 1 and 3 with the device's Tailscale name; 27 with `--to` its Tailscale name |
 | Relays, tunnel ports, more than one device | 9, 18 |
 | Home detection, Local Network | 11 |
 | `roamrun ota`, the OTA server or `tailscale serve` | 15 |

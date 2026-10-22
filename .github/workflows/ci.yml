@@ -46,6 +46,10 @@ jobs:
         run: cargo --version
       - run: cargo build --locked
       - run: cargo test --locked
+      - name: No clippy warnings, on each system it is built for
+        run: |
+          rustup component add clippy
+          cargo clippy --locked --all-targets -- -D warnings
       - name: The archive a release carries
         if: matrix.target != ''
         run: |
@@ -113,3 +117,9 @@ jobs:
         run: |
           xcrun swift build --build-tests -Xswiftc -warnings-as-errors
           xcrun swift build -Xswiftc -DSNAPSHOT -Xswiftc -warnings-as-errors
+      - name: No clippy warnings in device control's library
+        run: |
+          cd Rust/RoamRunDevice && rustup component add clippy
+          cargo clippy --locked --all-targets --target-dir ../../.build/device -- -D warnings
+      - name: The Introducer's engine compiles with the line formats the app shares with it (Foundation only)
+        run: xcrun swiftc -swift-version 6 -parse-as-library -warnings-as-errors -o /tmp/relay-check iOS/Sources/StandIn.swift Sources/RoamRun/Pairing/IntroductionLines.swift iOS/Sources/Wire.swift iOS/Checks/relay-check.swift

@@ -324,7 +324,7 @@ mod tests {
         let unnamed = peer(&st, "iphone-15.other.ts.net").unwrap();
         assert!(!unnamed.is(&unnamed));
         assert_eq!(short(&st.this.dns_name), "me");
-        assert!(status_from(&json).is_ok());   // a Tailscale too old to say its state is taken as up
+        assert!(status_from(json).is_ok());   // a Tailscale too old to say its state is taken as up
     }
 
     /// Signed out or stopped, Tailscale writes what it has none of as null: said as what to do, not as unreadable.

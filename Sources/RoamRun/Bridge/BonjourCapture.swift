@@ -1,0 +1,285 @@
+import Foundation
+
+/// Runs `/usr/bin/dns-sd -Z <type> <domain>` and parses the zone dump into
+/// `CapturedService` values: PTR gives the instance names, SRV the port and
+/// target host, TXT the pairing metadata, A/AAAA the host addresses.
+@MainActor
+final class BonjourCapture: ObservableObject {
+    /// A flooding LAN peer must not grow the tables without bound.
+    private static let cap = 500
+
+    @Published private(set) var services: [String: CapturedService] = [:]
+
+    /// Hostnames we publish ourselves via `dns-sd -P`. Instances resolving to
+    /// these are our own registrations, not real devices.
+    var ownedHosts = Set<String>()
+
+    var onLog: ((String) -> Void)?
+
+    private var process: Process?
+    private var stopped = false
+    private var reader: LineReader?
+    /// Which dns-sd a line came from: after stop() or restart(), an old one's
+    /// buffered lines must not refill the tables.
+    private var scan = 0
+    private var srvByRecord: [String: (host: String, port: UInt16)] = [:]
+    private var txtByRecord: [String: [String: String]] = [:]
+    private var ipsByHost: [String: [String]] = [:]
+    private var ptrs: Set<String> = []
+    /// When each record (instance) was last seen: full tables drop the stalest, so a
+    /// flood can't lock real devices out.
+    private var seen: [String: Date] = [:]
+    private var hostSeen: [String: Date] = [:]
+    private var launchFailing = false
+    private(set) var serviceType = "_remotepairing._tcp"
+    /// For tests: the kind of record to read, without browsing for it.
+    func reads(_ type: String) {
+        serviceType = type
+    }
+
+    private var domain = "local"
+
+    func start(serviceType: String = "_remotepairing._tcp", domain: String = "local") {
+        guard process == nil else { return }
+        stopped = false
+        self.serviceType = serviceType
+        self.domain = domain
+
+        let task = Proc.tied("/usr/bin/dns-sd", ["-Z", serviceType, domain])
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+        scan += 1
+        let mine = scan
+        reader = LineReader(pipe) { [weak self] line in
+            Task { @MainActor in
+                guard let self, self.scan == mine else { return }
+                self.parse(line: line)
+            }
+        }
+        // Before run(): a dns-sd that dies at once must still be restarted.
+        task.terminationHandler = { [weak self] ended in
+            Task { @MainActor in
+                // Only restart if *this* process was the live one — a
+                // late handler from an old one must not drop its successor.
+                guard let self, self.process === ended else { return }
+                self.process = nil
+                self.onLog?("dns-sd -Z exited unexpectedly; restarting in 5s")
+                try? await Task.sleep(for: .seconds(5))
+                guard !self.stopped else { return } // the sheet closed meanwhile
+                self.start(serviceType: self.serviceType, domain: self.domain)
+            }
+        }
+        do {
+            try task.run()
+            process = task
+            launchFailing = false
+            onLog?("Bonjour scan started (\(serviceType))")
+        } catch {
+            // As if it had died at once: without this one failure ends scanning for good.
+            // Said once per run of failures, not every 5 s.
+            if !launchFailing {
+                onLog?("Failed to start dns-sd -Z: \(error.localizedDescription); retrying every 5s")
+            }
+            launchFailing = true
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(5))
+                guard let self, !self.stopped, self.scan == mine, self.process == nil else { return }
+                self.start(serviceType: self.serviceType, domain: self.domain)
+            }
+        }
+    }
+
+    func stop() {
+        stopped = true
+        launchFailing = false // the next start's failure is news again
+        scan += 1
+        process?.terminate()
+        process = nil
+    }
+
+    /// Start over from what mDNS holds right now: records we saw earlier may
+    /// be gone (device left, cache flushed) and the dump never says so.
+    func restart() {
+        stop()
+        services = [:]
+        srvByRecord = [:]
+        txtByRecord = [:]
+        ipsByHost = [:]
+        ptrs = []
+        seen = [:]
+        hostSeen = [:]
+        start(serviceType: serviceType, domain: domain)
+    }
+
+    /// The quoted strings of a zone-file line, as they were before quoting: `\"` and `\\` are
+    /// the character, `\065` the byte. A value may hold a space or a quote (a Mac's name does).
+    nonisolated static func quoted(in line: String) -> [String] {
+        var found: [String] = [], bytes: [UInt8]?
+        var rest = Array(line.utf8)[...]
+        while let byte = rest.popFirst() {
+            guard var open = bytes else {
+                if byte == UInt8(ascii: "\"") {
+                    bytes = []
+                }
+                continue
+            }
+            if byte == UInt8(ascii: "\"") {
+                found.append(String(decoding: open, as: UTF8.self))
+                bytes = nil
+            } else if byte == UInt8(ascii: "\\"), let next = rest.first {
+                let digits = rest.prefix(3)
+                if digits.count == 3, digits.allSatisfy({
+                       (48 ... 57).contains($0)
+                   }),
+                   let value = UInt8(String(decoding: digits, as: UTF8.self))
+                {
+                    open.append(value)
+                    rest = rest.dropFirst(3)
+                } else {
+                    open.append(next)
+                    rest = rest.dropFirst()
+                }
+                bytes = open
+            } else {
+                open.append(byte)
+                bytes = open
+            }
+        }
+        return found
+    }
+
+    func parse(line: String) { // internal for tests
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, !trimmed.hasPrefix(";") else { return }
+        let tokens = trimmed.split(whereSeparator: {
+            $0 == " " || $0 == "\t"
+        })
+        .map(String.init)
+        guard tokens.count >= 3 else { return }
+        let kind = tokens[1]
+        let recordName = tokens[0]
+        switch kind {
+        case "PTR":
+            // _type PTR <instance>._type
+            guard recordName == serviceType else { return }
+            let instanceFQDN = tokens[2].trimmingCharacters(in: CharacterSet(charactersIn: ".").union(.whitespaces))
+            guard !instanceFQDN.isEmpty else { return }
+            makeRoom(for: instanceFQDN)
+            if ptrs.insert(instanceFQDN).inserted {
+                emit(recordName: instanceFQDN)
+            }
+        case "SRV":
+            // <instance>._type SRV 0 0 <port> <host>. ; comment
+            guard tokens.count >= 6, let port = UInt16(tokens[4]) else { return }
+            var host = tokens[5]
+            if let c = host.firstIndex(of: ";") {
+                host = String(host[..<c])
+            }
+            host = host.trimmingCharacters(in: .whitespaces)
+            if host.hasSuffix(".") {
+                host.removeLast()
+            }
+            makeRoom(for: recordName)
+            srvByRecord[recordName] = (host, port)
+            emit(recordName: recordName)
+        case "TXT":
+            var dict: [String: String] = [:]
+            for pair in Self.quoted(in: trimmed) {
+                if let eq = pair.firstIndex(of: "=") {
+                    dict[String(pair[..<eq])] = String(pair[pair.index(after: eq)...])
+                } else {
+                    dict[pair] = ""
+                }
+            }
+            if !dict.isEmpty {
+                makeRoom(for: recordName)
+                txtByRecord[recordName] = dict
+            }
+            emit(recordName: recordName)
+        case "A", "AAAA":
+            // <host>. A <ip>
+            var host = recordName
+            if host.hasSuffix(".") {
+                host.removeLast()
+            }
+            if ipsByHost[host] == nil, ipsByHost.count >= Self.cap,
+               let stalest = hostSeen.min(by: {
+                   $0.value < $1.value
+               })?.key
+            {
+                ipsByHost[stalest] = nil
+                hostSeen[stalest] = nil
+            }
+            hostSeen[host] = .now
+            if !(ipsByHost[host] ?? []).contains(tokens[2]), (ipsByHost[host]?.count ?? 0) < 8 {
+                ipsByHost[
+                    host,
+                    default: []
+                ].append(tokens[2])
+            }
+            // host IPs may complete a pending service
+            for (rec, srv) in srvByRecord where srv.host == host {
+                emit(recordName: rec)
+            }
+        default:
+            break
+        }
+    }
+
+    /// Marks `record` fresh; when the tables are full, forgets the least recently seen record.
+    private func makeRoom(for record: String) {
+        if seen[record] == nil, seen.count >= Self.cap, let stalest = seen.min(by: {
+            $0.value < $1.value
+        })?.key {
+            seen[stalest] = nil
+            ptrs.remove(stalest)
+            srvByRecord[stalest] = nil
+            txtByRecord[stalest] = nil
+            services[stalest] = nil
+        }
+        seen[record] = .now
+    }
+
+    /// A name as dns-sd prints it, read back: `\032` is a space, `\.` a dot.
+    static func unescaped(_ name: String) -> String {
+        var out: [UInt8] = [], bytes = Array(name.utf8), i = 0
+        while i < bytes.count {
+            if bytes[i] == 0x5C, i + 3 < bytes.count, bytes[(i + 1) ... (i + 3)].allSatisfy({
+                   (0x30 ... 0x39).contains($0)
+               }),
+               let code = UInt8(String(decoding: bytes[(i + 1) ... (i + 3)], as: UTF8.self))
+            {
+                out.append(code)
+                i += 4
+            } else if bytes[i] == 0x5C, i + 1 < bytes.count {
+                out.append(bytes[i + 1])
+                i += 2
+            } else {
+                out.append(bytes[i])
+                i += 1
+            }
+        }
+        return String(decoding: out, as: UTF8.self)
+    }
+
+    private func emit(recordName: String) {
+        guard ptrs.contains(recordName) || recordName.hasSuffix(".\(serviceType)") else { return }
+        let instance = String(recordName.dropLast(recordName.hasSuffix(".\(serviceType)") ? serviceType.count + 1 : 0))
+        guard let srv = srvByRecord[recordName] else { return }
+        if ownedHosts.contains(srv.host) {
+            return
+        }
+        services[recordName] = CapturedService(
+            instanceName: Self.unescaped(instance),
+            serviceType: serviceType,
+            domain: domain,
+            port: srv.port,
+            host: srv.host,
+            hostIPs: ipsByHost[srv.host] ?? [],
+            txt: txtByRecord[recordName] ?? [:],
+            // When the record itself was last heard: its host's address coming again says nothing of it.
+            lastSeen: seen[recordName] ?? Date()
+        )
+    }
+}

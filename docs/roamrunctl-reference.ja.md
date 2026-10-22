@@ -227,7 +227,7 @@ python3 scripts/local-check.py target/debug/roamrunctl "$(ipconfig getifaddr en0
 
 この確認では、実際のデバイスとはペアリングしません。オファーは、試験専用の Bonjour サービス（`_rrtest._tcp`）で公開します。偽のデバイスは、実行中だけ、本物と同じ `_remotepairing._tcp` で LAN 上に公開されます。確認するのは、サービスの発見、想定外の相手の拒否、TCP の中継、デバイスの情報の作成、公開の後始末です。続けて、デバイス操作について、偽のホストとのやり取り、オファーの公開、中継、コードの表示、終了コード 0 を確認します。この Mac のポート 41830 と 53050 が空いている必要があります。
 
-Mac 側の関連する実装は、`Sources/RoamRun/Introductions.swift`、`PairByName.swift`、`ControlIntroductions.swift` にあります。
+Mac 側の関連する実装は、`Sources/RoamRun/Pairing/` にあります。ファイルは、`IntroductionLines.swift`、`Introductions.swift`、`PairByName.swift`、`ControlIntroductions.swift` です。
 
 ## 試していない構成
 

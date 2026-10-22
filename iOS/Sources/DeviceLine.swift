@@ -31,8 +31,10 @@ final class DeviceFinder: @unchecked Sendable {
     func start() {
         browser.stateUpdateHandler = { [weak self] state in
             switch state {
-            case .ready: self?.looking = true; self?.denied = false
-            case .waiting(.dns(-65570)), .failed(.dns(-65570)): self?.denied = true; self?.looking = false   // Local Network permission
+            case .ready: self?.looking = true
+                self?.denied = false
+            case .waiting(.dns(-65570)), .failed(.dns(-65570)): self?.denied = true
+                self?.looking = false // Local Network permission
             default: break
             }
         }
@@ -46,7 +48,10 @@ final class DeviceFinder: @unchecked Sendable {
     /// Ends a search under way too: nothing is said of it afterwards.
     func stop() {
         browser.cancel()
-        queue.async { self.resolution?.cancel(); self.resolution = nil }
+        queue.async {
+            self.resolution?.cancel()
+            self.resolution = nil
+        }
     }
 
     /// Watches announcements for 5 s from when it may look (the permission prompt isn't counted, a
@@ -66,22 +71,38 @@ final class DeviceFinder: @unchecked Sendable {
     /// Whether this app may see the local network: asked before the far Mac is, since the answer
     /// may wait on the person (the first run's prompt), a minute at most.
     func allowed(_ completion: @escaping @Sendable (Bool) -> Void) {
-        queue.async { self.ask(completion, waited: 0) }
+        queue.async {
+            self.ask(completion, waited: 0)
+        }
     }
 
     private func ask(_ completion: @escaping @Sendable (Bool) -> Void, waited: Int) {
         switch Wire.mayUseNetwork(looking: looking, denied: denied, waited: waited) {
         case false?: completion(false)
         // Ready, and still so a moment later: a refusal arrives just after, and is waited on like any.
-        case true?: queue.asyncAfter(deadline: .now() + 0.3) { self.denied ? self.ask(completion, waited: waited + 1) : completion(true) }
-        case nil: queue.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.ask(completion, waited: waited + 1) }
+        case true?: queue.asyncAfter(deadline: .now() + 0.3) {
+                self.denied ? self.ask(completion, waited: waited + 1) : completion(true)
+            }
+        case nil: queue.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.ask(completion, waited: waited + 1)
+            }
         }
     }
 
     private func arm(_ box: Resolution, waited: Int) {
-        if denied { box.end(.denied); return }
-        if looking || waited >= 60 { queue.asyncAfter(deadline: .now() + 5) { [weak self] in box.end(self?.denied == true ? .denied : .notSeen) }; return }
-        queue.asyncAfter(deadline: .now() + 1) { [weak self] in self?.arm(box, waited: waited + 1) }
+        if denied {
+            box.end(.denied)
+            return
+        }
+        if looking || waited >= 60 {
+            queue.asyncAfter(deadline: .now() + 5) { [weak self] in
+                box.end(self?.denied == true ? .denied : .notSeen)
+            }
+            return
+        }
+        queue.asyncAfter(deadline: .now() + 1) { [weak self] in
+            self?.arm(box, waited: waited + 1)
+        }
     }
 
     /// Keeps checking new records until this device is found or the deadline passes.
@@ -95,7 +116,13 @@ final class DeviceFinder: @unchecked Sendable {
         private let completion: @Sendable (Found) -> Void
         private var connections: [NWConnection] = []
 
-        init(own: Set<Data>, name: String, peer: String, queue: DispatchQueue, completion: @escaping @Sendable (Found) -> Void) {
+        init(
+            own: Set<Data>,
+            name: String,
+            peer: String,
+            queue: DispatchQueue,
+            completion: @escaping @Sendable (Found) -> Void
+        ) {
             self.own = own
             self.name = name
             self.peer = peer
@@ -117,8 +144,15 @@ final class DeviceFinder: @unchecked Sendable {
                         connection.cancel()
                         guard let raw = OwnAddresses.raw(endpoint), self.own.contains(raw),
                               case .hostPort(_, let port) = endpoint else { return }
-                        let txt = record.dictionary.filter { Introduction.Device.keys.contains($0.key) }
-                        let device = Introduction.Device(name: self.name, peer: self.peer, port: port.rawValue, txt: txt)
+                        let txt = record.dictionary.filter {
+                            Introduction.Device.keys.contains($0.key)
+                        }
+                        let device = Introduction.Device(
+                            name: self.name,
+                            peer: self.peer,
+                            port: port.rawValue,
+                            txt: txt
+                        )
                         switch Introduction.device(from: Introduction.line(device)) {
                         case .success(let whole): self.finish(.line(Introduction.line(whole)))
                         case .failure(.refused(let why)): self.finish(.refused(why))
@@ -133,16 +167,24 @@ final class DeviceFinder: @unchecked Sendable {
             }
         }
 
-        func end(_ found: Found) { if !done { finish(found) } }
+        func end(_ found: Found) {
+            if !done {
+                finish(found)
+            }
+        }
 
         func cancel() {
             done = true
-            connections.forEach { $0.cancel() }
+            connections.forEach {
+                $0.cancel()
+            }
         }
 
         private func finish(_ found: Found) {
             done = true
-            connections.forEach { $0.cancel() }
+            connections.forEach {
+                $0.cancel()
+            }
             completion(found)
         }
     }

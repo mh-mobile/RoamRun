@@ -20,7 +20,9 @@ struct ContentView: View {
             } else if session.running {
                 RunView(session: session).transition(.opacity)
             } else {
-                StartView(session: session, scan: scan, edit: { editing = true }).transition(.opacity)
+                StartView(session: session, scan: scan, edit: {
+                    editing = true
+                }).transition(.opacity)
             }
         }
         .tint(.brand)
@@ -28,23 +30,36 @@ struct ContentView: View {
         .animation(.smooth(duration: 0.3), value: session.outcome)
         .animation(.smooth(duration: 0.3), value: session.stage)
         .animation(.smooth(duration: 0.3), value: session.code)
-        .onOpenURL { session.open($0) }
+        .onOpenURL {
+            session.open($0)
+        }
         .sheet(isPresented: $scanning) {
             ScanSheet { url in
                 scanning = false
                 session.open(url)
             }
         }
-        .sheet(isPresented: $editing) { OtherWays(session: session) }
+        .sheet(isPresented: $editing) {
+            OtherWays(session: session)
+        }
         #if DEBUG
-        .task { if let what = ProcessInfo.processInfo.environment["INTRODUCER_PREVIEW"] { session.preview(what) } }
+        .task {
+            if let what = ProcessInfo.processInfo.environment["INTRODUCER_PREVIEW"] {
+                session.preview(what)
+            }
+        }
         #endif
     }
 
     private func scan() {
         Task {
-            if await AVCaptureDevice.requestAccess(for: .video) { scanning = true }
-            else { session.notice = "The camera is off for this app. Allow it in Settings › Apps › RoamRun, or enter the Mac's name." }
+            if await AVCaptureDevice.requestAccess(for: .video) {
+                scanning = true
+            } else {
+                session
+                    .notice =
+                    "The camera is off for this app. Allow it in Settings › Apps › RoamRun, or enter the Mac's name."
+            }
         }
     }
 }
@@ -55,8 +70,12 @@ private struct Backdrop: View {
     var body: some View {
         ZStack(alignment: .top) {
             Color(.systemGroupedBackground)
-            LinearGradient(colors: [Color.brand.opacity(0.24), Color.cyan.opacity(0.10), .clear], startPoint: .topLeading, endPoint: .bottom)
-                .frame(height: 440)
+            LinearGradient(
+                colors: [Color.brand.opacity(0.24), Color.cyan.opacity(0.10), .clear],
+                startPoint: .topLeading,
+                endPoint: .bottom
+            )
+            .frame(height: 440)
         }
         .ignoresSafeArea()
     }
@@ -66,7 +85,10 @@ private extension View {
     func card() -> some View {
         padding(18)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .background(
+                Color(.secondarySystemGroupedBackground),
+                in: RoundedRectangle(cornerRadius: 22, style: .continuous)
+            )
     }
 }
 
@@ -79,7 +101,11 @@ private struct Primary: ButtonStyle {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 16)
             .foregroundStyle(.white)
-            .background(LinearGradient(colors: [.brand, Color(red: 0.07, green: 0.56, blue: 0.90)], startPoint: .leading, endPoint: .trailing), in: Capsule())
+            .background(
+                LinearGradient(colors: [.brand, Color(red: 0.07, green: 0.56, blue: 0.90)], startPoint: .leading,
+                               endPoint: .trailing),
+                in: Capsule()
+            )
             .opacity(enabled ? (configuration.isPressed ? 0.8 : 1) : 0.4)
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
             .animation(.snappy(duration: 0.15), value: configuration.isPressed)
@@ -101,14 +127,17 @@ private struct Secondary: ButtonStyle {
 
 private struct Command: View {
     let text: String
-    init(_ text: String) { self.text = text }
+    init(_ text: String) {
+        self.text = text
+    }
 
     var body: some View {
         Text(text)
             .font(.system(.footnote, design: .monospaced))
             .fixedSize(horizontal: false, vertical: true)
             .textSelection(.enabled)
-            .padding(.horizontal, 12).padding(.vertical, 10)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
@@ -121,7 +150,9 @@ private struct StartView: View {
     var scan: () -> Void
     var edit: () -> Void
 
-    private var host: String { session.far.trimmingCharacters(in: .whitespaces) }
+    private var host: String {
+        session.far.trimmingCharacters(in: .whitespaces)
+    }
 
     var body: some View {
         ScrollView {
@@ -142,7 +173,9 @@ private struct StartView: View {
 
                 if host.isEmpty {
                     VStack(spacing: 12) {
-                        Button(action: scan) { Label("Scan the Mac's Code", systemImage: "qrcode.viewfinder") }.buttonStyle(Primary())
+                        Button(action: scan) {
+                            Label("Scan the Mac's Code", systemImage: "qrcode.viewfinder")
+                        }.buttonStyle(Primary())
                         Button("Enter Its Name", action: edit).buttonStyle(Secondary())
                     }
                 } else {
@@ -152,21 +185,45 @@ private struct StartView: View {
                                 .font(.title2)
                                 .foregroundStyle(Color.brand)
                                 .frame(width: 46, height: 46)
-                                .background(Color.brand.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .background(
+                                    Color.brand.opacity(0.12),
+                                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                )
                                 .accessibilityHidden(true)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(session.name).font(.title3.weight(.semibold)).lineLimit(1).truncationMode(.middle)
-                                if host != session.name { Text(host).font(.footnote).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle) }
-                                if session.byLine { Label("With its offer, carried by hand", systemImage: "doc.on.clipboard").font(.caption).foregroundStyle(.secondary) }
+                                if host != session
+                                    .name
+                                {
+                                    Text(host)
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                                if session.byLine {
+                                    Label(
+                                        "With its offer, carried by hand",
+                                        systemImage: "doc.on.clipboard"
+                                    )
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                }
                             }
                             Spacer(minLength: 0)
                         }
-                        Button("Introduce") { session.introduce() }.buttonStyle(Primary())
+                        Button("Introduce") {
+                            session.introduce()
+                        }.buttonStyle(Primary())
                     }
                     .card()
                     HStack(spacing: 12) {
-                        Button(action: scan) { Label("Scan a Code", systemImage: "qrcode.viewfinder") }.buttonStyle(Secondary())
-                        Button(action: edit) { Label("Edit", systemImage: "slider.horizontal.3") }.buttonStyle(Secondary())
+                        Button(action: scan) {
+                            Label("Scan a Code", systemImage: "qrcode.viewfinder")
+                        }.buttonStyle(Secondary())
+                        Button(action: edit) {
+                            Label("Edit", systemImage: "slider.horizontal.3")
+                        }.buttonStyle(Secondary())
                     }
                 }
 
@@ -179,10 +236,22 @@ private struct StartView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("How it goes").font(.footnote.weight(.semibold)).foregroundStyle(.secondary).textCase(.uppercase)
-                    HowRow(number: 1, title: "On the far Mac", detail: "Device Hub › + › Pair Nearby Device, then in a terminal:", command: "roamrun pair xcode --with <this iPhone> --qr")
+                    Text("How it goes")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .textCase(.uppercase)
+                    HowRow(
+                        number: 1,
+                        title: "On the far Mac",
+                        detail: "Device Hub › + › Pair Nearby Device, then in a terminal:",
+                        command: "roamrun pair xcode --with <this iPhone> --qr"
+                    )
                     HowRow(number: 2, title: "Scan the code it draws", detail: "Or enter the Mac's Tailscale name.")
-                    HowRow(number: 3, title: "Pair in Settings", detail: "Privacy & Security › Developer Mode › Pair with the Mac, and type its code.")
+                    HowRow(
+                        number: 3,
+                        title: "Pair in Settings",
+                        detail: "Privacy & Security › Developer Mode › Pair with the Mac, and type its code."
+                    )
                 }
                 .card()
             }
@@ -208,7 +277,9 @@ private struct HowRow: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(title).font(.body.weight(.semibold))
                 Text(detail).font(.subheadline).foregroundStyle(.secondary)
-                if let command { Command(command) }
+                if let command {
+                    Command(command)
+                }
             }
         }
         .accessibilityElement(children: .combine)
@@ -224,7 +295,9 @@ private struct RunView: View {
         ScrollView {
             VStack(spacing: 20) {
                 VStack(spacing: 6) {
-                    Text(session.kind == .control ? "Introducing, for device control" : "Introducing").font(.subheadline).foregroundStyle(.secondary)
+                    Text(session.kind == .control ? "Introducing, for device control" : "Introducing")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                     Text(session.name).font(.largeTitle.bold()).lineLimit(1).minimumScaleFactor(0.6)
                 }
                 .padding(.top, 40)
@@ -234,7 +307,8 @@ private struct RunView: View {
                         Text(code.prefix(3) + " " + code.suffix(3))
                             .font(.system(size: 54, weight: .bold, design: .rounded))
                             .monospacedDigit()
-                            .minimumScaleFactor(0.5).lineLimit(1)
+                            .minimumScaleFactor(0.5)
+                            .lineLimit(1)
                             .textSelection(.enabled)
                             .accessibilityLabel("Code \(code.map(String.init).joined(separator: " "))")
                         Text("Type this code in Settings").font(.subheadline).foregroundStyle(.secondary)
@@ -246,11 +320,25 @@ private struct RunView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 20) {
-                    StepRow(number: 1, title: session.byLine ? "Offer read from the line" : "Ask \(session.name) for its offer",
-                            detail: "It answers once Pair Nearby Device is waiting there.", at: .asking, now: session.stage)
+                    StepRow(
+                        number: 1,
+                        title: session.byLine ? "Offer read from the line" : "Ask \(session.name) for its offer",
+                        detail: "It answers once Pair Nearby Device is waiting there.",
+                        at: .asking,
+                        now: session.stage
+                    )
                     StepRow(number: 2, title: "Pair in Settings", detail: pairing, at: .pairing, now: session.stage)
-                    StepRow(number: 3, title: session.kind == .control ? "\(session.name) keeps the pairing" : "Tell \(session.name) about this iPhone",
-                            detail: session.kind == .control ? "It says here what it kept." : "So it can find this iPhone over Tailscale.", at: .finishing, now: session.stage)
+                    StepRow(
+                        number: 3,
+                        title: session
+                            .kind == .control ? "\(session.name) keeps the pairing" :
+                            "Tell \(session.name) about this iPhone",
+                        detail: session
+                            .kind == .control ? "It says here what it kept." :
+                            "So it can find this iPhone over Tailscale.",
+                        at: .finishing,
+                        now: session.stage
+                    )
                 }
                 .card()
 
@@ -262,14 +350,19 @@ private struct RunView: View {
                         .padding(.horizontal, 4)
                 }
                 if session.limited, session.stage != .finishing {
-                    Label("iOS gives this about 30 seconds in the background: go to Settings and type the code straight away.", systemImage: "timer")
-                        .font(.callout)
-                        .foregroundStyle(.orange)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 4)
+                    Label(
+                        "iOS gives this about 30 seconds in the background: go to Settings and type the code straight away.",
+                        systemImage: "timer"
+                    )
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 4)
                 }
 
-                Button("Stop", role: .destructive) { session.stop() }.buttonStyle(Secondary(color: .red))
+                Button("Stop", role: .destructive) {
+                    session.stop()
+                }.buttonStyle(Secondary(color: .red))
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 32)
@@ -278,8 +371,11 @@ private struct RunView: View {
 
     private var pairing: String {
         let path = "Settings › Privacy & Security › Developer Mode › Pair with “\(session.announcedName)”."
-        if session.kind == .xcode { return path + " Then type the code Device Hub shows on \(session.name)." }
-        return session.code == nil ? path + " The code then arrives here, in a notification and at the top of the screen." : "Type the code above in Settings."
+        if session.kind == .xcode {
+            return path + " Then type the code Device Hub shows on \(session.name)."
+        }
+        return session
+            .code == nil ? path + " The code then arrives here, in a notification and at the top of the screen." : "Type the code above in Settings."
     }
 }
 
@@ -305,8 +401,12 @@ private struct StepRow: View {
             }
             .frame(width: 28, height: 28)
             VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.body.weight(now == at ? .semibold : .regular)).foregroundStyle(now < at ? .secondary : .primary)
-                if now == at { Text(detail).font(.subheadline).foregroundStyle(.secondary) }
+                Text(title)
+                    .font(.body.weight(now == at ? .semibold : .regular))
+                    .foregroundStyle(now < at ? .secondary : .primary)
+                if now == at {
+                    Text(detail).font(.subheadline).foregroundStyle(.secondary)
+                }
             }
         }
         .accessibilityElement(children: .combine)
@@ -334,21 +434,35 @@ private struct OutcomeView: View {
                 // A line that is a command is set as one.
                 VStack(spacing: 10) {
                     ForEach(Array(outcome.detail.split(separator: "\n").enumerated()), id: \.offset) { part in
-                        if part.element.hasPrefix("roamrun ") { Command(String(part.element)) }
-                        else { Text(part.element).foregroundStyle(.secondary).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true) }
+                        if part.element.hasPrefix("roamrun ") {
+                            Command(String(part.element))
+                        } else {
+                            Text(part.element).foregroundStyle(.secondary).multilineTextAlignment(.center).fixedSize(
+                                horizontal: false,
+                                vertical: true
+                            )
+                        }
                     }
                 }
 
                 if let line = outcome.line {
                     VStack(alignment: .leading, spacing: 14) {
-                        Text(line).font(.system(.footnote, design: .monospaced)).lineLimit(5).truncationMode(.middle).textSelection(.enabled)
+                        Text(line)
+                            .font(.system(.footnote, design: .monospaced))
+                            .lineLimit(5)
+                            .truncationMode(.middle)
+                            .textSelection(.enabled)
                         HStack(spacing: 12) {
                             Button {
                                 UIPasteboard.general.string = line
                                 copied = true
-                            } label: { Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc") }
-                                .buttonStyle(Secondary())
-                            ShareLink(item: line) { Label("Share", systemImage: "square.and.arrow.up") }.buttonStyle(Secondary())
+                            } label: {
+                                Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
+                            }
+                            .buttonStyle(Secondary())
+                            ShareLink(item: line) {
+                                Label("Share", systemImage: "square.and.arrow.up")
+                            }.buttonStyle(Secondary())
                         }
                     }
                     .card()
@@ -356,10 +470,16 @@ private struct OutcomeView: View {
 
                 VStack(spacing: 12) {
                     if outcome.tone == .failure {
-                        Button("Try Again") { session.introduce() }.buttonStyle(Primary())
-                        Button("Back") { session.dismiss() }.buttonStyle(Secondary())
+                        Button("Try Again") {
+                            session.introduce()
+                        }.buttonStyle(Primary())
+                        Button("Back") {
+                            session.dismiss()
+                        }.buttonStyle(Secondary())
                     } else {
-                        Button("Done") { session.dismiss() }.buttonStyle(Primary())
+                        Button("Done") {
+                            session.dismiss()
+                        }.buttonStyle(Primary())
                     }
                 }
                 .padding(.top, 4)
@@ -368,7 +488,10 @@ private struct OutcomeView: View {
                     DisclosureGroup("Details") {
                         VStack(alignment: .leading, spacing: 6) {
                             ForEach(Array(session.log.enumerated()), id: \.offset) {
-                                Text($0.element).font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+                                Text($0.element).font(.footnote).foregroundStyle(.secondary).frame(
+                                    maxWidth: .infinity,
+                                    alignment: .leading
+                                )
                             }
                         }
                         .padding(.top, 8)
@@ -415,7 +538,9 @@ private struct OtherWays: View {
             Form {
                 Section {
                     TextField("cloud-mac", text: $session.far)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
                 } header: {
                     Text("Far Mac's Tailscale name")
                 } footer: {
@@ -426,23 +551,44 @@ private struct OtherWays: View {
                     Toggle("Carry the lines by hand", isOn: $session.byLine)
                     if session.byLine {
                         TextEditor(text: $session.offerLine)
-                            .font(.system(.footnote, design: .monospaced)).frame(minHeight: 96)
-                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .font(.system(.footnote, design: .monospaced))
+                            .frame(minHeight: 96)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
                             .overlay(alignment: .topLeading) {
-                                if session.offerLine.isEmpty { Text("Paste the line from roamrun pair xcode").foregroundStyle(.tertiary).padding(.top, 8).padding(.leading, 4).allowsHitTesting(false) }
+                                if session.offerLine
+                                    .isEmpty
+                                {
+                                    Text("Paste the line from roamrun pair xcode")
+                                        .foregroundStyle(.tertiary)
+                                        .padding(
+                                            .top,
+                                            8
+                                        )
+                                        .padding(.leading, 4)
+                                        .allowsHitTesting(false)
+                                }
                             }
                         TextField("This iPhone's Tailscale name", text: $session.peerName)
-                            .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .keyboardType(.URL)
                     }
                 } footer: {
                     Text(session.byLine
-                         ? "On the far Mac: roamrun pair xcode prints the line (with --qr, a code that holds it). Afterwards this app shows a line to take back there."
-                         : "For a far Mac this iPhone can't ask over Tailscale. Xcode's pairing only.")
+                        ? "On the far Mac: roamrun pair xcode prints the line (with --qr, a code that holds it). Afterwards this app shows a line to take back there."
+                        : "For a far Mac this iPhone can't ask over Tailscale. Xcode's pairing only.")
                 }
             }
             .navigationTitle("Far Mac")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
         }
         .presentationDetents([.medium, .large])
     }
@@ -458,12 +604,22 @@ private struct ScanSheet: View {
                 if DataScannerViewController.isSupported, DataScannerViewController.isAvailable {
                     Scanner(found: found).ignoresSafeArea(edges: .bottom)
                 } else {
-                    ContentUnavailableView("The camera can't be used", systemImage: "camera.fill", description: Text("Enter the far Mac's Tailscale name instead."))
+                    ContentUnavailableView(
+                        "The camera can't be used",
+                        systemImage: "camera.fill",
+                        description: Text("Enter the far Mac's Tailscale name instead.")
+                    )
                 }
             }
             .navigationTitle("Scan the Mac's Code")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+            }
         }
     }
 }

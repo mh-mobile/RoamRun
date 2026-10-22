@@ -19,10 +19,16 @@ public final class ScreenSizes: @unchecked Sendable {
     }
 
     public func size(of udid: String, now: Date = Date()) -> (width: Int, height: Int)? {
-        let (size, due) = lock.withLock { (known[udid], failed[udid].map { now.timeIntervalSince($0) >= retry } ?? true) }
-        if let size { return size }
+        let (size, due) = lock.withLock {
+            (known[udid], failed[udid].map {
+                now.timeIntervalSince($0) >= retry
+            } ?? true)
+        }
+        if let size {
+            return size
+        }
         guard due else { return nil }
-        let answer = ask(udid)   // not under the lock: it can take seconds
+        let answer = ask(udid) // not under the lock: it can take seconds
         lock.withLock {
             known[udid] = answer
             failed[udid] = answer == nil ? now : nil
@@ -33,10 +39,11 @@ public final class ScreenSizes: @unchecked Sendable {
 
 /// The frame without the stream's padding, which is on the right and at the bottom. A frame
 /// that is neither the screen's size nor a little more (either way round) is left alone.
-public func cut(_ image: CGImage, to screen: (width: Int, height: Int)?) -> CGImage {
+func cut(_ image: CGImage, to screen: (width: Int, height: Int)?) -> CGImage {
     guard let screen else { return image }
     for (w, h) in [(screen.width, screen.height), (screen.height, screen.width)]
-    where (w...w + 32).contains(image.width) && (h...h + 32).contains(image.height) {
+        where (w ... w + 32).contains(image.width) && (h ... h + 32).contains(image.height)
+    {
         return image.cropping(to: CGRect(x: 0, y: 0, width: w, height: h)) ?? image
     }
     return image
@@ -44,7 +51,6 @@ public func cut(_ image: CGImage, to screen: (width: Int, height: Int)?) -> CGIm
 
 final class Output: @unchecked Sendable {
     var pixels: CVImageBuffer?
-    var data = Data()
 }
 
 /// The NAL units of an Annex-B stream (each after a 00 00 01 start code).
@@ -61,20 +67,22 @@ func nalUnits(_ data: Data) -> [Data] {
         }
     }
     return starts.enumerated().map { n, s in
-        Data(b[s.unit..<(n + 1 < starts.count ? starts[n + 1].code : b.count)])
+        Data(b[s.unit ..< (n + 1 < starts.count ? starts[n + 1].code : b.count)])
     }
 }
 
 /// One HEVC key frame (VPS, SPS, PPS and its slices) decoded to an image.
-public func decodeKeyFrame(_ annexB: Data) throws -> CGImage {
-    var sets: [UInt8: Data] = [:]   // 32 VPS, 33 SPS, 34 PPS
+func decodeKeyFrame(_ annexB: Data) throws -> CGImage {
+    var sets: [UInt8: Data] = [:] // 32 VPS, 33 SPS, 34 PPS
     var slices = Data()
     for unit in nalUnits(annexB) where !unit.isEmpty {
         let type = (unit[unit.startIndex] >> 1) & 0x3f
-        if (32...34).contains(type) {
+        if (32 ... 34).contains(type) {
             sets[type] = unit
-        } else if type <= 31 {   // a coded slice: length-prefixed, as VideoToolbox takes them
-            withUnsafeBytes(of: UInt32(unit.count).bigEndian) { slices.append(contentsOf: $0) }
+        } else if type <= 31 { // a coded slice: length-prefixed, as VideoToolbox takes them
+            withUnsafeBytes(of: UInt32(unit.count).bigEndian) {
+                slices.append(contentsOf: $0)
+            }
             slices.append(unit)
         }
     }
@@ -82,11 +90,21 @@ public func decodeKeyFrame(_ annexB: Data) throws -> CGImage {
         throw FrameError.message("no parameter sets or slices in the frame")
     }
     var format: CMFormatDescription?
-    let status = [vps, sps, pps].map { [UInt8]($0) }.withParameterSets { pointers, sizes in
-        CMVideoFormatDescriptionCreateFromHEVCParameterSets(allocator: nil, parameterSetCount: 3, parameterSetPointers: pointers,
-                                                            parameterSetSizes: sizes, nalUnitHeaderLength: 4, extensions: nil,
-                                                            formatDescriptionOut: &format)
-    }
+    let status = [vps, sps, pps]
+        .map {
+            [UInt8]($0)
+        }
+        .withParameterSets { pointers, sizes in
+            CMVideoFormatDescriptionCreateFromHEVCParameterSets(
+                allocator: nil,
+                parameterSetCount: 3,
+                parameterSetPointers: pointers,
+                parameterSetSizes: sizes,
+                nalUnitHeaderLength: 4,
+                extensions: nil,
+                formatDescriptionOut: &format
+            )
+        }
     guard status == noErr, let format else { throw FrameError.message("format description: \(status)") }
 
     var block: CMBlockBuffer?
@@ -95,7 +113,14 @@ public func decodeKeyFrame(_ annexB: Data) throws -> CGImage {
     guard CMBlockBufferCreateWithMemoryBlock(allocator: nil, memoryBlock: nil, blockLength: count, blockAllocator: nil,
                                              customBlockSource: nil, offsetToData: 0, dataLength: count, flags: 0,
                                              blockBufferOut: &block) == noErr, let block,
-          slices.withUnsafeBytes({ CMBlockBufferReplaceDataBytes(with: $0.baseAddress!, blockBuffer: block, offsetIntoDestination: 0, dataLength: count) }) == noErr
+                                          slices.withUnsafeBytes({
+                                              CMBlockBufferReplaceDataBytes(
+                                                  with: $0.baseAddress!,
+                                                  blockBuffer: block,
+                                                  offsetIntoDestination: 0,
+                                                  dataLength: count
+                                              )
+                                          }) == noErr
     else { throw FrameError.message("block buffer") }
     var size = count
     guard CMSampleBufferCreateReady(allocator: nil, dataBuffer: block, formatDescription: format, sampleCount: 1,
@@ -112,7 +137,9 @@ public func decodeKeyFrame(_ annexB: Data) throws -> CGImage {
     defer { VTDecompressionSessionInvalidate(session) }
     // No async flag: the handler has run by the time the call returns.
     let output = Output()
-    let decoded = VTDecompressionSessionDecodeFrame(session, sampleBuffer: sample, flags: [], infoFlagsOut: nil) { _, _, buffer, _, _ in
+    let decoded = VTDecompressionSessionDecodeFrame(session, sampleBuffer: sample, flags: [],
+                                                    infoFlagsOut: nil)
+    { _, _, buffer, _, _ in
         output.pixels = buffer
     }
     guard decoded == noErr, let pixels = output.pixels else { throw FrameError.message("decode: \(decoded)") }
@@ -130,7 +157,11 @@ extension Array where Element == [UInt8] {
             p.initialize(from: set, count: set.count)
             return p
         }
-        defer { buffers.forEach { $0.deallocate() } }
-        return body(buffers.map { UnsafePointer($0) }, map(\.count))
+        defer { buffers.forEach {
+            $0.deallocate()
+        } }
+        return body(buffers.map {
+            UnsafePointer($0)
+        }, map(\.count))
     }
 }

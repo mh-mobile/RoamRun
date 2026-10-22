@@ -73,36 +73,45 @@ Apple Vision Pro は、向きが逆です。Vision Pro は、Mac に選ばれる
 
 ## ソースの構成
 
-`Sources/RoamRun/` に、アプリと CLI があります。この 2 つは、1 つのバイナリです。
+`Sources/RoamRun/` に、アプリと CLI があります。この 2 つは、1 つのバイナリです。部分ごとに、フォルダに分かれています。
 
 | ファイル | 役割 |
 |---|---|
-| `RoamRunApp.swift` | エントリーポイント。`roamrun <command>` なら CLI を実行し、それ以外ならアプリを開く |
-| `CLI.swift` | `roamrun` コマンド |
-| `CLIInstaller.swift` | `/usr/local/bin/roamrun` を、アプリのバイナリにリンクする |
-| `AppCoordinator.swift` | アプリの状態。保存したデバイス、ブリッジの制御、デバイスがあるかどうかの確認、デバイス操作のペアリング、OTA のページ |
-| `Views/` | 画面。メインウインドウ、デバイスのページ、Add Device、Settings、メニューバー |
-| `ProfileStore.swift`、`Models.swift` | 保存したデバイスと、取得した Bonjour のレコード |
-| `StatusFile.swift` | アプリと CLI が共有するブリッジの状態。どちらがどのデバイスのブリッジを動かしているか |
-| `LogStore.swift` | アクティビティログ |
-| `ProxyBridge.swift` | 1 台のデバイスに対する 1 つのブリッジ。下の各部品を動かす |
-| `BridgeSupervisor.swift`、`BridgeEnv.swift` | ブリッジをいつ始め直すかの判断と、ブリッジが外部に対して行う操作（テストでは差し替える） |
-| `BonjourCapture.swift` | `dns-sd -Z` のゾーンダンプを解析する |
-| `DNSServiceProxy.swift` | `dns-sd -P` の子プロセスで、代わりのレコードを公開する。残った子プロセスの後始末もする |
-| `Relays.swift` | TCP の中継。ブリッジの中継は、この Mac からの接続だけを受ける。仲介の中継は、デバイスからの接続だけを受ける |
-| `TunnelPortWatcher.swift` | `log stream` からトンネルのポートを見つけて、どのデバイスのものかを判定する |
-| `InterfaceMonitor.swift` | LAN インターフェイスを選び、アドレスの変化を検知する |
-| `ReachabilityProbe.swift` | TCP で接続できるかの確認と、RemotePairing のハンドシェイクの確認 |
-| `TailscaleClient.swift` | `tailscale` に、status、ping、whois、serve の状態を問い合わせる |
-| `Proc.swift` | 補助のツールを実行する |
-| `Introductions.swift` | 離れた Mac の仲介。オファーとデバイスの情報を表す行と、代わりのレコードの公開 |
-| `PairByName.swift` | 互いの名前を指定した 2 台の Mac のやり取り（ポート 41830） |
-| `ControlIntroductions.swift` | 別の Mac が仲介する場合の、デバイス操作のペアリング |
-| `TerminalQR.swift` | ターミナルに表示する QR コード |
-| `DeviceControl.swift` | デバイス操作。アプリが保つ接続、ペアリング、CLI と MCP のツールが使うソケット |
-| `DeviceControlKey.swift`、`DeviceControlAllowed.swift` | 保存したペアリングを暗号化するキーチェーンの鍵と、スイッチがオンのデバイスの一覧 |
-| `DeviceMCP.swift` | `roamrun mcp`。デバイス操作を MCP のツールとして提供する |
-| `OTA.swift`、`OTAPage.swift`、`OTAServer.swift` | OTA でのインストール。保存したビルドと署名の確認、インストール用のページと `itms-services` のマニフェスト、`tailscale serve` の後ろで動くローカルのサーバー |
+| `App/RoamRunApp.swift` | エントリーポイント。`roamrun <command>` なら CLI を実行し、それ以外ならアプリを開く |
+| `App/AppCoordinator.swift` | アプリの状態。保存したデバイス、ブリッジの制御、デバイスがあるかどうかの確認、デバイス操作のペアリング |
+| `App/AppCoordinator+OTA.swift` | OTA のページ。そのサーバーと、`tailscale serve` への登録 |
+| `App/Views/` | 画面。メインウインドウ、デバイスのページ、Add Device、Settings、メニューバー |
+| `App/LogStore.swift` | アクティビティログ |
+| `CLI/CLI.swift` | `roamrun` コマンド。引数の解釈、使い方の表示、各コマンドへの振り分け、`init` |
+| `CLI/CLI+Pairing.swift` | `pair` と、`devices export` / `add`。Mac どうしのペアリングと仲介 |
+| `CLI/CLI+Status.swift` | `devices`、`status`、`doctor` |
+| `CLI/CLI+Bridge.swift` | `up` と `down`、バックグラウンドで動かすブリッジ |
+| `CLI/CLI+Install.swift` | `install`、`run`、`logs`、`ota` |
+| `CLI/CLI+Control.swift` | デバイス操作のコマンド。`look`、`tap`、`swipe`、`type` / `paste` / `press`、`elements`、`screenshot`、`key` |
+| `CLI/CLIInstaller.swift` | `/usr/local/bin/roamrun` を、アプリのバイナリにリンクする |
+| `CLI/TerminalQR.swift` | ターミナルに表示する QR コード |
+| `Bridge/ProxyBridge.swift` | 1 台のデバイスに対する 1 つのブリッジ。下の各部品を動かす |
+| `Bridge/StatusFile.swift` | アプリと CLI が共有するブリッジの状態。どちらがどのデバイスのブリッジを動かしているか |
+| `Bridge/BridgeSupervisor.swift`、`Bridge/BridgeEnv.swift` | ブリッジをいつ始め直すかの判断と、ブリッジが外部に対して行う操作（テストでは差し替える） |
+| `Bridge/BonjourCapture.swift` | `dns-sd -Z` のゾーンダンプを解析する |
+| `Bridge/DNSServiceProxy.swift` | `dns-sd -P` の子プロセスで、代わりのレコードを公開する。残った子プロセスの後始末もする |
+| `Bridge/Relays.swift` | TCP の中継。ブリッジの中継は、この Mac からの接続だけを受ける。仲介の中継は、デバイスからの接続だけを受ける |
+| `Bridge/TunnelPortWatcher.swift` | `log stream` からトンネルのポートを見つけて、どのデバイスのものかを判定する |
+| `Bridge/InterfaceMonitor.swift` | LAN インターフェイスを選び、アドレスの変化を検知する |
+| `Bridge/ReachabilityProbe.swift` | TCP で接続できるかの確認と、RemotePairing のハンドシェイクの確認 |
+| `Pairing/IntroductionLines.swift` | Mac どうしで運ぶ行（オファーとデバイス）の形式と、その決まり。Introducer アプリも、このファイルをコンパイルする |
+| `Pairing/Introductions.swift` | 離れた Mac の仲介。行からのデバイスの保存と、代わりのレコードの公開 |
+| `Pairing/PairByName.swift` | 互いの名前を指定した 2 台の Mac のやり取り（ポート 41830） |
+| `Pairing/ControlIntroductions.swift` | 別の Mac が仲介する場合の、デバイス操作のペアリング |
+| `Control/DeviceControlHub.swift` | デバイス操作。アプリが保つ接続と、ペアリング |
+| `Control/DeviceControlWire.swift` | CLI と MCP のツールが、アプリに問い合わせるためのソケット |
+| `Control/SharedPairing.swift` | 別の Mac のために作ったペアリング。`roamrun key create` が書き出し、`key import` が読み込む |
+| `Control/DeviceControlKey.swift`、`Control/DeviceControlAllowed.swift` | 保存したペアリングを暗号化するキーチェーンの鍵と、スイッチがオンのデバイスの一覧 |
+| `Control/DeviceMCP.swift` | `roamrun mcp`。デバイス操作を MCP のツールとして提供する |
+| `OTA/OTA.swift`、`OTA/OTAPage.swift`、`OTA/OTAServer.swift` | OTA でのインストール。保存したビルドと署名の確認、インストール用のページと `itms-services` のマニフェスト、`tailscale serve` の後ろで動くローカルのサーバー |
+| `Support/ProfileStore.swift`、`Support/Models.swift` | 保存したデバイスと、取得した Bonjour のレコード |
+| `Support/TailscaleClient.swift` | `tailscale` に、status、ping、whois、serve の状態を問い合わせる |
+| `Support/Proc.swift` | 補助のツールを実行する |
 
 そのほかの場所は、次のとおりです。
 
