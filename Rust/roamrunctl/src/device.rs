@@ -237,7 +237,11 @@ struct SharedDevice {
 }
 
 /// What `key import` reads: a file `roamrun key create` wrote, or one saved here for a device on another machine.
-fn imported(text: &str, from: &str, name: Option<String>) -> Result<Saved, String> {
+fn imported(bytes: &[u8], from: &str, name: Option<String>) -> Result<Saved, String> {
+    if bytes.starts_with(b"age-encryption.org/v1") {
+        return Err(format!("{from} is a record kept under a passphrase (a .age file): it isn't imported. Import the unencrypted one (`--passphrase` here then keeps it encrypted), or pair again"));
+    }
+    let text = std::str::from_utf8(bytes).map_err(|_| format!("{from} isn't text: not a file `roamrun key create` wrote, nor a device roamrunctl saved"))?;
     // Without the mark some editors on Windows put first, as a passphrase file is read.
     let text = text.trim_start_matches('\u{feff}');
     let refused = || format!("{from} isn't a file `roamrun key create` wrote, nor a device roamrunctl saved");
@@ -255,6 +259,11 @@ fn imported(text: &str, from: &str, name: Option<String>) -> Result<Saved, Strin
     Ok(saved)
 }
 
+/// Whether an import removes `file` once it is saved: not standard input, nor a file saved here.
+fn removed_once_saved(file: &Path) -> bool {
+    file != Path::new("-") && !saved_here(file)
+}
+
 /// A file in the folder devices are saved in here: an import of it (under another name) leaves it.
 fn saved_here(file: &Path) -> bool {
     let parent = |path: &Path| path.parent().map(|p| if p.as_os_str().is_empty() { Path::new(".") } else { p }).and_then(|p| p.canonicalize().ok());
@@ -265,8 +274,8 @@ fn saved_here(file: &Path) -> bool {
 fn import(file: &Path, name: Option<String>, sealed: bool, ask: impl FnOnce(&str) -> Result<String, String>) -> Result<String, String> {
     let stdin = file == Path::new("-");
     let from = if stdin { "standard input".to_string() } else { file.display().to_string() };
-    let text = if stdin { std::io::read_to_string(std::io::stdin()) } else { std::fs::read_to_string(file) }.map_err(|e| format!("{from}: {e}"))?;
-    let saved = imported(&text, &from, name)?;
+    let bytes = if stdin { let mut bytes = Vec::new(); std::io::Read::read_to_end(&mut std::io::stdin(), &mut bytes).map(|_| bytes) } else { std::fs::read(file) }.map_err(|e| format!("{from}: {e}"))?;
+    let saved = imported(&bytes, &from, name)?;
     if kept(&saved.name)?.is_some() {
         return Err(format!("a device “{}” is saved here already: `roamrunctl devices remove {}` first, or --as another name", saved.name, saved.name));
     }
@@ -274,7 +283,7 @@ fn import(file: &Path, name: Option<String>, sealed: bool, ask: impl FnOnce(&str
     // Tried before it is kept, and the file goes only once it is: a key that doesn't open the device isn't one.
     open(&saved)?;
     let path = save(&saved, passphrase.as_deref())?;
-    if !stdin && !saved_here(file) { std::fs::remove_file(file).map_err(|e| format!("saved, but {} couldn't be removed ({e}): remove it yourself, it is a key", file.display()))?; }
+    if removed_once_saved(file) { std::fs::remove_file(file).map_err(|e| format!("saved, but {} couldn't be removed ({e}): remove it yourself, it is a key", file.display()))?; }
     Ok(match passphrase {
         Some(_) => format!("Saved {} ({}), and it connects. Its pairing is kept under the passphrase, in {}: that keeps the file from being a key on its own, not from whoever has both.", saved.name, saved.ip, path.display()),
         None => format!("Saved {} ({}), and it connects. The key is {}, as it is: whoever can read it and reach the device can see and operate it.", saved.name, saved.ip, path.display()),
@@ -632,28 +641,32 @@ mod tests {
     #[test]
     fn what_is_imported_is_a_key_create_file_or_a_device_saved_with_its_key() {
         let shared = r#"{"roamrunPairing":1,"device":{"displayName":"Ann's iPhone","providerIP":"100.64.0.7","remotePairingPort":49153},"pairing":"<plist/>"}"#;
-        let saved = imported(shared, "-", None).unwrap();
+        let saved = imported(shared.as_bytes(), "-", None).unwrap();
         assert_eq!((saved.name.as_str(), saved.ip.as_str(), saved.port), ("Ann-s-iPhone", "100.64.0.7", 49153));
         // As roamrunctl saves it, pretty, and as a CI's secret may give it back: its lines run together.
         let kept = serde_json::to_string_pretty(&Saved { v: 1, name: "ci".into(), ip: "100.64.0.8".into(), port: 49152, pairing: "<plist/>".into(), signer: None }).unwrap();
         for text in [kept.clone(), kept.replace('\n', ""), kept.replace('\n', " ")] {
-            assert_eq!(imported(&text, "-", None).unwrap().name, "ci");
+            assert_eq!(imported(text.as_bytes(), "-", None).unwrap().name, "ci");
         }
-        assert_eq!(imported(&kept, "-", Some("other".into())).unwrap().name, "other");
+        assert_eq!(imported(kept.as_bytes(), "-", Some("other".into())).unwrap().name, "other");
         let signed = kept.replace(r#""pairing""#, r#""signer": "mac", "pairing""#);
-        assert!(imported(&signed, "-", None).err().unwrap_or_default().contains("holds no key"));
+        assert!(imported(signed.as_bytes(), "-", None).err().unwrap_or_default().contains("holds no key"));
         for text in ["", "{}", r#"{"roamrunPairing":2,"device":{"displayName":"a","providerIP":"100.64.0.7"},"pairing":"x"}"#, &kept.replace("100.64.0.8", "nowhere")] {
-            assert!(imported(text, "standard input", None).err().unwrap_or_default().starts_with("standard input isn't"), "{text}");
+            assert!(imported(text.as_bytes(), "standard input", None).err().unwrap_or_default().starts_with("standard input isn't"), "{text}");
         }
-        assert!(imported(&kept, "-", Some("../x".into())).is_err());
+        assert!(imported(kept.as_bytes(), "-", Some("../x".into())).is_err());
         // As some editors on Windows save it, led by a byte order mark.
-        assert_eq!(imported(&format!("\u{feff}{shared}"), "-", None).unwrap().name, "Ann-s-iPhone");
+        assert_eq!(imported(format!("\u{feff}{shared}").as_bytes(), "-", None).unwrap().name, "Ann-s-iPhone");
+        // One kept under a passphrase is said to be that, not "not text".
+        let sealed = crate::secret::sealed(kept.as_bytes(), "pw").unwrap();
+        assert!(imported(&sealed, "phone.age", None).err().unwrap_or_default().starts_with("phone.age is a record kept under a passphrase"));
     }
 
     #[test]
     fn a_file_saved_here_is_left_by_its_import_and_another_goes() {
-        assert!(saved_here(&folder().unwrap().join("a.json")));
-        assert!(!saved_here(&std::env::temp_dir().join("a.json")));
+        assert!(!removed_once_saved(&folder().unwrap().join("a.json")));
+        assert!(removed_once_saved(&std::env::temp_dir().join("a.json")));
+        assert!(!removed_once_saved(Path::new("-")));
     }
 
     #[test]
