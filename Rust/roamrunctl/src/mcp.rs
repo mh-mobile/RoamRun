@@ -159,10 +159,10 @@ fn tools(remote: bool, installs: bool) -> Value {
         tool("press", "Press a hardware button. `lock` can't be undone from here: the user has to unlock.",
              json!({ "button": { "type": "string", "enum": ["home", "lock", "volume-up", "volume-down"] } }), &["button"]),
         if remote {
-            tool("install", "Start installing an .ipa sent with PUT /upload, built and signed for this device: the upload's id and sha256, as the upload answered them. It answers at once; install_status says when the app is in (a megabyte takes a few seconds, a large app minutes), and until then other calls on the device answer that it is installing. An upload serves one install.",
+            tool("install", "Start installing an .ipa sent with PUT /upload, built and signed for this device: the upload's id and sha256, as the upload answered them. It ends the app's running processes first. It answers at once; install_status says when the app is in (a megabyte takes a few seconds, a large app minutes), and until then other calls on the device answer that it is installing. An upload serves one install.",
                  json!({ "upload": { "type": "string" }, "sha256": { "type": "string" } }), &["upload", "sha256"])
         } else {
-            tool("install", "Start installing an app built and signed for this device: the path, on this machine, of an .ipa or an .app folder. It answers at once; install_status says when the app is in (a megabyte takes a few seconds, a large app minutes), and until then other calls on the device answer that it is installing.",
+            tool("install", "Start installing an app built and signed for this device: the path, on this machine, of an .ipa or an .app folder. It ends the app's running processes first. It answers at once; install_status says when the app is in (a megabyte takes a few seconds, a large app minutes), and until then other calls on the device answer that it is installing.",
                  json!({ "path": { "type": "string" } }), &["path"])
         },
         tool("install_status", "How the device's install goes: still going (for how long), done (with the app's bundle identifier, for launch), or why it failed. Given the id install answered (install <id>), of that install alone: another begun since is an error.",

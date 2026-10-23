@@ -397,6 +397,13 @@ the device over Tailscale, as any using machine does, and needs no place beside 
   a fixed staging name. **Do not run concurrent installs to one device** from separate
   commands: they are not coordinated. Within one `mcp` server, a device's second install is
   refused while its first runs.
+- Before it installs, it ends the app's running processes, found by the bundle identifier (an
+  `.ipa`'s, or an `.app` folder's Info.plist). iOS ends them itself, but on iOS 27.0 it didn't end
+  one in front while the device was on a wireless charger (cable charging wasn't tried): the
+  install waited until the app wasn't in front (122 s once, and 315 s timeouts). Where they can't
+  be found or ended, the install goes on as before. They are killed (SIGKILL), extensions too,
+  before the upload begins: the app can't save its state, is gone for the whole upload, and stays
+  ended if the install then fails, which 0.8.1 didn't do.
 - A subsequent `.app` installation cleans up interrupted staging where possible.
   The command prints its transfer size and timeout, then reports the result.
 - `install --launch` then launches the app, in the same connection to the device, by the

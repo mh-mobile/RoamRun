@@ -342,6 +342,8 @@ tunnel and Xcode has to run again.
     `sha256` → answered at once; `install_status` until it says installed. Ctrl-C → no
     `roamrunctl-uploads-*` left in the temporary folder (`ls "${TMPDIR:-/tmp}"`; `dir %TEMP%` on
     Windows).
+    An app in front: with the device on its wireless charger and the app just launched in front,
+    `roamrunctl install` of it again → installed in seconds, not waiting.
     Last, as it takes the place of that pairing on the device: the device paired once more, under
     another name and with `--passphrase` (as in 30a). Both names given → refused as one device
     (after its passphrase). The new name alone: its passphrase asked for once as it starts

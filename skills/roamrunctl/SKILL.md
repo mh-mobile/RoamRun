@@ -228,10 +228,12 @@ believed the first time it is used — use it only if the user named it.
 - `roamrunctl install <name> <app.ipa or .app>` — an app already built and signed for
   that device (xtool's `dev build --ipa`, or Xcode's). It doesn't build or sign. An .ipa
   that isn't one app (`Payload/<name>.app` and nothing else, no `.bundle`) is refused before
-  anything is sent. One install to a device at a time. It says how much it sends, then nothing until the app is
-  in: a megabyte takes three to four seconds on the device's Wi‑Fi (a large app, minutes),
-  and it is given some four times that (five minutes plus fifteen seconds a megabyte) — run
-  it where it can wait. `--launch` then launches it, by the bundle identifier in it.
+  anything is sent. One install to a device at a time. It kills the app's running processes
+  first, before the upload (extensions too; unsaved state is lost, the app is gone for the
+  whole upload, and it stays ended if the install fails). It says how much it sends, then
+  nothing until the app is in: a megabyte takes three to four seconds on the device's Wi‑Fi (a
+  large app, minutes), and it is given five minutes plus fifteen seconds a megabyte — run it
+  where it can wait. `--launch` then launches it, by the bundle identifier in it.
 - With `--relay <address>:<port>` (or `ROAMRUNCTL_RELAY`), `install` and `launch` go through
   `roamrunctl mcp --http --allow-install` on a machine that holds the device's key (anywhere
   on the tailnet: it reaches the device over Tailscale), which names the device:
