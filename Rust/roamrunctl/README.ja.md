@@ -157,7 +157,7 @@ sequenceDiagram
 ```sh
 roamrunctl devices                    # ここで使えるデバイスの一覧
 roamrunctl look phone shot.png        # スクリーンショットを PNG で保存（長辺は最大 1280 ピクセル）
-roamrunctl install phone App.ipa      # 署名済みの .app フォルダも指定できる
+roamrunctl install phone App.ipa      # 署名済みの .app フォルダも指定できる。--launch で続けて起動する
 roamrunctl launch phone com.example.App
 ```
 
@@ -194,7 +194,7 @@ roamrunctl mcp --http 9090 --allow tag:codex phone
 - `--allow` で、呼び出せる相手を指定します。タグの付いたマシンなら `tag:<名前>` です。クラウド環境のマシンには、渡した認証キーのタグが付きます。人が使うマシンなら、そのログイン名（`someone@example.com`）で指定します。呼び出しのたびに、相手が誰かを Tailscale に尋ねます（`tailscale whois`）。マシンの名前では指定できません。このマシン自身からの呼び出しは、トークンがない限り断ります。
 - `--token-file <ファイル>` を付けると、どの要求にも `Authorization: Bearer <トークン>` が必要になります。ファイルは、あなただけが読めるものにしてください。トークンは 32 文字以上です。
 - 一覧に出し、操作できるのは、指定したデバイスだけです。root では起動しません（Windows では確かめません）。
-- `--allow-install` を付けると、`install` も使えます。先に `.ipa` を `http://<そのアドレス>:9090/upload` に送ります（`curl -T App.ipa`）。その答えにある `upload` の id と `sha256` を、`install` に渡します。大きさの上限は 1024 MiB で、`--max-upload <MiB>` で変えられます。保持するアップロードは 1 つで、インストールできるのは送った呼び出し元だけです。インストールが終わったとき、30 分使われなかったとき、Ctrl-C で止めたときに消します。どの呼び出し元からでも、次のアップロードが届き始めたときにも消します。このフラグがなければ、HTTP でのインストールはできません。
+- `--allow-install` を付けると、`install` も使えます。先に `.ipa` を `http://<そのアドレス>:9090/upload` に送ります（`curl -T App.ipa`）。その答えにある `upload` の id と `sha256` を、`install` に渡します。大きさの上限は 1024 MiB で、`--max-upload <MiB>` で変えられます。保持するアップロードは 1 つで、インストールできるのは送った呼び出し元だけです。インストールが終わったとき、30 分使われなかったとき、Ctrl-C で止めたときに消します。どの呼び出し元からでも、次のアップロードが届き始めたときにも消します。このフラグがなければ、HTTP でのインストールはできません。CI のランナーなど、roamrunctl のあるマシンからは、`roamrunctl install phone App.ipa --relay <そのアドレス>:9090` を使えます。`--launch` も付けられます。アップロードからインストールの完了までを、このコマンドが待ちます。トークンは `ROAMRUNCTL_TOKEN` か `--token-file` で渡します。起動だけなら `roamrunctl launch phone <bundle id> --relay <そのアドレス>:9090` です。
 - 画像や、入力・貼り付けした文字、アップロードした `.ipa` は、途中にあるものを通ります。クラウド環境のプロキシには、画像も文字もアップロードもトークンも見えます。
 
 GitHub Actions のジョブからインストールして起動する手順は、[docs/ci.ja.md](../../docs/ci.ja.md) にあります。ランナーで roamrunctl を動かすやり方と、デバイスのそばのマシンでこのサーバーを動かして頼むやり方を載せています。

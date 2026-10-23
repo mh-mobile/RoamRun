@@ -336,6 +336,48 @@ until Ctrl-C:
   be opened then leaves it for another try; once the device is open, the install takes it,
   and its file is removed when the install ends.
 
+### `install --relay` and `launch --relay`
+
+`roamrunctl install <device> <app.ipa> --relay <address>:<port> [--token-file <file>] [--timeout <s>] [--launch]`
+and `roamrunctl launch <device> <bundle id> --relay <address>:<port> [--token-file <file>]`, on
+the calling machine, use such a server instead of a device of their own. The relay is the
+machine that holds the device's key and runs `mcp --http`, anywhere on the tailnet: it reaches
+the device over Tailscale, as any using machine does, and needs no place beside it.
+
+- `<device>` is the device's name on the relay, as its `mcp --http` names it. `--relay` takes
+  the address and port, or the address the server printed (`http://<address>:<port>/mcp`);
+  `ROAMRUNCTL_RELAY` gives it too (set to nothing, it gives none). With either, `install` and
+  `launch` don't use a device saved on the calling machine. A name is looked up, and each IPv4
+  address it gives is tried in turn (the server listens on IPv4 alone). The connection is made
+  directly over TCP: `http_proxy` and the like aren't used.
+- The token: `--token-file` (the owner's alone, 32 characters or more on one line, as the
+  server's), else `ROAMRUNCTL_TOKEN`; with neither, none is sent.
+- `install` takes an `.ipa`, not an `.app` folder, and checks it as `install` does (next
+  section). Then, from one process (so one Tailscale node, which the relay requires): `PUT
+  /upload` with `Expect: 100-continue` (a refusal, such as a missing token, comes before the
+  `.ipa` is sent); the sha256 the relay answered is compared with the file's, and a different
+  one stops it before anything is installed; `install` names the upload; `install_status` is
+  asked every 5 seconds, of the install `install` answered (by its id), until it says the app
+  is in, or why not. It prints what `install_status` said. A relay whose `install` gives no id
+  (before 0.9.0) is refused once the install is begun. A server that doesn't answer the
+  `Expect` within 10 seconds is sent the body all the same (a 100 Continue that comes after is
+  passed over); one that refuses while the body
+  goes is read for its answer. `--launch` then launches the app by the bundle identifier in the
+  `.ipa`, once what `install_status` said is printed.
+- A request the relay answers 503 is sent again, 5 times at most, 3 seconds apart. Any other
+  refusal stops the command with the status and what the relay said (401: the token; 403: its
+  `--allow`; 404 on `/upload`: no `--allow-install`). Each request is one connection.
+  `launch --relay` waits 120 seconds at most for everything (503s tried again included);
+  `install --relay` waits until its deadline (`--timeout`, below), each read or write 120
+  seconds at most. Either says "no answer within 120 s" when it gives up so.
+- `--timeout <s>` is the most the whole command waits for the app to be in, the upload and
+  each request among it: nothing is sent once it has passed, no answer is waited for past it
+  (a relay that answers a byte at a time, stops halfway, or sends 1xx on and on, included),
+  and an upload going on then stops. By default it is what the relay gives the install (five
+  minutes plus 15 seconds a megabyte), 2 seconds a MB for the upload, and a minute more. When
+  it passes the command fails; an install already begun goes on at the relay, and
+  `install_status` there says how it ends.
+
 ## Installing apps
 
 - `install` accepts an `.ipa` or a signed `.app` directory built for the target device.
@@ -357,9 +399,17 @@ until Ctrl-C:
   refused while its first runs.
 - A subsequent `.app` installation cleans up interrupted staging where possible.
   The command prints its transfer size and timeout, then reports the result.
+- `install --launch` then launches the app, in the same connection to the device, by the
+  bundle identifier in the `.ipa`, or in the `.app` folder's `Info.plist` (without one there,
+  nothing is installed). That it was installed is printed before the launch is tried.
 - The MCP `install` answers once the install has begun, with the bundle identifier (or the
-  `.app` path), the size and the time limit; `install_status` says how it goes: still going
-  and for how long, installed, or why it failed. Until it ends, every other call on that
+  `.app` path), the size, the install's id (`(install 3f2a9c0e1b7d4a65)`, random) and the time
+  limit; `install_status` says how the device's latest install goes: still going and for how
+  long, installed, or why it failed. Given `"install": "<id>"`, it answers of that install
+  alone: another caller's install of the same app isn't taken for one's own. One followed by
+  others on the device is still answered as it ended, each device's latest 16 ended ones kept; an older
+  one, or one from before the server was started again, is an error that says how it ended
+  isn't known. Until it ends, every other call on that
   device is answered that it is installing, and the device's latest look is ended. Over stdio,
   an install still going when standard input closes runs out before the server ends; over
   HTTP, Ctrl-C ends it where it is.
@@ -489,6 +539,17 @@ against a real device at the time these notes were written:
   same upload were refused meanwhile, it was installed after 10 s, the upload's file was gone
   after, and the folder was removed at Ctrl-C. `launch` of it over stdio answered with its pid
   in 1.3 s.
+- `install --relay` and `launch --relay` from another machine, from a cloud, or on Linux or
+  Windows; `install --launch` without a relay; `--timeout` running out. They were run on macOS
+  from the machine itself,
+  against its own `mcp --http` with the token, on the iPhone 15 Pro (iOS 27.0, its app not in
+  front): without the token the upload was refused (401) before the `.ipa` was sent; with it,
+  `install --relay --launch` of a 1 MB `.ipa` took 6.7 s (the install 5 s) and launched it,
+  and `launch --relay` (the relay from `ROAMRUNCTL_RELAY`) answered in 0.6 s — that in a form
+  before `install` answered an id. With the id, `install --relay --launch` took 8.9 s: `install`
+  answered `(install <id>)`, `install_status` asked by it said the app was in after 5 s, and it
+  launched; `install_status` with another id was then an error, and without one answered of
+  that install.
 - Tailscale userspace networking with no address available to bind.
 - Xcode pairing through `pair introduce` since the `--mac` → `--host` change.
 
