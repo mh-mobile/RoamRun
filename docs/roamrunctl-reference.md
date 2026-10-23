@@ -340,10 +340,11 @@ until Ctrl-C:
   refused while its first runs.
 - Before it installs, it ends the app's running processes, found by the bundle identifier (an
   `.ipa`'s, or an `.app` folder's Info.plist). iOS ends them itself, but on iOS 27.0 it didn't end
-  one in front while the device was charging: the install waited until the app wasn't in front
-  (122 s once, and 315 s timeouts). Where they can't be found or ended, the install goes on as before.
-  They are killed (SIGKILL), extensions too, so the app can't save its state, and it stays ended
-  if the install then fails.
+  one in front while the device was on a wireless charger (cable charging wasn't tried): the
+  install waited until the app wasn't in front (122 s once, and 315 s timeouts). Where they can't
+  be found or ended, the install goes on as before. They are killed (SIGKILL), extensions too,
+  before the upload begins: the app can't save its state, is gone for the whole upload, and stays
+  ended if the install then fails, which 0.8.1 didn't do.
 - A subsequent `.app` installation cleans up interrupted staging where possible.
   The command prints its transfer size and timeout, then reports the result.
 - The MCP `install` answers once the install has begun, with the bundle identifier (or the

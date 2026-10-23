@@ -595,7 +595,7 @@ fn app(device: &RRDevice, what: App) -> String {
 }
 
 /// The app's running processes, ended before it is replaced. iOS ends them itself, but not one in front while the
-/// device charges: it waits until the app isn't, which held installs for minutes (iOS 27.0). Ended here first;
+/// device is on a wireless charger (cable charging untried): it waits until the app isn't, which held installs for minutes (iOS 27.0). Ended here first;
 /// where anything of it fails, the install goes on as it would have. Where the app is is asked of
 /// installation_proxy: AppService's list of apps didn't answer over this connection.
 async fn end_running(link: &mut Link, bundle: &str) {
