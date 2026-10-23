@@ -350,7 +350,8 @@ the calling machine, use such a server instead of a device of their own:
   `--allow`; 404 on `/upload`: no `--allow-install`). Each request is one connection; an answer
   is waited for 120 seconds at most.
 - `--timeout <s>` is the most the whole command waits for the app to be in, the upload and
-  each request among it: nothing is sent once it has passed, and an upload going on then
+  each request among it: nothing is sent once it has passed, no answer is waited for past it
+  (a relay that stops halfway, or sends 1xx on and on, included), and an upload going on then
   stops. By default it is what the relay gives the install (five minutes plus 15 seconds a megabyte), 2
   seconds a MB for the upload, and a minute more. When it passes the command fails; an install
   already begun goes on at the relay, and `install_status` there says how it ends.
@@ -384,7 +385,7 @@ the calling machine, use such a server instead of a device of their own:
   limit; `install_status` says how the device's latest install goes: still going and for how
   long, installed, or why it failed. Given `"install": "<id>"`, it answers of that install
   alone: another caller's install of the same app isn't taken for one's own. One followed by
-  others on the device is still answered as it ended, the latest 16 ended ones kept; an older
+  others on the device is still answered as it ended, each device's latest 16 ended ones kept; an older
   one, or one from before the server was started again, is an error that says how it ended
   isn't known. Until it ends, every other call on that
   device is answered that it is installing, and the device's latest look is ended. Over stdio,

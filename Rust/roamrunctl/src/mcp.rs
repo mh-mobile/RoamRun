@@ -102,7 +102,7 @@ pub struct Server {
     /// Over HTTP with `--allow-install`: what is installed from, by its id.
     uploads: Option<Arc<Uploads>>,
     installs: HashMap<String, Install>,
-    /// How installs that another has followed since on their device ended: by device and id, the latest `PAST`.
+    /// How installs that another has followed since on their device ended: by device and id, each device's latest `PAST`.
     past: std::collections::VecDeque<(String, String, Result<String, String>)>,
     /// The last look's id; the first is a random one, so that a look kept from an earlier run isn't taken for one since.
     looks: u64,
@@ -121,7 +121,7 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
     json!({ "name": name, "description": description, "inputSchema": { "type": "object", "properties": properties, "required": needs }, "annotations": hints(name) })
 }
 
-/// How many ended installs are kept for `install_status` asked by their id, once others followed.
+/// How many ended installs of a device are kept for `install_status` asked by their id, once others followed.
 const PAST: usize = 16;
 
 /// What `install` answers once it has begun: `remote` reads the id back from it.
@@ -540,10 +540,17 @@ impl Server {
     fn begin(&mut self, name: &str, install: Install) {
         if let Some(was) = self.installs.get(name).map(|was| was.id.clone()) {
             let ended = self.install_status(name, None);
-            self.past.push_back((name.to_string(), was, ended));
-            if self.past.len() > PAST { self.past.pop_front(); }
+            self.keep(name, was, ended);
         }
         self.installs.insert(name.to_string(), install);
+    }
+
+    /// How the device's install `id` ended, among its latest `PAST`.
+    fn keep(&mut self, name: &str, id: String, ended: Result<String, String>) {
+        self.past.push_back((name.to_string(), id, ended));
+        if self.past.iter().filter(|(device, ..)| device == name).count() > PAST {
+            if let Some(oldest) = self.past.iter().position(|(device, ..)| device == name) { self.past.remove(oldest); }
+        }
     }
 
     /// The device's latest install; with `id`, that one alone.
@@ -921,6 +928,12 @@ pub(crate) mod tests {
         assert!(ended(&mut server, &name).unwrap().starts_with("io.example.app is installed on"));
         assert!(server.install_status(&name, Some("a1")).unwrap().starts_with("io.example.app is installed on"));
         assert!(server.install_status(&name, Some("b2")).unwrap_err().starts_with("install b2 isn't"));
+        // Each device's latest are kept: another's many don't push its out.
+        let mut other = Server::default();
+        other.keep("b", "b1".into(), Ok("in".into()));
+        for n in 0..=PAST { other.keep("a", format!("a{n}"), Ok("in".into())); }
+        assert_eq!(other.install_status("b", Some("b1")), Ok("in".into()));
+        assert!(other.install_status("a", Some("a0")).is_err() && other.install_status("a", Some("a1")).is_ok());
         // Followed by another, it is still answered by its id: as it ended, not as the one since.
         let end = going(&mut server, r#"{"ok":false,"error":"timed out"}"#);
         assert!(server.install_status(&name, Some("a1")).unwrap().starts_with("io.example.app is installed on"));

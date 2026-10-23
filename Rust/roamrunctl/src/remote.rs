@@ -20,6 +20,9 @@ const ANSWER: Duration = Duration::from_secs(120);
 const CONNECT: Duration = Duration::from_secs(10);
 const CONTINUE: Duration = if cfg!(test) { Duration::from_millis(300) } else { Duration::from_secs(10) };
 
+/// When a request is over, and what to say then.
+type Deadline<'a> = (Instant, &'a str);
+
 pub struct Relay {
     /// host:port, as connected to and as the Host the server checks.
     host: String,
@@ -41,19 +44,19 @@ impl Relay {
     }
 
     /// One request, tried again while the relay answers 503: its status and body. `body` gives a body anew for each try.
-    fn ask(&self, method: &str, path: &str, body: &dyn Fn() -> std::io::Result<(u64, Box<dyn Read>)>, until: Instant) -> Result<(u16, String), String> {
+    fn ask(&self, method: &str, path: &str, body: &dyn Fn() -> std::io::Result<(u64, Box<dyn Read>)>, until: Deadline) -> Result<(u16, String), String> {
         let mut tries = 0;
         loop {
             let (status, said) = self.once(method, path, body, until)?;
             tries += 1;
-            if status != 503 || tries == TRIES || Instant::now() + APART >= until { return Ok((status, said)) }
+            if status != 503 || tries == TRIES || Instant::now() + APART >= until.0 { return Ok((status, said)) }
             std::thread::sleep(APART);
         }
     }
 
     /// One request, over by `until`.
-    fn once(&self, method: &str, path: &str, body: &dyn Fn() -> std::io::Result<(u64, Box<dyn Read>)>, until: Instant) -> Result<(u16, String), String> {
-        let out = || format!("the relay at {}: out of time (--timeout)", self.host);
+    fn once(&self, method: &str, path: &str, body: &dyn Fn() -> std::io::Result<(u64, Box<dyn Read>)>, (until, why): Deadline) -> Result<(u16, String), String> {
+        let out = || format!("the relay at {}: {why}", self.host);
         let failed = |e: std::io::Error| if Instant::now() >= until { format!("{}: {e}", out()) } else { format!("the relay at {}: {e}", self.host) };
         let left = || until.checked_duration_since(Instant::now()).filter(|left| !left.is_zero()).ok_or_else(out);
         // It listens on IPv4 alone: each IPv4 address the name gives is tried.
@@ -63,35 +66,39 @@ impl Relay {
             if stream.is_ok() { break }
         }
         let stream = stream?;
-        let wait = |most: Duration| -> Result<(), String> { let most = most.min(left()?); stream.set_read_timeout(Some(most)).and_then(|()| stream.set_write_timeout(Some(most))).map_err(failed) };
+        // Before each wait: no longer than what is left. Where the relay has reset the connection already (it answered and
+        // closed while the body went), macOS refuses to set it; what it answered is read all the same.
+        let within = |most: Duration| -> Result<(), String> {
+            let most = most.min(left()?);
+            let _ = stream.set_read_timeout(Some(most)).and_then(|()| stream.set_write_timeout(Some(most)));
+            Ok(())
+        };
         let (length, mut content) = body().map_err(|e| e.to_string())?;
         let token = self.token.as_ref().map_or(String::new(), |token| format!("Authorization: Bearer {token}\r\n"));
         // With Expect, a refusal (the token, who this is, the size) comes before the body is sent.
         let kind = if path == "/upload" { "application/octet-stream" } else { "application/json" };
         let head = format!("{method} {path} HTTP/1.1\r\nHost: {}\r\n{token}Content-Type: {kind}\r\nContent-Length: {length}\r\nExpect: 100-continue\r\nConnection: close\r\n\r\n", self.host);
-        wait(ANSWER)?;
+        within(ANSWER)?;
         (&stream).write_all(head.as_bytes()).map_err(failed)?;
         // A server that doesn't answer the Expect is sent the body all the same, after a while.
-        wait(CONTINUE)?;
+        within(CONTINUE)?;
         let early = match stream.peek(&mut [0]) {
             Ok(_) => true,
             Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => false,
             Err(e) => return Err(failed(e)),
         };
-        wait(ANSWER)?;
         let mut reader = BufReader::new(&stream);
         // Its first word: a refusal, or 100 Continue (the body goes).
-        let refused = if early { Some(answer_head(&mut reader).map_err(failed)?).filter(|(status, _)| !(100..200).contains(status)) } else { None };
+        let refused = if early { within(ANSWER)?; Some(answer_head(&mut reader).map_err(failed)?).filter(|(status, _)| !(100..200).contains(status)) } else { None };
         let (status, length) = match refused {
             Some(answer) => answer,
             None => {
-                let sent = std::io::copy(&mut content.as_mut().take(length), &mut Until(&stream, until));
-                // Past the deadline, while it was sent or once it was: no answer is waited for.
-                if Instant::now() >= until { return Err(sent.err().map_or_else(out, failed)) }
-                wait(ANSWER)?;
+                let sent = std::io::copy(&mut content.as_mut().take(length), &mut Bounded(&stream, until));
                 // Refused while it was sent (answered, then closed): that answer, not the broken pipe. A 100 Continue
-                // that came after the body was sent anyway, and any other 1xx, is passed over.
+                // that came after the body was sent anyway, and any other 1xx, is passed over. Past the deadline, none
+                // is waited for.
                 let answer = loop {
+                    within(ANSWER)?;
                     match answer_head(&mut reader) {
                         Ok((status, _)) if (100..200).contains(&status) => continue,
                         answer => break answer,
@@ -103,20 +110,25 @@ impl Relay {
                 }
             }
         };
+        // Read a piece at a time, each within what is left: a relay that stops halfway doesn't hold this past the deadline.
         let mut said = Vec::new();
-        match length {
-            Some(length) => reader.take(length).read_to_end(&mut said),
-            None => reader.read_to_end(&mut said),
-        }.map_err(failed)?;
+        let mut piece = [0; 16 * 1024];
+        while length.is_none_or(|length| (said.len() as u64) < length) {
+            within(ANSWER)?;
+            let read = reader.read(&mut piece).map_err(failed)?;
+            if read == 0 { break }
+            said.extend_from_slice(&piece[..read]);
+        }
+        if let Some(length) = length { said.truncate(usize::try_from(length).unwrap_or(usize::MAX)) }
         Ok((status, String::from_utf8_lossy(&said).into_owned()))
     }
 
     /// One tool's answer, as text: an error where the tool says it failed.
     pub fn call(&self, tool: &str, arguments: Value) -> Result<String, String> {
-        self.call_by(tool, arguments, Instant::now() + ANSWER)
+        self.call_by(tool, arguments, (Instant::now() + ANSWER, &format!("no answer within {} s", ANSWER.as_secs())))
     }
 
-    fn call_by(&self, tool: &str, arguments: Value, until: Instant) -> Result<String, String> {
+    fn call_by(&self, tool: &str, arguments: Value, until: Deadline) -> Result<String, String> {
         let line = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": tool, "arguments": arguments } }).to_string();
         let (status, said) = self.ask("POST", "/mcp", &|| Ok((line.len() as u64, Box::new(std::io::Cursor::new(line.clone().into_bytes())))), until)?;
         if status != 200 { return Err(refused(tool, status, &said)) }
@@ -136,18 +148,20 @@ impl Relay {
         let bundle = roamrun_device::ipa_checked(&text)?;
         let (megabytes, given) = roamrun_device::install_given(&text);
         let until = began + timeout.map_or(given + Duration::from_secs(60 + 2 * megabytes), Duration::from_secs);
+        let why = format!("out of time ({} s{})", until.duration_since(began).as_secs(), if timeout.is_some() { ", --timeout" } else { ": what the relay gives the upload and the install; --timeout sets another" });
+        let deadline = (until, why.as_str());
         let opened = || std::fs::File::open(path).and_then(|file| Ok((file.metadata()?.len(), Box::new(file) as Box<dyn Read>)));
         let mut hash = <sha2::Sha256 as sha2::Digest>::new();
         std::io::copy(&mut opened().map_err(|e| format!("{}: {e}", path.display()))?.1, &mut hash).map_err(|e| format!("{}: {e}", path.display()))?;
         let sha256: String = sha2::Digest::finalize(hash).iter().map(|b| format!("{b:02x}")).collect();
         note!("Sending {} ({megabytes} MB) to the relay at {}", path.display(), self.host);
-        let (status, said) = self.ask("PUT", "/upload", &opened, until)?;
+        let (status, said) = self.ask("PUT", "/upload", &opened, deadline)?;
         if status != 200 { return Err(refused("the upload", status, &said)) }
         let said: Value = serde_json::from_str(&said).map_err(|_| "the relay's answer to the upload isn't JSON".to_string())?;
         // What arrived is what was sent: else nothing is installed.
         if said["sha256"].as_str() != Some(sha256.as_str()) { return Err(format!("the relay's sha256 of the upload isn't {}'s: nothing was installed", path.display())) }
         let upload = said["upload"].as_str().ok_or("the relay's answer to the upload has no id")?;
-        let begun = self.call_by("install", json!({ "device": name, "upload": upload, "sha256": sha256 }), until)?;
+        let begun = self.call_by("install", json!({ "device": name, "upload": upload, "sha256": sha256 }), deadline)?;
         note!("{begun}");
         // Asked of by its id: another caller's install on the device meanwhile, of the same app even, isn't taken for this one.
         let id = install_id(&begun).ok_or("the relay doesn't say which install this is (it needs roamrunctl 0.9.0 or later): not waited for")?;
@@ -156,7 +170,7 @@ impl Relay {
             if Instant::now() >= until {
                 return Err(format!("not in after {} s: the relay goes on with it, and install_status there says how it ends", began.elapsed().as_secs()));
             }
-            let said = self.call_by("install_status", json!({ "device": name, "install": id }), until)?;
+            let said = self.call_by("install_status", json!({ "device": name, "install": id }), deadline)?;
             if said.contains(" is installed on ") { return Ok((said, bundle)) }
             if !said.starts_with("installing ") { return Err(said) }
         }
@@ -169,9 +183,9 @@ fn install_id(begun: &str) -> Option<&str> {
 }
 
 /// Writes until `.1`, then fails: an upload that would go on past the deadline stops.
-struct Until<'a>(&'a TcpStream, Instant);
+struct Bounded<'a>(&'a TcpStream, Instant);
 
-impl Write for Until<'_> {
+impl Write for Bounded<'_> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         // Each write waits no longer than what is left: a relay that stops reading doesn't hold it past the deadline.
         let left = self.1.checked_duration_since(Instant::now()).filter(|left| !left.is_zero()).ok_or(std::io::ErrorKind::TimedOut)?;
@@ -274,25 +288,71 @@ mod tests {
         }
     }
 
+    /// A server on 127.0.0.1 that takes one connection and does `then` with it.
+    fn serving(then: impl FnOnce(&TcpStream) + Send + 'static) -> std::net::SocketAddr {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let at = listener.local_addr().unwrap();
+        std::thread::spawn(move || { let (stream, _) = listener.accept().unwrap(); then(&stream) });
+        at
+    }
+
+    /// A gigabyte of nothing, as an upload's body.
+    fn big() -> std::io::Result<(u64, Box<dyn Read>)> { Ok((1 << 30, Box::new(std::io::repeat(0)))) }
+
     /// A relay that stops reading holds an upload no longer than its deadline.
     #[test]
     fn a_relay_that_stops_reading_is_left_at_the_deadline() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let at = listener.local_addr().unwrap();
-        std::thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            (&stream).write_all(b"HTTP/1.1 100 Continue\r\n\r\n").unwrap();
+        let at = serving(|stream| {
+            let mut stream = stream;
+            stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").unwrap();
             // Reads for a while, then no more: a write begun then waits on what is left, not on what was left at first.
             let began = Instant::now();
             let mut chunk = [0; 1 << 16];
-            while began.elapsed() < Duration::from_millis(1200) { let _ = (&stream).read(&mut chunk); }
+            while began.elapsed() < Duration::from_millis(1200) { let _ = stream.read(&mut chunk); }
             std::thread::sleep(Duration::from_secs(10));
         });
-        let relay = Relay::new(&at.to_string(), None).unwrap();
         let began = Instant::now();
-        let body = || Ok((1u64 << 30, Box::new(std::io::repeat(0)) as Box<dyn Read>));
-        let said = relay.once("PUT", "/upload", &body, began + Duration::from_secs(2)).err().unwrap_or_default();
+        let said = Relay::new(&at.to_string(), None).unwrap().once("PUT", "/upload", &big, (began + Duration::from_secs(2), "out of time")).err().unwrap_or_default();
         assert!(said.contains("out of time"), "{said}");
         assert!(began.elapsed() < Duration::from_millis(2800), "{:?}", began.elapsed());
+    }
+
+    /// A relay that answers halfway and stops, or sends 1xx on and on, isn't waited for past the deadline.
+    #[test]
+    fn an_answer_is_read_within_the_deadline() {
+        let halfway = serving(|stream| {
+            let mut stream = stream;
+            // Late, so that what was left as its head came is less than what was left at first.
+            std::thread::sleep(Duration::from_millis(1300));
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nhalf").unwrap();
+            std::thread::sleep(Duration::from_secs(10));
+        });
+        let processing = serving(|stream| {
+            let mut stream = stream;
+            for _ in 0..50 { if stream.write_all(b"HTTP/1.1 102 Processing\r\n\r\n").is_err() { break } std::thread::sleep(Duration::from_millis(200)) }
+        });
+        for at in [halfway, processing] {
+            let began = Instant::now();
+            let body = || Ok((2u64, Box::new(std::io::Cursor::new(b"{}".to_vec())) as Box<dyn Read>));
+            let said = Relay::new(&at.to_string(), None).unwrap().once("POST", "/mcp", &body, (began + Duration::from_millis(1500), "out of time")).err().unwrap_or_default();
+            assert!(said.contains("out of time"), "{said}");
+            assert!(began.elapsed() < Duration::from_millis(2000), "{:?}", began.elapsed());
+        }
+    }
+
+    /// A relay that refuses while the body goes, and closes without reading the rest, is read for its answer. On macOS
+    /// the connection is reset by then, and the socket's timeouts can't be set any more.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_refusal_while_the_body_goes_is_read() {
+        let at = serving(|stream| {
+            let mut stream = stream;
+            stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").unwrap();
+            let mut taken = vec![0; 256 * 1024];
+            let _ = stream.read_exact(&mut taken);
+            stream.write_all(b"HTTP/1.1 413 Payload Too Large\r\nContent-Length: 10\r\nConnection: close\r\n\r\ntoo large\n").unwrap();
+        });
+        let said = Relay::new(&at.to_string(), None).unwrap().once("PUT", "/upload", &big, (Instant::now() + Duration::from_secs(20), "out of time"));
+        assert_eq!(said, Ok((413, "too large\n".to_string())));
     }
 }
