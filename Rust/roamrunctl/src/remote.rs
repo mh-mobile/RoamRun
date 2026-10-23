@@ -57,7 +57,7 @@ impl Relay {
     /// One request, over by `until`.
     fn once(&self, method: &str, path: &str, body: &dyn Fn() -> std::io::Result<(u64, Box<dyn Read>)>, (until, why): Deadline) -> Result<(u16, String), String> {
         let out = || format!("the relay at {}: {why}", self.host);
-        let failed = |e: std::io::Error| if Instant::now() >= until { format!("{}: {e}", out()) } else { format!("the relay at {}: {e}", self.host) };
+        let failed = |e: std::io::Error| if Instant::now() >= until { out() } else { format!("the relay at {}: {e}", self.host) };
         let left = || until.checked_duration_since(Instant::now()).filter(|left| !left.is_zero()).ok_or_else(out);
         // It listens on IPv4 alone: each IPv4 address the name gives is tried.
         let mut stream = Err(format!("the relay at {}: no IPv4 address", self.host));
@@ -66,8 +66,7 @@ impl Relay {
             if stream.is_ok() { break }
         }
         let stream = stream?;
-        // Before each wait: no longer than what is left. Where the relay has reset the connection already (it answered and
-        // closed while the body went), macOS refuses to set it; what it answered is read all the same.
+        // Before the head is sent and the Expect waited on: no longer than what is left. (The body and the answer: `Bounded`.)
         let within = |most: Duration| -> Result<(), String> {
             let most = most.min(left()?);
             let _ = stream.set_read_timeout(Some(most)).and_then(|()| stream.set_write_timeout(Some(most)));
@@ -87,18 +86,16 @@ impl Relay {
             Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => false,
             Err(e) => return Err(failed(e)),
         };
-        let mut reader = BufReader::new(&stream);
+        let mut reader = BufReader::new(Bounded(&stream, until));
         // Its first word: a refusal, or 100 Continue (the body goes).
-        let refused = if early { within(ANSWER)?; Some(answer_head(&mut reader).map_err(failed)?).filter(|(status, _)| !(100..200).contains(status)) } else { None };
+        let refused = if early { Some(answer_head(&mut reader).map_err(failed)?).filter(|(status, _)| !(100..200).contains(status)) } else { None };
         let (status, length) = match refused {
             Some(answer) => answer,
             None => {
                 let sent = std::io::copy(&mut content.as_mut().take(length), &mut Bounded(&stream, until));
                 // Refused while it was sent (answered, then closed): that answer, not the broken pipe. A 100 Continue
-                // that came after the body was sent anyway, and any other 1xx, is passed over. Past the deadline, none
-                // is waited for.
+                // that came after the body was sent anyway, and any other 1xx, is passed over.
                 let answer = loop {
-                    within(ANSWER)?;
                     match answer_head(&mut reader) {
                         Ok((status, _)) if (100..200).contains(&status) => continue,
                         answer => break answer,
@@ -110,16 +107,11 @@ impl Relay {
                 }
             }
         };
-        // Read a piece at a time, each within what is left: a relay that stops halfway doesn't hold this past the deadline.
         let mut said = Vec::new();
-        let mut piece = [0; 16 * 1024];
-        while length.is_none_or(|length| (said.len() as u64) < length) {
-            within(ANSWER)?;
-            let read = reader.read(&mut piece).map_err(failed)?;
-            if read == 0 { break }
-            said.extend_from_slice(&piece[..read]);
-        }
-        if let Some(length) = length { said.truncate(usize::try_from(length).unwrap_or(usize::MAX)) }
+        match length {
+            Some(length) => reader.take(length).read_to_end(&mut said),
+            None => reader.read_to_end(&mut said),
+        }.map_err(failed)?;
         Ok((status, String::from_utf8_lossy(&said).into_owned()))
     }
 
@@ -182,18 +174,37 @@ fn install_id(begun: &str) -> Option<&str> {
     begun.split_once("(install ").and_then(|(_, rest)| rest.split_once(')')).map(|(id, _)| id).filter(|id| !id.is_empty())
 }
 
-/// Writes until `.1`, then fails: an upload that would go on past the deadline stops.
+/// The connection, read and written until `.1`, then failing: an upload or an answer that would go on past the deadline stops.
 struct Bounded<'a>(&'a TcpStream, Instant);
 
+impl Bounded<'_> {
+    /// The next read or write waits only what is left (`ANSWER` at most); none left, TimedOut. Where the relay has reset
+    /// the connection (it answered and closed, or just closed, while the body went), macOS refuses to set it: what it
+    /// answered is read all the same, and the reset is said as one.
+    fn wait(&self, set: fn(&TcpStream, Option<Duration>) -> std::io::Result<()>) -> std::io::Result<()> {
+        let left = self.1.checked_duration_since(Instant::now()).filter(|left| !left.is_zero()).ok_or(std::io::ErrorKind::TimedOut)?;
+        let _ = set(self.0, Some(ANSWER.min(left)));
+        Ok(())
+    }
+}
+
+/// A relay that stops reading doesn't hold an upload past the deadline.
 impl Write for Bounded<'_> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        // Each write waits no longer than what is left: a relay that stops reading doesn't hold it past the deadline.
-        let left = self.1.checked_duration_since(Instant::now()).filter(|left| !left.is_zero()).ok_or(std::io::ErrorKind::TimedOut)?;
-        self.0.set_write_timeout(Some(ANSWER.min(left)))?;
+        self.wait(TcpStream::set_write_timeout)?;
         let mut stream = self.0;
         stream.write(bytes)
     }
     fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+}
+
+/// A relay that answers a byte at a time, stops halfway, or sends 1xx on and on doesn't hold this past the deadline.
+impl Read for Bounded<'_> {
+    fn read(&mut self, into: &mut [u8]) -> std::io::Result<usize> {
+        self.wait(TcpStream::set_read_timeout)?;
+        let mut stream = self.0;
+        stream.read(into)
+    }
 }
 
 /// The status line and the length of an answer, its head read.
@@ -313,7 +324,8 @@ mod tests {
         });
         let began = Instant::now();
         let said = Relay::new(&at.to_string(), None).unwrap().once("PUT", "/upload", &big, (began + Duration::from_secs(2), "out of time")).err().unwrap_or_default();
-        assert!(said.contains("out of time"), "{said}");
+        // Said as out of time alone, not with what the socket said then.
+        assert_eq!(said, format!("the relay at {at}: out of time"));
         assert!(began.elapsed() < Duration::from_millis(2800), "{:?}", began.elapsed());
     }
 
@@ -331,18 +343,26 @@ mod tests {
             let mut stream = stream;
             for _ in 0..50 { if stream.write_all(b"HTTP/1.1 102 Processing\r\n\r\n").is_err() { break } std::thread::sleep(Duration::from_millis(200)) }
         });
-        for at in [halfway, processing] {
+        let drip = serving(|stream| {
+            let mut stream = stream;
+            for byte in b"HTTP/1.1 200 OK\r\nX-Slow: ".iter().chain(std::iter::repeat_n(&b'a', 100)) {
+                if stream.write_all(&[*byte]).is_err() { break }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+        for at in [halfway, processing, drip] {
             let began = Instant::now();
             let body = || Ok((2u64, Box::new(std::io::Cursor::new(b"{}".to_vec())) as Box<dyn Read>));
             let said = Relay::new(&at.to_string(), None).unwrap().once("POST", "/mcp", &body, (began + Duration::from_millis(1500), "out of time")).err().unwrap_or_default();
-            assert!(said.contains("out of time"), "{said}");
+            assert_eq!(said, format!("the relay at {at}: out of time"));
             assert!(began.elapsed() < Duration::from_millis(2000), "{:?}", began.elapsed());
         }
     }
 
-    /// A relay that refuses while the body goes, and closes without reading the rest, is read for its answer. On macOS
-    /// the connection is reset by then, and the socket's timeouts can't be set any more.
-    #[cfg(target_os = "macos")]
+    /// A relay that refuses while the body goes, and closes without reading the rest, is read for its answer; one that
+    /// closes so without an answer is said to have reset the connection. The connection is reset by then: on macOS the
+    /// socket's timeouts can't be set any more. (Not tried on Windows.)
+    #[cfg(not(windows))]
     #[test]
     fn a_refusal_while_the_body_goes_is_read() {
         let at = serving(|stream| {
@@ -354,5 +374,15 @@ mod tests {
         });
         let said = Relay::new(&at.to_string(), None).unwrap().once("PUT", "/upload", &big, (Instant::now() + Duration::from_secs(20), "out of time"));
         assert_eq!(said, Ok((413, "too large\n".to_string())));
+        for _ in 0..3 {
+            let at = serving(|stream| {
+                let mut stream = stream;
+                stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").unwrap();
+                let mut taken = vec![0; 256 * 1024];
+                let _ = stream.read_exact(&mut taken);
+            });
+            let said = Relay::new(&at.to_string(), None).unwrap().once("PUT", "/upload", &big, (Instant::now() + Duration::from_secs(20), "out of time")).err().unwrap_or_default();
+            assert!(["reset", "Broken pipe"].iter().any(|word| said.contains(word)) && !said.contains("Invalid argument"), "{said}");
+        }
     }
 }
