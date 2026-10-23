@@ -60,9 +60,10 @@ With roamrunctl 0.8.1 over the LAN:
 | charging | not running | 5 s |
 
 Whether the app was in front before each run above wasn't recorded, so not every fast run is
-explained. roamrunctl 0.9.0 ends the app's running processes before it installs, and the same
-install took 4–5 s with the app in front on a charging device. With 0.8.1, don't leave the app in
-front on a charging device when a job installs it: end it, or leave the device off its charger.
+explained. roamrunctl 0.9.0 ends the app's running processes before it installs (#196): a build of
+that change, run from the Mac over the LAN, installed in 4–5 s with the app in front on a charging
+device. It wasn't run from CI. With 0.8.1, don't leave the app in front on a charging device when a
+job installs it: end it, or leave the device off its charger.
 
 ## What both ways need
 
@@ -91,6 +92,10 @@ The job joins the tailnet with [tailscale/github-action](https://github.com/tail
     tags: tag:ci
 ```
 
+The action also takes `ping:`, hosts to `tailscale ping` once it is up, which shows in the log
+whether the path to each is direct. The runs above pinged in a step of their own (`tailscale ping
+-c 5`); the input wasn't tried.
+
 With a policy that allows everything, the runner reaches every machine on your tailnet while the
 job runs. To let it reach only what it needs, write grants for `tag:ci`. For a relay, that is its
 one port. For roamrunctl on the runner, it is the device on TCP: the pairing port, one of
@@ -107,8 +112,12 @@ concurrency:
   cancel-in-progress: false
 ```
 
-The runs above were started by hand. GitHub gives no secrets to a workflow run for a pull request
-from a fork, and both ways need them.
+A group holds within one repository: two repositories that use one device aren't kept apart. And
+one run at most waits in a group: a newer one cancels the one waiting.
+
+The runs above were started by hand. GitHub gives no secrets to a workflow run on `pull_request`
+from a fork, and both ways need them. A `pull_request_target` workflow gets them even for a fork's
+pull request: don't use these secrets in one.
 
 ## roamrunctl on the runner
 
@@ -153,9 +162,9 @@ list.
 
 ### The runner's step
 
-With the Mac's key, `key import` takes it in. It accepts only a file `roamrun key create` wrote; it
-connects to the device before it saves the pairing, and removes the file once the pairing is
-saved.
+These steps are as they ran, with roamrunctl 0.8.1, the release then. With the Mac's key,
+`key import` takes it in; in 0.8.1 it accepts only a file `roamrun key create` wrote. It connects to
+the device before it saves the pairing, and removes the file once the pairing is saved.
 
 ```yaml
 - name: Install and launch
@@ -195,6 +204,10 @@ files written with the key readable by the runner's user alone; roamrunctl refus
 that others can read. `app/MyApp.ipa` and `com.example.MyApp` stand for your app and its bundle
 identifier.
 
+With 0.9.0 (not run from CI), `key import -` reads the key from standard input and takes a file
+roamrunctl saved as well, so either key goes in one way, with no file written for it:
+`printf '%s' "$ROAMRUN_CI_KEY" | "$rr" key import - --as ci`.
+
 ## A relay beside the device
 
 ### On the relay
@@ -214,7 +227,7 @@ identifier.
 2. Make a token, and store the same token as a secret:
 
    ```sh
-   mkdir -p ~/.config/roamrunctl && openssl rand -hex 32 > ~/.config/roamrunctl/ci-token && chmod 600 ~/.config/roamrunctl/ci-token
+   (umask 077 && mkdir -p ~/.config/roamrunctl && openssl rand -hex 32 > ~/.config/roamrunctl/ci-token)
    gh secret set RELAY_TOKEN --repo <owner>/<repo> < ~/.config/roamrunctl/ci-token
    ```
 
@@ -277,9 +290,13 @@ Tailscale node, and a GitHub-hosted runner is a new node each job.
 ```
 
 `initialize` isn't needed before a call. The loop gives up after 10 minutes, while the relay gives
-an install 5 minutes and 15 seconds a megabyte: for an `.ipa` over about 20 MB, lengthen it. What
+an install 5 minutes plus 15 seconds a megabyte: for an `.ipa` over about 20 MB, lengthen it. What
 the tools answer, and the limits on uploads, are in
 [roamrunctl-reference.md](roamrunctl-reference.md#mcp-over-http).
+
+With 0.9.0, `roamrunctl install <device> app/MyApp.ipa --relay <address>:<port> --launch`, with the
+token in `ROAMRUNCTL_TOKEN` or `--token-file`, does the upload, the install, the wait and the launch
+in place of this script. It was run from the Mac against a relay on the same Mac, not from CI.
 
 ## Not tried
 
@@ -290,3 +307,5 @@ the tools answer, and the limits on uploads, are in
 - A Tailscale policy narrowed to `tag:ci`'s needs.
 - An `.ipa` larger than 1 MB from CI, and whether the app's data survives an install over it.
 - A Mac beside the device that CI reaches by SSH and that installs with `xcrun devicectl`.
+- roamrunctl 0.9.0 from CI: `key import -`, `install --relay … --launch`, and the app ended before
+  an install.
