@@ -9,7 +9,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use idevice::core_device::hid::{
-    ButtonState, IndigoHidClient, UniversalHidServiceClient, TOUCHSCREEN_STATE_CONTACT, TOUCHSCREEN_STATE_RELEASE,
+    build_touchscreen_report, ButtonState, HidSurface, IndigoHidClient, UniversalHidServiceClient, DIGITIZER_SURFACE_MAIN_TOUCHSCREEN,
+    TOUCHSCREEN_STATE_CONTACT, TOUCHSCREEN_STATE_RELEASE,
 };
 use idevice::dvt::message::AuxValue;
 use idevice::dvt::remote_server::RemoteServerClient;
@@ -78,6 +79,8 @@ struct Link {
     held: Option<(bool, u64, u64)>,
     /// Where a finger is down on the screen, for the same.
     finger: Option<(u16, u16)>,
+    /// The touch surface of the display that is on, found on the HID connection; again after a stream starts.
+    touchscreen: Option<u64>,
     verified_ms: u128,
     tunnel_ms: u128,
     rsd_ms: u128,
@@ -985,7 +988,7 @@ async fn connect(ip: &str, port: u16, file: &[u8], signer: Option<Signer>) -> Re
 
     let rsd = handle.connect(info.server_rsd_port).await.map_err(|e| format!("RSD: {e:?}"))?;
     let handshake = RsdHandshake::new(rsd).await.map_err(|e| format!("RSD handshake: {e:?}"))?;
-    Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_stopped: None, stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, resent: 0, bare_inputs: false, stop: Stop(std::ptr::null()), held: None, finger: None, verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
+    Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_stopped: None, stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, resent: 0, bare_inputs: false, stop: Stop(std::ptr::null()), held: None, finger: None, touchscreen: None, verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
 }
 
 /// The most that is typed in one call: beyond it, a slip in the middle is too costly, and paste does it in one.
@@ -1071,7 +1074,8 @@ async fn stream_for_input(link: &mut Link) -> Result<(), String> {
 /// be said, and the connections it used aren't kept.
 async fn let_go(link: &mut Link) {
     if let (Some(hid), Some((x, y))) = (link.hid.as_mut(), link.finger.take()) {
-        let _ = tokio::time::timeout(Duration::from_secs(1), hid.send_touchscreen(TOUCHSCREEN_STATE_RELEASE, x, y, None)).await;
+        let surface = link.touchscreen.unwrap_or(DIGITIZER_SURFACE_MAIN_TOUCHSCREEN);
+        let _ = tokio::time::timeout(Duration::from_secs(1), hid.send_report(surface, build_touchscreen_report(TOUCHSCREEN_STATE_RELEASE, x, y, None))).await;
     }
     if let Some(keys) = link.keys.as_mut() {
         let held = link.held.take();
@@ -1131,6 +1135,26 @@ fn drag_steps(from: (u16, u16), to: (u16, u16), samples: u32, every: u64) -> Vec
     steps
 }
 
+/// The touch surface of the display that is on: a device with two screens has one for each,
+/// named after the display's uniqueId. The main one when that can't be told.
+async fn find_touchscreen(link: &mut Link) -> u64 {
+    let shown = tokio::time::timeout(SCREEN_WAIT, display_info(link)).await.ok().and_then(|d| d.ok());
+    let unique = shown.as_ref().and_then(shown_display).and_then(|d| d.get("uniqueId")).and_then(|u| u.as_string()).map(str::to_string);
+    let surfaces = match link.hid.as_mut() {
+        Some(hid) => tokio::time::timeout(SCREEN_WAIT, hid.list_connected_services()).await.ok().and_then(|s| s.ok()).unwrap_or_default(),
+        None => Vec::new(),
+    };
+    touchscreen_of(&surfaces, unique.as_deref())
+}
+
+fn touchscreen_of(surfaces: &[HidSurface], unique: Option<&str>) -> u64 {
+    let Some(unique) = unique else { return DIGITIZER_SURFACE_MAIN_TOUCHSCREEN };
+    let named = format!("touchscreen({unique})");
+    surfaces.iter()
+        .find(|s| (s.primary_usage_page, s.primary_usage) == (Some(13), Some(4)) && s.product.as_deref().is_some_and(|p| p.ends_with(&named)))
+        .map_or(DIGITIZER_SURFACE_MAIN_TOUCHSCREEN, |s| s.service_id)
+}
+
 /// The steps, on the touch connection: the one kept, or a new one. As `press` does with keys.
 async fn touch(link: &mut Link, steps: &[Touch]) -> Result<(), String> {
     for attempt in 0..2 {
@@ -1139,6 +1163,10 @@ async fn touch(link: &mut Link, steps: &[Touch]) -> Result<(), String> {
             link.hid = Some(UniversalHidServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)
                 .await.map_err(|e| format!("HID service: {e:?}"))?);
         }
+        if !kept || link.touchscreen.is_none() {
+            link.touchscreen = Some(find_touchscreen(link).await);
+        }
+        let surface = link.touchscreen.unwrap_or(DIGITIZER_SURFACE_MAIN_TOUCHSCREEN);
         let hid = link.hid.as_mut().expect("just set");
         let mut sent_any = false;
         let mut failed = None;
@@ -1148,7 +1176,7 @@ async fn touch(link: &mut Link, steps: &[Touch]) -> Result<(), String> {
                 Touch::At(state, x, y) => {
                     // Noted before it is sent, as a key is: cut off on its way, it may be down.
                     if state == TOUCHSCREEN_STATE_CONTACT { link.finger = Some((x, y)); }
-                    match hid.send_touchscreen(state, x, y, None).await {
+                    match hid.send_report(surface, build_touchscreen_report(state, x, y, None)).await {
                         Ok(()) => {
                             sent_any = true;
                             if state == TOUCHSCREEN_STATE_RELEASE { link.finger = None; }
@@ -1416,6 +1444,7 @@ async fn start_stream(link: &mut Link) -> Result<Stream, String> {
     }
     // Display 1 when the device doesn't say, as before.
     let shown = tokio::time::timeout(SCREEN_WAIT, display_info(link)).await.ok().and_then(|d| d.ok()).as_ref().and_then(display_id).unwrap_or(1);
+    link.touchscreen = None;   // the screen may have changed: the touch surface is found again
     let mut display = tokio::time::timeout(STREAM_START, DisplayServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)).await
         .map_err(|_| "display service: no answer".to_string())?
         .map_err(|e| format!("display service: {e:?}"))?;
@@ -2124,5 +2153,17 @@ mod tests {
         let off = said(vec![display(3, false, false, 1920.0, 1080.0), display(1, true, false, 1179.0, 2556.0)]);
         assert_eq!(display_id(&off), Some(1));
         assert_eq!(display_id(&said(vec![])), None);
+    }
+
+    #[test]
+    fn touches_go_to_the_shown_displays_surface() {
+        let surface = |id: u64, product: &str, page: u64, usage: u64| HidSurface { service_id: id, product: Some(product.into()), primary_usage_page: Some(page), primary_usage: Some(usage) };
+        // As an iPhone with two screens lists them: each touchscreen named after its display's uniqueId.
+        let two = [surface(257, "CoreDevice touchscreen(987-654-321)", 13, 4), surface(258, "CoreDevice touchscreen(123-456-789)", 13, 4), surface(1281, "CoreDevice touchscreenGesture", 1, 2)];
+        assert_eq!(touchscreen_of(&two, Some("123-456-789")), 258);
+        assert_eq!(touchscreen_of(&two, Some("987-654-321")), 257);
+        assert_eq!(touchscreen_of(&two, Some("unknown")), DIGITIZER_SURFACE_MAIN_TOUCHSCREEN);
+        assert_eq!(touchscreen_of(&two, None), DIGITIZER_SURFACE_MAIN_TOUCHSCREEN);
+        assert_eq!(touchscreen_of(&[], Some("123-456-789")), DIGITIZER_SURFACE_MAIN_TOUCHSCREEN);
     }
 }
