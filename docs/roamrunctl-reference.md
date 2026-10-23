@@ -158,6 +158,18 @@ the using machine and the device, not through the key's machine.
   `roamrun key create <device> device.key` on that Mac, then
   `roamrunctl key import device.key` on the using machine. Import verifies the device
   over Tailscale, stores the record, and removes the import file on success.
+- `key import` also takes an unencrypted record roamrunctl saved on another machine (a
+  `devices/<name>.json` file), under its own name unless `--as` gives another; a record whose
+  key another machine keeps (B) is refused, and so is one kept under a passphrase (a `.age`
+  file). A file in this machine's own devices folder isn't
+  removed (imported `--as` another name, it is then saved under both). A byte order mark
+  before the JSON is passed over. With `--passphrase`, the passphrase is asked for before the
+  device is tried. With `-` in place of the file it reads standard
+  input, and removes nothing: `printf '%s' "$KEY" | roamrunctl key import - --as ci` takes a
+  CI's secret without writing it to a file. Line breaks outside the JSON's strings don't
+  matter, so a secret whose lines were run together, or turned into spaces, is read the same.
+  With `--passphrase` the passphrase then has to come from one of the sources above, as
+  standard input isn't a terminal.
 
 ## B: remote signing and trust
 
