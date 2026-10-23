@@ -102,6 +102,8 @@ pub struct Server {
     /// Over HTTP with `--allow-install`: what is installed from, by its id.
     uploads: Option<Arc<Uploads>>,
     installs: HashMap<String, Install>,
+    /// How installs that another has followed since on their device ended: by device and id, the latest `PAST`.
+    past: std::collections::VecDeque<(String, String, Result<String, String>)>,
     /// The last look's id; the first is a random one, so that a look kept from an earlier run isn't taken for one since.
     looks: u64,
 }
@@ -118,6 +120,9 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
     needs.extend(required);
     json!({ "name": name, "description": description, "inputSchema": { "type": "object", "properties": properties, "required": needs }, "annotations": hints(name) })
 }
+
+/// How many ended installs are kept for `install_status` asked by their id, once others followed.
+const PAST: usize = 16;
 
 /// What `install` answers once it has begun: `remote` reads the id back from it.
 pub fn begun(what: &str, megabytes: u64, name: &str, id: &str, given: Duration) -> String {
@@ -517,7 +522,7 @@ impl Server {
         let (megabytes, given) = roamrun_device::install_given(&path);
         let id: String = crate::hold::random::<8>()?.iter().map(|b| format!("{b:02x}")).collect();
         let going = std::thread::spawn(move || { let said = device.install(&path); drop(upload); said });
-        self.installs.insert(name.to_string(), Install { id: id.clone(), what: what.clone(), bundle, megabytes, given, began: Instant::now(), going: Some(going), ended: None });
+        self.begin(name, Install { id: id.clone(), what: what.clone(), bundle, megabytes, given, began: Instant::now(), going: Some(going), ended: None });
         Ok(begun(&what, megabytes, name, &id, given))
     }
 
@@ -531,10 +536,21 @@ impl Server {
         install.going.as_ref().map(|_| format!("installing {} on {name} ({} s so far): nothing else is done on it until that ends. install_status says how it goes", install.what, install.began.elapsed().as_secs()))
     }
 
+    /// The device's install, in place of the one before (ended: one begins only then), whose end is kept.
+    fn begin(&mut self, name: &str, install: Install) {
+        if let Some(was) = self.installs.get(name).map(|was| was.id.clone()) {
+            let ended = self.install_status(name, None);
+            self.past.push_back((name.to_string(), was, ended));
+            if self.past.len() > PAST { self.past.pop_front(); }
+        }
+        self.installs.insert(name.to_string(), install);
+    }
+
     /// The device's latest install; with `id`, that one alone.
     fn install_status(&mut self, name: &str, id: Option<&str>) -> Result<String, String> {
         if let Some(id) = id.filter(|id| self.installs.get(name).is_none_or(|install| install.id != *id)) {
-            return Err(format!("install {id} isn't {name}'s latest: another was begun since, or this server was started again"));
+            if let Some((.., ended)) = self.past.iter().find(|(device, was, _)| device == name && was == id) { return ended.clone() }
+            return Err(format!("install {id} isn't one of {name}'s here: how it ended isn't known (this server was started again since, or {PAST} more were begun)"));
         }
         if let Some(going) = self.installing(name) { return Ok(going) }
         let Some(Install { what, bundle, megabytes, given, ended: Some((said, took)), .. }) = self.installs.get(name) else { return Ok(format!("no install was begun on {name} since this began")) };
@@ -888,7 +904,7 @@ pub(crate) mod tests {
         let going = |server: &mut Server, said: &'static str| -> std::sync::mpsc::Sender<()> {
             let (end, ends) = std::sync::mpsc::channel::<()>();
             let going = std::thread::spawn(move || { let _ = ends.recv(); if said.is_empty() { panic!("inside") } said.to_string() });
-            server.installs.insert(name.clone(), Install { id: "a1".into(), what: "io.example.app".into(), bundle: true, megabytes: 3, given: Duration::from_secs(345), began: Instant::now(), going: Some(going), ended: None });
+            server.begin(&name, Install { id: format!("a{}", server.past.len() + server.installs.len() + 1), what: "io.example.app".into(), bundle: true, megabytes: 3, given: Duration::from_secs(345), began: Instant::now(), going: Some(going), ended: None });
             end
         };
         let end = going(&mut server, r#"{"ok":true}"#);
@@ -905,6 +921,12 @@ pub(crate) mod tests {
         assert!(ended(&mut server, &name).unwrap().starts_with("io.example.app is installed on"));
         assert!(server.install_status(&name, Some("a1")).unwrap().starts_with("io.example.app is installed on"));
         assert!(server.install_status(&name, Some("b2")).unwrap_err().starts_with("install b2 isn't"));
+        // Followed by another, it is still answered by its id: as it ended, not as the one since.
+        let end = going(&mut server, r#"{"ok":false,"error":"timed out"}"#);
+        assert!(server.install_status(&name, Some("a1")).unwrap().starts_with("io.example.app is installed on"));
+        end.send(()).unwrap();
+        assert!(ended(&mut server, &name).is_err());
+        assert!(server.install_status(&name, Some("a1")).unwrap().starts_with("io.example.app is installed on"));
         // Ended, the device is used again (opened anew: it doesn't answer, as it isn't there).
         assert!(server.call("look", &json!({ "device": name })).unwrap_err().contains("doesn't answer"));
         // A failure, and one inside, are said.

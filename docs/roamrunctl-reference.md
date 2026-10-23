@@ -341,7 +341,8 @@ the calling machine, use such a server instead of a device of their own:
   asked every 5 seconds, of the install `install` answered (by its id), until it says the app
   is in, or why not. It prints what `install_status` said. A relay whose `install` gives no id
   (before 0.9.0) is refused once the install is begun. A server that doesn't answer the
-  `Expect` within 10 seconds is sent the body all the same; one that refuses while the body
+  `Expect` within 10 seconds is sent the body all the same (a 100 Continue that comes after is
+  passed over); one that refuses while the body
   goes is read for its answer. `--launch` then launches the app by the bundle identifier in the
   `.ipa`, once what `install_status` said is printed.
 - A request the relay answers 503 is sent again, 5 times at most, 3 seconds apart. Any other
@@ -350,7 +351,7 @@ the calling machine, use such a server instead of a device of their own:
   is waited for 120 seconds at most.
 - `--timeout <s>` is the most the whole command waits for the app to be in, the upload and
   each request among it: nothing is sent once it has passed, and an upload going on then
-  stops. By default it is what the relay gives the install (5 minutes and 15 seconds a MB), 2
+  stops. By default it is what the relay gives the install (five minutes plus 15 seconds a megabyte), 2
   seconds a MB for the upload, and a minute more. When it passes the command fails; an install
   already begun goes on at the relay, and `install_status` there says how it ends.
 
@@ -382,8 +383,10 @@ the calling machine, use such a server instead of a device of their own:
   `.app` path), the size, the install's id (`(install 3f2a9c0e1b7d4a65)`, random) and the time
   limit; `install_status` says how the device's latest install goes: still going and for how
   long, installed, or why it failed. Given `"install": "<id>"`, it answers of that install
-  alone, and is an error once another was begun on the device or the server was started
-  again: another caller's install of the same app isn't taken for one's own. Until it ends, every other call on that
+  alone: another caller's install of the same app isn't taken for one's own. One followed by
+  others on the device is still answered as it ended, the latest 16 ended ones kept; an older
+  one, or one from before the server was started again, is an error that says how it ended
+  isn't known. Until it ends, every other call on that
   device is answered that it is installing, and the device's latest look is ended. Over stdio,
   an install still going when standard input closes runs out before the server ends; over
   HTTP, Ctrl-C ends it where it is.

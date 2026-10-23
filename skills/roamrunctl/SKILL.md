@@ -228,7 +228,7 @@ believed the first time it is used — use it only if the user named it.
   that isn't one app (`Payload/<name>.app` and nothing else, no `.bundle`) is refused before
   anything is sent. One install to a device at a time. It says how much it sends, then nothing until the app is
   in: a megabyte takes three to four seconds on the device's Wi‑Fi (a large app, minutes),
-  and it is given some four times that (five minutes and fifteen seconds a megabyte) — run
+  and it is given some four times that (five minutes plus fifteen seconds a megabyte) — run
   it where it can wait. `--launch` then launches it, by the bundle identifier in it.
 - With `--relay <address>:<port>` (or `ROAMRUNCTL_RELAY`), `install` and `launch` go through
   `roamrunctl mcp --http --allow-install` on the machine beside the device, which names the

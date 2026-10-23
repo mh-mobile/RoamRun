@@ -53,8 +53,9 @@ impl Relay {
 
     /// One request, over by `until`.
     fn once(&self, method: &str, path: &str, body: &dyn Fn() -> std::io::Result<(u64, Box<dyn Read>)>, until: Instant) -> Result<(u16, String), String> {
-        let failed = |e: std::io::Error| format!("the relay at {}: {e}", self.host);
-        let left = || until.checked_duration_since(Instant::now()).filter(|left| !left.is_zero()).ok_or_else(|| format!("the relay at {}: out of time (--timeout), nothing more was sent", self.host));
+        let out = || format!("the relay at {}: out of time (--timeout)", self.host);
+        let failed = |e: std::io::Error| if Instant::now() >= until { format!("{}: {e}", out()) } else { format!("the relay at {}: {e}", self.host) };
+        let left = || until.checked_duration_since(Instant::now()).filter(|left| !left.is_zero()).ok_or_else(out);
         // It listens on IPv4 alone: each IPv4 address the name gives is tried.
         let mut stream = Err(format!("the relay at {}: no IPv4 address", self.host));
         for at in self.host.to_socket_addrs().map_err(failed)?.filter(SocketAddr::is_ipv4) {
@@ -79,15 +80,25 @@ impl Relay {
         };
         wait(ANSWER)?;
         let mut reader = BufReader::new(&stream);
-        let refused = if early { Some(answer_head(&mut reader).map_err(failed)?).filter(|(status, _)| *status != 100) } else { None };
+        // Its first word: a refusal, or 100 Continue (the body goes).
+        let refused = if early { Some(answer_head(&mut reader).map_err(failed)?).filter(|(status, _)| !(100..200).contains(status)) } else { None };
         let (status, length) = match refused {
             Some(answer) => answer,
             None => {
                 let sent = std::io::copy(&mut content.as_mut().take(length), &mut Until(&stream, until));
-                // Refused while it was sent (answered, then closed): that answer, not the broken pipe.
-                match (answer_head(&mut reader), sent) {
+                // Past the deadline, while it was sent or once it was: no answer is waited for.
+                if Instant::now() >= until { return Err(sent.err().map_or_else(out, failed)) }
+                wait(ANSWER)?;
+                // Refused while it was sent (answered, then closed): that answer, not the broken pipe. A 100 Continue
+                // that came after the body was sent anyway, and any other 1xx, is passed over.
+                let answer = loop {
+                    match answer_head(&mut reader) {
+                        Ok((status, _)) if (100..200).contains(&status) => continue,
+                        answer => break answer,
+                    }
+                };
+                match (answer, sent) {
                     (Ok(answer), _) => answer,
-                    (Err(_), Err(e)) if Instant::now() >= until => return Err(format!("{}, while it was sent ({e})", left().err().unwrap_or_default())),
                     (Err(_), Err(e)) | (Err(e), Ok(_)) => return Err(failed(e)),
                 }
             }
@@ -162,7 +173,9 @@ struct Until<'a>(&'a TcpStream, Instant);
 
 impl Write for Until<'_> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        if Instant::now() >= self.1 { return Err(std::io::ErrorKind::TimedOut.into()) }
+        // Each write waits no longer than what is left: a relay that stops reading doesn't hold it past the deadline.
+        let left = self.1.checked_duration_since(Instant::now()).filter(|left| !left.is_zero()).ok_or(std::io::ErrorKind::TimedOut)?;
+        self.0.set_write_timeout(Some(ANSWER.min(left)))?;
         let mut stream = self.0;
         stream.write(bytes)
     }
@@ -226,11 +239,12 @@ mod tests {
         assert!(said.starts_with("/nowhere/at/all.ipa: ") && !said.contains(".app folder"), "{said}");
     }
 
-    /// A server that answers no `Expect: 100-continue` is sent the body after a while, and answered.
-    #[test]
-    fn a_body_goes_without_100_continue() {
+    /// A server on 127.0.0.1 that answers one request with `answer`, its 100 Continue sent `late` after the body
+    /// went anyway (else none).
+    fn served(late: bool, answer: &str) -> std::net::SocketAddr {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let at = listener.local_addr().unwrap();
+        let answer = answer.to_string();
         std::thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(&stream);
@@ -243,11 +257,42 @@ mod tests {
             }
             let mut body = vec![0; length];
             reader.read_exact(&mut body).unwrap();
-            let answer = json!({ "jsonrpc": "2.0", "id": 1, "result": { "content": [{ "type": "text", "text": "phone" }] } }).to_string();
+            if late { (&stream).write_all(b"HTTP/1.1 100 Continue\r\n\r\n").unwrap() }
             (&stream).write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{answer}", answer.len()).as_bytes()).unwrap();
         });
+        at
+    }
+
+    /// A server that answers no `Expect: 100-continue`, or answers it late, is sent the body after a while, and answered.
+    #[test]
+    fn a_body_goes_without_100_continue_and_a_late_one_is_passed_over() {
+        let answer = json!({ "jsonrpc": "2.0", "id": 1, "result": { "content": [{ "type": "text", "text": "phone" }] } }).to_string();
+        for late in [false, true] {
+            let began = Instant::now();
+            assert_eq!(Relay::new(&served(late, &answer).to_string(), None).unwrap().call("devices", json!({})).as_deref(), Ok("phone"), "late: {late}");
+            assert!(began.elapsed() < Duration::from_secs(5));
+        }
+    }
+
+    /// A relay that stops reading holds an upload no longer than its deadline.
+    #[test]
+    fn a_relay_that_stops_reading_is_left_at_the_deadline() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let at = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            (&stream).write_all(b"HTTP/1.1 100 Continue\r\n\r\n").unwrap();
+            // Reads for a while, then no more: a write begun then waits on what is left, not on what was left at first.
+            let began = Instant::now();
+            let mut chunk = [0; 1 << 16];
+            while began.elapsed() < Duration::from_millis(1200) { let _ = (&stream).read(&mut chunk); }
+            std::thread::sleep(Duration::from_secs(10));
+        });
+        let relay = Relay::new(&at.to_string(), None).unwrap();
         let began = Instant::now();
-        assert_eq!(Relay::new(&at.to_string(), None).unwrap().call("devices", json!({})).as_deref(), Ok("phone"));
-        assert!(began.elapsed() < Duration::from_secs(5));
+        let body = || Ok((1u64 << 30, Box::new(std::io::repeat(0)) as Box<dyn Read>));
+        let said = relay.once("PUT", "/upload", &body, began + Duration::from_secs(2)).err().unwrap_or_default();
+        assert!(said.contains("out of time"), "{said}");
+        assert!(began.elapsed() < Duration::from_millis(2800), "{:?}", began.elapsed());
     }
 }
