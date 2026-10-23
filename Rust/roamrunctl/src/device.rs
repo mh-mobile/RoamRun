@@ -239,7 +239,7 @@ struct SharedDevice {
 /// What `key import` reads: a file `roamrun key create` wrote, or one saved here for a device on another machine.
 fn imported(bytes: &[u8], from: &str, name: Option<String>) -> Result<Saved, String> {
     if bytes.starts_with(b"age-encryption.org/v1") {
-        return Err(format!("{from} is a record kept under a passphrase (a .age file): it isn't imported. Import the unencrypted one (`--passphrase` here then keeps it encrypted), or pair again"));
+        return Err(format!("{from} is a record kept under a passphrase (a .age file): it isn't imported: pair again (`--passphrase` here keeps an imported one encrypted)"));
     }
     let text = std::str::from_utf8(bytes).map_err(|_| format!("{from} isn't text: not a file `roamrun key create` wrote, nor a device roamrunctl saved"))?;
     // Without the mark some editors on Windows put first, as a passphrase file is read.
@@ -659,7 +659,7 @@ mod tests {
         assert_eq!(imported(format!("\u{feff}{shared}").as_bytes(), "-", None).unwrap().name, "Ann-s-iPhone");
         // One kept under a passphrase is said to be that, not "not text".
         let sealed = crate::secret::sealed(kept.as_bytes(), "pw").unwrap();
-        assert!(imported(&sealed, "phone.age", None).err().unwrap_or_default().starts_with("phone.age is a record kept under a passphrase"));
+        assert!(imported(&sealed, "phone.age", None).err().unwrap_or_default().starts_with("phone.age is a record kept under a passphrase (a .age file): it isn't imported: pair again"));
     }
 
     #[test]
