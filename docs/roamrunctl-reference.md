@@ -514,12 +514,16 @@ against a real device at the time these notes were written:
   after, and the folder was removed at Ctrl-C. `launch` of it over stdio answered with its pid
   in 1.3 s.
 - `install --relay` and `launch --relay` from another machine, from a cloud, or on Linux or
-  Windows; `install --launch` without a relay; install ids on a device. They were run, in a
-  form before `install` answered an id, on macOS from the machine itself,
+  Windows; `install --launch` without a relay; `--timeout` running out. They were run on macOS
+  from the machine itself,
   against its own `mcp --http` with the token, on the iPhone 15 Pro (iOS 27.0, its app not in
   front): without the token the upload was refused (401) before the `.ipa` was sent; with it,
   `install --relay --launch` of a 1 MB `.ipa` took 6.7 s (the install 5 s) and launched it,
-  and `launch --relay` (the relay from `ROAMRUNCTL_RELAY`) answered in 0.6 s.
+  and `launch --relay` (the relay from `ROAMRUNCTL_RELAY`) answered in 0.6 s — that in a form
+  before `install` answered an id. With the id, `install --relay --launch` took 8.9 s: `install`
+  answered `(install <id>)`, `install_status` asked by it said the app was in after 5 s, and it
+  launched; `install_status` with another id was then an error, and without one answered of
+  that install.
 - Tailscale userspace networking with no address available to bind.
 - Xcode pairing through `pair introduce` since the `--mac` → `--host` change.
 
