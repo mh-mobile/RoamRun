@@ -71,14 +71,14 @@ curl -fsSL https://github.com/mh-mobile/RoamRun/releases/latest/download/roamrun
 ```
 
 `shasum` checks the archive against the release's `roamrunctl-SHA256SUMS`, and `tar` runs only if
-it matches. On an Intel Mac, replace `aarch64` with `x86_64` in all three places. As on Linux, add `~/.local/bin`
-to your `PATH` or use the full path. The binaries are not signed with a Developer ID or
-notarized. Downloaded with `curl`, the archive and the files taken out of it carry no
-`com.apple.quarantine` attribute, and the binary runs. With that attribute set by hand on the
-archive, `tar` passed it on to the binary, and on an Apple silicon Mac with macOS 27 either
-binary was killed as soon as it started (exit status 137). After
-`xattr -d com.apple.quarantine roamrunctl` on the binary, it ran. A download in a browser was not
-tried.
+it matches. On an Intel Mac, replace `aarch64` with `x86_64` in all three places. As on Linux,
+add `~/.local/bin` to your `PATH` or use the full path. The binaries are not signed with a
+Developer ID or notarized. Downloaded with `curl`, the archive and the files taken out of it
+carry no `com.apple.quarantine` attribute, and the binary runs. With that attribute set by hand
+on the archive, `tar` passed it on to the binary, and on an Apple silicon Mac with macOS 27
+either binary was killed as soon as it started (exit status 137). After
+`xattr -d com.apple.quarantine` on the binary, it ran; installed as above, that is
+`xattr -d com.apple.quarantine ~/.local/bin/roamrunctl`. A download in a browser was not tried.
 
 With Homebrew, on macOS or Linux (it builds `roamrunctl` from source):
 
