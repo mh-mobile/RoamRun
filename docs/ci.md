@@ -294,6 +294,11 @@ an install 5 minutes plus 15 seconds a megabyte: for an `.ipa` over about 20 MB,
 the tools answer, and the limits on uploads, are in
 [roamrunctl-reference.md](roamrunctl-reference.md#mcp-over-http).
 
+The script checks only that the answer says " is installed on ": it doesn't tell its own install from
+another caller's that ended just before. With 0.9.0, `install` answers with an id (`(install <id>)`),
+and `install_status` given it as `"install": "<id>"` answers of that install alone; that form wasn't
+run.
+
 With 0.9.0, `roamrunctl install <device> app/MyApp.ipa --relay <address>:<port> --launch`, with the
 token in `ROAMRUNCTL_TOKEN` or `--token-file`, does the upload, the install, the wait and the launch
 in place of this script. It was run from the Mac against a relay on the same Mac, not from CI.

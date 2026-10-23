@@ -230,6 +230,8 @@ Linux のマシンで作った鍵は、roamrunctl がデバイスを保存した
 
 ツールを呼ぶ前に `initialize` を送る必要はありません。このループは 10 分で諦めます。relay がインストールに与える時間は、5 分と、1 MB あたり 15 秒の合計です。約 20 MB を超える `.ipa` では、ループを長くしてください。ツールの答え方やアップロードの上限は、[roamrunctl-reference.ja.md](roamrunctl-reference.ja.md#http-で使う-mcp) にあります。
 
+このスクリプトは、答えに「 is installed on 」が入っているかだけを見ます。そのため、自分のインストールと、直前に終わった別の呼び出し元のインストールを区別できません。0.9.0 の `install` は、答えに id（`(install <id>)`）を付けます。その id を `"install": "<id>"` として `install_status` に渡すと、そのインストールについてだけ答えます。この形は試していません。
+
 0.9.0 では、このスクリプトの代わりに `roamrunctl install <デバイス> app/MyApp.ipa --relay <アドレス>:<ポート> --launch` が使えます。トークンは `ROAMRUNCTL_TOKEN` か `--token-file` で渡します。アップロード、インストール、終わるまでの待ち、起動までを、このコマンドが行います。Mac から、同じ Mac の relay に対して実行しました。CI からは試していません。
 
 ## 試していないこと
