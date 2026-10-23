@@ -110,7 +110,8 @@ AND category == "input"'`. Text that arrives short with a line here was dropped 
    once before the push — edited in the tap as Homebrew has it checked out (`cd "$(brew --repository mh-mobile/tap)"`),
    which is what this builds: `brew install --build-from-source mh-mobile/tap/roamrunctl && brew test roamrunctl`.
 5. roamrunctl's install commands (its README) take the newest release's archives by name: once
-   it is out, run each on its system — Linux, Windows, `brew install`, and
+   it is out, run each on its system — Linux, Windows, macOS (on Apple silicon and, if one is at
+   hand, Intel), `brew install`, and
    `cargo install --locked --git … --tag v<version> roamrunctl` — and see `roamrunctl --version`
    say this version. The Introducer app (`iOS/`) isn't in a release: the notes say it is built from source.
 

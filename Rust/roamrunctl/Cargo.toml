@@ -14,7 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 base64 = "0.22"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 if-addrs = "0.15"
 mdns-sd = "0.19"
 serde = { version = "1", features = ["derive"] }

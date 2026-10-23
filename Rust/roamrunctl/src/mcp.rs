@@ -52,6 +52,8 @@ struct Shown {
 
 /// A device's install, going on aside with the device's connection, or how the last one went.
 struct Install {
+    /// What `install` answered it is, for `install_status` to be asked of it alone.
+    id: String,
     /// The app's bundle identifier (`bundle`), or the .app folder's path.
     what: String,
     bundle: bool,
@@ -100,6 +102,8 @@ pub struct Server {
     /// Over HTTP with `--allow-install`: what is installed from, by its id.
     uploads: Option<Arc<Uploads>>,
     installs: HashMap<String, Install>,
+    /// How installs that another has followed since on their device ended: by device and id, each device's latest `PAST`.
+    past: std::collections::VecDeque<(String, String, Result<String, String>)>,
     /// The last look's id; the first is a random one, so that a look kept from an earlier run isn't taken for one since.
     looks: u64,
 }
@@ -115,6 +119,14 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
     }
     needs.extend(required);
     json!({ "name": name, "description": description, "inputSchema": { "type": "object", "properties": properties, "required": needs }, "annotations": hints(name) })
+}
+
+/// How many ended installs of a device are kept for `install_status` asked by their id, once others followed.
+const PAST: usize = 16;
+
+/// What `install` answers once it has begun: `remote` reads the id back from it.
+pub fn begun(what: &str, megabytes: u64, name: &str, id: &str, given: Duration) -> String {
+    format!("installing {what} ({megabytes} MB) on {name} (install {id}), for {} s at most: install_status says how it goes. Until it ends, other calls on {name} answer that it is installing.", given.as_secs())
 }
 
 /// What a client may take each tool to do, the same in `roamrun mcp`. `look` only reads: nothing it does on
@@ -147,13 +159,14 @@ fn tools(remote: bool, installs: bool) -> Value {
         tool("press", "Press a hardware button. `lock` can't be undone from here: the user has to unlock.",
              json!({ "button": { "type": "string", "enum": ["home", "lock", "volume-up", "volume-down"] } }), &["button"]),
         if remote {
-            tool("install", "Start installing an .ipa sent with PUT /upload, built and signed for this device: the upload's id and sha256, as the upload answered them. It answers at once; install_status says when the app is in (a megabyte takes a few seconds, a large app minutes), and until then other calls on the device answer that it is installing. An upload serves one install.",
+            tool("install", "Start installing an .ipa sent with PUT /upload, built and signed for this device: the upload's id and sha256, as the upload answered them. It ends the app's running processes first. It answers at once; install_status says when the app is in (a megabyte takes a few seconds, a large app minutes), and until then other calls on the device answer that it is installing. An upload serves one install.",
                  json!({ "upload": { "type": "string" }, "sha256": { "type": "string" } }), &["upload", "sha256"])
         } else {
-            tool("install", "Start installing an app built and signed for this device: the path, on this machine, of an .ipa or an .app folder. It answers at once; install_status says when the app is in (a megabyte takes a few seconds, a large app minutes), and until then other calls on the device answer that it is installing.",
+            tool("install", "Start installing an app built and signed for this device: the path, on this machine, of an .ipa or an .app folder. It ends the app's running processes first. It answers at once; install_status says when the app is in (a megabyte takes a few seconds, a large app minutes), and until then other calls on the device answer that it is installing.",
                  json!({ "path": { "type": "string" } }), &["path"])
         },
-        tool("install_status", "How the device's install goes: still going (for how long), done (with the app's bundle identifier, for launch), or why it failed.", json!({}), &[]),
+        tool("install_status", "How the device's install goes: still going (for how long), done (with the app's bundle identifier, for launch), or why it failed. Given the id install answered (install <id>), of that install alone: another begun since is an error.",
+             json!({ "install": { "type": "string", "description": "The id install answered with" } }), &[]),
         tool("launch", "Launch an app on the device by its bundle identifier (one already running is ended first).",
              json!({ "bundle": { "type": "string" } }), &["bundle"]),
     ]);
@@ -365,7 +378,7 @@ impl Server {
             if device::mark(&name) != *was { return Err(anew(&name)) }
             if tool.starts_with("install") && self.uploads.is_none() { return Err("install isn't offered here: this was started without --allow-install".into()) }
         }
-        if tool == "install_status" { return self.install_status(&name).map(text) }
+        if tool == "install_status" { return self.install_status(&name, arguments["install"].as_str()).map(text) }
         // Its connection is the install's meanwhile.
         if let Some(busy) = self.installing(&name) { return Err(busy) }
         // One that is open is known, and one offered over HTTP is saved here (held to it above): asking what there is
@@ -507,9 +520,10 @@ impl Server {
         let upload = upload.map(|(uploads, id, sha256, _)| uploads.claim(&id, &sha256)).transpose()?;
         let (device, _) = self.open.remove(name).ok_or("the device isn't open")?;
         let (megabytes, given) = roamrun_device::install_given(&path);
+        let id: String = crate::hold::random::<8>()?.iter().map(|b| format!("{b:02x}")).collect();
         let going = std::thread::spawn(move || { let said = device.install(&path); drop(upload); said });
-        self.installs.insert(name.to_string(), Install { what: what.clone(), bundle, megabytes, given, began: Instant::now(), going: Some(going), ended: None });
-        Ok(format!("installing {what} ({megabytes} MB) on {name}, for {} s at most: install_status says how it goes. Until it ends, other calls on {name} answer that it is installing.", given.as_secs()))
+        self.begin(name, Install { id: id.clone(), what: what.clone(), bundle, megabytes, given, began: Instant::now(), going: Some(going), ended: None });
+        Ok(begun(&what, megabytes, name, &id, given))
     }
 
     /// The device's install, while it goes on: what any other call on it is answered.
@@ -522,7 +536,29 @@ impl Server {
         install.going.as_ref().map(|_| format!("installing {} on {name} ({} s so far): nothing else is done on it until that ends. install_status says how it goes", install.what, install.began.elapsed().as_secs()))
     }
 
-    fn install_status(&mut self, name: &str) -> Result<String, String> {
+    /// The device's install, in place of the one before (ended: one begins only then), whose end is kept.
+    fn begin(&mut self, name: &str, install: Install) {
+        if let Some(was) = self.installs.get(name).map(|was| was.id.clone()) {
+            let ended = self.install_status(name, None);
+            self.keep(name, was, ended);
+        }
+        self.installs.insert(name.to_string(), install);
+    }
+
+    /// How the device's install `id` ended, among its latest `PAST`.
+    fn keep(&mut self, name: &str, id: String, ended: Result<String, String>) {
+        self.past.push_back((name.to_string(), id, ended));
+        if self.past.iter().filter(|(device, ..)| device == name).count() > PAST {
+            if let Some(oldest) = self.past.iter().position(|(device, ..)| device == name) { self.past.remove(oldest); }
+        }
+    }
+
+    /// The device's latest install; with `id`, that one alone.
+    fn install_status(&mut self, name: &str, id: Option<&str>) -> Result<String, String> {
+        if let Some(id) = id.filter(|id| self.installs.get(name).is_none_or(|install| install.id != *id)) {
+            if let Some((.., ended)) = self.past.iter().find(|(device, was, _)| device == name && was == id) { return ended.clone() }
+            return Err(format!("install {id} isn't one of {name}'s here: how it ended isn't known (this server was started again since, or {PAST} more were begun)"));
+        }
         if let Some(going) = self.installing(name) { return Ok(going) }
         let Some(Install { what, bundle, megabytes, given, ended: Some((said, took)), .. }) = self.installs.get(name) else { return Ok(format!("no install was begun on {name} since this began")) };
         let took = took.as_secs();
@@ -535,7 +571,7 @@ impl Server {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -843,10 +879,10 @@ mod tests {
         }
     }
 
-    const INFO: &[u8] = b"<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>io.example.app</string></dict></plist>";
+    pub(crate) const INFO: &[u8] = b"<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>io.example.app</string></dict></plist>";
 
     /// An .ipa of one app with this Info.plist, stored, as an archiver writes it.
-    fn ipa(info: &[u8]) -> Vec<u8> {
+    pub(crate) fn ipa(info: &[u8]) -> Vec<u8> {
         let name = b"Payload/A.app/Info.plist";
         let crc = !info.iter().fold(!0u32, |c, &b| (0..8).fold(c ^ b as u32, |c, _| if c & 1 == 1 { (c >> 1) ^ 0xedb8_8320 } else { c >> 1 }));
         let (size, name_len) = ((info.len() as u32).to_le_bytes(), (name.len() as u16).to_le_bytes());
@@ -863,7 +899,7 @@ mod tests {
     fn ended(server: &mut Server, name: &str) -> Result<String, String> {
         let began = Instant::now();
         while server.installing(name).is_some() && began.elapsed() < Duration::from_secs(10) { std::thread::sleep(Duration::from_millis(20)) }
-        server.install_status(name)
+        server.install_status(name, None)
     }
 
     #[test]
@@ -875,7 +911,7 @@ mod tests {
         let going = |server: &mut Server, said: &'static str| -> std::sync::mpsc::Sender<()> {
             let (end, ends) = std::sync::mpsc::channel::<()>();
             let going = std::thread::spawn(move || { let _ = ends.recv(); if said.is_empty() { panic!("inside") } said.to_string() });
-            server.installs.insert(name.clone(), Install { what: "io.example.app".into(), bundle: true, megabytes: 3, given: Duration::from_secs(345), began: Instant::now(), going: Some(going), ended: None });
+            server.begin(&name, Install { id: format!("a{}", server.past.len() + server.installs.len() + 1), what: "io.example.app".into(), bundle: true, megabytes: 3, given: Duration::from_secs(345), began: Instant::now(), going: Some(going), ended: None });
             end
         };
         let end = going(&mut server, r#"{"ok":true}"#);
@@ -885,9 +921,25 @@ mod tests {
             let said = server.call(tool, &arguments).unwrap_err();
             assert!(said.starts_with("installing io.example.app on") && said.contains("nothing else is done"), "{tool}: {said}");
         }
-        assert!(server.install_status(&name).unwrap().contains("s so far"));
+        assert!(server.install_status(&name, None).unwrap().contains("s so far"));
+        // Asked of by its id, it is answered; another's id, never taken for it.
+        assert!(server.install_status(&name, Some("a1")).unwrap().contains("s so far"));
         end.send(()).unwrap();
         assert!(ended(&mut server, &name).unwrap().starts_with("io.example.app is installed on"));
+        assert!(server.install_status(&name, Some("a1")).unwrap().starts_with("io.example.app is installed on"));
+        assert!(server.install_status(&name, Some("b2")).unwrap_err().starts_with("install b2 isn't"));
+        // Each device's latest are kept: another's many don't push its out.
+        let mut other = Server::default();
+        other.keep("b", "b1".into(), Ok("in".into()));
+        for n in 0..=PAST { other.keep("a", format!("a{n}"), Ok("in".into())); }
+        assert_eq!(other.install_status("b", Some("b1")), Ok("in".into()));
+        assert!(other.install_status("a", Some("a0")).is_err() && other.install_status("a", Some("a1")).is_ok());
+        // Followed by another, it is still answered by its id: as it ended, not as the one since.
+        let end = going(&mut server, r#"{"ok":false,"error":"timed out"}"#);
+        assert!(server.install_status(&name, Some("a1")).unwrap().starts_with("io.example.app is installed on"));
+        end.send(()).unwrap();
+        assert!(ended(&mut server, &name).is_err());
+        assert!(server.install_status(&name, Some("a1")).unwrap().starts_with("io.example.app is installed on"));
         // Ended, the device is used again (opened anew: it doesn't answer, as it isn't there).
         assert!(server.call("look", &json!({ "device": name })).unwrap_err().contains("doesn't answer"));
         // A failure, and one inside, are said.
@@ -919,12 +971,12 @@ mod tests {
         let not_ipa = app.join("Info.plist");
         let said = server.call("install", &json!({ "device": name, "path": not_ipa }));
         assert!(said.as_ref().unwrap_err().contains("isn't an app's .ipa"), "{said:?}");
-        assert!(server.install_status(&name).unwrap().starts_with("no install was begun"));
+        assert!(server.install_status(&name, None).unwrap().starts_with("no install was begun"));
         // A device that can't be opened: nothing is begun, but the look is ended as it is tried.
         server.shown.insert(name.clone(), Shown { size: (100.0, 200.0), way: 1, at: Instant::now(), of: device::mark(&name), id: 7, spent: false });
         assert!(server.call("install", &json!({ "device": name, "path": app })).unwrap_err().contains("doesn't answer"));
         assert!(!server.shown.contains_key(&name));
-        assert!(server.install_status(&name).unwrap().starts_with("no install was begun"));
+        assert!(server.install_status(&name, None).unwrap().starts_with("no install was begun"));
         std::fs::remove_dir_all(app).unwrap();
         device::unstub(&name);
     }

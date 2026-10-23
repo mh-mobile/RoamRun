@@ -397,10 +397,13 @@ bounded.
 - **`roamrun run` builds the project in the current folder.** Its build scripts
   and package plugins run as you, and like Xcode it may create provisioning
   profiles in your team. Use it (or let an agent use it) on projects you trust.
-- **Integrity of releases.** From 0.1.12, releases are signed with a Developer
-  ID and notarized by Apple (earlier ones were ad-hoc signed); the Homebrew
-  cask also checks the dmg's SHA-256, and building from source avoids the
-  question entirely.
+- **Integrity of releases.** From 0.1.12, the RoamRun dmg is signed with a
+  Developer ID and notarized by Apple (earlier ones were ad-hoc signed); the
+  Homebrew cask also checks the dmg's SHA-256, and building from source avoids
+  the question entirely. roamrunctl's archives (Linux, Windows, macOS) are not
+  signed with a Developer ID or notarized: the macOS arm64 binary carries only
+  the linker's ad-hoc signature, the others no signature. The release's
+  `roamrunctl-SHA256SUMS` lists their SHA-256.
 
 ## What it touches on the Mac
 

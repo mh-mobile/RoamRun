@@ -175,7 +175,9 @@ Tailscale name where it asks for the far Mac's. `--with` needs a device that was
 with something before: `pair introduce` says "…'s own announcement wasn't seen on this
 LAN" otherwise, and the device is then paired once first, with Xcode or with `pair control
 --to` on the near machine (whether the latter alone is enough wasn't tried). (A Mac with RoamRun can make the pairing instead and hand it
-over: `roamrun key create <device> <file>` there, `roamrunctl key import <file>` here.)
+over: `roamrun key create <device> <file>` there, `roamrunctl key import <file>` here.
+`key import` also takes a `devices/<name>.json` roamrunctl saved on another machine, and
+`-` for standard input — a CI's secret: `printf '%s' "$KEY" | roamrunctl key import - --as ci`.)
 
 The saved pairing is then a key to the device, in a file of this user's (on Linux and
 macOS only its owner can read it; on Windows nothing is checked): **any program running
@@ -227,10 +229,17 @@ believed the first time it is used — use it only if the user named it.
   that device (xtool's `dev build --ipa`, or Xcode's). It doesn't build or sign. An .ipa
   that isn't one app (`Payload/<name>.app` and nothing else, no `.bundle`) is refused before
   anything is sent. One install to a device at a time. It kills the app's running processes
-  first (extensions too; unsaved state is lost, and the app stays ended if the install fails).
-  It says how much it sends, then nothing until the app is in: a megabyte takes three to four
-  seconds on the device's Wi‑Fi (a large app, minutes), and it is given five minutes plus
-  fifteen seconds a megabyte — run it where it can wait.
+  first, before the upload (extensions too; unsaved state is lost, the app is gone for the
+  whole upload, and it stays ended if the install fails). It says how much it sends, then
+  nothing until the app is in: a megabyte takes three to four seconds on the device's Wi‑Fi (a
+  large app, minutes), and it is given five minutes plus fifteen seconds a megabyte — run it
+  where it can wait. `--launch` then launches it, by the bundle identifier in it.
+- With `--relay <address>:<port>` (or `ROAMRUNCTL_RELAY`), `install` and `launch` go through
+  `roamrunctl mcp --http --allow-install` on a machine that holds the device's key (anywhere
+  on the tailnet: it reaches the device over Tailscale), which names the device:
+  `install <its name there> App.ipa --relay … [--launch] [--timeout <s>]` uploads the .ipa,
+  checks the sha256, installs and waits; the token comes from `ROAMRUNCTL_TOKEN` or
+  `--token-file`. An .ipa only.
 - `roamrunctl launch <name> <bundle id>` — one already running is ended first.
 - `roamrunctl mcp` — for an agent's MCP config (the command `roamrunctl`, the argument
   `mcp`): `devices`, `look`, `tap`, `swipe`, `elements`, `type`, `paste`, `press`,
@@ -300,8 +309,12 @@ path:
 curl -sS --max-time 2100 -w '\n%{http_code}\n' ${RR_TOKEN:+-H} ${RR_TOKEN:+"Authorization: Bearer $RR_TOKEN"} -T App.ipa "http://<address>:<port>/upload"
 # It answered {"upload":"<id>","size":…,"sha256":"<hex>"}: check the sha256 is your file's (sha256sum App.ipa; on a Mac, shasum -a 256 App.ipa), then give both.
 printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"install","arguments":{"device":"phone","upload":"<id>","sha256":"<hex>"}}}' | rr | said
-printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"install_status","arguments":{"device":"phone"}}}' | rr | said
+# install answered "… (install <its id>) …": ask of that install, and another caller's isn't taken for yours.
+printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"install_status","arguments":{"device":"phone","install":"<its id>"}}}' | rr | said
 ```
+
+Where roamrunctl is on the machine you run on, `roamrunctl install phone App.ipa --relay
+<address>:<port>` does all of this, and waits for the app to be in.
 
 An upload serves one install, by you alone. `409` is another upload coming in (send yours
 again once it's in), `413` one too big. One is kept at a time: if `install` says there's no
