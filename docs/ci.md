@@ -116,7 +116,7 @@ A group holds within one repository: two repositories that use one device aren't
 by default one run at most waits in a group: a newer one cancels the one waiting. GitHub's
 `queue: max` lets up to 100 wait; it wasn't tried.
 
-The runs above were started by hand. GitHub gives no secrets to a workflow run on `pull_request`
+The runs above were started by hand. GitHub gives no secrets but `GITHUB_TOKEN` to a workflow run on `pull_request`
 from a fork, and both ways need them. A `pull_request_target` workflow gets them even for a fork's
 pull request: don't use these secrets in one.
 
@@ -205,10 +205,11 @@ files written with the key readable by the runner's user alone; roamrunctl refus
 that others can read. `app/MyApp.ipa` and `com.example.MyApp` stand for your app and its bundle
 identifier.
 
-With 0.9.0 (not run from CI), `key import -` reads the key from standard input and takes a file
-roamrunctl saved as well, so either key goes in one way, with no temporary file for the secret
-(the device's file roamrunctl saves holds the key, as before):
-`printf '%s' "$ROAMRUN_CI_KEY" | "$rr" key import - --as ci`.
+With 0.9.0, `key import -` reads the key from standard input and takes a file roamrunctl saved as
+well, so either key goes in one way, with no temporary file for the secret (the device's file
+roamrunctl saves holds the key, as before):
+`printf '%s' "$ROAMRUN_CI_KEY" | "$rr" key import - --as ci`. `-` was run on the Mac with a file
+roamrunctl saved; with a file `roamrun key create` wrote, and from CI, it wasn't.
 
 ## A relay beside the device
 
@@ -303,10 +304,10 @@ from the Mac, not from CI.
 
 With 0.9.0, `roamrunctl install <device> app/MyApp.ipa --relay <address>:<port> --launch`, with the
 token in `ROAMRUNCTL_TOKEN` or `--token-file`, does the upload, the install, the wait and the launch
-in place of this script. The relay has to run 0.9.0 too: with a 0.8.1 relay the install begins there,
+in place of this script. It was run from the Mac against a relay on the same Mac, both 0.9.0, not
+from CI. The relay has to run 0.9.0 too: by the code, with a 0.8.1 relay the install begins there,
 but the command stops at that point, as the relay's answer carries no install id, and `--launch`
-doesn't run. It
-was run from the Mac against a relay on the same Mac, not from CI.
+doesn't run. That pairing wasn't tried.
 
 ## Not tried
 
