@@ -38,7 +38,20 @@ Expand-Archive -Force roamrunctl.zip .
 
 ARM 版の Windows では、ダウンロードするファイル名と実行ファイルのパスの `x86_64` を、どちらも `aarch64` に変えてください。バイナリにコード署名はありません。以降のコマンドは、この実行ファイルのパスで実行するか、フォルダを `PATH` に追加して実行します。
 
-macOS と、Homebrew を導入済みの Linux では、次のコマンドでインストールできます。
+macOS では、次のコマンドで `~/.local/bin` に入ります。Apple シリコンの例です。
+
+```sh
+mkdir -p ~/.local/bin && cd "$(mktemp -d)"
+curl -fsSLO https://github.com/mh-mobile/RoamRun/releases/latest/download/roamrunctl-macos-aarch64.tar.gz
+curl -fsSL https://github.com/mh-mobile/RoamRun/releases/latest/download/roamrunctl-SHA256SUMS \
+  | shasum -a 256 -c --ignore-missing \
+  && tar -xzf roamrunctl-macos-aarch64.tar.gz -C ~/.local/bin --strip-components 1 roamrunctl-macos-aarch64/roamrunctl
+~/.local/bin/roamrunctl --version
+```
+
+`shasum` がアーカイブをリリースの `roamrunctl-SHA256SUMS` と照合し、一致したときだけ `tar` が取り出します。Intel の Mac では、3 か所の `aarch64` を `x86_64` に変えてください。Linux と同じく、`~/.local/bin` を `PATH` に追加するか、フルパスで実行します。バイナリには Developer ID の署名も公証もありません。`curl` でダウンロードした場合は、アーカイブと取り出したファイルのどちらにも `com.apple.quarantine` 属性は付かず、そのまま実行できます。この属性を手でアーカイブに付けて試したところ、`tar` で取り出したバイナリにも付きました。macOS 27 の Apple シリコンの Mac では、どちらのバイナリも起動したとたんに終了させられました（終了ステータス 137）。バイナリに `xattr -d com.apple.quarantine` を実行したあとは、実行できました。上の手順で入れた場合は、`xattr -d com.apple.quarantine ~/.local/bin/roamrunctl` です。ブラウザでのダウンロードは試していません。
+
+Homebrew では、macOS でも Linux でも、次のコマンドでインストールできます。`roamrunctl` はソースからビルドされます。
 
 ```sh
 brew install mh-mobile/tap/roamrunctl

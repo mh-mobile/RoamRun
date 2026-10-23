@@ -17,14 +17,17 @@
 
 ## インストール
 
-- リリースのアーカイブは、次の 4 つです。
+- リリースのアーカイブは、次の 6 つです。
   - `roamrunctl-linux-x86_64.tar.gz`
   - `roamrunctl-linux-aarch64.tar.gz`
   - `roamrunctl-windows-x86_64.zip`
   - `roamrunctl-windows-aarch64.zip`
+  - `roamrunctl-macos-aarch64.tar.gz`
+  - `roamrunctl-macos-x86_64.tar.gz`
 - どのアーカイブにも、バイナリ、README、`SKILL.md`、ライセンス表記が入っています。チェックサムは `roamrunctl-SHA256SUMS` にあります。
 - Linux 版のバイナリは静的リンクです。`~/.local/bin` に入れたあと `roamrunctl` が見つからない場合は、そのディレクトリを `PATH` に追加するか、`~/.local/bin/roamrunctl` と指定して実行します。
 - Windows 版のアーカイブは、サブディレクトリに展開されます。`.\roamrunctl-windows-x86_64\roamrunctl.exe` のように指定して実行するか、そのディレクトリを `PATH` に追加します。バイナリにコード署名はありません。Windows 11 では、初めて Bonjour で公開したときに、Windows ファイアウォールが通信を許可するか尋ねてきたことがあります。このときは、プライベートとパブリックの両方で許可しました。管理者として実行した PowerShell では、何も尋ねられませんでした。
+- macOS 版のバイナリには、Developer ID の署名も公証もありません。`curl` でダウンロードした場合は、`com.apple.quarantine` 属性が付きません。この属性が付いていると、macOS 27 の Apple シリコンの Mac では、起動したとたんに終了させられました。`xattr -d com.apple.quarantine` で属性を外すと、実行できました（README のインストールに、試した手順があります）。
 - `cargo install --locked --git ...` には、Rust 1.89 以降と C コンパイラが必要です。これはソースからのビルドで、リリースに含まれる静的リンクの Linux 版とは別のものです。`roamrunctl` は crates.io には公開していません。Homebrew の formula は Homebrew 本体ではなく、`mh-mobile/tap` にあります。
 - 表示されるバージョンは RoamRun のバージョンです。同じペアリングに関わるマシンでは、バージョンをそろえてください。0.7.0 より前の `pair introduce` は、`--host` ではなく `--mac` を使っていました。古いリリースが案内するコマンドには、`--mac` と書かれています。
 
