@@ -347,15 +347,17 @@ the calling machine, use such a server instead of a device of their own:
   `.ipa`, once what `install_status` said is printed.
 - A request the relay answers 503 is sent again, 5 times at most, 3 seconds apart. Any other
   refusal stops the command with the status and what the relay said (401: the token; 403: its
-  `--allow`; 404 on `/upload`: no `--allow-install`). Each request is one connection. `launch --relay`
-  waits 120 seconds at most for everything (503s tried again included); `install --relay`
-  waits until its deadline (`--timeout`, below), each read or write 120 seconds at most.
+  `--allow`; 404 on `/upload`: no `--allow-install`). Each request is one connection.
+  `launch --relay` waits 120 seconds at most for everything (503s tried again included);
+  `install --relay` waits until its deadline (`--timeout`, below), each read or write 120
+  seconds at most. Either says "no answer within 120 s" when it gives up so.
 - `--timeout <s>` is the most the whole command waits for the app to be in, the upload and
   each request among it: nothing is sent once it has passed, no answer is waited for past it
-  (a relay that answers a byte at a time, stops halfway, or sends 1xx on and on, included), and an upload going on then
-  stops. By default it is what the relay gives the install (five minutes plus 15 seconds a megabyte), 2
-  seconds a MB for the upload, and a minute more. When it passes the command fails; an install
-  already begun goes on at the relay, and `install_status` there says how it ends.
+  (a relay that answers a byte at a time, stops halfway, or sends 1xx on and on, included),
+  and an upload going on then stops. By default it is what the relay gives the install (five
+  minutes plus 15 seconds a megabyte), 2 seconds a MB for the upload, and a minute more. When
+  it passes the command fails; an install already begun goes on at the relay, and
+  `install_status` there says how it ends.
 
 ## Installing apps
 

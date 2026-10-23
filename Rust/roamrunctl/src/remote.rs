@@ -15,8 +15,9 @@ const EVERY: Duration = if cfg!(test) { Duration::from_millis(50) } else { Durat
 /// A request the relay answers 503 (it couldn't tell who this is just then) is tried this often, this far apart.
 const TRIES: u32 = 5;
 const APART: Duration = if cfg!(test) { Duration::from_millis(50) } else { Duration::from_secs(3) };
-/// The most one answer is waited for, and one write; a connection; an answer to `Expect: 100-continue`.
-const ANSWER: Duration = Duration::from_secs(120);
+/// The most one read or write waits (for `launch`, also the whole request); a connection; an answer to
+/// `Expect: 100-continue`.
+const ANSWER: Duration = if cfg!(test) { Duration::from_secs(3) } else { Duration::from_secs(120) };
 const CONNECT: Duration = Duration::from_secs(10);
 const CONTINUE: Duration = if cfg!(test) { Duration::from_millis(300) } else { Duration::from_secs(10) };
 
@@ -57,7 +58,12 @@ impl Relay {
     /// One request, over by `until`.
     fn once(&self, method: &str, path: &str, body: &dyn Fn() -> std::io::Result<(u64, Box<dyn Read>)>, (until, why): Deadline) -> Result<(u16, String), String> {
         let out = || format!("the relay at {}: {why}", self.host);
-        let failed = |e: std::io::Error| if Instant::now() >= until { out() } else { format!("the relay at {}: {e}", self.host) };
+        let failed = |e: std::io::Error| match e.kind() {
+            _ if Instant::now() >= until => out(),
+            // A read or write given up before the deadline, at `ANSWER`.
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => format!("the relay at {}: no answer within {} s", self.host, ANSWER.as_secs()),
+            _ => format!("the relay at {}: {e}", self.host),
+        };
         let left = || until.checked_duration_since(Instant::now()).filter(|left| !left.is_zero()).ok_or_else(out);
         // It listens on IPv4 alone: each IPv4 address the name gives is tried.
         let mut stream = Err(format!("the relay at {}: no IPv4 address", self.host));
@@ -327,6 +333,15 @@ mod tests {
         // Said as out of time alone, not with what the socket said then.
         assert_eq!(said, format!("the relay at {at}: out of time"));
         assert!(began.elapsed() < Duration::from_millis(2800), "{:?}", began.elapsed());
+    }
+
+    /// A relay that says nothing is given up on at `ANSWER`, before a deadline further off, and said so.
+    #[test]
+    fn a_silent_relay_is_given_up_on_at_answer() {
+        let at = serving(|_| std::thread::sleep(Duration::from_secs(8)));
+        let body = || Ok((2u64, Box::new(std::io::Cursor::new(b"{}".to_vec())) as Box<dyn Read>));
+        let said = Relay::new(&at.to_string(), None).unwrap().once("POST", "/mcp", &body, (Instant::now() + Duration::from_secs(20), "out of time")).err().unwrap_or_default();
+        assert_eq!(said, format!("the relay at {at}: no answer within {} s", ANSWER.as_secs()));
     }
 
     /// A relay that answers halfway and stops, or sends 1xx on and on, isn't waited for past the deadline.
