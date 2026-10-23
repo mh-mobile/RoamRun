@@ -351,11 +351,28 @@ pub unsafe extern "C" fn rr_device_alive(device: *mut RRDevice) -> *mut c_char {
     })
 }
 
-/// The primary display's size in pixels (the first one's when none is marked), from what the device says of its displays.
-fn screen_size(displays: &plist::Value) -> Option<(u32, u32)> {
+/// What the device says of its displays.
+async fn display_info(link: &mut Link) -> Result<plist::Value, String> {
+    let mut info = DeviceInfo::connect_rsd(&mut link.handle, &mut link.handshake).await.map_err(|e| format!("device info service: {e:?}"))?;
+    info.0.invoke("com.apple.coredevice.feature.getdisplayinfo", None).await.map_err(|e| format!("displays: {e:?}"))
+}
+
+/// The display that is on: the one marked active, else primary, else the first. A device with
+/// two screens marks primary the one that may be off.
+fn shown_display(displays: &plist::Value) -> Option<&plist::Dictionary> {
     let all = displays.as_dictionary()?.get("displays")?.as_array()?;
-    let primary = |d: &&plist::Value| d.as_dictionary().and_then(|d| d.get("primary")).and_then(|p| p.as_boolean()) == Some(true);
-    let size = all.iter().find(primary).or(all.first())?.as_dictionary()?.get("nativeSize")?.as_array()?;
+    let marked = |key: &str| all.iter().filter_map(|d| d.as_dictionary()).find(|d| d.get(key).and_then(|v| v.as_boolean()) == Some(true));
+    marked("active").or_else(|| marked("primary")).or_else(|| all.first()?.as_dictionary())
+}
+
+/// The shown display's id, for the stream to show it.
+fn display_id(displays: &plist::Value) -> Option<i64> {
+    shown_display(displays)?.get("displayId")?.as_signed_integer()
+}
+
+/// The shown display's size in pixels, from what the device says of its displays.
+fn screen_size(displays: &plist::Value) -> Option<(u32, u32)> {
+    let size = shown_display(displays)?.get("nativeSize")?.as_array()?;
     let side = |v: &plist::Value| v.as_real().or(v.as_unsigned_integer().map(|n| n as f64)).filter(|n| (1.0..=65535.0).contains(n)).map(|n| n as u32);
     match size.as_slice() {
         [w, h] => Some((side(w)?, side(h)?)),
@@ -374,9 +391,7 @@ pub unsafe extern "C" fn rr_device_screen(device: *mut RRDevice) -> *mut c_char 
         if link.stop.raised() { return Err(STOPPED.into()); }
         device.runtime.block_on(async {
             tokio::time::timeout(SCREEN_WAIT, async {
-                let mut info = DeviceInfo::connect_rsd(&mut link.handle, &mut link.handshake).await.map_err(|e| format!("device info service: {e:?}"))?;
-                let displays = info.0.invoke("com.apple.coredevice.feature.getdisplayinfo", None).await.map_err(|e| format!("displays: {e:?}"))?;
-                screen_size(&displays).ok_or_else(|| "displays: no size in the answer".to_string())
+                screen_size(&display_info(link).await?).ok_or_else(|| "displays: no size in the answer".to_string())
             }).await.unwrap_or_else(|_| Err("timed out".into()))
         })
     });
@@ -1399,6 +1414,8 @@ async fn start_stream(link: &mut Link) -> Result<Stream, String> {
     if let Some(early) = link.stream_stopped.and_then(|at| AFTER_STOP.checked_sub(at.elapsed())) {
         tokio::time::sleep(early).await;
     }
+    // Display 1 when the device doesn't say, as before.
+    let shown = tokio::time::timeout(SCREEN_WAIT, display_info(link)).await.ok().and_then(|d| d.ok()).as_ref().and_then(display_id).unwrap_or(1);
     let mut display = tokio::time::timeout(STREAM_START, DisplayServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)).await
         .map_err(|_| "display service: no answer".to_string())?
         .map_err(|e| format!("display service: {e:?}"))?;
@@ -1418,7 +1435,7 @@ async fn start_stream(link: &mut Link) -> Result<Stream, String> {
     };
     let ssrc = uuid::Uuid::new_v4().as_u128() as u32;
     let video_started = match audio_started.and_then(|_| build_screen_video_offer(&call(), &call_info(), ssrc).map_err(|e| format!("video offer: {e:?}"))) {
-        Ok(offer) => match tokio::time::timeout(STREAM_START, display.start_media_stream(build_start_video_parameters(&ours, video.local_port(), &theirs, VIDEO_SENDER_PORT, offer, SUPPORTED_FEATURES, 1, session))).await {
+        Ok(offer) => match tokio::time::timeout(STREAM_START, display.start_media_stream(build_start_video_parameters(&ours, video.local_port(), &theirs, VIDEO_SENDER_PORT, offer, SUPPORTED_FEATURES, shown, session))).await {
             Ok(started) => started.map_err(|e| format!("video start: {e:?}")),
             Err(_) => Err("video start: no answer".into()),
         },
@@ -2082,5 +2099,30 @@ mod tests {
         assert_eq!(screen_size(&said(vec![display(true, 0.0, 2556.0)])), None);
         assert_eq!(screen_size(&said(vec![])), None);
         assert_eq!(screen_size(&plist::Value::String("no".into())), None);
+    }
+
+    #[test]
+    fn the_shown_display_is_the_active_one() {
+        let display = |id: i64, primary: bool, active: bool, w: f64, h: f64| {
+            let mut d = plist::Dictionary::new();
+            d.insert("displayId".into(), id.into());
+            d.insert("primary".into(), primary.into());
+            d.insert("active".into(), active.into());
+            d.insert("nativeSize".into(), plist::Value::Array(vec![w.into(), h.into()]));
+            plist::Value::Dictionary(d)
+        };
+        let said = |displays: Vec<plist::Value>| {
+            let mut d = plist::Dictionary::new();
+            d.insert("displays".into(), plist::Value::Array(displays));
+            plist::Value::Dictionary(d)
+        };
+        // Two screens, the primary one off.
+        let two = said(vec![display(1, true, false, 1398.0, 2034.0), display(2, false, true, 1878.0, 2670.0), display(3, false, false, 1920.0, 1080.0)]);
+        assert_eq!(display_id(&two), Some(2));
+        assert_eq!(screen_size(&two), Some((1878, 2670)));
+        // None active: the primary one.
+        let off = said(vec![display(3, false, false, 1920.0, 1080.0), display(1, true, false, 1179.0, 2556.0)]);
+        assert_eq!(display_id(&off), Some(1));
+        assert_eq!(display_id(&said(vec![])), None);
     }
 }
