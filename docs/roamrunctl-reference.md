@@ -342,6 +342,8 @@ until Ctrl-C:
   `.ipa`'s, or an `.app` folder's Info.plist). iOS ends them itself, but on iOS 27.0 it didn't end
   one in front while the device was charging: the install waited until the app wasn't in front
   (122 s once, and 315 s timeouts). Where they can't be found or ended, the install goes on as before.
+  They are killed (SIGKILL), extensions too, so the app can't save its state, and it stays ended
+  if the install then fails.
 - A subsequent `.app` installation cleans up interrupted staging where possible.
   The command prints its transfer size and timeout, then reports the result.
 - The MCP `install` answers once the install has begun, with the bundle identifier (or the

@@ -609,10 +609,23 @@ async fn end_running(link: &mut Link, bundle: &str) {
     }
 }
 
-/// The pids of `processes` (pid, executable URL) whose executable is inside the app at `app` on the device.
+/// The pids of `processes` (pid, executable URL) whose executable is inside the app at `app` on the device: a
+/// path as installation_proxy gives it, while the URLs are percent-encoded ("My%20App.app"). None for no path.
 fn inside<'a>(app: &str, processes: impl Iterator<Item = (u32, Option<&'a str>)>) -> Vec<u32> {
-    let within = format!("file://{}/", app.trim_end_matches('/'));
-    processes.filter(|(_, url)| url.is_some_and(|url| url.starts_with(&within))).map(|(pid, _)| pid).collect()
+    let app = app.trim_end_matches('/');
+    if app.is_empty() { return Vec::new() }
+    let within = format!("{app}/");
+    processes.filter(|(_, url)| url.and_then(file_path).is_some_and(|path| path.starts_with(&within))).map(|(pid, _)| pid).collect()
+}
+
+/// The path a `file://` URL names, its %XX escapes undone; None for another URL, a broken escape, or what isn't UTF-8.
+fn file_path(url: &str) -> Option<String> {
+    let mut bytes = url.strip_prefix("file://")?.bytes();
+    let mut path = Vec::new();
+    while let Some(b) = bytes.next() {
+        path.push(if b == b'%' { u8::from_str_radix(std::str::from_utf8(&[bytes.next()?, bytes.next()?]).ok()?, 16).ok()? } else { b });
+    }
+    String::from_utf8(path).ok()
 }
 
 /// An .app folder's bundle identifier, where its Info.plist gives one.
@@ -1743,6 +1756,23 @@ mod tests {
         ];
         assert_eq!(inside(app, processes.into_iter()), vec![10, 11]);
         assert_eq!(inside(&format!("{app}/"), processes.into_iter()), vec![10, 11]);
+        // No path, or the root: nothing is taken for inside it.
+        assert!(inside("", processes.into_iter()).is_empty() && inside("/", processes.into_iter()).is_empty());
+    }
+
+    #[test]
+    fn a_name_with_spaces_or_other_letters_is_matched_as_the_url_encodes_it() {
+        let processes: [(u32, Option<&str>); 4] = [
+            (20, Some("file:///private/var/containers/Bundle/Application/AB/My%20App.app/My%20App")),
+            (21, Some("file:///private/var/containers/Bundle/Application/CD/%E6%97%A5%E6%9C%AC%E8%AA%9E.app/X")),
+            // A broken escape isn't guessed at.
+            (22, Some("file:///private/var/containers/Bundle/Application/AB/My%2")),
+            (23, Some("https://example.com/private/var/containers/Bundle/Application/AB/My%20App.app/My%20App")),
+        ];
+        assert_eq!(inside("/private/var/containers/Bundle/Application/AB/My App.app", processes.into_iter()), vec![20]);
+        assert_eq!(inside("/private/var/containers/Bundle/Application/CD/日本語.app", processes.into_iter()), vec![21]);
+        assert_eq!(file_path("file:///a/%41%2fb"), Some("/a/A/b".into()));
+        assert_eq!(file_path("file:///a/%zz"), None);
     }
 
     #[test]

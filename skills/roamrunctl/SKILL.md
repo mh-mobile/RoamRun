@@ -226,10 +226,11 @@ believed the first time it is used — use it only if the user named it.
 - `roamrunctl install <name> <app.ipa or .app>` — an app already built and signed for
   that device (xtool's `dev build --ipa`, or Xcode's). It doesn't build or sign. An .ipa
   that isn't one app (`Payload/<name>.app` and nothing else, no `.bundle`) is refused before
-  anything is sent. One install to a device at a time. It says how much it sends, then nothing until the app is
-  in: a megabyte takes three to four seconds on the device's Wi‑Fi (a large app, minutes),
-  and it is given some four times that (five minutes and fifteen seconds a megabyte) — run
-  it where it can wait.
+  anything is sent. One install to a device at a time. It kills the app's running processes
+  first (extensions too; unsaved state is lost, and the app stays ended if the install fails).
+  It says how much it sends, then nothing until the app is in: a megabyte takes three to four
+  seconds on the device's Wi‑Fi (a large app, minutes), and it is given five minutes plus
+  fifteen seconds a megabyte — run it where it can wait.
 - `roamrunctl launch <name> <bundle id>` — one already running is ended first.
 - `roamrunctl mcp` — for an agent's MCP config (the command `roamrunctl`, the argument
   `mcp`): `devices`, `look`, `tap`, `swipe`, `elements`, `type`, `paste`, `press`,
