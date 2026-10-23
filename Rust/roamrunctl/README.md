@@ -62,13 +62,16 @@ by name.
 **macOS** (Apple silicon shown), into `~/.local/bin`:
 
 ```sh
-mkdir -p ~/.local/bin
-curl -fsSL https://github.com/mh-mobile/RoamRun/releases/latest/download/roamrunctl-macos-aarch64.tar.gz \
-  | tar -xz -C ~/.local/bin --strip-components 1 roamrunctl-macos-aarch64/roamrunctl
+mkdir -p ~/.local/bin && cd "$(mktemp -d)"
+curl -fsSLO https://github.com/mh-mobile/RoamRun/releases/latest/download/roamrunctl-macos-aarch64.tar.gz
+curl -fsSL https://github.com/mh-mobile/RoamRun/releases/latest/download/roamrunctl-SHA256SUMS \
+  | shasum -a 256 -c --ignore-missing \
+  && tar -xzf roamrunctl-macos-aarch64.tar.gz -C ~/.local/bin --strip-components 1 roamrunctl-macos-aarch64/roamrunctl
 ~/.local/bin/roamrunctl --version
 ```
 
-On an Intel Mac, replace `aarch64` with `x86_64` in both places. As on Linux, add `~/.local/bin`
+`shasum` checks the archive against the release's `roamrunctl-SHA256SUMS`, and `tar` runs only if
+it matches. On an Intel Mac, replace `aarch64` with `x86_64` in all three places. As on Linux, add `~/.local/bin`
 to your `PATH` or use the full path. The binaries are not signed with a Developer ID or
 notarized. Downloaded with `curl`, the archive and the files taken out of it carry no
 `com.apple.quarantine` attribute, and the binary runs. With that attribute set by hand on the

@@ -34,9 +34,10 @@ jobs:
           - { runner: windows-latest, target: x86_64-pc-windows-msvc, name: windows-x86_64 }
           - { runner: windows-11-arm, target: aarch64-pc-windows-msvc, name: windows-aarch64 }
           - { runner: macos-26, target: aarch64-apple-darwin, name: macos-aarch64 }
-          - { runner: macos-15-intel, target: x86_64-apple-darwin, name: macos-x86_64 }
+          # Slower: a run took 13 minutes here, most of it in the three builds.
+          - { runner: macos-15-intel, target: x86_64-apple-darwin, name: macos-x86_64, timeout: 30 }
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    timeout-minutes: ${{ matrix.timeout || 20 }}
     defaults:
       run:
         shell: bash
