@@ -24,7 +24,7 @@ repository (`gh release download`).
 
 ## What was run
 
-All on 2026-10-22 (UTC):
+The CI runs were all on 2026-10-22 (UTC):
 
 - The device: an iPhone 15 Pro on iOS 27.0, unlocked with its screen on, on a Wi‑Fi and a charger.
 - CI: GitHub Actions, `ubuntu-24.04`, a job started by hand (`workflow_dispatch`) in a private
@@ -51,7 +51,7 @@ device: in these runs the device lay on its charger with its screen on, and noth
 run had launched. Later, from the Mac with the device's log streamed
 (idevice's `syslog_relay`), it was seen why: iOS asked to end the app before replacing it, and the
 request "failed due to termination resistance"; the install waited until the app left the front.
-With roamrunctl 0.8.1 over the LAN:
+With roamrunctl 0.8.1 over the LAN, also on 2026-10-22 (UTC):
 
 | Device | App | Install |
 |---|---|---|
@@ -60,10 +60,12 @@ With roamrunctl 0.8.1 over the LAN:
 | charging | not running | 5 s |
 
 Whether the app was in front before each run above wasn't recorded, so not every fast run is
-explained. roamrunctl 0.9.0 ends the app's running processes before it installs (#196): a build of
-that change, run from the Mac over the LAN, installed in 4–5 s with the app in front on a charging
-device. It wasn't run from CI. With 0.8.1, don't leave the app in front on a charging device when a
-job installs it: end it, or leave the device off its charger.
+explained; nor are the 48 s and 71 s installs, which ended without anyone ending the app (whether
+someone touched the device then wasn't recorded either). roamrunctl 0.9.0 ends the app's running
+processes before it installs (#196): a build of that change, run from the Mac over the LAN,
+installed in 4–5 s with the app in front on a charging device. It wasn't run from CI. With 0.8.1,
+don't leave the app in front on a charging device when a job installs it: end it, or leave the
+device off its charger.
 
 ## What both ways need
 
@@ -82,7 +84,8 @@ job installs it: end it, or leave the device off its charger.
 3. In the repository's Settings › Secrets and variables › Actions, add the repository secrets
    `TS_OAUTH_CLIENT_ID` and `TS_OAUTH_SECRET`.
 
-The job joins the tailnet with [tailscale/github-action](https://github.com/tailscale/github-action):
+The job joins the tailnet with
+[tailscale/github-action](https://github.com/tailscale/github-action):
 
 ```yaml
 - uses: tailscale/github-action@v4
@@ -116,9 +119,9 @@ A group holds within one repository: two repositories that use one device aren't
 by default one run at most waits in a group: a newer one cancels the one waiting. GitHub's
 `queue: max` lets up to 100 wait; it wasn't tried.
 
-The runs above were started by hand. GitHub gives no secrets but `GITHUB_TOKEN` to a workflow run on `pull_request`
-from a fork, and both ways need them. A `pull_request_target` workflow gets them even for a fork's
-pull request: don't use these secrets in one.
+The runs above were started by hand. GitHub gives no secrets but `GITHUB_TOKEN` to a workflow run
+on `pull_request` from a fork, and both ways need them. A `pull_request_target` workflow gets them
+even for a fork's pull request: don't use these secrets in one.
 
 ## roamrunctl on the runner
 
@@ -208,8 +211,9 @@ identifier.
 With 0.9.0, `key import -` reads the key from standard input and takes a file roamrunctl saved as
 well, so either key goes in one way, with no temporary file for the secret (the device's file
 roamrunctl saves holds the key, as before):
-`printf '%s' "$ROAMRUN_CI_KEY" | "$rr" key import - --as ci`. `-` was run on the Mac with a file
-roamrunctl saved; with a file `roamrun key create` wrote, and from CI, it wasn't.
+`printf '%s' "$ROAMRUN_CI_KEY" | "$rr" key import - --as ci`. A build of that change (#193) ran `-`
+on the Mac with a file roamrunctl saved; with a file `roamrun key create` wrote, and from CI, it
+wasn't run.
 
 ## A relay beside the device
 
@@ -297,17 +301,17 @@ an install 5 minutes plus 15 seconds a megabyte: for an `.ipa` over about 20 MB,
 the tools answer, and the limits on uploads, are in
 [roamrunctl-reference.md](roamrunctl-reference.md#mcp-over-http).
 
-The script checks only that the answer says " is installed on ": it doesn't tell its own install from
-another caller's that ended just before. With 0.9.0, `install` answers with an id (`(install <id>)`),
-and `install_status` given it as `"install": "<id>"` answers of that install alone; that was run
-from the Mac, not from CI.
+The script checks only that the answer says " is installed on ": it doesn't tell its own install
+from another caller's that ended just before. With 0.9.0, `install` answers with an id (`(install
+<id>)`), and `install_status` given it as `"install": "<id>"` answers of that install alone; that
+was run from the Mac, not from CI.
 
 With 0.9.0, `roamrunctl install <device> app/MyApp.ipa --relay <address>:<port> --launch`, with the
 token in `ROAMRUNCTL_TOKEN` or `--token-file`, does the upload, the install, the wait and the launch
-in place of this script. It was run from the Mac against a relay on the same Mac, both 0.9.0, not
-from CI. The relay has to run 0.9.0 too: by the code, with a 0.8.1 relay the install begins there,
-but the command stops at that point, as the relay's answer carries no install id, and `--launch`
-doesn't run. That pairing wasn't tried.
+in place of this script. A build of that change (#194) ran it from the Mac against a relay on the
+same Mac, with that build at both ends, not from CI. The relay has to run 0.9.0 too: by the code,
+with a 0.8.1 relay the install begins there, but the command stops at that point, as the relay's
+answer carries no install id, and `--launch` doesn't run. That pairing wasn't tried.
 
 ## Not tried
 
@@ -318,5 +322,6 @@ doesn't run. That pairing wasn't tried.
 - A Tailscale policy narrowed to `tag:ci`'s needs.
 - An `.ipa` larger than 1 MB from CI, and whether the app's data survives an install over it.
 - A Mac beside the device that CI reaches by SSH and that installs with `xcrun devicectl`.
-- roamrunctl 0.9.0 from CI: `key import -`, `install --relay … --launch`, and the app ended before
-  an install.
+- roamrunctl 0.9.0 from CI: `key import -`, `install --relay … --launch`, `install_status` given
+  an install's id, and the app ended before an install.
+- tailscale/github-action's `ping:` input, and GitHub's `queue: max`.
