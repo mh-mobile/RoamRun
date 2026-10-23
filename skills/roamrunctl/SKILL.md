@@ -231,9 +231,10 @@ believed the first time it is used — use it only if the user named it.
   and it is given some four times that (five minutes plus fifteen seconds a megabyte) — run
   it where it can wait. `--launch` then launches it, by the bundle identifier in it.
 - With `--relay <address>:<port>` (or `ROAMRUNCTL_RELAY`), `install` and `launch` go through
-  `roamrunctl mcp --http --allow-install` on the machine beside the device, which names the
-  device: `install <its name there> App.ipa --relay … [--launch] [--timeout <s>]` uploads the
-  .ipa, checks the sha256, installs and waits; the token comes from `ROAMRUNCTL_TOKEN` or
+  `roamrunctl mcp --http --allow-install` on a machine that holds the device's key (anywhere
+  on the tailnet: it reaches the device over Tailscale), which names the device:
+  `install <its name there> App.ipa --relay … [--launch] [--timeout <s>]` uploads the .ipa,
+  checks the sha256, installs and waits; the token comes from `ROAMRUNCTL_TOKEN` or
   `--token-file`. An .ipa only.
 - `roamrunctl launch <name> <bundle id>` — one already running is ended first.
 - `roamrunctl mcp` — for an agent's MCP config (the command `roamrunctl`, the argument

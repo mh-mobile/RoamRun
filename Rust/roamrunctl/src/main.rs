@@ -118,7 +118,8 @@ enum Command {
     },
 }
 
-/// `install` and `launch` through a relay: `roamrunctl mcp --http` on the machine beside the device.
+/// `install` and `launch` through a relay: `roamrunctl mcp --http` on a machine that holds the device's key, anywhere on
+/// the tailnet.
 #[derive(Args)]
 pub struct Relayed {
     /// The relay's address and port, as `roamrunctl mcp --http` printed them (100.x.y.z:9090)

@@ -1,4 +1,5 @@
-//! `install` and `launch` with `--relay`: through `roamrunctl mcp --http` on the machine beside the device.
+//! `install` and `launch` with `--relay`: through `roamrunctl mcp --http` on the machine that holds the device's key
+//! (anywhere on the tailnet: it reaches the device over Tailscale, as this one would).
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};

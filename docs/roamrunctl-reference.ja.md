@@ -162,7 +162,7 @@ roamrunctl mcp --http <ポート> --allow <相手> [--allow <相手>…] [--toke
 
 ### `install --relay` と `launch --relay`
 
-呼び出す側のマシンで次のように実行すると、自分で保存したデバイスではなく、このサーバーを通してデバイスを使います。
+呼び出す側のマシンで次のように実行すると、自分で保存したデバイスではなく、このサーバーを通してデバイスを使います。relay は、デバイスの鍵を持ち、`mcp --http` を動かすマシンです。tailnet のどこにあってもかまいません。ほかの操作マシンと同じく Tailscale 経由でデバイスにつなぐので、デバイスのそばに置く必要はありません。
 
 ```sh
 roamrunctl install <デバイス> <app.ipa> --relay <アドレス>:<ポート> [--token-file <ファイル>] [--timeout <秒>] [--launch]

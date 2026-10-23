@@ -323,7 +323,9 @@ until Ctrl-C:
 
 `roamrunctl install <device> <app.ipa> --relay <address>:<port> [--token-file <file>] [--timeout <s>] [--launch]`
 and `roamrunctl launch <device> <bundle id> --relay <address>:<port> [--token-file <file>]`, on
-the calling machine, use such a server instead of a device of their own:
+the calling machine, use such a server instead of a device of their own. The relay is the
+machine that holds the device's key and runs `mcp --http`, anywhere on the tailnet: it reaches
+the device over Tailscale, as any using machine does, and needs no place beside it.
 
 - `<device>` is the device's name on the relay, as its `mcp --http` names it. `--relay` takes
   the address and port, or the address the server printed (`http://<address>:<port>/mcp`);
