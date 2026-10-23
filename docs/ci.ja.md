@@ -164,10 +164,10 @@ Linux のマシンで作った鍵は、roamrunctl がデバイスを保存した
 1. relay 専用のペアリングを、デバイスと同じ Wi-Fi で作ります。
 
    ```sh
-   roamrunctl pair control --to iphone-15-pro --as relay
+   roamrunctl pair control --to iphone-15-pro --as phone
    ```
 
-   デバイスの 設定 › プライバシーとセキュリティ › デベロッパモード で relay の Tailscale 上の名前を選び、ターミナルに表示されたコードを入力します。`relay` は、そのマシンにデバイスを保存するときの名前です。下のサーバーとジョブの呼び出しでも、この名前でデバイスを指します。MacBook Pro では、Claude アプリのターミナルから実行したときは、デバイスのその一覧に Mac が出ませんでした。macOS のターミナルから実行すると出ました。
+   デバイスの 設定 › プライバシーとセキュリティ › デベロッパモード で relay の Tailscale 上の名前を選び、ターミナルに表示されたコードを入力します。`phone` は、そのマシンにデバイスを保存するときの名前です。下のサーバーとジョブの呼び出しでも、この名前でデバイスを指します。一方、`--relay` が指すのはマシンです。実際の試行ではデバイスの名前も `relay` にしていましたが、ここでは両者が紛らわしくないように `phone` にしています。MacBook Pro では、Claude アプリのターミナルから実行したときは、デバイスのその一覧に Mac が出ませんでした。macOS のターミナルから実行すると出ました。
 
 2. トークンを作り、同じトークンをシークレットにも登録します。
 
@@ -182,7 +182,7 @@ Linux のマシンで作った鍵は、roamrunctl がデバイスを保存した
 3. サーバーを起動し、動かしたままにします（Ctrl-C で止まります）。
 
    ```sh
-   roamrunctl mcp --http 9090 --allow tag:ci --token-file ~/.config/roamrunctl/ci-token --allow-install relay
+   roamrunctl mcp --http 9090 --allow tag:ci --token-file ~/.config/roamrunctl/ci-token --allow-install phone
    ```
 
    起動するときに、待ち受けるアドレス（`http://<Tailscale の IPv4 アドレス>:9090/mcp`）を表示します。そのあとは要求ごとに 1 行を標準エラー出力に書き出します。時刻、呼び出し元のアドレスと Tailscale が答えた相手、ツール、結果、かかった時間です。サービスとして動かすこと（launchd や systemd）は試していません。
@@ -218,21 +218,21 @@ Linux のマシンで作った鍵は、roamrunctl がデバイスを保存した
     [ "${up##*$'\n'}" = 200 ] || { echo "${up%$'\n'*}"; exit 1; }
     id=$(printf '%s' "${up%$'\n'*}" | jq -r .upload); sha=$(printf '%s' "${up%$'\n'*}" | jq -r .sha256)
     [ "$sha" = "$(sha256sum app/MyApp.ipa | cut -d' ' -f1)" ] || { echo "the relay's sha256 differs"; exit 1; }
-    call install "{\"device\":\"relay\",\"upload\":\"$id\",\"sha256\":\"$sha\"}"
+    call install "{\"device\":\"phone\",\"upload\":\"$id\",\"sha256\":\"$sha\"}"
     for _ in $(seq 1 120); do
       sleep 5
-      call install_status '{"device":"relay"}' || exit 1
+      call install_status '{"device":"phone"}' || exit 1
       jq -e '.result.content[0].text | test("^installing ")' "$RUNNER_TEMP/last.json" >/dev/null || break
     done
     jq -e '.result.content[0].text | test(" is installed on ")' "$RUNNER_TEMP/last.json" >/dev/null || exit 1
-    call launch '{"device":"relay","bundle":"com.example.MyApp"}'
+    call launch '{"device":"phone","bundle":"com.example.MyApp"}'
 ```
 
 ツールを呼ぶ前に `initialize` を送る必要はありません。このループは 10 分で諦めます。relay がインストールに与える時間は、5 分と、1 MB あたり 15 秒の合計です。約 20 MB を超える `.ipa` では、ループを長くしてください。ツールの答え方やアップロードの上限は、[roamrunctl-reference.ja.md](roamrunctl-reference.ja.md#http-で使う-mcp) にあります。
 
 このスクリプトは、答えに「 is installed on 」が入っているかだけを見ます。そのため、自分のインストールと、直前に終わった別の呼び出し元のインストールを区別できません。0.9.0 の `install` は、答えに id（`(install <id>)`）を付けます。その id を `"install": "<id>"` として `install_status` に渡すと、そのインストールについてだけ答えます。これは Mac から試しました。CI からは試していません。
 
-0.9.0 では、このスクリプトの代わりに `roamrunctl install <デバイス> app/MyApp.ipa --relay <アドレス>:<ポート> --launch` が使えます。トークンは `ROAMRUNCTL_TOKEN` か `--token-file` で渡します。アップロード、インストール、終わるまでの待ち、起動までを、このコマンドが行います。この変更（#194）を入れたビルドを両端に使い、Mac から同じ Mac の relay に対して実行しました。CI からは試していません。relay の側も 0.9.0 である必要があります。コードによれば、0.8.1 の relay でも、relay の側でインストールは始まります。ただ、その答えにはインストールの id がないので、コマンドはそこで止まり、`--launch` も実行されません。この組み合わせは試していません。
+0.9.0 では、このスクリプトの代わりに `roamrunctl install phone app/MyApp.ipa --relay <アドレス>:<ポート> --launch` が使えます。トークンは `ROAMRUNCTL_TOKEN` か `--token-file` で渡します。アップロード、インストール、終わるまでの待ち、起動までを、このコマンドが行います。この変更（#194）を入れたビルドを両端に使い、Mac から同じ Mac の relay に対して実行しました。CI からは試していません。relay の側も 0.9.0 である必要があります。コードによれば、0.8.1 の relay でも、relay の側でインストールは始まります。ただ、その答えにはインストールの id がないので、コマンドはそこで止まり、`--launch` も実行されません。この組み合わせは試していません。
 
 ## 試していないこと
 

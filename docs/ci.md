@@ -222,12 +222,13 @@ wasn't run.
 1. Make a pairing of its own, on the device's Wi‑Fi:
 
    ```sh
-   roamrunctl pair control --to iphone-15-pro --as relay
+   roamrunctl pair control --to iphone-15-pro --as phone
    ```
 
    On the device, under Settings › Privacy & Security › Developer Mode, select the relay's
-   Tailscale name and enter the code the command prints. `relay` is the name the device is saved
-   under on that machine; the server below and the job's calls name it so. On the MacBook Pro,
+   Tailscale name and enter the code the command prints. `phone` is the name the device is saved
+   under on that machine; the server below and the job's calls name it so, while `--relay` names
+   the machine. (The runs used `relay` for it; it is `phone` here so the two don't read alike.) On the MacBook Pro,
    the device never listed the Mac while the command ran in the Claude app's terminal. It did when
    the command ran in macOS's Terminal.
 
@@ -244,7 +245,7 @@ wasn't run.
 3. Start the server and leave it running (Ctrl-C ends it):
 
    ```sh
-   roamrunctl mcp --http 9090 --allow tag:ci --token-file ~/.config/roamrunctl/ci-token --allow-install relay
+   roamrunctl mcp --http 9090 --allow tag:ci --token-file ~/.config/roamrunctl/ci-token --allow-install phone
    ```
 
    It prints its address (`http://<its Tailscale IPv4 address>:9090/mcp`) as it starts, and a line
@@ -286,14 +287,14 @@ Tailscale node, and a GitHub-hosted runner is a new node each job.
     [ "${up##*$'\n'}" = 200 ] || { echo "${up%$'\n'*}"; exit 1; }
     id=$(printf '%s' "${up%$'\n'*}" | jq -r .upload); sha=$(printf '%s' "${up%$'\n'*}" | jq -r .sha256)
     [ "$sha" = "$(sha256sum app/MyApp.ipa | cut -d' ' -f1)" ] || { echo "the relay's sha256 differs"; exit 1; }
-    call install "{\"device\":\"relay\",\"upload\":\"$id\",\"sha256\":\"$sha\"}"
+    call install "{\"device\":\"phone\",\"upload\":\"$id\",\"sha256\":\"$sha\"}"
     for _ in $(seq 1 120); do
       sleep 5
-      call install_status '{"device":"relay"}' || exit 1
+      call install_status '{"device":"phone"}' || exit 1
       jq -e '.result.content[0].text | test("^installing ")' "$RUNNER_TEMP/last.json" >/dev/null || break
     done
     jq -e '.result.content[0].text | test(" is installed on ")' "$RUNNER_TEMP/last.json" >/dev/null || exit 1
-    call launch '{"device":"relay","bundle":"com.example.MyApp"}'
+    call launch '{"device":"phone","bundle":"com.example.MyApp"}'
 ```
 
 `initialize` isn't needed before a call. The loop gives up after 10 minutes, while the relay gives
@@ -306,7 +307,7 @@ from another caller's that ended just before. With 0.9.0, `install` answers with
 <id>)`), and `install_status` given it as `"install": "<id>"` answers of that install alone; that
 was run from the Mac, not from CI.
 
-With 0.9.0, `roamrunctl install <device> app/MyApp.ipa --relay <address>:<port> --launch`, with the
+With 0.9.0, `roamrunctl install phone app/MyApp.ipa --relay <address>:<port> --launch`, with the
 token in `ROAMRUNCTL_TOKEN` or `--token-file`, does the upload, the install, the wait and the launch
 in place of this script. A build of that change (#194) ran it from the Mac against a relay on the
 same Mac, with that build at both ends, not from CI. The relay has to run 0.9.0 too: by the code,
