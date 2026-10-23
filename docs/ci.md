@@ -255,10 +255,36 @@ wasn't run.
 
 ### The step that calls the relay
 
-The job uploads the `.ipa`, starts the install, calls `install_status` every 5 seconds until the
-install ends, and launches. `RELAY` is the address and port the server printed. The upload and the
-install have to be in one job: only the caller that uploaded can install the upload, by its
-Tailscale node, and a GitHub-hosted runner is a new node each job.
+With roamrunctl 0.9.0 on the runner, one command uploads the `.ipa`, has the relay install it,
+waits for that install and launches the app:
+
+```yaml
+- name: Install and launch through the relay
+  env:
+    ROAMRUNCTL_TOKEN: ${{ secrets.RELAY_TOKEN }}
+    RELAY: "100.x.y.z:9090"
+  run: |
+    curl -sSfL "https://github.com/mh-mobile/RoamRun/releases/download/v0.9.0/roamrunctl-linux-x86_64.tar.gz" | tar xz
+    ./roamrunctl-linux-x86_64/roamrunctl install phone app/MyApp.ipa --relay "$RELAY" --launch
+```
+
+`phone` is the device as the relay names it, and `RELAY` the address and port the server printed;
+the token is the relay's. The command checks the sha256 the relay answers for the upload, and waits
+for its own install by the id the relay gives it; `--timeout <s>` sets the most it waits in all (by
+default, what the relay gives the upload and the install, and a minute more). The upload and the
+install are in this one command, so in one job: only the caller that uploaded can install the
+upload, by its Tailscale node, and a GitHub-hosted runner is a new node each job.
+
+The relay has to run 0.9.0 too: by the code, with a 0.8.1 relay the install begins there, but the
+command stops at that point, as the relay's answer carries no install id, and `--launch` doesn't
+run. That pairing wasn't tried. A build of that change (#194) ran the command from the Mac against
+a relay on the same Mac, with that build at both ends; this step wasn't run from CI.
+
+#### With 0.8.1: the script that ran
+
+roamrunctl 0.8.1 has no command that asks a relay; it is only the relay's side (`mcp --http`). So
+the runs above called the relay with curl: the job uploads the `.ipa`, starts the install, calls
+`install_status` every 5 seconds until the install ends, and launches.
 
 ```yaml
 - name: Install and launch through the relay
@@ -306,13 +332,6 @@ The script checks only that the answer says " is installed on ": it doesn't tell
 from another caller's that ended just before. With 0.9.0, `install` answers with an id (`(install
 <id>)`), and `install_status` given it as `"install": "<id>"` answers of that install alone; that
 was run from the Mac, not from CI.
-
-With 0.9.0, `roamrunctl install phone app/MyApp.ipa --relay <address>:<port> --launch`, with the
-token in `ROAMRUNCTL_TOKEN` or `--token-file`, does the upload, the install, the wait and the launch
-in place of this script. A build of that change (#194) ran it from the Mac against a relay on the
-same Mac, with that build at both ends, not from CI. The relay has to run 0.9.0 too: by the code,
-with a 0.8.1 relay the install begins there, but the command stops at that point, as the relay's
-answer carries no install id, and `--launch` doesn't run. That pairing wasn't tried.
 
 ## Not tried
 

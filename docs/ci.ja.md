@@ -189,7 +189,25 @@ Linux のマシンで作った鍵は、roamrunctl がデバイスを保存した
 
 ### relay を呼ぶ手順
 
-ジョブは `.ipa` をアップロードしてインストールを始め、終わるまで 5 秒ごとに `install_status` を呼んでから起動します。`RELAY` は、サーバーが表示したアドレスとポートです。アップロードとインストールは、同じジョブの中で行います。アップロードしたものをインストールできるのは、アップロードした呼び出し元（Tailscale のノード）だけです。GitHub がホストするランナーは、ジョブが変わると別のノードです。
+ランナーに roamrunctl 0.9.0 を入れれば、1 つのコマンドで済みます。`.ipa` をアップロードし、relay にインストールさせ、そのインストールが終わるのを待って、アプリを起動します。
+
+```yaml
+- name: Install and launch through the relay
+  env:
+    ROAMRUNCTL_TOKEN: ${{ secrets.RELAY_TOKEN }}
+    RELAY: "100.x.y.z:9090"
+  run: |
+    curl -sSfL "https://github.com/mh-mobile/RoamRun/releases/download/v0.9.0/roamrunctl-linux-x86_64.tar.gz" | tar xz
+    ./roamrunctl-linux-x86_64/roamrunctl install phone app/MyApp.ipa --relay "$RELAY" --launch
+```
+
+`phone` は relay の側でのデバイスの名前、`RELAY` はサーバーが表示したアドレスとポートです。トークンは relay のものを渡します。このコマンドは、アップロードに対して relay が答えた sha256 を照らし合わせ、relay が返す id で自分のインストールを待ちます。`--timeout <秒>` を付けると、全体でそれ以上待ちません（付けなければ、relay がアップロードとインストールに与える時間と、1 分の合計です）。アップロードとインストールは 1 つのコマンドの中、つまり同じジョブの中で行います。アップロードしたものをインストールできるのは、アップロードした呼び出し元（Tailscale のノード）だけです。GitHub がホストするランナーは、ジョブが変わると別のノードです。
+
+relay の側も 0.9.0 である必要があります。コードによれば、0.8.1 の relay でも、relay の側でインストールは始まります。ただ、その答えにはインストールの id がないので、コマンドはそこで止まり、`--launch` も実行されません。この組み合わせは試していません。この変更（#194）を入れたビルドを両端に使い、Mac から同じ Mac の relay に対してこのコマンドを実行しました。この手順を CI からは試していません。
+
+#### 0.8.1 で実行したスクリプト
+
+roamrunctl 0.8.1 には、relay に頼むコマンドがありません。relay になる側（`mcp --http`）だけです。そのため上の実行では、curl で relay を呼びました。ジョブは `.ipa` をアップロードしてインストールを始め、終わるまで 5 秒ごとに `install_status` を呼んでから起動します。
 
 ```yaml
 - name: Install and launch through the relay
@@ -231,8 +249,6 @@ Linux のマシンで作った鍵は、roamrunctl がデバイスを保存した
 ツールを呼ぶ前に `initialize` を送る必要はありません。このループは 10 分で諦めます。relay がインストールに与える時間は、5 分と、1 MB あたり 15 秒の合計です。約 20 MB を超える `.ipa` では、ループを長くしてください。ツールの答え方やアップロードの上限は、[roamrunctl-reference.ja.md](roamrunctl-reference.ja.md#http-で使う-mcp) にあります。
 
 このスクリプトは、答えに「 is installed on 」が入っているかだけを見ます。そのため、自分のインストールと、直前に終わった別の呼び出し元のインストールを区別できません。0.9.0 の `install` は、答えに id（`(install <id>)`）を付けます。その id を `"install": "<id>"` として `install_status` に渡すと、そのインストールについてだけ答えます。これは Mac から試しました。CI からは試していません。
-
-0.9.0 では、このスクリプトの代わりに `roamrunctl install phone app/MyApp.ipa --relay <アドレス>:<ポート> --launch` が使えます。トークンは `ROAMRUNCTL_TOKEN` か `--token-file` で渡します。アップロード、インストール、終わるまでの待ち、起動までを、このコマンドが行います。この変更（#194）を入れたビルドを両端に使い、Mac から同じ Mac の relay に対して実行しました。CI からは試していません。relay の側も 0.9.0 である必要があります。コードによれば、0.8.1 の relay でも、relay の側でインストールは始まります。ただ、その答えにはインストールの id がないので、コマンドはそこで止まり、`--launch` も実行されません。この組み合わせは試していません。
 
 ## 試していないこと
 
