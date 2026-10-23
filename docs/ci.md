@@ -6,16 +6,24 @@ A GitHub Actions job on a GitHub-hosted runner can install an app on your iPhone
 Tailscale with the released `roamrunctl`, unchanged. Other CI services weren't tried. There are two
 ways:
 
-| | roamrunctl on the runner | A relay beside the device |
+| | roamrunctl on the runner | A relay |
 |---|---|---|
 | Who talks to the device | the runner | a machine of yours, by `roamrunctl mcp --http` |
 | What CI holds | a pairing (a key to the device) and a Tailscale OAuth client | a token for the relay and a Tailscale OAuth client |
 | What the runner has to reach | the device, on its pairing port and the tunnel port it names | the relay, on one port |
 | What has to keep running | nothing | the relay, started by you |
 
-With a relay, the key never leaves your machine. With roamrunctl on the runner, nothing of yours
-runs while the job does. A repository can be set up for both. "Relay" on this page is that
-machine beside the device, not Tailscale's DERP relays.
+"Relay" on this page is a machine of yours that keeps the device's key and runs `roamrunctl mcp
+--http`, not Tailscale's DERP relays. It reaches the device over Tailscale, as the runner does, so
+it can be anywhere on your tailnet: only pairing it needs the device's Wi‑Fi (`pair control --to`),
+or a key made elsewhere (`roamrun key create`, then `key import`). With a relay, the key never
+leaves that machine. With roamrunctl on the runner, nothing of yours runs while the job does. A
+repository can be set up for both.
+
+Either way, whoever can run a workflow that reads the secrets can see and operate the device: with
+the pairing key for as long as the pairing stands, with the relay's token while the relay runs (the
+relay offers all its tools to a caller it lets in). The Tailscale OAuth client lets whoever holds it
+join your tailnet as `tag:ci` until it is revoked.
 
 The job here doesn't build or sign the app. CI needs an `.ipa` already signed for the device (a
 development profile that lists it); `roamrunctl` checks the archive's shape, not its signature,
@@ -26,12 +34,13 @@ repository (`gh release download`).
 
 The CI runs were all on 2026-10-22 (UTC):
 
-- The device: an iPhone 15 Pro on iOS 27.0, unlocked with its screen on, on a Wi‑Fi and a charger.
+- The device: an iPhone 15 Pro on iOS 27.0, unlocked, on a Wi‑Fi and a wireless charger. Whether
+  its screen stayed on between runs wasn't recorded.
 - CI: GitHub Actions, `ubuntu-24.04`, a job started by hand (`workflow_dispatch`) in a private
   repository, roamrunctl 0.8.1 from its release (`roamrunctl-linux-x86_64.tar.gz`).
-- Relays, each on the device's Wi‑Fi: a MacBook Pro with roamrunctl 0.8.1 from Homebrew, run in
-  macOS's Terminal; and an Ubuntu 24.04 (arm64) virtual machine with roamrunctl 0.8.1 from the
-  README's Linux install command.
+- Relays, each on the device's Wi‑Fi (where they were paired): a MacBook Pro with roamrunctl 0.8.1
+  from Homebrew, run in macOS's Terminal; and an Ubuntu 24.04 (arm64) virtual machine with
+  roamrunctl 0.8.1 from the README's Linux install command.
 - Pairings for the runner: one made on a Mac with RoamRun, and one made on that Ubuntu machine.
 - The app: a 1 MB `.ipa`.
 - Tailscale: the tailnet's policy allowed everything; the runner joined with the tag `tag:ci`. In
@@ -46,26 +55,27 @@ The CI runs were all on 2026-10-22 (UTC):
 | the runner alone | Linux's key: install 11 s, launch 3 s | — |
 | the relay alone, 2 minutes after that | — | Linux: upload 2 s, install 48 s, launch 1 s |
 
-The slow installs and the timeout fit an install over the app while it is in front on a charging
-device: in these runs the device lay on its charger with its screen on, and nothing ended the app a
-run had launched. Later, from the Mac with the device's log streamed
+The slow installs and the timeout fit an install over the app while it is in front on a device on
+its wireless charger: in these runs the device lay on that charger, and each run ended by launching
+the app. Later, from the Mac with the device's log streamed
 (idevice's `syslog_relay`), it was seen why: iOS asked to end the app before replacing it, and the
 request "failed due to termination resistance"; the install waited until the app left the front.
 With roamrunctl 0.8.1 over the LAN, also on 2026-10-22 (UTC):
 
 | Device | App | Install |
 |---|---|---|
-| charging | in front | waited (122 s, until the app was ended by hand; 315 s timeouts otherwise) |
-| not charging | in front | 4 s |
-| charging | not running | 5 s |
+| on its wireless charger | in front | waited (122 s, until the app was ended by hand; 315 s timeouts otherwise) |
+| off it | in front | 4 s |
+| on it | not running | 5 s |
 
-Whether the app was in front before each run above wasn't recorded, so not every fast run is
-explained; nor are the 48 s and 71 s installs, which ended without anyone ending the app (whether
-someone touched the device then wasn't recorded either). roamrunctl 0.9.0 ends the app's running
-processes before it installs (#196): a build of that change, run from the Mac over the LAN,
-installed in 4–5 s with the app in front on a charging device. It wasn't run from CI. With 0.8.1,
-don't leave the app in front on a charging device when a job installs it: end it, or leave the
-device off its charger.
+Whether the app was still in front when each run above began wasn't recorded (the screen may have
+locked between runs, which takes the app out of the front), so the fast runs and the 48 s and 71 s
+installs aren't explained by this. Cable charging wasn't tried. roamrunctl 0.9.0 ends the app's
+running processes before it installs (#196): a build of that change, run from the Mac over the LAN,
+installed in 4–5 s with the app in front on a device on its wireless charger. It wasn't run from
+CI. The app is then ended from the start of the upload, and stays ended if the install fails,
+which 0.8.1 didn't do. With 0.8.1, don't leave the app in front on a device on its charger when a
+job installs it: end it, or take the device off its charger.
 
 ## What both ways need
 
@@ -95,19 +105,20 @@ The job joins the tailnet with
     tags: tag:ci
 ```
 
-The action also takes `ping:`, hosts to `tailscale ping` once it is up, which shows in the log
-whether the path to each is direct. The runs above pinged in a step of their own (`tailscale ping
--c 5`); the input wasn't tried.
+The action also takes `ping:`, hosts it waits for, up to 3 minutes, once it is up (a path direct
+or relayed). The runs above pinged in a step of their own (`tailscale ping -c 5`), which shows
+whether a path is direct; the input wasn't tried.
 
 With a policy that allows everything, the runner reaches every machine on your tailnet while the
 job runs. To let it reach only what it needs, write grants for `tag:ci`. For a relay, that is its
 one port. For roamrunctl on the runner, it is the device on TCP: the pairing port, one of
-49152–49167, and the tunnel port, another one the device names for each connection. Such a policy
-wasn't tried.
+49152–49167, and the tunnel port, which the device names anew for each connection, with no range
+known, so in effect any TCP port. Such a policy wasn't tried.
 
 ### The workflow
 
-One device serves one job at a time:
+Installs to one device have to take turns (they aren't coordinated). A concurrency group on the
+workflow makes its runs take turns:
 
 ```yaml
 concurrency:
@@ -115,9 +126,12 @@ concurrency:
   cancel-in-progress: false
 ```
 
-A group holds within one repository: two repositories that use one device aren't kept apart. And
-by default one run at most waits in a group: a newer one cancels the one waiting. GitHub's
-`queue: max` lets up to 100 wait; it wasn't tried.
+It groups runs, not jobs: two jobs of one run still go at the same time, so put a device's
+installs in one job, or give each job the same group under `jobs.<id>.concurrency`. A group holds
+within one repository: two repositories that use one device aren't kept apart. By default one run
+at most waits in a group: a newer one cancels the one waiting; GitHub's `queue: max` lets up to 100
+wait (not tried). A relay keeps one upload at a time, from whichever caller, so jobs for two devices
+on one relay belong in one group too.
 
 The runs above were started by hand. GitHub gives no secrets but `GITHUB_TOKEN` to a workflow run
 on `pull_request` from a fork, and both ways need them. A `pull_request_target` workflow gets them
@@ -162,7 +176,10 @@ ssh admin@ubuntu-standin cat /tmp/tmp.XXXXXXXXXX/roamrunctl/devices/ci-linux.jso
 
 Either secret is a key to the device: anyone who can run a workflow that reads it, and reach the
 device, can see and operate it. To take it back, remove its name from the device's Developer Mode
-list.
+list. A pairing made with `pair control --to` is announced under the machine's Tailscale name,
+whatever `--as` says, so the Ubuntu machine's two pairings (this one and the relay's below) carry
+the same name there; how the list tells them apart wasn't checked. One made with `roamrun key
+create --as ci` is listed as "ci".
 
 ### The runner's step
 
@@ -215,11 +232,12 @@ roamrunctl saves holds the key, as before):
 on the Mac with a file roamrunctl saved; with a file `roamrun key create` wrote, and from CI, it
 wasn't run.
 
-## A relay beside the device
+## A relay
 
 ### On the relay
 
-1. Make a pairing of its own, on the device's Wi‑Fi:
+1. Make a pairing of its own, on the device's Wi‑Fi (the relay itself can be anywhere on your
+   tailnet afterwards):
 
    ```sh
    roamrunctl pair control --to iphone-15-pro --as phone
@@ -228,9 +246,10 @@ wasn't run.
    On the device, under Settings › Privacy & Security › Developer Mode, select the relay's
    Tailscale name and enter the code the command prints. `phone` is the name the device is saved
    under on that machine; the server below and the job's calls name it so, while `--relay` names
-   the machine. (The runs used `relay` for it; it is `phone` here so the two don't read alike.) On the MacBook Pro,
-   the device never listed the Mac while the command ran in the Claude app's terminal. It did when
-   the command ran in macOS's Terminal.
+   the machine. (The runs used `relay` for it; it is `phone` here so the two don't read alike.) On
+   the MacBook Pro, the device never listed the Mac while the command ran in the Claude app's
+   terminal, and did when it ran in macOS's Terminal: most likely the Claude app had no Local
+   Network permission, which macOS gives per app (not checked).
 
 2. Make a token, and store the same token as a secret:
 
@@ -335,8 +354,8 @@ was run from the Mac, not from CI.
 
 ## Not tried
 
-- The device locked or asleep, or an iPad. (A device on cellular alone doesn't take these
-  connections: see the roamrunctl README.)
+- The device locked or asleep, on a cable charger, or an iPad. (A device on cellular alone doesn't
+  take these connections: see the roamrunctl README.)
 - A relay on Windows, or run as a service.
 - macOS or Windows runners, or a self-hosted runner.
 - A Tailscale policy narrowed to `tag:ci`'s needs.
