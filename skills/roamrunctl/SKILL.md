@@ -164,6 +164,13 @@ runs on: the user runs it, at a terminal of their own.** Don't run one, and neve
 back, or pass one on: typing it is the owner's consent. On the device it is Settings ›
 Privacy & Security › Developer Mode › the machine's name, then the code.
 
+**A using machine that reaches the tailnet only through an HTTP proxy** (0.10.0+), such as an
+Xcode Cloud build running Tailscale in userspace (`tailscaled --tun=userspace-networking
+--outbound-http-proxy-listen=127.0.0.1:1056`): `ROAMRUNCTL_PROXY=http://127.0.0.1:1056` there.
+The device's connections and `--relay`'s go through the proxy's `CONNECT`; pairing and the
+connection to a key's machine (B) don't. Only `http://host:port` is taken, and `HTTPS_PROXY`
+and the like are never read.
+
 **A. The using machine holds the key.** `roamrunctl pair control --to <the device's
 Tailscale name> [--as <name>]` where it is on the device's Wi‑Fi. Where it isn't,
 `roamrunctl pair control --with <the near machine> [--as <name>]` on it, and on the near

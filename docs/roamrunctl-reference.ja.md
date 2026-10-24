@@ -173,11 +173,25 @@ roamrunctl install <デバイス> <app.ipa> --relay <アドレス>:<ポート> [
 roamrunctl launch <デバイス> <bundle id> --relay <アドレス>:<ポート> [--token-file <ファイル>]
 ```
 
-- `<デバイス>` は、relay の `mcp --http` に指定した名前です。`--relay` には、アドレスとポート、またはサーバーが表示したアドレス（`http://<アドレス>:<ポート>/mcp`）を渡します。`ROAMRUNCTL_RELAY` でも指定できます（空の値なら指定なしとみなします）。どちらかがあると、`install` と `launch` は、呼び出す側のマシンに保存したデバイスを使いません。名前を渡した場合は、名前から得た IPv4 アドレスを順に試します。サーバーは IPv4 でしか待ち受けないからです。接続は TCP で直接つなぐので、`http_proxy` などは使いません。
+- `<デバイス>` は、relay の `mcp --http` に指定した名前です。`--relay` には、アドレスとポート、またはサーバーが表示したアドレス（`http://<アドレス>:<ポート>/mcp`）を渡します。`ROAMRUNCTL_RELAY` でも指定できます（空の値なら指定なしとみなします）。どちらかがあると、`install` と `launch` は、呼び出す側のマシンに保存したデバイスを使いません。名前を渡した場合は、名前から得た IPv4 アドレスを順に試します。サーバーは IPv4 でしか待ち受けないからです。接続は TCP で直接つなぐか、`ROAMRUNCTL_PROXY` が指すプロキシを通します（次の節）。`http_proxy` などは使いません。
 - トークンは `--token-file` で渡します（サーバーと同じく、所有者だけが読めるファイルで、1 行に 32 文字以上）。なければ `ROAMRUNCTL_TOKEN` を使います。どちらもなければ、トークンを送りません。
 - `install` が受け付けるのは `.ipa` だけで、`.app` フォルダは受け付けません。`.ipa` は、`install` と同じように検査します（次の節）。そのあと、1 つのプロセスから次の順に進めます。relay は、アップロードとインストールが同じ Tailscale のノードから来ることを求めるからです。まず `Expect: 100-continue` を付けて `PUT /upload` を送ります。トークンがないなどで断られる場合は、`.ipa` を送る前に分かります。relay が答えた sha256 をファイルのものと比べ、違えば何もインストールせずに止まります。次に `install` でそのアップロードを指定し、`install` が答えたインストールの id を付けて、`install_status` を 5 秒ごとに尋ねます。アプリが入ったか、入らなかった理由が返るまで続けます。表示するのは `install_status` の答えです。`install` が id を答えない relay（0.9.0 より前）なら、インストールを始めたところで止まります。`Expect` に 10 秒たっても答えないサーバーには、そのまま本体を送ります。そのあとに届いた 100 Continue は読み飛ばします。本体を送っている途中で断られた場合も、サーバーの答えを読みます。`--launch` を付けると、`install_status` の答えを表示してから、`.ipa` の中の bundle identifier でアプリを起動します。
 - relay が 503 を返した要求は、3 秒おきに最大 5 回まで送り直します。それ以外で断られたら、ステータスと relay の答えを表示して止まります。401 はトークンの問題、403 は relay の `--allow` で許されていないこと、`/upload` の 404 は `--allow-install` がないことを表します。要求ごとに接続を 1 つ使います。`launch --relay` は、503 の送り直しも含めて、全体で最大 120 秒待ちます。`install --relay` は、期限（`--timeout`、次の項目）まで待ちます。その間も、1 回の読み書きで待つのは最大 120 秒です。どちらも、そこであきらめたときは「no answer within 120 s」と表示します。
 - `--timeout <秒>` は、アプリが入るまでコマンド全体で待つ最大の時間です。アップロードと、その間の各要求も含みます。過ぎたら何も送らず、答えも待ちません。1 バイトずつ答える relay、途中で止まる relay、1xx を送り続ける relay でも同じです。送っている途中のアップロードも止めます。既定は、relay がインストールに与える時間（5 分に、1 MB あたり 15 秒を足した時間）が基本です。これに、アップロードの分の 1 MB あたり 2 秒と、さらに 1 分を足します。過ぎるとコマンドは失敗します。始まっていたインストールは relay で続くので、どう終わったかは relay の `install_status` で分かります。
+
+## HTTP プロキシを通す（`ROAMRUNCTL_PROXY`）
+
+HTTP プロキシを通してしか tailnet に届かないマシンでは、`ROAMRUNCTL_PROXY=http://<ホスト>:<ポート>` を指定します。すると roamrunctl は、そのプロキシの `CONNECT` を通してつなぎます。対象はデバイスへの接続（応答するかの確認、ペアリング用ポート、トンネル用ポート）で、`look`、`install`、`launch`、`mcp` なども含みます。relay への接続（`--relay`）も対象です。
+
+- 受け付けるのは `http://<ホスト>:<ポート>` だけです。ユーザー名とパスワード、パス、`https://`、SOCKS は受け付けません。それ以外の値なら、何もする前に止まります。空の値なら、指定なしとみなします。`HTTPS_PROXY`、`http_proxy`、`ALL_PROXY` などは読みません。
+- ペアリング（`pair control`、`pair introduce`）と、デバイスに署名するマシン（B）への接続は、プロキシを通しません。
+- userspace で動く Tailscale は、tailnet へのこうしたプロキシを出せます。次のように動かします。
+
+  ```sh
+  tailscaled --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:1056
+  export ROAMRUNCTL_PROXY=http://127.0.0.1:1056
+  ```
+- この変更のビルドで、2026-10-24 に Xcode Cloud から iPhone 15 Pro に対して試しました。`install --relay … --launch` が通りました。relay を使わない `key import -`、`install --launch`、`look` も通りました。手順は [docs/xcode-cloud.ja.md](xcode-cloud.ja.md) にあります。Mac からは、`CONNECT` を記録する試験用のプロキシを通して、`look`、`install --launch`、`install --relay … --launch` を試しました。
 
 ## アプリのインストール
 

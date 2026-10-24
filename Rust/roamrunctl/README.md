@@ -288,6 +288,13 @@ Installing and launching from a GitHub Actions job, with roamrunctl on the runne
 `mcp --http` on a machine beside the device, is in [docs/ci.md](../../docs/ci.md), and the
 GitHub Action [mh-mobile/roamrun-action](https://github.com/mh-mobile/roamrun-action) does it in one step.
 
+A machine that reaches its tailnet only through an HTTP proxy, such as an Xcode Cloud build
+running Tailscale in userspace (`tailscaled --outbound-http-proxy-listen=127.0.0.1:1056`), names
+the proxy in `ROAMRUNCTL_PROXY=http://127.0.0.1:1056` (0.10.0+): the device's connections and a
+relay's then go through its `CONNECT`. `HTTPS_PROXY` and the like are never read. Xcode Cloud:
+[docs/xcode-cloud.md](../../docs/xcode-cloud.md); the details:
+[the reference](../../docs/roamrunctl-reference.md#through-an-http-proxy-roamrunctl_proxy).
+
 An optional [agent skill](https://github.com/mh-mobile/RoamRun/tree/main/skills/roamrunctl)
 provides instructions: `npx skills add mh-mobile/RoamRun`. Installing the skill does not
 register or start the MCP server.
