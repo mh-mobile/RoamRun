@@ -9367,7 +9367,7 @@ Portions of ICU4X may have been adapted from ICU4C and/or ICU4J.
 ICU 1.8.1 to ICU 57.1 © 1995-2016 International Business Machines Corporation and others.
 
 ################################################################################
-tokio 1.53.2 (MIT)
+tokio 1.53.3 (MIT)
 tokio-util 0.7.20 (MIT)
 #-------------------------------------------------------------------------------
 MIT License
