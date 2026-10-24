@@ -3,8 +3,9 @@
 <p align="center">English | <a href="ci.ja.md">日本語</a></p>
 
 A GitHub Actions job on a GitHub-hosted runner can install an app on your iPhone and launch it over
-Tailscale with the released `roamrunctl`, unchanged. Xcode Cloud can too, through a relay:
-[xcode-cloud.md](xcode-cloud.md). Other CI services weren't tried. There are two ways:
+Tailscale with the released `roamrunctl`, unchanged. Xcode Cloud can too:
+[xcode-cloud.md](xcode-cloud.md); and Bitrise, with a Step: [bitrise.md](bitrise.md). Other CI
+services weren't tried. There are two ways:
 
 | | roamrunctl on the runner | A relay |
 |---|---|---|
