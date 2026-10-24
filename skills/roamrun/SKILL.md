@@ -420,6 +420,10 @@ have the user add the MCP tools, which run outside it.
 - These press what is really there. Don't tap what spends money, posts, sends,
   deletes or signs in unless the user asked for exactly that; when the screen
   isn't what you expected, look again rather than guess.
+- On an iPhone with two screens, opened (tried: a foldable one on iOS 27.1), the
+  first tap or swipe after RoamRun connects to it, and the first after it is
+  opened, does nothing; the next one works. If the look after one shows nothing
+  changed, tap again by that look.
 - A `look` shows whatever is on the screen — notifications, messages, the lock
   screen. Don't send the image anywhere the user didn't ask.
 - A locked device is looked at and operated all the same: its lock screen is what
