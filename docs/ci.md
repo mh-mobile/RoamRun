@@ -30,6 +30,27 @@ development profile that lists it); `roamrunctl` checks the archive's shape, not
 and installs it as it is. In the runs below, the job took the `.ipa` from a release of its own
 repository (`gh release download`).
 
+## With the action
+
+[mh-mobile/roamrun-action](https://github.com/mh-mobile/roamrun-action) does either way in one step,
+after the Tailscale step below: it downloads roamrunctl from its release, checks it against
+`roamrunctl-SHA256SUMS`, and installs and launches (`key import -` and `install --launch`, or
+`install --relay … --launch`). The setup is the same as on this page: the Tailscale tag and OAuth
+client, and the pairing or the relay.
+
+```yaml
+- uses: mh-mobile/roamrun-action@v1
+  with:
+    key: ${{ secrets.ROAMRUN_CI_KEY }}        # or relay:, token: and device: for a relay
+    ipa: build/MyApp.ipa
+```
+
+It runs on Linux and macOS runners. On macOS, the Tailscale action points the system's DNS at
+`100.100.100.100`; on the tailnet it was tried with, github.com then stopped resolving, and its
+README shows the line that puts the runner's own DNS back. Its inputs, and what was tried with it,
+are in [its README](https://github.com/mh-mobile/roamrun-action#readme). The rest of this page is
+the steps it takes, written out.
+
 ## What was run
 
 The CI runs with roamrunctl 0.8.1 were all on 2026-10-22 (UTC); those with 0.9.0 are

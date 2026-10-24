@@ -285,7 +285,8 @@ roamrunctl mcp --http 9090 --allow tag:codex phone
   images, the text typed or pasted, what is uploaded, and the token.
 
 Installing and launching from a GitHub Actions job, with roamrunctl on the runner or through
-`mcp --http` on a machine beside the device, is in [docs/ci.md](../../docs/ci.md).
+`mcp --http` on a machine beside the device, is in [docs/ci.md](../../docs/ci.md), and
+[mh-mobile/roamrun-action](https://github.com/mh-mobile/roamrun-action) does it in one step.
 
 An optional [agent skill](https://github.com/mh-mobile/RoamRun/tree/main/skills/roamrunctl)
 provides instructions: `npx skills add mh-mobile/RoamRun`. Installing the skill does not

@@ -17,6 +17,19 @@ GitHub がホストするランナーで動く GitHub Actions のジョブから
 
 このページのジョブは、アプリのビルドや署名をしません。CI には、そのデバイス向けに署名済みの `.ipa`（そのデバイスを含む開発用プロファイルで署名したもの）が必要です。`roamrunctl` が確かめるのはアーカイブの構成だけで、署名は確かめずにそのままインストールします。下の実行では、ジョブは自分のリポジトリのリリースから `.ipa` を取得しました（`gh release download`）。
 
+## action を使う
+
+[mh-mobile/roamrun-action](https://github.com/mh-mobile/roamrun-action) を使うと、どちらのやり方も 1 つのステップで書けます。下の Tailscale のステップのあとに置きます。この action は、roamrunctl をリリースから取得し、`roamrunctl-SHA256SUMS` と照らし合わせます。そのうえで、インストールと起動をします。使うコマンドは、`key import -` と `install --launch`、または `install --relay … --launch` です。準備はこのページと同じです。Tailscale のタグと OAuth クライアント、それにペアリングか relay を用意します。
+
+```yaml
+- uses: mh-mobile/roamrun-action@v1
+  with:
+    key: ${{ secrets.ROAMRUN_CI_KEY }}        # relay に頼むなら relay:、token:、device:
+    ipa: build/MyApp.ipa
+```
+
+Linux と macOS のランナーで動きます。macOS では、Tailscale の action がシステムの DNS を `100.100.100.100` に切り替えます。試した tailnet では、そのあと github.com の名前を引けなくなりました。ランナーのもとの DNS に戻す 1 行は、action の README にあります。入力の一覧と、action で試したことも、[その README](https://github.com/mh-mobile/roamrun-action#readme) にあります。このページの残りは、action が行う手順を書き出したものです。
+
 ## 実行した環境と結果
 
 roamrunctl 0.8.1 での CI からの実行は、どれも 2026-10-22（UTC）です。0.9.0 での実行は[あとに](#roamrunctl-090-での-ci-からの実行)まとめました。
