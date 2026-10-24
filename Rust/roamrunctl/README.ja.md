@@ -199,6 +199,15 @@ roamrunctl mcp --http 9090 --allow tag:codex phone
 
 GitHub Actions のジョブからインストールして起動する手順は、[docs/ci.ja.md](../../docs/ci.ja.md) にあります。ランナーで roamrunctl を動かすやり方と、デバイスのそばのマシンでこのサーバーを動かして頼むやり方を載せています。
 
+HTTP プロキシを通してしか tailnet に届かないマシンでは、`ROAMRUNCTL_PROXY` にプロキシを指定します（0.10.0 以降）。たとえば、userspace で Tailscale を動かす Xcode Cloud のビルドでは、次のようにします。
+
+```sh
+tailscaled --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:1056
+export ROAMRUNCTL_PROXY=http://127.0.0.1:1056
+```
+
+すると、デバイスへの接続と relay への接続が、そのプロキシの `CONNECT` を通ります。`HTTPS_PROXY` などは読みません。Xcode Cloud については [docs/xcode-cloud.ja.md](../../docs/xcode-cloud.ja.md) にあります。細かいことは、[リファレンス](../../docs/roamrunctl-reference.ja.md#http-プロキシを通すroamrunctl_proxy)にあります。
+
 エージェントに使い方を教える[スキル](https://github.com/mh-mobile/RoamRun/tree/main/skills/roamrunctl)も用意しています（`npx skills add mh-mobile/RoamRun`）。スキルを入れても、MCP サーバーの登録や起動は行われません。
 
 ### 鍵のファイル（A）

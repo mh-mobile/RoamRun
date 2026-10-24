@@ -250,21 +250,25 @@ final class Introducer {
     private let plan: Plan
     private let record: any BonjourRecord
     private let addressNow: () -> String?
+    private let listening: () async -> Void
     private let onEvent: (Event) -> Void
     private var relay: Relay?
     private var watches: [Task<Void, Never>] = []
     private(set) var ended = false
 
-    /// `addressNow`: the interface's address at this moment (nil: it has none).
+    /// `addressNow`: the interface's address at this moment (nil: it has none). `listening`: awaited once a
+    /// port is listened on, before anything is announced (a test ends it there).
     init(
         _ plan: Plan,
         record: any BonjourRecord,
         addressNow: @escaping () -> String?,
+        listening: @escaping () async -> Void = {},
         onEvent: @escaping (Event) -> Void
     ) {
         self.plan = plan
         self.record = record
         self.addressNow = addressNow
+        self.listening = listening
         self.onEvent = onEvent
     }
 
@@ -290,6 +294,7 @@ final class Introducer {
             do { try await relay.start() } catch { failure = error.localizedDescription
                 continue
             }
+            await listening()
             // Ended while that waited: nothing may be announced after it was said nothing is.
             if ended {
                 relay.stop()
