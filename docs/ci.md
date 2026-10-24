@@ -30,6 +30,33 @@ development profile that lists it); `roamrunctl` checks the archive's shape, not
 and installs it as it is. In the runs below, the job took the `.ipa` from a release of its own
 repository (`gh release download`).
 
+## With the action
+
+The GitHub Action [mh-mobile/roamrun-action](https://github.com/mh-mobile/roamrun-action) does either
+of the two ways in one step, placed after the Tailscale step. It downloads roamrunctl (0.9.0 by
+default) from RoamRun's release, checks it against `roamrunctl-SHA256SUMS`, and by default installs
+and launches: `key import -` and `install --launch` on the runner, or `install --relay … --launch`
+through a relay, which runs 0.9.0 too. Before using it, set up what this page describes: the
+[Tailscale tag and OAuth client](#tailscale-a-tag-and-an-oauth-client), and either
+[a pairing for CI](#a-pairing-for-ci), given as the secret `key`, or [a relay](#a-relay).
+
+```yaml
+- uses: mh-mobile/roamrun-action@v1
+  with:
+    key: ${{ secrets.ROAMRUN_CI_KEY }}   # for a relay: relay:, token: and device: instead of key:
+    ipa: build/MyApp.ipa
+```
+
+It runs on Linux and macOS runners. On macOS, with MagicDNS on, the Tailscale action set the
+system's DNS to `100.100.100.100`; on the tailnet it was tried with, github.com then stopped
+resolving. The action's README shows the line that puts the runner's own DNS back, between the two
+steps. Its inputs (installing only, launching only, and more) and what was tried with it are in
+[its README](https://github.com/mh-mobile/roamrun-action#readme).
+
+What the action runs is the 0.9.0 form of [the runner's step](#the-runners-step) and
+[the step that calls the relay](#the-step-that-calls-the-relay). The rest of this page is the setup,
+and the runs made without the action.
+
 ## What was run
 
 The CI runs with roamrunctl 0.8.1 were all on 2026-10-22 (UTC); those with 0.9.0 are
@@ -378,7 +405,8 @@ was run from the Mac, and from CI inside `install --relay` (which waits by that 
 - The device locked or asleep, on a cable charger, or an iPad. (A device on cellular alone doesn't
   take these connections: see the roamrunctl README.)
 - A relay on Windows, or run as a service.
-- macOS or Windows runners, or a self-hosted runner.
+- macOS or Windows runners with this page's steps (the action ran on `macos-15`, as its README
+  says), or a self-hosted runner.
 - A Tailscale policy narrowed to `tag:ci`'s needs.
 - An `.ipa` larger than 1 MB from CI, and whether the app's data survives an install over it.
 - A Mac beside the device that CI reaches by SSH and that installs with `xcrun devicectl`.

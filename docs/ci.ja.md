@@ -17,6 +17,21 @@ GitHub がホストするランナーで動く GitHub Actions のジョブから
 
 このページのジョブは、アプリのビルドや署名をしません。CI には、そのデバイス向けに署名済みの `.ipa`（そのデバイスを含む開発用プロファイルで署名したもの）が必要です。`roamrunctl` が確かめるのはアーカイブの構成だけで、署名は確かめずにそのままインストールします。下の実行では、ジョブは自分のリポジトリのリリースから `.ipa` を取得しました（`gh release download`）。
 
+## action を使う
+
+GitHub Action の [mh-mobile/roamrun-action](https://github.com/mh-mobile/roamrun-action) を使うと、どちらのやり方も 1 つのステップで書けます。Tailscale のステップのあとに置きます。この action は、roamrunctl（既定では 0.9.0）を RoamRun のリリースから取得し、`roamrunctl-SHA256SUMS` と照らし合わせます。そのうえで、既定ではインストールして起動します。ランナーで動かすなら `key import -` と `install --launch`、relay に頼むなら `install --relay … --launch` を使います。relay の側も 0.9.0 である必要があります。使う前に、このページにある準備をしておきます。[Tailscale のタグと OAuth クライアント](#tailscaleタグと-oauth-クライアント)と、[CI 用のペアリング](#ci-用のペアリング)（シークレットを `key` に渡します）か [relay](#relay-に頼む) のどちらかです。
+
+```yaml
+- uses: mh-mobile/roamrun-action@v1
+  with:
+    key: ${{ secrets.ROAMRUN_CI_KEY }}   # relay に頼むなら、key: の代わりに relay:、token:、device: を書く
+    ipa: build/MyApp.ipa
+```
+
+Linux と macOS のランナーで動きます。macOS では、MagicDNS が有効なとき、Tailscale のアクションがシステムの DNS を `100.100.100.100` に切り替えました。試した tailnet では、そのあと github.com の名前を引けなくなりました。2 つのステップの間に置いて、ランナーのもとの DNS に戻す 1 行は、action の README にあります。入力の一覧と action で試したことは、[その README](https://github.com/mh-mobile/roamrun-action#readme) にあります。インストールだけ、または起動だけにする入力もあります。
+
+action が実行するのは、[ランナーの手順](#ランナーの手順)と [relay を呼ぶ手順](#relay-を呼ぶ手順)の 0.9.0 の形です。このページの残りは、準備と、action を使わずに実行した記録です。
+
 ## 実行した環境と結果
 
 roamrunctl 0.8.1 での CI からの実行は、どれも 2026-10-22（UTC）です。0.9.0 での実行は[あとに](#roamrunctl-090-での-ci-からの実行)まとめました。
@@ -270,7 +285,7 @@ roamrunctl 0.8.1 には、relay に頼むコマンドがありません。relay 
 
 - デバイスがロックされている、またはスリープしている場合。ケーブルでの充電。iPad での実行。（モバイル通信だけでつながっているデバイスは、こうした接続を受け付けません。roamrunctl の README にあるとおりです。）
 - Windows の relay。relay をサービスとして動かすこと。
-- macOS や Windows のランナー。セルフホストのランナー。
+- このページの手順での macOS や Windows のランナー（action は `macos-15` で動きました。その README にあります）。セルフホストのランナー。
 - `tag:ci` に必要な先だけに絞った Tailscale のポリシー。
 - CI からの 1 MB より大きい `.ipa`。上書きでインストールしたときに、アプリのデータが残るかどうか。
 - デバイスのそばの Mac に CI から SSH でつなぎ、`xcrun devicectl` でインストールするやり方。
