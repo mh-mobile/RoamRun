@@ -255,7 +255,10 @@ believed the first time it is used — use it only if the user named it.
   tap, swipe, type or paste, a tap or swipe needs a new look. `press` isn't held to a look and
   goes to whatever is on the screen: look before it too. A
   call that fails may or may not have reached the device — look before doing it again.
-  A call you take back before its turn isn't made.
+  A call you take back before its turn isn't made. On an iPhone with two screens, opened
+  (tried: a foldable one on iOS 27.1), the first tap or swipe of an `mcp` run does nothing (and,
+  as seen with RoamRun on a Mac, the first after the device is opened); the next one works: if
+  the look after one shows nothing changed, tap again by that look.
   These press what is really there — don't tap what spends money, posts, sends, deletes
   or signs in unless the user asked for exactly that.
 
