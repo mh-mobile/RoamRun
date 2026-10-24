@@ -1,7 +1,6 @@
 //! Holding a pairing with a device and using it: what is saved here, and the commands on it.
 
 use std::io::Write;
-use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -291,7 +290,7 @@ fn import(file: &Path, name: Option<String>, sealed: bool, ask: impl FnOnce(&str
 }
 
 fn open(saved: &Saved) -> Result<Device, String> {
-    let answers = |port: u16, within: u64| format!("{}:{port}", saved.ip).parse::<SocketAddr>().is_ok_and(|at| TcpStream::connect_timeout(&at, Duration::from_millis(within)).is_ok());
+    let answers = |port: u16, within: u64| roamrun_device::proxy::reach(&saved.ip, port, Duration::from_millis(within)).is_ok();
     // The port it was saved with is given the time a device that slept takes; the others are asked together.
     let mut first = None;
     if answers(saved.port, 2500) {

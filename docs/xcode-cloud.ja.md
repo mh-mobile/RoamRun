@@ -2,7 +2,7 @@
 
 <p align="center"><a href="xcode-cloud.md">English</a> | 日本語</p>
 
-Xcode Cloud のビルドから、アーカイブしたアプリを自分の iPhone にインストールして起動できます。Tailscale 越しに、手元の relay を経由します。プロジェクトにスクリプト（`ci_scripts/ci_post_xcodebuild.sh`）を置きます。このスクリプトが tailnet に参加し、relay の `roamrunctl mcp --http` を呼びます。スクリプトは Tailscale を root なしの userspace モードで動かすので、tailnet へは Tailscale の SOCKS5 プロキシを通ります。roamrunctl にはプロキシを通す方法がありません。そのため、[GitHub Actions の手順](ci.ja.md)の 2 つのやり方のうち relay に頼むほうを使い、relay は `curl` で呼びます。
+Xcode Cloud のビルドから、アーカイブしたアプリを自分の iPhone にインストールして起動できます。Tailscale 越しに、手元の relay を経由します。プロジェクトにスクリプト（`ci_scripts/ci_post_xcodebuild.sh`）を置きます。このスクリプトが tailnet に参加し、relay の `roamrunctl mcp --http` を呼びます。スクリプトは Tailscale を root なしの userspace モードで動かすので、tailnet へは Tailscale の SOCKS5 プロキシを通ります。roamrunctl 0.9.0 にはプロキシを通す方法がありません。そのため、[GitHub Actions の手順](ci.ja.md)の 2 つのやり方のうち relay に頼むほうを使い、relay は `curl` で呼びます。0.10.0 からは roamrunctl が HTTP プロキシを通せるので、どちらのやり方も使えます（[roamrunctl そのものを使う](#roamrunctl-そのものを使う0100)）。
 
 auth key を持つ人は、`tag:ci` として tailnet へ参加でき、ポリシーがそのタグに許す範囲のマシンへ届きます。ポリシーが「すべて許可」なら、すべてのマシンです（[GitHub Actions の手順](ci.ja.md#tailscaleタグと-oauth-クライアント)を参照）。relay のトークンもあれば、relay が動いている間、デバイスを操作できます。どちらもワークフローの環境に入ります。そのため、ビルドを始められる人や、ワークフローがビルドするブランチにコミットできる人も、同じことができます。スクリプトは、どの変数も出力できるからです。止めるには、管理画面で鍵を取り消し、新しいトークンで relay を起動し直します。
 
@@ -116,9 +116,36 @@ call launch "{\"device\":\"$RELAY_DEVICE\",\"bundle\":\"$CI_BUNDLE_ID\"}" > /dev
 
 relay への呼び出しは、どれも Tailscale の SOCKS5 プロキシ（`socks5h://127.0.0.1:1055`）を通ります。relay は、トークンと、呼び出し元が `tag:ci` であることを確かめます。スクリプトは、`install`、`install_status`、`launch` への relay の答えを出力します（アップロードの答えは、sha256 が違うときだけです）。relay がエラーを返したときや、インストールが 10 分で終わらないときは、ビルドを失敗にします。最後に Tailscale からログアウトし、ephemeral のマシンが tailnet から消えるようにします。
 
+## roamrunctl そのものを使う（0.10.0）
+
+0.10.0 からは、roamrunctl が `ROAMRUNCTL_PROXY` の指す HTTP プロキシを通せます。userspace で動く Tailscale は、tailnet へのそうしたプロキシを出せます（`--outbound-http-proxy-listen`）。そのため、スクリプトで roamrunctl そのものを動かせます。relay を経由してもよく、デバイスの鍵をビルドのマシンに置いて relay なしで使うこともできます。この変更のビルドで、2026-10-24 に Xcode Cloud から両方を試しました。リポジトリ、アプリ、デバイス、relay は上と同じです。上のスクリプトと違うのは次の行で、relay を `curl` で呼ぶ部分（`token=` から最後まで）は roamrunctl に置き換えました。
+
+```bash
+rr="$CI_PRIMARY_REPOSITORY_PATH/bin/roamrunctl"
+"$bin/tailscaled" --tun=userspace-networking --socket="$t/sock" --statedir="$t/state" \
+  --outbound-http-proxy-listen=127.0.0.1:1056 > "$t/log" 2>&1 &
+# … tailscale up は上と同じ …
+export ROAMRUNCTL_PROXY=http://127.0.0.1:1056
+
+# Through the relay.
+ROAMRUNCTL_TOKEN="$RELAY_TOKEN" "$rr" install "$RELAY_DEVICE" "$ipa" --relay "$RELAY" --launch
+
+# With the key here, no relay.
+export XDG_CONFIG_HOME="$t/config"
+( umask 077 && printf '%s' "$ROAMRUN_KEY" | "$rr" key import - --as dev )
+"$rr" install dev "$ipa" --launch
+"$rr" look dev "$t/look.png"
+```
+
+- relay 経由：インストールして起動しました。10 秒です。
+- 鍵を置いて relay なし：`key import` のあと、インストールして起動するまで 14 秒でした。そのあとの `look` は 8 秒です。鍵は、RoamRun の入った Mac で作りました（`roamrun key create iPhone ~/xcc-key.json --as xcc`）。それを Secret の変数 `ROAMRUN_KEY` に入れました。
+- `$rr` は、この変更のビルドの roamrunctl で、リポジトリに入れました（`bin/roamrunctl`）。0.10.0 のリリース後は、GitHub Action と同じく、RoamRun のリリースからアーカイブを取得する形になります。その形はまだ試していません。
+
+鍵をビルドのマシンに置く場合、変数は `TS_AUTHKEY` と `ROAMRUN_KEY` で、どちらも Secret にします。`RELAY`、`RELAY_TOKEN`、`RELAY_DEVICE` は使いません。tailnet のポリシーは、relay のポートだけでなく、デバイスそのものに `tag:ci` が届くことを許す必要があります。ポートは [GitHub Actions の手順](ci.ja.md#tailscaleタグと-oauth-クライアント)に書いたとおりです。止める relay も、作り直すトークンもありません。`ROAMRUN_KEY` を読めてデバイスに届く人は、デバイスのデベロッパモードの一覧からその名前を削除するまで（設定 › プライバシーとセキュリティ › デベロッパモード）、デバイスを操作できます。
+
 ## 試していないこと
 
-- Xcode Cloud の上で roamrunctl そのものを動かし、relay を使わずにビルドのマシンに鍵を置くこと。roamrunctl にはまだプロキシを通す方法がないので、いまのままではできません。
+- roamrunctl 0.10.0 をリリースから取得するスクリプト（今回は、この変更のビルドをリポジトリに入れて使いました）。
 - auth key の代わりに OAuth クライアントを使うこと。`tag:ci` に必要な先だけに絞った Tailscale のポリシー。
 - Xcode Cloud のほかの Xcode や macOS の版。ほかの Distribution Preparation の設定。大きなアプリ。iPad。
 - プルリクエストやスケジュールでビルドを始めること。
