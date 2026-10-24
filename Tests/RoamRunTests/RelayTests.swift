@@ -973,22 +973,27 @@ extension TimingSensitive.RelayOnLocalhost {
             "minVer": "17"
         ]
         var said: [Introducer.Event] = []
+        var (listening, stopped) = (false, false)
         let standIn = Introducer(.init(offer: .init(port: 58701, txt: txt), farIP: "127.0.0.1", localIP: "127.0.0.1",
                                        interface: "lo0", accept: .ownAddress, deadline: 0.1),
                                  record: record, addressNow: {
                                      "127.0.0.1"
+                                 }, listening: {
+                                     listening = true
+                                     while !stopped {
+                                         await Task.yield()
+                                     }
                                  }) {
             said.append($0)
         }
-        var entered = false
         let starting = Task { @MainActor in
-            entered = true
             try await standIn.start()
         }
-        while !entered {
+        while !listening {
             await Task.yield()
         }
         await standIn.end(.stopped)
+        stopped = true
         _ = try? await starting.value
         try await Task.sleep(for: .milliseconds(150))
         #expect(!record.announced)
