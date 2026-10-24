@@ -56,9 +56,10 @@ char *rr_device_info(RRDevice *device);
 char *rr_device_alive(RRDevice *device);
 
 /**
- * JSON: {"ok":true,"width":…,"height":…}, the primary display's size in pixels as the device
- * holds it (portrait for a phone), by the device's own word. A frame of the stream can be a
- * little larger: padded on the right and at the bottom. Free with rr_string_free.
+ * JSON: {"ok":true,"width":…,"height":…}, the size in pixels of the display that is on (marked
+ * active, else primary) as the device holds it (portrait for a phone), by the device's own word.
+ * A frame of the stream can be a little larger: padded on the right and at the bottom. Free with
+ * rr_string_free.
  */
 char *rr_device_screen(RRDevice *device);
 

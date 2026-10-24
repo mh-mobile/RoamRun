@@ -6361,7 +6361,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ################################################################################
-tokio 1.53.2 (MIT)
+tokio 1.53.3 (MIT)
 tokio-util 0.7.20 (MIT)
 #-------------------------------------------------------------------------------
 MIT License

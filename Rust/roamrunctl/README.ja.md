@@ -38,7 +38,20 @@ Expand-Archive -Force roamrunctl.zip .
 
 ARM 版の Windows では、ダウンロードするファイル名と実行ファイルのパスの `x86_64` を、どちらも `aarch64` に変えてください。バイナリにコード署名はありません。以降のコマンドは、この実行ファイルのパスで実行するか、フォルダを `PATH` に追加して実行します。
 
-macOS と、Homebrew を導入済みの Linux では、次のコマンドでインストールできます。
+macOS では、次のコマンドで `~/.local/bin` に入ります。Apple シリコンの例です。
+
+```sh
+mkdir -p ~/.local/bin && cd "$(mktemp -d)"
+curl -fsSLO https://github.com/mh-mobile/RoamRun/releases/latest/download/roamrunctl-macos-aarch64.tar.gz
+curl -fsSL https://github.com/mh-mobile/RoamRun/releases/latest/download/roamrunctl-SHA256SUMS \
+  | shasum -a 256 -c --ignore-missing \
+  && tar -xzf roamrunctl-macos-aarch64.tar.gz -C ~/.local/bin --strip-components 1 roamrunctl-macos-aarch64/roamrunctl
+~/.local/bin/roamrunctl --version
+```
+
+`shasum` がアーカイブをリリースの `roamrunctl-SHA256SUMS` と照合し、一致したときだけ `tar` が取り出します。Intel の Mac では、3 か所の `aarch64` を `x86_64` に変えてください。Linux と同じく、`~/.local/bin` を `PATH` に追加するか、フルパスで実行します。バイナリには Developer ID の署名も公証もありません。`curl` でダウンロードした場合は、アーカイブと取り出したファイルのどちらにも `com.apple.quarantine` 属性は付かず、そのまま実行できます。この属性を手でアーカイブに付けて試したところ、`tar` で取り出したバイナリにも付きました。macOS 27 の Apple シリコンの Mac では、どちらのバイナリも起動したとたんに終了させられました（終了ステータス 137）。バイナリに `xattr -d com.apple.quarantine` を実行したあとは、実行できました。上の手順で入れた場合は、`xattr -d com.apple.quarantine ~/.local/bin/roamrunctl` です。ブラウザでのダウンロードは試していません。
+
+Homebrew では、macOS でも Linux でも、次のコマンドでインストールできます。`roamrunctl` はソースからビルドされます。
 
 ```sh
 brew install mh-mobile/tap/roamrunctl
@@ -144,7 +157,7 @@ sequenceDiagram
 ```sh
 roamrunctl devices                    # ここで使えるデバイスの一覧
 roamrunctl look phone shot.png        # スクリーンショットを PNG で保存（長辺は最大 1280 ピクセル）
-roamrunctl install phone App.ipa      # 署名済みの .app フォルダも指定できる
+roamrunctl install phone App.ipa      # 署名済みの .app フォルダも指定できる。--launch で続けて起動する
 roamrunctl launch phone com.example.App
 ```
 
@@ -181,8 +194,10 @@ roamrunctl mcp --http 9090 --allow tag:codex phone
 - `--allow` で、呼び出せる相手を指定します。タグの付いたマシンなら `tag:<名前>` です。クラウド環境のマシンには、渡した認証キーのタグが付きます。人が使うマシンなら、そのログイン名（`someone@example.com`）で指定します。呼び出しのたびに、相手が誰かを Tailscale に尋ねます（`tailscale whois`）。マシンの名前では指定できません。このマシン自身からの呼び出しは、トークンがない限り断ります。
 - `--token-file <ファイル>` を付けると、どの要求にも `Authorization: Bearer <トークン>` が必要になります。ファイルは、あなただけが読めるものにしてください。トークンは 32 文字以上です。
 - 一覧に出し、操作できるのは、指定したデバイスだけです。root では起動しません（Windows では確かめません）。
-- `--allow-install` を付けると、`install` も使えます。先に `.ipa` を `http://<そのアドレス>:9090/upload` に送ります（`curl -T App.ipa`）。その答えにある `upload` の id と `sha256` を、`install` に渡します。大きさの上限は 1024 MiB で、`--max-upload <MiB>` で変えられます。保持するアップロードは 1 つで、インストールできるのは送った呼び出し元だけです。インストールが終わったとき、30 分使われなかったとき、Ctrl-C で止めたときに消します。どの呼び出し元からでも、次のアップロードが届き始めたときにも消します。このフラグがなければ、HTTP でのインストールはできません。
+- `--allow-install` を付けると、`install` も使えます。先に `.ipa` を `http://<そのアドレス>:9090/upload` に送ります（`curl -T App.ipa`）。その答えにある `upload` の id と `sha256` を、`install` に渡します。大きさの上限は 1024 MiB で、`--max-upload <MiB>` で変えられます。保持するアップロードは 1 つで、インストールできるのは送った呼び出し元だけです。インストールが終わったとき、30 分使われなかったとき、Ctrl-C で止めたときに消します。どの呼び出し元からでも、次のアップロードが届き始めたときにも消します。このフラグがなければ、HTTP でのインストールはできません。CI のランナーなど、roamrunctl のあるマシンからは、`roamrunctl install phone App.ipa --relay <そのアドレス>:9090` を使えます。`--launch` も付けられます。アップロードからインストールの完了までを、このコマンドが待ちます。トークンは `ROAMRUNCTL_TOKEN` か `--token-file` で渡します。起動だけなら `roamrunctl launch phone <bundle id> --relay <そのアドレス>:9090` です。
 - 画像や、入力・貼り付けした文字、アップロードした `.ipa` は、途中にあるものを通ります。クラウド環境のプロキシには、画像も文字もアップロードもトークンも見えます。
+
+GitHub Actions のジョブからインストールして起動する手順は、[docs/ci.ja.md](../../docs/ci.ja.md) にあります。ランナーで roamrunctl を動かすやり方と、デバイスのそばのマシンでこのサーバーを動かして頼むやり方を載せています。
 
 エージェントに使い方を教える[スキル](https://github.com/mh-mobile/RoamRun/tree/main/skills/roamrunctl)も用意しています（`npx skills add mh-mobile/RoamRun`）。スキルを入れても、MCP サーバーの登録や起動は行われません。
 

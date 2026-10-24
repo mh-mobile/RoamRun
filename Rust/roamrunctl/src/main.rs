@@ -13,6 +13,7 @@ mod secret;
 mod sign;
 mod lines;
 mod relay;
+mod remote;
 mod tailscale;
 mod wire;
 
@@ -62,19 +63,29 @@ enum Command {
         /// Where to save it (else a new file in the temporary folder)
         file: Option<std::path::PathBuf>,
     },
-    /// Install an app built and signed for the device: an .ipa, or an .app folder
+    /// Install an app built and signed for the device: an .ipa, or an .app folder; with --relay, an .ipa through `roamrunctl mcp --http` on another machine
     Install {
-        /// The device, as `roamrunctl devices` names it
+        /// The device, as `roamrunctl devices` names it (with --relay, as the relay names it)
         name: String,
         /// The .ipa or .app folder, on this machine
         path: std::path::PathBuf,
+        /// Then launch it, by the bundle identifier in it
+        #[arg(long)]
+        launch: bool,
+        #[command(flatten)]
+        relay: Relayed,
+        /// With --relay, the most seconds this waits for the app to be in (else what the relay gives the upload and the install, and a minute more)
+        #[arg(long, requires = "relay")]
+        timeout: Option<u64>,
     },
     /// Launch an app on the device (one already running is ended first)
     Launch {
-        /// The device, as `roamrunctl devices` names it
+        /// The device, as `roamrunctl devices` names it (with --relay, as the relay names it)
         name: String,
         /// The app's bundle identifier
         bundle: String,
+        #[command(flatten)]
+        relay: Relayed,
     },
     /// The device's commands as MCP tools: over stdin/stdout (for an agent's MCP config), or with --http over HTTP on this machine's Tailscale address, until Ctrl-C
     Mcp {
@@ -105,6 +116,29 @@ enum Command {
         #[arg(long = "for")]
         machine: String,
     },
+}
+
+/// `install` and `launch` through a relay: `roamrunctl mcp --http` on a machine that holds the device's key, anywhere on
+/// the tailnet.
+#[derive(Args)]
+pub struct Relayed {
+    /// The relay's address and port, as `roamrunctl mcp --http` printed them (100.x.y.z:9090)
+    #[arg(long, env = "ROAMRUNCTL_RELAY")]
+    pub relay: Option<String>,
+    /// The relay's token, in a file of the owner's alone (else ROAMRUNCTL_TOKEN holds it)
+    #[arg(long = "token-file", requires = "relay")]
+    pub token_file: Option<std::path::PathBuf>,
+}
+
+impl Relayed {
+    /// The relay and its token file, where one is named: an empty one (ROAMRUNCTL_RELAY set to nothing) is none.
+    pub fn given(self) -> Result<Option<(String, Option<std::path::PathBuf>)>, String> {
+        match (self.relay.filter(|relay| !relay.trim().is_empty()), self.token_file) {
+            (Some(relay), token_file) => Ok(Some((relay, token_file))),
+            (None, Some(_)) => Err("--token-file goes with --relay, and ROAMRUNCTL_RELAY is empty".into()),
+            (None, None) => Ok(None),
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -736,6 +770,17 @@ async fn device_seen(announcement: &announce::Announcement, seen: &Seen, lan: Ip
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_empty_relay_is_none() {
+        let given = |args: &[&str]| match Cli::try_parse_from(args).map(|cli| cli.command) {
+            Ok(Command::Launch { relay, .. }) => relay.given(),
+            _ => Err("not parsed".into()),
+        };
+        assert_eq!(given(&["roamrunctl", "launch", "a", "b", "--relay", ""]), Ok(None));
+        assert_eq!(given(&["roamrunctl", "launch", "a", "b", "--relay", "100.64.0.1:9090"]).map(|g| g.map(|(relay, _)| relay)), Ok(Some("100.64.0.1:9090".into())));
+        assert!(given(&["roamrunctl", "launch", "a", "b", "--relay", " ", "--token-file", "t"]).is_err());
+    }
 
     #[test]
     fn subnets() {

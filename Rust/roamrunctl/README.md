@@ -59,7 +59,28 @@ path. The binaries are not code-signed. For the commands
 below, use this executable path or add its folder to your `PATH` so that `roamrunctl` works
 by name.
 
-**macOS**, or Linux with Homebrew:
+**macOS** (Apple silicon shown), into `~/.local/bin`:
+
+```sh
+mkdir -p ~/.local/bin && cd "$(mktemp -d)"
+curl -fsSLO https://github.com/mh-mobile/RoamRun/releases/latest/download/roamrunctl-macos-aarch64.tar.gz
+curl -fsSL https://github.com/mh-mobile/RoamRun/releases/latest/download/roamrunctl-SHA256SUMS \
+  | shasum -a 256 -c --ignore-missing \
+  && tar -xzf roamrunctl-macos-aarch64.tar.gz -C ~/.local/bin --strip-components 1 roamrunctl-macos-aarch64/roamrunctl
+~/.local/bin/roamrunctl --version
+```
+
+`shasum` checks the archive against the release's `roamrunctl-SHA256SUMS`, and `tar` runs only if
+it matches. On an Intel Mac, replace `aarch64` with `x86_64` in all three places. As on Linux,
+add `~/.local/bin` to your `PATH` or use the full path. The binaries are not signed with a
+Developer ID or notarized. Downloaded with `curl`, the archive and the files taken out of it
+carry no `com.apple.quarantine` attribute, and the binary runs. With that attribute set by hand
+on the archive, `tar` passed it on to the binary, and on an Apple silicon Mac with macOS 27
+either binary was killed as soon as it started (exit status 137). After
+`xattr -d com.apple.quarantine` on the binary, it ran; installed as above, that is
+`xattr -d com.apple.quarantine ~/.local/bin/roamrunctl`. A download in a browser was not tried.
+
+With Homebrew, on macOS or Linux (it builds `roamrunctl` from source):
 
 ```sh
 brew install mh-mobile/tap/roamrunctl
@@ -191,7 +212,7 @@ machine's Tailscale name in the app.
 ```sh
 roamrunctl devices                    # list devices available here
 roamrunctl look phone shot.png        # save a PNG screenshot (longer side at most 1280 pixels)
-roamrunctl install phone App.ipa      # or a signed .app folder
+roamrunctl install phone App.ipa      # or a signed .app folder; --launch then launches it
 roamrunctl launch phone com.example.App
 ```
 
@@ -256,9 +277,15 @@ roamrunctl mcp --http 9090 --allow tag:codex phone
   is given. One upload is kept, and only its sender can install it. It is removed when the
   install ends, after 30 minutes unused, at Ctrl-C, or when another upload begins to come in,
   from any caller. Without the flag there is no install over
-  HTTP.
+  HTTP. From a machine with roamrunctl (a CI runner, say),
+  `roamrunctl install phone App.ipa --relay <that address>:9090 [--launch]` does the upload,
+  the install and the wait, with the token from `ROAMRUNCTL_TOKEN` or `--token-file`; and
+  `roamrunctl launch phone <bundle id> --relay <that address>:9090` launches.
 - What is shown and sent passes through whatever lies between: a cloud's proxy sees the
   images, the text typed or pasted, what is uploaded, and the token.
+
+Installing and launching from a GitHub Actions job, with roamrunctl on the runner or through
+`mcp --http` on a machine beside the device, is in [docs/ci.md](../../docs/ci.md).
 
 An optional [agent skill](https://github.com/mh-mobile/RoamRun/tree/main/skills/roamrunctl)
 provides instructions: `npx skills add mh-mobile/RoamRun`. Installing the skill does not

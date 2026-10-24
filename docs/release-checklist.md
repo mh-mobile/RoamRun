@@ -269,8 +269,8 @@ tunnel and Xcode has to run again.
     with Ctrl-C while announced: nothing left announced (`dns-sd -B
     _remotepairing-pairable-host._tcp` on a Mac there). On a machine with wired and Wi‑Fi both on
     the device's network, if one is at hand: it says its other address, and `--on <that>` takes
-    it. After the release: each install command of roamrunctl's README — Linux, Windows, `brew
-    install mh-mobile/tap/roamrunctl`, `cargo install` — then `roamrunctl --version`.
+    it. After the release: each install command of roamrunctl's README — Linux, Windows, macOS,
+    `brew install mh-mobile/tap/roamrunctl`, `cargo install` — then `roamrunctl --version`.
 
 30a. roamrunctl holding a device (when `Rust/roamrunctl` or `Rust/RoamRunDevice` changed). Pairing
     commands run by yourself, in a terminal of your own. On a Linux machine on the device's Wi‑Fi:
@@ -342,6 +342,8 @@ tunnel and Xcode has to run again.
     `sha256` → answered at once; `install_status` until it says installed. Ctrl-C → no
     `roamrunctl-uploads-*` left in the temporary folder (`ls "${TMPDIR:-/tmp}"`; `dir %TEMP%` on
     Windows).
+    An app in front: with the device on its wireless charger and the app just launched in front,
+    `roamrunctl install` of it again → installed in seconds, not waiting.
     Last, as it takes the place of that pairing on the device: the device paired once more, under
     another name and with `--passphrase` (as in 30a). Both names given → refused as one device
     (after its passphrase). The new name alone: its passphrase asked for once as it starts
