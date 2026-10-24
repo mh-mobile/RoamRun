@@ -197,7 +197,7 @@ roamrunctl mcp --http 9090 --allow tag:codex phone
 - `--allow-install` を付けると、`install` も使えます。先に `.ipa` を `http://<そのアドレス>:9090/upload` に送ります（`curl -T App.ipa`）。その答えにある `upload` の id と `sha256` を、`install` に渡します。大きさの上限は 1024 MiB で、`--max-upload <MiB>` で変えられます。保持するアップロードは 1 つで、インストールできるのは送った呼び出し元だけです。インストールが終わったとき、30 分使われなかったとき、Ctrl-C で止めたときに消します。どの呼び出し元からでも、次のアップロードが届き始めたときにも消します。このフラグがなければ、HTTP でのインストールはできません。CI のランナーなど、roamrunctl のあるマシンからは、`roamrunctl install phone App.ipa --relay <そのアドレス>:9090` を使えます。`--launch` も付けられます。アップロードからインストールの完了までを、このコマンドが待ちます。トークンは `ROAMRUNCTL_TOKEN` か `--token-file` で渡します。起動だけなら `roamrunctl launch phone <bundle id> --relay <そのアドレス>:9090` です。
 - 画像や、入力・貼り付けした文字、アップロードした `.ipa` は、途中にあるものを通ります。クラウド環境のプロキシには、画像も文字もアップロードもトークンも見えます。
 
-GitHub Actions のジョブからインストールして起動する手順は、[docs/ci.ja.md](../../docs/ci.ja.md) にあります。ランナーで roamrunctl を動かすやり方と、デバイスのそばのマシンでこのサーバーを動かして頼むやり方を載せています。
+GitHub Actions のジョブからインストールして起動する手順は、[docs/ci.ja.md](../../docs/ci.ja.md) にあります。ランナーで roamrunctl を動かすやり方と、デバイスのそばのマシンでこのサーバーを動かして頼むやり方を載せています。Bitrise では、Step の [mh-mobile/bitrise-step-roamrun](https://github.com/mh-mobile/bitrise-step-roamrun) が、tailnet への参加からインストールと起動までを行います。roamrunctl 0.10.0 以降を使います。手順は [docs/bitrise.ja.md](../../docs/bitrise.ja.md) にあります。
 
 HTTP プロキシを通してしか tailnet に届かないマシンでは、`ROAMRUNCTL_PROXY` にプロキシを指定します（0.10.0 以降）。たとえば、userspace で Tailscale を動かす Xcode Cloud のビルドでは、次のようにします。
 

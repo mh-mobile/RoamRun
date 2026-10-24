@@ -287,6 +287,8 @@ roamrunctl mcp --http 9090 --allow tag:codex phone
 Installing and launching from a GitHub Actions job, with roamrunctl on the runner or through
 `mcp --http` on a machine beside the device, is in [docs/ci.md](../../docs/ci.md), and the
 GitHub Action [mh-mobile/roamrun-action](https://github.com/mh-mobile/roamrun-action) does it in one step.
+On Bitrise, the Step [mh-mobile/bitrise-step-roamrun](https://github.com/mh-mobile/bitrise-step-roamrun)
+does the same and joins the tailnet itself (roamrunctl 0.10.0 or later): [docs/bitrise.md](../../docs/bitrise.md).
 
 A machine that reaches its tailnet only through an HTTP proxy, such as an Xcode Cloud build
 running Tailscale in userspace (`tailscaled --tun=userspace-networking
