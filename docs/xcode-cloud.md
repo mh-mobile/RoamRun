@@ -5,9 +5,10 @@
 An Xcode Cloud build can install the app it archived on your iPhone and launch it, through a relay
 of yours, over Tailscale. A script in the project (`ci_scripts/ci_post_xcodebuild.sh`) joins the
 tailnet and calls the relay's `roamrunctl mcp --http`. It runs Tailscale without root, in userspace,
-so it reaches the tailnet through Tailscale's SOCKS5 proxy; roamrunctl has no way to go through a
-proxy, so of [the GitHub Actions guide](ci.md)'s two ways this is the relay's, with `curl` calling
-the relay.
+so it reaches the tailnet through Tailscale's SOCKS5 proxy; roamrunctl 0.9.0 has no way to go
+through a proxy, so of [the GitHub Actions guide](ci.md)'s two ways this is the relay's, with
+`curl` calling the relay. From 0.10.0, roamrunctl goes through an HTTP proxy, and both ways work:
+[With roamrunctl itself](#with-roamrunctl-itself-0100).
 
 Whoever holds the auth key can join your tailnet as `tag:ci` and reach whatever your policy lets
 that tag reach (with a policy that allows everything, every machine: see
@@ -146,10 +147,51 @@ relay checks the token and that the caller is `tag:ci`. The script prints the re
 build when the relay gives an error or the install doesn't end in 10 minutes. At its end it logs out
 of Tailscale, so that the ephemeral machine leaves the tailnet.
 
+## With roamrunctl itself (0.10.0)
+
+From 0.10.0, roamrunctl goes through the HTTP proxy `ROAMRUNCTL_PROXY` names, and Tailscale in
+userspace gives one into the tailnet (`--outbound-http-proxy-listen`). The script can then run
+roamrunctl itself: through the relay, or with the device's key on the build machine and no relay.
+A build of that change ran both on Xcode Cloud on 2026-10-24, from the same repository, app,
+device and relay as above. Its script differed from the one above in these lines, and the part
+that calls the relay with `curl` (from `token=` to the end) was replaced by roamrunctl:
+
+```bash
+rr="$CI_PRIMARY_REPOSITORY_PATH/bin/roamrunctl"
+"$bin/tailscaled" --tun=userspace-networking --socket="$t/sock" --statedir="$t/state" \
+  --outbound-http-proxy-listen=127.0.0.1:1056 > "$t/log" 2>&1 &
+# … tailscale up, as above …
+export ROAMRUNCTL_PROXY=http://127.0.0.1:1056
+
+# Through the relay.
+ROAMRUNCTL_TOKEN="$RELAY_TOKEN" "$rr" install "$RELAY_DEVICE" "$ipa" --relay "$RELAY" --launch
+
+# With the key here, no relay.
+export XDG_CONFIG_HOME="$t/config"
+( umask 077 && printf '%s' "$ROAMRUN_KEY" | "$rr" key import - --as dev )
+"$rr" install dev "$ipa" --launch
+"$rr" look dev "$t/look.png"
+```
+
+- Through the relay: installed and launched, 10 s.
+- With the key, no relay: after `key import`, installed and launched in 14 s, and the look took
+  8 s. The key was made on a Mac with RoamRun (`roamrun key create iPhone ~/xcc-key.json --as
+  xcc`) and given as the Secret variable `ROAMRUN_KEY`.
+- `$rr` was that build of roamrunctl, committed to the repository (`bin/roamrunctl`). With 0.10.0
+  released, a script would download the archive from RoamRun's release instead, as the GitHub
+  Action does; that wasn't run.
+
+With the key on the build machine, the variables are `TS_AUTHKEY` and `ROAMRUN_KEY`, both Secret;
+`RELAY`, `RELAY_TOKEN` and `RELAY_DEVICE` aren't used. The tailnet's policy has to let `tag:ci`
+reach the device itself, on the ports [the GitHub Actions guide](ci.md#tailscale-a-tag-and-an-oauth-client)
+names, not only the relay's port. There is no relay to stop and no token to change: whoever can
+read `ROAMRUN_KEY` and reach the device can operate it until its name is removed from the device's
+Developer Mode list (Settings › Privacy & Security › Developer Mode).
+
 ## Not tried
 
-- roamrunctl itself on Xcode Cloud, with the key on the build machine and no relay: roamrunctl has no
-  way to go through a proxy yet, so this isn't possible as it is.
+- A script that downloads roamrunctl 0.10.0 from its release (a build of the change was committed
+  instead).
 - An OAuth client instead of an auth key; a Tailscale policy narrowed to `tag:ci`'s needs.
 - Other Xcode or macOS versions on Xcode Cloud, other Distribution Preparation settings, a larger
   app, an iPad.

@@ -2,7 +2,7 @@
 
 <p align="center"><a href="ci.md">English</a> | 日本語</p>
 
-GitHub がホストするランナーで動く GitHub Actions のジョブから、Tailscale 越しに自分の iPhone へアプリをインストールし、起動できます。リリース版の `roamrunctl` を、そのまま使います。Xcode Cloud からも、relay を経由すればできます（[xcode-cloud.ja.md](xcode-cloud.ja.md)）。ほかの CI サービスでは試していません。やり方は 2 つあります。
+GitHub がホストするランナーで動く GitHub Actions のジョブから、Tailscale 越しに自分の iPhone へアプリをインストールし、起動できます。リリース版の `roamrunctl` を、そのまま使います。Xcode Cloud からもできます（[xcode-cloud.ja.md](xcode-cloud.ja.md)）。Bitrise からは、Step を使ってできます（[bitrise.ja.md](bitrise.ja.md)）。ほかの CI サービスでは試していません。やり方は 2 つあります。
 
 | | ランナーで roamrunctl を動かす | relay に頼む |
 |---|---|---|

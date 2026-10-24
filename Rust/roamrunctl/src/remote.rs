@@ -66,13 +66,22 @@ impl Relay {
             _ => format!("the relay at {}: {e}", self.host),
         };
         let left = || until.checked_duration_since(Instant::now()).filter(|left| !left.is_zero()).ok_or_else(out);
-        // It listens on IPv4 alone: each IPv4 address the name gives is tried.
-        let mut stream = Err(format!("the relay at {}: no IPv4 address", self.host));
-        for at in self.host.to_socket_addrs().map_err(failed)?.filter(SocketAddr::is_ipv4) {
-            stream = TcpStream::connect_timeout(&at, CONNECT.min(left()?)).map_err(failed);
-            if stream.is_ok() { break }
-        }
-        let stream = stream?;
+        let stream = match roamrun_device::proxy::named() {
+            // Through the proxy named (ROAMRUNCTL_PROXY), which finds the relay itself.
+            Some(proxy) => {
+                let (name, port) = self.host.rsplit_once(':').and_then(|(name, port)| Some((name, port.parse().ok()?))).ok_or_else(out)?;
+                roamrun_device::proxy::through(proxy, name, port, CONNECT.min(left()?)).map_err(|e| format!("the relay at {}: {e}", self.host))?
+            }
+            // It listens on IPv4 alone: each IPv4 address the name gives is tried.
+            None => {
+                let mut stream = Err(format!("the relay at {}: no IPv4 address", self.host));
+                for at in self.host.to_socket_addrs().map_err(failed)?.filter(SocketAddr::is_ipv4) {
+                    stream = TcpStream::connect_timeout(&at, CONNECT.min(left()?)).map_err(failed);
+                    if stream.is_ok() { break }
+                }
+                stream?
+            }
+        };
         // Before the head is sent and the Expect waited on: no longer than what is left. (The body and the answer: `Bounded`.)
         let within = |most: Duration| -> Result<(), String> {
             let most = most.min(left()?);
