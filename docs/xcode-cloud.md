@@ -4,38 +4,42 @@
 
 An Xcode Cloud build can install the app it archived on your iPhone and launch it, through a relay
 of yours, over Tailscale. A script in the project (`ci_scripts/ci_post_xcodebuild.sh`) joins the
-tailnet without root and calls the relay's `roamrunctl mcp --http`. Only the relay way of
-[the GitHub Actions guide](ci.md) works here: Tailscale on Xcode Cloud runs without root, so the
-tailnet is reached through its SOCKS5 proxy, which roamrunctl can't use; the script calls the relay
-with `curl` instead.
+tailnet and calls the relay's `roamrunctl mcp --http`. It runs Tailscale without root, in userspace,
+so it reaches the tailnet through Tailscale's SOCKS5 proxy; roamrunctl has no way to go through a
+proxy, so of [the GitHub Actions guide](ci.md)'s two ways this is the relay's, with `curl` calling
+the relay.
 
-Whoever can start a build of the workflow, or read its environment, can operate the device for as
-long as the relay runs and the Tailscale key is valid.
+Whoever holds the auth key can join your tailnet as `tag:ci` and reach whatever your policy lets
+that tag reach (with a policy that allows everything, every machine: see
+[the GitHub Actions guide](ci.md#tailscale-a-tag-and-an-oauth-client)); with the relay's token as
+well, they can operate the device while the relay runs. Both are in the workflow's environment, so
+whoever can start its builds, or commit to a branch it builds (a script can print any variable),
+can too. Revoking the key in the admin console and restarting the relay with a new token ends it.
 
 ## What was run
 
-On 2026-10-24 (UTC), from a private repository holding an app made from Xcode's template:
+On 2026-10-24 (UTC), from a private repository holding a minimal SwiftUI app (its project made
+with XcodeGen, with a shared scheme):
 
-- Xcode Cloud: macOS 27.0.1, Xcode 27.1, a workflow started by hand, with an Archive action
-  (iOS, Distribution Preparation: None).
-- The relay: a MacBook Pro at home with roamrunctl 0.9.0 from Homebrew, serving an iPhone 15 Pro
-  (iOS 27.0), unlocked.
+- Xcode Cloud: macOS 27.0.1, Xcode 27.1, builds started by hand, with an Archive action (iOS,
+  Distribution Preparation: None).
+- The relay: a MacBook Pro with roamrunctl 0.9.0 from Homebrew, serving an iPhone 15 Pro (iOS 27.0).
 - The script below, as it is.
 
 The build archived the app, and the script installed and launched it on the iPhone: 8 s from the
 upload to the launch, the install 5 s of it, by the relay's log. Three runs of an earlier form of
-the script, which printed more, showed:
+the script, which printed more (two after a Build action, one after an Archive), showed:
 
 - No proxy settings in the script's environment (`HTTP_PROXY` and the like were unset), and
   Tailscale's control server reached directly.
-- UDP blocked: Tailscale connected through its DERP relay servers, over HTTPS (the nearest was New
+- UDP blocked (netcheck), so Tailscale connected through its DERP relay servers (the nearest was New
   York in one run, San Francisco and Los Angeles in the others). `tailscale ping` to the relay's
-  machine was answered through DERP (Tokyo), mostly in 130–190 ms, a few times in 0.7–1.8 s, and
-  printed "direct connection not established".
+  machine was answered through DERP (Tokyo), mostly in about 130–190 ms, a few times in 0.7–1.8 s,
+  and printed "direct connection not established".
 - Tailscale 1.104.1 from Homebrew (a bottle), and `tailscaled --tun=userspace-networking` started
   without root.
-- With Distribution Preparation "None", the archive still exported a development-signed `.ipa`
-  (`CI_DEVELOPMENT_SIGNED_APP_PATH`). Its profile listed 7 devices, the iPhone among them.
+- In the run with an Archive, Distribution Preparation "None" still exported a development-signed
+  `.ipa` (`CI_DEVELOPMENT_SIGNED_APP_PATH`). Its profile listed 7 devices, the iPhone among them.
 
 ## What it needs
 
@@ -70,9 +74,9 @@ the device. The iPhone here had been used for development with the team before, 
 | Name | Value | Secret |
 |---|---|---|
 | `TS_AUTHKEY` | the auth key | **on** |
-| `RELAY` | the relay's Tailscale address and port, `100.x.y.z:9090` | off |
+| `RELAY` | the relay's Tailscale address and port, `100.x.y.z:9090` (the server prints it as it starts) | off |
 | `RELAY_TOKEN` | the relay's token | **on** |
-| `RELAY_DEVICE` | the device as the relay names it | off |
+| `RELAY_DEVICE` | the device as the relay names it: the name given to `--allow-install` | off |
 
 Mark the two secrets as Secret: Xcode Cloud prints every variable that isn't, values included, at
 the start of the build's log. That happened once in these runs, and the key was revoked and the
@@ -136,15 +140,16 @@ printf '%s' "$status" | grep -q ' is installed on ' || { echo "not installed in 
 call launch "{\"device\":\"$RELAY_DEVICE\",\"bundle\":\"$CI_BUNDLE_ID\"}" > /dev/null
 ```
 
-The upload goes through Tailscale's SOCKS5 proxy (`socks5h://127.0.0.1:1055`); the relay checks
-the token and that the caller is `tag:ci`. The script prints each answer of the relay, and fails
-the build when the relay gives an error or the install doesn't end in 10 minutes. At its end it
-logs out of Tailscale, and the ephemeral machine leaves the tailnet.
+Every call to the relay goes through Tailscale's SOCKS5 proxy (`socks5h://127.0.0.1:1055`); the
+relay checks the token and that the caller is `tag:ci`. The script prints the relay's answers to
+`install`, `install_status` and `launch` (the upload's only when its sha256 differs), and fails the
+build when the relay gives an error or the install doesn't end in 10 minutes. At its end it logs out
+of Tailscale, so that the ephemeral machine leaves the tailnet.
 
 ## Not tried
 
-- roamrunctl itself on Xcode Cloud, and the key on the build machine (no relay): roamrunctl can't
-  go through a proxy.
+- roamrunctl itself on Xcode Cloud, with the key on the build machine and no relay: roamrunctl has no
+  way to go through a proxy yet, so this isn't possible as it is.
 - An OAuth client instead of an auth key; a Tailscale policy narrowed to `tag:ci`'s needs.
 - Other Xcode or macOS versions on Xcode Cloud, other Distribution Preparation settings, a larger
   app, an iPad.
