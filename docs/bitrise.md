@@ -5,10 +5,11 @@
 A Bitrise build can install the app it archived on your iPhone and launch it, over Tailscale, with
 the Bitrise Step [mh-mobile/bitrise-step-roamrun](https://github.com/mh-mobile/bitrise-step-roamrun).
 Bitrise's Step Library had no Tailscale Step when this was written, so this Step joins the tailnet
-itself: it installs Tailscale with Homebrew and runs it without root, in userspace, and gives roamrunctl Tailscale's HTTP proxy into the tailnet
-(`ROAMRUNCTL_PROXY`, roamrunctl 0.10.0 or later). Then it installs and launches in either of
-[the GitHub Actions guide](ci.md)'s two ways: with the device's key on the build machine, or
-through a relay of yours.
+itself: it installs Tailscale with Homebrew and runs it without root, in userspace, and gives
+roamrunctl Tailscale's HTTP proxy into the tailnet (`ROAMRUNCTL_PROXY`, roamrunctl 0.10.0 or later).
+Then it installs and launches in either of [the GitHub Actions guide](ci.md)'s two ways: with the
+device's key on the build machine, or through a relay of yours. It runs on macOS stacks with macOS
+15 or later (Xcode 16.3 or later), and stops on an older one.
 
 ```yaml
 - xcode-archive@6:
@@ -21,15 +22,19 @@ through a relay of yours.
       - roamrun_key: $ROAMRUN_KEY
 ```
 
-Through a relay, `relay_address`, `relay_token` and `device_name` take the place of `roamrun_key`.
-The Step's README lists its inputs, what to prepare, and what it does.
+The Step isn't in Bitrise's Step Library: add it in `bitrise.yml` (the Workflow Editor's YAML view)
+by its git URL and tag, as above. Through a relay, `relay_address`, `relay_token` and `device_name`
+take the place of `roamrun_key`. `ipa_path` defaults to `$BITRISE_IPA_PATH`, which Xcode Archive &
+Export sets when it runs before the Step; give it a path to install another `.ipa`. The Step's
+README lists its inputs, what to prepare, and what it does.
 
 ## What to prepare
 
 - The device as [roamrunctl](../Rust/roamrunctl/README.md#requirements) needs it: iOS 27 or later,
   Developer Mode on, Tailscale on it in your tailnet, on Wi‑Fi, unlocked once since it started.
-- The app signed for the device: Xcode Archive & Export with `distribution_method: development`,
-  and code signing set up on Bitrise. In the run below: an App Store Connect API key (role
+- The app signed with a development profile that lists the device (the device in your team's
+  device list): Xcode Archive & Export with `distribution_method: development`, and code signing
+  set up on Bitrise. In the third run below: an App Store Connect API key (role
   Developer), added under the workspace's Settings › Integrations › App Store Connect and chosen
   under the project's Project settings › Integrations › Stores; and the Apple Development
   certificate as a `.p12` under Project settings › Code signing.
@@ -37,12 +42,15 @@ The Step's README lists its inputs, what to prepare, and what it does.
   Ephemeral, the tag `tag:ci`, a short expiry. The tag and the policy are as in
   [the GitHub Actions guide](ci.md#tailscale-a-tag-and-an-oauth-client); with the key on the build
   machine, the policy has to let the tag reach the device itself, not only a relay.
-- The device's key ([a pairing for CI](ci.md#a-pairing-for-ci): `roamrun key create`, the whole
-  file in a Secret), or [a relay](ci.md#on-the-relay).
+- The device's key ([a pairing for CI](ci.md#a-pairing-for-ci): the whole file `roamrun key create`
+  wrote, or one `roamrunctl pair control` saved, in a Secret), or [a relay](ci.md#on-the-relay).
 - Bitrise Secrets for the auth key, the device's key and the relay's token. The relay's address and
   the device's name needn't be Secrets: Bitrise hides every occurrence of a Secret's value in the
   log, so a name such as `relay` kept as a Secret puts `[REDACTED]` into roamrunctl's messages
   wherever the word appears.
+
+One device takes one install at a time: keep builds that install on it from running together (the
+Hobby plan used below allows one concurrent build).
 
 Whoever can start a build, or push to a branch that builds, can read the Secrets (a Script Step can
 print any of them). With the auth key they join your tailnet as `tag:ci` and reach whatever your

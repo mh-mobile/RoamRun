@@ -4,7 +4,7 @@
 
 Bitrise のビルドから、アーカイブしたアプリを Tailscale 越しに自分の iPhone へインストールし、起動できます。使うのは Bitrise Step の [mh-mobile/bitrise-step-roamrun](https://github.com/mh-mobile/bitrise-step-roamrun) です。
 
-これを書いた時点で、Bitrise の Step Library には Tailscale の Step がありませんでした。そのため、この Step が自分で tailnet に参加します。Tailscale は Homebrew で入れ、root なしの userspace で動かします。Tailscale が出す tailnet への HTTP プロキシを、`ROAMRUNCTL_PROXY` で roamrunctl に渡します。これは roamrunctl 0.10.0 からの機能です。インストールと起動には、[GitHub Actions の手順](ci.ja.md)の 2 つのやり方を使えます。デバイスの鍵をビルドのマシンに置くやり方と、手元の relay に頼むやり方です。
+これを書いた時点で、Bitrise の Step Library には Tailscale の Step がありませんでした。そのため、この Step が自分で tailnet に参加します。Tailscale は Homebrew で入れ、root なしの userspace で動かします。Tailscale が出す tailnet への HTTP プロキシを、`ROAMRUNCTL_PROXY` で roamrunctl に渡します。これは roamrunctl 0.10.0 からの機能です。インストールと起動には、[GitHub Actions の手順](ci.ja.md)の 2 つのやり方を使えます。デバイスの鍵をビルドのマシンに置くやり方と、手元の relay に頼むやり方です。macOS 15 以降（Xcode 16.3 以降）のスタックで動き、それより古いスタックでは止まります。
 
 ```yaml
 - xcode-archive@6:
@@ -17,17 +17,19 @@ Bitrise のビルドから、アーカイブしたアプリを Tailscale 越し�
       - roamrun_key: $ROAMRUN_KEY
 ```
 
-relay に頼むときは、`roamrun_key` の代わりに `relay_address`、`relay_token`、`device_name` を渡します。入力の一覧、用意するもの、Step がすることは、Step の README にあります。
+Step は Bitrise の Step Library にありません。上のように、`bitrise.yml`（Workflow Editor の YAML 表示）に git の URL とタグで書きます。relay に頼むときは、`roamrun_key` の代わりに `relay_address`、`relay_token`、`device_name` を渡します。`ipa_path` の既定値は `$BITRISE_IPA_PATH` で、前に置いた Xcode Archive & Export が設定します。別の `.ipa` を入れるときは、そのパスを渡します。入力の一覧、用意するもの、Step がすることは、Step の README にあります。
 
 ## 用意するもの
 
 - [roamrunctl に必要なもの](../Rust/roamrunctl/README.ja.md#必要なもの)を満たすデバイス。iOS 27 以降で、デベロッパモードをオンにし、Tailscale を入れて同じ tailnet に参加させます。Wi‑Fi につなぎ、起動してから一度はロックを解除しておきます。
-- デバイス向けに署名したアプリ。Xcode Archive & Export を `distribution_method: development` で動かし、Bitrise にコード署名を設定します。下の試行では、次の 2 つを設定しました。
+- デバイスを含む開発用プロファイルで署名したアプリ（デバイスをチームのデバイス一覧に登録しておきます）。Xcode Archive & Export を `distribution_method: development` で動かし、Bitrise にコード署名を設定します。下の 3 回目の試行では、次の 2 つを設定しました。
   - App Store Connect の API キー（役割は Developer）。追加は Workspace の Settings › Integrations › App Store Connect で行いました。プロジェクトでの選択は、Project settings › Integrations › Stores で行いました。
   - Apple Development の証明書。`.p12` にして、Project settings › Code signing に入れました。
 - Tailscale の auth key（管理画面の Settings › Keys）。OAuth クライアントでは試していません。Reusable と Ephemeral をオンにし、タグは `tag:ci`、期限は短くします。タグとポリシーは [GitHub Actions の手順](ci.ja.md#tailscaleタグと-oauth-クライアント)と同じです。鍵をビルドのマシンに置くなら、ポリシーで、タグからデバイスそのものへの接続を許す必要があります。relay への接続だけでは足りません。
-- デバイスの鍵（[CI 用のペアリング](ci.ja.md#ci-用のペアリング)。`roamrun key create` が書いたファイルの中身をまるごと Secret に入れます）。または [relay](ci.ja.md#relay-で用意すること)。
+- デバイスの鍵（[CI 用のペアリング](ci.ja.md#ci-用のペアリング)）。`roamrun key create` が書いたファイルか、`roamrunctl pair control` が保存したファイルを使います。中身をまるごと Secret に入れます。または [relay](ci.ja.md#relay-で用意すること)。
 - auth key、デバイスの鍵、relay のトークンを入れる Bitrise の Secret。relay のアドレスとデバイスの名前は、Secret にしなくてかまいません。Bitrise は、Secret の値と同じ文字列をログの中で全部伏せます。そのため、`relay` のような名前を Secret にすると、roamrunctl のメッセージの一部が `[REDACTED]` になります。
+
+1 台のデバイスへのインストールは、同時に 1 つです。同じデバイスへインストールするビルドが重ならないようにします（下で使った Hobby プランは、同時に 1 ビルドです）。
 
 ビルドを始められる人と、ビルドするブランチに push できる人は、Secret を読めます。Script の Step は、どの値も出力できるからです。auth key があれば、`tag:ci` として tailnet に参加し、ポリシーがそのタグに許す範囲のマシンに届きます。ポリシーが「すべて許可」なら、すべてのマシンです。デバイスの鍵か relay のトークンがあれば、デバイスを操作できます。PR のビルドでは、PR へ渡す設定をオンにしない限り、Secret の値は空です。空なら、Step はそう言って止まります。
 
