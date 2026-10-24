@@ -4,7 +4,7 @@
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// The proxy's answer at most: a status line and its headers.
 const MAX: usize = 4096;
@@ -40,31 +40,41 @@ pub fn name(url: &str) -> Result<(), String> {
     NAMED.set(parse(url)?).map_err(|_| "a proxy is named already".to_string())
 }
 
-/// A connection to `ip:port` through `proxy`, each step given `within`.
+/// A connection to `ip:port` through `proxy`, answered within `within` in all.
 pub fn through(proxy: &Proxy, ip: &str, port: u16, within: Duration) -> Result<TcpStream, String> {
-    let at = (proxy.host.as_str(), proxy.port).to_socket_addrs().ok().and_then(|mut all| all.next())
-        .ok_or_else(|| format!("the proxy {}:{} has no address", proxy.host, proxy.port))?;
-    let said = |e: std::io::Error| format!("the proxy {}:{}: {e}", proxy.host, proxy.port);
-    let mut stream = TcpStream::connect_timeout(&at, within).map_err(said)?;
-    stream.set_read_timeout(Some(within)).map_err(said)?;
-    stream.set_write_timeout(Some(within)).map_err(said)?;
+    let by = Instant::now() + within;
+    let who = format!("the proxy {}:{}", proxy.host, proxy.port);
+    let said = |e: std::io::Error| match e.kind() {
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => format!("{who}: no answer within {} s", within.as_secs_f32()),
+        _ => format!("{who}: {e}"),
+    };
+    let left = || by.checked_duration_since(Instant::now()).filter(|left| !left.is_zero()).ok_or_else(|| said(std::io::ErrorKind::TimedOut.into()));
+    // Each address the name gives (localhost is ::1 before 127.0.0.1).
+    let mut stream = Err(format!("{who} has no address"));
+    for at in (proxy.host.as_str(), proxy.port).to_socket_addrs().map_err(said)? {
+        stream = TcpStream::connect_timeout(&at, left()?).map_err(said);
+        if stream.is_ok() { break }
+    }
+    let mut stream = stream?;
+    stream.set_write_timeout(Some(left()?)).map_err(said)?;
     stream.write_all(format!("CONNECT {ip}:{port} HTTP/1.1\r\nHost: {ip}:{port}\r\n\r\n").as_bytes()).map_err(said)?;
     // A byte at a time: what follows the blank line is the device's, and stays unread.
     let mut answer = Vec::new();
     let mut byte = [0u8; 1];
-    while !answer.ends_with(b"\r\n\r\n") {
-        if answer.len() >= MAX { return Err(format!("the proxy {}:{} answered with more than a proxy does", proxy.host, proxy.port)); }
+    while !answer.ends_with(b"\r\n\r\n") && !answer.ends_with(b"\n\n") {
+        if answer.len() >= MAX { return Err(format!("{who} answered with more than a proxy does")); }
+        stream.set_read_timeout(Some(left()?)).map_err(said)?;
         match stream.read(&mut byte) {
             Ok(1) => answer.push(byte[0]),
-            Ok(_) => return Err(format!("the proxy {}:{} closed before it answered", proxy.host, proxy.port)),
+            Ok(_) => return Err(format!("{who} closed before it answered")),
             Err(e) => return Err(said(e)),
         }
     }
     let line = String::from_utf8_lossy(&answer);
     let line = line.lines().next().unwrap_or("");
     let status = line.split(' ').nth(1).unwrap_or("");
-    if !line.starts_with("HTTP/1.") || status != "200" {
-        return Err(format!("the proxy {}:{} didn't connect to {ip}:{port} ({})", proxy.host, proxy.port, if line.is_empty() { "no status" } else { line }));
+    if !line.starts_with("HTTP/1.") || status.len() != 3 || !status.starts_with('2') {
+        return Err(format!("{who} didn't connect to {ip}:{port} ({})", if line.is_empty() { "no status" } else { line }));
     }
     stream.set_read_timeout(None).map_err(said)?;
     stream.set_write_timeout(None).map_err(said)?;
@@ -138,6 +148,31 @@ mod tests {
         let (proxy, _) = proxy("403 Forbidden");
         let why = through(&proxy, "100.64.0.9", 49152, Duration::from_secs(10)).unwrap_err();
         assert!(why.contains("HTTP/1.1 403 Forbidden") && why.contains("100.64.0.9:49152"), "{why}");
+    }
+
+    #[test]
+    fn a_proxy_that_answers_slowly_is_given_up_on_in_all_by_the_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            // A byte now and then: each read in time, the answer never.
+            for byte in b"HTTP/1.1 200 OK\r\n" {
+                std::thread::sleep(Duration::from_millis(150));
+                if stream.write_all(&[*byte]).is_err() { return }
+            }
+        });
+        let began = Instant::now();
+        let why = through(&Proxy { host: "127.0.0.1".into(), port }, "100.64.0.9", 49152, Duration::from_millis(500)).unwrap_err();
+        assert!(began.elapsed() < Duration::from_millis(900), "{:?}", began.elapsed());
+        assert!(why.contains("no answer within 0.5 s"), "{why}");
+    }
+
+    #[test]
+    fn localhost_is_tried_at_each_of_its_addresses() {
+        let (mut proxy, _) = proxy("200 Connection established");
+        proxy.host = "localhost".into();
+        assert!(through(&proxy, "100.64.0.9", 49152, Duration::from_secs(10)).is_ok());
     }
 
     #[test]

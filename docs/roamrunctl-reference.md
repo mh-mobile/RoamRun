@@ -348,9 +348,9 @@ the device over Tailscale, as any using machine does, and needs no place beside 
   the address and port, or the address the server printed (`http://<address>:<port>/mcp`);
   `ROAMRUNCTL_RELAY` gives it too (set to nothing, it gives none). With either, `install` and
   `launch` don't use a device saved on the calling machine. A name is looked up, and each IPv4
-  address it gives is tried in turn (the server listens on IPv4 alone). The connection is made
-  directly over TCP, or through the proxy `ROAMRUNCTL_PROXY` names (next section): `http_proxy`
-  and the like aren't used.
+  address it gives is tried in turn (the server listens on IPv4 alone). Through the proxy
+  `ROAMRUNCTL_PROXY` names (next section), the name goes to the proxy as it is, and the proxy
+  looks it up. `http_proxy` and the like aren't used.
 - The token: `--token-file` (the owner's alone, 32 characters or more on one line, as the
   server's), else `ROAMRUNCTL_TOKEN`; with neither, none is sent.
 - `install` takes an `.ipa`, not an `.app` folder, and checks it as `install` does (next
@@ -387,10 +387,13 @@ answers, the pairing port and the tunnel port, so `look`, `install`, `launch`, `
 rest), and to a relay (`--relay`).
 
 - Only `http://<host>:<port>` is taken: no user and password, no path, not `https://`, not SOCKS.
-  Any other value stops roamrunctl before it does anything; set to nothing, it names none.
-  `HTTPS_PROXY`, `http_proxy`, `ALL_PROXY` and the like are never read.
-- Not through it: pairing (`pair control`, `pair introduce`), and the connection to a machine
-  that signs for a device (B).
+  `<host>` is a name or an IPv4 address (not an IPv6 address in brackets); each address a name
+  gives is tried. Any other value stops roamrunctl before it does anything; set to nothing, it
+  names none. `HTTPS_PROXY`, `http_proxy`, `ALL_PROXY` and the like are never read.
+- The proxy's answer to `CONNECT` is waited for as long as a direct connection would be.
+- Not through it: pairing with the device (`pair control`'s exchange on the device's Wi‑Fi, and
+  `pair introduce`), and the connection to a machine that signs for a device (B). `pair
+  control`'s try over the tailnet before it keeps the pairing does go through it.
 - Tailscale running in userspace gives such a proxy into the tailnet:
   `tailscaled --tun=userspace-networking --outbound-http-proxy-listen=127.0.0.1:1056`, then
   `ROAMRUNCTL_PROXY=http://127.0.0.1:1056`.

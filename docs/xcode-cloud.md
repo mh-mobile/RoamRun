@@ -153,9 +153,11 @@ From 0.10.0, roamrunctl goes through the HTTP proxy `ROAMRUNCTL_PROXY` names, an
 userspace gives one into the tailnet (`--outbound-http-proxy-listen`). The script can then run
 roamrunctl itself: through the relay, or with the device's key on the build machine and no relay.
 A build of that change ran both on Xcode Cloud on 2026-10-24, from the same repository, app,
-device and relay as above. Its script differed from the one above in these lines:
+device and relay as above. Its script differed from the one above in these lines, and the part
+that calls the relay with `curl` (from `token=` to the end) was replaced by roamrunctl:
 
 ```bash
+rr="$CI_PRIMARY_REPOSITORY_PATH/bin/roamrunctl"
 "$bin/tailscaled" --tun=userspace-networking --socket="$t/sock" --statedir="$t/state" \
   --outbound-http-proxy-listen=127.0.0.1:1056 > "$t/log" 2>&1 &
 # … tailscale up, as above …
@@ -179,9 +181,12 @@ export XDG_CONFIG_HOME="$t/config"
   released, a script would download the archive from RoamRun's release instead, as the GitHub
   Action does; that wasn't run.
 
-With the key on the build machine there is no relay to stop and no token to change: whoever can
-read `ROAMRUN_KEY` can operate the device until its name is removed from the device's Developer
-Mode list (Settings › Privacy & Security › Developer Mode).
+With the key on the build machine, the variables are `TS_AUTHKEY` and `ROAMRUN_KEY`, both Secret;
+`RELAY`, `RELAY_TOKEN` and `RELAY_DEVICE` aren't used. The tailnet's policy has to let `tag:ci`
+reach the device itself, on the ports [the GitHub Actions guide](ci.md#tailscale-a-tag-and-an-oauth-client)
+names, not only the relay's port. There is no relay to stop and no token to change: whoever can
+read `ROAMRUN_KEY` and reach the device can operate it until its name is removed from the device's
+Developer Mode list (Settings › Privacy & Security › Developer Mode).
 
 ## Not tried
 
