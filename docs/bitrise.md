@@ -77,8 +77,11 @@ an iPhone 15 Pro (iOS 27.0) at home, unlocked:
 Each time, Homebrew poured Tailscale 1.104.1's ready-built package and the machine joined as
 `bitrise-<build number>`. After the first, the machine wasn't among the tailnet's machines, and a
 look at the device showed the app in front. The relay logged the upload, `install`,
-`install_status` and `launch` from `tag:ci`. The Step's commits after 6e57e27, up to 1.0.0 (checks,
-the README), didn't run on bitrise.io.
+`install_status` and `launch` from `tag:ci`.
 
-Not tried, among others the Step's README lists: the Step's default download of roamrunctl (it waits
-for 0.10.0's release), a Step stopped by its timeout, the Bitrise CLI on a Mac of your own, an iPad.
+After the release, on 2026-10-24 (UTC), the first workflow ran once more with the Step's 1.0.0 and
+no `roamrunctl_path`: it downloaded roamrunctl 0.10.0 from this repository's release, checked it
+against `roamrunctl-SHA256SUMS`, and installed and launched the same `.ipa`; the Step took 27 s.
+
+Not tried, among others the Step's README lists: a Step stopped by its timeout, the Bitrise CLI on a
+Mac of your own, an iPad.

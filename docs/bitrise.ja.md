@@ -55,11 +55,12 @@ Step は Bitrise の Step Library にありません。上のように、`bitris
 | relay に頼む（MacBook Pro、Homebrew の roamrunctl 0.9.0）。`.ipa` は同じもの | インストール（5 秒）して起動。Step は 16 秒 |
 | Xcode Archive & Export（上の設定）のあと、鍵をビルドのマシンに置く | インストールして起動。Step は 21 秒 |
 
-どの回も、Homebrew は Tailscale 1.104.1 のビルド済みパッケージを入れ、マシンは `bitrise-<ビルド番号>` として tailnet に参加しました。1 回目のあとに確かめると、マシンは tailnet の一覧から消えていて、デバイスの画面ではアプリが前に出ていました。relay のログには、`tag:ci` からのアップロード、`install`、`install_status`、`launch` が残りました。Step の 6e57e27 より後のコミット（`1.0.0` まで。確認の追加と README）は、bitrise.io では動かしていません。
+どの回も、Homebrew は Tailscale 1.104.1 のビルド済みパッケージを入れ、マシンは `bitrise-<ビルド番号>` として tailnet に参加しました。1 回目のあとに確かめると、マシンは tailnet の一覧から消えていて、デバイスの画面ではアプリが前に出ていました。relay のログには、`tag:ci` からのアップロード、`install`、`install_status`、`launch` が残りました。
+
+リリース後の 2026-10-24（UTC）には、1 つ目のワークフローをもう一度流しました。Step は `1.0.0` で、`roamrunctl_path` は渡していません。Step はこのリポジトリのリリースから roamrunctl 0.10.0 をダウンロードし、`roamrunctl-SHA256SUMS` と照らし合わせました。そのうえで、同じ `.ipa` をインストールして起動しました。Step は 27 秒でした。
 
 試していないことは、次のとおりです。ほかにも、Step の README に挙げています。
 
-- Step に既定どおり roamrunctl をダウンロードさせること（0.10.0 のリリース待ち）。
 - 時間切れで止められた Step。
 - 手元の Mac での Bitrise CLI。
 - iPad。
