@@ -79,7 +79,7 @@ Each time, Homebrew poured Tailscale 1.104.1's ready-built package and the machi
 look at the device showed the app in front. The relay logged the upload, `install`,
 `install_status` and `launch` from `tag:ci`.
 
-After the release, on 2026-10-25 (UTC), the first workflow ran once more with the Step's 1.0.0 and
+After the release, on 2026-10-24 (UTC), the first workflow ran once more with the Step's 1.0.0 and
 no `roamrunctl_path`: it downloaded roamrunctl 0.10.0 from this repository's release, checked it
 against `roamrunctl-SHA256SUMS`, and installed and launched the same `.ipa`; the Step took 27 s.
 

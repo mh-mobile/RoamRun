@@ -57,7 +57,7 @@ Step は Bitrise の Step Library にありません。上のように、`bitris
 
 どの回も、Homebrew は Tailscale 1.104.1 のビルド済みパッケージを入れ、マシンは `bitrise-<ビルド番号>` として tailnet に参加しました。1 回目のあとに確かめると、マシンは tailnet の一覧から消えていて、デバイスの画面ではアプリが前に出ていました。relay のログには、`tag:ci` からのアップロード、`install`、`install_status`、`launch` が残りました。
 
-リリース後の 2026-10-25（UTC）には、1 つ目のワークフローをもう一度流しました。Step は `1.0.0` で、`roamrunctl_path` は渡していません。Step はこのリポジトリのリリースから roamrunctl 0.10.0 をダウンロードし、`roamrunctl-SHA256SUMS` と照らし合わせました。そのうえで、同じ `.ipa` をインストールして起動しました。Step は 27 秒でした。
+リリース後の 2026-10-24（UTC）には、1 つ目のワークフローをもう一度流しました。Step は `1.0.0` で、`roamrunctl_path` は渡していません。Step はこのリポジトリのリリースから roamrunctl 0.10.0 をダウンロードし、`roamrunctl-SHA256SUMS` と照らし合わせました。そのうえで、同じ `.ipa` をインストールして起動しました。Step は 27 秒でした。
 
 試していないことは、次のとおりです。ほかにも、Step の README に挙げています。
 
