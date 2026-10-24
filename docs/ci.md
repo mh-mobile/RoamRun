@@ -32,7 +32,8 @@ repository (`gh release download`).
 
 ## What was run
 
-The CI runs were all on 2026-10-22 (UTC):
+The CI runs with roamrunctl 0.8.1 were all on 2026-10-22 (UTC); those with 0.9.0 are
+[below](#with-roamrunctl-090-from-ci).
 
 - The device: an iPhone 15 Pro on iOS 27.0, unlocked, on a Wi‑Fi and a wireless charger. Whether
   its screen stayed on between runs wasn't recorded.
@@ -72,10 +73,30 @@ Whether the app was still in front when each run above began wasn't recorded (th
 locked between runs, which takes the app out of the front), so the fast runs and the 48 s and 71 s
 installs aren't explained by this. Cable charging wasn't tried. roamrunctl 0.9.0 ends the app's
 running processes before it installs (#196): a build of that change, run from the Mac over the LAN,
-installed in 4–5 s with the app in front on a device on its wireless charger. It wasn't run from
-CI. The app is then ended from the start of the upload, and stays ended if the install fails,
-which 0.8.1 didn't do. With 0.8.1, don't leave the app in front on a device on its charger when a
+installed in 4–5 s with the app in front on a device on its wireless charger. From CI, 0.9.0's
+installs ran ([below](#with-roamrunctl-090-from-ci)), but that case wasn't set up for them. With
+0.9.0, the app is ended from the start of the upload, and stays ended if the install fails, which
+0.8.1 didn't do. With 0.8.1, don't leave the app in front on a device on its charger when a
 job installs it: end it, or take the device off its charger.
+
+### With roamrunctl 0.9.0, from CI
+
+On 2026-10-24 (UTC), the same device, runner and private repository ran roamrunctl 0.9.0 before it
+was released: the archive CI built from `release/0.9.0` at f21291c, put in that repository as a
+release asset. The device was unlocked, on a Wi‑Fi; whether it lay on its charger, and whether the
+app was in front when each install began, wasn't recorded. The relay was the MacBook Pro, with a
+build of the same code, started from a shell on that Mac.
+
+| Step | Took |
+|---|---|
+| The Mac's key (`roamrun key create`): `printf '%s' "$ROAMRUN_CI_KEY" \| roamrunctl key import - --as ci` | 3 s |
+| `roamrunctl install ci app/RoamRunIntroducer.ipa --launch` | 18 s |
+| The Linux machine's key (a file roamrunctl saved), the same way: `key import - --as ci-linux` | 3 s |
+| `roamrunctl install ci-linux app/RoamRunIntroducer.ipa --launch` | 16 s |
+| `roamrunctl install relay app/RoamRunIntroducer.ipa --relay "$RELAY" --launch` | 10 s (the install 5 s) |
+
+Each step ended with the app launched. The relay logged four calls from `tag:ci`: the upload,
+`install`, `install_status` and `launch`.
 
 ## What both ways need
 
@@ -228,9 +249,9 @@ identifier.
 With 0.9.0, `key import -` reads the key from standard input and takes a file roamrunctl saved as
 well, so either key goes in one way, with no temporary file for the secret (the device's file
 roamrunctl saves holds the key, as before):
-`printf '%s' "$ROAMRUN_CI_KEY" | "$rr" key import - --as ci`. A build of that change (#193) ran `-`
-on the Mac with a file roamrunctl saved; with a file `roamrun key create` wrote, and from CI, it
-wasn't run.
+`printf '%s' "$ROAMRUN_CI_KEY" | "$rr" key import - --as ci`. It ran from CI with both keys, a file
+`roamrun key create` wrote and a file roamrunctl saved
+([above](#with-roamrunctl-090-from-ci)).
 
 ## A relay
 
@@ -296,8 +317,8 @@ upload, by its Tailscale node, and a GitHub-hosted runner is a new node each job
 
 The relay has to run 0.9.0 too: by the code, with a 0.8.1 relay the install begins there, but the
 command stops at that point, as the relay's answer carries no install id, and `--launch` doesn't
-run. That pairing wasn't tried. A build of that change (#194) ran the command from the Mac against
-a relay on the same Mac, with that build at both ends; this step wasn't run from CI.
+run. That pairing wasn't tried. This step ran from CI against a relay with 0.9.0
+([above](#with-roamrunctl-090-from-ci)).
 
 #### With 0.8.1: the script that ran
 
@@ -350,7 +371,7 @@ the tools answer, and the limits on uploads, are in
 The script checks only that the answer says " is installed on ": it doesn't tell its own install
 from another caller's that ended just before. With 0.9.0, `install` answers with an id (`(install
 <id>)`), and `install_status` given it as `"install": "<id>"` answers of that install alone; that
-was run from the Mac, not from CI.
+was run from the Mac, and from CI inside `install --relay` (which waits by that id).
 
 ## Not tried
 
@@ -361,6 +382,6 @@ was run from the Mac, not from CI.
 - A Tailscale policy narrowed to `tag:ci`'s needs.
 - An `.ipa` larger than 1 MB from CI, and whether the app's data survives an install over it.
 - A Mac beside the device that CI reaches by SSH and that installs with `xcrun devicectl`.
-- roamrunctl 0.9.0 from CI: `key import -`, `install --relay … --launch`, `install_status` given
-  an install's id, and the app ended before an install.
+- From CI with 0.9.0, an install with the app in front on a device on its wireless charger, set up
+  on purpose (0.9.0 ends the app first: that ran from the Mac).
 - tailscale/github-action's `ping:` input, and GitHub's `queue: max`.
