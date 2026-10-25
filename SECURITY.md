@@ -289,7 +289,7 @@ bounded.
   `install` is offered only with `--allow-install`, from an `.ipa` sent with `PUT /upload`, never
   a path on the Mac: one upload is kept (1024 MiB at most by default), in RoamRun's own folder,
   installable by the caller that sent it alone (by its Tailscale node's lasting id), and removed
-  when an install uses it, when any allowed caller starts another upload, after 30 minutes unused,
+  when the app answers that an install of it began, when any allowed caller starts another upload, after 30 minutes unused,
   or at Ctrl-C; one left by a server that was killed is removed when the RoamRun app, or another
   server with `--allow-install`, starts a day later. An install the app doesn't begin leaves it.
 - **roamrunctl can serve its MCP tools over HTTP.** `roamrunctl mcp --http <port> --allow

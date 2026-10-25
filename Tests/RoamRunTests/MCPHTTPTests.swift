@@ -478,3 +478,27 @@ private func status(_ answer: String) -> Int {
         }
         .isEmpty)
 }
+
+/// Two uploads lent at once (installs on two devices): stopping removes both their own files.
+@Test func stoppingRemovesEveryLentUpload() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let uploads = MCPHTTP.Uploads(folder: folder, most: 1 << 20)
+    let served = try Served(uploads: uploads)
+    // Held, as a call waiting for the app's answer holds them.
+    var held: [(path: String, settle: (Bool) -> Void)] = []
+    func lend(_ body: String) throws -> String {
+        let sent = served
+            .ask("PUT /upload HTTP/1.1\r\nHost: 127.0.0.1:\(served.port)\r\nContent-Length: 1\r\n\r\n\(body)")
+        let id = try #require(sent.components(separatedBy: #""upload":""#).last?.prefix(32)).description
+        let sha = try #require(sent.components(separatedBy: #""sha256":""#).last?.prefix(64)).description
+        held.append(try uploads.claim(id: id, sha256: sha, into: folder))
+        return folder.appendingPathComponent("upload-\(id).ipa").path
+    }
+    let (first, second) = (try lend("a"), try lend("b"))
+    #expect(FileManager.default.fileExists(atPath: first) && FileManager.default.fileExists(atPath: second))
+    uploads.end()
+    #expect(!FileManager.default.fileExists(atPath: first) && !FileManager.default.fileExists(atPath: second))
+    #expect(held.count == 2)
+}

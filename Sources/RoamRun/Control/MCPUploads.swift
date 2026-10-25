@@ -38,9 +38,9 @@ extension MCPHTTP {
         let most: Int
         private let lock = NSLock()
         private var kept: (upload: Upload, used: Date)?
-        /// The upload an install was handed, until the app has taken it (or not): its file stays, so that an install
-        /// the app didn't begin gives it back.
-        private var lent: Upload?
+        /// The uploads installs were handed, until the app has taken each (or not): their files stay, so that an install
+        /// the app didn't begin gives its own back.
+        private var lent: [Upload] = []
         private var coming = false
         /// The file one coming in is written to.
         private var incoming: String?
@@ -157,7 +157,7 @@ extension MCPHTTP {
                       held.upload.sha256.caseInsensitiveCompare(sha256) == .orderedSame
                 else { throw Failure(description: Self.gone(id)) }
                 kept = nil
-                lent = held.upload
+                lent.append(held.upload)
                 return held.upload
             }
             let own = folder.appendingPathComponent("install-\(UUID().uuidString)")
@@ -185,8 +185,10 @@ extension MCPHTTP {
         /// The upload lent to an install, once the app has answered: used up, or kept again where nothing replaced it.
         private func settle(_ upload: Upload, taken: Bool) {
             lock.withLock {
-                guard lent === upload else { return }
-                lent = nil
+                guard let at = lent.firstIndex(where: {
+                    $0 === upload
+                }) else { return }
+                lent.remove(at: at)
                 if !taken, kept == nil, !coming {
                     kept = (upload, Date())
                 } else {
@@ -208,11 +210,11 @@ extension MCPHTTP {
         func end() {
             let left = lock.withLock { () -> [String] in
                 // The process ends at once after this: no deinit runs. A lent one's install has its own link.
-                let left = [incoming, kept?.upload.path, lent?.path].compactMap {
+                let left = ([incoming, kept?.upload.path] + lent.map(\.path)).compactMap {
                     $0
                 }
                 kept = nil
-                lent = nil
+                lent = []
                 return left
             }
             left.forEach {

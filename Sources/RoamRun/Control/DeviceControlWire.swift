@@ -72,10 +72,12 @@ enum DeviceControlWire {
         case noApp, message(String)
         /// The app may well be running: this process isn't let through to it.
         case keptOut(String)
+        /// Given up, or broken off, before the request was all sent: the app didn't act on it.
+        case notSent(String)
         var description: String {
             switch self {
             case .noApp: "the RoamRun app isn't running"
-            case .message(let m): m
+            case .message(let m), .notSent(let m): m
             case .keptOut(let why):
                 "this process isn't allowed to reach the RoamRun app (\(why)): it runs in a sandbox that keeps it from the app's socket. Run the command outside the sandbox, or use the MCP tools (`roamrun mcp`, started by the agent itself)"
             }
@@ -315,9 +317,9 @@ enum DeviceControlWire {
             throw why == EPERM || why == EACCES ? WireError.keptOut(String(cString: strerror(why))) : WireError.noApp
         }
         defer { asking?.ended() } // before the close above: a number given up later isn't this one's
-        guard asking?.began(fd) ?? true else { throw WireError.message("taken back") }
+        guard asking?.began(fd) ?? true else { throw WireError.notSent("taken back") }
         guard writeLine(request, to: fd)
-        else { throw WireError.message("couldn't send the request (a number that isn't one?)") }
+        else { throw WireError.notSent("couldn't send the request (a number that isn't one?)") }
         let line = readLine(fd)
         guard let response = try? JSONDecoder().decode(Response.self, from: line) else {
             throw WireError.message(line.isEmpty ? "the app didn't answer" : "the app's answer couldn't be read")

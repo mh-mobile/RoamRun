@@ -603,7 +603,8 @@ import ImageIO
 /// The install folder of an upload is removed where the app surely didn't take it (refused), and kept where its answer
 /// was lost (it may be installing from it).
 @Test func anUploadsInstallFolderIsKeptWhenTheAnswerIsLost() throws {
-    for (failure, kept) in [(true, false), (false, true)] {
+    // Refused (removed), answer lost (kept), not sent at all (removed).
+    for (how, kept) in [("refused", false), ("lost", true), ("not sent", false)] {
         let own = FileManager.default.temporaryDirectory.appendingPathComponent("install-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: own, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: own) }
@@ -617,16 +618,17 @@ import ImageIO
             case "state": return .init(ok: true, allowed: true)
             case "install_status": return .init(ok: true, said: "no install was begun")
             default:
-                if failure {
-                    return .failure("device control is switched off for this device")
+                switch how {
+                case "refused": return .failure("device control is switched off for this device")
+                case "lost": throw DeviceControlWire.WireError.message("the app didn't answer")
+                default: throw DeviceControlWire.WireError.notSent("taken back")
                 }
-                throw DeviceControlWire.WireError.message("the app didn't answer")
             }
         }
         _ = server.handle(Data(
             #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"install","arguments":{"device":"iPhone","upload":"u1","sha256":"ab"}}}"#
                 .utf8
         ))
-        #expect(FileManager.default.fileExists(atPath: own.path) == kept)
+        #expect(FileManager.default.fileExists(atPath: own.path) == kept, "\(how)")
     }
 }

@@ -224,6 +224,17 @@ final class DeviceMCP: @unchecked Sendable {
 
     static let olderApp = "the RoamRun app running is older than this roamrun: it doesn't hold what is done to the look given. Quit it and open the RoamRun this command came with"
 
+    /// Whether an install request's failure says the app surely didn't take its app: refused (or no app), or not sent.
+    static func untaken(_ error: Error) -> Bool {
+        if error is Failure {
+            return true
+        }
+        if case DeviceControlWire.WireError.notSent = error {
+            return true
+        }
+        return false
+    }
+
     static let olderForApps = "the RoamRun app running is older than this roamrun: it can't install or launch. Quit it and open the RoamRun this command came with"
 
     /// Whether the app's answer to "rules" is an older app's: one that doesn't hold an action to the look given.
@@ -378,7 +389,7 @@ final class DeviceMCP: @unchecked Sendable {
                 // another try. Its install folder is removed only where the app surely didn't take it (refused, or not
                 // there); one whose answer was lost may be installing from it, and the app removes that one.
                 claimed.settle(false)
-                if error is Failure {
+                if Self.untaken(error) {
                     try? FileManager.default
                         .removeItem(at: URL(fileURLWithPath: claimed.path).deletingLastPathComponent())
                 }
@@ -419,11 +430,14 @@ final class DeviceMCP: @unchecked Sendable {
             do {
                 // The app removes the copy once the install ends, or refuses it.
                 return try text(send(.init(op: "install", device: device.id, path: copy.path)).said ?? "installing")
-            } catch let refused as Failure {
-                // Refused by the app (or none there): nobody else will remove it. A request that broke off may have
-                // been taken: the app removes that one, or its next start does.
-                try? FileManager.default.removeItem(at: folder)
-                throw refused.description == "unknown request" ? Failure(description: Self.olderForApps) : refused
+            } catch {
+                // Refused by the app, none there, or not sent: nobody else will remove it. A request whose answer was
+                // lost may have been taken: the app removes that one, or its next start does.
+                if Self.untaken(error) {
+                    try? FileManager.default.removeItem(at: folder)
+                }
+                throw (error as? Failure)?
+                    .description == "unknown request" ? Failure(description: Self.olderForApps) : error
             }
         case "install_status":
             do {
@@ -548,7 +562,7 @@ final class DeviceMCP: @unchecked Sendable {
     static func tools(installs: Installs?) -> [[String: Any]] {
         let install = installs == .uploads ? tool(
             "install",
-            "Start installing an .ipa sent with PUT /upload, built and signed for this device: the upload's id and sha256, as the upload answered them. It ends the app's running processes first. It answers at once; install_status says when the app is in (a megabyte takes a few seconds, a large app minutes), and until then other calls on the device answer that it is installing. An upload serves one install.",
+            "Start installing an .ipa sent with PUT /upload, built and signed for this device: the upload's id and sha256, as the upload answered them. It ends the app's running processes first. It answers at once; install_status says when the app is in (a megabyte takes a few seconds, a large app minutes), and until then other calls on the device answer that it is installing. An install the app begins uses the upload up.",
             ["upload": ["type": "string"], "sha256": ["type": "string"]],
             required: ["upload", "sha256"]
         ) : tool(
