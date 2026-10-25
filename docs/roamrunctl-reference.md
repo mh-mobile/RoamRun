@@ -238,7 +238,7 @@ needed to establish each new device connection.
   while `type` and `paste` still go by it (look → tap a field → type needs one look). Ids
   start from a random number at each start, so one kept from an earlier run isn't taken for
   a later look.
-- Rotation is rejected when reported orientation or image-shape checks detect a mismatch;
+- For a PNG look, rotation is rejected when reported orientation or image-shape checks detect a mismatch;
   it is **not guaranteed** to be detected if the device reports no orientation.
   Tap/swipe coordinates are pixels in the image returned by the last `look`.
 - `type`, `paste`, and `press` act on the currently focused interface. `press` isn't held to a
@@ -253,7 +253,17 @@ needed to establish each new device connection.
 - A queued call cancelled before it starts is not executed; a call already running may
   complete. MCP keeps connections open and reopens a device when its saved association
   changes or its connection fails.
-- `look` and inputs do not establish a persistent video stream or a visible screen-sharing
+- On macOS (0.11.0+), `look` (MCP's and `roamrunctl look`) takes the screen from the device's
+  screen stream and decodes it on this machine, instead of waiting for the device's full-size
+  PNG. On an iPhone Duo over a LAN, with photos on the screen, a look took about 1.2 s this way
+  and 10 to 36 s as a PNG. The device lists the stream as screen sharing, which its user can
+  see, until about five seconds after the last look or action, and some apps' sound goes silent
+  meanwhile, as during RoamRun's looks ([sound-while-looking.md](sound-while-looking.md)). The
+  picture is the display's own way up (portrait on an iPhone held sideways); taps and swipes go
+  by its pixels all the same, and a turn of the device after it isn't checked. During a phone
+  or VoIP call the device refuses the stream (seen during a VoIP call), and the look is the
+  PNG. `ROAMRUNCTL_LOOK=screenshot` always takes the PNG, as before 0.11.0.
+- On Linux and Windows, a look is the device's PNG: the device lists no screen-sharing
   session. Music continued playing during the screen/input tests, but microphone and some
   other interaction scenarios have not been verified.
 

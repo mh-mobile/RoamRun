@@ -345,9 +345,34 @@ pub fn said(answer: String) -> Result<serde_json::Value, String> {
     if value["ok"] == true { Ok(value) } else { Err(roamrun_device::safe::readable(value["error"].as_str().unwrap_or(&answer))) }
 }
 
-/// The device's picture, its longer side LONGER at most, as `format`; and its size.
-pub fn fitted(png: &[u8], format: image::ImageFormat) -> Result<(Vec<u8>, u32, u32), String> {
-    let image = image::load_from_memory_with_format(png, image::ImageFormat::Png).map_err(|e| format!("the device's picture couldn't be read: {e}"))?;
+/// Whether a look comes from the screen stream: on macOS, which decodes it, unless ROAMRUNCTL_LOOK=screenshot.
+/// The device lists a running stream as screen sharing.
+pub fn streams() -> bool {
+    cfg!(target_os = "macos") && std::env::var("ROAMRUNCTL_LOOK").as_deref() != Ok("screenshot")
+}
+
+/// The screen as a picture. From the stream (see `streams`): the display's own way up (`native`), and no
+/// full-size PNG to wait for. Else, or where the device refuses the stream (during a call), its PNG, turned as
+/// its interface is.
+pub struct Picture {
+    pub image: image::DynamicImage,
+    pub native: bool,
+}
+
+pub fn picture(device: &Device) -> Result<Picture, String> {
+    #[cfg(target_os = "macos")]
+    if streams() {
+        let rgb = device.keyframe().and_then(|frame| roamrun_device::hevc::decode(&frame))
+            .and_then(|(rgb, width, height)| image::RgbImage::from_raw(width, height, rgb).ok_or_else(|| "decode: a short image".to_string()));
+        if let Ok(rgb) = rgb { return Ok(Picture { image: image::DynamicImage::ImageRgb8(rgb), native: true }) }
+    }
+    let png = device.screenshot()?;
+    let image = image::load_from_memory_with_format(&png, image::ImageFormat::Png).map_err(|e| format!("the device's picture couldn't be read: {e}"))?;
+    Ok(Picture { image, native: false })
+}
+
+/// The picture, its longer side LONGER at most, as `format`; and its size.
+pub fn fitted(image: image::DynamicImage, format: image::ImageFormat) -> Result<(Vec<u8>, u32, u32), String> {
     let longer = image.width().max(image.height());
     let image = if longer > LONGER { image.resize(LONGER, LONGER, image::imageops::FilterType::Triangle) } else { image };
     let mut out = std::io::Cursor::new(Vec::new());
@@ -545,7 +570,7 @@ fn launched(device: &Device, name: &str, bundle: &str) -> Result<String, String>
 
 fn look(name: &str, file: Option<PathBuf>) -> Result<String, String> {
     let device = opened(name)?;
-    let (png, width, height) = fitted(&device.screenshot()?, image::ImageFormat::Png)?;
+    let (png, width, height) = fitted(picture(&device)?.image, image::ImageFormat::Png)?;
     let path = file.unwrap_or_else(|| std::env::temp_dir().join(format!("roamrunctl-{}-{}.png", named(name).unwrap_or("device"), std::process::id())));
     // Whatever is on the screen is in it: the owner's only.
     replace_whole(&path, &png).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -903,14 +928,13 @@ mod tests {
 
     #[test]
     fn a_picture_is_fitted_to_the_longer_side_and_a_small_one_left() {
-        let png = |w, h| { let mut out = std::io::Cursor::new(Vec::new()); image::DynamicImage::new_rgb8(w, h).write_to(&mut out, image::ImageFormat::Png).unwrap(); out.into_inner() };
-        let (_, w, h) = fitted(&png(1179, 2556), image::ImageFormat::Png).unwrap();
+        let picture = image::DynamicImage::new_rgb8;
+        let (_, w, h) = fitted(picture(1179, 2556), image::ImageFormat::Png).unwrap();
         assert_eq!((w, h), (590, 1280));
-        let (_, w, h) = fitted(&png(2556, 1179), image::ImageFormat::Jpeg).unwrap();
+        let (_, w, h) = fitted(picture(2556, 1179), image::ImageFormat::Jpeg).unwrap();
         assert_eq!((w, h), (1280, 590));
-        let (_, w, h) = fitted(&png(300, 200), image::ImageFormat::Png).unwrap();
+        let (_, w, h) = fitted(picture(300, 200), image::ImageFormat::Png).unwrap();
         assert_eq!((w, h), (300, 200));
-        assert!(fitted(b"not a picture", image::ImageFormat::Png).is_err());
     }
 
     #[test]

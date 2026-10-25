@@ -31,7 +31,16 @@ const INSTRUCTIONS: &str = "Operates a real iPhone or iPad from this machine. Lo
 action, and points are pixels of the image the last look returned, given with the id it answered with. Pairing with a device and signing for one \
 (`roamrunctl pair`, `roamrunctl sign`) are the user's to run, never yours. These press what is really there — don't tap what spends \
 money, posts, sends, deletes or signs in unless the user asked for exactly that. A look shows whatever is on the screen \
-(notifications, messages); don't pass the image on. The device shows no screen-sharing session for this; what an action itself brings up (paste's \"Allow Paste\") shows there. Type and paste give the id of the latest look too, within a minute of it (after a tap with it is fine), and are refused once something else was looked at or done since: they go to whatever has focus. Press goes to whatever is on the screen: look before it too.";
+(notifications, messages); don't pass the image on. SHARING; what an action itself brings up (paste's \"Allow Paste\") shows there. Type and paste give the id of the latest look too, within a minute of it (after a tap with it is fine), and are refused once something else was looked at or done since: they go to whatever has focus. Press goes to whatever is on the screen: look before it too.";
+
+/// What the device shows of looks, for INSTRUCTIONS: a stream runs until about five seconds after the last look or action.
+fn instructions() -> String {
+    INSTRUCTIONS.replace("SHARING", if device::streams() {
+        "The device lists looking as screen sharing, which its user can see, and some apps' sound goes silent meanwhile, until about five seconds after the last look or action. During a phone or VoIP call a look takes longer"
+    } else {
+        "The device shows no screen-sharing session for this"
+    })
+}
 
 /// The device's latest look, while nothing else was done since.
 #[derive(Clone)]
@@ -40,6 +49,8 @@ struct Shown {
     size: (f64, f64),
     /// Which way up the interface was: see `upright`.
     way: u8,
+    /// Taken from the screen stream, in the display's own way up: its points go to the touch as they are.
+    native: bool,
     at: Instant,
     /// The saved file of the device it was of (see `device::mark`): another saved under the name isn't it.
     of: Option<Vec<u8>>,
@@ -272,7 +283,7 @@ impl Server {
                 "protocolVersion": VERSIONS.into_iter().find(|v| params["protocolVersion"] == *v).or(VERSIONS.into_iter().max()),
                 "capabilities": { "tools": {} },
                 "serverInfo": { "name": "roamrunctl", "version": env!("ROAMRUN_VERSION") },
-                "instructions": INSTRUCTIONS,
+                "instructions": instructions(),
             }),
             "ping" => json!({}),
             "tools/list" => json!({ "tools": tools(self.offered.is_some(), self.uploads.is_some()) }),
@@ -397,19 +408,22 @@ impl Server {
                 self.device(&name, None)?;
                 let of = self.open[&name].1.clone();
                 let device = &self.open[&name].0;
-                let (png, way) = match device.screenshot() {
-                    // Not said the first time, it is asked once more: a point is turned by it.
-                    Ok(png) => (png, match device.way() { 0 => device.way(), way => way }),
+                let picture = match device::picture(device) {
+                    Ok(picture) => picture,
                     Err(_) => {
                         // Let go of meanwhile: once more, on a new connection.
                         self.open.remove(&name);
-                        let device = self.device(&name, None)?;
-                        (device.screenshot()?, device.way())
+                        device::picture(self.device(&name, None)?)?
                     }
                 };
-                let (jpeg, width, height) = device::fitted(&png, image::ImageFormat::Jpeg)?;
+                let device = &self.open[&name].0;
+                // A PNG comes turned as the interface is, and a point is turned back by it: not said the first
+                // time, it is asked once more. The stream's picture is the display's own way up.
+                let way = if picture.native { 1 } else { match device.way() { 0 => device.way(), way => way } };
+                let native = picture.native;
+                let (jpeg, width, height) = device::fitted(picture.image, image::ImageFormat::Jpeg)?;
                 let id = self.next_look();
-                self.shown.insert(name, Shown { size: (width as f64, height as f64), way, at: Instant::now(), of, id, spent: false });
+                self.shown.insert(name, Shown { size: (width as f64, height as f64), way, native, at: Instant::now(), of, id, spent: false });
                 let mut content = vec![json!({ "type": "image", "data": base64::engine::general_purpose::STANDARD.encode(jpeg), "mimeType": "image/jpeg" })];
                 content.extend(text(format!("{width} x {height}, look {id}. Points for tap and swipe are pixels of this image, given with look {id}. It serves one tap or swipe, and type and paste, within a minute: look again after them.")));
                 Ok(content)
@@ -417,7 +431,7 @@ impl Server {
             "tap" | "swipe" => {
                 // The look is spent by what reaches the device: a call refused for what it says leaves it.
                 let before = self.shown.get(&name).filter(|shown| !shown.spent).ok_or("look first: a point is given in the pixels of the image a look returns")?.clone();
-                let (id, size, way, of) = (before.id, before.size, before.way, before.of.clone());
+                let (id, size, way, native, of) = (before.id, before.size, before.way, before.native, before.of.clone());
                 // A number, or one written as text, as a model sometimes gives it.
                 let given = look_of(arguments)?;
                 // Looked at again since, by another caller or this one: what that look saw may not be on the screen any more.
@@ -427,6 +441,7 @@ impl Server {
                     if !(0.0..size.0).contains(&x) || !(0.0..size.1).contains(&y) {
                         return Err(format!("the point must be inside the image ({} x {})", size.0, size.1));
                     }
+                    if native { return Ok((x / size.0, y / size.1)); }
                     upright(way, size.0 > size.1, (x / size.0, y / size.1)).ok_or_else(|| if way == 0 {
                         "the device is on its side and doesn't say which way: nothing was pressed. Ask the user to turn it upright".to_string()
                     } else {
@@ -436,7 +451,7 @@ impl Server {
                 let done = if tool == "tap" {
                     let (x, y) = real(number("x")?, number("y")?)?;
                     self.spend(&name);
-                    self.unturned(&name, way, &of)?;
+                    if !native { self.unturned(&name, way, &of)?; }
                     self.ask(&name, Some(&of), Some(before), |d| d.tap(x, y)).map(|_| "tapped; look to see what it did")
                 } else {
                     let (from, to) = (real(number("x1")?, number("y1")?)?, real(number("x2")?, number("y2")?)?);
@@ -445,7 +460,7 @@ impl Server {
                         given => given.as_u64().filter(|ms| (50..=5000).contains(ms)).ok_or("milliseconds is a whole number, 50...5000")? as u32,
                     };
                     self.spend(&name);
-                    self.unturned(&name, way, &of)?;
+                    if !native { self.unturned(&name, way, &of)?; }
                     self.ask(&name, Some(&of), Some(before), |d| d.swipe(from, to, ms)).map(|_| "swiped; look to see what it did")
                 };
                 done.map(text)
@@ -664,7 +679,7 @@ pub(crate) mod tests {
             server.call(tool, &arguments).err().unwrap_or_else(|| "done".into())
         };
         let look = |server: &mut Server, size, way, at| {
-            server.shown.insert(name.clone(), Shown { size, way, at, of: device::mark(&name), id: 7, spent: false });
+            server.shown.insert(name.clone(), Shown { size, way, native: false, at, of: device::mark(&name), id: 7, spent: false });
         };
         let (upright, now) = ((100.0, 200.0), Instant::now);
         assert!(call(&mut server, "tap", json!({ "x": 1, "y": 1 })).starts_with("look first"));
@@ -717,7 +732,7 @@ pub(crate) mod tests {
         device::stub(&name, 49152);
         let mut server = Server::default();
         let of = device::mark(&name);
-        server.shown.insert(name.clone(), Shown { size: (100.0, 200.0), way: 1, at: Instant::now(), of: of.clone(), id: 7, spent: false });
+        server.shown.insert(name.clone(), Shown { size: (100.0, 200.0), way: 1, native: false, at: Instant::now(), of: of.clone(), id: 7, spent: false });
         // Saved anew after the look was checked (while the device was asked which way up it was, say): the other
         // isn't opened, and nothing is sent to it.
         device::unstub(&name);
@@ -740,7 +755,7 @@ pub(crate) mod tests {
         };
         // The device's latest look, taken `at`; `spent`: a tap went by it.
         let look = |server: &mut Server, id: u64, at: Instant, spent: bool| {
-            server.shown.insert(name.clone(), Shown { size: (100.0, 200.0), way: 1, at, of: device::mark(&name), id, spent });
+            server.shown.insert(name.clone(), Shown { size: (100.0, 200.0), way: 1, native: false, at, of: device::mark(&name), id, spent });
         };
         let typed = |look: u64| json!({ "look": look, "text": "a" });
         // No look yet: nothing is sent.
@@ -787,7 +802,7 @@ pub(crate) mod tests {
         let name = format!("refused-{}", std::process::id());
         let mut server = Server::default();
         let refused = || r#"{"ok":false,"invalid":true,"error":"can't type character 1 of the text"}"#.to_string();
-        let look = |server: &mut Server, spent: bool| { server.shown.insert(name.clone(), Shown { size: (100.0, 200.0), way: 1, at: Instant::now(), of: None, id: 7, spent }); };
+        let look = |server: &mut Server, spent: bool| { server.shown.insert(name.clone(), Shown { size: (100.0, 200.0), way: 1, native: false, at: Instant::now(), of: None, id: 7, spent }); };
         // A tap, swipe, type or paste spends the look as it is sent; refused, the look is as it was: a tap by it is
         // still taken, and one gone by it already (look → tap → type) still isn't.
         for spent in [false, true] {
@@ -816,7 +831,7 @@ pub(crate) mod tests {
         // How long `tool` takes, an input made `ago`: sent by the latest look (the device doesn't answer, as it isn't
         // there; that it doesn't is known at once).
         let sent = |server: &mut Server, tool: &str, ago: Duration| -> Duration {
-            server.shown.insert(name.clone(), Shown { size: (100.0, 200.0), way: 1, at: Instant::now(), of: device::mark(&name), id: 7, spent: true });
+            server.shown.insert(name.clone(), Shown { size: (100.0, 200.0), way: 1, native: false, at: Instant::now(), of: device::mark(&name), id: 7, spent: true });
             server.acted.insert(name.clone(), Instant::now().checked_sub(ago).unwrap());
             let began = Instant::now();
             assert!(server.call(tool, &json!({ "device": name, "look": 7, "text": "a" })).unwrap_err().contains("doesn't answer"));
@@ -829,7 +844,7 @@ pub(crate) mod tests {
         // An input long enough ago: nothing to wait out.
         assert!(sent(&mut server, "type", SETTLE * 2) < SETTLE / 2);
         // Another device saved under the name in that moment: the text isn't sent to it.
-        server.shown.insert(name.clone(), Shown { size: (100.0, 200.0), way: 1, at: Instant::now(), of: device::mark(&name), id: 7, spent: true });
+        server.shown.insert(name.clone(), Shown { size: (100.0, 200.0), way: 1, native: false, at: Instant::now(), of: device::mark(&name), id: 7, spent: true });
         server.acted.insert(name.clone(), Instant::now());
         let anew = { let name = name.clone(); std::thread::spawn(move || { std::thread::sleep(SETTLE / 4); device::unstub(&name); device::stub(&name, 49153); }) };
         assert!(server.call("type", &json!({ "device": name, "look": 7, "text": "a" })).unwrap_err().contains("isn't the one that look was of"));
@@ -973,7 +988,7 @@ pub(crate) mod tests {
         assert!(said.as_ref().unwrap_err().contains("isn't an app's .ipa"), "{said:?}");
         assert!(server.install_status(&name, None).unwrap().starts_with("no install was begun"));
         // A device that can't be opened: nothing is begun, but the look is ended as it is tried.
-        server.shown.insert(name.clone(), Shown { size: (100.0, 200.0), way: 1, at: Instant::now(), of: device::mark(&name), id: 7, spent: false });
+        server.shown.insert(name.clone(), Shown { size: (100.0, 200.0), way: 1, native: false, at: Instant::now(), of: device::mark(&name), id: 7, spent: false });
         assert!(server.call("install", &json!({ "device": name, "path": app })).unwrap_err().contains("doesn't answer"));
         assert!(!server.shown.contains_key(&name));
         assert!(server.install_status(&name, None).unwrap().starts_with("no install was begun"));

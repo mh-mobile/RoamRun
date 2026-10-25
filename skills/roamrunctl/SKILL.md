@@ -256,8 +256,8 @@ believed the first time it is used — use it only if the user named it.
   that device answers that it is installing — ask `install_status` now and then, then launch.
   Look, act, look again: a look answers with an id (`look 12`) and
   serves one tap or swipe, within a minute, which gives it (`"look": 12`) with points in
-  the pixels of the image it returned; looked at again since, by anyone, or turned since, the
-  device isn't pressed: look again. `type` and `paste` give the latest look's id too, within
+  the pixels of the image it returned; looked at again since, by anyone, or turned since a
+  look that was the device's picture (below), the device isn't pressed: look again. `type` and `paste` give the latest look's id too, within
   the same minute (after a tap by it is fine, and so is more text) and are refused once
   another look, a button, a launch, an install or `elements` came since: look again. After a
   tap, swipe, type or paste, a tap or swipe needs a new look. `press` isn't held to a look and
@@ -331,10 +331,15 @@ An upload serves one install, by you alone. `409` is another upload coming in (s
 again once it's in), `413` one too big. One is kept at a time: if `install` says there's no
 such upload (another replaced it, or it waited 30 minutes), send it again.
 
-A look here is a picture the device makes, and inputs are sent without a screen stream:
-the device lists no screen-sharing session and what plays goes on sounding (listened to
-on iOS 27.0, with looks, taps, keys and buttons; swipes, paste and the microphone weren't
-looked into). `paste` makes the device ask "Allow Paste". The device has to be on Wi‑Fi
+On Linux and Windows a look is a picture the device makes, and inputs are sent without a
+screen stream: the device lists no screen-sharing session and what plays goes on sounding
+(listened to on iOS 27.0, with looks, taps, keys and buttons; swipes, paste and the
+microphone weren't looked into). On macOS (0.11.0+) a look comes from the device's screen
+stream, many times quicker: the device lists it as screen sharing, which its user can see,
+until about five seconds after the last look or action, and some apps' sound goes silent
+meanwhile — asked to keep watching a screen, tell the user that first. During a phone or
+VoIP call the device refuses the stream, and a look is the device's picture again, slower;
+`ROAMRUNCTL_LOOK=screenshot` in the server's environment always takes that. `paste` makes the device ask "Allow Paste". The device has to be on Wi‑Fi
 (on cellular alone it refuses), unlocked once since it started, and connected in
 Tailscale. Whether launching works on a device no Xcode ever met wasn't tried.
 

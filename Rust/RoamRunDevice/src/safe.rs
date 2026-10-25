@@ -82,6 +82,17 @@ impl Device {
         Ok(bytes)
     }
 
+    /// One key frame of the screen stream (HEVC, Annex B): the display's own size and way up. The stream is
+    /// started if it isn't running, and kept a few seconds for the next.
+    pub fn keyframe(&self) -> Result<Vec<u8>, String> {
+        let (mut length, mut error) = (0usize, std::ptr::null_mut());
+        let frame = unsafe { rr_device_keyframe(self.0, &mut length, &mut error) };
+        if frame.is_null() { return Err(take(error)); }
+        let bytes = unsafe { std::slice::from_raw_parts(frame, length) }.to_vec();
+        unsafe { rr_bytes_free(frame, length) };
+        Ok(bytes)
+    }
+
     fn with(&self, text: &str, call: impl FnOnce(*mut RRDevice, *const c_char) -> *mut c_char) -> String {
         match c(text) {
             Ok(text) => take(call(self.0, text.as_ptr())),
