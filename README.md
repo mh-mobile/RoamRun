@@ -31,7 +31,8 @@ It also does three related things:
   ([Installing without the bridge](#installing-without-the-bridge-over-the-air)).
 
 For a machine without RoamRun — Linux, Windows, or another Mac — there is a separate command,
-[`roamrunctl`](Rust/roamrunctl/README.md).
+[`roamrunctl`](Rust/roamrunctl/README.md). With it, a CI build can install and launch on your device
+([Installing and launching from CI](#installing-and-launching-from-ci)).
 
 ## Why it is needed
 
@@ -569,6 +570,28 @@ restrict it with Tailscale's access rules. To take the page down, delete
 
 The rest — the port and Funnel, `--replace`, Developer Mode on the device, and what RoamRun checks
 before it stores a build — is in [docs/ota.md](docs/ota.md).
+
+## Installing and launching from CI
+
+A CI build can install the app it built on your device and launch it, over Tailscale, with
+[`roamrunctl`](Rust/roamrunctl/README.md): no bridge, and no Mac with Xcode on the CI side. The build
+joins your tailnet, then does one of two things:
+
+- **roamrunctl on the CI machine**, with the device's pairing kept as a CI secret (made once
+  beside the device with `roamrun key create`, or with `roamrunctl pair control`).
+- **Through a relay**: a machine of yours runs `roamrunctl mcp --http` and keeps the pairing; the
+  build sends it the `.ipa`, and the relay installs and launches.
+
+| CI | How | Guide |
+|---|---|---|
+| GitHub Actions | the action [mh-mobile/roamrun-action](https://github.com/mh-mobile/roamrun-action), after Tailscale's own action; Linux and macOS runners | [docs/ci.md](docs/ci.md) |
+| Xcode Cloud | a script in the project runs Tailscale in userspace; roamrunctl goes through its HTTP proxy (`ROAMRUNCTL_PROXY`, 0.10.0 or later), or `curl` calls a relay | [docs/xcode-cloud.md](docs/xcode-cloud.md) |
+| Bitrise | the Step [mh-mobile/bitrise-step-roamrun](https://github.com/mh-mobile/bitrise-step-roamrun), which joins the tailnet itself | [docs/bitrise.md](docs/bitrise.md) |
+
+Each was run with an iPhone 15 Pro on iOS 27.0; the guides say how, and what wasn't tried. What it
+needs: an `.ipa` signed with a development profile that lists the device, and the device on Wi‑Fi
+with Tailscale on and unlocked once since it started. Whoever can read the CI's secrets can operate
+the device; the guides say who that is and how each secret is taken back.
 
 ## Limitations and known issues
 

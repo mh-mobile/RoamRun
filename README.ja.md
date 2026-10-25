@@ -24,7 +24,7 @@ RoamRun は、macOS のメニューバーアプリです。Xcode のワイヤレ
 - クラウドの Mac のように、**デバイスと同じ場所にいたことのない Mac をペアリングする**（[離れた Mac を Xcode 用にペアリングする](#離れた-mac-を-xcode-用にペアリングする)）
 - ブリッジもペアリングも使わずに、**デバイス自身にビルドをインストールさせる**（[ブリッジを使わずにインストールする](#ブリッジを使わずにインストールするota)）
 
-RoamRun を入れていないマシン（Linux、Windows、別の Mac）向けには、[`roamrunctl`](Rust/roamrunctl/README.ja.md) という別のコマンドがあります。
+RoamRun を入れていないマシン（Linux、Windows、別の Mac）向けには、[`roamrunctl`](Rust/roamrunctl/README.ja.md) という別のコマンドがあります。これを使うと、CI のビルドからデバイスへインストールして起動できます（[CI からインストールして起動する](#ci-からインストールして起動する)）。
 
 ## なぜ必要か
 
@@ -408,6 +408,23 @@ roamrun ota iPhone build/MyApp.ipa     # 名前を指定すると、そのデバ
 **tailnet のメンバーなら、だれでもこのページを開いて、ビルドをインストールできます**。tailnet を共有している場合は、Tailscale のアクセス制御で制限してください。ページの公開をやめるには、`~/Library/Application Support/RoamRun/ota/` を削除します。
 
 ポートと Funnel、`--replace`、デバイス側のデベロッパモード、ビルドを保存する前に RoamRun が確かめることは、[docs/ota.ja.md](docs/ota.ja.md)にあります。
+
+## CI からインストールして起動する
+
+CI のビルドから、作ったアプリを Tailscale 越しにデバイスへインストールし、起動できます。使うのは [`roamrunctl`](Rust/roamrunctl/README.ja.md) で、ブリッジも、CI 側の Xcode の入った Mac も要りません。ビルドは tailnet に参加したうえで、次のどちらかを行います。
+
+- CI のマシンで roamrunctl を動かす。デバイスのペアリングは、CI のシークレットに置きます。ペアリングは、デバイスのそばで一度だけ作ります（`roamrun key create` か `roamrunctl pair control`）。
+- relay に頼む。手元のマシンで `roamrunctl mcp --http` を動かし、ペアリングはそこに置きます。ビルドは `.ipa` を relay に送り、relay がインストールして起動します。
+
+| CI | やり方 | 手順 |
+|---|---|---|
+| GitHub Actions | Tailscale の action のあとに、action の [mh-mobile/roamrun-action](https://github.com/mh-mobile/roamrun-action) を置く。Linux と macOS のランナー | [docs/ci.ja.md](docs/ci.ja.md) |
+| Xcode Cloud | プロジェクトのスクリプトで Tailscale を userspace で動かす。roamrunctl はその HTTP プロキシを通す（`ROAMRUNCTL_PROXY`、0.10.0 以降）か、`curl` で relay を呼ぶ | [docs/xcode-cloud.ja.md](docs/xcode-cloud.ja.md) |
+| Bitrise | Step の [mh-mobile/bitrise-step-roamrun](https://github.com/mh-mobile/bitrise-step-roamrun)。Step が自分で tailnet に参加する | [docs/bitrise.ja.md](docs/bitrise.ja.md) |
+
+どれも、iOS 27.0 の iPhone 15 Pro で試しました。やり方と、試していないことは、それぞれの手順にあります。
+
+必要なものは 2 つです。デバイスを含む開発用プロファイルで署名した `.ipa` と、Wi‑Fi につながったデバイスです。デバイスでは Tailscale をオンにし、起動してから一度はロックを解除しておきます。CI のシークレットを読める人は、デバイスを操作できます。それが誰か、各シークレットをどう取り消すかも、それぞれの手順に書いてあります。
 
 ## 制限と既知の問題
 
