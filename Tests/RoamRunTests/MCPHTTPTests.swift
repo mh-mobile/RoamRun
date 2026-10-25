@@ -58,6 +58,8 @@ private final class Served: @unchecked Sendable {
     var handled: [String] = []
     /// Held while a call on "slow" runs.
     let slow = DispatchSemaphore(value: 0)
+    /// Whether a call on "waits" saw its request to the app given up.
+    var givenUp: Bool?
 
     init(
         token: String? = nil,
@@ -68,7 +70,7 @@ private final class Served: @unchecked Sendable {
     ) throws {
         (listener, port) = try MCPHTTP.listen(ip: "127.0.0.1", port: 0)
         final class Later: @unchecked Sendable {
-            var handle: ((Data) -> Data?)?
+            var handle: ((Data, DeviceControlWire.Asking) -> Data?)?
         }
         let later = Later()
         server = MCPHTTP(
@@ -79,14 +81,14 @@ private final class Served: @unchecked Sendable {
             hosts: MCPHTTP.hosts(ip: "127.0.0.1", names: ["mac.tail.ts.net"], port: port),
             headWithin: 2,
             whois: whois,
-            handle: { message in
-                later.handle?(message)
+            handle: { message, asking in
+                later.handle?(message, asking)
             },
             turnOf: { arguments in
                 arguments["device"] as? String
             }
         )
-        later.handle = { [unowned self] message in
+        later.handle = { [unowned self] message, asking in
             let object = (try? JSONSerialization.jsonObject(with: message)) as? [String: Any] ?? [:]
             let id = object["id"].map {
                 "\($0)"
@@ -97,6 +99,15 @@ private final class Served: @unchecked Sendable {
             }
             if device == "slow" {
                 slow.wait()
+            }
+            if device == "waits" {
+                // As a call waiting at the app behind another client: until it is given up, or 3 s.
+                for _ in 0 ..< 150 where !asking.givenUp {
+                    usleep(20000)
+                }
+                lock.withLock {
+                    givenUp = asking.givenUp
+                }
             }
             return Data(#"{"jsonrpc":"2.0","id":\#(id),"result":{"content":[],"isError":false}}"#.utf8)
         }
@@ -253,4 +264,37 @@ private func status(_ answer: String) -> Int {
     [first, takenBack, kept].forEach {
         close($0)
     }
+}
+
+/// A JSON nested deep is refused or read, and the server goes on: on a thread's default stack it ran out.
+@Test func aDeeplyNestedBodyDoesntEndTheServer() throws {
+    let served = try Served()
+    let deep = String(repeating: #"{"a":"#, count: 5000) + "1" + String(repeating: "}", count: 5000)
+    #expect([200, 202, 400].contains(status(served.post(deep))))
+    #expect(status(served.post(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#)) == 200)
+}
+
+/// A call whose caller goes while it waits at the app (behind another client of the device) has its
+/// request to the app given up.
+@Test func aCallsRequestToTheAppIsGivenUpWhenItsCallerGoes() throws {
+    let served = try Served()
+    let body = #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"tap","arguments":{"device":"waits"}}}"#
+    let fd = served
+        .open(
+            "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:\(served.port)\r\nContent-Length: \(body.utf8.count)\r\n\r\n\(body)"
+        )
+    for _ in 0 ..< 100 where served.lock.withLock({
+        served.handled.isEmpty
+    }) {
+        usleep(20000)
+    }
+    close(fd)
+    for _ in 0 ..< 200 where served.lock.withLock({
+        served.givenUp == nil
+    }) {
+        usleep(20000)
+    }
+    #expect(served.lock.withLock {
+        served.givenUp
+    } == true)
 }

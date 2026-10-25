@@ -452,7 +452,7 @@ enum CLI {
                         allow: parsed.lists["--allow"] ?? [],
                         tokenFile: parsed.values["--token-file"]
                     )
-                    FileHandle.standardError.write(Data((note + "\n").utf8))
+                    MCPHTTP.note(note + "\n")
                     Thread.detachNewThread {
                         server.serve(listener)
                         exit(1)

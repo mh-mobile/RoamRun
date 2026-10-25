@@ -20,6 +20,9 @@ final class MCPHTTP: @unchecked Sendable {
     /// How long a `notifications/cancelled` is kept for a call still to come, and how many at most.
     static let takenBackFor: TimeInterval = 60
     static let cancelsMost = 256
+    /// A connection's thread: what it reads is parsed there, and a JSON nested deep enough runs a thread's default
+    /// 512 KB out (Foundation stops at depth 512, but only after recursing that far).
+    static let stack = 8 << 20
 
     enum Allow: Equatable {
         case tag(String)
@@ -445,8 +448,9 @@ final class MCPHTTP: @unchecked Sendable {
     let ownID: String
     let hosts: [String]
     let whois: @Sendable (String) -> Result<Whois, Failure>
-    /// One JSON-RPC message in, its answer out (nil for a notification).
-    let handle: @Sendable (Data) -> Data?
+    /// One JSON-RPC message in, its answer out (nil for a notification), asked of the app with the `Asking` given,
+    /// which is given up when the caller goes or takes the call back.
+    let handle: @Sendable (Data, DeviceControlWire.Asking) -> Data?
     /// The device a tool call's arguments name, as its turn is kept; nil: answered at once (no such device).
     let turnOf: @Sendable ([String: Any]) -> String?
     let headWithin: TimeInterval
@@ -465,7 +469,7 @@ final class MCPHTTP: @unchecked Sendable {
         hosts: [String],
         headWithin: TimeInterval = headWithin,
         whois: @escaping @Sendable (String) -> Result<Whois, Failure>,
-        handle: @escaping @Sendable (Data) -> Data?,
+        handle: @escaping @Sendable (Data, DeviceControlWire.Asking) -> Data?,
         turnOf: @escaping @Sendable ([String: Any]) -> String?
     ) {
         self.allowed = allowed
@@ -567,7 +571,7 @@ final class MCPHTTP: @unchecked Sendable {
                     close(fd)
                     continue
                 }
-                Thread.detachNewThread {
+                Self.thread {
                     Self.respond(fd, 503, "", "too many connections at once\n")
                     Self.linger(fd)
                     close(fd)
@@ -577,7 +581,7 @@ final class MCPHTTP: @unchecked Sendable {
                 }
                 continue
             }
-            Thread.detachNewThread {
+            Self.thread {
                 self.connection(fd, from: ip)
                 close(fd)
                 self.lock.withLock {
@@ -590,6 +594,17 @@ final class MCPHTTP: @unchecked Sendable {
         }
     }
 
+    static func thread(_ work: @escaping @Sendable () -> Void) {
+        let thread = Thread(block: work)
+        thread.stackSize = stack
+        thread.start()
+    }
+
+    /// A line on standard error; one that can't be written (its reader gone) is dropped.
+    static func note(_ line: String) {
+        try? FileHandle.standardError.write(contentsOf: Data(line.utf8))
+    }
+
     /// One request, from its head to its answer, and its line in the log. Never logged: the token, a body, what is
     /// typed or pasted, what is shown.
     func connection(_ fd: Int32, from ip: String) {
@@ -598,7 +613,7 @@ final class MCPHTTP: @unchecked Sendable {
         let outcome = served(fd, from: ip, began: began, who: &who, what: &what)
         let line =
             "\(Self.clock()) \(ip) \(Self.printable(who)) \(Self.printable(what)) \(outcome) \(String(format: "%.1f", Date().timeIntervalSince(began)))s\n"
-        FileHandle.standardError.write(Data(line.utf8))
+        Self.note(line)
         Self.linger(fd)
     }
 
@@ -710,7 +725,7 @@ final class MCPHTTP: @unchecked Sendable {
         guard method == "tools/call", let device = turnOf(arguments) else {
             // Asks nothing of a device (`devices`, `initialize`, a device not saved): answered at once. An initialize
             // is given a session id, sent back with what follows.
-            let answer = handle(line).flatMap {
+            let answer = handle(line, DeviceControlWire.Asking()).flatMap {
                 String(data: $0, encoding: .utf8)
             } ?? ""
             var given = ""
@@ -791,7 +806,27 @@ final class MCPHTTP: @unchecked Sendable {
                 ])
                 .data(using: .utf8)
             }
-            return handle(line)
+            // Given up when the caller goes or takes it back: one still waiting at the app (behind another client
+            // of the device) isn't begun there, and one under way stops where it can, as with stdio.
+            let asking = DeviceControlWire.Asking()
+            let done = DispatchSemaphore(value: 0)
+            Self.thread { [weak self] in
+                while done.wait(timeout: .now() + 0.3) == .timedOut {
+                    let takenBack = session.map { session in
+                        self?.lock.withLock {
+                            self?.cancelled.contains {
+                                $0.session == session && $0.id == id
+                            } ?? false
+                        } ?? false
+                    } ?? false
+                    if takenBack || Self.closed(fd) {
+                        asking.giveUp()
+                        return
+                    }
+                }
+            }
+            defer { done.signal() }
+            return handle(line, asking)
         }
     }
 }
@@ -801,6 +836,8 @@ extension MCPHTTP {
     /// IPv4 address only; not without Tailscale, without `--allow`, or as root. The server, its socket, and what to
     /// tell the person who started it.
     static func start(port given: String, allow: [String], tokenFile: String?) throws -> (MCPHTTP, Int32, String) {
+        // A log read through a pipe whose reader went: the write fails, the server goes on.
+        signal(SIGPIPE, SIG_IGN)
         guard geteuid() != 0
         else { throw Failure(description: "not as root: start it as the user whose devices it offers") }
         guard let port = UInt16(given), port > 0 else { throw Failure(description: "--http takes a port, 1...65535") }
@@ -840,10 +877,9 @@ extension MCPHTTP {
                     return .failure(Failure(description: error.localizedDescription))
                 }
             },
-            handle: { message in
-                // Each call its own: one taken back gives up its own request to the app alone.
-                let asking = DeviceControlWire.Asking()
-                return DeviceMCP(profiles: {
+            handle: { message, asking in
+                // Each call its own asking: one taken back gives up its own request to the app alone.
+                DeviceMCP(profiles: {
                     ProfileStore().load()
                 }, looks: folder, asking: asking) {
                     try DeviceControlWire.ask($0, in: ProfileStore.directory, asking: asking)
