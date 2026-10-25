@@ -155,6 +155,22 @@ final class DeviceControlHub: @unchecked Sendable {
     }
 
     /// Whether an install not ended yet, on any device, is installing from `folder`.
+    /// What runs longer than a request waits (an answer is waited for 480 s): a copy older than this, left to install
+    /// besides what the start sweeps, is no request's.
+    static let leftWhileRunning: TimeInterval = 60 * 60
+
+    /// Apps left to install, swept while the app runs too (a menu bar app runs for weeks): a copy whose install never
+    /// ended, or an upload a killed server left. Not one an install here is taking from, however old.
+    func sweepLeft(now: Date = Date()) {
+        let folder = DeviceControlWire.socketFolder(in: directory)
+        for left in (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+            where DeviceControlWire.leftToInstall(left, now: now.addingTimeInterval(-Self.leftWhileRunning)) &&
+            !installing(from: left.standardizedFileURL.path)
+        {
+            try? FileManager.default.removeItem(at: left)
+        }
+    }
+
     private func installing(from folder: String) -> Bool {
         lock.withLock {
             installs.values.contains {
@@ -937,6 +953,7 @@ final class DeviceControlHub: @unchecked Sendable {
             self?.renewChanged()
             self?.checkOpen()
             self?.keepOpen()
+            self?.sweepLeft()
         }
         timer.resume()
         self.timer = timer

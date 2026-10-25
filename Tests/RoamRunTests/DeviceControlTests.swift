@@ -1555,6 +1555,63 @@ func anInputIsInterruptedWhenItsAskerLeavesOrItsDeviceIsSwitchedOff(_ op: String
     #expect(!FileManager.default.fileExists(atPath: own.path))
 }
 
+/// While the app runs, apps left to install an hour ago or more are swept too; not one an install is taking from,
+/// however old, nor one a request may still be waiting with.
+@Test func appsLeftToInstallAreSweptWhileTheAppRuns() throws {
+    let dir = URL(fileURLWithPath: "/tmp/rr-\(UUID().uuidString.prefix(8))")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try scratchPairing(at: DeviceControlWire.pairingFile(udid: "UDID-1", in: dir))
+    let made = OSAllocatedUnfairLock<[StandInDevice]>(initialState: [])
+    let hub = DeviceControlHub(directory: dir, key: { _ in
+        scratchKey
+    }) { _, _, _ in
+        let device = StandInDevice()
+        made.withLock {
+            $0.append(device)
+        }
+        return device
+    }
+    defer { hub.stop() }
+    let id = UUID()
+    hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
+    let device = try #require(made.withLock {
+        $0.first
+    })
+    hub.start()
+    let control = DeviceControlWire.socketFolder(in: dir)
+    func left(_ name: String, minutesAgo: Double) throws -> URL {
+        let folder = control.appendingPathComponent(name)
+        let app = folder.appendingPathComponent("App.app")
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        try PropertyListSerialization.data(
+            fromPropertyList: ["CFBundleIdentifier": "com.example.App"],
+            format: .xml,
+            options: 0
+        )
+        .write(to: app.appendingPathComponent("Info.plist"))
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(-minutesAgo * 60)],
+            ofItemAtPath: folder.path
+        )
+        return folder
+    }
+    let old = try left("install-old", minutesAgo: 90)
+    let waiting = try left("install-waiting", minutesAgo: 5)
+    // An install under way from a folder that grows old meanwhile.
+    device.installHold = DispatchSemaphore(value: 0)
+    let taking = try left("install-taking", minutesAgo: 0)
+    #expect(hub.answer(.init(op: "install", device: id, path: taking.appendingPathComponent("App.app").path)).ok)
+    #expect(soon(device.installBegan))
+    try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-90 * 60)],
+                                          ofItemAtPath: taking.path)
+    hub.sweepLeft()
+    #expect(!FileManager.default.fileExists(atPath: old.path))
+    #expect(FileManager.default.fileExists(atPath: waiting.path))
+    #expect(FileManager.default.fileExists(atPath: taking.path))
+    device.installHold?.signal()
+}
+
 /// What the app's start sweeps away of apps left to install: one left two minutes ago or more, not one a CLI is copying.
 @Test func onlyAnInstallCopyLeftAWhileIsSweptAtStart() throws {
     let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
