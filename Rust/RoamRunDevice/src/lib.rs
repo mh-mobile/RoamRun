@@ -80,7 +80,7 @@ struct Link {
     held: Option<(bool, u64, u64)>,
     /// Where a finger is down on the screen, for the same.
     finger: Option<(u16, u16)>,
-    /// The uniqueId of the display on when last asked (a stream starting, a screenshot), for touches to go to it.
+    /// The uniqueId of the display on when the device last answered (a stream starting, a screenshot), for touches to go to it.
     shown: Option<String>,
     /// That display's id, for a stream to show it.
     shown_id: Option<i64>,
@@ -389,8 +389,9 @@ async fn ask_shown(link: &mut Link) -> Option<plist::Value> {
     displays
 }
 
-/// Which display is on, from the device's answer; with no answer in time, the one known before:
-/// the primary one taken instead was, on a two-screen device opened, the screen that is off.
+/// Which display is on, from the device's answer; with no answer (in time), the one known before:
+/// the primary one taken instead was, on a two-screen device opened, the screen that is off. The
+/// one known can be off too, the device folded since; the next answer puts it right.
 fn kept_shown(known: (Option<String>, Option<i64>), answer: Option<&plist::Value>) -> (Option<String>, Option<i64>) {
     match answer {
         Some(displays) => (unique_id(displays), display_id(displays)),
@@ -1482,7 +1483,7 @@ async fn start_stream(link: &mut Link) -> Result<Stream, String> {
     if let Some(early) = link.stream_stopped.and_then(|at| AFTER_STOP.checked_sub(at.elapsed())) {
         tokio::time::sleep(early).await;
     }
-    // Display 1 when the device has never said.
+    // Display 1 when nothing is known (never answered, or no display id in the answer).
     ask_shown(link).await;
     let shown = link.shown_id.unwrap_or(1);
     link.touchscreen = None;   // the screen may have changed: the touch surface is found again
