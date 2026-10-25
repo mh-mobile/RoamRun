@@ -295,8 +295,8 @@ bounded.
   from another tailnet; the machine itself without the token (any of its users would
   otherwise pass); any request with an `Origin` (a web page in a browser on the tailnet);
   a `Host` other than the server's address or its own Tailscale names. A request's head has
-  to arrive within 10 s and its body within 30 s more (an upload's: 30 s plus 2 s a MiB, with
-  no more than 60 s between reads), and one address holds 17 of the 32
+  to arrive within 10 s and its body within 30 s more (an upload has to keep coming: 30 s, and
+  2 s more for each MiB that came, with no more than 60 s between reads), and one address holds 17 of the 32
   connections at most: one machine that can reach the port can't take them all, but two or
   more that the tailnet's access rules let reach it can keep callers out for as long as they
   keep connecting. Only the devices named are used — each only while it is saved as

@@ -42,9 +42,17 @@ const TURN: Duration = Duration::from_secs(20);
 const TAKEN_BACK: Duration = Duration::from_secs(60);
 /// Of those, no more than this many are kept at once.
 const CANCELS: usize = 256;
-/// An upload's body is given this long a MiB on top of `BODY_WITHIN`, by its length or, chunked, by the most taken:
-/// 200 MiB took 103 s through a cloud's proxy (about 2 MiB a second).
+/// An upload's body is given `UPLOAD_WITHIN`, and this long more for each MiB that came — by what comes, not by the
+/// length it says, so that one trickling in doesn't hold the one slot for as long as that length would take at its
+/// pace: 200 MiB took 103 s through a cloud's proxy (about 2 MiB a second).
 const UPLOAD_MIB_WITHIN: Duration = Duration::from_secs(2);
+#[cfg(not(test))]
+const UPLOAD_WITHIN: Duration = BODY_WITHIN;
+#[cfg(test)]
+const UPLOAD_WITHIN: Duration = Duration::from_millis(500);
+/// What may trail a chunked body's last piece, at most: lines, and bytes.
+const TRAILER_LINES: usize = 64;
+const TRAILER: usize = 8 * 1024;
 /// An upload not used this long is dropped.
 const UPLOAD_KEPT: Duration = Duration::from_secs(30 * 60);
 
@@ -101,18 +109,25 @@ fn printable(said: &str) -> String {
     said.chars().take(200).map(|c| if c.is_control() { '?' } else { c }).collect()
 }
 
-/// The socket, read with a deadline for all that is read, not for each read.
+/// The socket, read with a deadline for all that is read, not for each read; with `pace`, one that grows with what was
+/// read since it began (an upload's).
 struct Timed {
     stream: TcpStream,
     until: Instant,
+    pace: Option<(Instant, u64)>,
 }
 
 impl Read for Timed {
     fn read(&mut self, into: &mut [u8]) -> std::io::Result<usize> {
+        if let Some((began, read)) = self.pace {
+            self.until = began + UPLOAD_WITHIN + UPLOAD_MIB_WITHIN * u32::try_from((read >> 20) + 1).unwrap_or(u32::MAX);
+        }
         let left = self.until.checked_duration_since(Instant::now()).filter(|left| !left.is_zero())
             .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::TimedOut))?;
         self.stream.set_read_timeout(Some(left.min(IDLE)))?;
-        self.stream.read(into)
+        let n = self.stream.read(into)?;
+        if let Some((_, read)) = &mut self.pace { *read += n as u64 }
+        Ok(n)
     }
 }
 
@@ -202,9 +217,15 @@ fn framed(reader: &mut impl BufRead, request: &Request, most: u64, into: &mut im
             size += piece;
             if !line(reader, 2)?.is_empty() { return Err(400) }
         }
-        // What may trail the last piece: read to the empty line, not used.
-        while !line(reader, 1024)?.is_empty() {}
-        return Ok(size);
+        // What may trail the last piece: read to the empty line, not used — a little of it, not a stream of lines.
+        let mut trailing = 0;
+        for _ in 0..TRAILER_LINES {
+            let line = line(reader, 1024)?;
+            if line.is_empty() { return Ok(size) }
+            trailing += line.len() + 2;
+            if trailing > TRAILER { return Err(431) }
+        }
+        return Err(431);
     }
     let length = length(request)?.unwrap_or(0);
     if length > most { return Err(413) }
@@ -632,7 +653,7 @@ fn linger(mut stream: &TcpStream) {
 fn served(stream: &mut TcpStream, s: &Shared, from: IpAddr, began: Instant, who: &mut String, what: &mut String) -> String {
     let _ = stream.set_write_timeout(Some(WRITE));
     let Ok(read) = stream.try_clone() else { return "gone".into() };
-    let mut reader = BufReader::new(Timed { stream: read, until: began + s.head_within });
+    let mut reader = BufReader::new(Timed { stream: read, until: began + s.head_within, pace: None });
     let mut refuse = |status: u16, extra: &str, body: &str| { respond(stream, status, extra, body); status.to_string() };
     let request = match head(&mut reader) { Ok(request) => request, Err(status) => return refuse(status, "", "") };
     *what = format!("{} {}", request.method, request.path);
@@ -669,8 +690,7 @@ fn served(stream: &mut TcpStream, s: &Shared, from: IpAddr, began: Instant, who:
         let too_big = format!("{} MiB at most: the server's --max-upload sets it\n", uploads.most >> 20);
         if length.is_some_and(|length| length > uploads.most) { return refuse(413, "", &too_big) }
         let Some(_coming) = uploads.coming() else { return refuse(409, "", "another upload is coming in: try again once it is in\n") };
-        let mib = length.unwrap_or(uploads.most).div_ceil(1 << 20);
-        reader.get_mut().until = Instant::now() + BODY_WITHIN + UPLOAD_MIB_WITHIN * u32::try_from(mib).unwrap_or(u32::MAX);
+        reader.get_mut().pace = Some((Instant::now(), 0));
         if request.header("expect").is_some_and(|e| e.eq_ignore_ascii_case("100-continue")) {
             let _ = stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n");
         }
@@ -837,6 +857,7 @@ mod tests {
             ("POST /mcp HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n11\r\n", 413),
             ("POST /mcp HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nffffffffffffffff\r\n", 413),
             ("POST /mcp HTTP/1.1\r\nTransfer-Encoding: gzip\r\n\r\n", 501),
+            (&*Box::leak(format!("POST /mcp HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx\r\n0\r\n{}\r\n", "x-pad: 1\r\n".repeat(TRAILER_LINES + 1)).into_boxed_str()), 431),
             ("POST /mcp HTTP/1.1\r\nContent-Length: 5\r\n\r\nhel", 400),
             ("POST /mcp HTTP/1.1\r\nNo colon\r\n\r\n", 400),
             ("POST /mcp\r\n\r\n", 400),
@@ -1104,6 +1125,28 @@ mod tests {
         let mut answer = String::new();
         let _ = stream.read_to_string(&mut answer);
         answer
+    }
+
+    #[test]
+    fn an_upload_trickling_in_doesnt_hold_the_slot_for_the_length_it_says() {
+        let uploads = Uploads::new(128 << 20).unwrap();
+        let at = started_with(None, ci, Some(uploads.clone()));
+        // Said to be 64 MiB, then a byte every 400 ms, each within IDLE: cut off by what came, not given 2 s a MiB said.
+        let began = Instant::now();
+        let mut slow = TcpStream::connect(at).unwrap();
+        slow.write_all(format!("PUT /upload HTTP/1.1\r\nHost: {at}\r\nContent-Length: {}\r\n\r\n", 64 << 20).as_bytes()).unwrap();
+        while began.elapsed() < Duration::from_secs(10) && slow.write_all(b"x").is_ok() {
+            std::thread::sleep(Duration::from_millis(400));
+            slow.set_read_timeout(Some(Duration::from_millis(1))).unwrap();
+            let mut peek = [0u8; 16];
+            if matches!(slow.peek(&mut peek), Ok(n) if n > 0) { break }
+        }
+        slow.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut answer = String::new();
+        let _ = slow.read_to_string(&mut answer);
+        assert!(answer.starts_with("HTTP/1.1 408") && began.elapsed() < Duration::from_secs(6), "{answer} after {:?}", began.elapsed());
+        // The slot is free again.
+        assert!(put(at, "Content-Length: 1\r\n", b"x").contains(" 200 "));
     }
 
     #[test]
