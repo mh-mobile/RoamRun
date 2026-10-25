@@ -547,3 +547,26 @@ import ImageIO
         #expect(!claimed)
     }
 }
+
+/// A latest install that failed doesn't hold the next one back: only one going does.
+@Test func aFailedInstallDoesntHoldBackTheNextFromAnUpload() throws {
+    var claimed = false
+    let server = DeviceMCP(profiles: {
+        [profile("iPhone")]
+    }, looks: FileManager.default.temporaryDirectory, installsFromPaths: false, claimUpload: { _, _ in
+        claimed = true
+        return "/ready/install-x.ipa"
+    }) { request in
+        switch request.op {
+        case "state": return .init(ok: true, allowed: true)
+        case "install_status":
+            return .failure("installing com.example.App on iPhone failed after 3 s (of the 300 s it was given): no")
+        default: return .init(ok: true, install: "ef56", said: "began (install ef56)")
+        }
+    }
+    let answer = try #require(server.handle(Data(
+        #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"install","arguments":{"device":"iPhone","upload":"u1","sha256":"ab"}}}"#
+            .utf8
+    )))
+    #expect(String(decoding: answer, as: UTF8.self).contains("install ef56") && claimed)
+}

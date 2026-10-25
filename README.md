@@ -356,8 +356,9 @@ it is under way. The RoamRun app
 has to be running, as for `roamrun mcp`. With `--allow-install [--max-upload <MiB>]` it offers
 `install` and `install_status`: the caller sends an .ipa with `PUT /upload` (1024 MiB at most by
 default), gets its id and sha256, and installs it by them, as with roamrunctl. One upload is kept,
-in RoamRun's own folder, for the machine that sent it to install: an install refused because the
-device isn't set up, is switched off or is installing leaves it for another try. It goes when an
+in RoamRun's own folder, for the machine that sent it to install. Before an install uses it, the
+device is asked whether it is set up, switched on and not installing; refused then, the upload
+stays for another try (what changes in the moment after that isn't caught). It goes when an
 install uses it, when any caller starts another upload, after 30 minutes unused, or at Ctrl-C; one
 left by a server that was killed goes when a server starts a day later. Without `--allow-install`
 there is neither.

@@ -354,8 +354,14 @@ final class DeviceMCP: @unchecked Sendable {
             do {
                 let state = try send(.init(op: "state", device: device.id))
                 guard state.allowed != false else { throw Failure(description: DeviceControlHub.switchedOff) }
-                let latest = try send(.init(op: "install_status", device: device.id)).said ?? ""
-                guard !latest.hasPrefix("installing") else { throw Failure(description: latest) }
+                // Only one going is a refusal: a latest that failed doesn't hold the next back.
+                let latest = try ask(.init(op: "install_status", device: device.id))
+                if latest.error == "unknown request" {
+                    throw Failure(description: Self.olderForApps)
+                }
+                if latest.ok, let going = latest.said, going.hasPrefix("installing") {
+                    throw Failure(description: going)
+                }
             } catch let failure as Failure where failure.description == "unknown request" {
                 throw Failure(description: Self.olderForApps)
             }

@@ -137,6 +137,7 @@ extension MCPHTTP {
             lock.withLock {
                 guard let held = kept, held.upload.id == id, held.upload.owner == owner else { return Self.gone(id) }
                 kept?.used = Date()
+                utimes(held.upload.path, nil) // its file's time too: a server starting goes by that
                 return held.upload.sha256.caseInsensitiveCompare(sha256) == .orderedSame ? nil :
                     "sha256 \(sha256) isn't upload \(id)'s: nothing was installed"
             }
