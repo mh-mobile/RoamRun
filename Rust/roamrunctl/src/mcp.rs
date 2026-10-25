@@ -120,9 +120,10 @@ pub struct Server {
     past: std::collections::VecDeque<(String, String, Result<String, String>)>,
     /// The last look's id; the first is a random one, so that a look kept from an earlier run isn't taken for one since.
     looks: u64,
-    /// Each device's screen size (None: not said), as its stream pictures are cut to, by the size of the frame it was
-    /// asked for: asked again when frames come in another size (a two-screen device folded or opened since).
-    screens: HashMap<String, (Size, Option<Size>)>,
+    /// Each device's screen size, as its stream pictures are cut to, by the size of the frame it was asked for and when:
+    /// asked again when frames come in another size (a two-screen device folded or opened since), and, not said, a
+    /// minute later.
+    screens: HashMap<String, (Size, Option<Size>, Instant)>,
 }
 
 fn text(s: impl Into<String>) -> Vec<Value> { vec![json!({ "type": "text", "text": s.into() })] }
@@ -140,6 +141,8 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
 
 /// How many ended installs of a device are kept for `install_status` asked by their id, once others followed.
 const PAST: usize = 16;
+/// How long a screen size the device didn't say is gone without before it is asked again (each ask can take seconds).
+const SCREEN_AGAIN: Duration = Duration::from_secs(60);
 
 /// What `install` answers once it has begun: `remote` reads the id back from it.
 pub fn begun(what: &str, megabytes: u64, name: &str, id: &str, given: Duration) -> String {
@@ -316,7 +319,7 @@ impl Server {
         // Removed since, or another saved under the name: the one that is open isn't the one named any more.
         if self.open.get(name).is_some_and(|(_, was)| device::mark(name) != *was) {
             // What was seen of the other isn't this one's screen.
-            self.open.remove(name); self.shown.remove(name); self.acted.remove(name);
+            self.open.remove(name); self.shown.remove(name); self.acted.remove(name); self.screens.remove(name);
         }
         if !self.open.contains_key(name) {
             let offered = self.offered.as_ref().map(|offered| offered.iter().find(|(n, _)| n == name).and_then(|(_, was)| was.clone()));
@@ -430,10 +433,10 @@ impl Server {
                 let image = if native {
                     let frame = (picture.image.width(), picture.image.height());
                     let screen = match self.screens.get(&name) {
-                        Some(&(asked, screen)) if asked == frame => screen,
+                        Some(&(asked, screen, at)) if asked == frame && (screen.is_some() || at.elapsed() < SCREEN_AGAIN) => screen,
                         _ => {
                             let screen = device::screen_size(device);
-                            self.screens.insert(name.clone(), (frame, screen));
+                            self.screens.insert(name.clone(), (frame, screen, Instant::now()));
                             screen
                         }
                     };
