@@ -321,6 +321,9 @@ tunnel and Xcode has to run again.
     no `Origin`, the right `Host` and the token: those are refused first). Started without
     `--token-file`: from this machine → 403, the log saying `this machine itself, without the
     token`.
+    On a Mac, a look → the device lists screen sharing, gone about 5 s later; with
+    `ROAMRUNCTL_LOOK=screenshot` → a look is the PNG, and no screen sharing is listed; the device
+    held sideways, a tap by a look's pixels → lands where it was aimed.
     Looks, through `rr`: look → a tap on a text field by that look → a type by it: typed. A tap by
     an older look, and a type more than a minute after its look → refused with "look again"; a
     tap after that type → "look first"; nothing done. Two callers: A looks, B looks, A taps by its

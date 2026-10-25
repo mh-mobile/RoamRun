@@ -271,9 +271,12 @@ bounded.
   a terminal, not from the command line: the file alone, in a backup or a copied
   folder, then opens nothing — and a program that runs as the user and can read the
   passphrase where it is kept is no further from the device than before. A running `mcp`
-  keeps what it opened while the file is the same, as `sign` keeps what it serves. It looks by
-  the device's own screenshot and sends inputs with no screen stream, so the device
-  shows no screen-sharing session meanwhile. Its MCP tools hold `tap`, `swipe`, `type` and
+  keeps what it opened while the file is the same, as `sign` keeps what it serves. On Linux and
+  Windows it looks by the device's own screenshot and sends inputs with no screen stream, so the
+  device shows no screen-sharing session meanwhile. On macOS (0.11.0+) a look comes from the
+  screen stream, which the device lists as screen sharing until about five seconds after the last
+  look or action (`ROAMRUNCTL_LOOK=screenshot` looks by the screenshot there too); such a look is
+  the screen the way the device holds it, and its points are pressed as they are. Its MCP tools hold `tap`, `swipe`, `type` and
   `paste` to the device's latest look, by its id, for a minute — a tap or swipe to one that
   nothing went by yet — and let it go after anything else done there, or a failure that may
   have reached the device; `press` goes to whatever is on the screen.
@@ -296,7 +299,7 @@ bounded.
   otherwise pass); any request with an `Origin` (a web page in a browser on the tailnet);
   a `Host` other than the server's address or its own Tailscale names. A request's head has
   to arrive within 10 s and its body within 30 s more (an upload has to keep coming: 30 s, and
-  2 s more for each MiB that came, with no more than 60 s between reads), and one address holds 17 of the 32
+  2 s more for each MiB begun, with no more than 60 s between reads), and one address holds 17 of the 32
   connections at most: one machine that can reach the port can't take them all, but two or
   more that the tailnet's access rules let reach it can keep callers out for as long as they
   keep connecting. Only the devices named are used — each only while it is saved as
