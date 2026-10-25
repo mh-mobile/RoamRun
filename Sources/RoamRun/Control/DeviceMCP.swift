@@ -224,15 +224,18 @@ final class DeviceMCP: @unchecked Sendable {
 
     static let olderApp = "the RoamRun app running is older than this roamrun: it doesn't hold what is done to the look given. Quit it and open the RoamRun this command came with"
 
-    /// Whether an install request's failure says the app surely didn't take its app: refused (or no app), or not sent.
+    /// Whether an install request's failure says the app surely didn't take its app: refused (or no app), or never
+    /// reached it. Only an answer lost after the request went out may hide an install begun.
     static func untaken(_ error: Error) -> Bool {
-        if error is Failure {
-            return true
+        switch error {
+        case is Failure: true
+        case let wire as DeviceControlWire.WireError:
+            switch wire {
+            case .noApp, .keptOut, .notSent: true
+            case .message: false
+            }
+        default: false
         }
-        if case DeviceControlWire.WireError.notSent = error {
-            return true
-        }
-        return false
     }
 
     static let olderForApps = "the RoamRun app running is older than this roamrun: it can't install or launch. Quit it and open the RoamRun this command came with"

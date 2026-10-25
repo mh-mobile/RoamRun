@@ -603,8 +603,8 @@ import ImageIO
 /// The install folder of an upload is removed where the app surely didn't take it (refused), and kept where its answer
 /// was lost (it may be installing from it).
 @Test func anUploadsInstallFolderIsKeptWhenTheAnswerIsLost() throws {
-    // Refused (removed), answer lost (kept), not sent at all (removed).
-    for (how, kept) in [("refused", false), ("lost", true), ("not sent", false)] {
+    // Refused (removed), answer lost (kept), not sent at all or kept out by a sandbox (removed).
+    for (how, kept) in [("refused", false), ("lost", true), ("not sent", false), ("kept out", false)] {
         let own = FileManager.default.temporaryDirectory.appendingPathComponent("install-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: own, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: own) }
@@ -621,6 +621,7 @@ import ImageIO
                 switch how {
                 case "refused": return .failure("device control is switched off for this device")
                 case "lost": throw DeviceControlWire.WireError.message("the app didn't answer")
+                case "kept out": throw DeviceControlWire.WireError.keptOut("Operation not permitted")
                 default: throw DeviceControlWire.WireError.notSent("taken back")
                 }
             }

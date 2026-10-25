@@ -365,8 +365,8 @@ tunnel and Xcode has to run again.
     `--allow` → 403. Through `rr`: look → tap by it → look shows what the tap did. A look queued
     behind a `type` that runs 5–15 s, its `rr` stopped before its turn → not made, the log saying
     `not begun`. Switched off in the app meanwhile → the next call is refused. Ctrl-C → the port
-    is free. Started again with `--allow-install`: an .ipa signed for the device sent with `curl -T`
-    to `/upload` → its `sha256` is the file's; `install` by it → answered at once; `install_status`
+    is free. Started again with `--allow-install`: `curl -T <an .ipa signed for the device> -H
+    "Authorization: Bearer $(cat t)" http://<address>:<port>/upload` → its `sha256` is the file's; `install` by it → answered at once; `install_status`
     until installed; `launch` → the app in front. Ctrl-C → no `upload-*` or `install-*` left in
     `~/Library/Application Support/RoamRun/control/`.
 

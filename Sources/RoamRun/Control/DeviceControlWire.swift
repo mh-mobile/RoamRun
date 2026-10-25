@@ -305,7 +305,7 @@ enum DeviceControlWire {
                     wait: TimeInterval = answerWait) throws -> Response
     {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw WireError.message("no socket") }
+        guard fd >= 0 else { throw WireError.notSent("no socket") }
         defer { close(fd) }
         noSIGPIPE(fd)
         readWait(fd, wait)
