@@ -120,6 +120,8 @@ import ImageIO
     }
     #expect(try failed("not json").code == -32700)
     #expect(try failed("[]").code == -32600)
+    #expect(try failed(#"{"jsonrpc":"2.0","id":-1e400,"method":"ping"}"#).code == -32700)
+    #expect(try failed(#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":1e400}}"#).code == -32700)
     let noMethod = try failed(#"{"jsonrpc":"2.0","id":9}"#)
     #expect(noMethod.code == -32600 && noMethod.id as? Int == 9)
     #expect(try failed(#"{"jsonrpc":"2.0","id":10,"method":"no/such"}"#).code == -32601)

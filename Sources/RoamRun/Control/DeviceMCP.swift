@@ -159,6 +159,8 @@ final class DeviceMCP: @unchecked Sendable {
             -32600,
             "one request at a time, as an object"
         ) }
+        // 1e400 reads as infinity, which can't be written back: answering it would end the process.
+        guard JSONSerialization.isValidJSONObject(object) else { return failed(NSNull(), -32700, "a number too large") }
         guard let id = object["id"] else { return nil } // a notification: nothing to answer
         guard let method = object["method"] as? String else { return failed(id, -32600, "no method") }
         let params = object["params"] as? [String: Any] ?? [:]
@@ -594,7 +596,7 @@ final class DeviceMCP: @unchecked Sendable {
             install,
             tool(
                 "install_status",
-                "How the device's install goes: still going (for how long), done (with the app's bundle identifier, for launch), or why it failed. Given the id install answered (install <id>), of that install alone: another begun since is an error.",
+                "How the device's install goes: still going (for how long), done (with the app's bundle identifier, for launch), or why it failed. Given the id install answered (install <id>), of that install, among the device's last 16; without it, of the latest.",
                 ["install": ["type": "string", "description": "The id install answered with"]]
             ),
         ] : []) + [

@@ -384,7 +384,7 @@ final class MCPHTTP: @unchecked Sendable {
             }
             // What may trail the last piece: read to the empty line, not used — a little of it, not a stream of lines.
             var trailing = 0
-            for _ in 0 ..< trailerLines {
+            for _ in 0 ... trailerLines { // `trailerLines` lines, then the empty one
                 switch reader.line(most: 1024) {
                 case let .success(line) where line.isEmpty: return .success(size)
                 case let .success(line):
@@ -769,6 +769,10 @@ final class MCPHTTP: @unchecked Sendable {
         }
         guard let message = read as? [String: Any] else {
             return refuse(400, "", Self.rpcError(NSNull(), -32600, "one message a request, as an object"))
+        }
+        // 1e400 reads as infinity, which can't be written back: answering it would end the process.
+        guard JSONSerialization.isValidJSONObject(message) else {
+            return refuse(400, "", Self.rpcError(NSNull(), -32700, "a number too large"))
         }
         let method = message["method"] as? String ?? ""
         let params = message["params"] as? [String: Any] ?? [:]

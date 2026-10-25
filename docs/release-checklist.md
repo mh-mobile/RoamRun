@@ -363,7 +363,7 @@ tunnel and Xcode has to run again.
     Tailscale IPv4 address only (`lsof -nP -iTCP:<port> -sTCP:LISTEN`).
     `scripts/mcp-http-check.py http://<address>:<port> --token-file t --look <device>` → "all
     checks passed": from the tagged machine, and from the Mac itself. From a machine not in
-    `--allow` → 403. Through `rr`: look → tap by it → look shows what the tap did. A look queued
+    `--allow`, sending the token → 403. Through `rr`: look → tap by it → look shows what the tap did. A look queued
     behind a `type` that runs 5–15 s, its `rr` stopped before its turn → not made, the log saying
     `not begun`. Switched off in the app meanwhile → the next call is refused. Ctrl-C → the port
     is free. Started again with `--allow-install`: `curl -T <an .ipa signed for the device> -H

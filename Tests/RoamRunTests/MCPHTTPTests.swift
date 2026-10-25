@@ -183,6 +183,7 @@ private func status(_ answer: String) -> Int {
     #expect(status(served.post(call, headers: bearer + "MCP-Protocol-Version: 2026-07-28\r\n")) == 400)
     #expect(status(served.post("[1]", headers: bearer)) == 400)
     #expect(status(served.post("{", headers: bearer)) == 400)
+    #expect(status(served.post(#"{"jsonrpc":"2.0","id":-1e400,"method":"ping"}"#, headers: bearer)) == 400)
     #expect(served.lock
         .withLock {
             served.handled
@@ -527,10 +528,13 @@ private func status(_ answer: String) -> Int {
     uploads.perMiB = 0.5
     let served = try Served(uploads: uploads)
     let host = "Host: 127.0.0.1:\(served.port)\r\n"
-    let trailers = String(repeating: "x-pad: 1\r\n", count: MCPHTTP.trailerLines + 1)
-    #expect(status(served
-            .ask("PUT /upload HTTP/1.1\r\n\(host)Transfer-Encoding: chunked\r\n\r\n1\r\nx\r\n0\r\n\(trailers)\r\n")) ==
-        431)
+    func trailed(_ lines: Int) -> Int {
+        let trailers = String(repeating: "x-pad: 1\r\n", count: lines)
+        return status(served
+            .ask("PUT /upload HTTP/1.1\r\n\(host)Transfer-Encoding: chunked\r\n\r\n1\r\nx\r\n0\r\n\(trailers)\r\n"))
+    }
+    #expect(trailed(MCPHTTP.trailerLines) == 200)
+    #expect(trailed(MCPHTTP.trailerLines + 1) == 431)
     // Said to be 64 MiB, ten bytes sent, then nothing: cut off well before 0.5 + 0.5 × 64 s.
     let began = Date()
     let slow = served.ask("PUT /upload HTTP/1.1\r\n\(host)Content-Length: \(64 << 20)\r\n\r\n0123456789")

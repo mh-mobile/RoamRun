@@ -287,7 +287,7 @@ bounded.
   roamrunctl's does (below), on the Mac's Tailscale IPv4 address, and doesn't start as root. It
   offers the devices saved in RoamRun, each operated only while its switch in the app is on, and
   `install` is offered only with `--allow-install`, from an `.ipa` sent with `PUT /upload`
-  (which has to keep coming: 30 s, and 2 s more for each MiB that came), never a path on the
+  (which has to keep coming: 30 s, and 2 s more for each MiB begun), never a path on the
   Mac: one upload is kept (1024 MiB at most by default), in RoamRun's own folder, installable by
   the caller that sent it alone (by its Tailscale node's lasting id), and removed when the app
   answers that an install of it began, when any allowed caller starts another upload, after 30
@@ -426,8 +426,9 @@ bounded.
 - Files: `~/Library/Application Support/RoamRun/` (device profiles, mode 0600,
   bridge status, and `ota/` — the .ipa files you stored, 5 per app), `~/Library/Logs/RoamRun/`, and the
   `io.github.mh-mobile.roamrun` defaults (`com.roamrun.app` before 0.1.12).
-  With device control: its socket and the looks on their way to whoever asked (`control/`, yours
-  only), this Mac's identity for pairing (`device-control-host`), sealed pairings
+  With device control: its socket, the looks on their way to whoever asked, and apps on their way
+  to an install (`install-*/` copies, and `upload-*.ipa` files sent to `roamrun mcp --http`, up to
+  `--max-upload` each) (`control/`, yours only), this Mac's identity for pairing (`device-control-host`), sealed pairings
   (`device-pairing-<UDID>.sealed`, 0600), and two
   items in the login Keychain, which removing the app leaves:
   `security delete-generic-password -s io.github.mh-mobile.roamrun.device-control -a pairings`

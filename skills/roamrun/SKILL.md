@@ -372,7 +372,7 @@ if the user started the server with `--allow-install`, and takes the id and sha2
 a `PUT /upload` of the .ipa answered, never a path.
 An agent on another machine of the tailnet can have them over HTTP from
 `roamrun mcp --http <port> --allow <who>` (0.11.0+), which the user starts and stops —
-never you; it is called as `roamrunctl mcp --http` is.
+never you; it is called as `roamrunctl mcp --http` is (the roamrunctl skill's "Over HTTP").
 If your client shows the tool's image as a placeholder you can't see, use
 `roamrun look` and read the file instead, and then act with the commands too.
 If a command says this process isn't allowed to reach the RoamRun app, your
