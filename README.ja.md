@@ -413,7 +413,7 @@ roamrun ota iPhone build/MyApp.ipa     # 名前を指定すると、そのデバ
 
 CI のジョブから、`.ipa` を Tailscale 越しにデバイスへインストールし、起動できます。`.ipa` は、そのジョブで作ったものでも、別に用意したものでもかまいません。使うのは [`roamrunctl`](Rust/roamrunctl/README.ja.md) です。ブリッジも Xcode も通らないので、Linux のランナーでもできます。ジョブは tailnet に参加したうえで、次のどちらかを行います。
 
-- CI のマシンで roamrunctl を動かす。roamrunctl 自身のデバイスとのペアリング（デバイス制御が使うもので、Xcode のものではありません）を、CI のシークレットに置きます。ペアリングは、デバイスと同じ Wi‑Fi のマシンで一度だけ作ります。RoamRun の入った Mac なら `roamrun key create`、どのマシンでも `roamrunctl pair control --to` で作れます。
+- CI のマシンで roamrunctl を動かす。デバイス操作のペアリング（Xcode のものではありません）を、CI のシークレットに置きます。ペアリングは、デバイスと同じ Wi‑Fi のマシンで一度だけ作ります。RoamRun の入った Mac なら `roamrun key create`、どのマシンでも `roamrunctl pair control --to` で作れます。
 - 手元の relay のマシンに頼む。そのマシンで `roamrunctl mcp --http` を動かし、ペアリングはそこに置きます。ジョブは `.ipa` を relay に送り、relay がインストールして起動します。
 
 | CI | やり方 | 手順 |

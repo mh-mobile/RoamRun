@@ -578,8 +578,8 @@ over Tailscale, with [`roamrunctl`](Rust/roamrunctl/README.md). It goes through 
 nor Xcode, so a Linux runner can do it too. The job joins your tailnet, then does one of two
 things:
 
-- **roamrunctl on the CI machine**, with roamrunctl's own pairing to the device (the one device
-  control uses, not Xcode's) kept as a CI secret. It is made once on a machine on the device's
+- **roamrunctl on the CI machine**, with a device-control pairing to the device (not Xcode's) kept
+  as a CI secret. It is made once on a machine on the device's
   Wi‑Fi: `roamrun key create` on a Mac with RoamRun, or `roamrunctl pair control --to` on any machine.
 - **Through a relay machine of yours**: it runs `roamrunctl mcp --http` and keeps that pairing; the
   job sends it the `.ipa`, and it installs and launches.
