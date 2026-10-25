@@ -366,9 +366,10 @@ enum DeviceControlWire {
             }
             unlink(path) // a run's that ended without removing it
             // Looks a CLI was to move to their place and didn't (it was interrupted): screens aren't left lying.
+            // Nor apps left to install by an install that never ended (the app quit during it, the CLI was ended).
             for left in (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ??
                 []
-                where left.lastPathComponent.hasPrefix("look-")
+                where left.lastPathComponent.hasPrefix("look-") || left.lastPathComponent.hasPrefix("install-")
             {
                 try? FileManager.default.removeItem(at: left)
             }

@@ -340,7 +340,7 @@ Xcode: `install` takes the path of an .ipa or an .app folder on this Mac, built 
 device, ends the app's running processes, and answers at once with an id; `install_status` with
 that id says when the app is in, and until then other calls on the device answer that it is
 installing; `launch` takes the bundle identifier. The file is copied into RoamRun's own folder for
-the app, and removed when the install ends.
+the app, and removed when the install ends (or, if the app quit meanwhile, when it starts again).
 
 **For an agent elsewhere on your tailnet** (0.11.0+), `roamrun mcp --http <port> --allow <tag:name
 or login> [--allow …] [--token-file <file>]` serves the same tools over HTTP, until Ctrl-C. It

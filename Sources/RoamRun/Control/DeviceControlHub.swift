@@ -128,8 +128,6 @@ final class DeviceControlHub: @unchecked Sendable {
         var nextTry = Date.distantPast
         /// When the connection was last asked whether it stands (from when it was made).
         var checked = Date()
-        /// The device's latest install, which holds the device until it ends (under the hub's lock).
-        var install: Install?
 
         /// The pairing this session is for, and the only one it connects with (`session(for:)`):
         /// what the switch is asked about. The saved file changed, this session isn't it any more.
@@ -170,6 +168,10 @@ final class DeviceControlHub: @unchecked Sendable {
     /// command, from checking its look to what it leaves behind, so that one look serves one
     /// action and one command at a time reaches the device, also across a change of session.
     private var gates: [UUID: NSLock] = [:]
+    /// Each device's installs, the latest last, `pastInstalls` at most: kept by the device, not its session, which an
+    /// install outlives when the session is replaced (under the hub's lock).
+    private var installs: [UUID: [Install]] = [:]
+    static let pastInstalls = 16
     private var listener: DeviceControlWire.Listener?
     private var timer: DispatchSourceTimer?
     /// The last update's, for when a pairing is made or removed in between.
@@ -1089,15 +1091,18 @@ final class DeviceControlHub: @unchecked Sendable {
             && file.lastPathComponent.hasPrefix("look-") && file.pathExtension == "png"
     }
 
-    /// An app to install as the CLI leaves it for the app: in the folder looks are, named install-…, an .ipa or an
-    /// .app folder, and not a link to something elsewhere.
+    /// An app to install as the CLI leaves it for the app: an .ipa or an .app folder, under its own name (the device
+    /// stages it by that name, and clears what a cut-short install of it left), in a folder install-… of its own in the
+    /// folder looks are; neither of them a link to something elsewhere.
     static func isInstallFile(_ path: String, in directory: URL) -> Bool {
         let file = URL(fileURLWithPath: path).standardizedFileURL
-        var info = stat()
-        return file.deletingLastPathComponent().path == DeviceControlWire.socketFolder(in: directory)
+        let own = file.deletingLastPathComponent()
+        var info = stat(), folder = stat()
+        return own.deletingLastPathComponent().path == DeviceControlWire.socketFolder(in: directory)
             .standardizedFileURL
             .path
-            && file.lastPathComponent.hasPrefix("install-") && ["ipa", "app"].contains(file.pathExtension)
+            && own.lastPathComponent.hasPrefix("install-") && ["ipa", "app"].contains(file.pathExtension)
+            && lstat(own.path, &folder) == 0 && folder.st_mode & S_IFMT == S_IFDIR
             && lstat(file.path, &info) == 0 && info.st_mode & S_IFMT != S_IFLNK
     }
 
@@ -1109,19 +1114,17 @@ final class DeviceControlHub: @unchecked Sendable {
         "installing \(install.what) on \(name) (\(Int(Date().timeIntervalSince(install.began))) s so far): nothing else is done on it until that ends. install_status says how it goes"
     }
 
-    /// How the device's latest install went; `asked`, of that one alone.
-    static func installStatus(_ install: Install?, asked: String?, on name: String) -> DeviceControlWire.Response {
-        guard let install else {
+    /// How the device's latest install went; `asked`, that one, among its `pastInstalls` latest.
+    static func installStatus(_ installs: [Install], asked: String?, on name: String) -> DeviceControlWire.Response {
+        guard let install = asked.map({ asked in
+            installs.last {
+                $0.id == asked
+            }
+        }) ?? installs.last else {
             return asked == nil ? .init(ok: true, said: "no install was begun on \(name) since the RoamRun app started")
-                :
-                .failure(
-                    "install \(asked ?? "") isn't one of \(name)'s here: how it ended isn't known (the RoamRun app was started again since)"
+                : .failure(
+                    "install \(asked ?? "") isn't one of \(name)'s here: how it ended isn't known (the RoamRun app was started again since, or \(pastInstalls) more were begun)"
                 )
-        }
-        if let asked, asked != install.id {
-            return .failure(
-                "install \(asked) isn't \(name)'s latest here: another began since, and how that one ended isn't known"
-            )
         }
         guard let ended = install.ended else { return .init(ok: true, said: installing(install, on: name)) }
         let took = Int(ended.took)
@@ -1225,12 +1228,12 @@ final class DeviceControlHub: @unchecked Sendable {
         }
         // How an install goes is said at once, whatever holds the device.
         if request.op == "install_status" {
-            guard let (install, name) = lock.withLock({
+            guard let (installs, name) = lock.withLock({
                 held[request.device].map {
-                    ($0.install, $0.target.name)
+                    (self.installs[request.device] ?? [], $0.target.name)
                 }
             }) else { return notSetUp }
-            return Self.installStatus(install, asked: request.install, on: name)
+            return Self.installStatus(installs, asked: request.install, on: name)
         }
         // Everything else one at a time per device, and whole: a look is checked, spent and acted
         // on without another command coming in between. The session is the one held once the
@@ -1320,7 +1323,7 @@ final class DeviceControlHub: @unchecked Sendable {
         let session = h.session
         // An install holds the device until it ends: nothing else is begun meanwhile.
         if let install = lock.withLock({
-            h.install
+            installs[request.device]?.last
         }), install.ended == nil {
             return .failure(Self.installing(install, on: name))
         }
@@ -1330,9 +1333,11 @@ final class DeviceControlHub: @unchecked Sendable {
                 guard let path = request.path, Self.isInstallFile(path, in: directory) else {
                     return .failure("no app to install: it is given in RoamRun's own folder")
                 }
+                // Its folder goes with it, however this ends.
+                let folder = URL(fileURLWithPath: path).deletingLastPathComponent().path
                 let app: (bundle: String?, megabytes: Int, seconds: Int)
                 do { app = try DeviceSession.app(at: path) } catch {
-                    try? FileManager.default.removeItem(atPath: path)
+                    try? FileManager.default.removeItem(atPath: folder)
                     return .failure("\(error)")
                 }
                 // What a look saw may move while the app is replaced.
@@ -1351,16 +1356,20 @@ final class DeviceControlHub: @unchecked Sendable {
                     seconds: app.seconds,
                     began: Date()
                 )
+                let device = request.device
                 lock.withLock {
-                    h.install = install
+                    let kept = (installs[device] ?? []) + [install]
+                    installs[device] = Array(kept.suffix(Self.pastInstalls))
                 }
                 Thread.detachNewThread { [weak self] in
                     var failed: String?
                     do { try session.install(path) } catch { failed = "\(error)" }
-                    try? FileManager.default.removeItem(atPath: path)
+                    try? FileManager.default.removeItem(atPath: folder)
                     self?.lock.withLock {
-                        if h.install?.id == install.id {
-                            h.install?.ended = (failed, Date().timeIntervalSince(install.began))
+                        if let at = self?.installs[device]?.lastIndex(where: {
+                            $0.id == install.id
+                        }) {
+                            self?.installs[device]?[at].ended = (failed, Date().timeIntervalSince(install.began))
                         }
                     }
                 }

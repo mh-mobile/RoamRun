@@ -215,6 +215,8 @@ final class DeviceMCP: @unchecked Sendable {
 
     static let olderApp = "the RoamRun app running is older than this roamrun: it doesn't hold what is done to the look given. Quit it and open the RoamRun this command came with"
 
+    static let olderForApps = "the RoamRun app running is older than this roamrun: it can't install or launch. Quit it and open the RoamRun this command came with"
+
     /// Whether the app's answer to "rules" is an older app's: one that doesn't hold an action to the look given.
     static func older(_ said: DeviceControlWire.Response) -> Bool {
         said.ok ? (said.rules ?? 0) < DeviceControlHub.rules : said.error == "unknown request"
@@ -341,29 +343,58 @@ final class DeviceMCP: @unchecked Sendable {
             guard installsFromPaths, let path = arguments["path"] as? String else {
                 throw Failure(description: installsFromPaths ? "path is missing" : "no such tool: install")
             }
-            // Copied where the app takes it from: RoamRun's own folder, which only this user can enter.
-            var folder: ObjCBool = false
-            let source = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
-            guard FileManager.default.fileExists(atPath: source.path, isDirectory: &folder)
+            // Where a link leads (a build's "latest"), and only an app: an .ipa, or an .app folder that says its bundle
+            // identifier — not a folder that only holds one.
+            let source = URL(fileURLWithPath: (path as NSString).expandingTildeInPath).resolvingSymlinksInPath()
+            var isFolder: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: source.path, isDirectory: &isFolder)
             else { throw Failure(description: "\(path) isn't on this Mac") }
-            let copy = looks.appendingPathComponent("install-\(UUID().uuidString).\(folder.boolValue ? "app" : "ipa")")
-            do { try FileManager.default.copyItem(at: source, to: copy) } catch {
+            let app = isFolder.boolValue ? source.pathExtension == "app" &&
+                (NSDictionary(contentsOf: source.appendingPathComponent("Info.plist"))?["CFBundleIdentifier"] is String)
+                : source.pathExtension == "ipa"
+            guard app else {
+                throw Failure(
+                    description: "\(path) isn't an app: an .ipa, or an .app folder whose Info.plist says its bundle identifier"
+                )
+            }
+            // Copied where the app takes it from, under its own name in a folder of its own: RoamRun's own folder,
+            // which only this user can enter.
+            let folder = looks.appendingPathComponent("install-\(UUID().uuidString)")
+            let copy = folder.appendingPathComponent(source.lastPathComponent)
+            do {
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+                try FileManager.default.copyItem(at: source, to: copy)
+            } catch {
+                try? FileManager.default.removeItem(at: folder)
                 throw Failure(description: "\(path) couldn't be copied for the app: \(error.localizedDescription)")
             }
             do {
-                // The app removes the copy once the install ends, or is refused.
+                // The app removes the copy once the install ends, or refuses it.
                 return try text(send(.init(op: "install", device: device.id, path: copy.path)).said ?? "installing")
-            } catch {
-                try? FileManager.default.removeItem(at: copy)
-                throw error
+            } catch let refused as Failure {
+                // Refused by the app (or none there): nobody else will remove it. A request that broke off may have
+                // been taken: the app removes that one, or its next start does.
+                try? FileManager.default.removeItem(at: folder)
+                throw refused.description == "unknown request" ? Failure(description: Self.olderForApps) : refused
             }
+        case "install_status" where !installsFromPaths:
+            throw Failure(description: "no such tool: install_status")
         case "install_status":
-            return try text(send(.init(op: "install_status", device: device.id,
-                                       install: arguments["install"] as? String)).said ?? "")
+            do {
+                return try text(send(.init(op: "install_status", device: device.id,
+                                           install: arguments["install"] as? String)).said ?? "")
+            } catch let failure as Failure where failure.description == "unknown request" {
+                throw Failure(description: Self.olderForApps)
+            }
         case "launch":
             guard let bundle = arguments["bundle"] as? String, !bundle.isEmpty
             else { throw Failure(description: "bundle is missing: the app's bundle identifier") }
-            let said = try send(.init(op: "launch", device: device.id, text: bundle))
+            let said: DeviceControlWire.Response
+            do { said = try send(.init(op: "launch", device: device.id, text: bundle)) } catch let failure as Failure
+                where failure.description == "unknown request"
+            {
+                throw Failure(description: Self.olderForApps)
+            }
             return text("launched (pid \(said.pid ?? 0)); look to see it")
         default:
             throw Failure(description: "no such tool: \(tool)")

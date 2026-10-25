@@ -193,7 +193,8 @@ bounded.
   script or a package's install step is let in as well. Each device has a switch
   on its page: off, every request is refused; a text being typed or a walk of
   the elements stops where it is, and what was waiting its turn isn't begun (a
-  tap or a press already on its way arrives). What is on is kept in the login Keychain, where another program can't
+  tap or a press already on its way arrives, and an install already begun goes on
+  until it ends). What is on is kept in the login Keychain, where another program can't
   add to it without macOS asking you, and it names the pairing itself, as it is
   saved for its device — not the device's entry in the list of saved devices,
   which any program can rewrite — so a device you switched off stays off. A

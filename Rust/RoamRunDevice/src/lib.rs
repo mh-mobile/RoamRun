@@ -721,10 +721,13 @@ pub unsafe extern "C" fn rr_device_launch(device: *mut RRDevice, bundle: *const 
 #[no_mangle]
 pub unsafe extern "C" fn rr_app_checked(path: *const c_char) -> *mut c_char {
     let Some(path) = (!path.is_null()).then(|| unsafe { CStr::from_ptr(path) }.to_str().ok()).flatten() else { return c_string(failure("bad arguments")) };
-    let bundle = if std::path::Path::new(path).is_dir() { Ok(app_bundle(path)) } else { ipa_checked(path).map(Some) };
-    c_string(match bundle {
-        Ok(bundle) => {
-            let (megabytes, given) = install_given(path);
+    // On a thread with room, as an install's own check is: an .ipa is unzipped to be read.
+    let checked = with_room(|| {
+        let bundle = if std::path::Path::new(path).is_dir() { Ok(app_bundle(path)) } else { ipa_checked(path).map(Some) };
+        Ok(bundle.map(|bundle| (bundle, install_given(path))))
+    }).and_then(|checked| checked);
+    c_string(match checked {
+        Ok((bundle, (megabytes, given))) => {
             format!("{{\"ok\":true,\"bundle\":{},\"megabytes\":{megabytes},\"seconds\":{}}}", bundle.as_deref().map_or("null".into(), quoted), given.as_secs())
         }
         Err(why) => format!("{{\"ok\":false,\"invalid\":true,\"error\":{}}}", quoted(&why)),

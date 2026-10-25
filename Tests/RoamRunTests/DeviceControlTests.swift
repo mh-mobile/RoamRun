@@ -1458,7 +1458,9 @@ func anInputIsInterruptedWhenItsAskerLeavesOrItsDeviceIsSwitchedOff(_ op: String
     })
     hub.start()
     func app(_ name: String) throws -> String {
-        let folder = DeviceControlWire.socketFolder(in: dir).appendingPathComponent(name)
+        let folder = DeviceControlWire.socketFolder(in: dir)
+            .appendingPathComponent(name)
+            .appendingPathComponent("App.app")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try PropertyListSerialization.data(
             fromPropertyList: ["CFBundleIdentifier": "com.example.App"],
@@ -1474,13 +1476,17 @@ func anInputIsInterruptedWhenItsAskerLeavesOrItsDeviceIsSwitchedOff(_ op: String
 
     #expect(status(nil).said?.hasPrefix("no install was begun") == true)
     #expect(!hub.answer(.init(op: "install", device: id, path: "/tmp/App.ipa")).ok)
-    let elsewhere = dir.appendingPathComponent("install-1.app").path
+    let elsewhere = dir.appendingPathComponent("install-1").appendingPathComponent("App.app").path
     try FileManager.default.createDirectory(atPath: elsewhere, withIntermediateDirectories: true)
     #expect(!hub.answer(.init(op: "install", device: id, path: elsewhere)).ok)
+    // Not in a folder of its own there: refused too.
+    let loose = DeviceControlWire.socketFolder(in: dir).appendingPathComponent("install-2.app").path
+    try FileManager.default.createDirectory(atPath: loose, withIntermediateDirectories: true)
+    #expect(!hub.answer(.init(op: "install", device: id, path: loose)).ok)
     #expect(!device.calls.contains("install"))
 
     device.installHold = DispatchSemaphore(value: 0)
-    let path = try app("install-2.app")
+    let path = try app("install-a")
     let begun = hub.answer(.init(op: "install", device: id, path: path))
     let install = try #require(begun.install)
     #expect(begun.ok && begun.said?.contains("install \(install)") == true)
@@ -1497,14 +1503,14 @@ func anInputIsInterruptedWhenItsAskerLeavesOrItsDeviceIsSwitchedOff(_ op: String
     }
     #expect(said.ok && said.said?.contains("is installed on iPhone") == true && said.said?
         .contains("launch takes it") == true)
-    #expect(!FileManager.default.fileExists(atPath: path))
+    #expect(!FileManager.default.fileExists(atPath: URL(fileURLWithPath: path).deletingLastPathComponent().path))
     let launched = hub.answer(.init(op: "launch", device: id, text: "com.example.App"))
     #expect(launched.ok && launched.pid == 42)
 
     // One that fails says why, and it is gone too.
     device.installHold = nil
     device.failing = DeviceSession.Failure.message("install: the device said no")
-    let again = try app("install-3.app")
+    let again = try app("install-b")
     let second = try #require(hub.answer(.init(op: "install", device: id, path: again)).install)
     var failed = status(second)
     for _ in 0 ..< 100 where failed.said?.hasPrefix("installing") == true {
@@ -1512,6 +1518,7 @@ func anInputIsInterruptedWhenItsAskerLeavesOrItsDeviceIsSwitchedOff(_ op: String
         failed = status(second)
     }
     #expect(!failed.ok && failed.error?.contains("the device said no") == true)
-    #expect(!status(install).ok) // the earlier one isn't the latest any more
-    #expect(!FileManager.default.fileExists(atPath: again))
+    // The earlier one is still said, by its id.
+    #expect(status(install).said?.contains("is installed on iPhone") == true)
+    #expect(!FileManager.default.fileExists(atPath: URL(fileURLWithPath: again).deletingLastPathComponent().path))
 }

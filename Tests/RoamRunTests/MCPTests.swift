@@ -412,12 +412,21 @@ import ImageIO
     #expect(!begun.failed && begun.text.contains("install ab12"))
     let path = try #require(seen?.path)
     #expect(seen?.there == true && path != ipa.path)
-    #expect(URL(fileURLWithPath: path).deletingLastPathComponent().standardizedFileURL == folder.standardizedFileURL)
-    #expect(URL(fileURLWithPath: path).lastPathComponent.hasPrefix("install-") && path.hasSuffix(".ipa"))
+    // Under its own name, in a folder of its own in the looks folder.
+    let own = URL(fileURLWithPath: path).deletingLastPathComponent()
+    #expect(own.deletingLastPathComponent().standardizedFileURL == folder.standardizedFileURL)
+    #expect(own.lastPathComponent.hasPrefix("install-") && URL(fileURLWithPath: path).lastPathComponent == "App.ipa")
+    // A link is followed; what isn't an app isn't copied.
+    let link = folder.appendingPathComponent("Latest.ipa")
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: ipa)
+    #expect(try !call(local, "install", #"{"device":"iPhone","path":"\#(link.path)"}"#).failed)
+    #expect(seen?.there == true && seen?.path.hasSuffix("/App.ipa") == true)
+    #expect(try call(local, "install", #"{"device":"iPhone","path":"\#(folder.path)"}"#).failed)
     #expect(try call(local, "install", #"{"device":"iPhone","path":"/nowhere/App.ipa"}"#).failed)
     #expect(try call(local, "launch", #"{"device":"iPhone","bundle":"com.example.App"}"#).text.contains("pid 7"))
     let remote = server(installs: false)
     seen = nil
     #expect(try call(remote, "install", #"{"device":"iPhone","path":"\#(ipa.path)"}"#).failed)
+    #expect(try call(remote, "install_status", #"{"device":"iPhone"}"#).failed)
     #expect(seen == nil)
 }
