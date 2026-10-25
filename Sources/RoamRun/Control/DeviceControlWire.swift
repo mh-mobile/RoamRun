@@ -90,12 +90,15 @@ enum DeviceControlWire {
             .st_ino
     }
 
-    /// An app to install that was left there two minutes or more ago: by an install that never ended.
+    /// An app to install that was left there two minutes or more ago (by an install that never ended), or an upload a
+    /// day or more ago (by a `roamrun mcp --http --allow-install` that was killed).
     static func leftToInstall(_ entry: URL, now: Date = Date()) -> Bool {
-        guard entry.lastPathComponent.hasPrefix("install-") else { return false }
-        let changed = (try? entry.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ??
+        let name = entry.lastPathComponent
+        let age: TimeInterval = name.hasPrefix("install-") ? 120 : name.hasPrefix("upload-") ? 24 * 60 * 60 : .infinity
+        // From the file, not a URL's cache of it.
+        let changed = (try? FileManager.default.attributesOfItem(atPath: entry.path)[.modificationDate] as? Date) ??
             .distantPast
-        return now.timeIntervalSince(changed) >= 120
+        return now.timeIntervalSince(changed) >= age
     }
 
     /// The longest a line may be: a long paste, or many elements.

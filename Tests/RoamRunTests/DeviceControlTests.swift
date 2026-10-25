@@ -1566,4 +1566,17 @@ func anInputIsInterruptedWhenItsAskerLeavesOrItsDeviceIsSwitchedOff(_ op: String
     #expect(DeviceControlWire.leftToInstall(left))
     #expect(!DeviceControlWire.leftToInstall(fresh))
     #expect(!DeviceControlWire.leftToInstall(folder.appendingPathComponent("look-1.png")))
+    // An upload a killed server left: only once a day old.
+    let upload = folder.appendingPathComponent("upload-x.ipa")
+    try Data("x".utf8).write(to: upload)
+    try FileManager.default.setAttributes(
+        [.modificationDate: Date().addingTimeInterval(-3600)],
+        ofItemAtPath: upload.path
+    )
+    #expect(!DeviceControlWire.leftToInstall(upload))
+    try FileManager.default.setAttributes(
+        [.modificationDate: Date().addingTimeInterval(-25 * 3600)],
+        ofItemAtPath: upload.path
+    )
+    #expect(DeviceControlWire.leftToInstall(upload))
 }

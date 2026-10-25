@@ -465,11 +465,14 @@ import ImageIO
 @Test func anInstallFromAnUploadAsksTheAppWithItsPath() throws {
     var asked: DeviceControlWire.Request?
     var claimed: (String, String)?
+    var settled: Bool?
     let server = DeviceMCP(profiles: {
         [profile("iPhone")]
     }, looks: FileManager.default.temporaryDirectory, installsFromPaths: false, claimUpload: { id, sha256 in
         claimed = (id, sha256)
-        return "/ready/install-x.ipa"
+        return ("/ready/install-x.ipa", { taken in
+            settled = taken
+        })
     }) { request in
         asked = request
         switch request.op {
@@ -498,7 +501,7 @@ import ImageIO
             .utf8
     )))
     #expect(String(decoding: answer, as: UTF8.self).contains("install cd34"))
-    #expect(claimed?.0 == "u1" && claimed?.1 == "ab")
+    #expect(claimed?.0 == "u1" && claimed?.1 == "ab" && settled == true) // taken by the app: used up
     #expect(asked?.op == "install" && asked?.path == "/ready/install-x.ipa")
     let going = try #require(server.handle(Data(
         #"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"install_status","arguments":{"device":"iPhone","install":"cd34"}}}"#
@@ -530,7 +533,8 @@ import ImageIO
             [profile("iPhone")]
         }, looks: FileManager.default.temporaryDirectory, installsFromPaths: false, claimUpload: { _, _ in
             claimed = true
-            return "/ready/install-x.ipa"
+            return ("/ready/install-x.ipa", { _ in
+            })
         }) { request in
             switch request.op {
             case "state": return .init(ok: true, allowed: allowed)
@@ -555,7 +559,8 @@ import ImageIO
         [profile("iPhone")]
     }, looks: FileManager.default.temporaryDirectory, installsFromPaths: false, claimUpload: { _, _ in
         claimed = true
-        return "/ready/install-x.ipa"
+        return ("/ready/install-x.ipa", { _ in
+        })
     }) { request in
         switch request.op {
         case "state": return .init(ok: true, allowed: true)
@@ -569,4 +574,28 @@ import ImageIO
             .utf8
     )))
     #expect(String(decoding: answer, as: UTF8.self).contains("install ef56") && claimed)
+}
+
+/// An install from an upload the app doesn't begin (refused, or its request given up) gives the upload back.
+@Test func anUploadIsGivenBackWhenTheAppDoesntBeginItsInstall() throws {
+    var settled: Bool?
+    let server = DeviceMCP(profiles: {
+        [profile("iPhone")]
+    }, looks: FileManager.default.temporaryDirectory, installsFromPaths: false, claimUpload: { _, _ in
+        ("/ready/install-x.ipa", { taken in
+            settled = taken
+        })
+    }) { request in
+        switch request.op {
+        case "state": return .init(ok: true, allowed: true)
+        case "install_status": return .init(ok: true, said: "no install was begun")
+        default: return .failure(DeviceControlHub.nobodyWaits)
+        }
+    }
+    let answer = try #require(server.handle(Data(
+        #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"install","arguments":{"device":"iPhone","upload":"u1","sha256":"ab"}}}"#
+            .utf8
+    )))
+    #expect(String(decoding: answer, as: UTF8.self).contains(#""isError":true"#))
+    #expect(settled == false)
 }

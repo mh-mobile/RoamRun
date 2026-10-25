@@ -32,7 +32,10 @@ final class DeviceMCP: @unchecked Sendable {
     let installsFromPaths: Bool
     /// Over HTTP with `--allow-install`: `install` from an upload, by its id and sha256 — made ready where the app
     /// takes it from, its path answered.
-    let claimUpload: ((String, String) throws -> String)?
+    let claimUpload: Claim?
+    /// An upload handed to an install, by its id and sha256: the path the app takes it from, and what to say once the
+    /// app has answered (taken, or not: then the upload is kept again).
+    typealias Claim = (String, String) throws -> (path: String, settle: (_ taken: Bool) -> Void)
     /// The request to the app under way, which `ask` makes with it: given up when its call is taken back.
     private let asking: DeviceControlWire.Asking
     private let work = DispatchQueue(label: "roamrun.mcp")
@@ -53,7 +56,7 @@ final class DeviceMCP: @unchecked Sendable {
         profiles: @escaping () -> [DeviceProfile],
         looks: URL,
         installsFromPaths: Bool = true,
-        claimUpload: ((String, String) throws -> String)? = nil,
+        claimUpload: Claim? = nil,
         asking: DeviceControlWire.Asking = .init(),
         ask: @escaping Ask
     ) {
@@ -365,14 +368,15 @@ final class DeviceMCP: @unchecked Sendable {
             } catch let failure as Failure where failure.description == "unknown request" {
                 throw Failure(description: Self.olderForApps)
             }
-            let path = try claimUpload?(upload, sha256) ?? ""
+            guard let claimed = try claimUpload?(upload, sha256) else { throw Failure(description: Self.olderForApps) }
             do {
-                return try text(send(.init(op: "install", device: device.id, path: path)).said ?? "installing")
+                let said = try send(.init(op: "install", device: device.id, path: claimed.path)).said
+                claimed.settle(true)
+                return text(said ?? "installing")
             } catch {
-                // Refused by the app (which removed it then), or taken back before it was sent: nobody else's to remove.
-                if error is Failure || (error as? DeviceControlWire.WireError)?.description == "taken back" {
-                    try? FileManager.default.removeItem(at: URL(fileURLWithPath: path).deletingLastPathComponent())
-                }
+                // Not begun by the app (refused, nobody waiting any more, taken back, no answer): the upload stays for
+                // another try. One the app began anyway installs from its own link.
+                claimed.settle(false)
                 throw (error as? Failure)?
                     .description == "unknown request" ? Failure(description: Self.olderForApps) : error
             }

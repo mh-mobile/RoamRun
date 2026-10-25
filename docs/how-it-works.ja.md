@@ -108,6 +108,7 @@ Apple Vision Pro は、向きが逆です。Vision Pro は、Mac に選ばれる
 | `Control/SharedPairing.swift` | 別の Mac のために作ったペアリング。`roamrun key create` が書き出し、`key import` が読み込む |
 | `Control/DeviceControlKey.swift`、`Control/DeviceControlAllowed.swift` | 保存したペアリングを暗号化するキーチェーンの鍵と、スイッチがオンのデバイスの一覧 |
 | `Control/DeviceMCP.swift` | `roamrun mcp`。デバイス操作を MCP のツールとして提供する |
+| `Control/MCPUploads.swift` | `roamrun mcp --http --allow-install`。`PUT /upload` で受け取った .ipa を 1 つ、インストールのために置いておく |
 | `Control/MCPHTTP.swift` | `roamrun mcp --http`。同じツールを、tailnet の許可したマシンに HTTP で提供する |
 | `OTA/OTA.swift`、`OTA/OTAPage.swift`、`OTA/OTAServer.swift` | OTA でのインストール。保存したビルドと署名の確認、インストール用のページと `itms-services` のマニフェスト、`tailscale serve` の後ろで動くローカルのサーバー |
 | `Support/ProfileStore.swift`、`Support/Models.swift` | 保存したデバイスと、取得した Bonjour のレコード |

@@ -985,11 +985,13 @@ extension MCPHTTP {
         if let uploads {
             // At stop, what was uploaded goes: Ctrl-C, and what a closed terminal sends.
             for stop in [SIGINT, SIGTERM, SIGHUP] {
-                signal(stop, SIG_IGN)
+                // One ignored already (nohup's SIGHUP) still doesn't end it.
+                guard unsafeBitCast(signal(stop, SIG_IGN), to: Int.self) != unsafeBitCast(SIG_IGN, to: Int.self)
+                else { continue }
                 let source = DispatchSource.makeSignalSource(signal: stop, queue: .global())
                 source.setEventHandler {
                     uploads.end()
-                    exit(130)
+                    exit(128 + stop)
                 }
                 source.resume()
                 stopping.append(source)

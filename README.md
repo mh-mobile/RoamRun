@@ -346,22 +346,22 @@ the app, and removed when the install ends (or, if the app quit meanwhile, when 
 or login> [--allow …] [--token-file <file>]` serves the same tools over HTTP, until Ctrl-C. It
 listens on this Mac's Tailscale IPv4 address only, and lets in what `tailscale whois` says is a
 machine with that tag or that user's untagged machine. Requests, refusals, turns and the log go as
-with `roamrunctl mcp --http` ([its rules](docs/roamrunctl-reference.md#mcp-over-http)), with three
+with `roamrunctl mcp --http` ([its rules](docs/roamrunctl-reference.md#mcp-over-http)), with these
 differences: it offers the devices saved in RoamRun, each operated only while its switch in the
-app is on, rather than devices named on its command line; `install` takes an upload, never a
-path (below); and a call whose
-caller goes, or takes it back, after its turn here is given up at the app, as with `roamrun mcp`:
-not begun if it still waits there behind another client of the device, stopped where it can if
-it is under way. The RoamRun app
-has to be running, as for `roamrun mcp`. With `--allow-install [--max-upload <MiB>]` it offers
-`install` and `install_status`: the caller sends an .ipa with `PUT /upload` (1024 MiB at most by
-default), gets its id and sha256, and installs it by them, as with roamrunctl. One upload is kept,
-in RoamRun's own folder, for the machine that sent it to install. Before an install uses it, the
-device is asked whether it is set up, switched on and not installing; refused then, the upload
-stays for another try (what changes in the moment after that isn't caught). It goes when an
-install uses it, when any caller starts another upload, after 30 minutes unused, or at Ctrl-C; one
-left by a server that was killed goes when a server starts a day later. Without `--allow-install`
-there is neither.
+app is on, rather than devices named on its command line; a call whose caller goes, or takes it
+back, after its turn here is given up at the app, as with `roamrun mcp`: not begun if it still
+waits there behind another client of the device, stopped where it can if it is under way; and
+uploads are kept in RoamRun's own folder rather than one made for the run. The RoamRun app has to
+be running, as for `roamrun mcp`.
+
+With `--allow-install [--max-upload <MiB>]` it offers `install` and `install_status`, as
+roamrunctl does: the caller sends an .ipa with `PUT /upload` (1024 MiB at most by default), gets
+its id and sha256, and installs it by them, never by a path. One upload is kept, for the machine
+that sent it to install. An install the app doesn't begin (the device not set up, switched off or
+installing, the caller gone before its turn at the app) leaves it for another try. It goes when an
+install the app began uses it, when any caller starts another upload, after 30 minutes unused, or
+at Ctrl-C; one left by a server that was killed goes when the RoamRun app, or another such server,
+starts a day later. Without `--allow-install` there is neither.
 
 **What the device does meanwhile.** Each look and each action runs a screen-sharing session on the
 device, which RoamRun keeps for about five seconds after the last one. The device showed it as

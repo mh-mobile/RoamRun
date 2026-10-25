@@ -38,6 +38,9 @@ extension MCPHTTP {
         let most: Int
         private let lock = NSLock()
         private var kept: (upload: Upload, used: Date)?
+        /// The upload an install was handed, until the app has taken it (or not): its file stays, so that an install
+        /// the app didn't begin gives it back.
+        private var lent: Upload?
         private var coming = false
         /// The file one coming in is written to.
         private var incoming: String?
@@ -50,7 +53,7 @@ extension MCPHTTP {
                 where name.hasPrefix("upload-") && name.hasSuffix(".ipa")
             {
                 let file = folder.appendingPathComponent(name)
-                let changed = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+                let changed = try? FileManager.default.attributesOfItem(atPath: file.path)[.modificationDate] as? Date
                 if Date().timeIntervalSince(changed ?? .distantPast) > Self.leftFor {
                     unlink(file.path)
                 }
@@ -83,21 +86,21 @@ extension MCPHTTP {
             }
             .joined()
             let path = folder.appendingPathComponent("upload-\(id).ipa").path
+            lock.withLock {
+                incoming = path
+            }
             var fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
             if fd < 0, errno == ENOENT {
                 // The folder removed meanwhile: made again, once.
                 mkdir(folder.path, 0o700)
                 fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
             }
-            guard fd >= 0 else { return .failure(507) }
-            lock.withLock {
-                incoming = path
-            }
             defer {
                 lock.withLock {
                     incoming = nil
                 }
             }
+            guard fd >= 0 else { return .failure(507) }
             var hash = SHA256()
             let size = MCPHTTP.framed(reader, request, most: most) { chunk in
                 hash.update(data: Data(chunk))
@@ -143,24 +146,55 @@ extension MCPHTTP {
             }
         }
 
-        /// The upload `id`, named by `sha256`, used up by an install in its turn: moved where the app takes it, in a
-        /// folder install-… of its own in `folder` (as `roamrun mcp` leaves a path's copy); its path.
-        func claim(id: String, sha256: String, into folder: URL) throws -> String {
+        /// The upload `id`, named by `sha256`, handed to an install in its turn: linked where the app takes it from, in a
+        /// folder install-… of its own in `folder` (as `roamrun mcp` leaves a path's copy). Its path, and what to say once
+        /// the app has answered: taken (the upload is used up), or not (it is kept again, unless another came meanwhile).
+        func claim(id: String, sha256: String,
+                   into folder: URL) throws -> (path: String, settle: (_ taken: Bool) -> Void)
+        {
             let upload = try lock.withLock { () -> Upload in
                 guard let held = kept, held.upload.id == id,
                       held.upload.sha256.caseInsensitiveCompare(sha256) == .orderedSame
                 else { throw Failure(description: Self.gone(id)) }
                 kept = nil
+                lent = held.upload
                 return held.upload
             }
             let own = folder.appendingPathComponent("install-\(UUID().uuidString)")
             let path = own.appendingPathComponent("app.ipa").path
-            guard mkdir(own.path, 0o700) == 0, rename(upload.path, path) == 0 else {
+            if mkdir(own.path, 0o700) != 0, errno == ENOENT {
+                // The folder removed meanwhile: made again, once.
+                mkdir(folder.path, 0o700)
+                mkdir(own.path, 0o700)
+            }
+            // A link, not a move: the app removes its folder whatever happens, and the upload's own file is kept.
+            guard link(upload.path, path) == 0 else {
                 let why = String(cString: strerror(errno))
                 rmdir(own.path)
-                throw Failure(description: "the upload couldn't be made ready for the app: \(why)")
+                settle(upload, taken: false)
+                throw Failure(
+                    description: "the upload couldn't be made ready for the app: \(why). It is kept: try again"
+                )
             }
-            return path
+            return (path, { [weak self] taken in
+                if !taken {
+                    try? FileManager.default.removeItem(atPath: own.path)
+                }
+                self?.settle(upload, taken: taken)
+            })
+        }
+
+        /// The upload lent to an install, once the app has answered: used up, or kept again where nothing replaced it.
+        private func settle(_ upload: Upload, taken: Bool) {
+            lock.withLock {
+                guard lent === upload else { return }
+                lent = nil
+                if !taken, kept == nil, !coming {
+                    kept = (upload, Date())
+                } else {
+                    unlink(upload.path) // used up: the app has its own link
+                }
+            }
         }
 
         /// Lets go of the upload not used since `keptFor` before `now`.
@@ -176,6 +210,7 @@ extension MCPHTTP {
         func end() {
             let left = lock.withLock { () -> String? in
                 kept = nil
+                lent = nil
                 return incoming
             }
             if let left {
