@@ -75,6 +75,9 @@ enum CLI {
                                      Any text, by the device's pasteboard (it asks the user each time)
       press <name> <button>          home, lock, volume-up or volume-down
       mcp                            The same as MCP tools, over stdin/stdout (for an agent's MCP config)
+      mcp --http <port> --allow <tag:name or login> [--allow …] [--token-file <file>]
+                                     The same over HTTP, on this Mac's Tailscale address, for the
+                                     machines Tailscale says are allowed; until Ctrl-C
     Each look serves one action (type and paste may still go by it): look, act, look again.
     With --look, refused once another look (anyone's), a button, elements or an action without
     --look came since, or after a minute: what an agent sharing the device gives.
@@ -442,7 +445,25 @@ enum CLI {
                         "usage: roamrun key create <name> <file> [--as <label>] | roamrun key import <file> [--as <name>]"
                     )
                 }
+            case "mcp" where parsed.values["--http"] != nil:
+                do {
+                    let (server, listener, note) = try MCPHTTP.start(
+                        port: parsed.values["--http"] ?? "",
+                        allow: parsed.lists["--allow"] ?? [],
+                        tokenFile: parsed.values["--token-file"]
+                    )
+                    FileHandle.standardError.write(Data((note + "\n").utf8))
+                    Thread.detachNewThread {
+                        server.serve(listener)
+                        exit(1)
+                    }
+                } catch {
+                    fail("\(error)")
+                }
             case "mcp":
+                guard parsed.lists["--allow"] == nil, parsed.values["--token-file"] == nil else {
+                    fail("--allow and --token-file go with --http: roamrun mcp --http <port> --allow <who>")
+                }
                 // Off the main thread: it reads stdin until the client closes it.
                 let asking = DeviceControlWire.Asking()
                 let server = DeviceMCP(profiles: {
@@ -518,7 +539,7 @@ enum CLI {
         all["paste"] = (["--look="], 0 ... 2)
         all["press"] = ([], 0 ... 2)
         all["elements"] = ([], 0 ... 2)
-        all["mcp"] = ([], 0 ... 0)
+        all["mcp"] = (["--http=", "--allow=", "--token-file="], 0 ... 0)
         all["key"] = (["--as="], 0 ... 3)
         return all
     }()

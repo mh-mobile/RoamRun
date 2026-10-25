@@ -143,6 +143,7 @@ its own connections to the device.
 | `Control/SharedPairing.swift` | A pairing made for another Mac: what `roamrun key create` writes and `key import` takes |
 | `Control/DeviceControlKey.swift`, `Control/DeviceControlAllowed.swift` | The Keychain key that saved pairings are sealed with, and the list of devices switched on |
 | `Control/DeviceMCP.swift` | `roamrun mcp`: device control as MCP tools |
+| `Control/MCPHTTP.swift` | `roamrun mcp --http`: the same tools over HTTP, for allowed machines of the tailnet |
 | `OTA/OTA.swift`, `OTA/OTAPage.swift`, `OTA/OTAServer.swift` | Over-the-air installs: stored builds and signing checks, the install page and its `itms-services` manifest, and the local server behind `tailscale serve` |
 | `Support/ProfileStore.swift`, `Support/Models.swift` | Saved devices and the captured Bonjour record |
 | `Support/TailscaleClient.swift` | Asks `tailscale` for status, ping, whois and what it serves |

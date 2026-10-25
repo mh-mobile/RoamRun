@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Checks a running `roamrunctl mcp --http` from a machine it lets in: how each
+"""Checks a running `roamrunctl mcp --http` or `roamrun mcp --http` from a machine it lets in: how each
 request is answered, as #156 has it. Run by hand: the server listens on a Tailscale address only.
 Nothing is asked of a device unless --look names one; then one look is saved to look.jpg here.
 

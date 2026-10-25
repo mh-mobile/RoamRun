@@ -281,6 +281,11 @@ bounded.
   another saved under the name, it isn't operated under that name any more. Where the
   device doesn't say which way up it is and its picture is upright, a point is pressed
   as it is — on a device held upside down that would be the opposite point (not tried).
+- **RoamRun can serve its MCP tools over HTTP too** (0.11.0+): `roamrun mcp --http <port>
+  --allow <who> [--allow <who>…] [--token-file <file>]` lets callers in, refuses and logs as
+  roamrunctl's does (below), on the Mac's Tailscale IPv4 address, and doesn't start as root. It
+  offers the devices saved in RoamRun, each operated only while its switch in the app is on, and
+  it has no `install`.
 - **roamrunctl can serve its MCP tools over HTTP.** `roamrunctl mcp --http <port> --allow
   <who> [--allow <who>…] <devices>…`, started by a person and ended with Ctrl-C, listens on the machine's
   Tailscale IPv4 address only, and doesn't start as root (not checked on Windows). A caller
