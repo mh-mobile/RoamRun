@@ -31,7 +31,8 @@ It also does three related things:
   ([Installing without the bridge](#installing-without-the-bridge-over-the-air)).
 
 For a machine without RoamRun — Linux, Windows, or another Mac — there is a separate command,
-[`roamrunctl`](Rust/roamrunctl/README.md).
+[`roamrunctl`](Rust/roamrunctl/README.md). With it, a CI job can install and launch your app on your
+device ([Installing and launching from CI](#installing-and-launching-from-ci)).
 
 ## Why it is needed
 
@@ -569,6 +570,31 @@ restrict it with Tailscale's access rules. To take the page down, delete
 
 The rest — the port and Funnel, `--replace`, Developer Mode on the device, and what RoamRun checks
 before it stores a build — is in [docs/ota.md](docs/ota.md).
+
+## Installing and launching from CI
+
+A CI job can install an `.ipa` on your device (one it built, or one it was given) and launch it,
+over Tailscale, with [`roamrunctl`](Rust/roamrunctl/README.md). It goes through neither the bridge
+nor Xcode, so a Linux runner can do it too. The job joins your tailnet, then does one of two
+things:
+
+- **roamrunctl on the CI machine**, with a device-control pairing to the device (not Xcode's) kept
+  as a CI secret. It is made once on a machine on the device's
+  Wi‑Fi: `roamrun key create` on a Mac with RoamRun, or `roamrunctl pair control --to` on any machine.
+- **Through a relay machine of yours**: it runs `roamrunctl mcp --http` and keeps that pairing; the
+  job sends it the `.ipa`, and it installs and launches.
+
+| CI | How | Guide |
+|---|---|---|
+| GitHub Actions | the action [mh-mobile/roamrun-action](https://github.com/mh-mobile/roamrun-action), after Tailscale's own action; Linux and macOS runners | [docs/ci.md](docs/ci.md) |
+| Xcode Cloud | a script in the project runs Tailscale in userspace and reaches the device or a relay through Tailscale's HTTP proxy (`ROAMRUNCTL_PROXY`, roamrunctl 0.10.0 or later), or calls a relay with `curl` | [docs/xcode-cloud.md](docs/xcode-cloud.md) |
+| Bitrise | the Step [mh-mobile/bitrise-step-roamrun](https://github.com/mh-mobile/bitrise-step-roamrun), which joins the tailnet itself | [docs/bitrise.md](docs/bitrise.md) |
+
+Each was run with an iPhone 15 Pro on iOS 27.0; the guides say how, and what wasn't tried. What it
+needs: a device on iOS 27 or later with Developer Mode on, on Wi‑Fi with Tailscale on and unlocked
+once since it started; and an `.ipa` signed with a development profile that lists it. Whoever can
+read the CI's secrets can operate the device; the guides say who that is and how each secret is
+taken back.
 
 ## Limitations and known issues
 

@@ -23,8 +23,9 @@ repository can be set up for both.
 
 Either way, whoever can run a workflow that reads the secrets can see and operate the device: with
 the pairing key for as long as the pairing stands, with the relay's token while the relay runs (the
-relay offers all its tools to a caller it lets in). The Tailscale OAuth client lets whoever holds it
-join your tailnet as `tag:ci` until it is revoked.
+relay offers all its tools to a caller it lets in); stopping the relay, or restarting it with a new
+token, takes the token back. The Tailscale OAuth client lets whoever holds it join your tailnet as
+`tag:ci` until it is revoked in the admin console.
 
 The job here doesn't build or sign the app. CI needs an `.ipa` already signed for the device (a
 development profile that lists it); `roamrunctl` checks the archive's shape, not its signature,
