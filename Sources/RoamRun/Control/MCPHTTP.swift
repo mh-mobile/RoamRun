@@ -1024,8 +1024,7 @@ extension MCPHTTP {
                     ProfileStore().load()
                 }, looks: folder, installsFromPaths: false, claimUpload: uploads.map { uploads in
                     { id, sha256 in
-                        try uploads.claim(id: id, sha256: sha256,
-                                          to: folder.appendingPathComponent("install-\(UUID().uuidString).ipa").path)
+                        try uploads.claim(id: id, sha256: sha256, into: folder)
                     }
                 }, asking: asking) {
                     try DeviceControlWire.ask($0, in: ProfileStore.directory, asking: asking)

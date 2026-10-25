@@ -352,9 +352,10 @@ final class DeviceMCP: @unchecked Sendable {
             let path = try claimUpload?(upload, sha256) ?? ""
             do {
                 return try text(send(.init(op: "install", device: device.id, path: path)).said ?? "installing")
-            } catch {
-                try? FileManager.default.removeItem(atPath: path)
-                throw error
+            } catch let refused as Failure {
+                // As for a path's copy: refused by the app, it is nobody else's to remove.
+                try? FileManager.default.removeItem(at: URL(fileURLWithPath: path).deletingLastPathComponent())
+                throw refused.description == "unknown request" ? Failure(description: Self.olderForApps) : refused
             }
         case "install_status" where !installsFromPaths && claimUpload == nil:
             throw Failure(description: "no such tool: install_status")
@@ -396,8 +397,6 @@ final class DeviceMCP: @unchecked Sendable {
                 try? FileManager.default.removeItem(at: folder)
                 throw refused.description == "unknown request" ? Failure(description: Self.olderForApps) : refused
             }
-        case "install_status" where !installsFromPaths:
-            throw Failure(description: "no such tool: install_status")
         case "install_status":
             do {
                 return try text(send(.init(op: "install_status", device: device.id,

@@ -130,8 +130,9 @@ extension MCPHTTP {
             }
         }
 
-        /// The upload `id`, named by `sha256`, used up by an install in its turn: moved to `to`, where the app takes it.
-        func claim(id: String, sha256: String, to path: String) throws -> String {
+        /// The upload `id`, named by `sha256`, used up by an install in its turn: moved where the app takes it, in a
+        /// folder install-… of its own in `folder` (as `roamrun mcp` leaves a path's copy); its path.
+        func claim(id: String, sha256: String, into folder: URL) throws -> String {
             let upload = try lock.withLock { () -> Upload in
                 guard let held = kept, held.upload.id == id,
                       held.upload.sha256.caseInsensitiveCompare(sha256) == .orderedSame
@@ -139,10 +140,12 @@ extension MCPHTTP {
                 kept = nil
                 return held.upload
             }
-            guard rename(upload.path, path) == 0 else {
-                throw Failure(
-                    description: "the upload couldn't be made ready for the app: \(String(cString: strerror(errno)))"
-                )
+            let own = folder.appendingPathComponent("install-\(UUID().uuidString)")
+            let path = own.appendingPathComponent("app.ipa").path
+            guard mkdir(own.path, 0o700) == 0, rename(upload.path, path) == 0 else {
+                let why = String(cString: strerror(errno))
+                rmdir(own.path)
+                throw Failure(description: "the upload couldn't be made ready for the app: \(why)")
             }
             return path
         }

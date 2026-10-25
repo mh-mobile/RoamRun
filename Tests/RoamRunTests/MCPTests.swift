@@ -493,6 +493,11 @@ import ImageIO
     #expect(String(decoding: answer, as: UTF8.self).contains("install cd34"))
     #expect(claimed?.0 == "u1" && claimed?.1 == "ab")
     #expect(asked?.op == "install" && asked?.path == "/ready/install-x.ipa")
+    let going = try #require(server.handle(Data(
+        #"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"install_status","arguments":{"device":"iPhone","install":"cd34"}}}"#
+            .utf8
+    )))
+    #expect(!String(decoding: going, as: UTF8.self).contains(#""isError":true"#) && asked?.op == "install_status")
     // Neither a path nor install_status where installs aren't offered at all.
     let none = DeviceMCP(profiles: {
         [profile("iPhone")]

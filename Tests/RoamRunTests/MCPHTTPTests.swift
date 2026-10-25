@@ -376,11 +376,12 @@ private func status(_ answer: String) -> Int {
     #expect(uploads.refusal(id: id, owner: "someone-else", sha256: sha256) != nil)
     #expect(uploads.refusal(id: id, owner: "caller", sha256: sha256) == nil)
     // Used up by the install it serves: moved where the app takes it, and not kept for another.
-    let ready = folder.appendingPathComponent("install-1.ipa").path
-    #expect(try uploads.claim(id: id, sha256: sha256, to: ready) == ready)
+    let ready = try uploads.claim(id: id, sha256: sha256, into: folder)
+    #expect(URL(fileURLWithPath: ready).deletingLastPathComponent().lastPathComponent.hasPrefix("install-"))
     #expect(FileManager.default.fileExists(atPath: ready))
+    #expect(!FileManager.default.fileExists(atPath: folder.appendingPathComponent("upload-\(id).ipa").path))
     #expect(throws: MCPHTTP.Failure.self) {
-        try uploads.claim(id: id, sha256: sha256, to: ready)
+        try uploads.claim(id: id, sha256: sha256, into: folder)
     }
 }
 
