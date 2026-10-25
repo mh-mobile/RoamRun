@@ -31,14 +31,14 @@ const INSTRUCTIONS: &str = "Operates a real iPhone or iPad from this machine. Lo
 action, and points are pixels of the image the last look returned, given with the id it answered with. Pairing with a device and signing for one \
 (`roamrunctl pair`, `roamrunctl sign`) are the user's to run, never yours. These press what is really there — don't tap what spends \
 money, posts, sends, deletes or signs in unless the user asked for exactly that. A look shows whatever is on the screen \
-(notifications, messages); don't pass the image on. SHARING; what an action itself brings up (paste's \"Allow Paste\") shows there. Type and paste give the id of the latest look too, within a minute of it (after a tap with it is fine), and are refused once something else was looked at or done since: they go to whatever has focus. Press goes to whatever is on the screen: look before it too.";
+(notifications, messages); don't pass the image on. What an action itself brings up (paste's \"Allow Paste\") shows on the device. SHARING. Type and paste give the id of the latest look too, within a minute of it (after a tap with it is fine), and are refused once something else was looked at or done since: they go to whatever has focus. Press goes to whatever is on the screen: look before it too.";
 
 /// What the device shows of looks, for INSTRUCTIONS: a stream runs until about five seconds after the last look or action.
 fn instructions() -> String {
     INSTRUCTIONS.replace("SHARING", if device::streams() {
-        "The device lists looking as screen sharing, which its user can see, and some apps' sound goes silent meanwhile, until about five seconds after the last look or action. During a phone or VoIP call a look takes longer"
+        "A look comes from the device's screen stream, which the device lists as screen sharing, where its user can see it, and some apps' sound goes silent, until about five seconds after the last look or action: asked to keep watching a screen, tell the user that first. Its picture is the display's own way up (on a device held sideways the screen may come turned), and points are pixels of it all the same. During a phone or VoIP call a look is slower"
     } else {
-        "The device shows no screen-sharing session for this"
+        "The device shows no screen-sharing session for looks"
     })
 }
 
@@ -117,6 +117,9 @@ pub struct Server {
     past: std::collections::VecDeque<(String, String, Result<String, String>)>,
     /// The last look's id; the first is a random one, so that a look kept from an earlier run isn't taken for one since.
     looks: u64,
+    /// Each device's screen size, as its stream pictures are cut to: asked again when a frame doesn't fit it (a
+    /// two-screen device folded or opened since).
+    screens: HashMap<String, (u32, u32)>,
 }
 
 fn text(s: impl Into<String>) -> Vec<Value> { vec![json!({ "type": "text", "text": s.into() })] }
@@ -421,7 +424,16 @@ impl Server {
                 // time, it is asked once more. The stream's picture is the display's own way up.
                 let way = if picture.native { 1 } else { match device.way() { 0 => device.way(), way => way } };
                 let native = picture.native;
-                let (jpeg, width, height) = device::fitted(picture.image, image::ImageFormat::Jpeg)?;
+                let image = if native {
+                    let frame = (picture.image.width(), picture.image.height());
+                    let known = self.screens.get(&name).copied().filter(|&screen| device::fit(frame, Some(screen)).is_some());
+                    let screen = known.or_else(|| device::screen_size(device));
+                    if let Some(screen) = screen { self.screens.insert(name.clone(), screen); }
+                    device::cut(picture.image, screen)
+                } else {
+                    picture.image
+                };
+                let (jpeg, width, height) = device::fitted(image, image::ImageFormat::Jpeg)?;
                 let id = self.next_look();
                 self.shown.insert(name, Shown { size: (width as f64, height as f64), way, native, at: Instant::now(), of, id, spent: false });
                 let mut content = vec![json!({ "type": "image", "data": base64::engine::general_purpose::STANDARD.encode(jpeg), "mimeType": "image/jpeg" })];

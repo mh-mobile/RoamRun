@@ -337,7 +337,9 @@ screen stream: the device lists no screen-sharing session and what plays goes on
 microphone weren't looked into). On macOS (0.11.0+) a look comes from the device's screen
 stream, many times quicker: the device lists it as screen sharing, which its user can see,
 until about five seconds after the last look or action, and some apps' sound goes silent
-meanwhile — asked to keep watching a screen, tell the user that first. During a phone or
+meanwhile — asked to keep watching a screen, tell the user that first. Its picture is the
+display's own way up (on a device held sideways the screen may come turned); points are its
+pixels all the same. During a phone or
 VoIP call the device refuses the stream, and a look is the device's picture again, slower;
 `ROAMRUNCTL_LOOK=screenshot` in the server's environment always takes that. `paste` makes the device ask "Allow Paste". The device has to be on Wi‑Fi
 (on cellular alone it refuses), unlocked once since it started, and connected in

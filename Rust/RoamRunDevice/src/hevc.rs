@@ -69,6 +69,7 @@ extern "C" {
     fn CVPixelBufferGetBytesPerRow(buffer: Ref) -> usize;
     fn CVPixelBufferGetWidth(buffer: Ref) -> usize;
     fn CVPixelBufferGetHeight(buffer: Ref) -> usize;
+    fn CVPixelBufferGetPixelFormatType(buffer: Ref) -> u32;
 }
 
 const BGRA: u32 = u32::from_be_bytes(*b"BGRA");
@@ -127,10 +128,11 @@ extern "C" fn decoded(refcon: *mut c_void, _: *mut c_void, status: OSStatus, _: 
     out.status = status;
     if status != 0 || buffer.is_null() { return; }
     unsafe {
-        if CVPixelBufferLockBaseAddress(buffer, READ_ONLY) != 0 { return; }
+        // Only what was asked for (one plane of BGRA): a panic here would end the process, not the look.
+        if CVPixelBufferGetPixelFormatType(buffer) != BGRA || CVPixelBufferLockBaseAddress(buffer, READ_ONLY) != 0 { return; }
         let (width, height, row) = (CVPixelBufferGetWidth(buffer), CVPixelBufferGetHeight(buffer), CVPixelBufferGetBytesPerRow(buffer));
         let base = CVPixelBufferGetBaseAddress(buffer);
-        if !base.is_null() {
+        if !base.is_null() && width > 0 && row >= width * 4 {
             let bgra = std::slice::from_raw_parts(base, row * height);
             let mut rgb = Vec::with_capacity(width * height * 3);
             for line in bgra.chunks_exact(row) {
