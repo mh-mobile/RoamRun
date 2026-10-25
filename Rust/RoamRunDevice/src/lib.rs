@@ -80,8 +80,10 @@ struct Link {
     held: Option<(bool, u64, u64)>,
     /// Where a finger is down on the screen, for the same.
     finger: Option<(u16, u16)>,
-    /// The uniqueId of the display on when last asked (a stream starting, a screenshot), for touches to go to it.
+    /// The uniqueId of the display on when the device last answered (a stream starting, a screenshot), for touches to go to it.
     shown: Option<String>,
+    /// That display's id, for a stream to show it.
+    shown_id: Option<i64>,
     /// That display's touch surface, found on the HID connection; again after a stream starts.
     touchscreen: Option<u64>,
     verified_ms: u128,
@@ -377,14 +379,20 @@ fn unique_id(displays: &plist::Value) -> Option<String> {
     shown_display(displays)?.get("uniqueId")?.as_string().map(str::to_string)
 }
 
-/// What the device says of its displays now, kept as which one is on; a touch surface found for
-/// another is let go of. None when the device doesn't answer in time.
-async fn ask_shown(link: &mut Link) -> Option<plist::Value> {
+/// Asks which display is on and keeps it (see `kept_shown`); a touch surface found for another is let go of.
+async fn ask_shown(link: &mut Link) {
     let displays = tokio::time::timeout(DISPLAY_WAIT, display_info(link)).await.ok().and_then(|d| d.ok());
-    let unique = displays.as_ref().and_then(unique_id);
+    let (unique, id) = kept_shown((link.shown.clone(), link.shown_id), displays.as_ref());
     if unique != link.shown { link.touchscreen = None; }
-    link.shown = unique;
-    displays
+    (link.shown, link.shown_id) = (unique, id);
+}
+
+/// Which display is on, from the device's answer; with none in time, the one known before (off if folded since).
+fn kept_shown(known: (Option<String>, Option<i64>), answer: Option<&plist::Value>) -> (Option<String>, Option<i64>) {
+    match answer {
+        Some(displays) => (unique_id(displays), display_id(displays)),
+        None => known,
+    }
 }
 
 /// The shown display's id, for the stream to show it.
@@ -465,8 +473,8 @@ pub unsafe extern "C" fn rr_device_screenshot(device: *mut RRDevice, length: *mu
         if link.stop.raised() { return Err(STOPPED.into()); }
         let link = &mut *link;
         device.runtime.block_on(async {
-            // Of the display that is on (the primary one, when not told, can be off); asked each
-            // time, as a look comes before each touch: one after the screen changed goes to it.
+            // Of the display that is on, asked each time, as a look comes before each touch: one
+            // after the screen changed goes to it. The primary one, taken when none is known, can be off.
             ask_shown(link).await;
             let shown = link.shown.clone();
             let mut capture = tokio::time::timeout(DEADLINE, ScreenCaptureServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)).await
@@ -1011,7 +1019,7 @@ async fn connect(ip: &str, port: u16, file: &[u8], signer: Option<Signer>) -> Re
 
     let rsd = handle.connect(info.server_rsd_port).await.map_err(|e| format!("RSD: {e:?}"))?;
     let handshake = RsdHandshake::new(rsd).await.map_err(|e| format!("RSD handshake: {e:?}"))?;
-    Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_stopped: None, stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, resent: 0, bare_inputs: false, stop: Stop(std::ptr::null()), held: None, finger: None, shown: None, touchscreen: None, verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
+    Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_stopped: None, stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, resent: 0, bare_inputs: false, stop: Stop(std::ptr::null()), held: None, finger: None, shown: None, shown_id: None, touchscreen: None, verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
 }
 
 /// The most that is typed in one call: beyond it, a slip in the middle is too costly, and paste does it in one.
@@ -1471,8 +1479,9 @@ async fn start_stream(link: &mut Link) -> Result<Stream, String> {
     if let Some(early) = link.stream_stopped.and_then(|at| AFTER_STOP.checked_sub(at.elapsed())) {
         tokio::time::sleep(early).await;
     }
-    // Display 1 when the device doesn't say, as before.
-    let shown = ask_shown(link).await.as_ref().and_then(display_id).unwrap_or(1);
+    // Display 1 when nothing is known (never answered, or no display id in the answer).
+    ask_shown(link).await;
+    let shown = link.shown_id.unwrap_or(1);
     link.touchscreen = None;   // the screen may have changed: the touch surface is found again
     let mut display = tokio::time::timeout(STREAM_START, DisplayServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)).await
         .map_err(|_| "display service: no answer".to_string())?
@@ -2161,6 +2170,24 @@ mod tests {
         assert_eq!(screen_size(&said(vec![display(true, 0.0, 2556.0)])), None);
         assert_eq!(screen_size(&said(vec![])), None);
         assert_eq!(screen_size(&plist::Value::String("no".into())), None);
+    }
+
+    #[test]
+    fn with_no_answer_in_time_the_display_known_before_stays_the_shown_one() {
+        let mut inner = plist::Dictionary::new();
+        inner.insert("displayId".into(), 2.into());
+        inner.insert("uniqueId".into(), "inner".into());
+        inner.insert("active".into(), true.into());
+        let mut said = plist::Dictionary::new();
+        said.insert("displays".into(), plist::Value::Array(vec![plist::Value::Dictionary(inner)]));
+        let said = plist::Value::Dictionary(said);
+        let known = (Some("inner".to_string()), Some(2));
+        // The device didn't answer: not the primary display (the one off, opened), but the one known.
+        assert_eq!(kept_shown(known.clone(), None), known);
+        // Nothing known yet: nothing to keep, the stream's display 1 and the screenshot's primary as before.
+        assert_eq!(kept_shown((None, None), None), (None, None));
+        // An answer is taken as it is.
+        assert_eq!(kept_shown((Some("outer".into()), Some(1)), Some(&said)), known);
     }
 
     #[test]
