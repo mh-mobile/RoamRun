@@ -294,6 +294,36 @@ public final class DeviceSession: @unchecked Sendable {
         }
     }
 
+    /// Installs the app at `path` (an .ipa or an .app folder on this Mac), holding the device until it is in.
+    public func install(_ path: String) throws {
+        _ = try answer(repeatable: false) {
+            rr_device_install($0, path)
+        }
+    }
+
+    /// Launches the app, ending one already running; its process id.
+    public func launch(_ bundle: String) throws -> Int {
+        let said = try answer(repeatable: false) {
+            rr_device_launch($0, bundle)
+        }
+        return (said["pid"] as? NSNumber)?.intValue ?? 0
+    }
+
+    /// What installing `path` would be, of no device: its bundle identifier (nil for an .app folder whose
+    /// Info.plist gives none), its size, and the seconds an install of it is given. An .ipa that isn't one app is `invalid`.
+    public static func app(at path: String) throws -> (bundle: String?, megabytes: Int, seconds: Int) {
+        guard let json = rr_app_checked(path) else { throw Failure.message("no answer") }
+        defer { rr_string_free(json) }
+        guard let said = try? JSONSerialization.jsonObject(with: Data(String(cString: json).utf8)) as? [String: Any]
+        else { throw Failure.message("unreadable answer") }
+        guard said["ok"] as? Bool == true else {
+            let why = said["error"] as? String ?? "failed"
+            throw said["invalid"] as? Bool == true ? Failure.invalid(why) : Failure.message(why)
+        }
+        return (said["bundle"] as? String, (said["megabytes"] as? NSNumber)?.intValue ?? 0,
+                (said["seconds"] as? NSNumber)?.intValue ?? 0)
+    }
+
     /// A call that answers {"ok":…} JSON; its "error" becomes the failure.
     private func answer(repeatable: Bool,
                         _ call: @escaping (OpaquePointer) -> UnsafeMutablePointer<CChar>?) throws -> [String: Any]

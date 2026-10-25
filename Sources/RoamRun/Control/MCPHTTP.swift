@@ -901,7 +901,7 @@ extension MCPHTTP {
                 // Each call its own asking: one taken back gives up its own request to the app alone.
                 DeviceMCP(profiles: {
                     ProfileStore().load()
-                }, looks: folder, asking: asking) {
+                }, looks: folder, installsFromPaths: false, asking: asking) {
                     try DeviceControlWire.ask($0, in: ProfileStore.directory, asking: asking)
                 }.handle(message)
             },

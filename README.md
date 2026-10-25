@@ -335,13 +335,20 @@ with the look's id, instead of writing a file; `type` takes 500 characters a cal
 `swipe`, `type` and `paste` must give that id (`"look": 12`), as `--look` does. An app older than
 the `roamrun` it is asked from gets none of these four tools.
 
+`install`, `install_status` and `launch` (0.11.0+) put an app on the device and start it, with no
+Xcode: `install` takes the path of an .ipa or an .app folder on this Mac, built and signed for the
+device, ends the app's running processes, and answers at once with an id; `install_status` with
+that id says when the app is in, and until then other calls on the device answer that it is
+installing; `launch` takes the bundle identifier. The file is copied into RoamRun's own folder for
+the app, and removed when the install ends (or, if the app quit meanwhile, when it starts again).
+
 **For an agent elsewhere on your tailnet** (0.11.0+), `roamrun mcp --http <port> --allow <tag:name
 or login> [--allow …] [--token-file <file>]` serves the same tools over HTTP, until Ctrl-C. It
 listens on this Mac's Tailscale IPv4 address only, and lets in what `tailscale whois` says is a
 machine with that tag or that user's untagged machine. Requests, refusals, turns and the log go as
 with `roamrunctl mcp --http` ([its rules](docs/roamrunctl-reference.md#mcp-over-http)), with three
 differences: it offers the devices saved in RoamRun, each operated only while its switch in the
-app is on, rather than devices named on its command line; it has no `install`; and a call whose
+app is on, rather than devices named on its command line; it has no `install` or `install_status`; and a call whose
 caller goes, or takes it back, after its turn here is given up at the app, as with `roamrun mcp`:
 not begun if it still waits there behind another client of the device, stopped where it can if
 it is under way. The RoamRun app
@@ -354,7 +361,8 @@ app in one sitting — some apps went on sounding, some played unheard, one stop
 took nothing: [docs/sound-while-looking.md](docs/sound-while-looking.md).
 
 **Who can use it.** Device control is not given to one agent or one command. **While a device is
-switched on, any program you run on this Mac can see and operate it** through the app: a build
+switched on, any program you run on this Mac can see and operate it**, and install and launch apps
+on it, through the app: a build
 script, a package's install step, another agent. A `look` shows whatever is on the screen,
 notifications and messages included, and locking the device does not stop it: the lock screen is
 seen and operated too (seen), though unlocking still takes the passcode or Face ID.

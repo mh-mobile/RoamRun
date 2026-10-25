@@ -188,12 +188,13 @@ bounded.
   having dropped the pairing (a refusal is believed only from the device).
 - **Any program you run can use device control while it is switched on.** Any
   process of your user can ask the running app to look at or operate a paired
-  device (the `roamrun` commands do): the key stays with RoamRun, but RoamRun
+  device, or to install and launch an app on it (the `roamrun` commands and `roamrun mcp` do): the key stays with RoamRun, but RoamRun
   uses it for whoever asks. It is not a permission given to one agent — a build
   script or a package's install step is let in as well. Each device has a switch
   on its page: off, every request is refused; a text being typed or a walk of
   the elements stops where it is, and what was waiting its turn isn't begun (a
-  tap or a press already on its way arrives). What is on is kept in the login Keychain, where another program can't
+  tap or a press already on its way arrives, and an install already begun goes on
+  until it ends). What is on is kept in the login Keychain, where another program can't
   add to it without macOS asking you, and it names the pairing itself, as it is
   saved for its device — not the device's entry in the list of saved devices,
   which any program can rewrite — so a device you switched off stays off. A
@@ -285,7 +286,7 @@ bounded.
   --allow <who> [--allow <who>…] [--token-file <file>]` lets callers in, refuses and logs as
   roamrunctl's does (below), on the Mac's Tailscale IPv4 address, and doesn't start as root. It
   offers the devices saved in RoamRun, each operated only while its switch in the app is on, and
-  it has no `install`.
+  it has no `install`: it doesn't name files on the Mac for a caller.
 - **roamrunctl can serve its MCP tools over HTTP.** `roamrunctl mcp --http <port> --allow
   <who> [--allow <who>…] <devices>…`, started by a person and ended with Ctrl-C, listens on the machine's
   Tailscale IPv4 address only, and doesn't start as root (not checked on Windows). A caller

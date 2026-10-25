@@ -399,6 +399,23 @@ final class StandInDevice: ControlledDevice, @unchecked Sendable {
         try input("press")
     }
 
+    /// An install waits here when set, and says it has begun; it throws `failing` when that is set.
+    var installHold: DispatchSemaphore?
+    let installBegan = DispatchSemaphore(value: 0)
+    func install(_ path: String) throws {
+        count("install")
+        installBegan.signal()
+        held(installHold)
+        if let failing {
+            throw failing
+        }
+    }
+
+    func launch(_ bundle: String) throws -> Int {
+        try input("launch")
+        return 42
+    }
+
     private func input(_ call: String) throws {
         count(call)
         typeBegan.signal()

@@ -1431,3 +1431,139 @@ func anInputIsInterruptedWhenItsAskerLeavesOrItsDeviceIsSwitchedOff(_ op: String
     }
     #expect(attempts == 1 && reopened == 0)
 }
+
+/// An install holds the device until it ends: other calls on it are answered that it is installing,
+/// install_status says how it goes, and the app's copy is removed once it ends. Only an app RoamRun's
+/// own folder holds is installed.
+@Test func anInstallHoldsTheDeviceUntilItEndsAndSaysHowItWent() throws {
+    let dir = URL(fileURLWithPath: "/tmp/rr-\(UUID().uuidString.prefix(8))")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try scratchPairing(at: DeviceControlWire.pairingFile(udid: "UDID-1", in: dir))
+    let made = OSAllocatedUnfairLock<[StandInDevice]>(initialState: [])
+    let hub = DeviceControlHub(directory: dir, key: { _ in
+        scratchKey
+    }) { _, _, _ in
+        let device = StandInDevice()
+        made.withLock {
+            $0.append(device)
+        }
+        return device
+    }
+    defer { hub.stop() }
+    let id = UUID()
+    hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
+    let device = try #require(made.withLock {
+        $0.first
+    })
+    hub.start()
+    func app(_ name: String) throws -> String {
+        let folder = DeviceControlWire.socketFolder(in: dir)
+            .appendingPathComponent(name)
+            .appendingPathComponent("App.app")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try PropertyListSerialization.data(
+            fromPropertyList: ["CFBundleIdentifier": "com.example.App"],
+            format: .xml,
+            options: 0
+        )
+        .write(to: folder.appendingPathComponent("Info.plist"))
+        return folder.path
+    }
+    func status(_ install: String?) -> DeviceControlWire.Response {
+        hub.answer(.init(op: "install_status", device: id, install: install))
+    }
+
+    #expect(status(nil).said?.hasPrefix("no install was begun") == true)
+    #expect(!hub.answer(.init(op: "install", device: id, path: "/tmp/App.ipa")).ok)
+    let elsewhere = dir.appendingPathComponent("install-1").appendingPathComponent("App.app").path
+    try FileManager.default.createDirectory(atPath: elsewhere, withIntermediateDirectories: true)
+    #expect(!hub.answer(.init(op: "install", device: id, path: elsewhere)).ok)
+    // Not in a folder of its own there: refused too.
+    let loose = DeviceControlWire.socketFolder(in: dir).appendingPathComponent("install-2.app").path
+    try FileManager.default.createDirectory(atPath: loose, withIntermediateDirectories: true)
+    #expect(!hub.answer(.init(op: "install", device: id, path: loose)).ok)
+    #expect(!device.calls.contains("install"))
+
+    device.installHold = DispatchSemaphore(value: 0)
+    let path = try app("install-a")
+    let begun = hub.answer(.init(op: "install", device: id, path: path))
+    let install = try #require(begun.install)
+    #expect(begun.ok && begun.said?.contains("install \(install)") == true)
+    #expect(soon(device.installBegan))
+    let busy = hub.answer(.init(op: "press", device: id, text: "home"))
+    #expect(!busy.ok && busy.error?.hasPrefix("installing com.example.App on iPhone") == true)
+    // The device found at another port meanwhile, its session made anew: the install still holds the device.
+    hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 2, udid: "UDID-1")])
+    #expect(made.withLock {
+        $0.count
+    } == 2)
+    let stillBusy = hub.answer(.init(op: "press", device: id, text: "home"))
+    #expect(!stillBusy.ok && stillBusy.error?.hasPrefix("installing com.example.App on iPhone") == true)
+    #expect(status(install).said?.hasPrefix("installing com.example.App") == true)
+    #expect(!status("another").ok)
+    // The same path asked for again meanwhile: refused, and the folder the install takes it from stays.
+    #expect(!hub.answer(.init(op: "install", device: id, path: path)).ok)
+    #expect(FileManager.default.fileExists(atPath: path))
+    device.installHold?.signal()
+    var said = status(install)
+    for _ in 0 ..< 100 where said.said?.hasPrefix("installing") == true {
+        Thread.sleep(forTimeInterval: 0.02)
+        said = status(install)
+    }
+    #expect(said.ok && said.said?.contains("is installed on iPhone") == true && said.said?
+        .contains("launch takes it") == true)
+    #expect(!FileManager.default.fileExists(atPath: URL(fileURLWithPath: path).deletingLastPathComponent().path))
+    let launched = hub.answer(.init(op: "launch", device: id, text: "com.example.App"))
+    #expect(launched.ok && launched.pid == 42)
+
+    // One that fails says why, and it is gone too. (On the session made anew.)
+    let anew = try #require(made.withLock {
+        $0.last
+    })
+    anew.failing = DeviceSession.Failure.message("install: the device said no")
+    let again = try app("install-b")
+    let second = try #require(hub.answer(.init(op: "install", device: id, path: again)).install)
+    var failed = status(second)
+    for _ in 0 ..< 100 where failed.said?.hasPrefix("installing") == true {
+        Thread.sleep(forTimeInterval: 0.02)
+        failed = status(second)
+    }
+    #expect(!failed.ok && failed.error?.contains("the device said no") == true)
+    // The earlier one is still said, by its id.
+    #expect(status(install).said?.contains("is installed on iPhone") == true)
+    #expect(!FileManager.default.fileExists(atPath: URL(fileURLWithPath: again).deletingLastPathComponent().path))
+
+    // Refused by the app's own check: its folder goes too. Given through a link and `..`, it is the folder that was
+    // checked that goes, not where the link leads (which has no App.ipa: the path is then taken as install-c's own).
+    anew.failing = nil
+    let control = DeviceControlWire.socketFolder(in: dir)
+    let own = control.appendingPathComponent("install-c")
+    let outside = dir.appendingPathComponent("outside")
+    try FileManager.default.createDirectory(at: own, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(
+        at: outside.appendingPathComponent("sub"),
+        withIntermediateDirectories: true
+    )
+    try Data("not an ipa".utf8).write(to: own.appendingPathComponent("App.ipa"))
+    try Data("keep".utf8).write(to: outside.appendingPathComponent("canary"))
+    try FileManager.default.createSymbolicLink(at: own.appendingPathComponent("link"),
+                                               withDestinationURL: outside.appendingPathComponent("sub"))
+    let refused = hub.answer(.init(op: "install", device: id, path: own.appendingPathComponent("link/../App.ipa").path))
+    #expect(!refused.ok)
+    #expect(FileManager.default.fileExists(atPath: outside.appendingPathComponent("canary").path))
+    #expect(!FileManager.default.fileExists(atPath: own.path))
+}
+
+/// What the app's start sweeps away of apps left to install: one left two minutes ago or more, not one a CLI is copying.
+@Test func onlyAnInstallCopyLeftAWhileIsSweptAtStart() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let left = folder.appendingPathComponent("install-old"), fresh = folder.appendingPathComponent("install-new")
+    try FileManager.default.createDirectory(at: left, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: fresh, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-300)], ofItemAtPath: left.path)
+    #expect(DeviceControlWire.leftToInstall(left))
+    #expect(!DeviceControlWire.leftToInstall(fresh))
+    #expect(!DeviceControlWire.leftToInstall(folder.appendingPathComponent("look-1.png")))
+}

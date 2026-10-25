@@ -127,7 +127,19 @@ import ImageIO
         try #require(try result(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)["tools"] as? [[String: Any]])
     #expect(Set(tools.compactMap {
         $0["name"] as? String
-    }) == ["devices", "look", "tap", "swipe", "elements", "type", "paste", "press"])
+    }) == [
+        "devices",
+        "look",
+        "tap",
+        "swipe",
+        "elements",
+        "type",
+        "paste",
+        "press",
+        "install",
+        "install_status",
+        "launch"
+    ])
     func hinted(_ hint: String) -> Set<String> {
         Set(tools.filter {
             ($0["annotations"] as? [String: Bool])?[hint] == true
@@ -136,8 +148,8 @@ import ImageIO
             $0["name"] as? String
         })
     }
-    #expect(hinted("readOnlyHint") == ["devices", "look"])
-    #expect(hinted("destructiveHint") == ["tap", "swipe", "type", "paste", "press"])
+    #expect(hinted("readOnlyHint") == ["devices", "look", "install_status"])
+    #expect(hinted("destructiveHint") == ["tap", "swipe", "type", "paste", "press", "install", "launch"])
 
     // What holds an action to a look, and says which.
     func required(_ name: String) -> [String] {
@@ -362,4 +374,89 @@ import ImageIO
     }
     #expect(try call(String(repeating: "a", count: DeviceMCP.longestTyped)) == false && asked == 1)
     #expect(try call(String(repeating: "a", count: DeviceMCP.longestTyped + 1)) == true && asked == 1)
+}
+
+/// `install` takes a path on this Mac, over stdio only: it is copied into RoamRun's own folder, where the app
+/// takes it from. A server that doesn't offer it (over HTTP) neither lists nor does it.
+@Test func anInstallFromAPathIsCopiedWhereTheAppTakesIt() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let ipa = folder.appendingPathComponent("App.ipa")
+    try Data("not really".utf8).write(to: ipa)
+    var seen: (path: String, there: Bool)?
+    func server(installs: Bool) -> DeviceMCP {
+        DeviceMCP(profiles: {
+            [profile("iPhone")]
+        }, looks: folder, installsFromPaths: installs) { request in
+            if request.op == "install" {
+                seen = (request.path ?? "", FileManager.default.fileExists(atPath: request.path ?? ""))
+                return .init(ok: true, install: "ab12", said: "installing began (install ab12)")
+            }
+            return .init(ok: true, pid: 7)
+        }
+    }
+    func call(_ server: DeviceMCP, _ tool: String, _ arguments: String) throws -> (text: String, failed: Bool) {
+        let answer = try #require(server.handle(Data(
+            #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"\#(tool)","arguments":\#(arguments)}}"#
+                .utf8
+        )))
+        let result =
+            try #require((try JSONSerialization
+                    .jsonObject(with: answer) as? [String: Any])?["result"] as? [String: Any])
+        let text = ((result["content"] as? [[String: Any]])?.first?["text"] as? String) ?? ""
+        return (text, result["isError"] as? Bool == true)
+    }
+    let local = server(installs: true)
+    let begun = try call(local, "install", #"{"device":"iPhone","path":"\#(ipa.path)"}"#)
+    #expect(!begun.failed && begun.text.contains("install ab12"))
+    let path = try #require(seen?.path)
+    #expect(seen?.there == true && path != ipa.path)
+    // Under its own name, in a folder of its own in the looks folder.
+    let own = URL(fileURLWithPath: path).deletingLastPathComponent()
+    #expect(own.deletingLastPathComponent().standardizedFileURL == folder.standardizedFileURL)
+    #expect(own.lastPathComponent.hasPrefix("install-") && URL(fileURLWithPath: path).lastPathComponent == "App.ipa")
+    // A link is followed; what isn't an app isn't copied.
+    let link = folder.appendingPathComponent("Latest.ipa")
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: ipa)
+    #expect(try !call(local, "install", #"{"device":"iPhone","path":"\#(link.path)"}"#).failed)
+    #expect(seen?.there == true && seen?.path.hasSuffix("/App.ipa") == true)
+    #expect(try call(local, "install", #"{"device":"iPhone","path":"\#(folder.path)"}"#).failed)
+    // An .app that doesn't say its bundle identifier isn't an app to install.
+    let bare = folder.appendingPathComponent("Bare.app")
+    try FileManager.default.createDirectory(at: bare, withIntermediateDirectories: true)
+    seen = nil
+    #expect(try call(local, "install", #"{"device":"iPhone","path":"\#(bare.path)"}"#).failed)
+    #expect(seen == nil)
+    #expect(try call(local, "install", #"{"device":"iPhone","path":"/nowhere/App.ipa"}"#).failed)
+    #expect(try call(local, "launch", #"{"device":"iPhone","bundle":"com.example.App"}"#).text.contains("pid 7"))
+    let remote = server(installs: false)
+    seen = nil
+    #expect(try call(remote, "install", #"{"device":"iPhone","path":"\#(ipa.path)"}"#).failed)
+    #expect(try call(remote, "install_status", #"{"device":"iPhone"}"#).failed)
+    #expect(seen == nil)
+}
+
+/// Refused by the app, the copy is removed; an app too old to install says so.
+@Test func aRefusedInstallLeavesNoCopy() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let ipa = folder.appendingPathComponent("App.ipa")
+    try Data("not really".utf8).write(to: ipa)
+    for (said, expected) in [("device control is switched off for this device", "switched off"),
+                             ("unknown request", DeviceMCP.olderForApps)]
+    {
+        let server = DeviceMCP(profiles: {
+            [profile("iPhone")]
+        }, looks: folder) { _ in
+            .failure(said)
+        }
+        let answer = try #require(server.handle(Data(
+            #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"install","arguments":{"device":"iPhone","path":"\#(ipa.path)"}}}"#
+                .utf8
+        )))
+        #expect(String(decoding: answer, as: UTF8.self).contains(expected))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == ["App.ipa"])
+    }
 }

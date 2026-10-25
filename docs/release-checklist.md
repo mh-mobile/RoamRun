@@ -142,7 +142,10 @@ tunnel and Xcode has to run again.
     device that was switched off — it reads on, and the sheet says so.
 20. `roamrun look <name> /tmp/a.png`, then `tap`, `swipe`, `type`, `paste`, `press home` and
     `elements`, a `look` after each: each did what it says. The same through `roamrun mcp`
-    from an agent.
+    from an agent. There too (when the hub's install or launch changed): `install` of an .app or
+    .ipa signed for the device → answered at once; a `look` meanwhile → "installing";
+    `install_status` until installed; `launch` → the app in front; no `install-*` left in
+    `~/Library/Application Support/RoamRun/control/`.
 21. Connected on a Wi‑Fi, then that Wi‑Fi off (cellular only): `look` still answers, and a
     minute later too.
 22. Quit and reopen RoamRun: connected again without a prompt. Install this release over
