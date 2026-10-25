@@ -365,7 +365,10 @@ tunnel and Xcode has to run again.
     `--allow` → 403. Through `rr`: look → tap by it → look shows what the tap did. A look queued
     behind a `type` that runs 5–15 s, its `rr` stopped before its turn → not made, the log saying
     `not begun`. Switched off in the app meanwhile → the next call is refused. Ctrl-C → the port
-    is free.
+    is free. Started again with `--allow-install`: an .ipa signed for the device sent with `curl -T`
+    to `/upload` → its `sha256` is the file's; `install` by it → answered at once; `install_status`
+    until installed; `launch` → the app in front. Ctrl-C → no `upload-*` or `install-*` left in
+    `~/Library/Application Support/RoamRun/control/`.
 
 31. An Apple Vision Pro and a far Mac (when `pair xcode --with`, `pair introduce`, the stand-in,
     the wire, Xcode or visionOS changed). The far Mac's entry removed on the device first

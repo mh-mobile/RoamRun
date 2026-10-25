@@ -20,6 +20,8 @@ final class MCPHTTP: @unchecked Sendable {
     /// How long a `notifications/cancelled` is kept for a call still to come, and how many at most.
     static let takenBackFor: TimeInterval = 60
     static let cancelsMost = 256
+    /// The longest a read of a request waits for anything to come.
+    static let idle: TimeInterval = 60
     /// A connection's thread: what it reads is parsed there, and a JSON nested deep enough runs a thread's default
     /// 512 KB out (Foundation stops at depth 512, but only after recursing that far).
     static let stack = 8 << 20
@@ -165,6 +167,8 @@ final class MCPHTTP: @unchecked Sendable {
     final class Reader {
         let fd: Int32
         var until: Date
+        /// The longest a read waits for anything to come.
+        var idle: TimeInterval = MCPHTTP.idle
         private var buffer: [UInt8] = []
         private var at = 0
 
@@ -184,15 +188,13 @@ final class MCPHTTP: @unchecked Sendable {
                 let left = until.timeIntervalSinceNow
                 guard left > 0 else { return .late }
                 var wanted = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
-                let ready = poll(&wanted, 1, Int32(min(left, 60) * 1000) + 1)
+                let ready = poll(&wanted, 1, Int32(min(left, idle) * 1000) + 1)
                 if ready < 0, errno == EINTR {
                     continue
                 }
                 guard ready > 0 else {
-                    if ready == 0 {
-                        continue
-                    }
-                    return .end
+                    // Nothing for `idle`: a body that stopped coming, whatever time is left for it.
+                    return ready == 0 ? .late : .end
                 }
                 var chunk = [UInt8](repeating: 0, count: 8192)
                 let n = recv(fd, &chunk, chunk.count, 0)
@@ -237,7 +239,18 @@ final class MCPHTTP: @unchecked Sendable {
         /// `count` bytes: 408 where the time ran out, 400 where they were cut short.
         func bytes(_ count: Int) -> Result<[UInt8], Refused> {
             var out: [UInt8] = []
-            while out.count < count {
+            return pass(count) {
+                out += $0
+                return true
+            }.map {
+                out
+            }
+        }
+
+        /// `count` bytes, handed on as they come: 507 where `into` couldn't keep them.
+        func pass(_ count: Int, into: (ArraySlice<UInt8>) -> Bool) -> Result<Void, Refused> {
+            var left = count
+            while left > 0 {
                 if at == buffer.count {
                     switch fill() {
                     case .data: continue
@@ -245,11 +258,12 @@ final class MCPHTTP: @unchecked Sendable {
                     case .late: return .failure(408)
                     }
                 }
-                let n = min(buffer.count - at, count - out.count)
-                out.append(contentsOf: buffer[at ..< at + n])
+                let n = min(buffer.count - at, left)
+                guard into(buffer[at ..< at + n]) else { return .failure(507) }
                 at += n
+                left -= n
             }
-            return .success(out)
+            return .success(())
         }
     }
 
@@ -322,9 +336,22 @@ final class MCPHTTP: @unchecked Sendable {
     /// The body as the head frames it: chunked where it says so (also when a length comes with it), else by its one
     /// length, else none; `most` bytes at most.
     static func body(_ reader: Reader, _ request: Request, most: Int) -> Result<[UInt8], Refused> {
+        var body: [UInt8] = []
+        return framed(reader, request, most: most) {
+            body += $0
+            return true
+        }.map { _ in
+            body
+        }
+    }
+
+    /// The body as the head frames it, handed on as it comes (`into`: false where it couldn't be kept); its size.
+    static func framed(_ reader: Reader, _ request: Request, most: Int,
+                       into: (ArraySlice<UInt8>) -> Bool) -> Result<Int, Refused>
+    {
         if let coding = request.header("transfer-encoding") {
             guard coding.caseInsensitiveCompare("chunked") == .orderedSame else { return .failure(501) }
-            var body: [UInt8] = []
+            var size = 0
             while true {
                 let piece: Int
                 switch reader.line(most: 1024) {
@@ -341,11 +368,11 @@ final class MCPHTTP: @unchecked Sendable {
                 if piece == 0 {
                     break
                 }
-                guard piece <= most - body.count else { return .failure(413) }
-                switch reader.bytes(piece) {
-                case let .success(read): body += read
-                case let .failure(status): return .failure(status)
+                guard piece <= most - size else { return .failure(413) }
+                if case let .failure(status) = reader.pass(piece, into: into) {
+                    return .failure(status)
                 }
+                size += piece
                 switch reader.line(most: 2) {
                 case let .success(line) where line.isEmpty: break
                 case .success: return .failure(400)
@@ -355,7 +382,7 @@ final class MCPHTTP: @unchecked Sendable {
             // What may trail the last piece: read to the empty line, not used.
             while true {
                 switch reader.line(most: 1024) {
-                case let .success(line) where line.isEmpty: return .success(body)
+                case let .success(line) where line.isEmpty: return .success(size)
                 case .success: continue
                 case let .failure(status): return .failure(status)
                 }
@@ -365,7 +392,9 @@ final class MCPHTTP: @unchecked Sendable {
         case let .success(length):
             let length = length ?? 0
             guard length <= most else { return .failure(413) }
-            return reader.bytes(length)
+            return reader.pass(length, into: into).map {
+                length
+            }
         case let .failure(status): return .failure(status)
         }
     }
@@ -375,7 +404,8 @@ final class MCPHTTP: @unchecked Sendable {
     static func reason(_ status: Int) -> String {
         [
             200: "OK", 202: "Accepted", 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden", 404: "Not Found",
-            405: "Method Not Allowed", 408: "Request Timeout", 413: "Content Too Large",
+            405: "Method Not Allowed", 408: "Request Timeout", 409: "Conflict", 411: "Length Required",
+            413: "Content Too Large", 507: "Insufficient Storage",
             431: "Request Header Fields Too Large", 501: "Not Implemented", 503: "Service Unavailable",
             505: "HTTP Version Not Supported",
         ][status] ?? ""
@@ -454,6 +484,8 @@ final class MCPHTTP: @unchecked Sendable {
     /// The device a tool call's arguments name, as its turn is kept; nil: answered at once (no such device).
     let turnOf: @Sendable ([String: Any]) -> String?
     let headWithin: TimeInterval
+    /// With `--allow-install`: what `PUT /upload` keeps, for `install`.
+    let uploads: Uploads?
 
     private let lock = NSLock()
     private var turns: [String: DispatchQueue] = [:]
@@ -468,6 +500,7 @@ final class MCPHTTP: @unchecked Sendable {
         ownID: String,
         hosts: [String],
         headWithin: TimeInterval = headWithin,
+        uploads: Uploads? = nil,
         whois: @escaping @Sendable (String) -> Result<Whois, Failure>,
         handle: @escaping @Sendable (Data, DeviceControlWire.Asking) -> Data?,
         turnOf: @escaping @Sendable ([String: Any]) -> String?
@@ -478,6 +511,7 @@ final class MCPHTTP: @unchecked Sendable {
         self.ownID = ownID
         self.hosts = hosts
         self.headWithin = headWithin
+        self.uploads = uploads
         self.whois = whois
         self.handle = handle
         self.turnOf = turnOf
@@ -668,6 +702,44 @@ final class MCPHTTP: @unchecked Sendable {
             who = why.description
             return refuse(403)
         }
+        if request.path == "/upload" {
+            guard let uploads else { return refuse(404) }
+            guard request.method == "PUT" else { return refuse(405, "Allow: PUT\r\n") }
+            // Tied to the caller by its lasting id: none, no upload.
+            guard !caller.id.isEmpty else { return refuse(403) }
+            let length: Int?
+            switch Self.length(request) {
+            case let .success(said): length = said
+            case let .failure(refused): return refuse(refused)
+            }
+            // Refused before the slot is taken, which lets go of the one kept.
+            if let coding = request.header("transfer-encoding") {
+                guard coding.caseInsensitiveCompare("chunked") == .orderedSame else { return refuse(501) }
+            } else if length == nil {
+                return refuse(411)
+            }
+            let tooBig = "\(uploads.most >> 20) MiB at most: the server's --max-upload sets it\n"
+            if let length, length > uploads.most {
+                return refuse(413, "", tooBig)
+            }
+            guard uploads.begin()
+            else { return refuse(409, "", "another upload is coming in: try again once it is in\n") }
+            defer { uploads.done() }
+            let mib = ((length ?? uploads.most) + (1 << 20) - 1) >> 20
+            reader.until = Date().addingTimeInterval(Self.bodyWithin + Uploads.perMiB * Double(mib))
+            if request.header("expect")?.caseInsensitiveCompare("100-continue") == .orderedSame {
+                let go = Array("HTTP/1.1 100 Continue\r\n\r\n".utf8)
+                _ = send(fd, go, go.count, 0)
+            }
+            switch uploads.receive(reader, request, owner: caller.id) {
+            case let .success(answer):
+                Self.respond(fd, 200, "", answer)
+                return "ok"
+            case let .failure(refused):
+                Self.respond(fd, refused.status, "", refused.status == 413 ? tooBig : "")
+                return "\(refused.status)"
+            }
+        }
         guard request.path == "/mcp" else { return refuse(404) }
         guard request.method == "POST" else { return refuse(405, "Allow: POST\r\n") }
         if let version = request.header("mcp-protocol-version"), !DeviceMCP.versions.contains(version) {
@@ -720,6 +792,18 @@ final class MCPHTTP: @unchecked Sendable {
         }
         if method.isEmpty {
             return refuse(400, "", Self.rpcError(id, -32600, "no method"))
+        }
+        // An install from another's upload, or one not as it was sent, is refused before it waits its turn.
+        if let uploads, method == "tools/call", params["name"] as? String == "install",
+           let upload = arguments["upload"] as? String,
+           let why = uploads.refusal(id: upload, owner: caller.id, sha256: arguments["sha256"] as? String ?? "")
+        {
+            Self.respond(fd, 200, "", Self.json([
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": ["content": [["type": "text", "text": why]], "isError": true],
+            ]))
+            return "error"
         }
         let line = Data(body)
         guard method == "tools/call", let device = turnOf(arguments) else {
@@ -851,11 +935,20 @@ final class MCPHTTP: @unchecked Sendable {
     }
 }
 
+/// The signal sources of a server with uploads, kept for as long as the process runs.
+nonisolated(unsafe) private var stopping: [DispatchSourceSignal] = []
+
 extension MCPHTTP {
     /// `roamrun mcp --http <port> --allow <who>… [--token-file <file>]`, ready to serve: on this Mac's Tailscale
     /// IPv4 address only; not without Tailscale, without `--allow`, or as root. The server, its socket, and what to
     /// tell the person who started it.
-    static func start(port given: String, allow: [String], tokenFile: String?) throws -> (MCPHTTP, Int32, String) {
+    static func start(
+        port given: String,
+        allow: [String],
+        tokenFile: String?,
+        allowInstall: Bool = false,
+        maxUpload: String? = nil
+    ) throws -> (MCPHTTP, Int32, String) {
         // A log read through a pipe whose reader went: the write fails, the server goes on.
         signal(SIGPIPE, SIG_IGN)
         guard geteuid() != 0
@@ -868,6 +961,13 @@ extension MCPHTTP {
         }
         let allowed = try allow.map(Self.allow)
         let token = try tokenFile.map(Self.token(at:))
+        guard maxUpload == nil || allowInstall
+        else { throw Failure(description: "--max-upload goes with --allow-install") }
+        let mib = try maxUpload.map {
+            guard let mib = Int($0), (1 ... 4096).contains(mib)
+            else { throw Failure(description: "--max-upload takes MiB, 1...4096") }
+            return mib
+        } ?? 1024
         let mesh: TailscaleClient.Mesh
         do { mesh = try TailscaleClient.fromSettings().mesh() } catch {
             throw Failure(description: error.localizedDescription)
@@ -881,12 +981,33 @@ extension MCPHTTP {
             !$0.isEmpty
         }
         let folder = DeviceControlWire.socketFolder(in: ProfileStore.directory)
+        let uploads = allowInstall ? Uploads(folder: folder, most: mib << 20) : nil
+        if let uploads {
+            // At stop, what was uploaded goes: Ctrl-C, and what a closed terminal sends.
+            for stop in [SIGINT, SIGTERM, SIGHUP] {
+                signal(stop, SIG_IGN)
+                let source = DispatchSource.makeSignalSource(signal: stop, queue: .global())
+                source.setEventHandler {
+                    uploads.end()
+                    exit(130)
+                }
+                source.resume()
+                stopping.append(source)
+            }
+            Thread.detachNewThread {
+                while true {
+                    Thread.sleep(forTimeInterval: 60)
+                    uploads.sweep()
+                }
+            }
+        }
         let server = MCPHTTP(
             allowed: allowed,
             token: token,
             ownIP: own,
             ownID: mesh.ownID,
             hosts: hosts(ip: own, names: names, port: bound),
+            uploads: uploads,
             whois: { ip in
                 do {
                     guard let said = whois(fromJSON: try TailscaleClient.fromSettings().whoisJSON(of: ip)) else {
@@ -901,7 +1022,12 @@ extension MCPHTTP {
                 // Each call its own asking: one taken back gives up its own request to the app alone.
                 DeviceMCP(profiles: {
                     ProfileStore().load()
-                }, looks: folder, installsFromPaths: false, asking: asking) {
+                }, looks: folder, installsFromPaths: false, claimUpload: uploads.map { uploads in
+                    { id, sha256 in
+                        try uploads.claim(id: id, sha256: sha256,
+                                          to: folder.appendingPathComponent("install-\(UUID().uuidString).ipa").path)
+                    }
+                }, asking: asking) {
                     try DeviceControlWire.ask($0, in: ProfileStore.directory, asking: asking)
                 }.handle(message)
             },
@@ -914,8 +1040,9 @@ extension MCPHTTP {
             }
         )
         let who = allow.joined(separator: ", ")
+        let install = uploads == nil ? "" : "; install of an .ipa sent to http://\(own):\(bound)/upload, \(mib) MiB at most"
         let note =
-            "roamrun: the MCP tools for the devices saved in RoamRun at http://\(own):\(bound)/mcp, for \(who) on the tailnet\(token == nil ? "" : ", with the token"). Ctrl-C ends it. What is sent and shown passes through whatever lies between (a cloud's proxy sees images and text)."
+            "roamrun: the MCP tools for the devices saved in RoamRun at http://\(own):\(bound)/mcp, for \(who) on the tailnet\(token == nil ? "" : ", with the token")\(install). Ctrl-C ends it. What is sent and shown passes through whatever lies between (a cloud's proxy sees images and text)."
         return (server, fd, note)
     }
 }

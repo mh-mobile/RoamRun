@@ -348,11 +348,16 @@ listens on this Mac's Tailscale IPv4 address only, and lets in what `tailscale w
 machine with that tag or that user's untagged machine. Requests, refusals, turns and the log go as
 with `roamrunctl mcp --http` ([its rules](docs/roamrunctl-reference.md#mcp-over-http)), with three
 differences: it offers the devices saved in RoamRun, each operated only while its switch in the
-app is on, rather than devices named on its command line; it has no `install` or `install_status`; and a call whose
+app is on, rather than devices named on its command line; `install` takes an upload, never a
+path (below); and a call whose
 caller goes, or takes it back, after its turn here is given up at the app, as with `roamrun mcp`:
 not begun if it still waits there behind another client of the device, stopped where it can if
 it is under way. The RoamRun app
-has to be running, as for `roamrun mcp`.
+has to be running, as for `roamrun mcp`. With `--allow-install [--max-upload <MiB>]` it offers
+`install` and `install_status`: the caller sends an .ipa with `PUT /upload` (1024 MiB at most by
+default), gets its id and sha256, and installs it by them, as with roamrunctl. One upload is kept,
+for the machine that sent it, in RoamRun's own folder, until an install uses it, a later upload
+replaces it, 30 minutes pass unused, or Ctrl-C. Without `--allow-install` there is neither.
 
 **What the device does meanwhile.** Each look and each action runs a screen-sharing session on the
 device, which RoamRun keeps for about five seconds after the last one. The device showed it as

@@ -460,3 +460,48 @@ import ImageIO
         #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == ["App.ipa"])
     }
 }
+
+/// Over HTTP with `--allow-install`: `install` takes an upload by its id and sha256, made ready where the app takes it.
+@Test func anInstallFromAnUploadAsksTheAppWithItsPath() throws {
+    var asked: DeviceControlWire.Request?
+    var claimed: (String, String)?
+    let server = DeviceMCP(profiles: {
+        [profile("iPhone")]
+    }, looks: FileManager.default.temporaryDirectory, installsFromPaths: false, claimUpload: { id, sha256 in
+        claimed = (id, sha256)
+        return "/ready/install-x.ipa"
+    }) { request in
+        asked = request
+        return .init(ok: true, install: "cd34", said: "installing began (install cd34)")
+    }
+    let listed = try #require(server.handle(Data(#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#.utf8)))
+    let tools = try #require(
+        ((try JSONSerialization.jsonObject(with: listed) as? [String: Any])?["result"] as? [String: Any])?["tools"]
+            as? [[String: Any]]
+    )
+    let install = try #require(tools.first {
+        $0["name"] as? String == "install"
+    })
+    #expect((install["inputSchema"] as? [String: Any])?["required"] as? [String] == ["device", "upload", "sha256"])
+    #expect(tools.contains {
+        $0["name"] as? String == "install_status"
+    })
+    let answer = try #require(server.handle(Data(
+        #"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"install","arguments":{"device":"iPhone","upload":"u1","sha256":"ab"}}}"#
+            .utf8
+    )))
+    #expect(String(decoding: answer, as: UTF8.self).contains("install cd34"))
+    #expect(claimed?.0 == "u1" && claimed?.1 == "ab")
+    #expect(asked?.op == "install" && asked?.path == "/ready/install-x.ipa")
+    // Neither a path nor install_status where installs aren't offered at all.
+    let none = DeviceMCP(profiles: {
+        [profile("iPhone")]
+    }, looks: FileManager.default.temporaryDirectory, installsFromPaths: false) { _ in
+        .init(ok: true, said: "x")
+    }
+    let status = try #require(none.handle(Data(
+        #"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"install_status","arguments":{"device":"iPhone"}}}"#
+            .utf8
+    )))
+    #expect(String(decoding: status, as: UTF8.self).contains(#""isError":true"#))
+}

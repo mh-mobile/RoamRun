@@ -30,6 +30,9 @@ final class DeviceMCP: @unchecked Sendable {
     private let looks: URL
     /// Whether `install` is offered, from a path on this Mac: over stdio, not to a caller elsewhere.
     let installsFromPaths: Bool
+    /// Over HTTP with `--allow-install`: `install` from an upload, by its id and sha256 — made ready where the app
+    /// takes it from, its path answered.
+    let claimUpload: ((String, String) throws -> String)?
     /// The request to the app under way, which `ask` makes with it: given up when its call is taken back.
     private let asking: DeviceControlWire.Asking
     private let work = DispatchQueue(label: "roamrun.mcp")
@@ -50,12 +53,14 @@ final class DeviceMCP: @unchecked Sendable {
         profiles: @escaping () -> [DeviceProfile],
         looks: URL,
         installsFromPaths: Bool = true,
+        claimUpload: ((String, String) throws -> String)? = nil,
         asking: DeviceControlWire.Asking = .init(),
         ask: @escaping Ask
     ) {
         self.saved = profiles
         self.looks = looks
         self.installsFromPaths = installsFromPaths
+        self.claimUpload = claimUpload
         self.asking = asking
         self.ask = ask
     }
@@ -172,7 +177,8 @@ final class DeviceMCP: @unchecked Sendable {
         case "ping":
             return reply([:])
         case "tools/list":
-            return reply(["tools": Self.tools(installs: installsFromPaths)])
+            return reply(["tools": Self
+                    .tools(installs: installsFromPaths ? .paths : claimUpload == nil ? nil : .uploads)])
         case "tools/call":
             let content: [[String: Any]]
             var failed = false
@@ -339,6 +345,19 @@ final class DeviceMCP: @unchecked Sendable {
             _ = try send(.init(op: tool, device: device.id, text: value, look: look))
             return text(tool == "type" ? DeviceControlWire
                 .typed(value) ?? "sent; look to see what it did" : "sent; look to see what it did")
+        case "install" where claimUpload != nil:
+            guard let upload = arguments["upload"] as? String, let sha256 = arguments["sha256"] as? String else {
+                throw Failure(description: "upload and sha256 are missing: as PUT /upload answered them")
+            }
+            let path = try claimUpload?(upload, sha256) ?? ""
+            do {
+                return try text(send(.init(op: "install", device: device.id, path: path)).said ?? "installing")
+            } catch {
+                try? FileManager.default.removeItem(atPath: path)
+                throw error
+            }
+        case "install_status" where !installsFromPaths && claimUpload == nil:
+            throw Failure(description: "no such tool: install_status")
         case "install":
             guard installsFromPaths, let path = arguments["path"] as? String else {
                 throw Failure(description: installsFromPaths ? "path is missing" : "no such tool: install")
@@ -496,15 +515,23 @@ final class DeviceMCP: @unchecked Sendable {
         ]
     }
 
-    /// With `installs`, `install` from a path and `install_status`.
-    static func tools(installs: Bool) -> [[String: Any]] {
-        operating + (installs ? [
-            tool(
-                "install",
-                "Start installing an app built and signed for this device: the path, on this Mac, of an .ipa or an .app folder. It ends the app's running processes first. It answers at once; install_status says when the app is in (a megabyte takes a few seconds, a large app minutes), and until then other calls on the device answer that it is installing.",
-                ["path": ["type": "string"]],
-                required: ["path"]
-            ),
+    enum Installs { case paths, uploads }
+
+    /// With `installs`, `install` (from a path on this Mac, or from an upload) and `install_status`.
+    static func tools(installs: Installs?) -> [[String: Any]] {
+        let install = installs == .uploads ? tool(
+            "install",
+            "Start installing an .ipa sent with PUT /upload, built and signed for this device: the upload's id and sha256, as the upload answered them. It ends the app's running processes first. It answers at once; install_status says when the app is in (a megabyte takes a few seconds, a large app minutes), and until then other calls on the device answer that it is installing. An upload serves one install.",
+            ["upload": ["type": "string"], "sha256": ["type": "string"]],
+            required: ["upload", "sha256"]
+        ) : tool(
+            "install",
+            "Start installing an app built and signed for this device: the path, on this Mac, of an .ipa or an .app folder. It ends the app's running processes first. It answers at once; install_status says when the app is in (a megabyte takes a few seconds, a large app minutes), and until then other calls on the device answer that it is installing.",
+            ["path": ["type": "string"]],
+            required: ["path"]
+        )
+        return operating + (installs != nil ? [
+            install,
             tool(
                 "install_status",
                 "How the device's install goes: still going (for how long), done (with the app's bundle identifier, for launch), or why it failed. Given the id install answered (install <id>), of that install alone: another begun since is an error.",

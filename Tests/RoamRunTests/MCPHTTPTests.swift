@@ -64,6 +64,7 @@ private final class Served: @unchecked Sendable {
     init(
         token: String? = nil,
         own: String = "100.64.0.9",
+        uploads: MCPHTTP.Uploads? = nil,
         whois: @escaping @Sendable (String) -> Result<MCPHTTP.Whois, MCPHTTP.Failure> = { _ in
             .success(.init(id: "caller", tags: ["tag:ci"]))
         }
@@ -80,6 +81,7 @@ private final class Served: @unchecked Sendable {
             ownID: "own-node",
             hosts: MCPHTTP.hosts(ip: "127.0.0.1", names: ["mac.tail.ts.net"], port: port),
             headWithin: 2,
+            uploads: uploads,
             whois: whois,
             handle: { message, asking in
                 later.handle?(message, asking)
@@ -325,4 +327,76 @@ private func status(_ answer: String) -> Int {
     #expect(served.lock.withLock {
         served.givenUp
     } == true)
+}
+
+/// `PUT /upload` with `--allow-install`: an .ipa kept for one install by the caller that sent it, and its sha256.
+@Test func anUploadIsKeptForItsCallersInstall() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let plain = try Served()
+    #expect(status(plain.ask("PUT /upload HTTP/1.1\r\nHost: 127.0.0.1:\(plain.port)\r\nContent-Length: 1\r\n\r\nx")) ==
+        404)
+
+    let uploads = MCPHTTP.Uploads(folder: folder, most: 1 << 20)
+    let served = try Served(uploads: uploads)
+    let host = "Host: 127.0.0.1:\(served.port)\r\n"
+    #expect(status(served.ask("GET /upload HTTP/1.1\r\n\(host)\r\n")) == 405)
+    #expect(status(served.ask("PUT /upload HTTP/1.1\r\n\(host)\r\n")) == 411)
+    let tooBig = served.ask("PUT /upload HTTP/1.1\r\n\(host)Content-Length: \((1 << 20) + 1)\r\n\r\n")
+    #expect(status(tooBig) == 413 && tooBig.contains("1 MiB at most"))
+    // One coming in holds the slot: another meanwhile is told to wait.
+    let coming = served.open("PUT /upload HTTP/1.1\r\n\(host)Content-Length: 100\r\n\r\nhalf")
+    usleep(200_000)
+    #expect(status(served.ask("PUT /upload HTTP/1.1\r\n\(host)Content-Length: 1\r\n\r\nx")) == 409)
+    close(coming)
+    usleep(200_000)
+    #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty) // what came of it is gone
+
+    let sent = served.ask("PUT /upload HTTP/1.1\r\n\(host)Content-Length: 5\r\n\r\nhello")
+    #expect(status(sent) == 200)
+    let answer = try #require(sent.components(separatedBy: "\r\n\r\n").last.flatMap {
+        try JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]
+    })
+    let id = try #require(answer["upload"] as? String)
+    let sha256 = try #require(answer["sha256"] as? String)
+    #expect(answer["size"] as? Int == 5)
+    #expect(sha256 == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
+    #expect(FileManager.default.fileExists(atPath: folder.appendingPathComponent("upload-\(id).ipa").path))
+    // An install naming it by another sha256 is refused before its turn; nothing is asked of a device.
+    let wrong = served.post(
+        #"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"install","arguments":{"device":"phone","upload":"\#(id)","sha256":"00"}}}"#
+    )
+    #expect(wrong.contains(#""isError":true"#) && wrong.contains("isn't upload"))
+    #expect(served.lock
+        .withLock {
+            served.handled
+        }
+        .isEmpty)
+    #expect(uploads.refusal(id: id, owner: "someone-else", sha256: sha256) != nil)
+    #expect(uploads.refusal(id: id, owner: "caller", sha256: sha256) == nil)
+    // Used up by the install it serves: moved where the app takes it, and not kept for another.
+    let ready = folder.appendingPathComponent("install-1.ipa").path
+    #expect(try uploads.claim(id: id, sha256: sha256, to: ready) == ready)
+    #expect(FileManager.default.fileExists(atPath: ready))
+    #expect(throws: MCPHTTP.Failure.self) {
+        try uploads.claim(id: id, sha256: sha256, to: ready)
+    }
+}
+
+/// An upload not used for half an hour is let go of, and its file with it.
+@Test func anUploadUnusedForHalfAnHourIsDropped() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let uploads = MCPHTTP.Uploads(folder: folder, most: 1 << 20)
+    let served = try Served(uploads: uploads)
+    let sent = served.ask(
+        "PUT /upload HTTP/1.1\r\nHost: 127.0.0.1:\(served.port)\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n"
+    )
+    #expect(status(sent) == 200 && sent.contains(#""size":3"#))
+    uploads.sweep(now: Date().addingTimeInterval(MCPHTTP.Uploads.keptFor - 60))
+    #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).count == 1)
+    uploads.sweep(now: Date().addingTimeInterval(MCPHTTP.Uploads.keptFor + 60))
+    #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty)
 }

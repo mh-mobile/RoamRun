@@ -76,8 +76,10 @@ enum CLI {
       press <name> <button>          home, lock, volume-up or volume-down
       mcp                            The same as MCP tools, over stdin/stdout (for an agent's MCP config)
       mcp --http <port> --allow <tag:name or login> [--allow …] [--token-file <file>]
+          [--allow-install [--max-upload <MiB>]]
                                      The same over HTTP, on this Mac's Tailscale address, for the
-                                     machines Tailscale says are allowed; until Ctrl-C
+                                     machines Tailscale says are allowed; until Ctrl-C. With
+                                     --allow-install, install of an .ipa sent with PUT /upload
     Each look serves one action (type and paste may still go by it): look, act, look again.
     With --look, refused once another look (anyone's), a button, elements or an action without
     --look came since, or after a minute: what an agent sharing the device gives.
@@ -450,7 +452,9 @@ enum CLI {
                     let (server, listener, note) = try MCPHTTP.start(
                         port: parsed.values["--http"] ?? "",
                         allow: parsed.lists["--allow"] ?? [],
-                        tokenFile: parsed.values["--token-file"]
+                        tokenFile: parsed.values["--token-file"],
+                        allowInstall: parsed.flags.contains("--allow-install"),
+                        maxUpload: parsed.values["--max-upload"]
                     )
                     MCPHTTP.note(note + "\n")
                     Thread.detachNewThread {
@@ -461,8 +465,12 @@ enum CLI {
                     fail("\(error)")
                 }
             case "mcp":
-                guard parsed.lists["--allow"] == nil, parsed.values["--token-file"] == nil else {
-                    fail("--allow and --token-file go with --http: roamrun mcp --http <port> --allow <who>")
+                guard parsed.lists["--allow"] == nil, parsed.values["--token-file"] == nil,
+                      !parsed.flags.contains("--allow-install"), parsed.values["--max-upload"] == nil
+                else {
+                    fail(
+                        "--allow, --token-file, --allow-install and --max-upload go with --http: roamrun mcp --http <port> --allow <who>"
+                    )
                 }
                 // Off the main thread: it reads stdin until the client closes it.
                 let asking = DeviceControlWire.Asking()
@@ -539,7 +547,7 @@ enum CLI {
         all["paste"] = (["--look="], 0 ... 2)
         all["press"] = ([], 0 ... 2)
         all["elements"] = ([], 0 ... 2)
-        all["mcp"] = (["--http=", "--allow=", "--token-file="], 0 ... 0)
+        all["mcp"] = (["--http=", "--allow=", "--token-file=", "--allow-install", "--max-upload="], 0 ... 0)
         all["key"] = (["--as="], 0 ... 3)
         return all
     }()
