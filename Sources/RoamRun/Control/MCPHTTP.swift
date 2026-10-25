@@ -736,14 +736,24 @@ final class MCPHTTP: @unchecked Sendable {
             }
             return refuse(200, given, answer)
         }
-        guard let answer = take(turnOn: device, session: session, id: DeviceMCP.name(id), rpcID: id, line: line, fd: fd)
+        var givenUp = false
+        guard let answer = take(
+            turnOn: device,
+            session: session,
+            id: DeviceMCP.name(id),
+            rpcID: id,
+            line: line,
+            fd: fd,
+            givenUp: &givenUp
+        )
         else { return "not begun" }
         let failed =
             ((try? JSONSerialization.jsonObject(with: answer) as? [String: Any])?["result"] as? [String: Any])?[
                 "isError"
             ] as? Bool == true
         Self.respond(fd, 200, "", String(data: answer, encoding: .utf8) ?? "")
-        return failed ? "error" : "ok"
+        // Its caller went, or took it back, while it was at the app: what it answers is no failure of the call's own.
+        return givenUp ? "given up" : failed ? "error" : "ok"
     }
 
     /// A request id as MCP has one: a number, or text, and not a long one.
@@ -770,7 +780,15 @@ final class MCPHTTP: @unchecked Sendable {
 
     /// The call, in its turn on the device: nil where it isn't begun (taken back in its session, or its caller's
     /// connection closed, before its turn). One that waited too long is answered so, and not begun.
-    private func take(turnOn device: String, session: String?, id: String, rpcID: Any, line: Data, fd: Int32) -> Data? {
+    private func take(
+        turnOn device: String,
+        session: String?,
+        id: String,
+        rpcID: Any,
+        line: Data,
+        fd: Int32,
+        givenUp: inout Bool
+    ) -> Data? {
         let queue = lock.withLock { () -> DispatchQueue in
             if let queue = turns[device] {
                 return queue
@@ -826,7 +844,9 @@ final class MCPHTTP: @unchecked Sendable {
                 }
             }
             defer { done.signal() }
-            return handle(line, asking)
+            let answer = handle(line, asking)
+            givenUp = asking.givenUp
+            return answer
         }
     }
 }

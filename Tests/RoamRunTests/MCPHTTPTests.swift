@@ -298,3 +298,31 @@ private func status(_ answer: String) -> Int {
         served.givenUp
     } == true)
 }
+
+/// …and so does one taken back in its session after its turn, its caller still there.
+@Test func aCallsRequestToTheAppIsGivenUpWhenItIsTakenBack() throws {
+    let served = try Served()
+    let body = #"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"tap","arguments":{"device":"waits"}}}"#
+    let fd = served
+        .open(
+            "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:\(served.port)\r\nMcp-Session-Id: s9\r\nContent-Length: \(body.utf8.count)\r\n\r\n\(body)"
+        )
+    defer { close(fd) }
+    for _ in 0 ..< 100 where served.lock.withLock({
+        served.handled.isEmpty
+    }) {
+        usleep(20000)
+    }
+    #expect(status(served.post(
+        #"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":8}}"#,
+        headers: "Mcp-Session-Id: s9\r\n"
+    )) == 202)
+    for _ in 0 ..< 200 where served.lock.withLock({
+        served.givenUp == nil
+    }) {
+        usleep(20000)
+    }
+    #expect(served.lock.withLock {
+        served.givenUp
+    } == true)
+}
