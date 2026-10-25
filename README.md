@@ -341,6 +341,8 @@ device, ends the app's running processes, and answers at once with an id; `insta
 that id says when the app is in, and until then other calls on the device answer that it is
 installing; `launch` takes the bundle identifier. The file is copied into RoamRun's own folder for
 the app, and removed when the install ends (or, if the app quit meanwhile, when it starts again).
+An .ipa is read whole into the app's memory while it is sent to the device (an .app folder is sent
+file by file).
 
 **For an agent elsewhere on your tailnet** (0.11.0+), `roamrun mcp --http <port> --allow <who>`
 serves the same tools over HTTP, until Ctrl-C. `<who>` is `tag:<name>` or a login, and `--allow`
