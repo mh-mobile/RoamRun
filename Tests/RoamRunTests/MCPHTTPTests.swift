@@ -384,8 +384,8 @@ private func status(_ answer: String) -> Int {
     #expect(FileManager.default.fileExists(atPath: upload))
     #expect(uploads.refusal(id: id, owner: "caller", sha256: sha256) != nil) // not kept for another meanwhile
     lent.settle(false)
-    #expect(!FileManager.default.fileExists(atPath: own.path))
     #expect(uploads.refusal(id: id, owner: "caller", sha256: sha256) == nil)
+    try FileManager.default.removeItem(at: own) // as the app or `roamrun mcp` does
     let taken = try uploads.claim(id: id, sha256: sha256, into: folder)
     taken.settle(true)
     #expect(FileManager.default.fileExists(atPath: taken.path)) // the app's, to remove when its install ends
@@ -393,6 +393,15 @@ private func status(_ answer: String) -> Int {
     #expect(throws: MCPHTTP.Failure.self) {
         try uploads.claim(id: id, sha256: sha256, into: folder)
     }
+
+    // Stopped while one is lent: its own file goes, the install's link stays.
+    let again = served.ask("PUT /upload HTTP/1.1\r\n\(host)Content-Length: 1\r\n\r\ny")
+    let second = try #require(again.components(separatedBy: #""upload":""#).last?.prefix(32)).description
+    let secondSha = try #require(again.components(separatedBy: #""sha256":""#).last?.prefix(64)).description
+    let held = try uploads.claim(id: second, sha256: secondSha, into: folder)
+    uploads.end()
+    #expect(!FileManager.default.fileExists(atPath: folder.appendingPathComponent("upload-\(second).ipa").path))
+    #expect(FileManager.default.fileExists(atPath: held.path))
 }
 
 /// An upload not used for half an hour is let go of, and its file with it.

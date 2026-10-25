@@ -170,16 +170,14 @@ extension MCPHTTP {
             // A link, not a move: the app removes its folder whatever happens, and the upload's own file is kept.
             guard link(upload.path, path) == 0 else {
                 let why = String(cString: strerror(errno))
+                let gone = access(upload.path, F_OK) != 0
                 rmdir(own.path)
-                settle(upload, taken: false)
-                throw Failure(
-                    description: "the upload couldn't be made ready for the app: \(why). It is kept: try again"
-                )
+                // Its own file gone (the folder removed meanwhile): nothing is kept.
+                settle(upload, taken: gone)
+                throw Failure(description: gone ? Self.gone(id) :
+                    "the upload couldn't be made ready for the app: \(why). It is kept: try again")
             }
             return (path, { [weak self] taken in
-                if !taken {
-                    try? FileManager.default.removeItem(atPath: own.path)
-                }
                 self?.settle(upload, taken: taken)
             })
         }
@@ -208,13 +206,17 @@ extension MCPHTTP {
 
         /// At stop: what is kept, and what was coming in.
         func end() {
-            let left = lock.withLock { () -> String? in
+            let left = lock.withLock { () -> [String] in
+                // The process ends at once after this: no deinit runs. A lent one's install has its own link.
+                let left = [incoming, kept?.upload.path, lent?.path].compactMap {
+                    $0
+                }
                 kept = nil
                 lent = nil
-                return incoming
+                return left
             }
-            if let left {
-                unlink(left)
+            left.forEach {
+                unlink($0)
             }
         }
 

@@ -374,9 +374,14 @@ final class DeviceMCP: @unchecked Sendable {
                 claimed.settle(true)
                 return text(said ?? "installing")
             } catch {
-                // Not begun by the app (refused, nobody waiting any more, taken back, no answer): the upload stays for
-                // another try. One the app began anyway installs from its own link.
+                // Not said to have begun (refused, nobody waiting any more, taken back, no answer): the upload stays for
+                // another try. Its install folder is removed only where the app surely didn't take it (refused, or not
+                // there); one whose answer was lost may be installing from it, and the app removes that one.
                 claimed.settle(false)
+                if error is Failure {
+                    try? FileManager.default
+                        .removeItem(at: URL(fileURLWithPath: claimed.path).deletingLastPathComponent())
+                }
                 throw (error as? Failure)?
                     .description == "unknown request" ? Failure(description: Self.olderForApps) : error
             }
