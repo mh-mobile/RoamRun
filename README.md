@@ -335,6 +335,18 @@ with the look's id, instead of writing a file; `type` takes 500 characters a cal
 `swipe`, `type` and `paste` must give that id (`"look": 12`), as `--look` does. An app older than
 the `roamrun` it is asked from gets none of these four tools.
 
+**For an agent elsewhere on your tailnet** (0.11.0+), `roamrun mcp --http <port> --allow <tag:name
+or login> [--allow …] [--token-file <file>]` serves the same tools over HTTP, until Ctrl-C. It
+listens on this Mac's Tailscale IPv4 address only, and lets in what `tailscale whois` says is a
+machine with that tag or that user's untagged machine. Requests, refusals, turns and the log go as
+with `roamrunctl mcp --http` ([its rules](docs/roamrunctl-reference.md#mcp-over-http)), with three
+differences: it offers the devices saved in RoamRun, each operated only while its switch in the
+app is on, rather than devices named on its command line; it has no `install`; and a call whose
+caller goes, or takes it back, after its turn here is given up at the app, as with `roamrun mcp`:
+not begun if it still waits there behind another client of the device, stopped where it can if
+it is under way. The RoamRun app
+has to be running, as for `roamrun mcp`.
+
 **What the device does meanwhile.** Each look and each action runs a screen-sharing session on the
 device, which RoamRun keeps for about five seconds after the last one. The device showed it as
 screen sharing (seen). What happened to sound and the microphone during such sessions was noted app by

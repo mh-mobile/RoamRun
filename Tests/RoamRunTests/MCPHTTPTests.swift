@@ -1,0 +1,328 @@
+import Darwin
+import Foundation
+import Testing
+@testable import RoamRun
+
+@Test func whoMayCallOverHTTPIsATagOrALoginAndNotAMachineName() throws {
+    #expect(try MCPHTTP.allow("tag:ci") == .tag("tag:ci"))
+    #expect(try MCPHTTP.allow("me@example.com") == .login("me@example.com"))
+    for refused in ["tag:", "my-mac", "tag:a,tag:b", "a@b c"] {
+        #expect(throws: MCPHTTP.Failure.self) {
+            try MCPHTTP.allow(refused)
+        }
+    }
+    let allowed: [MCPHTTP.Allow] = [.tag("tag:ci"), .login("me@example.com")]
+    func judged(_ who: MCPHTTP.Whois, own: Bool = false, token: Bool = false) -> String? {
+        try? MCPHTTP.judged(who, allowed: allowed, own: own, token: token).get()
+    }
+    #expect(judged(.init(id: "n1", tags: ["tag:ci"])) == "tag:ci")
+    #expect(judged(.init(id: "n2", login: "ME@example.com")) == "ME@example.com")
+    // A tagged machine is nobody's, whoever it shows as; one shared in isn't this tailnet's.
+    #expect(judged(.init(id: "n3", tags: ["tag:other"], login: "me@example.com")) == nil)
+    #expect(judged(.init(id: "n4", login: "me@example.com", sharer: 9)) == nil)
+    #expect(judged(.init(id: "n5", login: "you@example.com")) == nil)
+    // This machine: any user of it would pass, so only with the token.
+    #expect(judged(.init(id: "own", login: "you@example.com"), own: true) == nil)
+    #expect(judged(.init(id: "own", login: "you@example.com"), own: true, token: true) ==
+        "you@example.com (this machine)")
+    let said = #"{"Node":{"StableID":"nX","Tags":["tag:ci"],"Sharer":0},"UserProfile":{"LoginName":"tagged-devices"}}"#
+    #expect(MCPHTTP.whois(fromJSON: said) == .init(id: "nX", tags: ["tag:ci"], login: "tagged-devices"))
+}
+
+@Test func theTokenFileIsItsOwnersAloneAndLongEnough() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let file = folder.appendingPathComponent("token").path
+    let token = String(repeating: "a1", count: 16)
+    try (token + "\n").write(toFile: file, atomically: true, encoding: .utf8)
+    chmod(file, 0o644)
+    #expect(throws: MCPHTTP.Failure.self) {
+        try MCPHTTP.token(at: file)
+    }
+    chmod(file, 0o600)
+    #expect(try MCPHTTP.token(at: file) == token)
+    try "short".write(toFile: file, atomically: true, encoding: .utf8)
+    chmod(file, 0o600)
+    #expect(throws: MCPHTTP.Failure.self) {
+        try MCPHTTP.token(at: file)
+    }
+}
+
+/// A server on 127.0.0.1, with Tailscale's answers and the tools given here.
+private final class Served: @unchecked Sendable {
+    let server: MCPHTTP
+    let listener: Int32
+    let port: UInt16
+    let lock = NSLock()
+    var handled: [String] = []
+    /// Held while a call on "slow" runs.
+    let slow = DispatchSemaphore(value: 0)
+    /// Whether a call on "waits" saw its request to the app given up.
+    var givenUp: Bool?
+
+    init(
+        token: String? = nil,
+        own: String = "100.64.0.9",
+        whois: @escaping @Sendable (String) -> Result<MCPHTTP.Whois, MCPHTTP.Failure> = { _ in
+            .success(.init(id: "caller", tags: ["tag:ci"]))
+        }
+    ) throws {
+        (listener, port) = try MCPHTTP.listen(ip: "127.0.0.1", port: 0)
+        final class Later: @unchecked Sendable {
+            var handle: ((Data, DeviceControlWire.Asking) -> Data?)?
+        }
+        let later = Later()
+        server = MCPHTTP(
+            allowed: [.tag("tag:ci")],
+            token: token,
+            ownIP: own,
+            ownID: "own-node",
+            hosts: MCPHTTP.hosts(ip: "127.0.0.1", names: ["mac.tail.ts.net"], port: port),
+            headWithin: 2,
+            whois: whois,
+            handle: { message, asking in
+                later.handle?(message, asking)
+            },
+            turnOf: { arguments in
+                arguments["device"] as? String
+            }
+        )
+        later.handle = { [unowned self] message, asking in
+            let object = (try? JSONSerialization.jsonObject(with: message)) as? [String: Any] ?? [:]
+            let id = object["id"].map {
+                "\($0)"
+            } ?? ""
+            let device = ((object["params"] as? [String: Any])?["arguments"] as? [String: Any])?["device"] as? String
+            lock.withLock {
+                handled.append(id)
+            }
+            if device == "slow" {
+                slow.wait()
+            }
+            if device == "waits" {
+                // As a call waiting at the app behind another client: until it is given up, or 3 s.
+                for _ in 0 ..< 150 where !asking.givenUp {
+                    usleep(20000)
+                }
+                lock.withLock {
+                    givenUp = asking.givenUp
+                }
+            }
+            return Data(#"{"jsonrpc":"2.0","id":\#(id),"result":{"content":[],"isError":false}}"#.utf8)
+        }
+        Thread.detachNewThread { [server, listener] in
+            server.serve(listener)
+        }
+    }
+
+    deinit {
+        close(listener)
+    }
+
+    /// A connection, with `request` sent on it.
+    func open(_ request: String) -> Int32 {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = port.bigEndian
+        inet_pton(AF_INET, "127.0.0.1", &address.sin_addr)
+        _ = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        let bytes = Array(request.utf8)
+        _ = send(fd, bytes, bytes.count, 0)
+        return fd
+    }
+
+    /// The whole answer to `request`, to the server's close.
+    func ask(_ request: String) -> String {
+        let fd = open(request)
+        defer { close(fd) }
+        var answer: [UInt8] = []
+        var chunk = [UInt8](repeating: 0, count: 8192)
+        while true {
+            let n = recv(fd, &chunk, chunk.count, 0)
+            guard n > 0 else { break }
+            answer += chunk[..<n]
+        }
+        return String(decoding: answer, as: UTF8.self)
+    }
+
+    func post(_ body: String, headers: String = "") -> String {
+        ask(
+            "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\nContent-Type: application/json\r\n\(headers)Content-Length: \(body.utf8.count)\r\n\r\n\(body)"
+        )
+    }
+}
+
+private func status(_ answer: String) -> Int {
+    Int(answer.split(separator: " ").dropFirst().first ?? "") ?? 0
+}
+
+@Test func anMCPRequestOverHTTPIsRefusedBeforeAnythingIsAskedOfADevice() throws {
+    let served = try Served(token: String(repeating: "t", count: 32))
+    let port = served.port
+    let call = #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"device":"phone"}}}"#
+    let bearer = "Authorization: Bearer \(String(repeating: "t", count: 32))\r\n"
+    #expect(status(served
+            .ask("GET /.well-known/oauth-authorization-server HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\n\r\n")) == 404)
+    #expect(status(served.post(call, headers: bearer + "Origin: https://example.com\r\n")) == 403)
+    #expect(status(served
+            .ask("POST /mcp HTTP/1.1\r\nHost: elsewhere.example:\(port)\r\n\(bearer)Content-Length: 2\r\n\r\n{}")) ==
+        400)
+    let unauthorized = served.post(call)
+    #expect(status(unauthorized) == 401 && unauthorized.contains("WWW-Authenticate: Bearer"))
+    #expect(status(served.post(call, headers: "Authorization: Bearer wrong\r\n")) == 401)
+    #expect(status(served.ask("GET /mcp HTTP/1.1\r\nHost: mac.tail.ts.net:\(port)\r\n\(bearer)\r\n")) == 405)
+    #expect(status(served.post(call, headers: bearer + "MCP-Protocol-Version: 2026-07-28\r\n")) == 400)
+    #expect(status(served.post("[1]", headers: bearer)) == 400)
+    #expect(status(served.post("{", headers: bearer)) == 400)
+    #expect(served.lock
+        .withLock {
+            served.handled
+        }
+        .isEmpty)
+    let answered = served.post(call, headers: bearer)
+    #expect(status(answered) == 200 && answered.contains(#""isError":false"#))
+    #expect(served.lock.withLock {
+        served.handled
+    } == ["1"])
+}
+
+@Test func whoCallsOverHTTPIsWhatTailscaleSays() throws {
+    let call = #"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"look","arguments":{"device":"phone"}}}"#
+    #expect(status(try Served(whois: { _ in
+        .failure(.init(description: "no answer"))
+    }).post(call)) == 503)
+    #expect(status(try Served(whois: { _ in
+        .success(.init(id: "n", login: "someone@example.com"))
+    }).post(call)) == 403)
+    #expect(status(try Served(whois: { _ in
+        .success(.init(id: "n", tags: ["tag:ci"], sharer: 3))
+    }).post(call)) == 403)
+    // This Mac itself: only with the token.
+    let token = String(repeating: "t", count: 32)
+    let own = try Served(token: token, own: "127.0.0.1")
+    #expect(status(own.post(call)) == 401)
+    #expect(status(own.post(call, headers: "Authorization: Bearer \(token)\r\n")) == 200)
+    let noToken = try Served(own: "127.0.0.1")
+    #expect(status(noToken.post(call)) == 403)
+}
+
+@Test func anMCPSessionIsGivenAtInitializeAndNotificationsAreAccepted() throws {
+    let served = try Served()
+    let hello = served.post(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#)
+    #expect(status(hello) == 200 && hello.contains("Mcp-Session-Id: "))
+    #expect(status(served.post(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)) == 202)
+    // Chunked, as a cloud's proxy may send it.
+    let body = #"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"look","arguments":{"device":"phone"}}}"#
+    let chunked = served.ask(
+        "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:\(served.port)\r\nTransfer-Encoding: chunked\r\nContent-Length: 3\r\n\r\n\(String(body.utf8.count, radix: 16))\r\n\(body)\r\n0\r\n\r\n"
+    )
+    #expect(status(chunked) == 200 && chunked.contains(#""id":5"#))
+}
+
+/// A call waits its device's turn; one whose caller has gone meanwhile, or took it back in its session, isn't made.
+@Test func aCallWhoseCallerWentBeforeItsTurnIsNotMade() throws {
+    let served = try Served()
+    func call(_ id: Int) -> String {
+        let body = #"{"jsonrpc":"2.0","id":\#(id),"method":"tools/call","params":{"name":"tap","arguments":{"device":"slow"}}}"#
+        return "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:\(served.port)\r\nMcp-Session-Id: s1\r\nContent-Length: \(body.utf8.count)\r\n\r\n\(body)"
+    }
+    let first = served.open(call(1))
+    // In its turn before the others come.
+    for _ in 0 ..< 100 where served.lock.withLock({
+        served.handled.isEmpty
+    }) {
+        usleep(20000)
+    }
+    let gone = served.open(call(2))
+    let takenBack = served.open(call(3))
+    usleep(200_000)
+    close(gone)
+    #expect(status(served.post(
+        #"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":3}}"#,
+        headers: "Mcp-Session-Id: s1\r\n"
+    )) == 202)
+    let kept = served.open(call(4))
+    usleep(200_000)
+    for _ in 0 ..< 4 {
+        served.slow.signal()
+    }
+    var answer = [UInt8](repeating: 0, count: 4096)
+    let n = recv(kept, &answer, answer.count, 0)
+    #expect(n > 0 && String(decoding: answer[..<n], as: UTF8.self).contains(#""id":4"#))
+    #expect(served.lock.withLock {
+        served.handled
+    } == ["1", "4"])
+    // The one taken back is closed unanswered.
+    #expect(recv(takenBack, &answer, answer.count, 0) == 0)
+    [first, takenBack, kept].forEach {
+        close($0)
+    }
+}
+
+/// A JSON nested deep is refused or read, and the server goes on: on a thread's default stack it ran out.
+@Test func aDeeplyNestedBodyDoesntEndTheServer() throws {
+    let served = try Served()
+    let deep = String(repeating: #"{"a":"#, count: 5000) + "1" + String(repeating: "}", count: 5000)
+    #expect([200, 202, 400].contains(status(served.post(deep))))
+    #expect(status(served.post(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#)) == 200)
+}
+
+/// A call whose caller goes while it waits at the app (behind another client of the device) has its
+/// request to the app given up.
+@Test func aCallsRequestToTheAppIsGivenUpWhenItsCallerGoes() throws {
+    let served = try Served()
+    let body = #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"tap","arguments":{"device":"waits"}}}"#
+    let fd = served
+        .open(
+            "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:\(served.port)\r\nContent-Length: \(body.utf8.count)\r\n\r\n\(body)"
+        )
+    for _ in 0 ..< 100 where served.lock.withLock({
+        served.handled.isEmpty
+    }) {
+        usleep(20000)
+    }
+    close(fd)
+    for _ in 0 ..< 200 where served.lock.withLock({
+        served.givenUp == nil
+    }) {
+        usleep(20000)
+    }
+    #expect(served.lock.withLock {
+        served.givenUp
+    } == true)
+}
+
+/// …and so does one taken back in its session after its turn, its caller still there.
+@Test func aCallsRequestToTheAppIsGivenUpWhenItIsTakenBack() throws {
+    let served = try Served()
+    let body = #"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"tap","arguments":{"device":"waits"}}}"#
+    let fd = served
+        .open(
+            "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:\(served.port)\r\nMcp-Session-Id: s9\r\nContent-Length: \(body.utf8.count)\r\n\r\n\(body)"
+        )
+    defer { close(fd) }
+    for _ in 0 ..< 100 where served.lock.withLock({
+        served.handled.isEmpty
+    }) {
+        usleep(20000)
+    }
+    #expect(status(served.post(
+        #"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":8}}"#,
+        headers: "Mcp-Session-Id: s9\r\n"
+    )) == 202)
+    for _ in 0 ..< 200 where served.lock.withLock({
+        served.givenUp == nil
+    }) {
+        usleep(20000)
+    }
+    #expect(served.lock.withLock {
+        served.givenUp
+    } == true)
+}

@@ -253,6 +253,12 @@ enum DeviceControlWire {
             }
         }
 
+        var givenUp: Bool {
+            lock.withLock {
+                given
+            }
+        }
+
         func giveUp() {
             lock.withLock {
                 given = true
