@@ -24,7 +24,7 @@ RoamRun は、macOS のメニューバーアプリです。Xcode のワイヤレ
 - クラウドの Mac のように、**デバイスと同じ場所にいたことのない Mac をペアリングする**（[離れた Mac を Xcode 用にペアリングする](#離れた-mac-を-xcode-用にペアリングする)）
 - ブリッジもペアリングも使わずに、**デバイス自身にビルドをインストールさせる**（[ブリッジを使わずにインストールする](#ブリッジを使わずにインストールするota)）
 
-RoamRun を入れていないマシン（Linux、Windows、別の Mac）向けには、[`roamrunctl`](Rust/roamrunctl/README.ja.md) という別のコマンドがあります。これを使うと、CI のビルドからデバイスへインストールして起動できます（[CI からインストールして起動する](#ci-からインストールして起動する)）。
+RoamRun を入れていないマシン（Linux、Windows、別の Mac）向けには、[`roamrunctl`](Rust/roamrunctl/README.ja.md) という別のコマンドがあります。これを使うと、CI のジョブからアプリをデバイスへインストールして起動できます（[CI からインストールして起動する](#ci-からインストールして起動する)）。
 
 ## なぜ必要か
 
@@ -411,20 +411,20 @@ roamrun ota iPhone build/MyApp.ipa     # 名前を指定すると、そのデバ
 
 ## CI からインストールして起動する
 
-CI のビルドから、作ったアプリを Tailscale 越しにデバイスへインストールし、起動できます。使うのは [`roamrunctl`](Rust/roamrunctl/README.ja.md) で、ブリッジも、CI 側の Xcode の入った Mac も要りません。ビルドは tailnet に参加したうえで、次のどちらかを行います。
+CI のジョブから、`.ipa` を Tailscale 越しにデバイスへインストールし、起動できます。`.ipa` は、そのジョブで作ったものでも、別に用意したものでもかまいません。使うのは [`roamrunctl`](Rust/roamrunctl/README.ja.md) です。ブリッジも Xcode も通らないので、Linux のランナーでもできます。ジョブは tailnet に参加したうえで、次のどちらかを行います。
 
-- CI のマシンで roamrunctl を動かす。デバイスのペアリングは、CI のシークレットに置きます。ペアリングは、デバイスのそばで一度だけ作ります（`roamrun key create` か `roamrunctl pair control`）。
-- relay に頼む。手元のマシンで `roamrunctl mcp --http` を動かし、ペアリングはそこに置きます。ビルドは `.ipa` を relay に送り、relay がインストールして起動します。
+- CI のマシンで roamrunctl を動かす。roamrunctl 自身のデバイスとのペアリング（デバイス制御が使うもので、Xcode のものではありません）を、CI のシークレットに置きます。ペアリングは、デバイスと同じ Wi‑Fi のマシンで一度だけ作ります。RoamRun の入った Mac なら `roamrun key create`、どのマシンでも `roamrunctl pair control --to` で作れます。
+- 手元の relay のマシンに頼む。そのマシンで `roamrunctl mcp --http` を動かし、ペアリングはそこに置きます。ジョブは `.ipa` を relay に送り、relay がインストールして起動します。
 
 | CI | やり方 | 手順 |
 |---|---|---|
-| GitHub Actions | Tailscale の action のあとに、action の [mh-mobile/roamrun-action](https://github.com/mh-mobile/roamrun-action) を置く。Linux と macOS のランナー | [docs/ci.ja.md](docs/ci.ja.md) |
-| Xcode Cloud | プロジェクトのスクリプトで Tailscale を userspace で動かす。roamrunctl はその HTTP プロキシを通す（`ROAMRUNCTL_PROXY`、0.10.0 以降）か、`curl` で relay を呼ぶ | [docs/xcode-cloud.ja.md](docs/xcode-cloud.ja.md) |
+| GitHub Actions | Tailscale の action のあとに [mh-mobile/roamrun-action](https://github.com/mh-mobile/roamrun-action) を置く。Linux と macOS のランナーで動く | [docs/ci.ja.md](docs/ci.ja.md) |
+| Xcode Cloud | プロジェクトのスクリプトで Tailscale を userspace で動かし、Tailscale の HTTP プロキシを通してデバイスか relay に届く（`ROAMRUNCTL_PROXY`、roamrunctl 0.10.0 以降）。または `curl` で relay を呼ぶ | [docs/xcode-cloud.ja.md](docs/xcode-cloud.ja.md) |
 | Bitrise | Step の [mh-mobile/bitrise-step-roamrun](https://github.com/mh-mobile/bitrise-step-roamrun)。Step が自分で tailnet に参加する | [docs/bitrise.ja.md](docs/bitrise.ja.md) |
 
 どれも、iOS 27.0 の iPhone 15 Pro で試しました。やり方と、試していないことは、それぞれの手順にあります。
 
-必要なものは 2 つです。デバイスを含む開発用プロファイルで署名した `.ipa` と、Wi‑Fi につながったデバイスです。デバイスでは Tailscale をオンにし、起動してから一度はロックを解除しておきます。CI のシークレットを読める人は、デバイスを操作できます。それが誰か、各シークレットをどう取り消すかも、それぞれの手順に書いてあります。
+必要なものは、デバイスと `.ipa` です。デバイスは iOS 27 以降で、デベロッパモードをオンにします。Wi‑Fi につなぎ、Tailscale をオンにして、起動してから一度はロックを解除しておきます。`.ipa` は、そのデバイスを含む開発用プロファイルで署名します。CI のシークレットを読める人は、デバイスを操作できます。それが誰か、各シークレットをどう取り消すかも、それぞれの手順に書いてあります。
 
 ## 制限と既知の問題
 
