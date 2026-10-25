@@ -1378,6 +1378,11 @@ final class DeviceControlHub: @unchecked Sendable {
                 do { app = try DeviceSession.app(at: path) } catch {
                     return .failure("\(error)")
                 }
+                // Reached before it is said to have begun: a device asleep or away refuses it here, while whoever
+                // sent the app can still try again with it.
+                do { try session.connect() } catch {
+                    return .failure("\(error)")
+                }
                 // What a look saw may move while the app is replaced.
                 end()
                 begun = true

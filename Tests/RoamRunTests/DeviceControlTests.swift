@@ -1553,6 +1553,24 @@ func anInputIsInterruptedWhenItsAskerLeavesOrItsDeviceIsSwitchedOff(_ op: String
     #expect(!refused.ok)
     #expect(FileManager.default.fileExists(atPath: outside.appendingPathComponent("canary").path))
     #expect(!FileManager.default.fileExists(atPath: own.path))
+
+    // The device not reached: refused, not said to have begun (an upload stays for another try), nothing sent to
+    // it, and its folder goes.
+    anew.connectFailing = DeviceSession.Failure.notBegun("the device didn't answer")
+    let sent = anew.calls
+        .filter {
+            $0 == "install"
+        }
+        .count
+    let unreached = try app("install-d")
+    let notBegun = hub.answer(.init(op: "install", device: id, path: unreached))
+    #expect(!notBegun.ok && notBegun.install == nil && notBegun.error?.contains("didn't answer") == true)
+    #expect(anew.calls
+        .filter {
+            $0 == "install"
+        }
+        .count == sent)
+    #expect(!FileManager.default.fileExists(atPath: URL(fileURLWithPath: unreached).deletingLastPathComponent().path))
 }
 
 /// What the app's start sweeps away of apps left to install: one left two minutes ago or more, not one a CLI is copying.

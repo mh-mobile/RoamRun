@@ -309,10 +309,15 @@ final class StandInDevice: ControlledDevice, @unchecked Sendable {
     /// A connection waits here when set, and says it has begun.
     var connectHold: DispatchSemaphore?
     let connectBegan = DispatchSemaphore(value: 0)
+    /// What a connection fails with, when set.
+    var connectFailing: Error?
     func connect() throws {
         count("connect")
         connectBegan.signal()
         held(connectHold)
+        if let connectFailing {
+            throw connectFailing
+        }
         lock.withLock {
             open = true
             goneWhenChecked = false
