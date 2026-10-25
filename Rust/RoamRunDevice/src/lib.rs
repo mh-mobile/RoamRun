@@ -379,19 +379,15 @@ fn unique_id(displays: &plist::Value) -> Option<String> {
     shown_display(displays)?.get("uniqueId")?.as_string().map(str::to_string)
 }
 
-/// What the device says of its displays now, kept as which one is on; a touch surface found for
-/// another is let go of. None when the device doesn't answer in time.
-async fn ask_shown(link: &mut Link) -> Option<plist::Value> {
+/// Asks which display is on and keeps it (see `kept_shown`); a touch surface found for another is let go of.
+async fn ask_shown(link: &mut Link) {
     let displays = tokio::time::timeout(DISPLAY_WAIT, display_info(link)).await.ok().and_then(|d| d.ok());
     let (unique, id) = kept_shown((link.shown.clone(), link.shown_id), displays.as_ref());
     if unique != link.shown { link.touchscreen = None; }
     (link.shown, link.shown_id) = (unique, id);
-    displays
 }
 
-/// Which display is on, from the device's answer; with no answer (in time), the one known before:
-/// the primary one taken instead was, on a two-screen device opened, the screen that is off. The
-/// one known can be off too, the device folded since; the next answer puts it right.
+/// Which display is on, from the device's answer; with none in time, the one known before (off if folded since).
 fn kept_shown(known: (Option<String>, Option<i64>), answer: Option<&plist::Value>) -> (Option<String>, Option<i64>) {
     match answer {
         Some(displays) => (unique_id(displays), display_id(displays)),
@@ -477,8 +473,8 @@ pub unsafe extern "C" fn rr_device_screenshot(device: *mut RRDevice, length: *mu
         if link.stop.raised() { return Err(STOPPED.into()); }
         let link = &mut *link;
         device.runtime.block_on(async {
-            // Of the display that is on (the primary one, when not told, can be off); asked each
-            // time, as a look comes before each touch: one after the screen changed goes to it.
+            // Of the display that is on, asked each time, as a look comes before each touch: one
+            // after the screen changed goes to it. The primary one, taken when none is known, can be off.
             ask_shown(link).await;
             let shown = link.shown.clone();
             let mut capture = tokio::time::timeout(DEADLINE, ScreenCaptureServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)).await
