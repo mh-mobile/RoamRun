@@ -1091,19 +1091,20 @@ final class DeviceControlHub: @unchecked Sendable {
             && file.lastPathComponent.hasPrefix("look-") && file.pathExtension == "png"
     }
 
-    /// An app to install as the CLI leaves it for the app: an .ipa or an .app folder, under its own name (the device
-    /// stages it by that name, and clears what a cut-short install of it left), in a folder install-… of its own in the
-    /// folder looks are; neither of them a link to something elsewhere.
-    static func isInstallFile(_ path: String, in directory: URL) -> Bool {
+    /// An app to install as the CLI leaves it for the app: an .ipa or an .app folder, under its own name (an .app is
+    /// staged on the device by that name, and what a cut-short install of it left is cleared), in a folder install-… of
+    /// its own in the folder looks are; neither of them a link to something elsewhere. Its path as it was checked, which
+    /// is what is used: `..` in what was given could lead elsewhere through a link.
+    static func installFile(_ path: String, in directory: URL) -> String? {
         let file = URL(fileURLWithPath: path).standardizedFileURL
         let own = file.deletingLastPathComponent()
         var info = stat(), folder = stat()
-        return own.deletingLastPathComponent().path == DeviceControlWire.socketFolder(in: directory)
+        guard own.deletingLastPathComponent().path == DeviceControlWire.socketFolder(in: directory)
             .standardizedFileURL
-            .path
-            && own.lastPathComponent.hasPrefix("install-") && ["ipa", "app"].contains(file.pathExtension)
-            && lstat(own.path, &folder) == 0 && folder.st_mode & S_IFMT == S_IFDIR
-            && lstat(file.path, &info) == 0 && info.st_mode & S_IFMT != S_IFLNK
+            .path, own.lastPathComponent.hasPrefix("install-"), ["ipa", "app"].contains(file.pathExtension),
+            lstat(own.path, &folder) == 0, folder.st_mode & S_IFMT == S_IFDIR,
+            lstat(file.path, &info) == 0, info.st_mode & S_IFMT != S_IFLNK else { return nil }
+        return file.path
     }
 
     static func begun(_ install: Install, on name: String) -> String {
@@ -1202,6 +1203,20 @@ final class DeviceControlHub: @unchecked Sendable {
     func answer(_ request: DeviceControlWire.Request, wanted: @escaping @Sendable () -> Bool = {
         true
     }) -> DeviceControlWire.Response {
+        let answered = answering(request, wanted: wanted)
+        // An install refused, wherever (the gate, the switch, an asker gone, the app's own check), leaves its app to
+        // nobody: removed here. One begun is removed when it ends.
+        if request.op == "install", !answered.ok, let path = request.path.flatMap({
+            Self.installFile($0, in: directory)
+        }) {
+            try? FileManager.default.removeItem(atPath: URL(fileURLWithPath: path).deletingLastPathComponent().path)
+        }
+        return answered
+    }
+
+    private func answering(_ request: DeviceControlWire.Request, wanted: @escaping @Sendable () -> Bool)
+        -> DeviceControlWire.Response
+    {
         let notSetUp = DeviceControlWire.Response
             .failure(
                 "device control isn't set up for this device: the user sets it up in the RoamRun app, on the device's page"
@@ -1330,14 +1345,15 @@ final class DeviceControlHub: @unchecked Sendable {
         do {
             switch request.op {
             case "install":
-                guard let path = request.path, Self.isInstallFile(path, in: directory) else {
+                guard let path = request.path.flatMap({
+                    Self.installFile($0, in: directory)
+                }) else {
                     return .failure("no app to install: it is given in RoamRun's own folder")
                 }
-                // Its folder goes with it, however this ends.
+                // Its folder goes with it once the install ends (refused, `answer` removes it).
                 let folder = URL(fileURLWithPath: path).deletingLastPathComponent().path
                 let app: (bundle: String?, megabytes: Int, seconds: Int)
                 do { app = try DeviceSession.app(at: path) } catch {
-                    try? FileManager.default.removeItem(atPath: folder)
                     return .failure("\(error)")
                 }
                 // What a look saw may move while the app is replaced.

@@ -90,6 +90,14 @@ enum DeviceControlWire {
             .st_ino
     }
 
+    /// An app to install that was left there two minutes or more ago: by an install that never ended.
+    static func leftToInstall(_ entry: URL, now: Date = Date()) -> Bool {
+        guard entry.lastPathComponent.hasPrefix("install-") else { return false }
+        let changed = (try? entry.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ??
+            .distantPast
+        return now.timeIntervalSince(changed) >= 120
+    }
+
     /// The longest a line may be: a long paste, or many elements.
     static let longestLine = 1 << 20
     /// What is said after a text was typed that a keyboard other than an English one takes otherwise:
@@ -366,11 +374,12 @@ enum DeviceControlWire {
             }
             unlink(path) // a run's that ended without removing it
             // Looks a CLI was to move to their place and didn't (it was interrupted): screens aren't left lying.
-            // Nor apps left to install by an install that never ended (the app quit during it, the CLI was ended).
-            for left in (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ??
-                []
-                where left.lastPathComponent.hasPrefix("look-") || left.lastPathComponent.hasPrefix("install-")
-            {
+            // Nor apps left to install by an install that never ended (the app quit during it, the CLI was ended) —
+            // but not one a CLI is copying, or has just copied, to ask for now.
+            for left in (try? FileManager.default.contentsOfDirectory(
+                at: folder,
+                includingPropertiesForKeys: [.contentModificationDateKey]
+            )) ?? [] where left.lastPathComponent.hasPrefix("look-") || DeviceControlWire.leftToInstall(left) {
                 try? FileManager.default.removeItem(at: left)
             }
             DeviceControlWire.noSIGPIPE(fd)
