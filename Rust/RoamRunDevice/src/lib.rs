@@ -2,6 +2,8 @@
 //! _button operate the device; rr_device_elements can scroll it.
 
 pub mod proxy;
+#[cfg(target_os = "macos")]
+pub mod hevc;
 pub mod safe;
 
 use std::ffi::{c_char, CStr, CString};
