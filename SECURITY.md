@@ -288,8 +288,9 @@ bounded.
   offers the devices saved in RoamRun, each operated only while its switch in the app is on, and
   `install` is offered only with `--allow-install`, from an `.ipa` sent with `PUT /upload`, never
   a path on the Mac: one upload is kept (1024 MiB at most by default), in RoamRun's own folder,
-  for the caller that sent it alone (by its Tailscale node's lasting id), and removed when an
-  install uses it, another replaces it, 30 minutes pass unused, or at Ctrl-C.
+  installable by the caller that sent it alone (by its Tailscale node's lasting id), and removed
+  when an install uses it, when any allowed caller starts another upload, after 30 minutes unused,
+  or at Ctrl-C; one left by a server that was killed is removed when a server starts a day later.
 - **roamrunctl can serve its MCP tools over HTTP.** `roamrunctl mcp --http <port> --allow
   <who> [--allow <who>…] <devices>…`, started by a person and ended with Ctrl-C, listens on the machine's
   Tailscale IPv4 address only, and doesn't start as root (not checked on Windows). A caller

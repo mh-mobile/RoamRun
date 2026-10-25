@@ -28,6 +28,8 @@ extension MCPHTTP {
     final class Uploads: @unchecked Sendable {
         /// An upload not used for this long is let go of.
         static let keptFor: TimeInterval = 30 * 60
+        /// An upload file this old when a server starts was left by one that ended without Ctrl-C.
+        static let leftFor: TimeInterval = 24 * 60 * 60
         /// Time for a body, beyond `bodyWithin`, by its size.
         static let perMiB: TimeInterval = 2
 
@@ -43,6 +45,16 @@ extension MCPHTTP {
         init(folder: URL, most: Int) {
             self.folder = folder
             self.most = most
+            // What a server ended without Ctrl-C (killed, or the Mac gone down) left: none is kept that long.
+            for name in (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+                where name.hasPrefix("upload-") && name.hasSuffix(".ipa")
+            {
+                let file = folder.appendingPathComponent(name)
+                let changed = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+                if Date().timeIntervalSince(changed ?? .distantPast) > Self.leftFor {
+                    unlink(file.path)
+                }
+            }
         }
 
         /// The slot for one coming in, the one kept let go of; false while another comes in. `done` frees it.

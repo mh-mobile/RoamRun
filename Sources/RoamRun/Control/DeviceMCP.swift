@@ -349,13 +349,26 @@ final class DeviceMCP: @unchecked Sendable {
             guard let upload = arguments["upload"] as? String, let sha256 = arguments["sha256"] as? String else {
                 throw Failure(description: "upload and sha256 are missing: as PUT /upload answered them")
             }
+            // What the app would refuse it for, asked before the upload is used up: refused then, it stays for another
+            // try, as roamrunctl leaves it while the device can't be had.
+            do {
+                let state = try send(.init(op: "state", device: device.id))
+                guard state.allowed != false else { throw Failure(description: DeviceControlHub.switchedOff) }
+                let latest = try send(.init(op: "install_status", device: device.id)).said ?? ""
+                guard !latest.hasPrefix("installing") else { throw Failure(description: latest) }
+            } catch let failure as Failure where failure.description == "unknown request" {
+                throw Failure(description: Self.olderForApps)
+            }
             let path = try claimUpload?(upload, sha256) ?? ""
             do {
                 return try text(send(.init(op: "install", device: device.id, path: path)).said ?? "installing")
-            } catch let refused as Failure {
-                // As for a path's copy: refused by the app, it is nobody else's to remove.
-                try? FileManager.default.removeItem(at: URL(fileURLWithPath: path).deletingLastPathComponent())
-                throw refused.description == "unknown request" ? Failure(description: Self.olderForApps) : refused
+            } catch {
+                // Refused by the app (which removed it then), or taken back before it was sent: nobody else's to remove.
+                if error is Failure || (error as? DeviceControlWire.WireError)?.description == "taken back" {
+                    try? FileManager.default.removeItem(at: URL(fileURLWithPath: path).deletingLastPathComponent())
+                }
+                throw (error as? Failure)?
+                    .description == "unknown request" ? Failure(description: Self.olderForApps) : error
             }
         case "install_status" where !installsFromPaths && claimUpload == nil:
             throw Failure(description: "no such tool: install_status")

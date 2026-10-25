@@ -472,7 +472,14 @@ import ImageIO
         return "/ready/install-x.ipa"
     }) { request in
         asked = request
-        return .init(ok: true, install: "cd34", said: "installing began (install cd34)")
+        switch request.op {
+        case "state": return .init(ok: true, allowed: true)
+        case "install_status": return .init(
+                ok: true,
+                said: "no install was begun on iPhone since the RoamRun app started"
+            )
+        default: return .init(ok: true, install: "cd34", said: "installing began (install cd34)")
+        }
     }
     let listed = try #require(server.handle(Data(#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#.utf8)))
     let tools = try #require(
@@ -509,4 +516,34 @@ import ImageIO
             .utf8
     )))
     #expect(String(decoding: status, as: UTF8.self).contains(#""isError":true"#))
+}
+
+/// Over HTTP: an install the app would refuse (switched off, already installing) is refused before the upload is used
+/// up, which stays for another try.
+@Test func anUploadIsntUsedUpByAnInstallTheAppWouldRefuse() throws {
+    for (allowed, latest) in [
+        (false, "no install was begun"),
+        (true, "installing com.example.App on iPhone (3 s so far)")
+    ] {
+        var claimed = false
+        let server = DeviceMCP(profiles: {
+            [profile("iPhone")]
+        }, looks: FileManager.default.temporaryDirectory, installsFromPaths: false, claimUpload: { _, _ in
+            claimed = true
+            return "/ready/install-x.ipa"
+        }) { request in
+            switch request.op {
+            case "state": return .init(ok: true, allowed: allowed)
+            case "install_status": return .init(ok: true, said: latest)
+            default: return .init(ok: true, install: "cd34", said: "began")
+            }
+        }
+        let answer = try #require(server.handle(Data(
+            #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"install","arguments":{"device":"iPhone","upload":"u1","sha256":"ab"}}}"#
+                .utf8
+        )))
+        let said = String(decoding: answer, as: UTF8.self)
+        #expect(said.contains(#""isError":true"#) && said.contains(allowed ? "installing" : "switched off"))
+        #expect(!claimed)
+    }
 }
