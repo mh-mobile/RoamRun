@@ -385,8 +385,9 @@ pub fn screen_size(device: &Device) -> Option<(u32, u32)> {
 }
 
 /// What a stream frame of `frame`'s size is cut to: the screen, either way round, at its size or scaled down as the
-/// stream may send it (an opened iPhone Duo: 1878 x 2670 came as 1408 x 2016), without the padding up to 32 pixels
-/// on the right and at the bottom. None where the frame isn't that.
+/// stream may send it (an opened iPhone Duo: 1878 x 2670 came as 1408 x 2016, one side exact), without the padding
+/// up to 32 pixels on the right and at the bottom. None where the frame isn't that. A screen of much the same shape
+/// can fit too: the size is the one asked for this frame's size.
 pub fn fit(frame: (u32, u32), screen: Option<(u32, u32)>) -> Option<(u32, u32)> {
     let (width, height) = screen?;
     [(width, height), (height, width)].into_iter().find_map(|(w, h)| {

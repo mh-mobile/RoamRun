@@ -97,6 +97,9 @@ pub fn upright(way: u8, sideways: bool, (x, y): (f64, f64)) -> Option<(f64, f64)
     }
 }
 
+/// Width and height, in pixels.
+type Size = (u32, u32);
+
 /// A device offered over HTTP by its name, with its saved file as it was then (see `device::mark`).
 pub type Offered = (String, Option<Vec<u8>>);
 
@@ -117,9 +120,9 @@ pub struct Server {
     past: std::collections::VecDeque<(String, String, Result<String, String>)>,
     /// The last look's id; the first is a random one, so that a look kept from an earlier run isn't taken for one since.
     looks: u64,
-    /// Each device's screen size, as its stream pictures are cut to: asked again when a frame doesn't fit it (a
-    /// two-screen device folded or opened since).
-    screens: HashMap<String, (u32, u32)>,
+    /// Each device's screen size (None: not said), as its stream pictures are cut to, by the size of the frame it was
+    /// asked for: asked again when frames come in another size (a two-screen device folded or opened since).
+    screens: HashMap<String, (Size, Option<Size>)>,
 }
 
 fn text(s: impl Into<String>) -> Vec<Value> { vec![json!({ "type": "text", "text": s.into() })] }
@@ -426,9 +429,14 @@ impl Server {
                 let native = picture.native;
                 let image = if native {
                     let frame = (picture.image.width(), picture.image.height());
-                    let known = self.screens.get(&name).copied().filter(|&screen| device::fit(frame, Some(screen)).is_some());
-                    let screen = known.or_else(|| device::screen_size(device));
-                    if let Some(screen) = screen { self.screens.insert(name.clone(), screen); }
+                    let screen = match self.screens.get(&name) {
+                        Some(&(asked, screen)) if asked == frame => screen,
+                        _ => {
+                            let screen = device::screen_size(device);
+                            self.screens.insert(name.clone(), (frame, screen));
+                            screen
+                        }
+                    };
                     device::cut(picture.image, screen)
                 } else {
                     picture.image
