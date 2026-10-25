@@ -150,6 +150,19 @@ final class DeviceControlHub: @unchecked Sendable {
         var seconds: Int
         var began: Date
         var ended: (failed: String?, took: TimeInterval)?
+        /// The folder of its own the app was left in, removed when it ends.
+        var folder = ""
+    }
+
+    /// Whether an install not ended yet, on any device, is installing from `folder`.
+    private func installing(from folder: String) -> Bool {
+        lock.withLock {
+            installs.values.contains {
+                $0.contains {
+                    $0.ended == nil && $0.folder == folder
+                }
+            }
+        }
     }
 
     typealias Opener = @Sendable (
@@ -1209,7 +1222,11 @@ final class DeviceControlHub: @unchecked Sendable {
         if request.op == "install", !answered.ok, let path = request.path.flatMap({
             Self.installFile($0, in: directory)
         }) {
-            try? FileManager.default.removeItem(atPath: URL(fileURLWithPath: path).deletingLastPathComponent().path)
+            // Not one an install is still taking it from (the same path asked for again).
+            let folder = URL(fileURLWithPath: path).deletingLastPathComponent().path
+            if !installing(from: folder) {
+                try? FileManager.default.removeItem(atPath: folder)
+            }
         }
         return answered
     }
@@ -1352,6 +1369,11 @@ final class DeviceControlHub: @unchecked Sendable {
                 }
                 // Its folder goes with it once the install ends (refused, `answer` removes it).
                 let folder = URL(fileURLWithPath: path).deletingLastPathComponent().path
+                guard !installing(from: folder) else {
+                    return .failure(
+                        "that app is being installed already, from the same place: send it again for another install"
+                    )
+                }
                 let app: (bundle: String?, megabytes: Int, seconds: Int)
                 do { app = try DeviceSession.app(at: path) } catch {
                     return .failure("\(error)")
@@ -1370,7 +1392,8 @@ final class DeviceControlHub: @unchecked Sendable {
                     bundle: app.bundle,
                     megabytes: app.megabytes,
                     seconds: app.seconds,
-                    began: Date()
+                    began: Date(),
+                    folder: folder
                 )
                 let device = request.device
                 lock.withLock {

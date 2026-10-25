@@ -1502,6 +1502,9 @@ func anInputIsInterruptedWhenItsAskerLeavesOrItsDeviceIsSwitchedOff(_ op: String
     #expect(!stillBusy.ok && stillBusy.error?.hasPrefix("installing com.example.App on iPhone") == true)
     #expect(status(install).said?.hasPrefix("installing com.example.App") == true)
     #expect(!status("another").ok)
+    // The same path asked for again meanwhile: refused, and the folder the install takes it from stays.
+    #expect(!hub.answer(.init(op: "install", device: id, path: path)).ok)
+    #expect(FileManager.default.fileExists(atPath: path))
     device.installHold?.signal()
     var said = status(install)
     for _ in 0 ..< 100 where said.said?.hasPrefix("installing") == true {
@@ -1531,27 +1534,24 @@ func anInputIsInterruptedWhenItsAskerLeavesOrItsDeviceIsSwitchedOff(_ op: String
     #expect(status(install).said?.contains("is installed on iPhone") == true)
     #expect(!FileManager.default.fileExists(atPath: URL(fileURLWithPath: again).deletingLastPathComponent().path))
 
-    // Refused by the app's own check: its folder goes too. Given through a link and `..`, nothing goes where the
-    // link leads.
+    // Refused by the app's own check: its folder goes too. Given through a link and `..`, it is the folder that was
+    // checked that goes, not where the link leads (which has no App.ipa: the path is then taken as install-c's own).
     anew.failing = nil
     let control = DeviceControlWire.socketFolder(in: dir)
     let own = control.appendingPathComponent("install-c")
     let outside = dir.appendingPathComponent("outside")
     try FileManager.default.createDirectory(at: own, withIntermediateDirectories: true)
-    try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
-    try Data("not an ipa".utf8).write(to: own.appendingPathComponent("App.ipa"))
-    try Data("not an ipa".utf8).write(to: outside.appendingPathComponent("App.ipa"))
-    try FileManager.default.createSymbolicLink(at: own.appendingPathComponent("link"),
-                                               withDestinationURL: outside.appendingPathComponent("sub-none"))
     try FileManager.default.createDirectory(
-        at: outside.appendingPathComponent("sub-none"),
+        at: outside.appendingPathComponent("sub"),
         withIntermediateDirectories: true
     )
+    try Data("not an ipa".utf8).write(to: own.appendingPathComponent("App.ipa"))
+    try Data("keep".utf8).write(to: outside.appendingPathComponent("canary"))
+    try FileManager.default.createSymbolicLink(at: own.appendingPathComponent("link"),
+                                               withDestinationURL: outside.appendingPathComponent("sub"))
     let refused = hub.answer(.init(op: "install", device: id, path: own.appendingPathComponent("link/../App.ipa").path))
     #expect(!refused.ok)
-    #expect(FileManager.default.fileExists(atPath: outside.appendingPathComponent("App.ipa").path))
-    #expect(FileManager.default.fileExists(atPath: outside.appendingPathComponent("sub-none").path))
-    #expect(!hub.answer(.init(op: "install", device: id, path: own.appendingPathComponent("App.ipa").path)).ok)
+    #expect(FileManager.default.fileExists(atPath: outside.appendingPathComponent("canary").path))
     #expect(!FileManager.default.fileExists(atPath: own.path))
 }
 
