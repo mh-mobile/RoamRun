@@ -18,6 +18,8 @@ enum DeviceControlWire {
         /// For "tap", "swipe", "type" and "paste": the look the points or the text are held to, when
         /// the caller keeps it (the MCP tools do; a command run by hand is of whatever was looked at last).
         var look: Int?
+        /// For "install_status": the install asked about, by the id "install" answered.
+        var install: String?
         /// For "pair-start": this Mac's address on the tailnet, the interface it is on, and the
         /// one address the device's connection will come from (the Mac that introduces it).
         var address: String?
@@ -57,6 +59,10 @@ enum DeviceControlWire {
         var state: String?
         var code: String?
         var reason: String?
+        /// For "install": its id. For "launch": the process started. For "install" and "install_status": what to tell.
+        var install: String?
+        var pid: Int?
+        var said: String?
         static func failure(_ why: String) -> Response {
             Response(ok: false, error: why)
         }

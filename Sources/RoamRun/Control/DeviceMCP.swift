@@ -26,8 +26,10 @@ final class DeviceMCP: @unchecked Sendable {
     /// The MCP versions spoken here: initialize answers the one asked for if it is one of them, else the newest.
     static let versions = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"]
 
-    /// Where the app writes a look for this to read: the folder it keeps looks in.
+    /// Where the app writes a look for this to read: the folder it keeps looks in (and takes an app to install from).
     private let looks: URL
+    /// Whether `install` is offered, from a path on this Mac: over stdio, not to a caller elsewhere.
+    let installsFromPaths: Bool
     /// The request to the app under way, which `ask` makes with it: given up when its call is taken back.
     private let asking: DeviceControlWire.Asking
     private let work = DispatchQueue(label: "roamrun.mcp")
@@ -47,11 +49,13 @@ final class DeviceMCP: @unchecked Sendable {
     init(
         profiles: @escaping () -> [DeviceProfile],
         looks: URL,
+        installsFromPaths: Bool = true,
         asking: DeviceControlWire.Asking = .init(),
         ask: @escaping Ask
     ) {
         self.saved = profiles
         self.looks = looks
+        self.installsFromPaths = installsFromPaths
         self.asking = asking
         self.ask = ask
     }
@@ -168,7 +172,7 @@ final class DeviceMCP: @unchecked Sendable {
         case "ping":
             return reply([:])
         case "tools/list":
-            return reply(["tools": Self.tools])
+            return reply(["tools": Self.tools(installs: installsFromPaths)])
         case "tools/call":
             let content: [[String: Any]]
             var failed = false
@@ -333,6 +337,34 @@ final class DeviceMCP: @unchecked Sendable {
             _ = try send(.init(op: tool, device: device.id, text: value, look: look))
             return text(tool == "type" ? DeviceControlWire
                 .typed(value) ?? "sent; look to see what it did" : "sent; look to see what it did")
+        case "install":
+            guard installsFromPaths, let path = arguments["path"] as? String else {
+                throw Failure(description: installsFromPaths ? "path is missing" : "no such tool: install")
+            }
+            // Copied where the app takes it from: RoamRun's own folder, which only this user can enter.
+            var folder: ObjCBool = false
+            let source = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+            guard FileManager.default.fileExists(atPath: source.path, isDirectory: &folder)
+            else { throw Failure(description: "\(path) isn't on this Mac") }
+            let copy = looks.appendingPathComponent("install-\(UUID().uuidString).\(folder.boolValue ? "app" : "ipa")")
+            do { try FileManager.default.copyItem(at: source, to: copy) } catch {
+                throw Failure(description: "\(path) couldn't be copied for the app: \(error.localizedDescription)")
+            }
+            do {
+                // The app removes the copy once the install ends, or is refused.
+                return try text(send(.init(op: "install", device: device.id, path: copy.path)).said ?? "installing")
+            } catch {
+                try? FileManager.default.removeItem(at: copy)
+                throw error
+            }
+        case "install_status":
+            return try text(send(.init(op: "install_status", device: device.id,
+                                       install: arguments["install"] as? String)).said ?? "")
+        case "launch":
+            guard let bundle = arguments["bundle"] as? String, !bundle.isEmpty
+            else { throw Failure(description: "bundle is missing: the app's bundle identifier") }
+            let said = try send(.init(op: "launch", device: device.id, text: bundle))
+            return text("launched (pid \(said.pid ?? 0)); look to see it")
         default:
             throw Failure(description: "no such tool: \(tool)")
         }
@@ -407,8 +439,8 @@ final class DeviceMCP: @unchecked Sendable {
     /// the device lasts. `elements` may scroll. Destructive: whatever presses or types into what is
     /// there, or can't be undone from here (`lock`).
     static func hints(_ name: String) -> [String: Bool] {
-        ["readOnlyHint": ["devices", "look"].contains(name),
-         "destructiveHint": ["tap", "swipe", "type", "paste", "press"].contains(name)]
+        ["readOnlyHint": ["devices", "look", "install_status"].contains(name),
+         "destructiveHint": ["tap", "swipe", "type", "paste", "press", "install", "launch"].contains(name)]
     }
 
     // Computed: JSON objects aren't Sendable, and a static stored one would have to be.
@@ -433,7 +465,27 @@ final class DeviceMCP: @unchecked Sendable {
         ]
     }
 
-    static var tools: [[String: Any]] {
+    /// With `installs`, `install` from a path and `install_status`.
+    static func tools(installs: Bool) -> [[String: Any]] {
+        operating + (installs ? [
+            tool(
+                "install",
+                "Start installing an app built and signed for this device: the path, on this Mac, of an .ipa or an .app folder. It ends the app's running processes first. It answers at once; install_status says when the app is in (a megabyte takes a few seconds, a large app minutes), and until then other calls on the device answer that it is installing.",
+                ["path": ["type": "string"]],
+                required: ["path"]
+            ),
+            tool(
+                "install_status",
+                "How the device's install goes: still going (for how long), done (with the app's bundle identifier, for launch), or why it failed. Given the id install answered (install <id>), of that install alone: another begun since is an error.",
+                ["install": ["type": "string", "description": "The id install answered with"]]
+            ),
+        ] : []) + [
+            tool("launch", "Launch an app on the device by its bundle identifier (one already running is ended first).",
+                 ["bundle": ["type": "string"]], required: ["bundle"]),
+        ]
+    }
+
+    private static var operating: [[String: Any]] {
         [
             tool("devices", "The devices saved in RoamRun, one name a line."),
             tool(

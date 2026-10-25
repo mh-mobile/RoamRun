@@ -1431,3 +1431,87 @@ func anInputIsInterruptedWhenItsAskerLeavesOrItsDeviceIsSwitchedOff(_ op: String
     }
     #expect(attempts == 1 && reopened == 0)
 }
+
+/// An install holds the device until it ends: other calls on it are answered that it is installing,
+/// install_status says how it goes, and the app's copy is removed once it ends. Only an app RoamRun's
+/// own folder holds is installed.
+@Test func anInstallHoldsTheDeviceUntilItEndsAndSaysHowItWent() throws {
+    let dir = URL(fileURLWithPath: "/tmp/rr-\(UUID().uuidString.prefix(8))")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try scratchPairing(at: DeviceControlWire.pairingFile(udid: "UDID-1", in: dir))
+    let made = OSAllocatedUnfairLock<[StandInDevice]>(initialState: [])
+    let hub = DeviceControlHub(directory: dir, key: { _ in
+        scratchKey
+    }) { _, _, _ in
+        let device = StandInDevice()
+        made.withLock {
+            $0.append(device)
+        }
+        return device
+    }
+    defer { hub.stop() }
+    let id = UUID()
+    hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
+    let device = try #require(made.withLock {
+        $0.first
+    })
+    hub.start()
+    func app(_ name: String) throws -> String {
+        let folder = DeviceControlWire.socketFolder(in: dir).appendingPathComponent(name)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try PropertyListSerialization.data(
+            fromPropertyList: ["CFBundleIdentifier": "com.example.App"],
+            format: .xml,
+            options: 0
+        )
+        .write(to: folder.appendingPathComponent("Info.plist"))
+        return folder.path
+    }
+    func status(_ install: String?) -> DeviceControlWire.Response {
+        hub.answer(.init(op: "install_status", device: id, install: install))
+    }
+
+    #expect(status(nil).said?.hasPrefix("no install was begun") == true)
+    #expect(!hub.answer(.init(op: "install", device: id, path: "/tmp/App.ipa")).ok)
+    let elsewhere = dir.appendingPathComponent("install-1.app").path
+    try FileManager.default.createDirectory(atPath: elsewhere, withIntermediateDirectories: true)
+    #expect(!hub.answer(.init(op: "install", device: id, path: elsewhere)).ok)
+    #expect(!device.calls.contains("install"))
+
+    device.installHold = DispatchSemaphore(value: 0)
+    let path = try app("install-2.app")
+    let begun = hub.answer(.init(op: "install", device: id, path: path))
+    let install = try #require(begun.install)
+    #expect(begun.ok && begun.said?.contains("install \(install)") == true)
+    #expect(soon(device.installBegan))
+    let busy = hub.answer(.init(op: "press", device: id, text: "home"))
+    #expect(!busy.ok && busy.error?.hasPrefix("installing com.example.App on iPhone") == true)
+    #expect(status(install).said?.hasPrefix("installing com.example.App") == true)
+    #expect(!status("another").ok)
+    device.installHold?.signal()
+    var said = status(install)
+    for _ in 0 ..< 100 where said.said?.hasPrefix("installing") == true {
+        Thread.sleep(forTimeInterval: 0.02)
+        said = status(install)
+    }
+    #expect(said.ok && said.said?.contains("is installed on iPhone") == true && said.said?
+        .contains("launch takes it") == true)
+    #expect(!FileManager.default.fileExists(atPath: path))
+    let launched = hub.answer(.init(op: "launch", device: id, text: "com.example.App"))
+    #expect(launched.ok && launched.pid == 42)
+
+    // One that fails says why, and it is gone too.
+    device.installHold = nil
+    device.failing = DeviceSession.Failure.message("install: the device said no")
+    let again = try app("install-3.app")
+    let second = try #require(hub.answer(.init(op: "install", device: id, path: again)).install)
+    var failed = status(second)
+    for _ in 0 ..< 100 where failed.said?.hasPrefix("installing") == true {
+        Thread.sleep(forTimeInterval: 0.02)
+        failed = status(second)
+    }
+    #expect(!failed.ok && failed.error?.contains("the device said no") == true)
+    #expect(!status(install).ok) // the earlier one isn't the latest any more
+    #expect(!FileManager.default.fileExists(atPath: again))
+}

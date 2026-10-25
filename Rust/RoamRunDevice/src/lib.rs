@@ -713,6 +713,24 @@ pub unsafe extern "C" fn rr_device_launch(device: *mut RRDevice, bundle: *const 
     }
 }
 
+/// What installing `path` (an .ipa or an .app folder on this machine) would be, before the device is asked:
+/// JSON {"ok":true,"bundle":…,"megabytes":…,"seconds":…} — its bundle identifier (null for a folder whose Info.plist
+/// gives none), its size, and how long an install of it is given. An .ipa `ipa_checked` refuses is "invalid".
+/// # Safety
+/// `path` is null or a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn rr_app_checked(path: *const c_char) -> *mut c_char {
+    let Some(path) = (!path.is_null()).then(|| unsafe { CStr::from_ptr(path) }.to_str().ok()).flatten() else { return c_string(failure("bad arguments")) };
+    let bundle = if std::path::Path::new(path).is_dir() { Ok(app_bundle(path)) } else { ipa_checked(path).map(Some) };
+    c_string(match bundle {
+        Ok(bundle) => {
+            let (megabytes, given) = install_given(path);
+            format!("{{\"ok\":true,\"bundle\":{},\"megabytes\":{megabytes},\"seconds\":{}}}", bundle.as_deref().map_or("null".into(), quoted), given.as_secs())
+        }
+        Err(why) => format!("{{\"ok\":false,\"invalid\":true,\"error\":{}}}", quoted(&why)),
+    })
+}
+
 /// One thing done to the device.
 enum Input {
     Tap(f64, f64),

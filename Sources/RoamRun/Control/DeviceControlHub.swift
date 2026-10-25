@@ -59,6 +59,8 @@ protocol ControlledDevice: AnyObject, Sendable {
     func type(_ text: String) throws
     func paste(_ text: String) throws
     func press(_ button: String) throws
+    func install(_ path: String) throws
+    func launch(_ bundle: String) throws -> Int
 }
 
 extension DeviceSession: ControlledDevice {}
@@ -70,6 +72,13 @@ extension ControlledDevice {
 
     func interrupt() {}
     func gate(_ mayBegin: @escaping @Sendable () -> Bool) {}
+    func install(_ path: String) throws {
+        throw DeviceSession.Failure.invalid("this device can't install")
+    }
+
+    func launch(_ bundle: String) throws -> Int {
+        throw DeviceSession.Failure.invalid("this device can't launch")
+    }
 }
 
 /// What a device pairs with: `DevicePairing`, or a stand-in for it in tests.
@@ -119,6 +128,8 @@ final class DeviceControlHub: @unchecked Sendable {
         var nextTry = Date.distantPast
         /// When the connection was last asked whether it stands (from when it was made).
         var checked = Date()
+        /// The device's latest install, which holds the device until it ends (under the hub's lock).
+        var install: Install?
 
         /// The pairing this session is for, and the only one it connects with (`session(for:)`):
         /// what the switch is asked about. The saved file changed, this session isn't it any more.
@@ -129,6 +140,18 @@ final class DeviceControlHub: @unchecked Sendable {
             self.session = session
             self.mark = mark
         }
+    }
+
+    /// An install: its id, what is installed (its bundle identifier, else its file's name), its size, the seconds
+    /// it is given, when it began, and how it ended — nil while it goes on, else why it failed (nil: it didn't) and how long it took.
+    struct Install {
+        var id: String
+        var what: String
+        var bundle: String?
+        var megabytes: Int
+        var seconds: Int
+        var began: Date
+        var ended: (failed: String?, took: TimeInterval)?
     }
 
     typealias Opener = @Sendable (
@@ -1066,6 +1089,54 @@ final class DeviceControlHub: @unchecked Sendable {
             && file.lastPathComponent.hasPrefix("look-") && file.pathExtension == "png"
     }
 
+    /// An app to install as the CLI leaves it for the app: in the folder looks are, named install-…, an .ipa or an
+    /// .app folder, and not a link to something elsewhere.
+    static func isInstallFile(_ path: String, in directory: URL) -> Bool {
+        let file = URL(fileURLWithPath: path).standardizedFileURL
+        var info = stat()
+        return file.deletingLastPathComponent().path == DeviceControlWire.socketFolder(in: directory)
+            .standardizedFileURL
+            .path
+            && file.lastPathComponent.hasPrefix("install-") && ["ipa", "app"].contains(file.pathExtension)
+            && lstat(file.path, &info) == 0 && info.st_mode & S_IFMT != S_IFLNK
+    }
+
+    static func begun(_ install: Install, on name: String) -> String {
+        "installing \(install.what) (\(install.megabytes) MB) on \(name) began (install \(install.id)): ask install_status with that id now and then — a megabyte takes a few seconds, and \(install.seconds) s are given. Until it ends, other calls on \(name) answer that it is installing"
+    }
+
+    static func installing(_ install: Install, on name: String) -> String {
+        "installing \(install.what) on \(name) (\(Int(Date().timeIntervalSince(install.began))) s so far): nothing else is done on it until that ends. install_status says how it goes"
+    }
+
+    /// How the device's latest install went; `asked`, of that one alone.
+    static func installStatus(_ install: Install?, asked: String?, on name: String) -> DeviceControlWire.Response {
+        guard let install else {
+            return asked == nil ? .init(ok: true, said: "no install was begun on \(name) since the RoamRun app started")
+                :
+                .failure(
+                    "install \(asked ?? "") isn't one of \(name)'s here: how it ended isn't known (the RoamRun app was started again since)"
+                )
+        }
+        if let asked, asked != install.id {
+            return .failure(
+                "install \(asked) isn't \(name)'s latest here: another began since, and how that one ended isn't known"
+            )
+        }
+        guard let ended = install.ended else { return .init(ok: true, said: installing(install, on: name)) }
+        let took = Int(ended.took)
+        if let failed = ended.failed {
+            return .failure(
+                "installing \(install.what) on \(name) failed after \(took) s (of the \(install.seconds) s it was given): \(failed)"
+            )
+        }
+        return .init(
+            ok: true,
+            said: install.bundle == nil ? "\(install.what) is installed on \(name) (\(install.megabytes) MB in \(took) s)"
+                : "\(install.what) is installed on \(name) (\(install.megabytes) MB in \(took) s): launch takes it by that bundle identifier"
+        )
+    }
+
     static let lookFirst = "look first: a point is given in the pixels of the image a look returns"
     static let nobodyWaits = "nobody is waiting for this any more"
     static let notGiven = "not given: whoever asked has left, or the device was switched off meanwhile"
@@ -1151,6 +1222,15 @@ final class DeviceControlHub: @unchecked Sendable {
             // As far as it is known: how a device stands is said at once, and the Keychain may take its time.
             return .init(ok: true, open: h.session.isOpen, refused: h.session.isRefused, allowed: allowedKnown(h.mark),
                          another: h.session.isAnother ? true : nil, listUnreadable: allowedUnreadable() ? true : nil)
+        }
+        // How an install goes is said at once, whatever holds the device.
+        if request.op == "install_status" {
+            guard let (install, name) = lock.withLock({
+                held[request.device].map {
+                    ($0.install, $0.target.name)
+                }
+            }) else { return notSetUp }
+            return Self.installStatus(install, asked: request.install, on: name)
         }
         // Everything else one at a time per device, and whole: a look is checked, spent and acted
         // on without another command coming in between. The session is the one held once the
@@ -1238,8 +1318,63 @@ final class DeviceControlHub: @unchecked Sendable {
         // A call can wait for its connection, and a text takes its time: an asker who leaves
         // meanwhile has it stopped where it is, or not begun.
         let session = h.session
+        // An install holds the device until it ends: nothing else is begun meanwhile.
+        if let install = lock.withLock({
+            h.install
+        }), install.ended == nil {
+            return .failure(Self.installing(install, on: name))
+        }
         do {
             switch request.op {
+            case "install":
+                guard let path = request.path, Self.isInstallFile(path, in: directory) else {
+                    return .failure("no app to install: it is given in RoamRun's own folder")
+                }
+                let app: (bundle: String?, megabytes: Int, seconds: Int)
+                do { app = try DeviceSession.app(at: path) } catch {
+                    try? FileManager.default.removeItem(atPath: path)
+                    return .failure("\(error)")
+                }
+                // What a look saw may move while the app is replaced.
+                end()
+                begun = true
+                var bytes = [UInt8](repeating: 0, count: 4)
+                arc4random_buf(&bytes, bytes.count)
+                let install = Install(
+                    id: bytes.map {
+                        String(format: "%02x", $0)
+                    }
+                    .joined(),
+                    what: app.bundle ?? URL(fileURLWithPath: path).lastPathComponent,
+                    bundle: app.bundle,
+                    megabytes: app.megabytes,
+                    seconds: app.seconds,
+                    began: Date()
+                )
+                lock.withLock {
+                    h.install = install
+                }
+                Thread.detachNewThread { [weak self] in
+                    var failed: String?
+                    do { try session.install(path) } catch { failed = "\(error)" }
+                    try? FileManager.default.removeItem(atPath: path)
+                    self?.lock.withLock {
+                        if h.install?.id == install.id {
+                            h.install?.ended = (failed, Date().timeIntervalSince(install.began))
+                        }
+                    }
+                }
+                return .init(ok: true, install: install.id, said: Self.begun(install, on: name))
+            case "launch":
+                guard let bundle = request.text, !bundle.isEmpty else { return .failure("no bundle identifier") }
+                end() // the app in front changes
+                begun = true
+                let pid = try Self.whileWanted(wanted, else: {
+                    session.interrupt()
+                }) {
+                    try session.launch(bundle)
+                }
+                return .init(ok: true, pid: pid)
             case "elements":
                 end() // the walk can scroll the screen
                 begun = true
