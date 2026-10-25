@@ -354,7 +354,8 @@ tunnel and Xcode has to run again.
     a look; the device's Wi‑Fi off until a look fails; back on, a look → the screen, with nothing
     asked.
 
-30c. RoamRun's MCP over HTTP (when `Control/MCPHTTP.swift` or `Control/DeviceMCP.swift` changed). On
+30c. RoamRun's MCP over HTTP (when `Control/MCPHTTP.swift`, `Control/MCPUploads.swift` or
+    `Control/DeviceMCP.swift` changed). On
     the Mac, with the app running and a device switched on in it, and a token as in 30b:
     `roamrun mcp --http <port> --allow tag:<a tagged machine's tag> --token-file t`. As it starts,
     `--allow` left out or naming a machine, a token file others can read, and a port already taken
@@ -366,9 +367,9 @@ tunnel and Xcode has to run again.
     behind a `type` that runs 5–15 s, its `rr` stopped before its turn → not made, the log saying
     `not begun`. Switched off in the app meanwhile → the next call is refused. Ctrl-C → the port
     is free. Started again with `--allow-install`: `curl -T <an .ipa signed for the device> -H
-    "Authorization: Bearer $(cat t)" http://<address>:<port>/upload` → its `sha256` is the file's; `install` by it → answered at once; `install_status`
-    until installed; `launch` → the app in front. Ctrl-C → no `upload-*` or `install-*` left in
-    `~/Library/Application Support/RoamRun/control/`.
+    "Authorization: Bearer $(cat t)" http://<address>:<port>/upload` → its `sha256` is the file's;
+    `install` by it → answered at once; `install_status` until installed; `launch` → the app in
+    front. Ctrl-C → no `upload-*` or `install-*` left in `~/Library/Application Support/RoamRun/control/`.
 
 31. An Apple Vision Pro and a far Mac (when `pair xcode --with`, `pair introduce`, the stand-in,
     the wire, Xcode or visionOS changed). The far Mac's entry removed on the device first

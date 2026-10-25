@@ -633,3 +633,42 @@ import ImageIO
         #expect(FileManager.default.fileExists(atPath: own.path) == kept, "\(how)")
     }
 }
+
+/// Over HTTP, what the app says of an upload's file in RoamRun's own folder names it "the upload": not a path on this
+/// Mac, whose folders carry the user's name. Over stdio the path is the caller's own and stays.
+@Test func anUploadsPathIsntShownToACallerElsewhere() throws {
+    let looks = FileManager.default.temporaryDirectory.appendingPathComponent("control-\(UUID().uuidString)")
+    let file = looks.appendingPathComponent("install-0A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9/app.ipa").path
+    let invalid = "\(file) isn't an app's .ipa: Payload/x.app/Info.plist isn't a plist"
+    func server(uploads: Bool) -> DeviceMCP {
+        DeviceMCP(profiles: {
+            [profile("iPhone")]
+        }, looks: looks, installsFromPaths: !uploads, claimUpload: uploads ? { _, _ in
+            (file, { _ in
+            })
+        } : nil) { request in
+            switch request.op {
+            case "state": return .init(ok: true, allowed: true)
+            case "install_status" where request.install == nil: return .init(ok: true, said: "no install was begun")
+            case "install_status": return .failure(
+                    "installing app.ipa on iPhone failed after 1 s: install: \(file): no"
+                )
+            default: return .failure(invalid)
+            }
+        }
+    }
+    func said(_ server: DeviceMCP, _ tool: String, _ arguments: String) throws -> String {
+        let answer = try #require(server.handle(Data(
+            #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"\#(tool)","arguments":\#(arguments)}}"#
+                .utf8
+        )))
+        return String(decoding: answer, as: UTF8.self)
+    }
+    let remote = server(uploads: true)
+    let install = try said(remote, "install", #"{"device":"iPhone","upload":"u1","sha256":"ab"}"#)
+    #expect(install.contains("the upload isn't an app's .ipa") && !install.contains("install-0A1B"))
+    let status = try said(remote, "install_status", #"{"device":"iPhone","install":"cd34"}"#)
+    #expect(status.contains("install: the upload: no") && !status.contains(looks.lastPathComponent))
+    let local = server(uploads: false)
+    #expect(try said(local, "install_status", #"{"device":"iPhone","install":"cd34"}"#).contains("install-0A1B"))
+}

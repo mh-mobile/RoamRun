@@ -360,8 +360,8 @@ its id and sha256, and installs it by them, never by a path. One upload is kept,
 that sent it to install. An install the app doesn't begin (the device not set up, switched off or
 installing, the caller gone before its turn at the app) leaves it for another try. It goes when the
 app answers that an install of it began, when any caller starts another upload, after 30 minutes
-unused, or at Ctrl-C; one left by a server that was killed goes when the RoamRun app, or another such server,
-starts a day later. Without `--allow-install` there is neither.
+unused, or at Ctrl-C; one left by a server that was killed goes when the RoamRun app, or another
+such server, starts a day later. Without `--allow-install` there is neither.
 
 **What the device does meanwhile.** Each look and each action runs a screen-sharing session on the
 device, which RoamRun keeps for about five seconds after the last one. The device showed it as

@@ -224,6 +224,18 @@ final class DeviceMCP: @unchecked Sendable {
 
     static let olderApp = "the RoamRun app running is older than this roamrun: it doesn't hold what is done to the look given. Quit it and open the RoamRun this command came with"
 
+    /// Over HTTP, an app's file in RoamRun's own folder named in what the app says: "the upload", not a path on this Mac
+    /// (whose folders carry the user's name).
+    func hidingPaths(_ said: String) -> String {
+        guard claimUpload != nil else { return said }
+        let folder = NSRegularExpression.escapedPattern(for: looks.standardizedFileURL.path)
+        return said.replacingOccurrences(
+            of: folder + #"/install-[0-9A-Fa-f-]+/[^\n:"]*?\.(ipa|app)"#,
+            with: "the upload",
+            options: .regularExpression
+        )
+    }
+
     /// Whether an install request's failure says the app surely didn't take its app: refused (or no app), or never
     /// reached it. Only an answer lost after the request went out may hide an install begun.
     static func untaken(_ error: Error) -> Bool {
@@ -386,7 +398,7 @@ final class DeviceMCP: @unchecked Sendable {
             do {
                 let said = try send(.init(op: "install", device: device.id, path: claimed.path)).said
                 claimed.settle(true)
-                return text(said ?? "installing")
+                return text(hidingPaths(said ?? "installing"))
             } catch {
                 // Not said to have begun (refused, nobody waiting any more, taken back, no answer): the upload stays for
                 // another try. Its install folder is removed only where the app surely didn't take it (refused, or not
@@ -396,8 +408,11 @@ final class DeviceMCP: @unchecked Sendable {
                     try? FileManager.default
                         .removeItem(at: URL(fileURLWithPath: claimed.path).deletingLastPathComponent())
                 }
-                throw (error as? Failure)?
-                    .description == "unknown request" ? Failure(description: Self.olderForApps) : error
+                if let refused = error as? Failure {
+                    throw refused.description == "unknown request" ? Failure(description: Self.olderForApps)
+                        : Failure(description: hidingPaths(refused.description))
+                }
+                throw error
             }
         case "install_status" where !installsFromPaths && claimUpload == nil:
             throw Failure(description: "no such tool: install_status")
@@ -444,10 +459,11 @@ final class DeviceMCP: @unchecked Sendable {
             }
         case "install_status":
             do {
-                return try text(send(.init(op: "install_status", device: device.id,
-                                           install: arguments["install"] as? String)).said ?? "")
-            } catch let failure as Failure where failure.description == "unknown request" {
-                throw Failure(description: Self.olderForApps)
+                return try text(hidingPaths(send(.init(op: "install_status", device: device.id,
+                                                       install: arguments["install"] as? String)).said ?? ""))
+            } catch let failure as Failure {
+                throw Failure(description: failure.description == "unknown request" ? Self.olderForApps
+                    : hidingPaths(failure.description))
             }
         case "launch":
             guard let bundle = arguments["bundle"] as? String, !bundle.isEmpty

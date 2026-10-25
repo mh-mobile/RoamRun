@@ -30,8 +30,10 @@ extension MCPHTTP {
         static let keptFor: TimeInterval = 30 * 60
         /// An upload file this old when a server starts was left by one that ended without Ctrl-C.
         static let leftFor: TimeInterval = 24 * 60 * 60
-        /// Time for a body, beyond `bodyWithin`, by its size.
-        static let perMiB: TimeInterval = 2
+        /// Time for a body: `within`, and `perMiB` more for each MiB that came — by what comes, not what is said will:
+        /// one that trickles doesn't hold the one slot for as long as its size would take at that pace.
+        var within: TimeInterval = MCPHTTP.bodyWithin
+        var perMiB: TimeInterval = 2
 
         let folder: URL
         /// The most taken, in bytes.
@@ -44,6 +46,8 @@ extension MCPHTTP {
         private var coming = false
         /// The file one coming in is written to.
         private var incoming: String?
+        /// Stopping: no file is made any more (one made after `end` would be left).
+        private var ended = false
 
         init(folder: URL, most: Int) {
             self.folder = folder
@@ -86,23 +90,32 @@ extension MCPHTTP {
             }
             .joined()
             let path = folder.appendingPathComponent("upload-\(id).ipa").path
-            lock.withLock {
+            // Made, and said to be coming in, where stopping sees it: not after `end` has taken what is there.
+            let fd = lock.withLock { () -> Int32? in
+                guard !ended else { return nil }
                 incoming = path
-            }
-            var fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
-            if fd < 0, errno == ENOENT {
-                // The folder removed meanwhile: made again, once.
-                mkdir(folder.path, 0o700)
-                fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+                var fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+                if fd < 0, errno == ENOENT {
+                    // The folder removed meanwhile: made again, once.
+                    mkdir(folder.path, 0o700)
+                    fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+                }
+                return fd
             }
             defer {
                 lock.withLock {
                     incoming = nil
                 }
             }
+            guard let fd else { return .failure(503) }
             guard fd >= 0 else { return .failure(507) }
             var hash = SHA256()
+            let began = Date()
+            var received = 0
+            reader.until = began.addingTimeInterval(within + perMiB)
             let size = MCPHTTP.framed(reader, request, most: most) { chunk in
+                received += chunk.count
+                reader.until = began.addingTimeInterval(within + perMiB * Double((received >> 20) + 1))
                 hash.update(data: Data(chunk))
                 return chunk.withUnsafeBytes { raw in
                     var written = 0
@@ -213,6 +226,7 @@ extension MCPHTTP {
                 let left = ([incoming, kept?.upload.path] + lent.map(\.path)).compactMap {
                     $0
                 }
+                ended = true
                 kept = nil
                 lent = []
                 return left

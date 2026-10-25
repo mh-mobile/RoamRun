@@ -22,6 +22,9 @@ final class MCPHTTP: @unchecked Sendable {
     static let cancelsMost = 256
     /// The longest a read of a request waits for anything to come.
     static let idle: TimeInterval = 60
+    /// What may trail a chunked body's last piece, at most.
+    static let trailerLines = 64
+    static let trailerMost = 8 * 1024
     /// A connection's thread: what it reads is parsed there, and a JSON nested deep enough runs a thread's default
     /// 512 KB out (Foundation stops at depth 512, but only after recursing that far).
     static let stack = 8 << 20
@@ -379,14 +382,18 @@ final class MCPHTTP: @unchecked Sendable {
                 case let .failure(status): return .failure(status)
                 }
             }
-            // What may trail the last piece: read to the empty line, not used.
-            while true {
+            // What may trail the last piece: read to the empty line, not used — a little of it, not a stream of lines.
+            var trailing = 0
+            for _ in 0 ..< trailerLines {
                 switch reader.line(most: 1024) {
                 case let .success(line) where line.isEmpty: return .success(size)
-                case .success: continue
+                case let .success(line):
+                    trailing += line.utf8.count + 2
+                    guard trailing <= trailerMost else { return .failure(431) }
                 case let .failure(status): return .failure(status)
                 }
             }
+            return .failure(431)
         }
         switch length(request) {
         case let .success(length):
@@ -725,8 +732,6 @@ final class MCPHTTP: @unchecked Sendable {
             guard uploads.begin()
             else { return refuse(409, "", "another upload is coming in: try again once it is in\n") }
             defer { uploads.done() }
-            let mib = ((length ?? uploads.most) + (1 << 20) - 1) >> 20
-            reader.until = Date().addingTimeInterval(Self.bodyWithin + Uploads.perMiB * Double(mib))
             if request.header("expect")?.caseInsensitiveCompare("100-continue") == .orderedSame {
                 let go = Array("HTTP/1.1 100 Continue\r\n\r\n".utf8)
                 _ = send(fd, go, go.count, 0)

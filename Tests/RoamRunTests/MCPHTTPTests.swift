@@ -502,3 +502,38 @@ private func status(_ answer: String) -> Int {
     #expect(!FileManager.default.fileExists(atPath: first) && !FileManager.default.fileExists(atPath: second))
     #expect(held.count == 2)
 }
+
+/// Once stopping has begun, an upload isn't taken: a file made after `end` would be left.
+@Test func anUploadIsntTakenOnceStopping() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let uploads = MCPHTTP.Uploads(folder: folder, most: 1 << 20)
+    let served = try Served(uploads: uploads)
+    uploads.end()
+    let sent = served.ask("PUT /upload HTTP/1.1\r\nHost: 127.0.0.1:\(served.port)\r\nContent-Length: 1\r\n\r\nx")
+    #expect(status(sent) == 503)
+    #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty)
+}
+
+/// A chunked upload can't hold the one slot with lines trailing its last piece, nor by trickling: its time goes by
+/// what came, not by the size it said.
+@Test func anUploadCantHoldTheSlotByTrickling() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let uploads = MCPHTTP.Uploads(folder: folder, most: 128 << 20)
+    uploads.within = 0.5
+    uploads.perMiB = 0.5
+    let served = try Served(uploads: uploads)
+    let host = "Host: 127.0.0.1:\(served.port)\r\n"
+    let trailers = String(repeating: "x-pad: 1\r\n", count: MCPHTTP.trailerLines + 1)
+    #expect(status(served
+            .ask("PUT /upload HTTP/1.1\r\n\(host)Transfer-Encoding: chunked\r\n\r\n1\r\nx\r\n0\r\n\(trailers)\r\n")) ==
+        431)
+    // Said to be 64 MiB, ten bytes sent, then nothing: cut off well before 0.5 + 0.5 × 64 s.
+    let began = Date()
+    let slow = served.ask("PUT /upload HTTP/1.1\r\n\(host)Content-Length: \(64 << 20)\r\n\r\n0123456789")
+    #expect(status(slow) == 408 && Date().timeIntervalSince(began) < 8)
+    #expect(status(served.ask("PUT /upload HTTP/1.1\r\n\(host)Content-Length: 1\r\n\r\nx")) == 200)
+}
