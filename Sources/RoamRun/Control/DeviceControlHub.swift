@@ -1407,7 +1407,21 @@ final class DeviceControlHub: @unchecked Sendable {
                 }
                 Thread.detachNewThread { [weak self] in
                     var failed: String?
-                    do { try session.install(path) } catch { failed = "\(error)" }
+                    var on = session
+                    for _ in 0 ..< 2 {
+                        do {
+                            try on.install(path)
+                            failed = nil
+                            break
+                        } catch {
+                            failed = "\(error)"
+                            // Its session made anew before it began (the device found at another port, say): on
+                            // the new one, once, rather than failed with nothing sent.
+                            guard case DeviceSession.Failure.notBegun = error, let anew = self?.session(of: device),
+                                  anew !== on else { break }
+                            on = anew
+                        }
+                    }
                     try? FileManager.default.removeItem(atPath: folder)
                     self?.lock.withLock {
                         if let at = self?.installs[device]?.lastIndex(where: {
