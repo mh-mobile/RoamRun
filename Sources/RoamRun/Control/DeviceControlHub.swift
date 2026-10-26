@@ -1378,6 +1378,13 @@ final class DeviceControlHub: @unchecked Sendable {
                 do { app = try DeviceSession.app(at: path) } catch {
                     return .failure("\(error)")
                 }
+                // Reached before it is said to have begun: a device asleep or away refuses it here, while whoever
+                // sent the app can still try again with it.
+                do { try session.connect() } catch {
+                    return .failure("\(error)")
+                }
+                // Reaching it can take a while: whoever asked may have gone meanwhile.
+                guard wanted() else { return .failure(Self.nobodyWaits) }
                 // What a look saw may move while the app is replaced.
                 end()
                 begun = true
@@ -1402,7 +1409,21 @@ final class DeviceControlHub: @unchecked Sendable {
                 }
                 Thread.detachNewThread { [weak self] in
                     var failed: String?
-                    do { try session.install(path) } catch { failed = "\(error)" }
+                    var on = session
+                    for _ in 0 ..< 2 {
+                        do {
+                            try on.install(path)
+                            failed = nil
+                            break
+                        } catch {
+                            failed = "\(error)"
+                            // Its session made anew before it began (the device found at another port, say): on
+                            // the new one, once, rather than failed with nothing sent.
+                            guard case DeviceSession.Failure.notBegun = error, let anew = self?.session(of: device),
+                                  anew !== on else { break }
+                            on = anew
+                        }
+                    }
                     try? FileManager.default.removeItem(atPath: folder)
                     self?.lock.withLock {
                         if let at = self?.installs[device]?.lastIndex(where: {

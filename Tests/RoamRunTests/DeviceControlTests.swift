@@ -1553,6 +1553,46 @@ func anInputIsInterruptedWhenItsAskerLeavesOrItsDeviceIsSwitchedOff(_ op: String
     #expect(!refused.ok)
     #expect(FileManager.default.fileExists(atPath: outside.appendingPathComponent("canary").path))
     #expect(!FileManager.default.fileExists(atPath: own.path))
+
+    // Its session made anew before the install began on it: it goes on the new one, not failed with nothing sent.
+    anew.installHold = DispatchSemaphore(value: 0)
+    anew.failing = DeviceSession.Failure.notBegun("stopped: this connection was closed (the device has a new one)")
+    let moved = try app("install-e")
+    let third = try #require(hub.answer(.init(op: "install", device: id, path: moved)).install)
+    #expect(soon(anew.installBegan))
+    hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 3, udid: "UDID-1")])
+    let newest = try #require(made.withLock {
+        $0.last
+    })
+    #expect(newest !== anew)
+    anew.installHold?.signal()
+    var movedSaid = status(third)
+    for _ in 0 ..< 100 where movedSaid.said?.hasPrefix("installing") == true {
+        Thread.sleep(forTimeInterval: 0.02)
+        movedSaid = status(third)
+    }
+    #expect(movedSaid.ok && movedSaid.said?.contains("is installed on iPhone") == true)
+    #expect(newest.calls.contains("install"))
+    anew.failing = nil
+    anew.installHold = nil
+
+    // The device not reached: refused, not said to have begun (an upload stays for another try), nothing sent to
+    // it, and its folder goes.
+    newest.connectFailing = DeviceSession.Failure.notBegun("the device didn't answer")
+    let sent = newest.calls
+        .filter {
+            $0 == "install"
+        }
+        .count
+    let unreached = try app("install-d")
+    let notBegun = hub.answer(.init(op: "install", device: id, path: unreached))
+    #expect(!notBegun.ok && notBegun.install == nil && notBegun.error?.contains("didn't answer") == true)
+    #expect(newest.calls
+        .filter {
+            $0 == "install"
+        }
+        .count == sent)
+    #expect(!FileManager.default.fileExists(atPath: URL(fileURLWithPath: unreached).deletingLastPathComponent().path))
 }
 
 /// What the app's start sweeps away of apps left to install: one left two minutes ago or more, not one a CLI is copying.
