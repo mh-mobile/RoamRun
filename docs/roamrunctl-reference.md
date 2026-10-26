@@ -262,7 +262,7 @@ needed to establish each new device connection.
   picture is the display's own way up (portrait on an iPhone held sideways); taps and swipes go
   by its pixels all the same, and a turn of the device after it isn't checked. During a phone
   or VoIP call the device refuses the stream (seen during a VoIP call), and the look is the
-  PNG; so is it where the screen's size isn't known, or the frame doesn't fit it (its points
+  PNG; so is it where the device doesn't say its screen's size (points by the uncut frame
   would land short by the stream's padding). `ROAMRUNCTL_LOOK=screenshot` always takes the PNG,
   as before 0.11.0; another value is refused before anything is done. At Ctrl-C, `mcp` stops a
   stream a look left before it ends.

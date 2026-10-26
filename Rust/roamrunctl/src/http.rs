@@ -532,7 +532,11 @@ pub fn serve(options: Options) -> Result<String, String> {
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     // At stop, what was uploaded goes with its folder: Ctrl-C, and what a closed terminal sends. Set up before the
     // folder is made, so that a failure here leaves none.
-    let stop = crate::at_stop()?;
+    // Needed with uploads, so that they go at Ctrl-C (checked before their folder is made); without, served all the same.
+    let stop = match crate::at_stop() {
+        Err(why) if options.uploads.is_some() => return Err(why),
+        stop => stop.ok(),
+    };
     let uploads = match options.uploads {
         Some(most) => {
             let uploads = Uploads::new(most)?;
@@ -542,8 +546,10 @@ pub fn serve(options: Options) -> Result<String, String> {
         }
         None => None,
     };
-    let ended = uploads.clone();
-    stop.then(move || if let Some(ended) = ended { ended.end() });
+    if let Some(stop) = stop {
+        let ended = uploads.clone();
+        stop.then(move || if let Some(ended) = ended { ended.end() });
+    }
     let who: Vec<&str> = options.allowed.iter().map(|a| match a { Allow::Tag(s) | Allow::Login(s) => s.as_str() }).collect();
     note!("roamrunctl: the MCP tools for {} at http://{own}:{port}/mcp, for {} on the tailnet{}{}. Ctrl-C ends it. What is sent and shown passes through whatever lies between (a cloud's proxy sees images and text).",
         options.devices.join(", "), who.join(", "), if options.token.is_some() { ", with the token" } else { "" },

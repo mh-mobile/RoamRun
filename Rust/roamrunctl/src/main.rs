@@ -535,8 +535,6 @@ fn on_lan(interfaces: &[(Ipv4Addr, u8, bool)], toward: Ipv4Addr, wanted: Option<
     Ok((one, here.iter().map(|i| i.0).filter(|ip| *ip != one).collect()))
 }
 
-/// Set once this is told to stop: Ctrl-C, and what a closed terminal or a dropped ssh session
-/// sends. Without the latter two the announcement would stay on the LAN for its 75 minutes.
 /// Ctrl-C, and what a closed terminal sends, listened for from now on.
 struct AtStop { runtime: tokio::runtime::Runtime, stop: watch::Receiver<bool> }
 
@@ -559,6 +557,8 @@ impl AtStop {
     }
 }
 
+/// Set once this is told to stop: Ctrl-C, and what a closed terminal or a dropped ssh session
+/// sends. Without the latter two the announcement would stay on the LAN for its 75 minutes.
 fn stops() -> Result<watch::Receiver<bool>, String> {
     let (tx, rx) = watch::channel(false);
     macro_rules! on {
