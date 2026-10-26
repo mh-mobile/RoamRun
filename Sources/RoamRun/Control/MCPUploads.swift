@@ -110,12 +110,12 @@ extension MCPHTTP {
             guard let fd else { return .failure(503) }
             guard fd >= 0 else { return .failure(507) }
             var hash = SHA256()
-            let began = Date()
+            let began = MCPHTTP.now
             var received = 0
-            reader.until = began.addingTimeInterval(within + perMiB)
+            reader.until = began + within + perMiB
             let size = MCPHTTP.framed(reader, request, most: most) { chunk in
                 received += chunk.count
-                reader.until = began.addingTimeInterval(within + perMiB * Double((received >> 20) + 1))
+                reader.until = began + within + perMiB * Double((received >> 20) + 1)
                 hash.update(data: Data(chunk))
                 return chunk.withUnsafeBytes { raw in
                     var written = 0

@@ -166,10 +166,16 @@ final class MCPHTTP: @unchecked Sendable {
 
     // MARK: - Reading a request
 
+    /// Seconds by a clock that setting the Mac's time doesn't move: what deadlines go by, as roamrunctl's `Instant`.
+    static var now: TimeInterval {
+        ProcessInfo.processInfo.systemUptime
+    }
+
     /// A socket read with one deadline for all that is read, not for each read.
     final class Reader {
         let fd: Int32
-        var until: Date
+        /// By `MCPHTTP.now`.
+        var until: TimeInterval
         /// The longest a read waits for anything to come.
         var idle: TimeInterval = MCPHTTP.idle
         private var buffer: [UInt8] = []
@@ -177,7 +183,7 @@ final class MCPHTTP: @unchecked Sendable {
 
         enum Filled { case data, end, late }
 
-        init(fd: Int32, until: Date) {
+        init(fd: Int32, until: TimeInterval) {
             self.fd = fd
             self.until = until
         }
@@ -188,7 +194,7 @@ final class MCPHTTP: @unchecked Sendable {
                 at = 0
             }
             while true {
-                let left = until.timeIntervalSinceNow
+                let left = until - MCPHTTP.now
                 guard left > 0 else { return .late }
                 var wanted = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
                 let ready = poll(&wanted, 1, Int32(min(left, idle) * 1000) + 1)
@@ -465,10 +471,10 @@ final class MCPHTTP: @unchecked Sendable {
     /// closed with it unread, the system resets the connection, and the caller can lose its answer.
     static func linger(_ fd: Int32) {
         shutdown(fd, SHUT_WR)
-        let until = Date().addingTimeInterval(1)
+        let until = now + 1
         var left = bodyMost
         var rest = [UInt8](repeating: 0, count: 8192)
-        while left > 0, until.timeIntervalSinceNow > 0 {
+        while left > 0, now < until {
             var wanted = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
             guard poll(&wanted, 1, 250) > 0 else { break }
             let n = recv(fd, &rest, rest.count, 0)
@@ -496,7 +502,7 @@ final class MCPHTTP: @unchecked Sendable {
 
     private let lock = NSLock()
     private var turns: [String: DispatchQueue] = [:]
-    private var cancelled: [(session: String, id: String, at: Date)] = []
+    private var cancelled: [(session: String, id: String, at: TimeInterval)] = []
     private var open: [String: Int] = [:]
     private var turningAway = 0
 
@@ -649,17 +655,19 @@ final class MCPHTTP: @unchecked Sendable {
     /// One request, from its head to its answer, and its line in the log. Never logged: the token, a body, what is
     /// typed or pasted, what is shown.
     func connection(_ fd: Int32, from ip: String) {
-        let began = Date()
+        let began = Self.now
         var who = "-", what = "-"
         let outcome = served(fd, from: ip, began: began, who: &who, what: &what)
         let line =
-            "\(Self.clock()) \(ip) \(Self.printable(who)) \(Self.printable(what)) \(outcome) \(String(format: "%.1f", Date().timeIntervalSince(began)))s\n"
+            "\(Self.clock()) \(ip) \(Self.printable(who)) \(Self.printable(what)) \(outcome) \(String(format: "%.1f", Self.now - began))s\n"
         Self.note(line)
         Self.linger(fd)
     }
 
-    private func served(_ fd: Int32, from ip: String, began: Date, who: inout String, what: inout String) -> String {
-        let reader = Reader(fd: fd, until: began.addingTimeInterval(headWithin))
+    private func served(_ fd: Int32, from ip: String, began: TimeInterval, who: inout String,
+                        what: inout String) -> String
+    {
+        let reader = Reader(fd: fd, until: began + headWithin)
         func refuse(_ refused: Refused, _ extra: String = "", _ body: String = "") -> String {
             Self.respond(fd, refused.status, extra, body)
             return "\(refused.status)"
@@ -754,7 +762,7 @@ final class MCPHTTP: @unchecked Sendable {
                 "Bad Request: Unsupported protocol version: \(version) (supported: \(DeviceMCP.versions.joined(separator: ", ")))"
             ))
         }
-        reader.until = Date().addingTimeInterval(Self.bodyWithin)
+        reader.until = Self.now + Self.bodyWithin
         if request.header("expect")?.caseInsensitiveCompare("100-continue") == .orderedSame {
             let go = Array("HTTP/1.1 100 Continue\r\n\r\n".utf8)
             _ = send(fd, go, go.count, 0)
@@ -863,10 +871,10 @@ final class MCPHTTP: @unchecked Sendable {
     private func takeBack(session: String, id: String) {
         lock.withLock {
             cancelled.removeAll {
-                Date().timeIntervalSince($0.at) >= Self.takenBackFor
+                Self.now - $0.at >= Self.takenBackFor
             }
             if cancelled.count < Self.cancelsMost {
-                cancelled.append((session, id, Date()))
+                cancelled.append((session, id, Self.now))
             }
         }
     }
@@ -890,7 +898,7 @@ final class MCPHTTP: @unchecked Sendable {
             turns[device] = queue
             return queue
         }
-        let came = Date()
+        let came = Self.now
         let rpcID = rpcID as? NSNumber ?? (rpcID as? String).map {
             $0 as NSString
         } ?? NSNull()
@@ -898,7 +906,7 @@ final class MCPHTTP: @unchecked Sendable {
             let takenBack = session.map { session in
                 lock.withLock {
                     cancelled.removeAll {
-                        Date().timeIntervalSince($0.at) >= Self.takenBackFor
+                        Self.now - $0.at >= Self.takenBackFor
                     }
                     return cancelled.contains {
                         $0.session == session && $0.id == id
@@ -908,7 +916,7 @@ final class MCPHTTP: @unchecked Sendable {
             if takenBack || Self.closed(fd) {
                 return nil
             }
-            if Date().timeIntervalSince(came) > Self.turnWithin {
+            if Self.now - came > Self.turnWithin {
                 let busy = "not begun: another call held the device for more than \(Int(Self.turnWithin)) s. Look before trying again"
                 return Self.json([
                     "jsonrpc": "2.0",
