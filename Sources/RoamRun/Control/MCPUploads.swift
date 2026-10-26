@@ -41,7 +41,7 @@ extension MCPHTTP {
         private let lock = NSLock()
         private var kept: (upload: Upload, used: Date)?
         /// The uploads installs were handed, until the app has taken each (or not): their files stay, so that an install
-        /// the app didn't begin gives its own back — unless another upload began since (`keepable` false then).
+        /// the app didn't begin gives its own back — unless another upload came in since (`keepable` false then).
         private var lent: [(upload: Upload, keepable: Bool)] = []
         private var coming = false
         /// The file one coming in is written to.
@@ -69,9 +69,6 @@ extension MCPHTTP {
             lock.withLock {
                 guard !coming else { return false }
                 kept = nil
-                for at in lent.indices {
-                    lent[at].keepable = false
-                }
                 coming = true
                 return true
             }
@@ -146,6 +143,10 @@ extension MCPHTTP {
                     .joined()
                 lock.withLock {
                     kept = (Upload(id: id, owner: owner, sha256: sha256, path: path), Date())
+                    // A newer one in: those lent before it aren't kept again (one that didn't all come replaced none).
+                    for at in lent.indices {
+                        lent[at].keepable = false
+                    }
                 }
                 return .success(MCPHTTP.json(["upload": id, "size": size, "sha256": sha256]))
             }

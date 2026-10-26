@@ -263,8 +263,8 @@ needed to establish each new device connection.
   by its pixels all the same, and a turn of the device after it isn't checked. During a phone
   or VoIP call the device refuses the stream (seen during a VoIP call), and the look is the
   PNG; so is it where the device doesn't say its screen's size, or the frame doesn't fit it
-  (points by the uncut frame would land beside what was meant), and the look's answer says so. `ROAMRUNCTL_LOOK=screenshot` always takes the PNG,
-  as before 0.11.0; another value is refused before anything is done. At Ctrl-C, `mcp` stops a
+  (points by the uncut frame would land beside what was meant), and MCP's `look` says so. `ROAMRUNCTL_LOOK=screenshot` always takes the PNG,
+  as before 0.11.0; another value is refused before anything is done. At Ctrl-C, `mcp` and `roamrunctl look` stop a
   stream a look left before it ends.
 - On Linux and Windows, a look is the device's PNG: the device lists no screen-sharing
   session. Music continued playing during the screen/input tests, but microphone and some

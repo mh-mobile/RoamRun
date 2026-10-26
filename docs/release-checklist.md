@@ -372,7 +372,9 @@ tunnel and Xcode has to run again.
     is free. Started again with `--allow-install`: `curl -T <an .ipa signed for the device> -H
     "Authorization: Bearer $(cat t)" http://<address>:<port>/upload` → its `sha256` is the file's;
     `install` by it → answered at once; `install_status` until installed; `launch` → the app in
-    front. Ctrl-C → no `upload-*` or `install-*` left in `~/Library/Application Support/RoamRun/control/`.
+    front. The device then made unreachable (airplane mode) within a minute of the last call, and
+    another upload's `install` → refused, not "installing", and an `install` of that upload again,
+    the device back, works. Ctrl-C → no `upload-*` or `install-*` left in `~/Library/Application Support/RoamRun/control/`.
 
 31. An Apple Vision Pro and a far Mac (when `pair xcode --with`, `pair introduce`, the stand-in,
     the wire, Xcode or visionOS changed). The far Mac's entry removed on the device first

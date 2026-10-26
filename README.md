@@ -386,7 +386,7 @@ on it, through the app: a build
 script, a package's install step, another agent. A `look` shows whatever is on the screen,
 notifications and messages included, and locking the device does not stop it: the lock screen is
 seen and operated too (seen), though unlocking still takes the passcode or Face ID. **While
-the MCP server over HTTP (`mcp --http`, below) runs, so can any program on the machines its `--allow` lets in** (each
+the MCP server over HTTP (`mcp --http`, above) runs, so can any program on the machines its `--allow` lets in** (each
 untagged machine of a login allowed, each machine with a tag allowed), on every device switched
 on, `launch` included; with `--allow-install` it can also replace the device's apps with any app
 signed for it. `--token-file` is the one check beyond the machine.
