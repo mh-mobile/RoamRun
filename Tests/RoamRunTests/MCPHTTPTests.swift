@@ -528,6 +528,21 @@ private func status(_ answer: String) -> Int {
     #expect(FileManager.default
         .fileExists(atPath: try uploads.claim(id: newer.id, sha256: newer.sha, into: folder).path))
     #expect(!FileManager.default.fileExists(atPath: folder.appendingPathComponent("upload-\(older.id).ipa").path))
+    // A newer one that didn't all come replaced nothing: the one lent before it is kept again.
+    let lentAgain = try upload("c")
+    let againLent = try uploads.claim(id: lentAgain.id, sha256: lentAgain.sha, into: folder)
+    let cut = served.open("PUT /upload HTTP/1.1\r\nHost: 127.0.0.1:\(served.port)\r\nContent-Length: 10\r\n\r\nabc")
+    shutdown(cut, SHUT_WR)
+    var rest = [UInt8](repeating: 0, count: 512)
+    while recv(cut, &rest, rest.count, 0) > 0 {}
+    close(cut) // closed once the server is done with it: the slot is free again
+    againLent.settle(false)
+    #expect(FileManager.default.fileExists(atPath: try uploads.claim(
+        id: lentAgain.id,
+        sha256: lentAgain.sha,
+        into: folder
+    )
+    .path))
 }
 
 /// Once stopping has begun, an upload isn't taken: a file made after `end` would be left.
