@@ -1383,6 +1383,8 @@ final class DeviceControlHub: @unchecked Sendable {
                 do { try session.connect() } catch {
                     return .failure("\(error)")
                 }
+                // Reaching it can take a while: whoever asked may have gone meanwhile.
+                guard wanted() else { return .failure(Self.nobodyWaits) }
                 // What a look saw may move while the app is replaced.
                 end()
                 begun = true
