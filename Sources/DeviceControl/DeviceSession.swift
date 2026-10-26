@@ -183,6 +183,21 @@ public final class DeviceSession: @unchecked Sendable {
         }
     }
 
+    /// `connect`, after asking one that stands whether it still answers (up to some 5 s): a device gone since the last
+    /// check isn't taken for reached. For what can't be taken back once it is said to have begun (an install).
+    public func reach() throws {
+        lock.withLock {
+            guard !closed, !broken, let device, let answer = rr_device_alive(device) else { return }
+            defer { rr_string_free(answer) }
+            let said = String(cString: answer)
+            guard !said.contains("\"ok\":true") else { return }
+            broken = true
+            noteStanding()
+            onEvent?("found gone: \(said)")
+        }
+        try connect()
+    }
+
     /// Finds out whether the connection still stands (the device restarted, or dropped the
     /// pairing, says nothing until it is asked): what it finds is in `isOpen`. A connection is
     /// opened in the tunnel and closed — nothing shows on the device, and its sound stays.

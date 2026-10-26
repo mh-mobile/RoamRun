@@ -43,6 +43,9 @@ protocol ControlledDevice: AnyObject, Sendable {
     var isRefused: Bool { get }
     var isAnother: Bool { get }
     func connect() throws
+    /// `connect`, after asking one that stands whether it still answers: one gone since the last check isn't taken for
+    /// open.
+    func reach() throws
     /// Finds out whether the connection still stands, without waiting for a call under way: `isOpen` says.
     func check()
     /// At once, from any thread: nothing more is begun on the device. `close` follows, and waits.
@@ -1172,6 +1175,8 @@ final class DeviceControlHub: @unchecked Sendable {
     }
 
     static let lookFirst = "look first: a point is given in the pixels of the image a look returns"
+    /// Not its path: over HTTP, the caller isn't told where on this Mac (whose folders carry the user's name).
+    static let lookNotSaved = "the look couldn't be saved in RoamRun's own folder (is the disk full?)"
     static let nobodyWaits = "nobody is waiting for this any more"
     static let notGiven = "not given: whoever asked has left, or the device was switched off meanwhile"
     /// The longer side of a look, at most: what a model is shown without its being scaled once more.
@@ -1397,7 +1402,7 @@ final class DeviceControlHub: @unchecked Sendable {
                 }
                 // Reached before it is said to have begun: a device asleep or away refuses it here, while whoever
                 // sent the app can still try again with it.
-                do { try session.connect() } catch {
+                do { try session.reach() } catch {
                     return .failure("\(error)")
                 }
                 // Reaching it can take a while: whoever asked may have gone meanwhile.
@@ -1549,10 +1554,10 @@ final class DeviceControlHub: @unchecked Sendable {
                     1,
                     nil
                 ) else {
-                    return .failure("can't write \(path)")
+                    return .failure(Self.lookNotSaved)
                 }
                 CGImageDestinationAddImage(out, image, nil)
-                guard CGImageDestinationFinalize(out) else { return .failure("can't write \(path)") }
+                guard CGImageDestinationFinalize(out) else { return .failure(Self.lookNotSaved) }
                 // Whoever asked left while it was taken: nobody is there to take the screen away.
                 guard wanted() else {
                     try? FileManager.default.removeItem(atPath: path)

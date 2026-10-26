@@ -41,8 +41,8 @@ extension MCPHTTP {
         private let lock = NSLock()
         private var kept: (upload: Upload, used: Date)?
         /// The uploads installs were handed, until the app has taken each (or not): their files stay, so that an install
-        /// the app didn't begin gives its own back.
-        private var lent: [Upload] = []
+        /// the app didn't begin gives its own back — unless another upload began since (`keepable` false then).
+        private var lent: [(upload: Upload, keepable: Bool)] = []
         private var coming = false
         /// The file one coming in is written to.
         private var incoming: String?
@@ -69,6 +69,9 @@ extension MCPHTTP {
             lock.withLock {
                 guard !coming else { return false }
                 kept = nil
+                for at in lent.indices {
+                    lent[at].keepable = false
+                }
                 coming = true
                 return true
             }
@@ -170,7 +173,7 @@ extension MCPHTTP {
                       held.upload.sha256.caseInsensitiveCompare(sha256) == .orderedSame
                 else { throw Failure(description: Self.gone(id)) }
                 kept = nil
-                lent.append(held.upload)
+                lent.append((held.upload, true))
                 return held.upload
             }
             let own = folder.appendingPathComponent("install-\(UUID().uuidString)")
@@ -199,10 +202,10 @@ extension MCPHTTP {
         private func settle(_ upload: Upload, taken: Bool) {
             lock.withLock {
                 guard let at = lent.firstIndex(where: {
-                    $0 === upload
+                    $0.upload === upload
                 }) else { return }
-                lent.remove(at: at)
-                if !taken, kept == nil, !coming {
+                let keepable = lent.remove(at: at).keepable
+                if !taken, keepable, kept == nil, !coming {
                     kept = (upload, Date())
                 } else {
                     unlink(upload.path) // used up: the app has its own link
@@ -223,7 +226,7 @@ extension MCPHTTP {
         func end() {
             let left = lock.withLock { () -> [String] in
                 // The process ends at once after this: no deinit runs. A lent one's install has its own link.
-                let left = ([incoming, kept?.upload.path] + lent.map(\.path)).compactMap {
+                let left = ([incoming, kept?.upload.path] + lent.map(\.upload.path)).compactMap {
                     $0
                 }
                 ended = true

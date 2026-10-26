@@ -1490,6 +1490,8 @@ func anInputIsInterruptedWhenItsAskerLeavesOrItsDeviceIsSwitchedOff(_ op: String
     let begun = hub.answer(.init(op: "install", device: id, path: path))
     let install = try #require(begun.install)
     #expect(begun.ok && begun.said?.contains("install \(install)") == true)
+    // A connection that stands was asked whether it still answers before the install was said to have begun.
+    #expect(device.calls.contains("reach"))
     #expect(soon(device.installBegan))
     let busy = hub.answer(.init(op: "press", device: id, text: "home"))
     #expect(!busy.ok && busy.error?.hasPrefix("installing com.example.App on iPhone") == true)

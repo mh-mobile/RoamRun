@@ -504,6 +504,32 @@ private func status(_ answer: String) -> Int {
     #expect(held.count == 2)
 }
 
+/// Two uploads lent at once, both installs refused: the newer is kept for another try, not the older one it replaced.
+@Test func anUploadReplacedWhileLentIsntKeptAgain() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let uploads = MCPHTTP.Uploads(folder: folder, most: 1 << 20)
+    let served = try Served(uploads: uploads)
+    func upload(_ body: String) throws -> (id: String, sha: String) {
+        let sent = served
+            .ask("PUT /upload HTTP/1.1\r\nHost: 127.0.0.1:\(served.port)\r\nContent-Length: 1\r\n\r\n\(body)")
+        let id = try #require(sent.components(separatedBy: #""upload":""#).last?.prefix(32)).description
+        let sha = try #require(sent.components(separatedBy: #""sha256":""#).last?.prefix(64)).description
+        return (id, sha)
+    }
+    let older = try upload("a")
+    let olderLent = try uploads.claim(id: older.id, sha256: older.sha, into: folder)
+    let newer = try upload("b")
+    let newerLent = try uploads.claim(id: newer.id, sha256: newer.sha, into: folder)
+    olderLent.settle(false)
+    newerLent.settle(false)
+    #expect(throws: (any Error).self) { try uploads.claim(id: older.id, sha256: older.sha, into: folder) }
+    #expect(FileManager.default
+        .fileExists(atPath: try uploads.claim(id: newer.id, sha256: newer.sha, into: folder).path))
+    #expect(!FileManager.default.fileExists(atPath: folder.appendingPathComponent("upload-\(older.id).ipa").path))
+}
+
 /// Once stopping has begun, an upload isn't taken: a file made after `end` would be left.
 @Test func anUploadIsntTakenOnceStopping() throws {
     let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
