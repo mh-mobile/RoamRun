@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -42,9 +42,17 @@ const TURN: Duration = Duration::from_secs(20);
 const TAKEN_BACK: Duration = Duration::from_secs(60);
 /// Of those, no more than this many are kept at once.
 const CANCELS: usize = 256;
-/// An upload's body is given this long a MiB on top of `BODY_WITHIN`, by its length or, chunked, by the most taken:
-/// 200 MiB took 103 s through a cloud's proxy (about 2 MiB a second).
+/// An upload's body is given `UPLOAD_WITHIN`, and this long more for each MiB that came — by what comes, not by the
+/// length it says, so that one trickling in doesn't hold the one slot for as long as that length would take at its
+/// pace: 200 MiB took 103 s through a cloud's proxy (about 2 MiB a second).
 const UPLOAD_MIB_WITHIN: Duration = Duration::from_secs(2);
+#[cfg(not(test))]
+const UPLOAD_WITHIN: Duration = BODY_WITHIN;
+#[cfg(test)]
+const UPLOAD_WITHIN: Duration = Duration::from_millis(500);
+/// What may trail a chunked body's last piece, at most: lines, and bytes.
+const TRAILER_LINES: usize = 64;
+const TRAILER: usize = 8 * 1024;
 /// An upload not used this long is dropped.
 const UPLOAD_KEPT: Duration = Duration::from_secs(30 * 60);
 
@@ -101,14 +109,20 @@ fn printable(said: &str) -> String {
     said.chars().take(200).map(|c| if c.is_control() { '?' } else { c }).collect()
 }
 
-/// The socket, read with a deadline for all that is read, not for each read.
+/// The socket, read with a deadline for all that is read, not for each read; with `pace`, one that grows with the
+/// body's bytes that came since it began (an upload's): not its framing, which a client could send without end.
 struct Timed {
     stream: TcpStream,
     until: Instant,
+    pace: Option<(Instant, Arc<AtomicU64>)>,
 }
 
 impl Read for Timed {
     fn read(&mut self, into: &mut [u8]) -> std::io::Result<usize> {
+        if let Some((began, came)) = &self.pace {
+            let came = came.load(Ordering::Relaxed);
+            self.until = *began + UPLOAD_WITHIN + UPLOAD_MIB_WITHIN * u32::try_from((came >> 20) + 1).unwrap_or(u32::MAX);
+        }
         let left = self.until.checked_duration_since(Instant::now()).filter(|left| !left.is_zero())
             .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::TimedOut))?;
         self.stream.set_read_timeout(Some(left.min(IDLE)))?;
@@ -202,9 +216,15 @@ fn framed(reader: &mut impl BufRead, request: &Request, most: u64, into: &mut im
             size += piece;
             if !line(reader, 2)?.is_empty() { return Err(400) }
         }
-        // What may trail the last piece: read to the empty line, not used.
-        while !line(reader, 1024)?.is_empty() {}
-        return Ok(size);
+        // What may trail the last piece: read to the empty line, not used — a little of it, not a stream of lines.
+        let mut trailing = 0;
+        for _ in 0..=TRAILER_LINES { // `TRAILER_LINES` lines, then the empty one
+            let line = line(reader, 1024)?;
+            if line.is_empty() { return Ok(size) }
+            trailing += line.len() + 2;
+            if trailing > TRAILER { return Err(431) }
+        }
+        return Err(431);
     }
     let length = length(request)?.unwrap_or(0);
     if length > most { return Err(413) }
@@ -294,12 +314,13 @@ impl Drop for Coming<'_> {
 }
 
 /// The bytes written to a file, and their sha256.
-struct Hashed { file: std::fs::File, hash: sha2::Sha256 }
+struct Hashed<'a> { file: std::fs::File, hash: sha2::Sha256, came: &'a AtomicU64 }
 
-impl Write for Hashed {
+impl Write for Hashed<'_> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         let n = self.file.write(bytes)?;
         sha2::Digest::update(&mut self.hash, &bytes[..n]);
+        self.came.fetch_add(n as u64, Ordering::Relaxed);
         Ok(n)
     }
     fn flush(&mut self) -> std::io::Result<()> { self.file.flush() }
@@ -337,8 +358,8 @@ impl Uploads {
     }
 
     /// The body, into a file of this folder: what is kept and answered, or a status for a body that didn't
-    /// all come. What was written of it is gone then.
-    fn receive(&self, reader: &mut impl BufRead, request: &Request, owner: &str) -> Result<String, u16> {
+    /// all come. What was written of it is gone then. `came` counts its bytes as they are written.
+    fn receive(&self, reader: &mut impl BufRead, request: &Request, owner: &str, came: &AtomicU64) -> Result<String, u16> {
         let id = hex(&crate::hold::random::<16>().map_err(|_| 507u16)?);
         let path = self.folder.join(format!("{id}.ipa"));
         let mut options = std::fs::OpenOptions::new();
@@ -352,7 +373,7 @@ impl Uploads {
         }.map_err(|_| 507u16)?;
         // Removed with its file, however this ends.
         let mut upload = Upload { id, owner: owner.to_string(), sha256: String::new(), path };
-        let mut into = Hashed { file, hash: <sha2::Sha256 as sha2::Digest>::new() };
+        let mut into = Hashed { file, hash: <sha2::Sha256 as sha2::Digest>::new(), came };
         let size = framed(reader, request, self.most, &mut into)?;
         into.flush().map_err(|_| 507u16)?;
         upload.sha256 = hex(&sha2::Digest::finalize(into.hash));
@@ -406,7 +427,7 @@ impl Uploads {
     pub fn put(&self, owner: &str, bytes: &[u8]) -> (String, String) {
         let request = Request { method: "PUT".into(), path: "/upload".into(), headers: vec![("content-length".into(), bytes.len().to_string())] };
         let _coming = self.coming().unwrap();
-        let said: Value = serde_json::from_str(&self.receive(&mut &bytes[..], &request, owner).unwrap()).unwrap();
+        let said: Value = serde_json::from_str(&self.receive(&mut &bytes[..], &request, owner, &AtomicU64::new(0)).unwrap()).unwrap();
         (said["upload"].as_str().unwrap().into(), said["sha256"].as_str().unwrap().into())
     }
 }
@@ -632,7 +653,7 @@ fn linger(mut stream: &TcpStream) {
 fn served(stream: &mut TcpStream, s: &Shared, from: IpAddr, began: Instant, who: &mut String, what: &mut String) -> String {
     let _ = stream.set_write_timeout(Some(WRITE));
     let Ok(read) = stream.try_clone() else { return "gone".into() };
-    let mut reader = BufReader::new(Timed { stream: read, until: began + s.head_within });
+    let mut reader = BufReader::new(Timed { stream: read, until: began + s.head_within, pace: None });
     let mut refuse = |status: u16, extra: &str, body: &str| { respond(stream, status, extra, body); status.to_string() };
     let request = match head(&mut reader) { Ok(request) => request, Err(status) => return refuse(status, "", "") };
     *what = format!("{} {}", request.method, request.path);
@@ -669,12 +690,12 @@ fn served(stream: &mut TcpStream, s: &Shared, from: IpAddr, began: Instant, who:
         let too_big = format!("{} MiB at most: the server's --max-upload sets it\n", uploads.most >> 20);
         if length.is_some_and(|length| length > uploads.most) { return refuse(413, "", &too_big) }
         let Some(_coming) = uploads.coming() else { return refuse(409, "", "another upload is coming in: try again once it is in\n") };
-        let mib = length.unwrap_or(uploads.most).div_ceil(1 << 20);
-        reader.get_mut().until = Instant::now() + BODY_WITHIN + UPLOAD_MIB_WITHIN * u32::try_from(mib).unwrap_or(u32::MAX);
+        let came = Arc::new(AtomicU64::new(0));
+        reader.get_mut().pace = Some((Instant::now(), came.clone()));
         if request.header("expect").is_some_and(|e| e.eq_ignore_ascii_case("100-continue")) {
             let _ = stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n");
         }
-        let (status, answer) = uploads.receive(&mut reader, &request, &whois.node.id).map_or_else(|status| (status, if status == 413 { too_big } else { String::new() }), |answer| (200, answer));
+        let (status, answer) = uploads.receive(&mut reader, &request, &whois.node.id, &came).map_or_else(|status| (status, if status == 413 { too_big } else { String::new() }), |answer| (200, answer));
         respond(stream, status, "", &answer);
         return if status == 200 { "ok".into() } else { status.to_string() };
     }
@@ -830,6 +851,8 @@ mod tests {
         let chunked = "Transfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n2;x=y\r\nde\r\n0\r\nTrailer: t\r\n\r\n";
         assert_eq!(parsed(&format!("POST /mcp HTTP/1.1\r\n{chunked}")).unwrap().1, b"abcde");
         assert_eq!(parsed(&format!("POST /mcp HTTP/1.1\r\nContent-Length: 99\r\n{chunked}")).unwrap().1, b"abcde");
+        let trailed = format!("POST /mcp HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx\r\n0\r\n{}\r\n", "x-pad: 1\r\n".repeat(TRAILER_LINES));
+        assert_eq!(parsed(&trailed).unwrap().1, b"x");
         for (raw, status) in [
             ("POST /mcp HTTP/1.1\r\nContent-Length: 5\r\nContent-Length: 5\r\n\r\nhello", 400),
             ("POST /mcp HTTP/1.1\r\nContent-Length: -1\r\n\r\n", 400),
@@ -837,6 +860,7 @@ mod tests {
             ("POST /mcp HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n11\r\n", 413),
             ("POST /mcp HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nffffffffffffffff\r\n", 413),
             ("POST /mcp HTTP/1.1\r\nTransfer-Encoding: gzip\r\n\r\n", 501),
+            (&*Box::leak(format!("POST /mcp HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx\r\n0\r\n{}\r\n", "x-pad: 1\r\n".repeat(TRAILER_LINES + 1)).into_boxed_str()), 431),
             ("POST /mcp HTTP/1.1\r\nContent-Length: 5\r\n\r\nhel", 400),
             ("POST /mcp HTTP/1.1\r\nNo colon\r\n\r\n", 400),
             ("POST /mcp\r\n\r\n", 400),
@@ -1104,6 +1128,47 @@ mod tests {
         let mut answer = String::new();
         let _ = stream.read_to_string(&mut answer);
         answer
+    }
+
+    #[test]
+    fn an_upload_trickling_in_doesnt_hold_the_slot_for_the_length_it_says() {
+        let uploads = Uploads::new(128 << 20).unwrap();
+        let at = started_with(None, ci, Some(uploads.clone()));
+        // Said to be 64 MiB, then a byte every 400 ms, each within IDLE: cut off by what came, not given 2 s a MiB said.
+        let began = Instant::now();
+        let mut slow = TcpStream::connect(at).unwrap();
+        slow.write_all(format!("PUT /upload HTTP/1.1\r\nHost: {at}\r\nContent-Length: {}\r\n\r\n", 64 << 20).as_bytes()).unwrap();
+        while began.elapsed() < Duration::from_secs(10) && slow.write_all(b"x").is_ok() {
+            std::thread::sleep(Duration::from_millis(400));
+            slow.set_read_timeout(Some(Duration::from_millis(1))).unwrap();
+            let mut peek = [0u8; 16];
+            if matches!(slow.peek(&mut peek), Ok(n) if n > 0) { break }
+        }
+        slow.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut answer = String::new();
+        let _ = slow.read_to_string(&mut answer);
+        assert!(answer.starts_with("HTTP/1.1 408") && began.elapsed() < Duration::from_secs(6), "{answer} after {:?}", began.elapsed());
+        // The slot is free again.
+        assert!(put(at, "Content-Length: 1\r\n", b"x").contains(" 200 "));
+        // Chunked, its framing (a long extension to each byte) coming fast: 3 MiB of it buys no time, only bytes do.
+        let began = Instant::now();
+        let mut framing = TcpStream::connect(at).unwrap();
+        framing.write_all(format!("PUT /upload HTTP/1.1\r\nHost: {at}\r\nTransfer-Encoding: chunked\r\n\r\n").as_bytes()).unwrap();
+        let piece = format!("1;{}\r\nx\r\n", "e".repeat(1000));
+        let mut sent = 0;
+        while began.elapsed() < Duration::from_secs(10) && framing.write_all(piece.as_bytes()).is_ok() {
+            sent += piece.len();
+            if sent > 3 << 20 {
+                std::thread::sleep(Duration::from_millis(100));
+                let _ = framing.set_read_timeout(Some(Duration::from_millis(1)));
+                let mut peek = [0u8; 16];
+                if matches!(framing.peek(&mut peek), Ok(n) if n > 0) { break }
+            }
+        }
+        let _ = framing.set_read_timeout(Some(Duration::from_secs(5)));
+        let mut answer = String::new();
+        let _ = framing.read_to_string(&mut answer);
+        assert!(answer.starts_with("HTTP/1.1 408") && began.elapsed() < Duration::from_secs(5), "{answer} after {:?}", began.elapsed());
     }
 
     #[test]

@@ -185,7 +185,7 @@ fn tools(remote: bool, installs: bool) -> Value {
             tool("install", "Start installing an app built and signed for this device: the path, on this machine, of an .ipa or an .app folder. It ends the app's running processes first. It answers at once; install_status says when the app is in (a megabyte takes a few seconds, a large app minutes), and until then other calls on the device answer that it is installing.",
                  json!({ "path": { "type": "string" } }), &["path"])
         },
-        tool("install_status", "How the device's install goes: still going (for how long), done (with the app's bundle identifier, for launch), or why it failed. Given the id install answered (install <id>), of that install alone: another begun since is an error.",
+        tool("install_status", "How the device's install goes: still going (for how long), done (with the app's bundle identifier, for launch), or why it failed. Given the id install answered (install <id>), of that install, among the device's last 16; without it, of the latest.",
              json!({ "install": { "type": "string", "description": "The id install answered with" } }), &[]),
         tool("launch", "Launch an app on the device by its bundle identifier (one already running is ended first).",
              json!({ "bundle": { "type": "string" } }), &["bundle"]),
