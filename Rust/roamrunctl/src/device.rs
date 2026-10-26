@@ -348,8 +348,9 @@ pub fn said(answer: String) -> Result<serde_json::Value, String> {
 /// Whether a look comes from the screen stream: on macOS, which decodes it, unless ROAMRUNCTL_LOOK=screenshot.
 /// The device lists a running stream as screen sharing.
 pub fn streams() -> bool {
-    cfg!(target_os = "macos") && std::env::var("ROAMRUNCTL_LOOK").as_deref() != Ok("screenshot")
+    cfg!(target_os = "macos") && std::env::var(LOOK).as_deref() != Ok("screenshot")
 }
+pub const LOOK: &str = "ROAMRUNCTL_LOOK";
 
 /// The screen as a picture. From the stream (see `streams`): the display's own way up (`native`), and no
 /// full-size PNG to wait for. Else, or where the device refuses the stream (during a call), its PNG, turned as
@@ -373,9 +374,24 @@ pub fn picture(device: &Device) -> Result<Picture, String> {
     };
     #[cfg(not(target_os = "macos"))]
     let stream: Option<String> = None;
-    let png = device.screenshot().map_err(|why| match stream { Some(stream) => format!("{why} (and the screen stream: {stream})"), None => why })?;
+    screenshot(device).map_err(|why| match stream { Some(stream) => format!("{why} (and the screen stream: {stream})"), None => why })
+}
+
+/// The device's PNG, turned as its interface is.
+pub fn screenshot(device: &Device) -> Result<Picture, String> {
+    let png = device.screenshot()?;
     let image = image::load_from_memory_with_format(&png, image::ImageFormat::Png).map_err(|e| format!("the device's picture couldn't be read: {e}"))?;
     Ok(Picture { image, native: false })
+}
+
+/// A stream picture cut to the screen (see `cut`); where it can't be (the screen's size unsaid, or a frame that
+/// doesn't fit it), the PNG instead: points by the uncut frame would land short by its padding.
+pub fn screen_picture(device: &Device, picture: Picture, screen: Option<(u32, u32)>) -> Result<Picture, String> {
+    if !picture.native { return Ok(picture) }
+    match cut(picture.image, screen) {
+        Some(image) => Ok(Picture { image, native: true }),
+        None => screenshot(device),
+    }
 }
 
 /// The screen's size by the device's own word, as a stream picture is cut to; None where it doesn't say.
@@ -398,12 +414,9 @@ pub fn fit(frame: (u32, u32), screen: Option<(u32, u32)>) -> Option<(u32, u32)> 
     })
 }
 
-/// A stream picture without the stream's padding (see `fit`); one that doesn't fit is left alone.
-pub fn cut(image: image::DynamicImage, screen: Option<(u32, u32)>) -> image::DynamicImage {
-    match fit((image.width(), image.height()), screen) {
-        Some((w, h)) => image.crop_imm(0, 0, w, h),
-        None => image,
-    }
+/// A stream picture without the stream's padding (see `fit`); None where it doesn't fit.
+pub fn cut(image: image::DynamicImage, screen: Option<(u32, u32)>) -> Option<image::DynamicImage> {
+    fit((image.width(), image.height()), screen).map(|(w, h)| image.crop_imm(0, 0, w, h))
 }
 
 /// The picture, its longer side LONGER at most, as `format`; and its size.
@@ -606,8 +619,8 @@ fn launched(device: &Device, name: &str, bundle: &str) -> Result<String, String>
 fn look(name: &str, file: Option<PathBuf>) -> Result<String, String> {
     let device = opened(name)?;
     let picture = picture(&device)?;
-    let image = if picture.native { cut(picture.image, screen_size(&device)) } else { picture.image };
-    let (png, width, height) = fitted(image, image::ImageFormat::Png)?;
+    let screen = if picture.native { screen_size(&device) } else { None };
+    let (png, width, height) = fitted(screen_picture(&device, picture, screen)?.image, image::ImageFormat::Png)?;
     let path = file.unwrap_or_else(|| std::env::temp_dir().join(format!("roamrunctl-{}-{}.png", named(name).unwrap_or("device"), std::process::id())));
     // Whatever is on the screen is in it: the owner's only.
     replace_whole(&path, &png).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -683,7 +696,13 @@ pub fn run(command: Command) -> i32 {
             Ok(None) => opened(&name).and_then(|device| launched(&device, &name, &bundle)),
             Err(why) => Err(why),
         },
-        Command::Mcp { http: None, .. } => return crate::mcp::Server::default().serve(),
+        Command::Mcp { http: None, .. } => {
+            match crate::at_stop() {
+                Ok(stop) => stop.then(|| {}),
+                Err(why) => { note!("roamrunctl: {why}"); return 1 }
+            }
+            return crate::mcp::Server::default().serve();
+        }
         Command::Mcp { http: Some(port), allow, token_file, allow_install, max_upload, devices } => allow.iter().map(|a| crate::http::allow(a)).collect::<Result<Vec<_>, _>>()
             .and_then(|allowed| Ok(crate::http::Options { port, allowed, token: token_file.as_deref().map(crate::http::token).transpose()?, devices, uploads: allow_install.then_some(max_upload << 20) }))
             .and_then(crate::http::serve),
@@ -977,13 +996,14 @@ mod tests {
     #[test]
     fn a_stream_picture_loses_its_padding_either_way_round_and_another_size_is_left() {
         let picture = image::DynamicImage::new_rgb8;
-        let size = |image: image::DynamicImage| (image.width(), image.height());
-        assert_eq!(size(cut(picture(1878, 2688), Some((1878, 2670)))), (1878, 2670));
-        assert_eq!(size(cut(picture(2688, 1878), Some((1878, 2670)))), (2670, 1878));
-        assert_eq!(size(cut(picture(1408, 2016), Some((1878, 2670)))), (1408, 2002), "scaled down by the stream, then padded");
-        assert_eq!(size(cut(picture(1200, 2700), Some((1178, 2556)))), (1200, 2700), "more than 32 over: not this screen's");
-        assert_eq!(size(cut(picture(1320, 1920), Some((1878, 2670)))), (1320, 1920), "the other screen's shape: left alone");
-        assert_eq!(size(cut(picture(1878, 2688), None)), (1878, 2688));
+        let size = |image: Option<image::DynamicImage>| image.map(|image| (image.width(), image.height()));
+        assert_eq!(size(cut(picture(1878, 2688), Some((1878, 2670)))), Some((1878, 2670)));
+        assert_eq!(size(cut(picture(2688, 1878), Some((1878, 2670)))), Some((2670, 1878)));
+        assert_eq!(size(cut(picture(1408, 2016), Some((1878, 2670)))), Some((1408, 2002)), "scaled down by the stream, then padded");
+        // Not cut, and so not used: the look is the PNG then.
+        assert_eq!(size(cut(picture(1200, 2700), Some((1178, 2556)))), None, "more than 32 over: not this screen's");
+        assert_eq!(size(cut(picture(1320, 1920), Some((1878, 2670)))), None, "the other screen's shape");
+        assert_eq!(size(cut(picture(1878, 2688), None)), None, "the screen's size unsaid");
     }
 
     #[test]

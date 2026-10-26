@@ -532,18 +532,18 @@ pub fn serve(options: Options) -> Result<String, String> {
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     // At stop, what was uploaded goes with its folder: Ctrl-C, and what a closed terminal sends. Set up before the
     // folder is made, so that a failure here leaves none.
+    let stop = crate::at_stop()?;
     let uploads = match options.uploads {
         Some(most) => {
-            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
-            let mut stop = runtime.block_on(async { crate::stops() })?;
             let uploads = Uploads::new(most)?;
-            let (ended, kept) = (uploads.clone(), uploads.clone());
-            std::thread::spawn(move || { let _ = runtime.block_on(stop.changed()); ended.end(); std::process::exit(130) });
+            let kept = uploads.clone();
             std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(60)); kept.sweep(Instant::now()) });
             Some(uploads)
         }
         None => None,
     };
+    let ended = uploads.clone();
+    stop.then(move || if let Some(ended) = ended { ended.end() });
     let who: Vec<&str> = options.allowed.iter().map(|a| match a { Allow::Tag(s) | Allow::Login(s) => s.as_str() }).collect();
     note!("roamrunctl: the MCP tools for {} at http://{own}:{port}/mcp, for {} on the tailnet{}{}. Ctrl-C ends it. What is sent and shown passes through whatever lies between (a cloud's proxy sees images and text).",
         options.devices.join(", "), who.join(", "), if options.token.is_some() { ", with the token" } else { "" },

@@ -211,6 +211,11 @@ fn main() {
         note!("roamrunctl: {PROXY}: {why}");
         std::process::exit(2);
     }
+    // Any other value would be taken for none: a look would stream though it was asked not to.
+    if let Some(look) = std::env::var(device::LOOK).ok().filter(|look| !look.is_empty() && look != "screenshot") {
+        note!("roamrunctl: {}={look:?}: the one value taken is `screenshot` (a look by the device's PNG)", device::LOOK);
+        std::process::exit(2);
+    }
     let args = match cli.command {
         Command::Pair { command: Pair::Introduce(args) } => args,
         Command::Pair { command: Pair::Control { to, with, name, passphrase } } => match match (to, with) {
@@ -532,6 +537,28 @@ fn on_lan(interfaces: &[(Ipv4Addr, u8, bool)], toward: Ipv4Addr, wanted: Option<
 
 /// Set once this is told to stop: Ctrl-C, and what a closed terminal or a dropped ssh session
 /// sends. Without the latter two the announcement would stay on the LAN for its 75 minutes.
+/// Ctrl-C, and what a closed terminal sends, listened for from now on.
+struct AtStop { runtime: tokio::runtime::Runtime, stop: watch::Receiver<bool> }
+
+fn at_stop() -> Result<AtStop, String> {
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+    let stop = runtime.block_on(async { stops() })?;
+    Ok(AtStop { runtime, stop })
+}
+
+impl AtStop {
+    /// Then: `then`, the streams looks left stopped (see `roamrun_device::stop_streams`), and the end.
+    fn then(self, then: impl FnOnce() + Send + 'static) {
+        let AtStop { runtime, mut stop } = self;
+        std::thread::spawn(move || {
+            let _ = runtime.block_on(stop.changed());
+            then();
+            roamrun_device::stop_streams();
+            std::process::exit(130)
+        });
+    }
+}
+
 fn stops() -> Result<watch::Receiver<bool>, String> {
     let (tx, rx) = watch::channel(false);
     macro_rules! on {
