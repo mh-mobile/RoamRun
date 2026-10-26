@@ -72,10 +72,12 @@ enum DeviceControlWire {
         case noApp, message(String)
         /// The app may well be running: this process isn't let through to it.
         case keptOut(String)
+        /// Given up, or broken off, before the request was all sent: the app didn't act on it.
+        case notSent(String)
         var description: String {
             switch self {
             case .noApp: "the RoamRun app isn't running"
-            case .message(let m): m
+            case .message(let m), .notSent(let m): m
             case .keptOut(let why):
                 "this process isn't allowed to reach the RoamRun app (\(why)): it runs in a sandbox that keeps it from the app's socket. Run the command outside the sandbox, or use the MCP tools (`roamrun mcp`, started by the agent itself)"
             }
@@ -90,12 +92,15 @@ enum DeviceControlWire {
             .st_ino
     }
 
-    /// An app to install that was left there two minutes or more ago: by an install that never ended.
+    /// An app to install that was left there two minutes or more ago (by an install that never ended), or an upload a
+    /// day or more ago (by a `roamrun mcp --http --allow-install` that was killed).
     static func leftToInstall(_ entry: URL, now: Date = Date()) -> Bool {
-        guard entry.lastPathComponent.hasPrefix("install-") else { return false }
-        let changed = (try? entry.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ??
+        let name = entry.lastPathComponent
+        let age: TimeInterval = name.hasPrefix("install-") ? 120 : name.hasPrefix("upload-") ? 24 * 60 * 60 : .infinity
+        // From the file, not a URL's cache of it.
+        let changed = (try? FileManager.default.attributesOfItem(atPath: entry.path)[.modificationDate] as? Date) ??
             .distantPast
-        return now.timeIntervalSince(changed) >= 120
+        return now.timeIntervalSince(changed) >= age
     }
 
     /// The longest a line may be: a long paste, or many elements.
@@ -300,7 +305,7 @@ enum DeviceControlWire {
                     wait: TimeInterval = answerWait) throws -> Response
     {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw WireError.message("no socket") }
+        guard fd >= 0 else { throw WireError.notSent("no socket") }
         defer { close(fd) }
         noSIGPIPE(fd)
         readWait(fd, wait)
@@ -312,9 +317,9 @@ enum DeviceControlWire {
             throw why == EPERM || why == EACCES ? WireError.keptOut(String(cString: strerror(why))) : WireError.noApp
         }
         defer { asking?.ended() } // before the close above: a number given up later isn't this one's
-        guard asking?.began(fd) ?? true else { throw WireError.message("taken back") }
+        guard asking?.began(fd) ?? true else { throw WireError.notSent("taken back") }
         guard writeLine(request, to: fd)
-        else { throw WireError.message("couldn't send the request (a number that isn't one?)") }
+        else { throw WireError.notSent("couldn't send the request (a number that isn't one?)") }
         let line = readLine(fd)
         guard let response = try? JSONDecoder().decode(Response.self, from: line) else {
             throw WireError.message(line.isEmpty ? "the app didn't answer" : "the app's answer couldn't be read")

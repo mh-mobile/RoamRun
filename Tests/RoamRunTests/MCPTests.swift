@@ -120,6 +120,8 @@ import ImageIO
     }
     #expect(try failed("not json").code == -32700)
     #expect(try failed("[]").code == -32600)
+    #expect(try failed(#"{"jsonrpc":"2.0","id":-1e400,"method":"ping"}"#).code == -32700)
+    #expect(try failed(#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":1e400}}"#).code == -32700)
     let noMethod = try failed(#"{"jsonrpc":"2.0","id":9}"#)
     #expect(noMethod.code == -32600 && noMethod.id as? Int == 9)
     #expect(try failed(#"{"jsonrpc":"2.0","id":10,"method":"no/such"}"#).code == -32601)
@@ -459,4 +461,216 @@ import ImageIO
         #expect(String(decoding: answer, as: UTF8.self).contains(expected))
         #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == ["App.ipa"])
     }
+}
+
+/// Over HTTP with `--allow-install`: `install` takes an upload by its id and sha256, made ready where the app takes it.
+@Test func anInstallFromAnUploadAsksTheAppWithItsPath() throws {
+    var asked: DeviceControlWire.Request?
+    var claimed: (String, String)?
+    var settled: Bool?
+    let server = DeviceMCP(profiles: {
+        [profile("iPhone")]
+    }, looks: FileManager.default.temporaryDirectory, installsFromPaths: false, claimUpload: { id, sha256 in
+        claimed = (id, sha256)
+        return ("/ready/install-x.ipa", { taken in
+            settled = taken
+        })
+    }) { request in
+        asked = request
+        switch request.op {
+        case "state": return .init(ok: true, allowed: true)
+        case "install_status": return .init(
+                ok: true,
+                said: "no install was begun on iPhone since the RoamRun app started"
+            )
+        default: return .init(ok: true, install: "cd34", said: "installing began (install cd34)")
+        }
+    }
+    let listed = try #require(server.handle(Data(#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#.utf8)))
+    let tools = try #require(
+        ((try JSONSerialization.jsonObject(with: listed) as? [String: Any])?["result"] as? [String: Any])?["tools"]
+            as? [[String: Any]]
+    )
+    let install = try #require(tools.first {
+        $0["name"] as? String == "install"
+    })
+    #expect((install["inputSchema"] as? [String: Any])?["required"] as? [String] == ["device", "upload", "sha256"])
+    #expect(tools.contains {
+        $0["name"] as? String == "install_status"
+    })
+    let answer = try #require(server.handle(Data(
+        #"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"install","arguments":{"device":"iPhone","upload":"u1","sha256":"ab"}}}"#
+            .utf8
+    )))
+    #expect(String(decoding: answer, as: UTF8.self).contains("install cd34"))
+    #expect(claimed?.0 == "u1" && claimed?.1 == "ab" && settled == true) // taken by the app: used up
+    #expect(asked?.op == "install" && asked?.path == "/ready/install-x.ipa")
+    let going = try #require(server.handle(Data(
+        #"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"install_status","arguments":{"device":"iPhone","install":"cd34"}}}"#
+            .utf8
+    )))
+    #expect(!String(decoding: going, as: UTF8.self).contains(#""isError":true"#) && asked?.op == "install_status")
+    // Neither a path nor install_status where installs aren't offered at all.
+    let none = DeviceMCP(profiles: {
+        [profile("iPhone")]
+    }, looks: FileManager.default.temporaryDirectory, installsFromPaths: false) { _ in
+        .init(ok: true, said: "x")
+    }
+    let status = try #require(none.handle(Data(
+        #"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"install_status","arguments":{"device":"iPhone"}}}"#
+            .utf8
+    )))
+    #expect(String(decoding: status, as: UTF8.self).contains(#""isError":true"#))
+}
+
+/// Over HTTP: an install the app would refuse (switched off, already installing) is refused before the upload is used
+/// up, which stays for another try.
+@Test func anUploadIsntUsedUpByAnInstallTheAppWouldRefuse() throws {
+    for (allowed, latest) in [
+        (false, "no install was begun"),
+        (true, "installing com.example.App on iPhone (3 s so far)")
+    ] {
+        var claimed = false
+        let server = DeviceMCP(profiles: {
+            [profile("iPhone")]
+        }, looks: FileManager.default.temporaryDirectory, installsFromPaths: false, claimUpload: { _, _ in
+            claimed = true
+            return ("/ready/install-x.ipa", { _ in
+            })
+        }) { request in
+            switch request.op {
+            case "state": return .init(ok: true, allowed: allowed)
+            case "install_status": return .init(ok: true, said: latest)
+            default: return .init(ok: true, install: "cd34", said: "began")
+            }
+        }
+        let answer = try #require(server.handle(Data(
+            #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"install","arguments":{"device":"iPhone","upload":"u1","sha256":"ab"}}}"#
+                .utf8
+        )))
+        let said = String(decoding: answer, as: UTF8.self)
+        #expect(said.contains(#""isError":true"#) && said.contains(allowed ? "installing" : "switched off"))
+        #expect(!claimed)
+    }
+}
+
+/// A latest install that failed doesn't hold the next one back: only one going does.
+@Test func aFailedInstallDoesntHoldBackTheNextFromAnUpload() throws {
+    var claimed = false
+    let server = DeviceMCP(profiles: {
+        [profile("iPhone")]
+    }, looks: FileManager.default.temporaryDirectory, installsFromPaths: false, claimUpload: { _, _ in
+        claimed = true
+        return ("/ready/install-x.ipa", { _ in
+        })
+    }) { request in
+        switch request.op {
+        case "state": return .init(ok: true, allowed: true)
+        case "install_status":
+            return .failure("installing com.example.App on iPhone failed after 3 s (of the 300 s it was given): no")
+        default: return .init(ok: true, install: "ef56", said: "began (install ef56)")
+        }
+    }
+    let answer = try #require(server.handle(Data(
+        #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"install","arguments":{"device":"iPhone","upload":"u1","sha256":"ab"}}}"#
+            .utf8
+    )))
+    #expect(String(decoding: answer, as: UTF8.self).contains("install ef56") && claimed)
+}
+
+/// An install from an upload the app doesn't begin (refused, or its request given up) gives the upload back.
+@Test func anUploadIsGivenBackWhenTheAppDoesntBeginItsInstall() throws {
+    var settled: Bool?
+    let server = DeviceMCP(profiles: {
+        [profile("iPhone")]
+    }, looks: FileManager.default.temporaryDirectory, installsFromPaths: false, claimUpload: { _, _ in
+        ("/ready/install-x.ipa", { taken in
+            settled = taken
+        })
+    }) { request in
+        switch request.op {
+        case "state": return .init(ok: true, allowed: true)
+        case "install_status": return .init(ok: true, said: "no install was begun")
+        default: return .failure(DeviceControlHub.nobodyWaits)
+        }
+    }
+    let answer = try #require(server.handle(Data(
+        #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"install","arguments":{"device":"iPhone","upload":"u1","sha256":"ab"}}}"#
+            .utf8
+    )))
+    #expect(String(decoding: answer, as: UTF8.self).contains(#""isError":true"#))
+    #expect(settled == false)
+}
+
+/// The install folder of an upload is removed where the app surely didn't take it (refused), and kept where its answer
+/// was lost (it may be installing from it).
+@Test func anUploadsInstallFolderIsKeptWhenTheAnswerIsLost() throws {
+    // Refused (removed), answer lost (kept), not sent at all or kept out by a sandbox (removed).
+    for (how, kept) in [("refused", false), ("lost", true), ("not sent", false), ("kept out", false)] {
+        let own = FileManager.default.temporaryDirectory.appendingPathComponent("install-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: own, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: own) }
+        let server = DeviceMCP(profiles: {
+            [profile("iPhone")]
+        }, looks: FileManager.default.temporaryDirectory, installsFromPaths: false, claimUpload: { _, _ in
+            (own.appendingPathComponent("app.ipa").path, { _ in
+            })
+        }) { request in
+            switch request.op {
+            case "state": return .init(ok: true, allowed: true)
+            case "install_status": return .init(ok: true, said: "no install was begun")
+            default:
+                switch how {
+                case "refused": return .failure("device control is switched off for this device")
+                case "lost": throw DeviceControlWire.WireError.message("the app didn't answer")
+                case "kept out": throw DeviceControlWire.WireError.keptOut("Operation not permitted")
+                default: throw DeviceControlWire.WireError.notSent("taken back")
+                }
+            }
+        }
+        _ = server.handle(Data(
+            #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"install","arguments":{"device":"iPhone","upload":"u1","sha256":"ab"}}}"#
+                .utf8
+        ))
+        #expect(FileManager.default.fileExists(atPath: own.path) == kept, "\(how)")
+    }
+}
+
+/// Over HTTP, what the app says of an upload's file in RoamRun's own folder names it "the upload": not a path on this
+/// Mac, whose folders carry the user's name. Over stdio the path is the caller's own and stays.
+@Test func anUploadsPathIsntShownToACallerElsewhere() throws {
+    let looks = FileManager.default.temporaryDirectory.appendingPathComponent("control-\(UUID().uuidString)")
+    let file = looks.appendingPathComponent("install-0A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9/app.ipa").path
+    let invalid = "\(file) isn't an app's .ipa: Payload/x.app/Info.plist isn't a plist"
+    func server(uploads: Bool) -> DeviceMCP {
+        DeviceMCP(profiles: {
+            [profile("iPhone")]
+        }, looks: looks, installsFromPaths: !uploads, claimUpload: uploads ? { _, _ in
+            (file, { _ in
+            })
+        } : nil) { request in
+            switch request.op {
+            case "state": return .init(ok: true, allowed: true)
+            case "install_status" where request.install == nil: return .init(ok: true, said: "no install was begun")
+            case "install_status": return .failure(
+                    "installing app.ipa on iPhone failed after 1 s: install: \(file): no"
+                )
+            default: return .failure(invalid)
+            }
+        }
+    }
+    func said(_ server: DeviceMCP, _ tool: String, _ arguments: String) throws -> String {
+        let answer = try #require(server.handle(Data(
+            #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"\#(tool)","arguments":\#(arguments)}}"#
+                .utf8
+        )))
+        return String(decoding: answer, as: UTF8.self)
+    }
+    let remote = server(uploads: true)
+    let install = try said(remote, "install", #"{"device":"iPhone","upload":"u1","sha256":"ab"}"#)
+    #expect(install.contains("the upload isn't an app's .ipa") && !install.contains("install-0A1B"))
+    let status = try said(remote, "install_status", #"{"device":"iPhone","install":"cd34"}"#)
+    #expect(status.contains("install: the upload: no") && !status.contains(looks.lastPathComponent))
+    let local = server(uploads: false)
+    #expect(try said(local, "install_status", #"{"device":"iPhone","install":"cd34"}"#).contains("install-0A1B"))
 }
