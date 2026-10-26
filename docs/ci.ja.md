@@ -7,13 +7,13 @@ GitHub がホストするランナーで動く GitHub Actions のジョブから
 | | ランナーで roamrunctl を動かす | relay に頼む |
 |---|---|---|
 | デバイスとやりとりするもの | ランナー | 手元のマシン（`roamrunctl mcp --http` を動かす） |
-| CI に置くもの | ペアリング（デバイスの鍵）と Tailscale の OAuth クライアント | relay のトークンと Tailscale の OAuth クライアント |
+| CI に置くもの | ペアリング（デバイスの鍵）と、Tailscale の OAuth クライアントか auth key | relay のトークンと、Tailscale の OAuth クライアントか auth key |
 | ランナーから届く必要がある先 | デバイス（ペアリング用ポートと、デバイスが指定するトンネル用のポート） | relay の 1 つのポート |
 | 動かしておくもの | なし | relay（自分で起動する） |
 
 このページの「relay」は、デバイスの鍵を持ち、`roamrunctl mcp --http` を動かす手元のマシンのことです。Tailscale の DERP によるリレーのことではありません。relay は、ランナーと同じく Tailscale 越しにデバイスへつなぎます。そのため、tailnet のどこに置いてもかまいません。デバイスと同じ Wi-Fi が要るのは、`pair control --to` でペアリングするときだけです。別の場所で作った鍵を取り込む方法もあります（`roamrun key create` のあと `key import`）。relay に頼むやり方では、鍵がそのマシンから出ません。ランナーで動かすやり方では、ジョブの間に手元で動かしておくものがありません。1 つのリポジトリに両方を用意しておくこともできます。
 
-どちらのやり方でも、シークレットを読むワークフローを動かせる人は、デバイスを見て操作できます。ペアリングの鍵なら、そのペアリングがある限りです。relay のトークンなら、relay が動いている間です（relay は、通した呼び出し元にすべてのツールを使わせます）。relay を止めるか、新しいトークンで起動し直せば、そのトークンは使えなくなります。Tailscale の OAuth クライアントを持つ人は、管理画面で取り消されるまで `tag:ci` として tailnet に参加できます。
+どちらのやり方でも、シークレットを読むワークフローを動かせる人は、デバイスを見て操作できます。ペアリングの鍵なら、そのペアリングがある限りです。relay のトークンなら、relay が動いている間です（relay は、通した呼び出し元にすべてのツールを使わせます）。relay を止めるか、新しいトークンで起動し直せば、そのトークンは使えなくなります。Tailscale の OAuth クライアントを持つ人は、管理画面で取り消されるまで `tag:ci` として tailnet に参加できます。auth key なら、期限が切れるか取り消されるまでです。
 
 このページのジョブは、アプリのビルドや署名をしません。CI には、そのデバイス向けに署名済みの `.ipa`（そのデバイスを含む開発用プロファイルで署名したもの）が必要です。`roamrunctl` が確かめるのはアーカイブの構成だけで、署名は確かめずにそのままインストールします。下の実行では、ジョブは自分のリポジトリのリリースから `.ipa` を取得しました（`gh release download`）。
 
@@ -79,6 +79,8 @@ roamrunctl 0.8.1 での CI からの実行は、どれも 2026-10-22（UTC）で
 
 ### Tailscale：タグと OAuth クライアント
 
+Tailnet Lock を有効にした tailnet では、署名した auth key を使います（[下](#auth-key-でも参加できます)）。OAuth クライアントで参加したランナーは、締め出されました。
+
 1. tailnet のポリシー（Access controls）で、CI 用のタグを作ります。
 
    ```json
@@ -100,7 +102,21 @@ roamrunctl 0.8.1 での CI からの実行は、どれも 2026-10-22（UTC）で
     tags: tag:ci
 ```
 
-このアクションは `ping:` も受け付けます。参加したあと、指定した相手につながるまで最大 3 分待つ入力です（経路は、直接か中継かを問いません）。上の実行では、別のステップで `tailscale ping -c 5` を実行しました。こちらは、経路が直接かどうかが出力に出ます。この入力は試していません。
+#### auth key でも参加できます
+
+Settings › Keys で auth key を作ります。Reusable と Ephemeral にし、タグは `tag:ci`、期限は短くします。tailnet が Device approval を求めるなら、Pre-approved もオンにします。Device approval は Tailnet Lock と同時には使えません。Pre-approved は試していません。それを `TS_AUTHKEY` という名前でリポジトリのシークレットに登録します。
+
+```yaml
+- uses: tailscale/github-action@v4
+  with:
+    authkey: ${{ secrets.TS_AUTHKEY }}
+```
+
+タグは鍵に付けたものが使われます（`tags:` は OAuth クライアントのときの入力です）。このアクションは `authkey` を非推奨とし、OAuth クライアントを勧めています。そのため実行の画面に警告が出ますが、処理は続きます。2026-10-26 に GitHub のランナーで試しました。`ubuntu-24.04` と `macos-15` は `tag:ci` として参加し、relay のマシンに届きました（どちらも DERP 経由）。さらに `ubuntu-24.04` のジョブから、relay を通して iPhone Duo にアプリを入れて起動しました。使ったのは roamrun-action v1（roamrunctl 0.9.0）で、relay は 0.11.0 のブランチからビルドした roamrunctl です。relay のログには、アップロード、`install`、`install_status`、`launch` の 4 つが `tag:ci` から届いていました。
+
+[Tailnet Lock](https://tailscale.com/docs/features/tailnet-lock) を有効にした tailnet では、参加したノードは、信頼されたノードの署名を受けるまで、ほかのノードとつながれません。auth key なら、信頼された Tailnet Lock の鍵を持つノードで `tailscale lock sign <鍵>` を一度実行して署名できます。そのとき表示される鍵を CI に渡します（[Tailscale の説明](https://tailscale.com/docs/features/tailnet-lock#add-a-node-using-a-pre-signed-auth-key)、英語）。署名した鍵は、そのまま Tailnet Lock を通ります。鍵を持つ人は、期限が切れるか取り消されるまで、信頼されたノードを足せます。署名ノードの承認は要りません。期限は短くします。漏れた疑いがあれば、管理画面で取り消してください。OAuth クライアントは実行のたびに新しい鍵を作るので、前もって署名できません。2026-10-26 に、Tailnet Lock を有効にした tailnet（署名ノードは 2 台）で試しました。署名した auth key では、`ubuntu-24.04` と `macos-15` が `tag:ci` として参加し、relay のジョブは上と同じく iPhone Duo にアプリを入れて起動しました。OAuth クライアントでは、ランナーは参加しましたが、relay のマシンには届きませんでした（`tailscale ping` が時間切れ）。ランナーで実行した `tailscale lock status` は「This node is LOCKED OUT by Tailnet Lock」と答えました。
+
+このアクションは `ping:` も受け付けます。参加したあと、指定した相手につながるまで最大 3 分待つ入力です（経路は、直接か中継かを問いません）。roamrunctl 0.8.1 と 0.9.0 での実行では、別のステップで `tailscale ping -c 5` を実行しました。こちらは、経路が直接かどうかが出力に出ます。この入力は試していません。
 
 ポリシーが「すべて許可」のままだと、ジョブが動いている間、ランナーは tailnet のどのマシンにも届きます。必要な先だけに届くようにするには、`tag:ci` の grants を書きます。relay に頼むなら、届く先は relay が待ち受ける 1 つのポートだけです。ランナーで動かすなら、デバイスへの TCP 接続を許可します。ペアリング用ポートは 49152〜49167 のどれかです。トンネル用のポートは、接続のたびにデバイスが新しく指定し、範囲も分かっていません。つまり実質は、デバイスのすべての TCP ポートを許可することになります。このように絞ったポリシーは試していません。
 
