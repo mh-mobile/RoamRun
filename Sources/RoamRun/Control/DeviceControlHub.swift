@@ -154,7 +154,6 @@ final class DeviceControlHub: @unchecked Sendable {
         var folder = ""
     }
 
-    /// Whether an install not ended yet, on any device, is installing from `folder`.
     /// What runs longer than a request waits (an answer is waited for 480 s): a copy older than this, left to install
     /// besides what the start sweeps, is no request's.
     static let leftWhileRunning: TimeInterval = 60 * 60
@@ -171,6 +170,7 @@ final class DeviceControlHub: @unchecked Sendable {
         }
     }
 
+    /// Whether an install not ended yet, on any device, is installing from `folder`.
     private func installing(from folder: String) -> Bool {
         lock.withLock {
             installs.values.contains {
