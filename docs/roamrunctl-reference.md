@@ -238,7 +238,7 @@ needed to establish each new device connection.
   while `type` and `paste` still go by it (look → tap a field → type needs one look). Ids
   start from a random number at each start, so one kept from an earlier run isn't taken for
   a later look.
-- Rotation is rejected when reported orientation or image-shape checks detect a mismatch;
+- For a PNG look, rotation is rejected when reported orientation or image-shape checks detect a mismatch;
   it is **not guaranteed** to be detected if the device reports no orientation.
   Tap/swipe coordinates are pixels in the image returned by the last `look`.
 - `type`, `paste`, and `press` act on the currently focused interface. `press` isn't held to a
@@ -253,7 +253,20 @@ needed to establish each new device connection.
 - A queued call cancelled before it starts is not executed; a call already running may
   complete. MCP keeps connections open and reopens a device when its saved association
   changes or its connection fails.
-- `look` and inputs do not establish a persistent video stream or a visible screen-sharing
+- On macOS (0.11.0+), `look` (MCP's and `roamrunctl look`) takes the screen from the device's
+  screen stream and decodes it on this machine, instead of waiting for the device's full-size
+  PNG. On an iPhone Duo over a LAN, with photos on the screen, a look took about 1.2 s this way
+  and 10 to 36 s as a PNG. The device lists the stream as screen sharing, which its user can
+  see, until about five seconds after the last look or action, and some apps' sound goes silent
+  meanwhile, as during RoamRun's looks ([sound-while-looking.md](sound-while-looking.md)). The
+  picture is the display's own way up (portrait on an iPhone Duo held sideways, seen); taps and swipes go
+  by its pixels all the same, and a turn of the device after it isn't checked. During a phone
+  or VoIP call the device refuses the stream (seen during a VoIP call), and the look is the
+  PNG; so is it where the device doesn't say its screen's size, or the frame doesn't fit it
+  (points by the uncut frame would land beside what was meant), and MCP's `look` says so. `ROAMRUNCTL_LOOK=screenshot` always takes the PNG,
+  as before 0.11.0; another value is refused before anything is done. At Ctrl-C, `mcp` and `roamrunctl look` stop a
+  stream a look left before it ends.
+- On Linux and Windows, a look is the device's PNG: the device lists no screen-sharing
   session. Music continued playing during the screen/input tests, but microphone and some
   other interaction scenarios have not been verified.
 
@@ -320,8 +333,10 @@ until Ctrl-C:
 - Once the caller is let in (as for `/mcp`): a method other than `PUT` is 405, no length and
   not chunked 411, a length over the most 413 (before `100 Continue` is sent), and one while
   another is coming in 409. `--max-upload <MiB>` sets the most: 1024 by default, 1 to 4096.
-  The body may take 30 seconds plus 2 seconds a MiB of its length (of the most, when chunked),
-  and nothing may come for 60 seconds at most: then it is refused with 408 and the slot is free.
+  The body has to keep coming (0.11.0+): 30 seconds, and 2 seconds more for each MiB begun,
+  whatever length it says, and nothing may come for 60 seconds at most: else it is refused with
+  408 and the slot is free. What trails a chunked body's last piece, here as for `/mcp`, is 64
+  lines and 8 KiB at most (else 431).
 - One upload is kept: when another begins to come in, from whichever caller, the one kept is
   dropped. It is kept in a folder made
   for this run in the system's temporary folder: mode 0700, the file 0600 (on Windows, the
@@ -551,8 +566,14 @@ against a real device at the time these notes were written:
 - Through MCP: swipe and a paste that goes through (these had been tested outside MCP).
   Installing and launching through MCP on Linux or Windows.
 - On Windows: `pair control --with`, MCP, install, and launch.
-- `mcp --http` from another machine (by a tag or a login), from a cloud, or on Linux or
-  Windows. On macOS it was checked from the machine itself, with the token:
+- On macOS, a look from the screen stream on any device but an iPhone Duo, or over a relay or
+  cellular.
+- `mcp --http` on Windows, or from a cloud other than GitHub Actions. From GitHub Actions' runners
+  (another machine, let in as `tag:ci`) it ran with relays on macOS and on Linux: see
+  [ci.md](ci.md#what-was-run). From another machine let in by a login, on 2026-10-26: an untagged
+  Linux machine of the tailnet passed `scripts/mcp-http-check.py` against a relay on macOS, and sent
+  an upload, `install` and `launch` through it to an iPhone Duo; under `--allow tag:ci` it was
+  refused (403). On macOS it was also checked from the machine itself, with the token:
   `scripts/mcp-http-check.py`; and on an iPhone, look, tap, type, press and `elements`, a tap
   refused after another caller's look, types and pastes refused by an older look, and queued
   calls taken back by closing their connection and by `notifications/cancelled` in a session.
@@ -570,8 +591,9 @@ against a real device at the time these notes were written:
   same upload were refused meanwhile, it was installed after 10 s, the upload's file was gone
   after, and the folder was removed at Ctrl-C. `launch` of it over stdio answered with its pid
   in 1.3 s.
-- `install --relay` and `launch --relay` from another machine, from a cloud, or on Linux or
-  Windows; `install --launch` without a relay; `--timeout` running out. They were run on macOS
+- `launch --relay` from another machine; `install --relay` from a cloud other than GitHub
+  Actions, or on Windows (from GitHub Actions' Linux runners it ran, as did `install --launch`
+  without a relay: [ci.md](ci.md#what-was-run)); `--timeout` running out. They were run on macOS
   from the machine itself,
   against its own `mcp --http` with the token, on the iPhone 15 Pro (iOS 27.0, its app not in
   front): without the token the upload was refused (401) before the `.ipa` was sent; with it,

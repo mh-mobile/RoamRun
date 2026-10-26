@@ -26,8 +26,16 @@ final class DeviceMCP: @unchecked Sendable {
     /// The MCP versions spoken here: initialize answers the one asked for if it is one of them, else the newest.
     static let versions = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"]
 
-    /// Where the app writes a look for this to read: the folder it keeps looks in.
+    /// Where the app writes a look for this to read: the folder it keeps looks in (and takes an app to install from).
     private let looks: URL
+    /// Whether `install` is offered, from a path on this Mac: over stdio, not to a caller elsewhere.
+    let installsFromPaths: Bool
+    /// Over HTTP with `--allow-install`: `install` from an upload, by its id and sha256 — made ready where the app
+    /// takes it from, its path answered.
+    let claimUpload: Claim?
+    /// An upload handed to an install, by its id and sha256: the path the app takes it from, and what to say once the
+    /// app has answered (taken, or not: then the upload is kept again).
+    typealias Claim = (String, String) throws -> (path: String, settle: (_ taken: Bool) -> Void)
     /// The request to the app under way, which `ask` makes with it: given up when its call is taken back.
     private let asking: DeviceControlWire.Asking
     private let work = DispatchQueue(label: "roamrun.mcp")
@@ -47,11 +55,15 @@ final class DeviceMCP: @unchecked Sendable {
     init(
         profiles: @escaping () -> [DeviceProfile],
         looks: URL,
+        installsFromPaths: Bool = true,
+        claimUpload: Claim? = nil,
         asking: DeviceControlWire.Asking = .init(),
         ask: @escaping Ask
     ) {
         self.saved = profiles
         self.looks = looks
+        self.installsFromPaths = installsFromPaths
+        self.claimUpload = claimUpload
         self.asking = asking
         self.ask = ask
     }
@@ -147,6 +159,8 @@ final class DeviceMCP: @unchecked Sendable {
             -32600,
             "one request at a time, as an object"
         ) }
+        // 1e400 reads as infinity, which can't be written back: answering it would end the process.
+        guard JSONSerialization.isValidJSONObject(object) else { return failed(NSNull(), -32700, "a number too large") }
         guard let id = object["id"] else { return nil } // a notification: nothing to answer
         guard let method = object["method"] as? String else { return failed(id, -32600, "no method") }
         let params = object["params"] as? [String: Any] ?? [:]
@@ -168,7 +182,8 @@ final class DeviceMCP: @unchecked Sendable {
         case "ping":
             return reply([:])
         case "tools/list":
-            return reply(["tools": Self.tools])
+            return reply(["tools": Self
+                    .tools(installs: installsFromPaths ? .paths : claimUpload == nil ? nil : .uploads)])
         case "tools/call":
             let content: [[String: Any]]
             var failed = false
@@ -210,6 +225,34 @@ final class DeviceMCP: @unchecked Sendable {
     }
 
     static let olderApp = "the RoamRun app running is older than this roamrun: it doesn't hold what is done to the look given. Quit it and open the RoamRun this command came with"
+
+    /// Over HTTP, an app's file in RoamRun's own folder named in what the app says: "the upload", not a path on this Mac
+    /// (whose folders carry the user's name).
+    func hidingPaths(_ said: String) -> String {
+        guard claimUpload != nil else { return said }
+        let folder = NSRegularExpression.escapedPattern(for: looks.standardizedFileURL.path)
+        return said.replacingOccurrences(
+            of: folder + #"/install-[0-9A-Fa-f-]+/[^\n:"]*?\.(ipa|app)"#,
+            with: "the upload",
+            options: .regularExpression
+        )
+    }
+
+    /// Whether an install request's failure says the app surely didn't take its app: refused (or no app), or never
+    /// reached it. Only an answer lost after the request went out may hide an install begun.
+    static func untaken(_ error: Error) -> Bool {
+        switch error {
+        case is Failure: true
+        case let wire as DeviceControlWire.WireError:
+            switch wire {
+            case .noApp, .keptOut, .notSent: true
+            case .message: false
+            }
+        default: false
+        }
+    }
+
+    static let olderForApps = "the RoamRun app running is older than this roamrun: it can't install or launch. Quit it and open the RoamRun this command came with"
 
     /// Whether the app's answer to "rules" is an older app's: one that doesn't hold an action to the look given.
     static func older(_ said: DeviceControlWire.Response) -> Bool {
@@ -333,6 +376,107 @@ final class DeviceMCP: @unchecked Sendable {
             _ = try send(.init(op: tool, device: device.id, text: value, look: look))
             return text(tool == "type" ? DeviceControlWire
                 .typed(value) ?? "sent; look to see what it did" : "sent; look to see what it did")
+        case "install" where claimUpload != nil:
+            guard let upload = arguments["upload"] as? String, let sha256 = arguments["sha256"] as? String else {
+                throw Failure(description: "upload and sha256 are missing: as PUT /upload answered them")
+            }
+            // What the app would refuse it for, asked before the upload is used up: refused then, it stays for another
+            // try, as roamrunctl leaves it while the device can't be had.
+            do {
+                let state = try send(.init(op: "state", device: device.id))
+                guard state.allowed != false else { throw Failure(description: DeviceControlHub.switchedOff) }
+                // Only one going is a refusal: a latest that failed doesn't hold the next back.
+                let latest = try ask(.init(op: "install_status", device: device.id))
+                if latest.error == "unknown request" {
+                    throw Failure(description: Self.olderForApps)
+                }
+                if latest.ok, let going = latest.said, going.hasPrefix("installing") {
+                    throw Failure(description: going)
+                }
+            } catch let failure as Failure where failure.description == "unknown request" {
+                throw Failure(description: Self.olderForApps)
+            }
+            guard let claimed = try claimUpload?(upload, sha256) else { throw Failure(description: Self.olderForApps) }
+            do {
+                let said = try send(.init(op: "install", device: device.id, path: claimed.path)).said
+                claimed.settle(true)
+                return text(hidingPaths(said ?? "installing"))
+            } catch {
+                // Not said to have begun (refused, nobody waiting any more, taken back, no answer): the upload stays for
+                // another try. Its install folder is removed only where the app surely didn't take it (refused, or not
+                // there); one whose answer was lost may be installing from it, and the app removes that one.
+                claimed.settle(false)
+                if Self.untaken(error) {
+                    try? FileManager.default
+                        .removeItem(at: URL(fileURLWithPath: claimed.path).deletingLastPathComponent())
+                }
+                if let refused = error as? Failure {
+                    throw refused.description == "unknown request" ? Failure(description: Self.olderForApps)
+                        : Failure(description: hidingPaths(refused.description))
+                }
+                throw error
+            }
+        case "install_status" where !installsFromPaths && claimUpload == nil:
+            throw Failure(description: "no such tool: install_status")
+        case "install":
+            guard installsFromPaths, let path = arguments["path"] as? String else {
+                throw Failure(description: installsFromPaths ? "path is missing" : "no such tool: install")
+            }
+            // Where a link leads (a build's "latest"), and only an app: an .ipa, or an .app folder that says its bundle
+            // identifier — not a folder that only holds one.
+            let source = URL(fileURLWithPath: (path as NSString).expandingTildeInPath).resolvingSymlinksInPath()
+            var isFolder: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: source.path, isDirectory: &isFolder)
+            else { throw Failure(description: "\(path) isn't on this Mac") }
+            let app = isFolder.boolValue ? source.pathExtension == "app" &&
+                (NSDictionary(contentsOf: source.appendingPathComponent("Info.plist"))?["CFBundleIdentifier"] is String)
+                : source.pathExtension == "ipa"
+            guard app else {
+                throw Failure(
+                    description: "\(path) isn't an app: an .ipa, or an .app folder whose Info.plist says its bundle identifier"
+                )
+            }
+            // Copied where the app takes it from, under its own name in a folder of its own: RoamRun's own folder,
+            // which only this user can enter.
+            let folder = looks.appendingPathComponent("install-\(UUID().uuidString)")
+            let copy = folder.appendingPathComponent(source.lastPathComponent)
+            do {
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+                try FileManager.default.copyItem(at: source, to: copy)
+            } catch {
+                try? FileManager.default.removeItem(at: folder)
+                throw Failure(description: "\(path) couldn't be copied for the app: \(error.localizedDescription)")
+            }
+            do {
+                // The app removes the copy once the install ends, or refuses it.
+                return try text(send(.init(op: "install", device: device.id, path: copy.path)).said ?? "installing")
+            } catch {
+                // Refused by the app, none there, or not sent: nobody else will remove it. A request whose answer was
+                // lost may have been taken: the app removes that one, or its next start does.
+                if Self.untaken(error) {
+                    try? FileManager.default.removeItem(at: folder)
+                }
+                throw (error as? Failure)?
+                    .description == "unknown request" ? Failure(description: Self.olderForApps) : error
+            }
+        case "install_status":
+            do {
+                return try text(hidingPaths(send(.init(op: "install_status", device: device.id,
+                                                       install: arguments["install"] as? String)).said ?? ""))
+            } catch let failure as Failure {
+                throw Failure(description: failure.description == "unknown request" ? Self.olderForApps
+                    : hidingPaths(failure.description))
+            }
+        case "launch":
+            guard let bundle = arguments["bundle"] as? String, !bundle.isEmpty
+            else { throw Failure(description: "bundle is missing: the app's bundle identifier") }
+            let said: DeviceControlWire.Response
+            do { said = try send(.init(op: "launch", device: device.id, text: bundle)) } catch let failure as Failure
+                where failure.description == "unknown request"
+            {
+                throw Failure(description: Self.olderForApps)
+            }
+            return text("launched (pid \(said.pid ?? 0)); look to see it")
         default:
             throw Failure(description: "no such tool: \(tool)")
         }
@@ -407,8 +551,8 @@ final class DeviceMCP: @unchecked Sendable {
     /// the device lasts. `elements` may scroll. Destructive: whatever presses or types into what is
     /// there, or can't be undone from here (`lock`).
     static func hints(_ name: String) -> [String: Bool] {
-        ["readOnlyHint": ["devices", "look"].contains(name),
-         "destructiveHint": ["tap", "swipe", "type", "paste", "press"].contains(name)]
+        ["readOnlyHint": ["devices", "look", "install_status"].contains(name),
+         "destructiveHint": ["tap", "swipe", "type", "paste", "press", "install", "launch"].contains(name)]
     }
 
     // Computed: JSON objects aren't Sendable, and a static stored one would have to be.
@@ -433,7 +577,35 @@ final class DeviceMCP: @unchecked Sendable {
         ]
     }
 
-    static var tools: [[String: Any]] {
+    enum Installs { case paths, uploads }
+
+    /// With `installs`, `install` (from a path on this Mac, or from an upload) and `install_status`.
+    static func tools(installs: Installs?) -> [[String: Any]] {
+        let install = installs == .uploads ? tool(
+            "install",
+            "Start installing an .ipa sent with PUT /upload, built and signed for this device: the upload's id and sha256, as the upload answered them. It ends the app's running processes first. It answers at once; install_status says when the app is in (a megabyte takes a few seconds, a large app minutes), and until then other calls on the device answer that it is installing. An install the app begins uses the upload up.",
+            ["upload": ["type": "string"], "sha256": ["type": "string"]],
+            required: ["upload", "sha256"]
+        ) : tool(
+            "install",
+            "Start installing an app built and signed for this device: the path, on this Mac, of an .ipa or an .app folder. It ends the app's running processes first. It answers at once; install_status says when the app is in (a megabyte takes a few seconds, a large app minutes), and until then other calls on the device answer that it is installing.",
+            ["path": ["type": "string"]],
+            required: ["path"]
+        )
+        return operating + (installs != nil ? [
+            install,
+            tool(
+                "install_status",
+                "How the device's install goes: still going (for how long), done (with the app's bundle identifier, for launch), or why it failed. Given the id install answered (install <id>), of that install, among the device's last 16; without it, of the latest.",
+                ["install": ["type": "string", "description": "The id install answered with"]]
+            ),
+        ] : []) + [
+            tool("launch", "Launch an app on the device by its bundle identifier (one already running is ended first).",
+                 ["bundle": ["type": "string"]], required: ["bundle"]),
+        ]
+    }
+
+    private static var operating: [[String: Any]] {
         [
             tool("devices", "The devices saved in RoamRun, one name a line."),
             tool(

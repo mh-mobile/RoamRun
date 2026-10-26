@@ -396,6 +396,9 @@ struct TailscaleClient {
         var suffix = ""
         var logins: [Int: String] = [:]
         var peers: [MeshDevice] = []
+        /// This machine's lasting id and its MagicDNS name.
+        var ownID = ""
+        var ownDNSName = ""
     }
 
     static func mesh(fromStatusJSON out: String) -> Mesh? {
@@ -410,7 +413,8 @@ struct TailscaleClient {
         }
         return Mesh(ownIPs: (own?["TailscaleIPs"] as? [String]) ?? [], userID: own?["UserID"] as? Int,
                     suffix: ((root["CurrentTailnet"] as? [String: Any])?["MagicDNSSuffix"] as? String) ?? "",
-                    logins: logins, peers: peers)
+                    logins: logins, peers: peers, ownID: own?["ID"] as? String ?? "",
+                    ownDNSName: own?["DNSName"] as? String ?? "")
     }
 
     func mesh() throws -> Mesh {
@@ -431,6 +435,12 @@ struct TailscaleClient {
               let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let id = (root["Node"] as? [String: Any])?["StableID"] as? String, !id.isEmpty else { return nil }
         return id
+    }
+
+    /// `tailscale whois --json` for an address, with five seconds to answer.
+    func whoisJSON(of ip: String) throws -> String {
+        guard let path = resolvedPath() else { throw TailscaleClientError.cliNotFound }
+        return try run(path, ["whois", "--json", ip])
     }
 
     /// Whose a tailnet address is right now; nil when Tailscale can't be asked or doesn't say.

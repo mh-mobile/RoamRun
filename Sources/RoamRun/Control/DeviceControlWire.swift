@@ -18,6 +18,8 @@ enum DeviceControlWire {
         /// For "tap", "swipe", "type" and "paste": the look the points or the text are held to, when
         /// the caller keeps it (the MCP tools do; a command run by hand is of whatever was looked at last).
         var look: Int?
+        /// For "install_status": the install asked about, by the id "install" answered.
+        var install: String?
         /// For "pair-start": this Mac's address on the tailnet, the interface it is on, and the
         /// one address the device's connection will come from (the Mac that introduces it).
         var address: String?
@@ -57,6 +59,10 @@ enum DeviceControlWire {
         var state: String?
         var code: String?
         var reason: String?
+        /// For "install": its id. For "launch": the process started. For "install" and "install_status": what to tell.
+        var install: String?
+        var pid: Int?
+        var said: String?
         static func failure(_ why: String) -> Response {
             Response(ok: false, error: why)
         }
@@ -66,10 +72,12 @@ enum DeviceControlWire {
         case noApp, message(String)
         /// The app may well be running: this process isn't let through to it.
         case keptOut(String)
+        /// Given up, or broken off, before the request was all sent: the app didn't act on it.
+        case notSent(String)
         var description: String {
             switch self {
             case .noApp: "the RoamRun app isn't running"
-            case .message(let m): m
+            case .message(let m), .notSent(let m): m
             case .keptOut(let why):
                 "this process isn't allowed to reach the RoamRun app (\(why)): it runs in a sandbox that keeps it from the app's socket. Run the command outside the sandbox, or use the MCP tools (`roamrun mcp`, started by the agent itself)"
             }
@@ -82,6 +90,17 @@ enum DeviceControlWire {
         var held = stat(), named = stat()
         return fstat(fd, &held) == 0 && lstat(path, &named) == 0 && held.st_dev == named.st_dev && held.st_ino == named
             .st_ino
+    }
+
+    /// An app to install that was left there two minutes or more ago (by an install that never ended), or an upload a
+    /// day or more ago (by a `roamrun mcp --http --allow-install` that was killed).
+    static func leftToInstall(_ entry: URL, now: Date = Date()) -> Bool {
+        let name = entry.lastPathComponent
+        let age: TimeInterval = name.hasPrefix("install-") ? 120 : name.hasPrefix("upload-") ? 24 * 60 * 60 : .infinity
+        // From the file, not a URL's cache of it.
+        let changed = (try? FileManager.default.attributesOfItem(atPath: entry.path)[.modificationDate] as? Date) ??
+            .distantPast
+        return now.timeIntervalSince(changed) >= age
     }
 
     /// The longest a line may be: a long paste, or many elements.
@@ -253,6 +272,12 @@ enum DeviceControlWire {
             }
         }
 
+        var givenUp: Bool {
+            lock.withLock {
+                given
+            }
+        }
+
         func giveUp() {
             lock.withLock {
                 given = true
@@ -280,7 +305,7 @@ enum DeviceControlWire {
                     wait: TimeInterval = answerWait) throws -> Response
     {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw WireError.message("no socket") }
+        guard fd >= 0 else { throw WireError.notSent("no socket") }
         defer { close(fd) }
         noSIGPIPE(fd)
         readWait(fd, wait)
@@ -292,9 +317,9 @@ enum DeviceControlWire {
             throw why == EPERM || why == EACCES ? WireError.keptOut(String(cString: strerror(why))) : WireError.noApp
         }
         defer { asking?.ended() } // before the close above: a number given up later isn't this one's
-        guard asking?.began(fd) ?? true else { throw WireError.message("taken back") }
+        guard asking?.began(fd) ?? true else { throw WireError.notSent("taken back") }
         guard writeLine(request, to: fd)
-        else { throw WireError.message("couldn't send the request (a number that isn't one?)") }
+        else { throw WireError.notSent("couldn't send the request (a number that isn't one?)") }
         let line = readLine(fd)
         guard let response = try? JSONDecoder().decode(Response.self, from: line) else {
             throw WireError.message(line.isEmpty ? "the app didn't answer" : "the app's answer couldn't be read")
@@ -354,10 +379,12 @@ enum DeviceControlWire {
             }
             unlink(path) // a run's that ended without removing it
             // Looks a CLI was to move to their place and didn't (it was interrupted): screens aren't left lying.
-            for left in (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ??
-                []
-                where left.lastPathComponent.hasPrefix("look-")
-            {
+            // Nor apps left to install by an install that never ended (the app quit during it, the CLI was ended) —
+            // but not one a CLI is copying, or has just copied, to ask for now.
+            for left in (try? FileManager.default.contentsOfDirectory(
+                at: folder,
+                includingPropertiesForKeys: [.contentModificationDateKey]
+            )) ?? [] where left.lastPathComponent.hasPrefix("look-") || DeviceControlWire.leftToInstall(left) {
                 try? FileManager.default.removeItem(at: left)
             }
             DeviceControlWire.noSIGPIPE(fd)

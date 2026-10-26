@@ -49,7 +49,10 @@ the script, which printed more (two after a Build action, one after an Archive),
 In the Tailscale admin console, Settings › Keys › Generate auth key: **Reusable** (each build
 uses it), **Ephemeral** (the build's machine leaves the tailnet when it logs out), the tag `tag:ci`
 (set up as in [the GitHub Actions guide](ci.md#tailscale-a-tag-and-an-oauth-client)), and a short
-expiry. An OAuth client, which GitHub Actions uses, wasn't tried here.
+expiry. An OAuth client, which GitHub Actions uses, wasn't tried here. On a tailnet with Tailnet
+Lock, sign the key first and give the signed one, which passes the lock for whoever holds it
+([as for GitHub Actions](ci.md#tailscale-a-tag-and-an-oauth-client); run from there, not from
+Xcode Cloud).
 
 ### The relay
 

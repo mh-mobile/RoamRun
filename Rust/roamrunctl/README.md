@@ -247,9 +247,17 @@ the device's latest: another look by any agent (one that failed too), or `press`
 `elements`, `install` or `launch` on that device, ends it. It permits one tap or swipe;
 after a tap, swipe, `type` or `paste` by it, a tap or swipe needs another look, while `type`
 and `paste` still go by it, so look → tap a field → type needs one look. A tap or swipe is
-also refused if the device reports that it was turned since the look, and a call that fails
-in a way that may have reached the device ends the look. The server uses the device's
-screenshots and input commands, not a continuous screen-sharing stream.
+also refused if the device reports that it was turned since a PNG look (below), and a call
+that fails in a way that may have reached the device ends the look.
+
+On macOS (0.11.0+) a look comes from the device's screen stream: on an iPhone Duo over a LAN,
+with photos on the screen, about 1.2 s where a PNG of the same screen took 10 to 36 s. The
+device lists it as screen sharing, which its user can see, until about five seconds after the
+last look or action, and some apps' sound goes silent meanwhile. During a phone or VoIP call
+the device refuses the stream (seen during a VoIP call), and a look is the device's PNG; so is
+it with `ROAMRUNCTL_LOOK=screenshot`, and always on Linux and Windows, where no screen-sharing
+session is listed.
+Details are in the [reference](../../docs/roamrunctl-reference.md#mcp-tools).
 
 #### Over HTTP, for an agent elsewhere (0.8.0+)
 

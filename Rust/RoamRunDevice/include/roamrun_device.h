@@ -114,6 +114,22 @@ char *rr_device_paste(RRDevice *device, const char *text);
 char *rr_device_button(RRDevice *device, const char *name);
 
 /**
+ * Installs the app at `path`, an .ipa or an .app folder on this Mac, built and signed for the device; its running
+ * processes are ended first. Holds the device for as long as the install takes (rr_app_checked says how long it is
+ * given): minutes for a large app. An .ipa that isn't one app is refused before anything is sent ("invalid").
+ */
+char *rr_device_install(RRDevice *device, const char *path);
+
+/** Launches the app with that bundle identifier, ending one already running: {"ok":true,"pid":…}. */
+char *rr_device_launch(RRDevice *device, const char *bundle);
+
+/**
+ * Of no device: what installing `path` would be, {"ok":true,"bundle":…,"megabytes":…,"seconds":…} (bundle null
+ * where an .app folder's Info.plist gives none), or an .ipa refused ("invalid"). Free with rr_string_free.
+ */
+char *rr_app_checked(const char *path);
+
+/**
  * What accessibility says is on the screen: JSON {"ok":true,"elements":[{"caption":…}],
  * "complete":…,"ms":…}, captions as VoiceOver would speak them ("Home, tab, selected"),
  * in its order, from the first element until they repeat or `limit` is reached.

@@ -142,7 +142,10 @@ tunnel and Xcode has to run again.
     device that was switched off — it reads on, and the sheet says so.
 20. `roamrun look <name> /tmp/a.png`, then `tap`, `swipe`, `type`, `paste`, `press home` and
     `elements`, a `look` after each: each did what it says. The same through `roamrun mcp`
-    from an agent.
+    from an agent. There too (when the hub's install or launch changed): `install` of an .app or
+    .ipa signed for the device → answered at once; a `look` meanwhile → "installing";
+    `install_status` until installed; `launch` → the app in front; no `install-*` left in
+    `~/Library/Application Support/RoamRun/control/`.
 21. Connected on a Wi‑Fi, then that Wi‑Fi off (cellular only): `look` still answers, and a
     minute later too.
 22. Quit and reopen RoamRun: connected again without a prompt. Install this release over
@@ -318,6 +321,9 @@ tunnel and Xcode has to run again.
     no `Origin`, the right `Host` and the token: those are refused first). Started without
     `--token-file`: from this machine → 403, the log saying `this machine itself, without the
     token`.
+    On a Mac, a look → the device lists screen sharing, gone about 5 s later; with
+    `ROAMRUNCTL_LOOK=screenshot` → a look is the PNG, and no screen sharing is listed; the device
+    held sideways, a tap by a look's pixels → lands where it was aimed.
     Looks, through `rr`: look → a tap on a text field by that look → a type by it: typed. A tap by
     an older look, and a type more than a minute after its look → refused with "look again"; a
     tap after that type → "look first"; nothing done. Two callers: A looks, B looks, A taps by its
@@ -350,6 +356,25 @@ tunnel and Xcode has to run again.
     (or taken from the environment), before anything listens; a wrong one ends it there. Started:
     a look; the device's Wi‑Fi off until a look fails; back on, a look → the screen, with nothing
     asked.
+
+30c. RoamRun's MCP over HTTP (when `Control/MCPHTTP.swift`, `Control/MCPUploads.swift` or
+    `Control/DeviceMCP.swift` changed). On
+    the Mac, with the app running and a device switched on in it, and a token as in 30b:
+    `roamrun mcp --http <port> --allow tag:<a tagged machine's tag> --token-file t`. As it starts,
+    `--allow` left out or naming a machine, a token file others can read, and a port already taken
+    each end it with a sentence before anything listens; started, it listens on the Mac's
+    Tailscale IPv4 address only (`lsof -nP -iTCP:<port> -sTCP:LISTEN`).
+    `scripts/mcp-http-check.py http://<address>:<port> --token-file t --look <device>` → "all
+    checks passed": from the tagged machine, and from the Mac itself. From a machine not in
+    `--allow`, sending the token → 403. Through `rr`: look → tap by it → look shows what the tap did. A look queued
+    behind a `type` that runs 5–15 s, its `rr` stopped before its turn → not made, the log saying
+    `not begun`. Switched off in the app meanwhile → the next call is refused. Ctrl-C → the port
+    is free. Started again with `--allow-install`: `curl -T <an .ipa signed for the device> -H
+    "Authorization: Bearer $(cat t)" http://<address>:<port>/upload` → its `sha256` is the file's;
+    `install` by it → answered at once; `install_status` until installed; `launch` → the app in
+    front. The device then made unreachable (airplane mode) within a minute of the last call, and
+    another upload's `install` → refused, not "installing", and an `install` of that upload again,
+    the device back, works. Ctrl-C → no `upload-*` or `install-*` left in `~/Library/Application Support/RoamRun/control/`.
 
 31. An Apple Vision Pro and a far Mac (when `pair xcode --with`, `pair introduce`, the stand-in,
     the wire, Xcode or visionOS changed). The far Mac's entry removed on the device first

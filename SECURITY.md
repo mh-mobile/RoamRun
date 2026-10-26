@@ -188,12 +188,13 @@ bounded.
   having dropped the pairing (a refusal is believed only from the device).
 - **Any program you run can use device control while it is switched on.** Any
   process of your user can ask the running app to look at or operate a paired
-  device (the `roamrun` commands do): the key stays with RoamRun, but RoamRun
+  device, or to install and launch an app on it (the `roamrun` commands and `roamrun mcp` do): the key stays with RoamRun, but RoamRun
   uses it for whoever asks. It is not a permission given to one agent — a build
   script or a package's install step is let in as well. Each device has a switch
   on its page: off, every request is refused; a text being typed or a walk of
   the elements stops where it is, and what was waiting its turn isn't begun (a
-  tap or a press already on its way arrives). What is on is kept in the login Keychain, where another program can't
+  tap or a press already on its way arrives, and an install already begun goes on
+  until it ends). What is on is kept in the login Keychain, where another program can't
   add to it without macOS asking you, and it names the pairing itself, as it is
   saved for its device — not the device's entry in the list of saved devices,
   which any program can rewrite — so a device you switched off stays off. A
@@ -270,9 +271,13 @@ bounded.
   a terminal, not from the command line: the file alone, in a backup or a copied
   folder, then opens nothing — and a program that runs as the user and can read the
   passphrase where it is kept is no further from the device than before. A running `mcp`
-  keeps what it opened while the file is the same, as `sign` keeps what it serves. It looks by
-  the device's own screenshot and sends inputs with no screen stream, so the device
-  shows no screen-sharing session meanwhile. Its MCP tools hold `tap`, `swipe`, `type` and
+  keeps what it opened while the file is the same, as `sign` keeps what it serves. On Linux and
+  Windows it looks by the device's own screenshot and sends inputs with no screen stream, so the
+  device shows no screen-sharing session meanwhile. On macOS (0.11.0+) a look comes from the
+  screen stream, which the device lists as screen sharing until about five seconds after the last
+  look or action (`ROAMRUNCTL_LOOK=screenshot` looks by the screenshot there too); such a look is
+  the display's own way up (portrait on an iPhone Duo held sideways, seen), and its points are
+  pressed as they are. Its MCP tools hold `tap`, `swipe`, `type` and
   `paste` to the device's latest look, by its id, for a minute — a tap or swipe to one that
   nothing went by yet — and let it go after anything else done there, or a failure that may
   have reached the device; `press` goes to whatever is on the screen.
@@ -281,6 +286,20 @@ bounded.
   another saved under the name, it isn't operated under that name any more. Where the
   device doesn't say which way up it is and its picture is upright, a point is pressed
   as it is — on a device held upside down that would be the opposite point (not tried).
+- **RoamRun can serve its MCP tools over HTTP too** (0.11.0+): `roamrun mcp --http <port>
+  --allow <who> [--allow <who>…] [--token-file <file>]` lets callers in, refuses and logs as
+  roamrunctl's does (below), on the Mac's Tailscale IPv4 address, and doesn't start as root. It
+  offers the devices saved in RoamRun, each operated only while its switch in the app is on, and
+  `install` is offered only with `--allow-install`, from an `.ipa` sent with `PUT /upload`
+  (which has to keep coming: 30 s, and 2 s more for each MiB begun), never a path on the
+  Mac: one upload is kept (1024 MiB at most by default), in RoamRun's own folder, installable by
+  the caller that sent it alone (by its Tailscale node's lasting id), and removed when the app
+  answers that an install of it began, when any allowed caller starts another upload, after 30
+  minutes unused, or at Ctrl-C; one left by a server that was killed is removed about a day later,
+  while the RoamRun app runs or when it, or another server with `--allow-install`, starts. An
+  install the app doesn't begin leaves it. Whoever is let in can look, operate and launch on every
+  device switched on in the app, and with `--allow-install` replace its apps with any app signed
+  for it.
 - **roamrunctl can serve its MCP tools over HTTP.** `roamrunctl mcp --http <port> --allow
   <who> [--allow <who>…] <devices>…`, started by a person and ended with Ctrl-C, listens on the machine's
   Tailscale IPv4 address only, and doesn't start as root (not checked on Windows). A caller
@@ -289,8 +308,8 @@ bounded.
   from another tailnet; the machine itself without the token (any of its users would
   otherwise pass); any request with an `Origin` (a web page in a browser on the tailnet);
   a `Host` other than the server's address or its own Tailscale names. A request's head has
-  to arrive within 10 s and its body within 30 s more (an upload's: 30 s plus 2 s a MiB, with
-  no more than 60 s between reads), and one address holds 17 of the 32
+  to arrive within 10 s and its body within 30 s more (an upload has to keep coming: 30 s, and
+  2 s more for each MiB begun, with no more than 60 s between reads), and one address holds 17 of the 32
   connections at most: one machine that can reach the port can't take them all, but two or
   more that the tailnet's access rules let reach it can keep callers out for as long as they
   keep connecting. Only the devices named are used — each only while it is saved as
@@ -413,8 +432,9 @@ bounded.
 - Files: `~/Library/Application Support/RoamRun/` (device profiles, mode 0600,
   bridge status, and `ota/` — the .ipa files you stored, 5 per app), `~/Library/Logs/RoamRun/`, and the
   `io.github.mh-mobile.roamrun` defaults (`com.roamrun.app` before 0.1.12).
-  With device control: its socket and the looks on their way to whoever asked (`control/`, yours
-  only), this Mac's identity for pairing (`device-control-host`), sealed pairings
+  With device control: its socket, the looks on their way to whoever asked, and apps on their way
+  to an install (`install-*/` copies, and `upload-*.ipa` files sent to `roamrun mcp --http`, up to
+  `--max-upload` each) (`control/`, yours only), this Mac's identity for pairing (`device-control-host`), sealed pairings
   (`device-pairing-<UDID>.sealed`, 0600), and two
   items in the login Keychain, which removing the app leaves:
   `security delete-generic-password -s io.github.mh-mobile.roamrun.device-control -a pairings`

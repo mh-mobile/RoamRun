@@ -363,6 +363,20 @@ you are shown, and its id; points are that image's pixels, and `tap`, `swipe`,
 `claude mcp add roamrun -- roamrun mcp`, or the like for another agent. Their
 `device` is the name RoamRun saved, as `devices` lists it — not a Tailscale name
 or an id. Use the tools when you have them; the rules below hold for both.
+The tools also install and launch (0.11.0+, no Xcode): `install` with the path of
+an .ipa or .app built and signed for the device answers at once with an id; ask
+`install_status` with it now and then until the app is in (other calls on the
+device answer that it is installing meanwhile), then `launch` by its bundle
+identifier. Install only what the user asked for. Over HTTP, `install` is there only
+if the user started the server with `--allow-install`, and takes the id and sha256 that
+a `PUT /upload` of the .ipa answered, never a path.
+An agent on another machine of the tailnet can have them over HTTP from
+`roamrun mcp --http <port> --allow <who>` (0.11.0+), which the user starts and stops —
+never you; it is called as `roamrunctl mcp --http` is (the roamrunctl skill's "Over HTTP"):
+JSON-RPC by POST to `http://<its Tailscale address>:<port>/mcp`, with `Authorization: Bearer
+<token>` where the user gave a token, an .ipa by `PUT /upload`. Unlike roamrunctl's, it lists
+every device saved in RoamRun, not devices named when it started, and operates those switched on in
+the app.
 If your client shows the tool's image as a placeholder you can't see, use
 `roamrun look` and read the file instead, and then act with the commands too.
 If a command says this process isn't allowed to reach the RoamRun app, your

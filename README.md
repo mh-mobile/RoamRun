@@ -329,11 +329,52 @@ The rules:
 
 **For an agent** the same are MCP tools: `claude mcp add roamrun -- roamrun mcp`, or the like for
 another agent. The tools are `devices`, `look`, `tap`, `swipe`, `type`, `paste`, `press` and
-`elements`. They differ from the commands in four ways: `device` is the name saved in RoamRun, as
+`elements`, with the three for apps below. They differ from the commands in four ways: `device` is the name saved in RoamRun, as
 `devices` lists it, not a Tailscale name or an id; `look` returns the picture to the agent,
 with the look's id, instead of writing a file; `type` takes 500 characters a call; and `tap`,
 `swipe`, `type` and `paste` must give that id (`"look": 12`), as `--look` does. An app older than
 the `roamrun` it is asked from gets none of these four tools.
+
+`install`, `install_status` and `launch` (0.11.0+) put an app on the device and start it, with no
+Xcode: `install` takes the path of an .ipa or an .app folder on this Mac, built and signed for the
+device, ends the app's running processes, and answers at once with an id; `install_status` with
+that id says when the app is in, and until then other calls on the device answer that it is
+installing; `launch` takes the bundle identifier. The file is copied into RoamRun's own folder for
+the app, and removed when the install ends (or, if the app quit meanwhile, when it starts again;
+one left by a command that was ended goes an hour later while the app runs).
+An .ipa is read whole into the app's memory while it is sent to the device (an .app folder is sent
+file by file).
+
+**For an agent elsewhere on your tailnet** (0.11.0+), `roamrun mcp --http <port> --allow <who>`
+serves the same tools over HTTP, until Ctrl-C. `<who>` is `tag:<name>` or a login, and `--allow`
+may be given again; `--token-file <file>` also asks every request for `Authorization: Bearer <the
+file's token>` (a file only you can read, 32 characters or more), and a call from this Mac itself
+is let in only with it. It listens on this
+Mac's Tailscale IPv4 address only, at `http://<that address>:<port>/mcp` (give a cloud the
+address: it usually has no MagicDNS), and lets in what `tailscale whois` says is a machine with
+that tag or that user's untagged machine. Requests, refusals, turns and the log go as
+with `roamrunctl mcp --http` ([its rules](docs/roamrunctl-reference.md#mcp-over-http)), with these
+differences: it offers the devices saved in RoamRun, each operated only while its switch in the
+app is on, rather than devices named on its command line; a call whose caller goes, or takes it
+back, after its turn here is given up at the app, as with `roamrun mcp`: not begun if it still
+waits there behind another client of the device, stopped where it can if it is under way; and
+uploads are kept in RoamRun's own folder rather than one made for the run. The RoamRun app has to
+be running, as for `roamrun mcp`. What is shown and sent passes through whatever lies between: a
+cloud's proxy sees the images, the text typed or pasted, what is uploaded, and the token. It was
+called from this Mac itself with the token, and from an untagged Linux machine of the tailnet let in
+by the login (`scripts/mcp-http-check.py`, then an upload, `install` and `launch`; under `--allow
+tag:ci` that machine was refused, 403); not yet through a cloud's proxy, nor with an upload of
+hundreds of MB.
+
+With `--allow-install [--max-upload <MiB>]` it offers `install` and `install_status`, as
+roamrunctl does: the caller sends an .ipa with `PUT /upload` (1024 MiB at most by default), gets
+its id and sha256, and installs it by them, never by a path. One upload is kept, for the machine
+that sent it to install. An install the app doesn't begin (the device not set up, switched off,
+installing or not reached, the caller gone before its turn at the app) leaves it for another try.
+It goes when the app answers that an install of it began, when any caller starts another upload,
+after 30 minutes unused, or at Ctrl-C; one left by a server that was killed goes about a day later, while
+the RoamRun app runs or when it, or another such server, starts. Without `--allow-install` there
+is neither.
 
 **What the device does meanwhile.** Each look and each action runs a screen-sharing session on the
 device, which RoamRun keeps for about five seconds after the last one. The device showed it as
@@ -342,10 +383,15 @@ app in one sitting — some apps went on sounding, some played unheard, one stop
 took nothing: [docs/sound-while-looking.md](docs/sound-while-looking.md).
 
 **Who can use it.** Device control is not given to one agent or one command. **While a device is
-switched on, any program you run on this Mac can see and operate it** through the app: a build
+switched on, any program you run on this Mac can see and operate it**, and install and launch apps
+on it, through the app: a build
 script, a package's install step, another agent. A `look` shows whatever is on the screen,
 notifications and messages included, and locking the device does not stop it: the lock screen is
-seen and operated too (seen), though unlocking still takes the passcode or Face ID.
+seen and operated too (seen), though unlocking still takes the passcode or Face ID. **While
+the MCP server over HTTP (`mcp --http`, above) runs, so can any program on the machines its `--allow` lets in** (each
+untagged machine of a login allowed, each machine with a tag allowed), on every device switched
+on, `launch` included; with `--allow-install` it can also replace the device's apps with any app
+signed for it. `--token-file` is the one check beyond the machine.
 
 - The switch beside Device control on the device's page turns it off for every program, and back
   on. It is on after Set Up, Pair Again, `roamrun key import <file>` and `roamrun pair control --with <Tailscale name>`.
@@ -662,7 +708,7 @@ RoamRun keeps its own files in these places:
 
 | Location | Contents |
 |---|---|
-| `~/Library/Application Support/RoamRun/` | Saved devices, bridge status, device control's pairings (sealed), and builds kept for over-the-air installs |
+| `~/Library/Application Support/RoamRun/` | Saved devices, bridge status, device control's pairings (sealed), builds kept for over-the-air installs, and apps on their way to an install (`control/`: copies, and `.ipa` files uploaded to its MCP server over HTTP) |
 | `~/Library/Logs/RoamRun/` | Logs of `roamrun up -d` |
 | `io.github.mh-mobile.roamrun` (defaults) | Settings, and which bridges were running |
 | `/usr/local/bin/roamrun` | Only if you installed the CLI from the app or with `make install-cli`. Homebrew links `/opt/homebrew/bin/roamrun` instead |

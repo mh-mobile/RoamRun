@@ -183,6 +183,21 @@ public final class DeviceSession: @unchecked Sendable {
         }
     }
 
+    /// `connect`, after asking one that stands whether it still answers (up to some 5 s): a device gone since the last
+    /// check isn't taken for reached. For what can't be taken back once it is said to have begun (an install).
+    public func reach() throws {
+        lock.withLock {
+            guard !closed, !broken, let device, let answer = rr_device_alive(device) else { return }
+            defer { rr_string_free(answer) }
+            let said = String(cString: answer)
+            guard !said.contains("\"ok\":true") else { return }
+            broken = true
+            noteStanding()
+            onEvent?("found gone: \(said)")
+        }
+        try connect()
+    }
+
     /// Finds out whether the connection still stands (the device restarted, or dropped the
     /// pairing, says nothing until it is asked): what it finds is in `isOpen`. A connection is
     /// opened in the tunnel and closed — nothing shows on the device, and its sound stays.
@@ -282,16 +297,48 @@ public final class DeviceSession: @unchecked Sendable {
     }
 
     /// The library takes text up to its first NUL: text with one would arrive cut short, and be reported sent.
-    private func whole(_ text: String) throws {
+    private func whole(_ text: String, _ what: String = "the text") throws {
         if text.utf8.contains(0) {
-            throw Failure.invalid("the text holds a NUL character, which can't be sent")
+            throw Failure.invalid("\(what) holds a NUL character, which can't be sent")
         }
     }
 
     public func press(_ button: String) throws {
+        try whole(button, "the button's name")
         _ = try answer(repeatable: false) {
             rr_device_button($0, button)
         }
+    }
+
+    /// Installs the app at `path` (an .ipa or an .app folder on this Mac), holding the device until it is in.
+    public func install(_ path: String) throws {
+        _ = try answer(repeatable: false) {
+            rr_device_install($0, path)
+        }
+    }
+
+    /// Launches the app, ending one already running; its process id.
+    public func launch(_ bundle: String) throws -> Int {
+        try whole(bundle, "the bundle identifier")
+        let said = try answer(repeatable: false) {
+            rr_device_launch($0, bundle)
+        }
+        return (said["pid"] as? NSNumber)?.intValue ?? 0
+    }
+
+    /// What installing `path` would be, of no device: its bundle identifier (nil for an .app folder whose
+    /// Info.plist gives none), its size, and the seconds an install of it is given. An .ipa that isn't one app is `invalid`.
+    public static func app(at path: String) throws -> (bundle: String?, megabytes: Int, seconds: Int) {
+        guard let json = rr_app_checked(path) else { throw Failure.message("no answer") }
+        defer { rr_string_free(json) }
+        guard let said = try? JSONSerialization.jsonObject(with: Data(String(cString: json).utf8)) as? [String: Any]
+        else { throw Failure.message("unreadable answer") }
+        guard said["ok"] as? Bool == true else {
+            let why = said["error"] as? String ?? "failed"
+            throw said["invalid"] as? Bool == true ? Failure.invalid(why) : Failure.message(why)
+        }
+        return (said["bundle"] as? String, (said["megabytes"] as? NSNumber)?.intValue ?? 0,
+                (said["seconds"] as? NSNumber)?.intValue ?? 0)
     }
 
     /// A call that answers {"ok":…} JSON; its "error" becomes the failure.
@@ -372,6 +419,7 @@ public final class DeviceSession: @unchecked Sendable {
             }
             if device == nil {
                 device = try open()
+                noteStanding() // open while what follows holds it, an install for minutes
                 onEvent?("opened")
             }
             do {
