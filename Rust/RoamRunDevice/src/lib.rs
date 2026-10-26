@@ -139,6 +139,22 @@ fn watch_idle_stream(held: &Arc<Held>) {
     });
 }
 
+/// The devices open in this process, for `stop_streams`.
+static OPEN: Mutex<Vec<std::sync::Weak<Held>>> = Mutex::new(Vec::new());
+
+/// At the process's end (Ctrl-C): a stream a look left is stopped, not left for the device to time out. One whose
+/// device is busy with a call is left: the end doesn't wait for it.
+pub fn stop_streams() {
+    let open = std::mem::take(&mut *OPEN.lock().unwrap_or_else(|e| e.into_inner()));
+    let _ = with_room(|| {
+        for held in open.iter().filter_map(std::sync::Weak::upgrade) {
+            let Ok(mut link) = held.link.try_lock() else { continue };
+            if let Some(mut stream) = link.stream.take() { held.runtime.block_on(stream.stop()); }
+        }
+        Ok(())
+    });
+}
+
 /// The stack this library's work gets. The tunnel's network stack puts large buffers on it: on
 /// a caller's own thread (a dispatch worker has 512 KB) that overflowed.
 const STACK: usize = 8 << 20;
@@ -187,8 +203,9 @@ unsafe fn set_error(error: *mut *mut c_char, why: String) {
     }
 }
 
+/// A call's failure, in the device's own words where it refused: not the dump of an archive the library gives.
 fn failure(why: &str) -> String {
-    format!("{{\"ok\":false,\"error\":{}}}", quoted(why))
+    format!("{{\"ok\":false,\"error\":{}}}", quoted(&safe::readable(why)))
 }
 
 fn quoted(s: &str) -> String {
@@ -249,6 +266,9 @@ unsafe fn open_with(ip: *const c_char, port: u16, pairing: *const u8, pairing_le
                 }))?;
                 let held = Arc::new(Held { runtime, link: Mutex::new(link) });
                 watch_idle_stream(&held);
+                let mut open = OPEN.lock().unwrap_or_else(|e| e.into_inner());
+                open.retain(|held| held.strong_count() > 0);
+                open.push(Arc::downgrade(&held));
                 Ok(RRDevice { held })
             }),
         _ => Err("bad arguments".into()),
@@ -539,7 +559,12 @@ async fn interface_way(link: &mut Link) -> Option<u8> {
 pub fn install_given(path: &str) -> (u64, Duration) {
     fn size(path: &std::path::Path) -> u64 {
         match std::fs::read_dir(path) {
-            Ok(inside) => inside.flatten().map(|entry| size(&entry.path())).sum(),
+            // A link inside isn't followed: idevice doesn't send it, and two pointing up would never end.
+            Ok(inside) => inside.flatten().map(|entry| match entry.file_type() {
+                Ok(kind) if kind.is_dir() => size(&entry.path()),
+                Ok(kind) if kind.is_file() => entry.metadata().map(|meta| meta.len()).unwrap_or(0),
+                _ => 0,
+            }).sum(),
             Err(_) => std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0),
         }
     }
@@ -611,6 +636,7 @@ fn app(device: &RRDevice, what: App) -> String {
         if link.stop.raised() { return Err(STOPPED.into()); }
         let link = &mut *link;
         device.runtime.block_on(async {
+            stream_ended(link).await;
             // An install sends the whole app: longer than a call's deadline, and longer the more there is of it.
             let given = match what { App::Install(path, _) => install_given(path).1, App::Launch(_) => Duration::from_secs(300) };
             tokio::time::timeout(given, async {
@@ -642,6 +668,15 @@ fn app(device: &RRDevice, what: App) -> String {
     match result {
         Ok(more) => format!("{{\"ok\":true{more}}}"),
         Err(why) => failure(&why),
+    }
+}
+
+/// A stream a look left, stopped before what holds the link for long (an install, a launch, a walk): the idle watcher
+/// can't stop it meanwhile, and the device would list screen sharing all that time.
+async fn stream_ended(link: &mut Link) {
+    if let Some(mut stream) = link.stream.take() {
+        stream.stop().await;
+        link.stream_stopped = Some(Instant::now());
     }
 }
 
@@ -865,7 +900,10 @@ pub unsafe extern "C" fn rr_device_elements(device: *mut RRDevice, limit: u32) -
     let result = with_room(|| {
         let mut link = device.link.lock().unwrap_or_else(|e| e.into_inner());
         if link.stop.raised() { return Err(STOPPED.into()); }
-        device.runtime.block_on(elements(&mut link, limit.max(1) as usize, started + WALK))
+        device.runtime.block_on(async {
+            stream_ended(&mut link).await;
+            elements(&mut link, limit.max(1) as usize, started + WALK).await
+        })
     });
     c_string(match result {
         Ok((captions, complete, ended)) => format!(
@@ -1896,6 +1934,13 @@ mod tests {
     }
 
     #[test]
+    fn a_failure_is_said_in_the_devices_words() {
+        let refused = r#"launch: CoreDevice(DeviceError("Dictionary({"userInfo": Dictionary({"NSLocalizedDescription": String("The application is not installed.")})})"))"#;
+        assert_eq!(failure(refused), r#"{"ok":false,"error":"launch: The application is not installed."}"#);
+        assert_eq!(failure("timed out"), r#"{"ok":false,"error":"timed out"}"#);
+    }
+
+    #[test]
     fn an_install_is_given_longer_the_more_there_is_to_send() {
         let folder = std::env::temp_dir().join(format!("rr-install-given-{}.app", std::process::id()));
         std::fs::create_dir_all(folder.join("inside")).unwrap();
@@ -1904,6 +1949,15 @@ mod tests {
         assert_eq!(install_given(folder.to_str().unwrap()), (3, Duration::from_secs(345)));
         assert_eq!(install_given(folder.join("inside/binary").to_str().unwrap()).0, 3);
         assert_eq!(install_given("/nowhere/at/all.ipa"), (0, Duration::from_secs(300)));
+        // Links inside aren't counted (idevice doesn't send them): not the file twice, nor folders without end.
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(folder.join("inside/binary"), folder.join("again")).unwrap();
+            assert_eq!(install_given(folder.to_str().unwrap()).0, 3);
+            std::os::unix::fs::symlink(".", folder.join("inside/up")).unwrap();
+            std::os::unix::fs::symlink("..", folder.join("inside/upper")).unwrap();
+            assert_eq!(install_given(folder.to_str().unwrap()).0, 3);
+        }
         std::fs::remove_dir_all(folder).unwrap();
     }
 

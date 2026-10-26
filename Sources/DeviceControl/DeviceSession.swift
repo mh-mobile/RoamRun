@@ -282,13 +282,14 @@ public final class DeviceSession: @unchecked Sendable {
     }
 
     /// The library takes text up to its first NUL: text with one would arrive cut short, and be reported sent.
-    private func whole(_ text: String) throws {
+    private func whole(_ text: String, _ what: String = "the text") throws {
         if text.utf8.contains(0) {
-            throw Failure.invalid("the text holds a NUL character, which can't be sent")
+            throw Failure.invalid("\(what) holds a NUL character, which can't be sent")
         }
     }
 
     public func press(_ button: String) throws {
+        try whole(button, "the button's name")
         _ = try answer(repeatable: false) {
             rr_device_button($0, button)
         }
@@ -303,6 +304,7 @@ public final class DeviceSession: @unchecked Sendable {
 
     /// Launches the app, ending one already running; its process id.
     public func launch(_ bundle: String) throws -> Int {
+        try whole(bundle, "the bundle identifier")
         let said = try answer(repeatable: false) {
             rr_device_launch($0, bundle)
         }
@@ -402,6 +404,7 @@ public final class DeviceSession: @unchecked Sendable {
             }
             if device == nil {
                 device = try open()
+                noteStanding() // open while what follows holds it, an install for minutes
                 onEvent?("opened")
             }
             do {

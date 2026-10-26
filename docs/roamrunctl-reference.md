@@ -262,7 +262,10 @@ needed to establish each new device connection.
   picture is the display's own way up (portrait on an iPhone held sideways); taps and swipes go
   by its pixels all the same, and a turn of the device after it isn't checked. During a phone
   or VoIP call the device refuses the stream (seen during a VoIP call), and the look is the
-  PNG. `ROAMRUNCTL_LOOK=screenshot` always takes the PNG, as before 0.11.0.
+  PNG; so is it where the device doesn't say its screen's size (points by the uncut frame
+  would land short by the stream's padding). `ROAMRUNCTL_LOOK=screenshot` always takes the PNG,
+  as before 0.11.0; another value is refused before anything is done. At Ctrl-C, `mcp` stops a
+  stream a look left before it ends.
 - On Linux and Windows, a look is the device's PNG: the device lists no screen-sharing
   session. Music continued playing during the screen/input tests, but microphone and some
   other interaction scenarios have not been verified.
@@ -330,8 +333,10 @@ until Ctrl-C:
 - Once the caller is let in (as for `/mcp`): a method other than `PUT` is 405, no length and
   not chunked 411, a length over the most 413 (before `100 Continue` is sent), and one while
   another is coming in 409. `--max-upload <MiB>` sets the most: 1024 by default, 1 to 4096.
-  The body may take 30 seconds plus 2 seconds a MiB of its length (of the most, when chunked),
-  and nothing may come for 60 seconds at most: then it is refused with 408 and the slot is free.
+  The body has to keep coming (0.11.0+): 30 seconds, and 2 seconds more for each MiB begun,
+  whatever length it says, and nothing may come for 60 seconds at most: else it is refused with
+  408 and the slot is free. What trails a chunked body's last piece, here as for `/mcp`, is 64
+  lines and 8 KiB at most (else 431).
 - One upload is kept: when another begins to come in, from whichever caller, the one kept is
   dropped. It is kept in a folder made
   for this run in the system's temporary folder: mode 0700, the file 0600 (on Windows, the
@@ -561,6 +566,8 @@ against a real device at the time these notes were written:
 - Through MCP: swipe and a paste that goes through (these had been tested outside MCP).
   Installing and launching through MCP on Linux or Windows.
 - On Windows: `pair control --with`, MCP, install, and launch.
+- On macOS, a look from the screen stream on any device but an iPhone Duo, or over a relay or
+  cellular.
 - `mcp --http` from another machine (by a tag or a login), from a cloud, or on Linux or
   Windows. On macOS it was checked from the machine itself, with the token:
   `scripts/mcp-http-check.py`; and on an iPhone, look, tap, type, press and `elements`, a tap

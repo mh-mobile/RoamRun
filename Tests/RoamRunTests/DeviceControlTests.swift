@@ -1553,6 +1553,103 @@ func anInputIsInterruptedWhenItsAskerLeavesOrItsDeviceIsSwitchedOff(_ op: String
     #expect(!refused.ok)
     #expect(FileManager.default.fileExists(atPath: outside.appendingPathComponent("canary").path))
     #expect(!FileManager.default.fileExists(atPath: own.path))
+
+    // Its session made anew before the install began on it: it goes on the new one, not failed with nothing sent.
+    anew.installHold = DispatchSemaphore(value: 0)
+    anew.failing = DeviceSession.Failure.notBegun("stopped: this connection was closed (the device has a new one)")
+    let moved = try app("install-e")
+    let third = try #require(hub.answer(.init(op: "install", device: id, path: moved)).install)
+    #expect(soon(anew.installBegan))
+    hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 3, udid: "UDID-1")])
+    let newest = try #require(made.withLock {
+        $0.last
+    })
+    #expect(newest !== anew)
+    anew.installHold?.signal()
+    var movedSaid = status(third)
+    for _ in 0 ..< 100 where movedSaid.said?.hasPrefix("installing") == true {
+        Thread.sleep(forTimeInterval: 0.02)
+        movedSaid = status(third)
+    }
+    #expect(movedSaid.ok && movedSaid.said?.contains("is installed on iPhone") == true)
+    #expect(newest.calls.contains("install"))
+    anew.failing = nil
+    anew.installHold = nil
+
+    // The device not reached: refused, not said to have begun (an upload stays for another try), nothing sent to
+    // it, and its folder goes.
+    newest.connectFailing = DeviceSession.Failure.notBegun("the device didn't answer")
+    let sent = newest.calls
+        .filter {
+            $0 == "install"
+        }
+        .count
+    let unreached = try app("install-d")
+    let notBegun = hub.answer(.init(op: "install", device: id, path: unreached))
+    #expect(!notBegun.ok && notBegun.install == nil && notBegun.error?.contains("didn't answer") == true)
+    #expect(newest.calls
+        .filter {
+            $0 == "install"
+        }
+        .count == sent)
+    #expect(!FileManager.default.fileExists(atPath: URL(fileURLWithPath: unreached).deletingLastPathComponent().path))
+}
+
+/// While the app runs, apps left to install an hour ago or more are swept too; not one an install is taking from,
+/// however old, nor one a request may still be waiting with.
+@Test func appsLeftToInstallAreSweptWhileTheAppRuns() throws {
+    let dir = URL(fileURLWithPath: "/tmp/rr-\(UUID().uuidString.prefix(8))")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try scratchPairing(at: DeviceControlWire.pairingFile(udid: "UDID-1", in: dir))
+    let made = OSAllocatedUnfairLock<[StandInDevice]>(initialState: [])
+    let hub = DeviceControlHub(directory: dir, key: { _ in
+        scratchKey
+    }) { _, _, _ in
+        let device = StandInDevice()
+        made.withLock {
+            $0.append(device)
+        }
+        return device
+    }
+    defer { hub.stop() }
+    let id = UUID()
+    hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
+    let device = try #require(made.withLock {
+        $0.first
+    })
+    hub.start()
+    let control = DeviceControlWire.socketFolder(in: dir)
+    func left(_ name: String, minutesAgo: Double) throws -> URL {
+        let folder = control.appendingPathComponent(name)
+        let app = folder.appendingPathComponent("App.app")
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        try PropertyListSerialization.data(
+            fromPropertyList: ["CFBundleIdentifier": "com.example.App"],
+            format: .xml,
+            options: 0
+        )
+        .write(to: app.appendingPathComponent("Info.plist"))
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(-minutesAgo * 60)],
+            ofItemAtPath: folder.path
+        )
+        return folder
+    }
+    let old = try left("install-old", minutesAgo: 90)
+    let waiting = try left("install-waiting", minutesAgo: 5)
+    // An install under way from a folder that grows old meanwhile.
+    device.installHold = DispatchSemaphore(value: 0)
+    let taking = try left("install-taking", minutesAgo: 0)
+    #expect(hub.answer(.init(op: "install", device: id, path: taking.appendingPathComponent("App.app").path)).ok)
+    #expect(soon(device.installBegan))
+    try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-90 * 60)],
+                                          ofItemAtPath: taking.path)
+    hub.sweepLeft()
+    #expect(!FileManager.default.fileExists(atPath: old.path))
+    #expect(FileManager.default.fileExists(atPath: waiting.path))
+    #expect(FileManager.default.fileExists(atPath: taking.path))
+    device.installHold?.signal()
 }
 
 /// What the app's start sweeps away of apps left to install: one left two minutes ago or more, not one a CLI is copying.

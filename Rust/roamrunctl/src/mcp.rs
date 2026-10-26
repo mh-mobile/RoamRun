@@ -185,7 +185,7 @@ fn tools(remote: bool, installs: bool) -> Value {
             tool("install", "Start installing an app built and signed for this device: the path, on this machine, of an .ipa or an .app folder. It ends the app's running processes first. It answers at once; install_status says when the app is in (a megabyte takes a few seconds, a large app minutes), and until then other calls on the device answer that it is installing.",
                  json!({ "path": { "type": "string" } }), &["path"])
         },
-        tool("install_status", "How the device's install goes: still going (for how long), done (with the app's bundle identifier, for launch), or why it failed. Given the id install answered (install <id>), of that install alone: another begun since is an error.",
+        tool("install_status", "How the device's install goes: still going (for how long), done (with the app's bundle identifier, for launch), or why it failed. Given the id install answered (install <id>), of that install, among the device's last 16; without it, of the latest.",
              json!({ "install": { "type": "string", "description": "The id install answered with" } }), &[]),
         tool("launch", "Launch an app on the device by its bundle identifier (one already running is ended first).",
              json!({ "bundle": { "type": "string" } }), &["bundle"]),
@@ -426,11 +426,7 @@ impl Server {
                     }
                 };
                 let device = &self.open[&name].0;
-                // A PNG comes turned as the interface is, and a point is turned back by it: not said the first
-                // time, it is asked once more. The stream's picture is the display's own way up.
-                let way = if picture.native { 1 } else { match device.way() { 0 => device.way(), way => way } };
-                let native = picture.native;
-                let image = if native {
+                let picture = if picture.native {
                     let frame = (picture.image.width(), picture.image.height());
                     let screen = match self.screens.get(&name) {
                         Some(&(asked, screen, at)) if asked == frame && (screen.is_some() || at.elapsed() < SCREEN_AGAIN) => screen,
@@ -440,11 +436,15 @@ impl Server {
                             screen
                         }
                     };
-                    device::cut(picture.image, screen)
+                    device::screen_picture(device, picture, screen)?
                 } else {
-                    picture.image
+                    picture
                 };
-                let (jpeg, width, height) = device::fitted(image, image::ImageFormat::Jpeg)?;
+                // A PNG comes turned as the interface is, and a point is turned back by it: not said the first
+                // time, it is asked once more. The stream's picture is the display's own way up.
+                let native = picture.native;
+                let way = if native { 1 } else { match device.way() { 0 => device.way(), way => way } };
+                let (jpeg, width, height) = device::fitted(picture.image, image::ImageFormat::Jpeg)?;
                 let id = self.next_look();
                 self.shown.insert(name, Shown { size: (width as f64, height as f64), way, native, at: Instant::now(), of, id, spent: false });
                 let mut content = vec![json!({ "type": "image", "data": base64::engine::general_purpose::STANDARD.encode(jpeg), "mimeType": "image/jpeg" })];
