@@ -261,6 +261,12 @@ xcrun devicectl device info files --device <udid> --domain-type systemCrashLogs 
 same Wi-Fi. Two were tried over tethering: WebDriverAgent took about 2 seconds a tap;
 agent-device took 25–35 seconds an action and missed taps in a windowed iPad app.
 
+Safari's Web Inspector reaches the device too: it was listed under Safari › Develop and a page
+opened in the inspector, over tethering. Turn on Connect via Network in that menu once first,
+with the device on a cable. The inspector closes about every 42 seconds, when macOS's pairing
+service drops its link to the bridge and reconnects (Xcode's session carries on through this);
+open the page from the Develop menu again.
+
 ## Using it from an AI agent
 
 Claude Code, Codex, Cursor and other agents can build, install and debug through RoamRun. A skill
