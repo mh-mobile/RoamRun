@@ -139,6 +139,22 @@ fn watch_idle_stream(held: &Arc<Held>) {
     });
 }
 
+/// The devices open in this process, for `stop_streams`.
+static OPEN: Mutex<Vec<std::sync::Weak<Held>>> = Mutex::new(Vec::new());
+
+/// At the process's end (Ctrl-C): a stream a look left is stopped, not left for the device to time out. One whose
+/// device is busy with a call is left: the end doesn't wait for it.
+pub fn stop_streams() {
+    let open = std::mem::take(&mut *OPEN.lock().unwrap_or_else(|e| e.into_inner()));
+    let _ = with_room(|| {
+        for held in open.iter().filter_map(std::sync::Weak::upgrade) {
+            let Ok(mut link) = held.link.try_lock() else { continue };
+            if let Some(mut stream) = link.stream.take() { held.runtime.block_on(stream.stop()); }
+        }
+        Ok(())
+    });
+}
+
 /// The stack this library's work gets. The tunnel's network stack puts large buffers on it: on
 /// a caller's own thread (a dispatch worker has 512 KB) that overflowed.
 const STACK: usize = 8 << 20;
@@ -250,6 +266,9 @@ unsafe fn open_with(ip: *const c_char, port: u16, pairing: *const u8, pairing_le
                 }))?;
                 let held = Arc::new(Held { runtime, link: Mutex::new(link) });
                 watch_idle_stream(&held);
+                let mut open = OPEN.lock().unwrap_or_else(|e| e.into_inner());
+                open.retain(|held| held.strong_count() > 0);
+                open.push(Arc::downgrade(&held));
                 Ok(RRDevice { held })
             }),
         _ => Err("bad arguments".into()),

@@ -348,8 +348,9 @@ pub fn said(answer: String) -> Result<serde_json::Value, String> {
 /// Whether a look comes from the screen stream: on macOS, which decodes it, unless ROAMRUNCTL_LOOK=screenshot.
 /// The device lists a running stream as screen sharing.
 pub fn streams() -> bool {
-    cfg!(target_os = "macos") && std::env::var("ROAMRUNCTL_LOOK").as_deref() != Ok("screenshot")
+    cfg!(target_os = "macos") && std::env::var(LOOK).as_deref() != Ok("screenshot")
 }
+pub const LOOK: &str = "ROAMRUNCTL_LOOK";
 
 /// The screen as a picture. From the stream (see `streams`): the display's own way up (`native`), and no
 /// full-size PNG to wait for. Else, or where the device refuses the stream (during a call), its PNG, turned as
@@ -373,9 +374,23 @@ pub fn picture(device: &Device) -> Result<Picture, String> {
     };
     #[cfg(not(target_os = "macos"))]
     let stream: Option<String> = None;
-    let png = device.screenshot().map_err(|why| match stream { Some(stream) => format!("{why} (and the screen stream: {stream})"), None => why })?;
+    screenshot(device).map_err(|why| match stream { Some(stream) => format!("{why} (and the screen stream: {stream})"), None => why })
+}
+
+/// The device's PNG, turned as its interface is.
+pub fn screenshot(device: &Device) -> Result<Picture, String> {
+    let png = device.screenshot()?;
     let image = image::load_from_memory_with_format(&png, image::ImageFormat::Png).map_err(|e| format!("the device's picture couldn't be read: {e}"))?;
     Ok(Picture { image, native: false })
+}
+
+/// A stream picture cut to the screen (see `cut`). Where the screen's size is unsaid, the PNG instead: points by
+/// the uncut frame would land short by its padding. A frame that doesn't fit a size said is left as it came: only
+/// the Duo's padding was seen, and a device padding more would otherwise have every look be its PNG.
+pub fn screen_picture(device: &Device, picture: Picture, screen: Option<(u32, u32)>) -> Result<Picture, String> {
+    if !picture.native { return Ok(picture) }
+    if screen.is_none() { return screenshot(device) }
+    Ok(Picture { image: cut(picture.image, screen), native: true })
 }
 
 /// The screen's size by the device's own word, as a stream picture is cut to; None where it doesn't say.
@@ -606,8 +621,8 @@ fn launched(device: &Device, name: &str, bundle: &str) -> Result<String, String>
 fn look(name: &str, file: Option<PathBuf>) -> Result<String, String> {
     let device = opened(name)?;
     let picture = picture(&device)?;
-    let image = if picture.native { cut(picture.image, screen_size(&device)) } else { picture.image };
-    let (png, width, height) = fitted(image, image::ImageFormat::Png)?;
+    let screen = if picture.native { screen_size(&device) } else { None };
+    let (png, width, height) = fitted(screen_picture(&device, picture, screen)?.image, image::ImageFormat::Png)?;
     let path = file.unwrap_or_else(|| std::env::temp_dir().join(format!("roamrunctl-{}-{}.png", named(name).unwrap_or("device"), std::process::id())));
     // Whatever is on the screen is in it: the owner's only.
     replace_whole(&path, &png).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -683,7 +698,11 @@ pub fn run(command: Command) -> i32 {
             Ok(None) => opened(&name).and_then(|device| launched(&device, &name, &bundle)),
             Err(why) => Err(why),
         },
-        Command::Mcp { http: None, .. } => return crate::mcp::Server::default().serve(),
+        Command::Mcp { http: None, .. } => {
+            // The streams stopped at Ctrl-C: where that can't be listened for, served all the same.
+            if let Ok(stop) = crate::at_stop() { stop.then(|| {}) }
+            return crate::mcp::Server::default().serve();
+        }
         Command::Mcp { http: Some(port), allow, token_file, allow_install, max_upload, devices } => allow.iter().map(|a| crate::http::allow(a)).collect::<Result<Vec<_>, _>>()
             .and_then(|allowed| Ok(crate::http::Options { port, allowed, token: token_file.as_deref().map(crate::http::token).transpose()?, devices, uploads: allow_install.then_some(max_upload << 20) }))
             .and_then(crate::http::serve),
