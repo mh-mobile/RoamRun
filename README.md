@@ -696,6 +696,13 @@ When in trouble, run `roamrun doctor` first.
   again.
 - **If the device's Bonjour record changes** (its identifier or authTag), add the device again on
   the same Wi-Fi.
+- **Safari's Web Inspector keeps dropping over the bridge.** Tried over tethering, the device was
+  listed under Safari › Develop and a page opened in the inspector, but the connection dropped
+  often. The cause wasn't pinned down. macOS's pairing service drops its link to the bridge about
+  every 42 seconds and reconnects within half a second, which Xcode's session survives; the log
+  showed the inspector active right after one such drop. The try had Web Inspector on in the
+  device's Safari settings, and Connect via Network turned on once in the device's submenu of the
+  Develop menu, with the device on a cable.
 
 ### Not tried
 
