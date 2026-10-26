@@ -1324,3 +1324,28 @@ private final class StandInPairing: PairingListener, @unchecked Sendable {
     try Data(count: 1 << 20).write(to: file)
     #expect(!DeviceControlWire.hasPairing(udid: "UDID-1", in: dir))
 }
+
+/// A bundle identifier or a button's name with a NUL in it would be sent cut short at it, and reported done: refused
+/// before anything is asked of the device (nor its pairing read).
+@Test func aNulIsRefusedBeforeTheDeviceIsAsked() throws {
+    let reads = OSAllocatedUnfairLock(initialState: 0)
+    let session = DeviceSession(ip: "127.0.0.1", port: 1, pairing: {
+        reads.withLock {
+            $0 += 1
+        }
+        throw DeviceSession.Failure.message("unreadable")
+    })
+    func refused(_ call: () throws -> Void) -> Bool {
+        do { try call() } catch let DeviceSession.Failure.invalid(why) { return why.contains("NUL") } catch {}
+        return false
+    }
+    #expect(refused {
+        _ = try session.launch("com.apple.Preferences\u{0}x")
+    })
+    #expect(refused {
+        try session.press("home\u{0}")
+    })
+    #expect(reads.withLock {
+        $0
+    } == 0)
+}
