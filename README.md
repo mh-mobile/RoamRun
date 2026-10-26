@@ -261,11 +261,14 @@ xcrun devicectl device info files --device <udid> --domain-type systemCrashLogs 
 same Wi-Fi. Two were tried over tethering: WebDriverAgent took about 2 seconds a tap;
 agent-device took 25–35 seconds an action and missed taps in a windowed iPad app.
 
-Safari's Web Inspector reaches the device too: it was listed under Safari › Develop and a page
-opened in the inspector, over tethering. Turn on Connect via Network in that menu once first,
-with the device on a cable. The inspector closes about every 42 seconds, when macOS's pairing
-service drops its link to the bridge and reconnects (Xcode's session carries on through this);
-open the page from the Develop menu again.
+Safari's Web Inspector works over the bridge too. Tried over tethering: the device was listed
+under Safari › Develop and a page opened in the inspector. Beforehand, turn on Web Inspector in the
+device's Safari settings, and once, with the device on a cable, Connect via Network in the device's
+submenu of the Develop menu. In that try the inspector's connection dropped often, for a cause not
+pinned down. macOS's pairing service drops its link to the bridge about every 42 seconds and
+reconnects within half a second (Xcode's session carries on through it); the log showed the
+inspector active right after one such drop. When the inspector drops, open the page from the
+Develop menu again.
 
 ## Using it from an AI agent
 
