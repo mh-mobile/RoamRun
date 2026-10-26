@@ -110,7 +110,7 @@ roamrunctl 0.8.1 での CI からの実行は、どれも 2026-10-22（UTC）で
 
 タグは鍵に付けたものが使われます（`tags:` は OAuth クライアントのときの入力です）。このアクションは `authkey` を非推奨とし、OAuth クライアントを勧めています。そのため実行の画面に警告が出ますが、処理は続きます。2026-10-26 に GitHub のランナーで試しました。`ubuntu-24.04` と `macos-15` は `tag:ci` として参加し、relay のマシンに届きました（macOS のランナーは DERP 経由）。さらに `ubuntu-24.04` のジョブから、relay を通して iPhone Duo にアプリを入れて起動しました。使ったのは roamrun-action v1（roamrunctl 0.9.0）で、relay は 0.11.0 のブランチからビルドした roamrunctl です。relay のログには、アップロード、`install`、`install_status`、`launch` の 4 つが `tag:ci` から届いていました。
 
-[Tailnet Lock](https://tailscale.com/docs/features/tailnet-lock) を有効にした tailnet では、参加したノードは、信頼されたノードの署名を受けるまで、ほかのノードとつながれません。auth key なら、信頼された Tailnet Lock の鍵を持つノードで `tailscale lock sign <鍵>` を一度実行して署名できます。そのとき表示される鍵を CI に渡します（[Tailscale の説明](https://tailscale.com/docs/features/tailnet-lock#add-a-node-using-a-pre-signed-auth-key)、英語）。OAuth クライアントは実行のたびに新しい鍵を作るので、前もって署名できません。どちらも、Tailnet Lock を有効にした tailnet では試していません。
+[Tailnet Lock](https://tailscale.com/docs/features/tailnet-lock) を有効にした tailnet では、参加したノードは、信頼されたノードの署名を受けるまで、ほかのノードとつながれません。auth key なら、信頼された Tailnet Lock の鍵を持つノードで `tailscale lock sign <鍵>` を一度実行して署名できます。そのとき表示される鍵を CI に渡します（[Tailscale の説明](https://tailscale.com/docs/features/tailnet-lock#add-a-node-using-a-pre-signed-auth-key)、英語）。OAuth クライアントは実行のたびに新しい鍵を作るので、前もって署名できません。2026-10-26 に、Tailnet Lock を有効にした tailnet（署名ノードは 2 台）で試しました。署名した auth key では、`ubuntu-24.04` と `macos-15` が `tag:ci` として参加し、relay のジョブは上と同じく iPhone Duo にアプリを入れて起動しました。OAuth クライアントでは、ランナーは参加しましたが、relay のマシンには届きませんでした（`tailscale ping` が時間切れ）。ランナーで実行した `tailscale lock status` は「This node is LOCKED OUT by Tailnet Lock」と答えました。
 
 このアクションは `ping:` も受け付けます。参加したあと、指定した相手につながるまで最大 3 分待つ入力です（経路は、直接か中継かを問いません）。上の実行では、別のステップで `tailscale ping -c 5` を実行しました。こちらは、経路が直接かどうかが出力に出ます。この入力は試していません。
 
@@ -298,7 +298,7 @@ roamrunctl 0.8.1 には、relay に頼むコマンドがありません。relay 
 - デバイスがロックされている、またはスリープしている場合。ケーブルでの充電。iPad での実行。（モバイル通信だけでつながっているデバイスは、こうした接続を受け付けません。roamrunctl の README にあるとおりです。）
 - Windows の relay。relay をサービスとして動かすこと。
 - このページの手順での macOS や Windows のランナー（action は `macos-15` で動きました。その README にあります）。セルフホストのランナー。
-- `tag:ci` に必要な先だけに絞った Tailscale のポリシー。Tailnet Lock を有効にした tailnet。
+- `tag:ci` に必要な先だけに絞った Tailscale のポリシー。
 - CI からの 1 MB より大きい `.ipa`。上書きでインストールしたときに、アプリのデータが残るかどうか。
 - デバイスのそばの Mac に CI から SSH でつなぎ、`xcrun devicectl` でインストールするやり方。
 - CI からの 0.9.0 で、ワイヤレス充電器の上のデバイスでアプリを前面に出した状態を、わざと作ってのインストール（0.9.0 はアプリを先に終了させます。これは Mac から試しました）。

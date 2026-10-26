@@ -177,8 +177,11 @@ joins needs a signature from a trusted node before others take its connections. 
 signed once, with `tailscale lock sign <the key>` on a node that holds a trusted Tailnet Lock key;
 the key it prints is the one CI is given
 ([Tailscale's guide](https://tailscale.com/docs/features/tailnet-lock#add-a-node-using-a-pre-signed-auth-key)).
-An OAuth client makes a new key at each run, which can't be signed beforehand. Neither was tried on
-a tailnet with Tailnet Lock.
+An OAuth client makes a new key at each run, which can't be signed beforehand. Run on 2026-10-26 on
+a tailnet with Tailnet Lock (two signing nodes): with a signed auth key, `ubuntu-24.04` and
+`macos-15` joined as `tag:ci`, and the relay job installed and launched the app on the iPhone Duo as
+above; with the OAuth client, the runner joined, but `tailscale lock status` on it said "This node
+is LOCKED OUT by Tailnet Lock", and it didn't reach the relay's machine (`tailscale ping` timed out).
 
 The action also takes `ping:`, hosts it waits for, up to 3 minutes, once it is up (a path direct
 or relayed). The runs above pinged in a step of their own (`tailscale ping -c 5`), which shows
@@ -434,7 +437,7 @@ was run from the Mac, and from CI inside `install --relay` (which waits by that 
 - A relay on Windows, or run as a service.
 - macOS or Windows runners with this page's steps (the action ran on `macos-15`, as its README
   says), or a self-hosted runner.
-- A Tailscale policy narrowed to `tag:ci`'s needs. A tailnet with Tailnet Lock.
+- A Tailscale policy narrowed to `tag:ci`'s needs.
 - An `.ipa` larger than 1 MB from CI, and whether the app's data survives an install over it.
 - A Mac beside the device that CI reaches by SSH and that installs with `xcrun devicectl`.
 - From CI with 0.9.0, an install with the app in front on a device on its wireless charger, set up

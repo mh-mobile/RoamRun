@@ -25,7 +25,7 @@ Step は Bitrise の Step Library にありません。上のように、`bitris
 - デバイスを含む開発用プロファイルで署名したアプリ（デバイスをチームのデバイス一覧に登録しておきます）。Xcode Archive & Export を `distribution_method: development` で動かし、Bitrise にコード署名を設定します。下の 3 回目の試行では、次の 2 つを設定しました。
   - App Store Connect の API キー（役割は Developer）。追加は Workspace の Settings › Integrations › App Store Connect で行いました。プロジェクトでの選択は、Project settings › Integrations › Stores で行いました。
   - Apple Development の証明書。`.p12` にして、Project settings › Code signing に入れました。
-- Tailscale の auth key（管理画面の Settings › Keys）。OAuth クライアントでは試していません。Reusable と Ephemeral をオンにし、タグは `tag:ci`、期限は短くします。タグとポリシーは [GitHub Actions の手順](ci.ja.md#tailscaleタグと-oauth-クライアント)と同じです。鍵をビルドのマシンに置くなら、ポリシーで、タグからデバイスそのものへの接続を許す必要があります。relay への接続だけでは足りません。
+- Tailscale の auth key（管理画面の Settings › Keys）。OAuth クライアントでは試していません。Reusable と Ephemeral をオンにし、タグは `tag:ci`、期限は短くします。タグとポリシーは [GitHub Actions の手順](ci.ja.md#tailscaleタグと-oauth-クライアント)と同じです。鍵をビルドのマシンに置くなら、ポリシーで、タグからデバイスそのものへの接続を許す必要があります。relay への接続だけでは足りません。Tailnet Lock を有効にした tailnet では、鍵を先に署名し、署名した鍵を渡します。やり方は同じ手順のページにあります。GitHub Actions からは試しましたが、Bitrise からは試していません。
 - デバイスの鍵（[CI 用のペアリング](ci.ja.md#ci-用のペアリング)）。`roamrun key create` が書いたファイルか、`roamrunctl pair control` が保存したファイルを使います。中身をまるごと Secret に入れます。または [relay](ci.ja.md#relay-で用意すること)。
 - auth key、デバイスの鍵、relay のトークンを入れる Bitrise の Secret。relay のアドレスとデバイスの名前は、Secret にしなくてかまいません。Bitrise は、Secret の値と同じ文字列をログの中で全部伏せます。そのため、`relay` のような名前を Secret にすると、roamrunctl のメッセージの一部が `[REDACTED]` になります。
 

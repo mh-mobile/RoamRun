@@ -32,6 +32,8 @@ Tailscale の管理画面で Settings › Keys › Generate auth key を選び�
 - タグは `tag:ci` にします（[GitHub Actions の手順](ci.ja.md#tailscaleタグと-oauth-クライアント)と同じもの）。
 - 有効期限は短くします。
 
+Tailnet Lock を有効にした tailnet では、鍵を先に署名し、署名した鍵を渡します。やり方は [GitHub Actions の手順](ci.ja.md#tailscaleタグと-oauth-クライアント)にあります。GitHub Actions からは試しましたが、Xcode Cloud からは試していません。
+
 GitHub Actions で使う OAuth クライアントは、ここでは試していません。
 
 ### relay
