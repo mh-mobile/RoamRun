@@ -114,6 +114,14 @@ AND category == "input"'`. Text that arrives short with a line here was dropped 
    hand, Intel), `brew install`, and
    `cargo install --locked --git … --tag v<version> roamrunctl` — and see `roamrunctl --version`
    say this version. The Introducer app (`iOS/`) isn't in a release: the notes say it is built from source.
+6. The CI integrations download a roamrunctl release they pin; once this one is out, raise it, so
+   that their users don't keep an older one:
+   - `mh-mobile/roamrun-action`: `roamrunctl-version`'s default in `action.yml`, and its README's
+     table; its CI, and a run from `mh-mobile/roamrun-ci-trial` by the new commit; a tag `v1.<n>.0`,
+     and `v1` moved to it. Workflows on `@v1` take it; on `@v1.0.0` or a commit, they don't.
+   - `mh-mobile/bitrise-step-roamrun`: `roamrunctl_version`'s default in `step.yml`; its CI; a tag
+     `1.<n>.0`. It has no moving tag: users name the tag in `git::…@<tag>`, so `docs/bitrise.md`
+     and `.ja.md` name the new one (a pull request to `main`).
 
 ## Rules
 
