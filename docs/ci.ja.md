@@ -19,7 +19,7 @@ GitHub がホストするランナーで動く GitHub Actions のジョブから
 
 ## action を使う
 
-GitHub Action の [mh-mobile/roamrun-action](https://github.com/mh-mobile/roamrun-action) を使うと、どちらのやり方も 1 つのステップで書けます。Tailscale のステップのあとに置きます。この action は、roamrunctl（既定では 0.9.0）を RoamRun のリリースから取得し、`roamrunctl-SHA256SUMS` と照らし合わせます。そのうえで、既定ではインストールして起動します。ランナーで動かすなら `key import -` と `install --launch`、relay に頼むなら `install --relay … --launch` を使います。relay の側も 0.9.0 である必要があります。使う前に、このページにある準備をしておきます。[Tailscale のタグと OAuth クライアント](#tailscaleタグと-oauth-クライアント)と、[CI 用のペアリング](#ci-用のペアリング)（シークレットを `key` に渡します）か [relay](#relay-に頼む) のどちらかです。
+GitHub Action の [mh-mobile/roamrun-action](https://github.com/mh-mobile/roamrun-action) を使うと、どちらのやり方も 1 つのステップで書けます。Tailscale のステップのあとに置きます。この action は、roamrunctl（v1.1.0 からは既定で 0.11.0）を RoamRun のリリースから取得し、`roamrunctl-SHA256SUMS` と照らし合わせます。そのうえで、既定ではインストールして起動します。ランナーで動かすなら `key import -` と `install --launch`、relay に頼むなら `install --relay … --launch` を使います。relay の側は 0.10.0 以降です。使う前に、このページにある準備をしておきます。[Tailscale のタグと OAuth クライアント](#tailscaleタグと-oauth-クライアント)と、[CI 用のペアリング](#ci-用のペアリング)（シークレットを `key` に渡します）か [relay](#relay-に頼む) のどちらかです。
 
 ```yaml
 - uses: mh-mobile/roamrun-action@v1
@@ -30,7 +30,7 @@ GitHub Action の [mh-mobile/roamrun-action](https://github.com/mh-mobile/roamru
 
 Linux と macOS のランナーで動きます。macOS では、MagicDNS が有効なとき、Tailscale のアクションがシステムの DNS を `100.100.100.100` に切り替えました。試した tailnet では、そのあと github.com の名前を引けなくなりました。2 つのステップの間に置いて、ランナーのもとの DNS に戻す 1 行は、action の README にあります。入力の一覧と action で試したことは、[その README](https://github.com/mh-mobile/roamrun-action#readme) にあります。インストールだけ、または起動だけにする入力もあります。
 
-action が実行するのは、[ランナーの手順](#ランナーの手順)と [relay を呼ぶ手順](#relay-を呼ぶ手順)の 0.9.0 の形です。このページの残りは、準備と、action を使わずに実行した記録です。
+action が実行するのは、[ランナーの手順](#ランナーの手順)と [relay を呼ぶ手順](#relay-を呼ぶ手順)の 0.11.0 の形です。このページの残りは、準備と、action を使わずに実行した記録です。
 
 ## 実行した環境と結果
 

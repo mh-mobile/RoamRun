@@ -11,7 +11,7 @@ Bitrise のビルドから、アーカイブしたアプリを Tailscale 越し�
     inputs:
       - distribution_method: development
       - automatic_code_signing: api-key
-- git::https://github.com/mh-mobile/bitrise-step-roamrun.git@1.0.0:
+- git::https://github.com/mh-mobile/bitrise-step-roamrun.git@1.1.0:
     inputs:
       - tailscale_auth_key: $TS_AUTHKEY
       - roamrun_key: $ROAMRUN_KEY
