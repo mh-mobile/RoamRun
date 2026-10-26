@@ -42,7 +42,8 @@ README lists its inputs, what to prepare, and what it does.
   Ephemeral, the tag `tag:ci`, a short expiry. The tag and the policy are as in
   [the GitHub Actions guide](ci.md#tailscale-a-tag-and-an-oauth-client); with the key on the build
   machine, the policy has to let the tag reach the device itself, not only a relay. On a tailnet
-  with Tailnet Lock, sign the key first and give the signed one (as in that guide; run from GitHub
+  with Tailnet Lock, sign the key first and give the signed one, which passes the lock for whoever
+  holds it (as in that guide; run from GitHub
   Actions, not from Bitrise).
 - The device's key ([a pairing for CI](ci.md#a-pairing-for-ci): the whole file `roamrun key create`
   wrote, or one `roamrunctl pair control` saved, in a Secret), or [a relay](ci.md#on-the-relay).

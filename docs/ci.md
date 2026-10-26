@@ -131,6 +131,9 @@ Each step ended with the app launched. The relay logged four calls from `tag:ci`
 
 ### Tailscale: a tag and an OAuth client
 
+On a tailnet with Tailnet Lock, use a signed auth key ([below](#or-an-auth-key)): a runner that
+joined by an OAuth client was locked out.
+
 1. In the tailnet's policy (Access controls), give CI a tag:
 
    ```json
@@ -155,8 +158,11 @@ The job joins the tailnet with
     tags: tag:ci
 ```
 
-**Or an auth key.** Under Settings › Keys, generate an auth key that is Reusable and Ephemeral,
-with the tag `tag:ci` and a short expiry, and add it as the repository secret `TS_AUTHKEY`:
+#### Or an auth key
+
+Under Settings › Keys, generate an auth key that is Reusable and Ephemeral, with the tag `tag:ci`
+and a short expiry (and Pre-approved, where the tailnet requires device approval, which can't be on
+with Tailnet Lock: not tried), and add it as the repository secret `TS_AUTHKEY`:
 
 ```yaml
 - uses: tailscale/github-action@v4
@@ -167,7 +173,7 @@ with the tag `tag:ci` and a short expiry, and add it as the repository secret `T
 The tag comes from the key (`tags:` is for an OAuth client). The action marks `authkey` as
 deprecated in favour of an OAuth client: the run shows a warning and goes on. Run on 2026-10-26 from
 GitHub-hosted runners: `ubuntu-24.04` and `macos-15` joined as `tag:ci` and reached the relay's
-machine (the macOS runner through DERP), and an `ubuntu-24.04` job installed and launched an app on
+machine (both through DERP), and an `ubuntu-24.04` job installed and launched an app on
 an iPhone Duo through a relay (roamrun-action v1, its roamrunctl 0.9.0; the relay a roamrunctl built
 from 0.11.0's branch), which logged the upload, `install`, `install_status` and `launch` from
 `tag:ci`.
@@ -177,14 +183,17 @@ joins needs a signature from a trusted node before others take its connections. 
 signed once, with `tailscale lock sign <the key>` on a node that holds a trusted Tailnet Lock key;
 the key it prints is the one CI is given
 ([Tailscale's guide](https://tailscale.com/docs/features/tailnet-lock#add-a-node-using-a-pre-signed-auth-key)).
-An OAuth client makes a new key at each run, which can't be signed beforehand. Run on 2026-10-26 on
+A signed key passes Tailnet Lock as it is: whoever holds it adds a node the lock trusts, with no
+signing node asked, until the key expires or is revoked. Keep its expiry short, and revoke it in the
+admin console when it may have leaked. An OAuth client makes a new key at each run, which can't be
+signed beforehand. Run on 2026-10-26 on
 a tailnet with Tailnet Lock (two signing nodes): with a signed auth key, `ubuntu-24.04` and
 `macos-15` joined as `tag:ci`, and the relay job installed and launched the app on the iPhone Duo as
 above; with the OAuth client, the runner joined, but `tailscale lock status` on it said "This node
 is LOCKED OUT by Tailnet Lock", and it didn't reach the relay's machine (`tailscale ping` timed out).
 
 The action also takes `ping:`, hosts it waits for, up to 3 minutes, once it is up (a path direct
-or relayed). The runs above pinged in a step of their own (`tailscale ping -c 5`), which shows
+or relayed). The runs with roamrunctl 0.8.1 and 0.9.0 pinged in a step of their own (`tailscale ping -c 5`), which shows
 whether a path is direct; the input wasn't tried.
 
 With a policy that allows everything, the runner reaches every machine on your tailnet while the
