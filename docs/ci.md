@@ -10,7 +10,7 @@ services weren't tried. There are two ways:
 | | roamrunctl on the runner | A relay |
 |---|---|---|
 | Who talks to the device | the runner | a machine of yours, by `roamrunctl mcp --http` |
-| What CI holds | a pairing (a key to the device) and a Tailscale OAuth client | a token for the relay and a Tailscale OAuth client |
+| What CI holds | a pairing (a key to the device) and a Tailscale OAuth client or auth key | a token for the relay and a Tailscale OAuth client or auth key |
 | What the runner has to reach | the device, on its pairing port and the tunnel port it names | the relay, on one port |
 | What has to keep running | nothing | the relay, started by you |
 
@@ -25,7 +25,7 @@ Either way, whoever can run a workflow that reads the secrets can see and operat
 the pairing key for as long as the pairing stands, with the relay's token while the relay runs (the
 relay offers all its tools to a caller it lets in); stopping the relay, or restarting it with a new
 token, takes the token back. The Tailscale OAuth client lets whoever holds it join your tailnet as
-`tag:ci` until it is revoked in the admin console.
+`tag:ci` until it is revoked in the admin console; an auth key, until it expires or is revoked.
 
 The job here doesn't build or sign the app. CI needs an `.ipa` already signed for the device (a
 development profile that lists it); `roamrunctl` checks the archive's shape, not its signature,
@@ -154,6 +154,31 @@ The job joins the tailnet with
     oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
     tags: tag:ci
 ```
+
+**Or an auth key.** Under Settings › Keys, generate an auth key that is Reusable and Ephemeral,
+with the tag `tag:ci` and a short expiry, and add it as the repository secret `TS_AUTHKEY`:
+
+```yaml
+- uses: tailscale/github-action@v4
+  with:
+    authkey: ${{ secrets.TS_AUTHKEY }}
+```
+
+The tag comes from the key (`tags:` is for an OAuth client). The action marks `authkey` as
+deprecated in favour of an OAuth client: the run shows a warning and goes on. Run on 2026-10-26 from
+GitHub-hosted runners: `ubuntu-24.04` and `macos-15` joined as `tag:ci` and reached the relay's
+machine (the macOS runner through DERP), and an `ubuntu-24.04` job installed and launched an app on
+an iPhone Duo through a relay (roamrun-action v1, its roamrunctl 0.9.0; the relay a roamrunctl built
+from 0.11.0's branch), which logged the upload, `install`, `install_status` and `launch` from
+`tag:ci`.
+
+On a tailnet with [Tailnet Lock](https://tailscale.com/docs/features/tailnet-lock), a node that
+joins needs a signature from a trusted node before others take its connections. An auth key can be
+signed once, with `tailscale lock sign <the key>` on a node that holds a trusted Tailnet Lock key;
+the key it prints is the one CI is given
+([Tailscale's guide](https://tailscale.com/docs/features/tailnet-lock#add-a-node-using-a-pre-signed-auth-key)).
+An OAuth client makes a new key at each run, which can't be signed beforehand. Neither was tried on
+a tailnet with Tailnet Lock.
 
 The action also takes `ping:`, hosts it waits for, up to 3 minutes, once it is up (a path direct
 or relayed). The runs above pinged in a step of their own (`tailscale ping -c 5`), which shows
@@ -409,7 +434,7 @@ was run from the Mac, and from CI inside `install --relay` (which waits by that 
 - A relay on Windows, or run as a service.
 - macOS or Windows runners with this page's steps (the action ran on `macos-15`, as its README
   says), or a self-hosted runner.
-- A Tailscale policy narrowed to `tag:ci`'s needs.
+- A Tailscale policy narrowed to `tag:ci`'s needs. A tailnet with Tailnet Lock.
 - An `.ipa` larger than 1 MB from CI, and whether the app's data survives an install over it.
 - A Mac beside the device that CI reaches by SSH and that installs with `xcrun devicectl`.
 - From CI with 0.9.0, an install with the app in front on a device on its wireless charger, set up

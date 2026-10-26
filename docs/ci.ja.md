@@ -7,13 +7,13 @@ GitHub がホストするランナーで動く GitHub Actions のジョブから
 | | ランナーで roamrunctl を動かす | relay に頼む |
 |---|---|---|
 | デバイスとやりとりするもの | ランナー | 手元のマシン（`roamrunctl mcp --http` を動かす） |
-| CI に置くもの | ペアリング（デバイスの鍵）と Tailscale の OAuth クライアント | relay のトークンと Tailscale の OAuth クライアント |
+| CI に置くもの | ペアリング（デバイスの鍵）と、Tailscale の OAuth クライアントか auth key | relay のトークンと、Tailscale の OAuth クライアントか auth key |
 | ランナーから届く必要がある先 | デバイス（ペアリング用ポートと、デバイスが指定するトンネル用のポート） | relay の 1 つのポート |
 | 動かしておくもの | なし | relay（自分で起動する） |
 
 このページの「relay」は、デバイスの鍵を持ち、`roamrunctl mcp --http` を動かす手元のマシンのことです。Tailscale の DERP によるリレーのことではありません。relay は、ランナーと同じく Tailscale 越しにデバイスへつなぎます。そのため、tailnet のどこに置いてもかまいません。デバイスと同じ Wi-Fi が要るのは、`pair control --to` でペアリングするときだけです。別の場所で作った鍵を取り込む方法もあります（`roamrun key create` のあと `key import`）。relay に頼むやり方では、鍵がそのマシンから出ません。ランナーで動かすやり方では、ジョブの間に手元で動かしておくものがありません。1 つのリポジトリに両方を用意しておくこともできます。
 
-どちらのやり方でも、シークレットを読むワークフローを動かせる人は、デバイスを見て操作できます。ペアリングの鍵なら、そのペアリングがある限りです。relay のトークンなら、relay が動いている間です（relay は、通した呼び出し元にすべてのツールを使わせます）。relay を止めるか、新しいトークンで起動し直せば、そのトークンは使えなくなります。Tailscale の OAuth クライアントを持つ人は、管理画面で取り消されるまで `tag:ci` として tailnet に参加できます。
+どちらのやり方でも、シークレットを読むワークフローを動かせる人は、デバイスを見て操作できます。ペアリングの鍵なら、そのペアリングがある限りです。relay のトークンなら、relay が動いている間です（relay は、通した呼び出し元にすべてのツールを使わせます）。relay を止めるか、新しいトークンで起動し直せば、そのトークンは使えなくなります。Tailscale の OAuth クライアントを持つ人は、管理画面で取り消されるまで `tag:ci` として tailnet に参加できます。auth key なら、期限が切れるか取り消されるまでです。
 
 このページのジョブは、アプリのビルドや署名をしません。CI には、そのデバイス向けに署名済みの `.ipa`（そのデバイスを含む開発用プロファイルで署名したもの）が必要です。`roamrunctl` が確かめるのはアーカイブの構成だけで、署名は確かめずにそのままインストールします。下の実行では、ジョブは自分のリポジトリのリリースから `.ipa` を取得しました（`gh release download`）。
 
@@ -99,6 +99,18 @@ roamrunctl 0.8.1 での CI からの実行は、どれも 2026-10-22（UTC）で
     oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
     tags: tag:ci
 ```
+
+**auth key でも参加できます。** Settings › Keys で auth key を作ります。Reusable と Ephemeral にし、タグは `tag:ci`、期限は短くします。それを `TS_AUTHKEY` という名前でリポジトリのシークレットに登録します。
+
+```yaml
+- uses: tailscale/github-action@v4
+  with:
+    authkey: ${{ secrets.TS_AUTHKEY }}
+```
+
+タグは鍵に付けたものが使われます（`tags:` は OAuth クライアントのときの入力です）。このアクションは `authkey` を非推奨とし、OAuth クライアントを勧めています。そのため実行の画面に警告が出ますが、処理は続きます。2026-10-26 に GitHub のランナーで試しました。`ubuntu-24.04` と `macos-15` は `tag:ci` として参加し、relay のマシンに届きました（macOS のランナーは DERP 経由）。さらに `ubuntu-24.04` のジョブから、relay を通して iPhone Duo にアプリを入れて起動しました。使ったのは roamrun-action v1（roamrunctl 0.9.0）で、relay は 0.11.0 のブランチからビルドした roamrunctl です。relay のログには、アップロード、`install`、`install_status`、`launch` の 4 つが `tag:ci` から届いていました。
+
+[Tailnet Lock](https://tailscale.com/docs/features/tailnet-lock) を有効にした tailnet では、参加したノードは、信頼されたノードの署名を受けるまで、ほかのノードとつながれません。auth key なら、信頼された Tailnet Lock の鍵を持つノードで `tailscale lock sign <鍵>` を一度実行して署名できます。そのとき表示される鍵を CI に渡します（[Tailscale の説明](https://tailscale.com/docs/features/tailnet-lock#add-a-node-using-a-pre-signed-auth-key)、英語）。OAuth クライアントは実行のたびに新しい鍵を作るので、前もって署名できません。どちらも、Tailnet Lock を有効にした tailnet では試していません。
 
 このアクションは `ping:` も受け付けます。参加したあと、指定した相手につながるまで最大 3 分待つ入力です（経路は、直接か中継かを問いません）。上の実行では、別のステップで `tailscale ping -c 5` を実行しました。こちらは、経路が直接かどうかが出力に出ます。この入力は試していません。
 
@@ -286,7 +298,7 @@ roamrunctl 0.8.1 には、relay に頼むコマンドがありません。relay 
 - デバイスがロックされている、またはスリープしている場合。ケーブルでの充電。iPad での実行。（モバイル通信だけでつながっているデバイスは、こうした接続を受け付けません。roamrunctl の README にあるとおりです。）
 - Windows の relay。relay をサービスとして動かすこと。
 - このページの手順での macOS や Windows のランナー（action は `macos-15` で動きました。その README にあります）。セルフホストのランナー。
-- `tag:ci` に必要な先だけに絞った Tailscale のポリシー。
+- `tag:ci` に必要な先だけに絞った Tailscale のポリシー。Tailnet Lock を有効にした tailnet。
 - CI からの 1 MB より大きい `.ipa`。上書きでインストールしたときに、アプリのデータが残るかどうか。
 - デバイスのそばの Mac に CI から SSH でつなぎ、`xcrun devicectl` でインストールするやり方。
 - CI からの 0.9.0 で、ワイヤレス充電器の上のデバイスでアプリを前面に出した状態を、わざと作ってのインストール（0.9.0 はアプリを先に終了させます。これは Mac から試しました）。
