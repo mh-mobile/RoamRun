@@ -212,7 +212,7 @@ fn main() {
         std::process::exit(2);
     }
     // Any other value would be taken for none: a look would stream though it was asked not to.
-    if let Some(look) = std::env::var(device::LOOK).ok().filter(|look| !look.is_empty() && look != "screenshot") {
+    if let Some(look) = std::env::var_os(device::LOOK).filter(|look| !look.is_empty() && look != "screenshot") {
         note!("roamrunctl: {}={look:?}: the one value taken is `screenshot` (a look by the device's PNG)", device::LOOK);
         std::process::exit(2);
     }

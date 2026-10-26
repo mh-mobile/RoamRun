@@ -276,7 +276,8 @@ bounded.
   device shows no screen-sharing session meanwhile. On macOS (0.11.0+) a look comes from the
   screen stream, which the device lists as screen sharing until about five seconds after the last
   look or action (`ROAMRUNCTL_LOOK=screenshot` looks by the screenshot there too); such a look is
-  the screen the way the device holds it, and its points are pressed as they are. Its MCP tools hold `tap`, `swipe`, `type` and
+  the display's own way up (portrait on an iPhone Duo held sideways, seen), and its points are
+  pressed as they are. Its MCP tools hold `tap`, `swipe`, `type` and
   `paste` to the device's latest look, by its id, for a minute — a tap or swipe to one that
   nothing went by yet — and let it go after anything else done there, or a failure that may
   have reached the device; `press` goes to whatever is on the screen.
@@ -294,9 +295,11 @@ bounded.
   Mac: one upload is kept (1024 MiB at most by default), in RoamRun's own folder, installable by
   the caller that sent it alone (by its Tailscale node's lasting id), and removed when the app
   answers that an install of it began, when any allowed caller starts another upload, after 30
-  minutes unused, or at Ctrl-C; one left by a server that was killed is removed when the RoamRun
-  app, or another server with `--allow-install`, starts a day later. An install the app doesn't
-  begin leaves it.
+  minutes unused, or at Ctrl-C; one left by a server that was killed is removed about a day later,
+  while the RoamRun app runs or when it, or another server with `--allow-install`, starts. An
+  install the app doesn't begin leaves it. Whoever is let in can look, operate and launch on every
+  device switched on in the app, and with `--allow-install` replace its apps with any app signed
+  for it.
 - **roamrunctl can serve its MCP tools over HTTP.** `roamrunctl mcp --http <port> --allow
   <who> [--allow <who>…] <devices>…`, started by a person and ended with Ctrl-C, listens on the machine's
   Tailscale IPv4 address only, and doesn't start as root (not checked on Windows). A caller

@@ -259,11 +259,11 @@ needed to establish each new device connection.
   and 10 to 36 s as a PNG. The device lists the stream as screen sharing, which its user can
   see, until about five seconds after the last look or action, and some apps' sound goes silent
   meanwhile, as during RoamRun's looks ([sound-while-looking.md](sound-while-looking.md)). The
-  picture is the display's own way up (portrait on an iPhone held sideways); taps and swipes go
+  picture is the display's own way up (portrait on an iPhone Duo held sideways, seen); taps and swipes go
   by its pixels all the same, and a turn of the device after it isn't checked. During a phone
   or VoIP call the device refuses the stream (seen during a VoIP call), and the look is the
-  PNG; so is it where the device doesn't say its screen's size (points by the uncut frame
-  would land short by the stream's padding). `ROAMRUNCTL_LOOK=screenshot` always takes the PNG,
+  PNG; so is it where the device doesn't say its screen's size, or the frame doesn't fit it
+  (points by the uncut frame would land beside what was meant), and the look's answer says so. `ROAMRUNCTL_LOOK=screenshot` always takes the PNG,
   as before 0.11.0; another value is refused before anything is done. At Ctrl-C, `mcp` stops a
   stream a look left before it ends.
 - On Linux and Windows, a look is the device's PNG: the device lists no screen-sharing

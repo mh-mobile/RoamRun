@@ -120,6 +120,10 @@ import ImageIO
             throw DeviceSession.Failure.message("no route")
         }
 
+        func reach() throws {
+            try connect()
+        }
+
         func check() {}
         func letGo() {}
         func close() {}

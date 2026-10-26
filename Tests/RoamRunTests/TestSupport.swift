@@ -324,6 +324,11 @@ final class StandInDevice: ControlledDevice, @unchecked Sendable {
         }
     }
 
+    func reach() throws {
+        count("reach")
+        try connect()
+    }
+
     func letGo() {
         count("letGo")
     }

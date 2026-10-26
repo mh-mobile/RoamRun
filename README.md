@@ -347,7 +347,9 @@ file by file).
 
 **For an agent elsewhere on your tailnet** (0.11.0+), `roamrun mcp --http <port> --allow <who>`
 serves the same tools over HTTP, until Ctrl-C. `<who>` is `tag:<name>` or a login, and `--allow`
-may be given again; `--token-file <file>` also asks every request for a token. It listens on this
+may be given again; `--token-file <file>` also asks every request for `Authorization: Bearer <the
+file's token>` (a file only you can read, 32 characters or more), and a call from this Mac itself
+is let in only with it. It listens on this
 Mac's Tailscale IPv4 address only, at `http://<that address>:<port>/mcp` (give a cloud the
 address: it usually has no MagicDNS), and lets in what `tailscale whois` says is a machine with
 that tag or that user's untagged machine. Requests, refusals, turns and the log go as
@@ -368,7 +370,7 @@ its id and sha256, and installs it by them, never by a path. One upload is kept,
 that sent it to install. An install the app doesn't begin (the device not set up, switched off,
 installing or not reached, the caller gone before its turn at the app) leaves it for another try.
 It goes when the app answers that an install of it began, when any caller starts another upload,
-after 30 minutes unused, or at Ctrl-C; one left by a server that was killed goes a day later, while
+after 30 minutes unused, or at Ctrl-C; one left by a server that was killed goes about a day later, while
 the RoamRun app runs or when it, or another such server, starts. Without `--allow-install` there
 is neither.
 
@@ -383,7 +385,11 @@ switched on, any program you run on this Mac can see and operate it**, and insta
 on it, through the app: a build
 script, a package's install step, another agent. A `look` shows whatever is on the screen,
 notifications and messages included, and locking the device does not stop it: the lock screen is
-seen and operated too (seen), though unlocking still takes the passcode or Face ID.
+seen and operated too (seen), though unlocking still takes the passcode or Face ID. **While
+the MCP server over HTTP (`mcp --http`, below) runs, so can any program on the machines its `--allow` lets in** (each
+untagged machine of a login allowed, each machine with a tag allowed), on every device switched
+on, `launch` included; with `--allow-install` it can also replace the device's apps with any app
+signed for it. `--token-file` is the one check beyond the machine.
 
 - The switch beside Device control on the device's page turns it off for every program, and back
   on. It is on after Set Up, Pair Again, `roamrun key import <file>` and `roamrun pair control --with <Tailscale name>`.

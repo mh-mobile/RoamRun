@@ -426,6 +426,7 @@ impl Server {
                     }
                 };
                 let device = &self.open[&name].0;
+                let streamed = picture.native;
                 let picture = if picture.native {
                     let frame = (picture.image.width(), picture.image.height());
                     let screen = match self.screens.get(&name) {
@@ -448,7 +449,9 @@ impl Server {
                 let id = self.next_look();
                 self.shown.insert(name, Shown { size: (width as f64, height as f64), way, native, at: Instant::now(), of, id, spent: false });
                 let mut content = vec![json!({ "type": "image", "data": base64::engine::general_purpose::STANDARD.encode(jpeg), "mimeType": "image/jpeg" })];
-                content.extend(text(format!("{width} x {height}, look {id}. Points for tap and swipe are pixels of this image, given with look {id}. It serves one tap or swipe, and type and paste, within a minute: look again after them.")));
+                // Said, so that a look much slower than the last isn't a mystery.
+                let png = if streamed && !native { " (The device's PNG this time: the screen stream's frame couldn't be fitted to the screen.)" } else { "" };
+                content.extend(text(format!("{width} x {height}, look {id}. Points for tap and swipe are pixels of this image, given with look {id}. It serves one tap or swipe, and type and paste, within a minute: look again after them.{png}")));
                 Ok(content)
             }
             "tap" | "swipe" => {
