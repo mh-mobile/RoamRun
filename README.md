@@ -360,9 +360,11 @@ back, after its turn here is given up at the app, as with `roamrun mcp`: not beg
 waits there behind another client of the device, stopped where it can if it is under way; and
 uploads are kept in RoamRun's own folder rather than one made for the run. The RoamRun app has to
 be running, as for `roamrun mcp`. What is shown and sent passes through whatever lies between: a
-cloud's proxy sees the images, the text typed or pasted, what is uploaded, and the token. It has
-been called only from this Mac itself, with the token: not yet from another machine or through a
-cloud's proxy, nor with an upload of hundreds of MB.
+cloud's proxy sees the images, the text typed or pasted, what is uploaded, and the token. It was
+called from this Mac itself with the token, and from an untagged Linux machine of the tailnet let in
+by the login (`scripts/mcp-http-check.py`, then an upload, `install` and `launch`; under `--allow
+tag:ci` that machine was refused, 403); not yet through a cloud's proxy, nor with an upload of
+hundreds of MB.
 
 With `--allow-install [--max-upload <MiB>]` it offers `install` and `install_status`, as
 roamrunctl does: the caller sends an .ipa with `PUT /upload` (1024 MiB at most by default), gets

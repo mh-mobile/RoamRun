@@ -568,8 +568,12 @@ against a real device at the time these notes were written:
 - On Windows: `pair control --with`, MCP, install, and launch.
 - On macOS, a look from the screen stream on any device but an iPhone Duo, or over a relay or
   cellular.
-- `mcp --http` from another machine (by a tag or a login), from a cloud, or on Linux or
-  Windows. On macOS it was checked from the machine itself, with the token:
+- `mcp --http` on Windows, or from a cloud other than GitHub Actions. From GitHub Actions' runners
+  (another machine, let in as `tag:ci`) it ran with relays on macOS and on Linux: see
+  [ci.md](ci.md#what-was-run). From another machine let in by a login, on 2026-10-26: an untagged
+  Linux machine of the tailnet passed `scripts/mcp-http-check.py` against a relay on macOS, and sent
+  an upload, `install` and `launch` through it to an iPhone Duo; under `--allow tag:ci` it was
+  refused (403). On macOS it was also checked from the machine itself, with the token:
   `scripts/mcp-http-check.py`; and on an iPhone, look, tap, type, press and `elements`, a tap
   refused after another caller's look, types and pastes refused by an older look, and queued
   calls taken back by closing their connection and by `notifications/cancelled` in a session.
@@ -587,8 +591,9 @@ against a real device at the time these notes were written:
   same upload were refused meanwhile, it was installed after 10 s, the upload's file was gone
   after, and the folder was removed at Ctrl-C. `launch` of it over stdio answered with its pid
   in 1.3 s.
-- `install --relay` and `launch --relay` from another machine, from a cloud, or on Linux or
-  Windows; `install --launch` without a relay; `--timeout` running out. They were run on macOS
+- `launch --relay` from another machine; `install --relay` from a cloud other than GitHub
+  Actions, or on Windows (from GitHub Actions' Linux runners it ran, as did `install --launch`
+  without a relay: [ci.md](ci.md#what-was-run)); `--timeout` running out. They were run on macOS
   from the machine itself,
   against its own `mcp --http` with the token, on the iPhone 15 Pro (iOS 27.0, its app not in
   front): without the token the upload was refused (401) before the `.ipa` was sent; with it,
