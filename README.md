@@ -261,15 +261,6 @@ xcrun devicectl device info files --device <udid> --domain-type systemCrashLogs 
 same Wi-Fi. Two were tried over tethering: WebDriverAgent took about 2 seconds a tap;
 agent-device took 25–35 seconds an action and missed taps in a windowed iPad app.
 
-Safari's Web Inspector works over the bridge too. Tried over tethering: the device was listed
-under Safari › Develop and a page opened in the inspector. Beforehand, turn on Web Inspector in the
-device's Safari settings, and once, with the device on a cable, Connect via Network in the device's
-submenu of the Develop menu. In that try the inspector's connection dropped often, for a cause not
-pinned down. macOS's pairing service drops its link to the bridge about every 42 seconds and
-reconnects within half a second (Xcode's session carries on through it); the log showed the
-inspector active right after one such drop. When the inspector drops, open the page from the
-Develop menu again.
-
 ## Using it from an AI agent
 
 Claude Code, Codex, Cursor and other agents can build, install and debug through RoamRun. A skill
@@ -705,6 +696,13 @@ When in trouble, run `roamrun doctor` first.
   again.
 - **If the device's Bonjour record changes** (its identifier or authTag), add the device again on
   the same Wi-Fi.
+- **Safari's Web Inspector keeps dropping over the bridge.** Tried over tethering, the device was
+  listed under Safari › Develop and a page opened in the inspector, but the connection dropped
+  often. The cause wasn't pinned down. macOS's pairing service drops its link to the bridge about
+  every 42 seconds and reconnects within half a second, which Xcode's session survives; the log
+  showed the inspector active right after one such drop. The try had Web Inspector on in the
+  device's Safari settings, and Connect via Network turned on once in the device's submenu of the
+  Develop menu, with the device on a cable.
 
 ### Not tried
 
