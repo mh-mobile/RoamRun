@@ -340,7 +340,8 @@ Xcode: `install` takes the path of an .ipa or an .app folder on this Mac, built 
 device, ends the app's running processes, and answers at once with an id; `install_status` with
 that id says when the app is in, and until then other calls on the device answer that it is
 installing; `launch` takes the bundle identifier. The file is copied into RoamRun's own folder for
-the app, and removed when the install ends (or, if the app quit meanwhile, when it starts again).
+the app, and removed when the install ends (or, if the app quit meanwhile, when it starts again;
+one left by a command that was ended goes an hour later while the app runs).
 An .ipa is read whole into the app's memory while it is sent to the device (an .app folder is sent
 file by file).
 
@@ -364,11 +365,12 @@ cloud's proxy, nor with an upload of hundreds of MB.
 With `--allow-install [--max-upload <MiB>]` it offers `install` and `install_status`, as
 roamrunctl does: the caller sends an .ipa with `PUT /upload` (1024 MiB at most by default), gets
 its id and sha256, and installs it by them, never by a path. One upload is kept, for the machine
-that sent it to install. An install the app doesn't begin (the device not set up, switched off or
-installing, the caller gone before its turn at the app) leaves it for another try. It goes when the
-app answers that an install of it began, when any caller starts another upload, after 30 minutes
-unused, or at Ctrl-C; one left by a server that was killed goes when the RoamRun app, or another
-such server, starts a day later. Without `--allow-install` there is neither.
+that sent it to install. An install the app doesn't begin (the device not set up, switched off,
+installing or not reached, the caller gone before its turn at the app) leaves it for another try.
+It goes when the app answers that an install of it began, when any caller starts another upload,
+after 30 minutes unused, or at Ctrl-C; one left by a server that was killed goes a day later, while
+the RoamRun app runs or when it, or another such server, starts. Without `--allow-install` there
+is neither.
 
 **What the device does meanwhile.** Each look and each action runs a screen-sharing session on the
 device, which RoamRun keeps for about five seconds after the last one. The device showed it as
