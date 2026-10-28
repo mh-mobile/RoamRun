@@ -568,7 +568,10 @@ against a real device at the time these notes were written:
 - On Windows: `pair control --with`, MCP, install, and launch.
 - On macOS, a look from the screen stream on any device but an iPhone Duo, or over a relay or
   cellular.
-- `mcp --http` on Windows, or from a cloud other than GitHub Actions. From GitHub Actions' runners
+- `mcp --http` on Windows. Of the clouds, it was called from Codex Cloud, Xcode Cloud and Bitrise
+  besides GitHub Actions: from Codex Cloud on 2026-10-19, with a build before 0.8.0's release run on
+  a Mac and on Linux, through a look, a tap, an upload, `install` and `launch`; Xcode Cloud and
+  Bitrise: see [xcode-cloud.md](xcode-cloud.md) and [bitrise.md](bitrise.md). From GitHub Actions' runners
   (another machine, let in as `tag:ci`) it ran with relays on macOS and on Linux: see
   [ci.md](ci.md#what-was-run). From another machine let in by a login, on 2026-10-26: an untagged
   Linux machine of the tailnet passed `scripts/mcp-http-check.py` against a relay on macOS, and sent
@@ -591,9 +594,9 @@ against a real device at the time these notes were written:
   same upload were refused meanwhile, it was installed after 10 s, the upload's file was gone
   after, and the folder was removed at Ctrl-C. `launch` of it over stdio answered with its pid
   in 1.3 s.
-- `launch --relay` from another machine; `install --relay` from a cloud other than GitHub
-  Actions, or on Windows (from GitHub Actions' Linux runners it ran, as did `install --launch`
-  without a relay: [ci.md](ci.md#what-was-run)); `--timeout` running out. They were run on macOS
+- `launch --relay` from another machine; `install --relay` on Windows (from GitHub Actions' Linux
+  runners it ran, as did `install --launch` without a relay: [ci.md](ci.md#what-was-run); and from
+  Xcode Cloud and Bitrise); `--timeout` running out. They were run on macOS
   from the machine itself,
   against its own `mcp --http` with the token, on the iPhone 15 Pro (iOS 27.0, its app not in
   front): without the token the upload was refused (401) before the `.ipa` was sent; with it,
