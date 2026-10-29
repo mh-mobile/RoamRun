@@ -363,8 +363,9 @@ be running, as for `roamrun mcp`. What is shown and sent passes through whatever
 cloud's proxy sees the images, the text typed or pasted, what is uploaded, and the token. It was
 called from this Mac itself with the token, and from an untagged Linux machine of the tailnet let in
 by the login (`scripts/mcp-http-check.py`, then an upload, `install` and `launch`; under `--allow
-tag:ci` that machine was refused, 403); not yet through a cloud's proxy, nor with an upload of
-hundreds of MB.
+tag:ci` that machine was refused, 403); and on 2026-10-27 from a cloud's Linux machine on the tailnet
+(Grok Bot's computer) through mcp-remote, a look and taps on an iPhone Duo. Not yet through a
+cloud's proxy, nor with an upload of hundreds of MB.
 
 With `--allow-install [--max-upload <MiB>]` it offers `install` and `install_status`, as
 roamrunctl does: the caller sends an .ipa with `PUT /upload` (1024 MiB at most by default), gets
