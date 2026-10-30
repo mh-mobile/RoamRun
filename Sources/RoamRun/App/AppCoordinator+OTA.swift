@@ -626,15 +626,15 @@ extension AppCoordinator {
         /// /dev/null here: it removes nothing and still exits 0, reporting a release that
         /// never happened. True when it exited 0.
         var off: @Sendable (_ port: Int, _ timeout: TimeInterval) -> Bool = { port, timeout in
-            Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
-                     ["serve", "--https=\(port)", "--set-path=/", "off"], timeout: timeout)
+            TailscaleClient.tailscale(TailscaleClient.fromSettings().resolvedPath(),
+                                      ["serve", "--https=\(port)", "--set-path=/", "off"], timeout: timeout)
                 .status == 0
         }
 
         /// What `tailscale` printed, for when the entry isn't there afterwards.
         var serve: @Sendable (_ port: Int, _ target: String) -> String = { port, target in
-            let out = Proc.run(TailscaleClient.fromSettings().resolvedPath() ?? "/usr/bin/false",
-                               ["serve", "--bg", "--yes", "--https=\(port)", target], timeout: 20)
+            let out = TailscaleClient.tailscale(TailscaleClient.fromSettings().resolvedPath(),
+                                                ["serve", "--bg", "--yes", "--https=\(port)", target], timeout: 20)
             return (out.err + "\n" + out.out).trimmingCharacters(in: .whitespacesAndNewlines)
         }
 

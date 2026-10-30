@@ -2,6 +2,26 @@ import Foundation
 import Testing
 @testable import RoamRun
 
+// MARK: - the binary as a CLI
+
+/// Tailscale.app's binary takes itself for the GUI without TERM, which an app opened from Finder hasn't.
+@Test func theBinaryIsToldItIsACLI() {
+    #expect(TailscaleClient.environment(from: ["HOME": "/Users/me"])["TERM"] == "dumb")
+    #expect(TailscaleClient.environment(from: ["TERM": ""])["TERM"] == "dumb")
+    #expect(TailscaleClient.environment(from: ["TERM": "xterm-256color"])["TERM"] == "xterm-256color")
+}
+
+/// What it printed instead, so that the next such failure names itself.
+@Test func whatWasPrintedInsteadOfJSONIsNamed() {
+    let gui = "The Tailscale GUI failed to start: The operation couldn’t be completed. (Tailscale.CLIError error 3.)\n"
+    #expect(TailscaleClient.devices(fromStatusJSON: gui) == nil)
+    #expect(TailscaleClient.mesh(fromStatusJSON: gui) == nil)
+    #expect(TailscaleClient.notJSON("status", gui) == "tailscale status: not JSON — "
+        + "The Tailscale GUI failed to start: The operation couldn’t be completed. (Tailscale.CLIError error 3.)")
+    #expect(TailscaleClient.notJSON("status", "\n") == "tailscale status: printed nothing")
+    #expect(TailscaleClient.ping(Proc.Result(status: 0, out: gui, err: "")) == .couldNotRun(gui))
+}
+
 // MARK: - tailscale ping
 
 @Test func directPathOnTheLAN() {

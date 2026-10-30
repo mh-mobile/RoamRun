@@ -74,6 +74,35 @@ struct TailscaleClient {
     nonisolated(unsafe) private static var knownPATH: String?
     nonisolated(unsafe) private static var lastMiss: Date?
 
+    /// Tailscale.app's binary is the GUI and the CLI in one, and takes itself for the GUI
+    /// unless TERM, TERM_PROGRAM or SHLVL is set (1.104). An app opened from Finder has none:
+    /// run by it, the binary printed "The Tailscale GUI failed to start" on stdout and exited
+    /// 0, which read as bad JSON. A terminal always has TERM, so the CLI never saw it.
+    static var environment: [String: String] {
+        environment(from: ProcessInfo.processInfo.environment)
+    }
+
+    static func environment(from env: [String: String]) -> [String: String] {
+        var env = env
+        if (env["TERM"] ?? "").isEmpty {
+            env["TERM"] = "dumb"
+        }
+        return env
+    }
+
+    /// The one way the tailscale binary is run; nil for no binary fails as a launch would.
+    static func tailscale(_ path: String?, _ args: [String], timeout: TimeInterval) -> Proc.Result {
+        Proc.run(path ?? "/usr/bin/false", args, timeout: timeout, environment: environment)
+    }
+
+    /// For output that should have been JSON and wasn't: what it was, as far as its first line says.
+    static func notJSON(_ what: String, _ out: String) -> String {
+        let line = out.split(whereSeparator: \.isNewline).first.map {
+            $0.trimmingCharacters(in: .whitespaces)
+        } ?? ""
+        return line.isEmpty ? "tailscale \(what): printed nothing" : "tailscale \(what): not JSON — \(line.prefix(160))"
+    }
+
     /// The client with the CLI path from Settings. The app owns the defaults
     /// domain; the CLI reads it by suite name.
     static func fromSettings() -> TailscaleClient {
@@ -111,7 +140,7 @@ struct TailscaleClient {
             throw TailscaleClientError.commandFailed(problem)
         }
         guard let devices = Self.devices(fromStatusJSON: out) else {
-            throw TailscaleClientError.commandFailed("tailscale status: bad JSON")
+            throw TailscaleClientError.commandFailed(Self.notJSON("status", out))
         }
         return devices
     }
@@ -135,7 +164,7 @@ struct TailscaleClient {
     /// `enableFeatureInteractive`). So it is worth naming before anything else.
     /// nil when Tailscale couldn't be asked.
     static func httpsEnabled() -> Bool? {
-        let out = Proc.run(fromSettings().resolvedPath() ?? "/usr/bin/false", ["status", "--json"], timeout: 5)
+        let out = tailscale(fromSettings().resolvedPath(), ["status", "--json"], timeout: 5)
         guard out.status == 0, let data = out.out.data(using: .utf8),
               let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
         // Signed out or still starting: no netmap, so no CertDomains either — that says nothing.
@@ -236,8 +265,7 @@ struct TailscaleClient {
     /// whatever else the user serves, and Funnel can only publish 443, 8443 and
     /// 10000 — so a port outside those cannot reach the internet at all.
     static func serving(port: Int, timeout: TimeInterval = 10) -> Serving {
-        let out = Proc.run(fromSettings().resolvedPath() ?? "/usr/bin/false",
-                           ["serve", "status", "--json"], timeout: timeout)
+        let out = tailscale(fromSettings().resolvedPath(), ["serve", "status", "--json"], timeout: timeout)
         guard out.status == 0 else { return .unknown }
         return serving(port: port, inJSON: out.out)
     }
@@ -424,7 +452,7 @@ struct TailscaleClient {
             throw TailscaleClientError.commandFailed(problem)
         }
         guard let mesh = Self.mesh(fromStatusJSON: out)
-        else { throw TailscaleClientError.commandFailed("tailscale status: bad JSON") }
+        else { throw TailscaleClientError.commandFailed(Self.notJSON("status", out)) }
         return mesh
     }
 
@@ -506,7 +534,7 @@ struct TailscaleClient {
 
     func pingResult(_ ip: String) -> Ping {
         guard let path = resolvedPath() else { return .couldNotRun("no tailscale CLI") }
-        let r = Proc.run(path, Self.pingArgs(ip), timeout: 8) // the ping itself gives up at 3 s
+        let r = Self.tailscale(path, Self.pingArgs(ip), timeout: 8) // the ping itself gives up at 3 s
         return Self.ping(r)
     }
 
@@ -521,7 +549,8 @@ struct TailscaleClient {
         }
         let said = (r.err + "\n" + r.out).lowercased()
         if ["local tailscale daemon", "local tailscale service", "tailscale is stopped", "logged out", "needslogin",
-            "not logged in", "not yet approved", "unexpected state", "access denied", "permission denied"]
+            "not logged in", "not yet approved", "unexpected state", "access denied", "permission denied",
+            "gui failed to start"]
             .contains(where: said.contains)
         {
             return .couldNotRun(r.err.isEmpty ? r.out : r.err)
@@ -539,7 +568,8 @@ struct TailscaleClient {
     /// unreachable. Pinging also wakes an idle peer, whose CurAddr is empty.
     func directHost(_ ip: String) throws -> String? {
         guard let path = resolvedPath() else { throw TailscaleClientError.cliNotFound }
-        return Self.directHost(fromPing: Proc.run(path, ["ping", "-c", "3", "--timeout", "2s", ip], timeout: 8).out)
+        return Self
+            .directHost(fromPing: Self.tailscale(path, ["ping", "-c", "3", "--timeout", "2s", ip], timeout: 8).out)
     }
 
     /// "pong from my-iphone (100.64.0.10) via 192.168.1.42:41641 in 40ms" / "via DERP(tok) in …" / "via [fd00::1]:41641 in …"
@@ -554,7 +584,7 @@ struct TailscaleClient {
     }
 
     private func run(_ path: String, _ args: [String], timeout: TimeInterval = 5) throws -> String {
-        let r = Proc.run(path, args, timeout: timeout) // a wedged tailscaled must not hang a bridge start
+        let r = Self.tailscale(path, args, timeout: timeout) // a wedged tailscaled must not hang a bridge start
         guard r.status == 0 else {
             throw TailscaleClientError.commandFailed("tailscale \(args.joined(separator: " ")): \(r.err)")
         }
