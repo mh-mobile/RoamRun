@@ -17,10 +17,15 @@ enum Proc {
     /// Runs to completion. Both pipes are drained while it runs — waiting
     /// first deadlocks once a tool writes more than the ~64KB pipe buffer.
     /// Never unbounded: a wedged tool must not hang the CLI or a bridge's checks.
-    static func run(_ path: String, _ args: [String], timeout: TimeInterval = 45) -> Result {
+    static func run(_ path: String, _ args: [String], timeout: TimeInterval = 45,
+                    environment: [String: String]? = nil) -> Result
+    {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: path)
         task.arguments = args
+        if let environment {
+            task.environment = environment
+        }
         let out = Pipe(), err = Pipe()
         task.standardInput = FileHandle.nullDevice // an interactive shell must not read the CLI's terminal
         task.standardOutput = out
