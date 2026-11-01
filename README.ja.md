@@ -52,7 +52,7 @@ flowchart LR
 ## 必要なもの
 
 - **Apple シリコンの Mac と、macOS 13 以降**。管理者アカウントも必要です。RoamRun は `log stream` で `remotepairingd` のログを読みます。macOS から管理者権限が必要だと返された場合は、その旨を表示して止まります。
-- **iOS 17.4 以降のデバイス**。RoamRun が中継するのは TCP だけです。iOS 17.0〜17.3 の QUIC トンネルには対応していません。iPad、Apple Vision Pro、Apple TV でも動かしています。以下の「デバイス」は、この 4 種類を指します。
+- **iOS 17.4 以降のデバイス**。RoamRun が中継するのは TCP だけです。iOS 17.0〜17.3 の QUIC トンネルには対応していません。iPad、Apple Vision Pro、Apple TV でも動かしています。以下の「デバイス」は、この 4 種類を指します。Apple Watch は、手元に実機がないため試していません。watchOS 用の Tailscale のアプリはないので、Apple Watch だけをブリッジできません。ペアの iPhone のブリッジを通して届くかどうかは、わかっていません。
 - **`devicectl` を含む Xcode**（Xcode 15 以降）。デバイスの iOS のバージョンに対応している必要があります。対応は [Apple の表](https://developer.apple.com/support/xcode/)で確かめられます。`roamrun logs` と `run --logs` は、Xcode 16 で入った `devicectl` の `--console` を使います。
 - **Tailscale**。デバイスのアドレスを手で入力する形なら、ほかの mesh VPN でも使えます。Mac とデバイスの両方で接続しておきます。
 - **この Mac と一度ペアリングしたデバイス**。デベロッパモードを有効にしておきます。ペアリングは、USB で行うか、Xcode 27 と iOS 27 なら同じ Wi-Fi 上で行えます（Device Hub › ＋ › Pair Nearby Device）。
