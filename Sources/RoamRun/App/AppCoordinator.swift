@@ -963,7 +963,7 @@ final class AppCoordinator: ObservableObject {
         externalBridges.keys.forEach(stopExternalBridge)
     }
 
-    /// iPhone, iPad or Vision Pro — for the icons. devicectl knows every paired
+    /// iPhone, iPad, Vision Pro or Apple TV — for the icons. devicectl knows every paired
     /// device's kind by UDID, even while it's away; asked once per profile.
     func learnDeviceTypes() {
         guard profiles.contains(where: {

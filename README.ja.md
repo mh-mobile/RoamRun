@@ -16,7 +16,7 @@
 
 <p align="center"><img src="docs/images/main.png" width="800" alt="RoamRun のメイン画面"></p>
 
-RoamRun は、macOS のメニューバーアプリです。Xcode のワイヤレスデバッグを、Tailscale などの mesh VPN 越しでも使えるようにします。`roamrun` コマンドも付いています。iPhone、iPad、Apple Vision Pro が Mac と別のネットワークにあっても、Xcode や `devicectl` からは手元のデバイスとして見えます。ビルド、インストール、起動、デバッグは、いつもどおりにできます。RoamRun では、このつながりを「ブリッジ」と呼びます。
+RoamRun は、macOS のメニューバーアプリです。Xcode のワイヤレスデバッグを、Tailscale などの mesh VPN 越しでも使えるようにします。`roamrun` コマンドも付いています。iPhone、iPad、Apple Vision Pro、Apple TV が Mac と別のネットワークにあっても、Xcode や `devicectl` からは手元のデバイスとして見えます。ビルド、インストール、起動、デバッグは、いつもどおりにできます。RoamRun では、このつながりを「ブリッジ」と呼びます。
 
 ほかに、次の 3 つのことができます。
 
@@ -52,7 +52,7 @@ flowchart LR
 ## 必要なもの
 
 - **Apple シリコンの Mac と、macOS 13 以降**。管理者アカウントも必要です。RoamRun は `log stream` で `remotepairingd` のログを読みます。macOS から管理者権限が必要だと返された場合は、その旨を表示して止まります。
-- **iOS 17.4 以降のデバイス**。RoamRun が中継するのは TCP だけです。iOS 17.0〜17.3 の QUIC トンネルには対応していません。iPad と Apple Vision Pro でも動かしています。以下の「デバイス」は、この 3 種類を指します。
+- **iOS 17.4 以降のデバイス**。RoamRun が中継するのは TCP だけです。iOS 17.0〜17.3 の QUIC トンネルには対応していません。iPad、Apple Vision Pro、Apple TV でも動かしています。以下の「デバイス」は、この 4 種類を指します。
 - **`devicectl` を含む Xcode**（Xcode 15 以降）。デバイスの iOS のバージョンに対応している必要があります。対応は [Apple の表](https://developer.apple.com/support/xcode/)で確かめられます。`roamrun logs` と `run --logs` は、Xcode 16 で入った `devicectl` の `--console` を使います。
 - **Tailscale**。デバイスのアドレスを手で入力する形なら、ほかの mesh VPN でも使えます。Mac とデバイスの両方で接続しておきます。
 - **この Mac と一度ペアリングしたデバイス**。デベロッパモードを有効にしておきます。ペアリングは、USB で行うか、Xcode 27 と iOS 27 なら同じ Wi-Fi 上で行えます（Device Hub › ＋ › Pair Nearby Device）。
@@ -363,17 +363,21 @@ roamrun up iphone-15-pro
 
 `roamrun` と `roamrunctl` は互いに通信するので、同じバージョンにそろえてください。0.7.0 より前の `pair introduce` は、相手のマシンを `--mac` で指定していました。いまは、どちらのコマンドでも `--host` です。
 
-### Apple Vision Pro
+<a id="apple-vision-pro"></a>
 
-Apple Vision Pro のペアリングは、iPhone とは手順が違います。Vision Pro のほうが待っていて、Mac が Vision Pro を選びます。使うコマンドは、iPhone の場合と同じ 2 つです。
+### Apple Vision Pro と Apple TV
+
+Apple Vision Pro と Apple TV のペアリングは、iPhone とは手順が違います。デバイスのほうが待っていて、Mac がデバイスを選びます。使うコマンドは、iPhone の場合と同じ 2 つです。Apple TV には、tvOS 用の Tailscale のアプリを入れておきます。
 
 ```sh
-# デバイスで。設定 › 一般 › Remote Devices を開いたままにする
+# デバイスで、次の画面を開いたままにする
+#   Apple Vision Pro: 設定 › 一般 › Remote Devices
+#   Apple TV: 設定 › 一般 › リモコンとデバイス › リモコンアプリとデバイス
 # 離れた Mac で
 roamrun pair xcode --with home-mac            # home-mac は、デバイスのそばの Mac の Tailscale 上の名前
 # デバイスのそばの Mac で。デバイスは、デバイスのそばの Mac の RoamRun に保存しておく
 roamrun pair introduce --host cloud-mac --to vision-pro
-# 離れた Mac で。コマンドに案内が出たら、Device Hub › ＋ › Pair Nearby Device › Apple Vision Pro を開き、
+# 離れた Mac で。コマンドに案内が出たら、Device Hub › ＋ › Pair Nearby Device › Apple Vision Pro（または Apple TV）を開き、
 # デバイスを選んで Next を押し、デバイスに表示されたコードを入力する
 roamrun up vision-pro
 ```
@@ -381,10 +385,14 @@ roamrun up vision-pro
 - 離れた Mac のコマンドは、Device Hub でペアリングが済むと、自動で終了します。終了の判断には、Device Hub がシステムログに書く 1 行を使います。この行にはデバイスの名前が含まれません。そのため、コマンドが動いている間は、Device Hub でほかのデバイスをペアリングしないでください。コマンドは、Ctrl-C を押したときと、5 分たったときにも終了します。
 - デバイスのそばの Mac から、Tailscale がデバイスに IPv4 で直接つながっている必要があります。
 - コマンドが動いている間、離れた Mac は、自分のネットワーク上にデバイスを公開します。中継するのは、離れた Mac 自身からデバイスへの接続だけです。コマンドが終了するまでに離れた Mac がデバイスに接続できていれば、デバイスが保存されます。
-- `--host` に指定できるのは Mac だけです。待っている状態のデバイスに対して、`pair introduce` は Mac 以外の `--host` を拒否します。Introducer アプリと `roamrunctl` は、Vision Pro の仲介に対応していません。
+- `--host` に指定できるのは Mac だけです。待っている状態のデバイスに対して、`pair introduce` は Mac 以外の `--host` を拒否します。Introducer アプリと `roamrunctl` は、Vision Pro と Apple TV の仲介に対応していません。
 - ペアリングのあと、Device Hub にデバイスが出てこない場合は、「Available」と「Unavailable」の見出しが折りたたまれていないか確かめてください。見出しにポインタを合わせると矢印が出るので、それをクリックします。
 
-2026-10-13 に、Apple Vision Pro 1 台と、仮想マシンの離れた Mac で、上のコマンドを実行しました。ペアリングができ、離れた Mac のコマンドが自動で終了し、離れた Mac でブリッジが Ready になりました。ブレークポイント、自宅の外にあるデバイス、Apple TV は試していません。
+2026-10-13 に、Apple Vision Pro 1 台と、仮想マシンの離れた Mac で、上のコマンドを実行しました。ペアリングができ、離れた Mac のコマンドが自動で終了し、離れた Mac でブリッジが Ready になりました。
+
+2026-11-01 には、tvOS 27.2 の Apple TV 4K（第 2 世代）で同じ手順を実行しました。離れた Mac は、Apple TV のそばの Mac の中で動く仮想マシンです。仮想マシンは、そばの Mac とは別のネットワークにあります。ペアリングができ、離れた Mac のコマンドが自動で終了し、ブリッジが Ready になりました。さらに、離れた Mac の Xcode 27.0 からアプリを実行し、ブレークポイントで止まりました。Apple TV の画面の名前は、日本語の表示で確かめたものです。
+
+試していないのは、自宅の外にある離れた Mac、自宅の外にあるデバイス、Apple TV でのデバイスの操作（look や tap）です。
 
 ## ブリッジを使わずにインストールする（OTA）
 
