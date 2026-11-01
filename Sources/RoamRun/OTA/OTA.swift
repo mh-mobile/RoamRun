@@ -131,8 +131,24 @@ enum OTA {
 
     // MARK: - Reading an archive
 
+    /// One copy of the archive to read, check, store and take the icon from. Read
+    /// from `path` each time, a build script exporting to it meanwhile could have
+    /// the page describe one archive and serve another. On APFS the copy is a clone.
+    static func withCopy<T>(of path: String, _ body: (String) throws -> T) throws -> T {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-ota-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        do { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
+        catch { throw Problem.failed("couldn't make \(dir.path): \(error.localizedDescription)") }
+        let copy = dir.appendingPathComponent("app.ipa")
+        do { try FileManager.default.copyItem(at: URL(fileURLWithPath: path), to: copy) }
+        catch { throw Problem.failed("couldn't read \(path): \(error.localizedDescription)") }
+        return try body(copy.path)
+    }
+
     /// What the .ipa says about itself, or why it can't be served.
-    static func read(ipa path: String) throws -> Build {
+    /// `shown`: how to name it, when `path` is a copy.
+    static func read(ipa path: String, shown: String? = nil) throws -> Build {
+        let name = shown ?? path
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-ota-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: dir) }
         do { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
@@ -142,17 +158,17 @@ enum OTA {
         // 1 is "warnings, but it worked" and 11 is "nothing matched", which the
         // guard below reports better. Anything above that is a broken archive.
         if unzip.status < 0 || (unzip.status > 1 && unzip.status != 11) {
-            throw Problem
-                .failed("couldn't unpack \(path): \(unzip.err.trimmingCharacters(in: .whitespacesAndNewlines))")
+            let why = unzip.err.replacingOccurrences(of: path, with: name)
+            throw Problem.failed("couldn't unpack \(name): \(why.trimmingCharacters(in: .whitespacesAndNewlines))")
         }
         let payload = dir.appendingPathComponent("Payload")
         guard let app = appBundle(in: payload),
               let plist = inside(payload.appendingPathComponent(app).appendingPathComponent("Info.plist"), dir),
               let info = NSDictionary(contentsOf: plist) as? [String: Any]
-        else { throw Problem.notAnArchive(path) }
+        else { throw Problem.notAnArchive(name) }
 
-        guard let bundleID = info["CFBundleIdentifier"] as? String else { throw Problem.unreadable(path) }
-        guard isPlainName(bundleID) else { throw Problem.oddBundleID(path: path, id: bundleID) }
+        guard let bundleID = info["CFBundleIdentifier"] as? String else { throw Problem.unreadable(name) }
+        guard isPlainName(bundleID) else { throw Problem.oddBundleID(path: name, id: bundleID) }
         let size = ((try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int64) ?? 0
 
         let version = (info["CFBundleShortVersionString"] as? String) ?? "0"
