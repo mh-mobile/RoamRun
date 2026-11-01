@@ -20,17 +20,20 @@ extension CLI {
             OTA.Device(name: $0.displayName, udid: running[$0.id]?.udid ?? $0.udid)
         }
         do {
-            var build = try OTA.read(ipa: path)
-            let checked = try OTA.check(CLI.profilePlist(of: path), against: devices, path: given)
-            build.expires = checked.expires
-            // Not while nothing of yours can take it: `--replace` would remove the
-            // build people are running to make room for one they can't install,
-            // and there would be no way back to it.
-            var noneOfYours = false
-            if case .noneOfYours = checked.coverage {
-                noneOfYours = true
+            let (build, checked, added) = try OTA.withCopy(of: path) { ipa in
+                var build = try OTA.read(ipa: ipa, shown: path)
+                let checked = try OTA.check(CLI.profilePlist(of: ipa), against: devices, path: given)
+                build.expires = checked.expires
+                // Not while nothing of yours can take it: `--replace` would remove the
+                // build people are running to make room for one they can't install,
+                // and there would be no way back to it.
+                var noneOfYours = false
+                if case .noneOfYours = checked.coverage {
+                    noneOfYours = true
+                }
+                let added = try OTA.add(ipa: ipa, build, replacing: replacing && !noneOfYours)
+                return (build, checked, added)
             }
-            let added = try OTA.add(ipa: path, build, replacing: replacing && !noneOfYours)
 
             print("Stored \(build.title) \(build.label) (\(OTA.size(build.size))).")
             // Which devices, not whether: an Ad Hoc profile covers the ones it

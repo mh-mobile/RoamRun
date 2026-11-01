@@ -787,6 +787,61 @@ private func sized(_ path: String, _ b: OTA.Build) -> OTA.Build {
     #expect(OTA.builds(of: "com.example.App", in: root)?.count == 2)
 }
 
+/// A real archive, as far as `OTA.read` looks: Payload/<app>.app/Info.plist, zipped.
+private func zippedIPA(_ root: URL, bundleID: String) throws -> String {
+    let work = root.appendingPathComponent(UUID().uuidString)
+    let app = work.appendingPathComponent("Payload/App.app")
+    try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+    let info: [String: Any] = ["CFBundleIdentifier": bundleID, "CFBundleShortVersionString": "1.0",
+                               "CFBundleVersion": "1"]
+    try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+        .write(to: app.appendingPathComponent("Info.plist"))
+    let zip = Process()
+    zip.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
+    zip.arguments = ["-qr", "app.ipa", "Payload"]
+    zip.currentDirectoryURL = work
+    try zip.run()
+    zip.waitUntilExit()
+    #expect(zip.terminationStatus == 0)
+    return work.appendingPathComponent("app.ipa").path
+}
+
+@Test func anArchiveRewrittenWhileOtaRunsIsntMixedWithTheOneItRead() throws {
+    let root = otaScratch()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let given = try zippedIPA(root.appendingPathComponent("src"), bundleID: "com.example.App")
+    let first = try Data(contentsOf: URL(fileURLWithPath: given))
+    let later = try zippedIPA(root.appendingPathComponent("src"), bundleID: "com.example.Other")
+    var copy = ""
+    let added = try OTA.withCopy(of: given) { ipa in
+        copy = ipa
+        let build = try OTA.read(ipa: ipa, shown: given)
+        // A build script exporting to the same path between the checks and the store.
+        try FileManager.default.removeItem(atPath: given)
+        try FileManager.default.copyItem(atPath: later, toPath: given)
+        return try OTA.add(ipa: ipa, build, in: root)
+    }
+    #expect(added.dir.deletingLastPathComponent().lastPathComponent == "com.example.App")
+    #expect(try Data(contentsOf: added.dir.appendingPathComponent("app.ipa")) == first)
+    #expect(copy != given && !FileManager.default.fileExists(atPath: copy))
+}
+
+@Test func aBrokenArchiveIsNamedByThePathGivenNotByItsCopy() throws {
+    let root = otaScratch()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let given = try fakeIPA(root.appendingPathComponent("src"), "not a zip")
+    var copy = ""
+    let error = #expect(throws: OTA.Problem.self) {
+        try OTA.withCopy(of: given) { ipa in
+            copy = ipa
+            return try OTA.read(ipa: ipa, shown: given)
+        }
+    }
+    let said = error?.localizedDescription ?? ""
+    #expect(said.contains(given) && !said.contains(copy))
+    #expect(!copy.isEmpty && !FileManager.default.fileExists(atPath: copy))
+}
+
 @Test func nothingIsKeptBeyondTheLimitEvenWhenTheNewBuildSortsLast() throws {
     let root = otaScratch()
     defer { try? FileManager.default.removeItem(at: root) }
