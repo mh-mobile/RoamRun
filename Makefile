@@ -24,10 +24,11 @@ SIGN_FLAGS = --force --options runtime $(if $(filter -,$(SIGN_ID))$(findstring A
 
 all: app
 
-# xcrun pins Xcode's toolchain; a swiftly `swift` first in PATH breaks the build.
+# xcrun pins Xcode's toolchain and its macOS SDK, the one `app` stamps; a swiftly `swift`
+# first in PATH breaks the build.
 # SNAPSHOT=1 compiles in the MB_SNAPSHOT screenshot mode (dev only; never in a dmg).
 build: device-lib
-	xcrun swift build -c release $(if $(SNAPSHOT),-Xswiftc -DSNAPSHOT)
+	xcrun --sdk macosx swift build -c release $(if $(SNAPSHOT),-Xswiftc -DSNAPSHOT)
 
 app: build
 	rm -rf $(BUNDLE)
@@ -35,7 +36,9 @@ app: build
 	# SwiftPM records the deployment target (13.0) as the SDK version, which
 	# makes macOS run the app in compatibility mode — no Liquid Glass. Stamp
 	# the real SDK version; the minimum OS stays 13.0.
-	xcrun vtool -set-build-version macos 13.0 $(shell xcrun --show-sdk-version) -replace \
+	sdk=$$(xcrun --sdk macosx --show-sdk-version) && [ -n "$$sdk" ] \
+		|| { echo "couldn't read the macOS SDK version (xcrun --sdk macosx --show-sdk-version)" >&2; exit 1; }; \
+	xcrun vtool -set-build-version macos 13.0 $$sdk -replace \
 		-output $(BUNDLE)/Contents/MacOS/$(APP_NAME) $(BINARY)
 	cp Info.plist $(BUNDLE)/Contents/Info.plist
 	mkdir -p $(BUNDLE)/Contents/Resources
