@@ -367,7 +367,7 @@ roamrun up iphone-15-pro
 
 ### Apple Vision Pro と Apple TV
 
-Apple Vision Pro と Apple TV のペアリングは、iPhone とは手順が違います。デバイスのほうが待っていて、Mac がデバイスを選びます。使うコマンドは、iPhone の場合と同じ 2 つです。Apple TV には、tvOS 用の Tailscale のアプリを入れておきます。
+Apple Vision Pro と Apple TV のペアリングは、iPhone とは手順が違います。デバイスのほうが待っていて、Mac がデバイスを選びます。使うコマンドは、iPhone の場合と同じ 2 つです。Apple TV には、tvOS 用の Tailscale のアプリを入れておきます。また、両方の Mac に RoamRun 0.12.0 以降が必要です。それより古い RoamRun は、iPhone、iPad、Apple Vision Pro のどれでもないとして Apple TV を断ります。
 
 ```sh
 # デバイスで、次の画面を開いたままにする

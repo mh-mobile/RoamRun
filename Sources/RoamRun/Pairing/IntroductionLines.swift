@@ -30,7 +30,7 @@ enum Introduction {
         static let keys: Set<String> = ["identifier", "authTag", "flags", "ver", "minVer"]
     }
 
-    /// A device that waits to be picked by a Mac (Apple Vision Pro, Apple TV, with Remote Devices open): what
+    /// A device that waits to be picked by a Mac (Apple Vision Pro, Apple TV, with the screen where it waits open): what
     /// it announces. The reverse of an offer: the Mac far from it announces this in the device's place.
     /// Which device it is isn't in it: that is the device handed over beside it.
     struct Pairable: Codable, Equatable, Sendable {

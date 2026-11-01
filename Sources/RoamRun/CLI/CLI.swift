@@ -133,8 +133,8 @@ enum CLI {
                                      naming this Mac) and hand it the device afterwards. --host may also
                                      name a machine that waits with `pair control --with` (RoamRun's, or
                                      roamrunctl's on Linux or Windows): it then pairs for device control.
-                                     An Apple Vision Pro or Apple TV waits to be picked instead (its
-                                     Remote Devices, open): without <offer>, what it announces goes to
+                                     An Apple Vision Pro or Apple TV waits to be picked instead (the
+                                     screen where it waits, open): without <offer>, what it announces goes to
                                      that Mac, which announces it there for its own Device Hub to pick
       up <name> [-v] [-d]            Bridge a device until Ctrl-C (-v: activity log; -d: run in the background —
                                      waits up to 60s for Ready or On this Wi-Fi (exit 0); otherwise exits 1

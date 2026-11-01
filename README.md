@@ -552,7 +552,9 @@ named its machine with `--mac`; it is `--host` now in both.
 ### Apple Vision Pro and Apple TV
 
 An Apple Vision Pro or Apple TV is paired the other way round: it waits, and the Mac picks it.
-The two commands are the same as for an iPhone. An Apple TV needs Tailscale's app for tvOS.
+The two commands are the same as for an iPhone. An Apple TV needs Tailscale's app for tvOS, and
+RoamRun 0.12.0 or later on both Macs: an older one refuses it as not an iPhone, iPad or Apple
+Vision Pro.
 
 ```sh
 # on the device, left open: Settings › General › Remote Devices (Apple Vision Pro),
