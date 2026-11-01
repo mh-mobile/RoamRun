@@ -35,7 +35,9 @@ app: build
 	# SwiftPM records the deployment target (13.0) as the SDK version, which
 	# makes macOS run the app in compatibility mode — no Liquid Glass. Stamp
 	# the real SDK version; the minimum OS stays 13.0.
-	xcrun vtool -set-build-version macos 13.0 $(shell xcrun --show-sdk-version) -replace \
+	sdk=$$(xcrun --sdk macosx --show-sdk-version) && [ -n "$$sdk" ] \
+		|| { echo "couldn't read the macOS SDK version (xcrun --sdk macosx --show-sdk-version)"; exit 1; }; \
+	xcrun vtool -set-build-version macos 13.0 $$sdk -replace \
 		-output $(BUNDLE)/Contents/MacOS/$(APP_NAME) $(BINARY)
 	cp Info.plist $(BUNDLE)/Contents/Info.plist
 	mkdir -p $(BUNDLE)/Contents/Resources
