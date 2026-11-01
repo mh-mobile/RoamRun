@@ -372,7 +372,7 @@ Apple Vision Pro と Apple TV のペアリングは、iPhone とは手順が違�
 ```sh
 # デバイスで、次の画面を開いたままにする
 #   Apple Vision Pro: 設定 › 一般 › Remote Devices
-#   Apple TV: 設定 › 一般 › リモコンとデバイス › リモコンアプリとデバイス
+#   Apple TV: 設定 › リモコンとデバイス › リモコンアプリとデバイス
 # 離れた Mac で
 roamrun pair xcode --with home-mac            # home-mac は、デバイスのそばの Mac の Tailscale 上の名前
 # デバイスのそばの Mac で。デバイスは、デバイスのそばの Mac の RoamRun に保存しておく

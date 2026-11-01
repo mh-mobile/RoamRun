@@ -140,7 +140,7 @@ introduced; you can run the commands, they do the rest.
   the `roamrunctl` skill (in this repository's `skills/roamrunctl`) says the rest.
 - An Apple Vision Pro or Apple TV pairs the other way round (it waits, the Mac picks it), with the
   same two commands: Settings › General › Remote Devices open on a Vision Pro (on an Apple TV,
-  Settings › General › Remotes and Devices › Remote App and Devices; it needs Tailscale's tvOS app),
+  Settings › Remotes and Devices › Remote App and Devices; it needs Tailscale's tvOS app),
   `roamrun pair xcode --with <mac>` on the far Mac, `roamrun pair introduce --host <mac>
   --to <name>` on a Mac on its Wi‑Fi that has it saved. The far Mac then announces the
   device itself and says so: the user picks it in Device Hub there (+ › Pair Nearby

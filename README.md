@@ -558,7 +558,7 @@ Vision Pro.
 
 ```sh
 # on the device, left open: Settings › General › Remote Devices (Apple Vision Pro),
-#   Settings › General › Remotes and Devices › Remote App and Devices (Apple TV)
+#   Settings › Remotes and Devices › Remote App and Devices (Apple TV)
 # on the far Mac:
 roamrun pair xcode --with home-mac            # home-mac: the Tailscale name of a Mac on the device's Wi‑Fi
 # on that Mac, with the device saved in RoamRun there:

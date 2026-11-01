@@ -266,7 +266,7 @@ extension Introduction {
         Waiting(deviceType: "realityDevice", model: "RealityDevice", name: "Apple Vision Pro",
                 settings: "Settings › General › Remote Devices"),
         Waiting(deviceType: "appleTV", model: "AppleTV", name: "Apple TV",
-                settings: "Settings › General › Remotes and Devices › Remote App and Devices")
+                settings: "Settings › Remotes and Devices › Remote App and Devices")
     ]
 
     static func waiting(model: String) -> Waiting? {
