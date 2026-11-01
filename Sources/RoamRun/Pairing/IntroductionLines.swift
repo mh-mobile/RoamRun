@@ -30,7 +30,7 @@ enum Introduction {
         static let keys: Set<String> = ["identifier", "authTag", "flags", "ver", "minVer"]
     }
 
-    /// A device that waits to be picked by a Mac (Apple Vision Pro, with Remote Devices open): what
+    /// A device that waits to be picked by a Mac (Apple Vision Pro, Apple TV, with the screen where it waits open): what
     /// it announces. The reverse of an offer: the Mac far from it announces this in the device's place.
     /// Which device it is isn't in it: that is the device handed over beside it.
     struct Pairable: Codable, Equatable, Sendable {
@@ -252,6 +252,48 @@ extension Introduction {
     static let deviceService = "_remotepairing._tcp"
     /// What a device announces while it waits for a Mac to pick it.
     static let pairableService = "_remotepairing-manual-pairing._tcp"
+
+    /// A kind of device that waits for a Mac to pick it: devicectl's deviceType, how the model it
+    /// announces starts, its name in Device Hub's Pair Nearby Device, and where on it it waits.
+    struct Waiting: Equatable, Sendable {
+        let deviceType: String
+        let model: String
+        let name: String
+        let settings: String
+    }
+
+    static let waitingKinds = [
+        Waiting(deviceType: "realityDevice", model: "RealityDevice", name: "Apple Vision Pro",
+                settings: "Settings › General › Remote Devices"),
+        Waiting(deviceType: "appleTV", model: "AppleTV", name: "Apple TV",
+                settings: "Settings › Remotes and Devices › Remote App and Devices")
+    ]
+
+    static func waiting(model: String) -> Waiting? {
+        waitingKinds.first {
+            model.hasPrefix($0.model)
+        }
+    }
+
+    static func waiting(deviceType: String?) -> Waiting? {
+        waitingKinds.first {
+            $0.deviceType == deviceType
+        }
+    }
+
+    /// The kind of device a pairable line was read from.
+    static func waiting(line: String) -> Waiting? {
+        guard case .success(let read) = pairable(from: line) else { return nil }
+        return waiting(model: read.txt["model"] ?? "")
+    }
+
+    /// Where each kind waits, for a device whose kind isn't known.
+    static var waitingSettings: String {
+        waitingKinds.map {
+            "\($0.settings) on an \($0.name)"
+        }
+        .joined(separator: "; ")
+    }
 
     /// A stand-in's host name: under `.roamrun.local`, which is how a leftover helper is known for ours.
     static func standInHost(_ identifier: String) -> String {

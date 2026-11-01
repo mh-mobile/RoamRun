@@ -222,7 +222,7 @@ roamrunctl pair introduce --host <host> --to <device> [--offer <line>] [--as <na
 - `--as` は、ホストがデバイスを保存するときの名前を指定します。ホストは、その名前を拒否することがあります。Xcode のペアリングでは、その場合、表示されたデバイスの情報を `roamrun devices add <行> --as <別の名前>` で手動で追加できます。ホストが `roamrunctl` の場合は、ホスト側の `--as` が優先されます。
 - `--on` は、仲介マシンがデバイスのネットワークに複数のアドレスを持つときに、使うローカルの IPv4 アドレスを指定します。指定しなければ、システムがデバイス宛ての通信に使うアドレスを選び、ほかの候補を表示します。
 - Xcode の場合、ペアリングのコードはホストの Device Hub に表示されます。仲介マシンが作るものではありません。デバイス操作の場合は、関係するターミナルに表示されます。
-- Remote Devices（デバイスの 設定 > 一般 > Remote Devices）を開いた Apple Vision Pro は、Mac に選ばれるのを待つ状態になります。このペアリングは RoamRun を入れた Mac どうしで行うもので、その形では動作を確かめてあります。こうしたデバイスに対して、Mac の `roamrun pair introduce` は、Mac 以外を `--host` に指定すると拒否します。Vision Pro と `roamrunctl` を組み合わせた動作は、確認していません。
+- Apple Vision Pro は、Remote Devices（デバイスの 設定 > 一般 > Remote Devices）を開くと、Mac に選ばれるのを待つ状態になります。Apple TV も、`設定 > リモコンとデバイス > リモコンアプリとデバイス` を開けば、同じ状態になります。このペアリングは RoamRun を入れた Mac どうしで行うもので、どちらのデバイスでもその形で動作を確かめてあります。こうしたデバイスに対して、Mac の `roamrun pair introduce` は、Mac 以外を `--host` に指定すると拒否します。どちらのデバイスも、`roamrunctl` と組み合わせた動作は確認していません。
 - Xcode の場合、デバイスの情報が取得できれば、`roamrun devices add` に渡せる形で 1 行、**標準出力**に書かれます。状況や診断のメッセージは、**標準エラー**に出ます。
 
 | 終了コード | 意味 |

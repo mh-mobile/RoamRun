@@ -99,7 +99,7 @@ struct DeviceProfile: Identifiable, Codable, Equatable {
     /// Hardware UDID (xcodebuild `-destination id=`, devicectl `--device`),
     /// learned from remotepairingd once the bridge first connects.
     var udid: String?
-    /// devicectl's deviceType ("iPhone", "iPad", "realityDevice"), learned by UDID.
+    /// devicectl's deviceType ("iPhone", "iPad", "realityDevice", "appleTV"), learned by UDID.
     var deviceType: String?
 
     var symbol: String {
@@ -109,6 +109,7 @@ struct DeviceProfile: Identifiable, Codable, Equatable {
     static func symbol(for deviceType: String?) -> String {
         switch deviceType {
         case "iPad": return "ipad"
+        case "appleTV": return "appletv"
         case "realityDevice": if #available(macOS 14, *) {
                 return "vision.pro"
             } else {

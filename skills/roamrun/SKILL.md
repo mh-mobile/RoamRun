@@ -1,12 +1,12 @@
 ---
 name: roamrun
-description: Reach a physical iPhone, iPad or Apple Vision Pro that is on another network than this Mac (the user is away, the Mac is at home) over Tailscale with RoamRun, so Xcode, xcodebuild, devicectl and lldb can use it as if it were local. Use when the device isn't visible to Xcode/devicectl because it's elsewhere, when the user mentions RoamRun, or to take a screenshot of such a device's screen. Also to install a build on a device without the bridge — over cellular or Wi-Fi, and on devices never paired with this Mac — when installing is all that is needed.
+description: Reach a physical iPhone, iPad, Apple Vision Pro or Apple TV that is on another network than this Mac (the user is away, the Mac is at home) over Tailscale with RoamRun, so Xcode, xcodebuild, devicectl and lldb can use it as if it were local. Use when the device isn't visible to Xcode/devicectl because it's elsewhere, when the user mentions RoamRun, or to take a screenshot of such a device's screen. Also to install a build on a device without the bridge — over cellular or Wi-Fi, and on devices never paired with this Mac — when installing is all that is needed.
 ---
 
 # RoamRun
 
 RoamRun makes a paired device on another network look local to Xcode, over
-Tailscale ("iPhone" below means any of iPhone, iPad, Apple Vision Pro; the CLI
+Tailscale ("iPhone" below means any of iPhone, iPad, Apple Vision Pro, Apple TV; the CLI
 says "device"). Its job is **the connection**: once `roamrun status` says
 ready, the device is an ordinary device to Apple's tools. Build, install,
 launch and debug it however you normally would — your usual steps or another
@@ -138,18 +138,19 @@ introduced; you can run the commands, they do the rest.
   prints the code to type: as with `pair introduce`, **the user runs it
   themselves, and you never ask for or pass on that code.** On that machine
   the `roamrunctl` skill (in this repository's `skills/roamrunctl`) says the rest.
-- An Apple Vision Pro pairs the other way round (it waits, the Mac picks it), with the
-  same two commands: Settings › General › Remote Devices open on it,
+- An Apple Vision Pro or Apple TV pairs the other way round (it waits, the Mac picks it), with the
+  same two commands: Settings › General › Remote Devices open on a Vision Pro (on an Apple TV,
+  Settings › Remotes and Devices › Remote App and Devices; it needs Tailscale's tvOS app),
   `roamrun pair xcode --with <mac>` on the far Mac, `roamrun pair introduce --host <mac>
   --to <name>` on a Mac on its Wi‑Fi that has it saved. The far Mac then announces the
   device itself and says so: the user picks it in Device Hub there (+ › Pair Nearby
-  Device › Apple Vision Pro), types the code **the device** shows; the command ends by
+  Device › Apple Vision Pro or Apple TV), types the code **the device** shows; the command ends by
   itself once Device Hub has paired (if it doesn't, Ctrl-C once Device Hub says it is
   paired) — the device is saved if that Mac
   had connected to it by then, and not otherwise (run it where the user can do that: it
-  waits for them, five minutes at most). Then `roamrun up`. With Remote Devices closed,
-  `pair introduce` says the device isn't waiting when RoamRun knows it is an Apple Vision
-  Pro, and else waits as for an iPhone, saying what to do if it is one.
+  waits for them, five minutes at most). Then `roamrun up`. With that screen closed,
+  `pair introduce` says the device isn't waiting when RoamRun knows it is a Vision Pro or
+  Apple TV (from a bridge before), and else waits as for an iPhone, saying what to do if it is one.
 - For an iPhone or iPad the user picks the entry on the device and types the code Device Hub shows on the
   far Mac. **Never pass a code on, in either direction**: the user reads it there.
 - `pair introduce` ends by itself (five minutes at most) and, when a pairing was

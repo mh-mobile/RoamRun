@@ -61,7 +61,7 @@ enum PairWire {
         case attempt(String)
         case code(String)
         case result(Outcome)
-        /// A device that waits to be picked (Apple Vision Pro), as the Mac beside it read it: sent in
+        /// A device that waits to be picked (Apple Vision Pro, Apple TV), as the Mac beside it read it: sent in
         /// place of the question for an offer. The Mac that offers then asks for the device and stands in itself.
         case pairable(String)
     }

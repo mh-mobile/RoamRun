@@ -17,7 +17,7 @@
 <p align="center"><img src="docs/images/main.png" width="800" alt="RoamRun main window: iPadPro ready for Xcode over Tailscale"></p>
 
 RoamRun is a macOS menu bar app, with a `roamrun` command, that makes Xcode's wireless debugging
-work over Tailscale or another mesh VPN. An iPhone, iPad or Apple Vision Pro on a different
+work over Tailscale or another mesh VPN. An iPhone, iPad, Apple Vision Pro or Apple TV on a different
 network from the Mac stays visible to Xcode and `devicectl` as a local device: you can build,
 install, launch and debug as usual. RoamRun calls that connection a bridge.
 
@@ -68,8 +68,8 @@ implements them. RoamRun relays bytes; it does not read or change them. The deta
   `remotepairingd`'s log with `log stream`, and stops with a message when macOS answers that an
   administrator is required.
 - **A device on iOS 17.4 or later.** RoamRun relays TCP only; it has no support for the QUIC
-  tunnel of iOS 17.0–17.3. iPad and Apple Vision Pro were also used; "device" below means any
-  of the three.
+  tunnel of iOS 17.0–17.3. iPad, Apple Vision Pro and Apple TV were also used; "device" below
+  means any of the four.
 - **Xcode with `devicectl`** (Xcode 15 or later) that supports the device's iOS version; see
   [Apple's table](https://developer.apple.com/support/xcode/). `roamrun logs` and
   `roamrun run --logs` use `devicectl`'s `--console`, which came with Xcode 16.
@@ -547,19 +547,24 @@ machine that waits with `roamrunctl pair control --with <name>`, for device cont
 and `roamrunctl` at the same version, since they talk to each other. Before 0.7.0 `pair introduce`
 named its machine with `--mac`; it is `--host` now in both.
 
-### Apple Vision Pro
+<a id="apple-vision-pro"></a>
 
-An Apple Vision Pro is paired the other way round: it waits, and the Mac picks it. The two
-commands are the same as for an iPhone.
+### Apple Vision Pro and Apple TV
+
+An Apple Vision Pro or Apple TV is paired the other way round: it waits, and the Mac picks it.
+The two commands are the same as for an iPhone. An Apple TV needs Tailscale's app for tvOS, and
+RoamRun 0.12.0 or later on both Macs: an older one refuses it as not an iPhone, iPad or Apple
+Vision Pro.
 
 ```sh
-# on the device: Settings › General › Remote Devices, left open
+# on the device, left open: Settings › General › Remote Devices (Apple Vision Pro),
+#   Settings › Remotes and Devices › Remote App and Devices (Apple TV)
 # on the far Mac:
 roamrun pair xcode --with home-mac            # home-mac: the Tailscale name of a Mac on the device's Wi‑Fi
 # on that Mac, with the device saved in RoamRun there:
 roamrun pair introduce --host cloud-mac --to vision-pro
-# on the far Mac, when its command says so: Device Hub › + › Pair Nearby Device › Apple Vision Pro,
-# pick the device, Next, and type the code the device shows
+# on the far Mac, when its command says so: Device Hub › + › Pair Nearby Device › Apple Vision Pro
+# (or Apple TV), pick the device, Next, and type the code the device shows
 roamrun up vision-pro
 ```
 
@@ -575,8 +580,12 @@ roamrun up vision-pro
   collapsed: point at one and click the arrow that appears.
 
 Run with these commands on 2026-10-13, with one Apple Vision Pro and a virtual Mac as the far one:
-the pairing, the far Mac's command ending by itself, and the bridge Ready there. Not tried:
-breakpoints, the device away from home, Apple TV.
+the pairing, the far Mac's command ending by itself, and the bridge Ready there. On 2026-11-01,
+with an Apple TV 4K (2nd generation) on tvOS 27.2 and, as the far Mac, a virtual Mac on its own
+network inside the Mac beside the Apple TV: the same, then Xcode 27.0 there ran an app on it and
+stopped at a breakpoint. The Apple TV's settings were in Japanese, so its menu names above are
+the English ones as they are expected to read. Not tried: a far Mac elsewhere than at home, the
+device away from home, and device control (look, tap) on an Apple TV.
 
 ## Installing without the bridge: over the air
 
