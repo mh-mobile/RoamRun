@@ -301,7 +301,7 @@ mod tests {
     /// What Tailscale.app's binary printed, started as the GUI from an app (seen with 1.104.4): said as it is.
     #[test]
     fn what_tailscale_printed_instead_of_json_is_said() {
-        let gui = "The Tailscale GUI failed to start: an error occurred.\n";
+        let gui = "The Tailscale GUI failed to start: The operation couldn’t be completed. (Tailscale.CLIError error 3.)\n";
         let why = status_from(gui).err().unwrap();
         assert!(why.contains("other than JSON") && why.contains("The Tailscale GUI failed to start"), "{why}");
         assert!(status_from("").err().unwrap().contains("printed nothing"));
