@@ -69,7 +69,9 @@ implements them. RoamRun relays bytes; it does not read or change them. The deta
   administrator is required.
 - **A device on iOS 17.4 or later.** RoamRun relays TCP only; it has no support for the QUIC
   tunnel of iOS 17.0–17.3. iPad, Apple Vision Pro and Apple TV were also used; "device" below
-  means any of the four.
+  means any of the four. Apple Watch has not been tried, as there was none at hand. Tailscale has
+  no app for watchOS, so a watch can't be bridged on its own; whether one is reached through its
+  iPhone's bridge is not known.
 - **Xcode with `devicectl`** (Xcode 15 or later) that supports the device's iOS version; see
   [Apple's table](https://developer.apple.com/support/xcode/). `roamrun logs` and
   `roamrun run --logs` use `devicectl`'s `--console`, which came with Xcode 16.
