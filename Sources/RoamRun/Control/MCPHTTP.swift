@@ -810,8 +810,8 @@ final class MCPHTTP: @unchecked Sendable {
         if method.isEmpty {
             return refuse(400, "", Self.rpcError(id, -32600, "no method"))
         }
-        // An install from another's upload, or one not as it was sent, is refused before it waits its turn.
-        if let uploads, method == "tools/call", params["name"] as? String == "install",
+        // An install or ota from another's upload, or one not as it was sent, is refused before it waits its turn.
+        if let uploads, method == "tools/call", ["install", "ota"].contains(params["name"] as? String ?? ""),
            let upload = arguments["upload"] as? String,
            let why = uploads.refusal(id: upload, owner: caller.id, sha256: arguments["sha256"] as? String ?? "")
         {
@@ -964,6 +964,7 @@ extension MCPHTTP {
         allow: [String],
         tokenFile: String?,
         allowInstall: Bool = false,
+        allowOTA: Bool = false,
         maxUpload: String? = nil
     ) throws -> (MCPHTTP, Int32, String) {
         // A log read through a pipe whose reader went: the write fails, the server goes on.
@@ -978,8 +979,8 @@ extension MCPHTTP {
         }
         let allowed = try allow.map(Self.allow)
         let token = try tokenFile.map(Self.token(at:))
-        guard maxUpload == nil || allowInstall
-        else { throw Failure(description: "--max-upload goes with --allow-install") }
+        guard maxUpload == nil || allowInstall || allowOTA
+        else { throw Failure(description: "--max-upload goes with --allow-install or --allow-ota") }
         let mib = try maxUpload.map {
             guard let mib = Int($0), (1 ... 4096).contains(mib)
             else { throw Failure(description: "--max-upload takes MiB, 1...4096") }
@@ -998,7 +999,7 @@ extension MCPHTTP {
             !$0.isEmpty
         }
         let folder = DeviceControlWire.socketFolder(in: ProfileStore.directory)
-        let uploads = allowInstall ? Uploads(folder: folder, most: mib << 20) : nil
+        let uploads = allowInstall || allowOTA ? Uploads(folder: folder, most: mib << 20) : nil
         if let uploads {
             // At stop, what was uploaded goes: Ctrl-C, and what a closed terminal sends.
             for stop in [SIGINT, SIGTERM, SIGHUP] {
@@ -1041,11 +1042,15 @@ extension MCPHTTP {
                 // Each call its own asking: one taken back gives up its own request to the app alone.
                 DeviceMCP(profiles: {
                     ProfileStore().load()
-                }, looks: folder, installsFromPaths: false, claimUpload: uploads.map { uploads in
+                }, looks: folder, installsFromPaths: false, claimUpload: allowInstall ? uploads.map { uploads in
                     { id, sha256 in
                         try uploads.claim(id: id, sha256: sha256, into: folder)
                     }
-                }, asking: asking) {
+                } : nil, publish: allowOTA ? uploads.map { uploads in
+                    { id, sha256, replace in
+                        try publish(uploads, id: id, sha256: sha256, replace: replace, folder: folder)
+                    }
+                } : nil, asking: asking) {
                     try DeviceControlWire.ask($0, in: ProfileStore.directory, asking: asking)
                 }.handle(message)
             },
@@ -1058,7 +1063,11 @@ extension MCPHTTP {
             }
         )
         let who = allow.joined(separator: ", ")
-        let install = uploads == nil ? "" : "; install of an .ipa sent to http://\(own):\(bound)/upload, \(mib) MiB at most"
+        let took = [allowInstall ? "install" : nil, allowOTA ? "the OTA page" : nil].compactMap {
+            $0
+        }
+        let install = uploads == nil ? "" :
+            "; \(took.joined(separator: " and ")) for an .ipa sent to http://\(own):\(bound)/upload, \(mib) MiB at most"
         let note =
             "roamrun: the MCP tools for the devices saved in RoamRun at http://\(own):\(bound)/mcp, for \(who) on the tailnet\(token == nil ? "" : ", with the token")\(install). Ctrl-C ends it. What is sent and shown passes through whatever lies between (a cloud's proxy sees images and text)."
         return (server, fd, note)

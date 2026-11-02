@@ -53,6 +53,37 @@ build needs none of this.
 
 **RoamRun running**, since the app serves the page.
 
+## From a CI job
+
+A job can put its build on the page with no one at the Mac, through the Mac app's MCP server over
+HTTP, started on the Mac (where RoamRun runs) with `--allow-ota` and a token made as for a relay
+([ci.md](ci.md#on-the-relay), step 2):
+
+```sh
+roamrun mcp --http 9090 --allow tag:ci --token-file ~/.config/roamrun/ci-token --allow-ota
+```
+
+The job sends the .ipa with `PUT /upload` and gets its id and sha256, then calls the tool `ota`
+with them, from the same machine (an upload is kept for the caller that sent it):
+
+```sh
+up=$(curl -sS -H "Authorization: Bearer $TOKEN" -T MyApp.ipa "http://$MAC:9090/upload")
+id=$(echo "$up" | jq -r .upload); sha=$(echo "$up" | jq -r .sha256)
+curl -sS -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"ota\",\"arguments\":{\"upload\":\"$id\",\"sha256\":\"$sha\"}}}" \
+  "http://$MAC:9090/mcp"
+```
+
+`ota` checks the build as `roamrun ota` does and answers with the same lines: what was stored,
+which of your devices it installs on, and the page's address. `"replace": true` does what
+`--replace` does. A build it refuses leaves the upload for another try; one it stores uses it up.
+`--allow-ota` offers `ota` and not `install`: `--allow-install` is the one for that, and both can
+be given. `$MAC` is the Mac's Tailscale address, which the server prints as it starts.
+
+Run on 2026-11-02 from this Mac itself, with the token: an Ad Hoc build of a test app was uploaded
+and stored, the answer named the two devices its profile lists, a second `ota` with the same upload
+was refused, and `install` wasn't offered. Not yet from a CI job, nor from another machine.
+
 ## The port, and Funnel
 
 RoamRun serves on a port of its own, 41443 by default, and gives it back when it quits. It does

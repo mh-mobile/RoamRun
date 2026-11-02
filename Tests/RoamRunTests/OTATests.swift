@@ -787,25 +787,6 @@ private func sized(_ path: String, _ b: OTA.Build) -> OTA.Build {
     #expect(OTA.builds(of: "com.example.App", in: root)?.count == 2)
 }
 
-/// A real archive, as far as `OTA.read` looks: Payload/<app>.app/Info.plist, zipped.
-private func zippedIPA(_ root: URL, bundleID: String) throws -> String {
-    let work = root.appendingPathComponent(UUID().uuidString)
-    let app = work.appendingPathComponent("Payload/App.app")
-    try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
-    let info: [String: Any] = ["CFBundleIdentifier": bundleID, "CFBundleShortVersionString": "1.0",
-                               "CFBundleVersion": "1"]
-    try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
-        .write(to: app.appendingPathComponent("Info.plist"))
-    let zip = Process()
-    zip.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
-    zip.arguments = ["-qr", "app.ipa", "Payload"]
-    zip.currentDirectoryURL = work
-    try zip.run()
-    zip.waitUntilExit()
-    #expect(zip.terminationStatus == 0)
-    return work.appendingPathComponent("app.ipa").path
-}
-
 @Test func anArchiveRewrittenWhileOtaRunsIsntMixedWithTheOneItRead() throws {
     let root = otaScratch()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -1384,4 +1365,45 @@ func publishStepsAsideWhenTurnedOff(_ c: PublishCase) async {
         #expect(step == .ran(after: mounted(41443, mine), said: ""))
         #expect(fake.offs.isEmpty && fake.record == ["41443 \(mine)"])
     }
+}
+
+/// An Ad Hoc profile naming `udids`, as `security cms -D` reads one.
+private func adHoc(_ udids: [String]) -> [String: Any] {
+    ["ProvisionedDevices": udids, "Entitlements": ["get-task-allow": false],
+     "ExpirationDate": Date().addingTimeInterval(86400)]
+}
+
+/// What `roamrun ota` and the MCP tool both do: read, checked against the devices, and stored, from one copy.
+@Test func aPublishedBuildIsStoredAndSaysWhichDevicesTakeIt() throws {
+    let root = otaScratch()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let given = try zippedIPA(root.appendingPathComponent("src"), bundleID: "com.example.App")
+    let store = root.appendingPathComponent("store")
+    let devices = [OTA.Device(name: "iPhone", udid: "00008130-AAAA"), OTA.Device(name: "iPad", udid: nil)]
+    let published = try OTA.publish(ipa: given, shown: "MyApp.ipa", devices: devices, replacing: false,
+                                    profile: { _ in
+                                        adHoc(["00008130-aaaa"])
+                                    }, in: store)
+    #expect(published.coverage == .devices(covers: ["iPhone"], unchecked: ["iPad"]))
+    #expect(OTA.builds(of: "com.example.App", in: store)?.count == 1)
+    let said = CLI.otaSaid(published)
+    #expect(said.first?.hasPrefix("Stored ") == true && said.contains("  Installs on: iPhone."))
+
+    // Nothing of yours takes it: stored, and replacing is not done.
+    let none = try OTA.publish(ipa: given, shown: "MyApp.ipa", devices: devices, replacing: true,
+                               profile: { _ in
+                                   adHoc(["other"])
+                               }, in: store)
+    #expect(none.replaceIgnored)
+    #expect(CLI.otaSaid(none, replace: "replace").contains {
+        $0.contains("replace was ignored") && !$0.contains("--")
+    })
+    // Development signing is refused, and named as given.
+    let error = #expect(throws: OTA.Problem.self) {
+        try OTA.publish(ipa: given, shown: "MyApp.ipa", devices: devices, replacing: false,
+                        profile: { _ in
+                            ["ProvisionedDevices": ["x"], "Entitlements": ["get-task-allow": true]]
+                        }, in: store)
+    }
+    #expect(error?.localizedDescription.contains("MyApp.ipa") == true)
 }

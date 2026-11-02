@@ -35,6 +35,28 @@ Ad Hoc ビルドをインストールできるのは、プロビジョニング�
 
 **起動している RoamRun**。ページを配信するのは、RoamRun のアプリです。
 
+## CI のジョブから
+
+ジョブは、Mac の前に誰もいなくても、ビルドをページに載せられます。使うのは、Mac のアプリの HTTP の MCP サーバーです。RoamRun が動いている Mac で、`--allow-ota` を付けて起動しておきます。トークンは、relay と同じ手順で作ります（[ci.ja.md](ci.ja.md#relay-で用意すること) の手順 2）。
+
+```sh
+roamrun mcp --http 9090 --allow tag:ci --token-file ~/.config/roamrun/ci-token --allow-ota
+```
+
+ジョブは、まず `PUT /upload` で .ipa を送り、返ってきた id と sha256 で `ota` ツールを呼びます。アップロードを使えるのは送ってきたマシンだけなので、2 つの呼び出しは同じマシンから行います。
+
+```sh
+up=$(curl -sS -H "Authorization: Bearer $TOKEN" -T MyApp.ipa "http://$MAC:9090/upload")
+id=$(echo "$up" | jq -r .upload); sha=$(echo "$up" | jq -r .sha256)
+curl -sS -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"ota\",\"arguments\":{\"upload\":\"$id\",\"sha256\":\"$sha\"}}}" \
+  "http://$MAC:9090/mcp"
+```
+
+`ota` は、`roamrun ota` と同じ検査をして、同じ内容を答えます。保存したもの、自分のデバイスのうちどれに入るか、ページのアドレスです。`"replace": true` を付けると、`--replace` と同じ動きになります。拒否されたビルドのアップロードは、もう一度試せるように残ります。保存されたら、そのアップロードは使い終わりです。`--allow-ota` で使えるのは `ota` だけで、`install` は使えません。`install` には `--allow-install` が必要で、両方を付けることもできます。`$MAC` は Mac の Tailscale のアドレスで、サーバーが起動したときに表示します。
+
+2026-11-02 に、この Mac 自身からトークン付きで試しました。テスト用アプリの Ad Hoc ビルドをアップロードして、保存できました。答えには、そのプロファイルに入っている 2 台のデバイスの名前が出ました。同じアップロードで 2 回目の `ota` を呼ぶと断られ、`install` は一覧に出ませんでした。CI のジョブからと、ほかのマシンからは、まだ試していません。
+
 ## ポートと Funnel
 
 RoamRun は、専用のポートで配信します。既定は 41443 で、終了するときにポートを解放します。tailnet のポート 443 は使いません。443 でほかのものを配信していても、ぶつからないようにするためです。ポートは、次のコマンドで変えられます。

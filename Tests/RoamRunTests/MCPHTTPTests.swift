@@ -123,7 +123,7 @@ private final class Served: @unchecked Sendable {
     }
 
     /// A connection, with `request` sent on it.
-    func open(_ request: String) -> Int32 {
+    func open(_ request: String, body: Data = Data()) -> Int32 {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         var address = sockaddr_in()
         address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
@@ -135,14 +135,14 @@ private final class Served: @unchecked Sendable {
                 connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
             }
         }
-        let bytes = Array(request.utf8)
+        let bytes = Array(request.utf8) + body
         _ = send(fd, bytes, bytes.count, 0)
         return fd
     }
 
     /// The whole answer to `request`, to the server's close.
-    func ask(_ request: String) -> String {
-        let fd = open(request)
+    func ask(_ request: String, body: Data = Data()) -> String {
+        let fd = open(request, body: body)
         defer { close(fd) }
         var answer: [UInt8] = []
         var chunk = [UInt8](repeating: 0, count: 8192)
@@ -581,4 +581,71 @@ private func status(_ answer: String) -> Int {
     let slow = served.ask("PUT /upload HTTP/1.1\r\n\(host)Content-Length: \(64 << 20)\r\n\r\n0123456789")
     #expect(status(slow) == 408 && Date().timeIntervalSince(began) < 8)
     #expect(status(served.ask("PUT /upload HTTP/1.1\r\n\(host)Content-Length: 1\r\n\r\nx")) == 200)
+}
+
+/// `ota` with `--allow-ota`: an upload put on the OTA page, used up when taken and kept when refused, with no path on
+/// this Mac said; another caller's upload is refused before its turn.
+@Test func anUploadIsPutOnTheOTAPageByItsCaller() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let store = folder.appendingPathComponent("ota")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let uploads = MCPHTTP.Uploads(folder: folder, most: 1 << 20)
+    let served = try Served(uploads: uploads)
+    let ipa = try Data(contentsOf: URL(fileURLWithPath: zippedIPA(folder.appendingPathComponent("src"),
+                                                                  bundleID: "com.example.App")))
+    let sent = served.ask(
+        "PUT /upload HTTP/1.1\r\nHost: 127.0.0.1:\(served.port)\r\nContent-Length: \(ipa.count)\r\n\r\n",
+        body: ipa
+    )
+    let answer = try #require(sent.components(separatedBy: "\r\n\r\n").last.flatMap {
+        try JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]
+    })
+    let id = try #require(answer["upload"] as? String)
+    let sha256 = try #require(answer["sha256"] as? String)
+
+    // Not the caller's: refused before its turn, as an install is.
+    #expect(uploads.refusal(id: id, owner: "someone-else", sha256: sha256) != nil)
+    let wrong = served.post(
+        #"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"ota","arguments":{"upload":"\#(id)","sha256":"00"}}}"#
+    )
+    #expect(wrong.contains(#""isError":true"#) && wrong.contains("isn't upload"))
+    #expect(served.lock
+        .withLock {
+            served.handled
+        }
+        .isEmpty)
+
+    let devices = {
+        [OTA.Device(name: "iPhone", udid: "00008130-AAAA")]
+    }
+    // Refused (no profile): kept for another try, and the folders on this Mac aren't named.
+    let error = #expect(throws: MCPHTTP.Failure.self) {
+        try MCPHTTP.publish(uploads, id: id, sha256: sha256, replace: false, folder: folder, store: store,
+                            devices: devices, profile: { _ in
+                                nil
+                            }, page: {
+                                []
+                            })
+    }
+    let said = error?.description ?? ""
+    #expect(said.contains("upload \(id)") && !said.contains(folder.path))
+    #expect(uploads.refusal(id: id, owner: "caller", sha256: sha256) == nil)
+
+    let stored = try MCPHTTP.publish(uploads, id: id, sha256: sha256, replace: false, folder: folder, store: store,
+                                     devices: devices, profile: { _ in
+                                         ["ProvisionedDevices": ["00008130-aaaa"], "Entitlements": [String: Any](),
+                                          "ExpirationDate": Date().addingTimeInterval(86400)]
+                                     }, page: {
+                                         ["  Page: https://mac.tail.ts.net:41443/"]
+                                     })
+    #expect(stored.hasPrefix("Stored ") && stored.contains("Installs on: iPhone.") && stored.contains("Page: "))
+    #expect(OTA.builds(of: "com.example.App", in: store)?.count == 1)
+    #expect(uploads.refusal(id: id, owner: "caller", sha256: sha256) != nil) // used up
+    #expect(try FileManager.default
+        .contentsOfDirectory(atPath: folder.path)
+        .filter {
+            $0.hasPrefix("install-")
+        }
+        .isEmpty)
 }

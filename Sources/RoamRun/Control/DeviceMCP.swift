@@ -36,6 +36,10 @@ final class DeviceMCP: @unchecked Sendable {
     /// An upload handed to an install, by its id and sha256: the path the app takes it from, and what to say once the
     /// app has answered (taken, or not: then the upload is kept again).
     typealias Claim = (String, String) throws -> (path: String, settle: (_ taken: Bool) -> Void)
+    /// Over HTTP with `--allow-ota`: `ota`, an upload put on the OTA page, by its id and sha256 and whether it replaces
+    /// the builds under its label. What to say of it.
+    let publish: Publish?
+    typealias Publish = (_ upload: String, _ sha256: String, _ replace: Bool) throws -> String
     /// The request to the app under way, which `ask` makes with it: given up when its call is taken back.
     private let asking: DeviceControlWire.Asking
     private let work = DispatchQueue(label: "roamrun.mcp")
@@ -57,6 +61,7 @@ final class DeviceMCP: @unchecked Sendable {
         looks: URL,
         installsFromPaths: Bool = true,
         claimUpload: Claim? = nil,
+        publish: Publish? = nil,
         asking: DeviceControlWire.Asking = .init(),
         ask: @escaping Ask
     ) {
@@ -64,6 +69,7 @@ final class DeviceMCP: @unchecked Sendable {
         self.looks = looks
         self.installsFromPaths = installsFromPaths
         self.claimUpload = claimUpload
+        self.publish = publish
         self.asking = asking
         self.ask = ask
     }
@@ -182,8 +188,10 @@ final class DeviceMCP: @unchecked Sendable {
         case "ping":
             return reply([:])
         case "tools/list":
-            return reply(["tools": Self
-                    .tools(installs: installsFromPaths ? .paths : claimUpload == nil ? nil : .uploads)])
+            return reply(["tools": Self.tools(
+                installs: installsFromPaths ? .paths : claimUpload == nil ? nil : .uploads,
+                ota: publish != nil
+            )])
         case "tools/call":
             let content: [[String: Any]]
             var failed = false
@@ -267,6 +275,12 @@ final class DeviceMCP: @unchecked Sendable {
         if tool == "devices" {
             return text(profiles.isEmpty ? "No devices saved in RoamRun." : profiles.map(\.displayName)
                 .joined(separator: "\n"))
+        }
+        if tool == "ota", let publish {
+            guard let upload = arguments["upload"] as? String, let sha256 = arguments["sha256"] as? String else {
+                throw Failure(description: "upload and sha256 are missing: as PUT /upload answered them")
+            }
+            return try text(publish(upload, sha256, arguments["replace"] as? Bool == true))
         }
         let named = (arguments["device"] as? String).map { name in
             profiles.filter {
@@ -532,7 +546,8 @@ final class DeviceMCP: @unchecked Sendable {
         required: [String] = []
     ) -> [String: Any] {
         var all = properties
-        if name != "devices" {
+        let anyDevice = ["devices", "ota"].contains(name)
+        if !anyDevice {
             all["device"] = [
                 "type": "string",
                 "description": "The device's name in RoamRun (see `devices`)"
@@ -542,7 +557,7 @@ final class DeviceMCP: @unchecked Sendable {
                 "inputSchema": [
                     "type": "object",
                     "properties": all,
-                    "required": (name == "devices" ? [] : ["device"]) + required
+                    "required": (anyDevice ? [] : ["device"]) + required
                 ],
                 "annotations": hints(name)]
     }
@@ -552,7 +567,7 @@ final class DeviceMCP: @unchecked Sendable {
     /// there, or can't be undone from here (`lock`).
     static func hints(_ name: String) -> [String: Bool] {
         ["readOnlyHint": ["devices", "look", "install_status"].contains(name),
-         "destructiveHint": ["tap", "swipe", "type", "paste", "press", "install", "launch"].contains(name)]
+         "destructiveHint": ["tap", "swipe", "type", "paste", "press", "install", "launch", "ota"].contains(name)]
     }
 
     // Computed: JSON objects aren't Sendable, and a static stored one would have to be.
@@ -579,8 +594,8 @@ final class DeviceMCP: @unchecked Sendable {
 
     enum Installs { case paths, uploads }
 
-    /// With `installs`, `install` (from a path on this Mac, or from an upload) and `install_status`.
-    static func tools(installs: Installs?) -> [[String: Any]] {
+    /// With `installs`, `install` (from a path on this Mac, or from an upload) and `install_status`; with `ota`, `ota`.
+    static func tools(installs: Installs?, ota: Bool = false) -> [[String: Any]] {
         let install = installs == .uploads ? tool(
             "install",
             "Start installing an .ipa sent with PUT /upload, built and signed for this device: the upload's id and sha256, as the upload answered them. It ends the app's running processes first. It answers at once; install_status says when the app is in (a megabyte takes a few seconds, a large app minutes), and until then other calls on the device answer that it is installing. An install the app begins uses the upload up.",
@@ -602,7 +617,18 @@ final class DeviceMCP: @unchecked Sendable {
         ] : []) + [
             tool("launch", "Launch an app on the device by its bundle identifier (one already running is ended first).",
                  ["bundle": ["type": "string"]], required: ["bundle"]),
-        ]
+        ] + (ota ? [
+            tool(
+                "ota",
+                "Put an .ipa sent with PUT /upload on this Mac's OTA page, where anyone on the tailnet can install it: the upload's id and sha256, as the upload answered them. Only an Ad Hoc or Enterprise build with a profile not expired is taken. It answers with which of the saved devices it installs on and the page's address. The page keeps the latest five builds of each app; with replace, the new build takes the place of those with its version and build number. Taking it uses the upload up.",
+                ["upload": ["type": "string"], "sha256": ["type": "string"],
+                 "replace": [
+                     "type": "boolean",
+                     "description": "Remove the builds with the same version and build number"
+                 ]],
+                required: ["upload", "sha256"]
+            ),
+        ] : [])
     }
 
     private static var operating: [[String: Any]] {

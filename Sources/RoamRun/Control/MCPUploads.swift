@@ -3,6 +3,39 @@ import Darwin
 import Foundation
 
 extension MCPHTTP {
+    /// The tool `ota` (`--allow-ota`): the upload `id`, named by `sha256`, put on the OTA page as `roamrun ota` puts a
+    /// file, checked against the devices saved here. Taken, it is used up; refused, it is kept for another try. Paths on
+    /// this Mac, which carry the user's name, aren't said.
+    static func publish(_ uploads: Uploads, id: String, sha256: String, replace: Bool, folder: URL,
+                        store: URL = OTA.directory,
+                        devices: () -> [OTA.Device] = {
+                            CLI.otaDevices(ProfileStore().load())
+                        },
+                        profile: (String) -> [String: Any]? = CLI.profilePlist(of:),
+                        page: () -> [String] = CLI.otaPage) throws -> String
+    {
+        let claimed = try uploads.claim(id: id, sha256: sha256, into: folder)
+        defer { try? FileManager.default.removeItem(at: URL(fileURLWithPath: claimed.path).deletingLastPathComponent())
+        }
+        do {
+            let published = try OTA.publish(
+                ipa: claimed.path,
+                shown: "upload \(id)",
+                devices: devices(),
+                replacing: replace,
+                profile: profile,
+                in: store
+            )
+            claimed.settle(true)
+            return (CLI.otaSaid(published, replace: "replace") + page()).joined(separator: "\n")
+        } catch {
+            claimed.settle(false)
+            throw Failure(description: error.localizedDescription
+                .replacingOccurrences(of: store.path, with: "the OTA folder")
+                .replacingOccurrences(of: FileManager.default.temporaryDirectory.path, with: "a temporary folder"))
+        }
+    }
+
     /// An .ipa sent with `PUT /upload`, for one install: its file goes once nothing holds it (an install takes it away first).
     final class Upload: @unchecked Sendable {
         let id: String

@@ -15,62 +15,11 @@ extension CLI {
         guard path.lowercased().trimmingCharacters(in: ["/"]).hasSuffix(".ipa") else {
             stop("\(given) isn't an .ipa — over-the-air installs need an archive, not an .app bundle")
         }
-        let running = StatusFile.read()
-        let devices = profiles.map {
-            OTA.Device(name: $0.displayName, udid: running[$0.id]?.udid ?? $0.udid)
-        }
         do {
-            let (build, checked, added) = try OTA.withCopy(of: path) { ipa in
-                var build = try OTA.read(ipa: ipa, shown: path)
-                let checked = try OTA.check(CLI.profilePlist(of: ipa), against: devices, path: given)
-                build.expires = checked.expires
-                // Not while nothing of yours can take it: `--replace` would remove the
-                // build people are running to make room for one they can't install,
-                // and there would be no way back to it.
-                var noneOfYours = false
-                if case .noneOfYours = checked.coverage {
-                    noneOfYours = true
-                }
-                let added = try OTA.add(ipa: ipa, build, replacing: replacing && !noneOfYours)
-                return (build, checked, added)
-            }
-
-            print("Stored \(build.title) \(build.label) (\(OTA.size(build.size))).")
-            // Which devices, not whether: an Ad Hoc profile covers the ones it
-            // names, and the page offers the build to all of them at once.
-            switch checked.coverage {
-            case .everyDevice:
-                print("  Enterprise signing — it installs on any device.")
-            case .devices(let covers, let unchecked):
-                print("  Installs on: \(covers.joined(separator: ", ")).")
-                // Said out loud, or the line above reads as "and on no others".
-                if !unchecked.isEmpty {
-                    print("  Can't tell for \(unchecked.joined(separator: ", ")) — " +
-                        "bridge one once and RoamRun learns its UDID.")
-                }
-            case .noneOfYours(let known, let unchecked):
-                // Stored, not refused: the page is open to the whole tailnet and
-                // the profile may name a device this Mac has never seen. But
-                // nobody here can install it, and that has to be said plainly —
-                // without claiming anything about the ones it couldn't check.
-                print("  WARNING: its provisioning profile doesn't name " +
-                    (known.isEmpty ? "any device RoamRun has a UDID for" : known.joined(separator: ", ")) + ".")
-                if !unchecked.isEmpty {
-                    print("  Can't tell for \(unchecked.joined(separator: ", ")) — " +
-                        "bridge one once and RoamRun learns its UDID.")
-                }
-                print("  Whoever installs it needs a device that is in the profile; iOS refuses the rest.")
-                if replacing {
-                    print("  --replace was ignored: it would have removed a build that does install.")
-                }
-            }
-            switch added.notReplaced {
-            case nil:
-                print("  Couldn't read the folder, so --replace may not have removed the older builds.")
-            case .some(let n) where n > 0:
-                print("  Couldn't remove \(n) older build\(n == 1 ? "" : "s") under that version — " +
-                    "--replace left \(n == 1 ? "it" : "them") on the page.")
-            default: break
+            let published = try OTA.publish(ipa: path, shown: given, devices: otaDevices(profiles),
+                                            replacing: replacing)
+            otaSaid(published).forEach {
+                print($0)
             }
             let tailnetPort = AppCoordinator.otaPort
             let host: String?
@@ -132,6 +81,75 @@ extension CLI {
         } catch {
             stop(error.localizedDescription)
         }
+    }
+
+    /// The devices a build is checked against: their UDIDs as a bridge last saw them, else as saved.
+    nonisolated static func otaDevices(_ profiles: [DeviceProfile]) -> [OTA.Device] {
+        let running = StatusFile.read()
+        return profiles.map {
+            OTA.Device(name: $0.displayName, udid: running[$0.id]?.udid ?? $0.udid)
+        }
+    }
+
+    /// What `ota` and the MCP tool `ota` say of a stored build, a line each.
+    nonisolated static func otaSaid(_ published: OTA.Published, replace: String = "--replace") -> [String] {
+        let build = published.build
+        var said = ["Stored \(build.title) \(build.label) (\(OTA.size(build.size)))."]
+        // Which devices, not whether: an Ad Hoc profile covers the ones it
+        // names, and the page offers the build to all of them at once.
+        switch published.coverage {
+        case .everyDevice:
+            said.append("  Enterprise signing — it installs on any device.")
+        case .devices(let covers, let unchecked):
+            said.append("  Installs on: \(covers.joined(separator: ", ")).")
+            // Said out loud, or the line above reads as "and on no others".
+            if !unchecked.isEmpty {
+                said.append("  Can't tell for \(unchecked.joined(separator: ", ")) — " +
+                    "bridge one once and RoamRun learns its UDID.")
+            }
+        case .noneOfYours(let known, let unchecked):
+            // Stored, not refused: the page is open to the whole tailnet and
+            // the profile may name a device this Mac has never seen. But
+            // nobody here can install it, and that has to be said plainly —
+            // without claiming anything about the ones it couldn't check.
+            said.append("  WARNING: its provisioning profile doesn't name " +
+                (known.isEmpty ? "any device RoamRun has a UDID for" : known.joined(separator: ", ")) + ".")
+            if !unchecked.isEmpty {
+                said.append("  Can't tell for \(unchecked.joined(separator: ", ")) — " +
+                    "bridge one once and RoamRun learns its UDID.")
+            }
+            said.append("  Whoever installs it needs a device that is in the profile; iOS refuses the rest.")
+            if published.replaceIgnored {
+                said.append("  \(replace) was ignored: it would have removed a build that does install.")
+            }
+        }
+        switch published.notReplaced {
+        case nil:
+            said.append("  Couldn't read the folder, so \(replace) may not have removed the older builds.")
+        case .some(let n) where n > 0:
+            said.append("  Couldn't remove \(n) older build\(n == 1 ? "" : "s") under that version — " +
+                "\(replace) left \(n == 1 ? "it" : "them") on the page.")
+        default: break
+        }
+        return said
+    }
+
+    /// For the MCP tool `ota`: the page's address, and what keeps it from showing (`ota` here says more, and stops).
+    nonisolated static func otaPage() -> [String] {
+        let port = AppCoordinator.otaPort
+        guard let host = (try? TailscaleClient.fromSettings().selfDNSName()) ?? nil else {
+            return [
+                "  The page has no address: Tailscale didn't give this Mac a name (MagicDNS is off, or Tailscale didn't answer)."
+            ]
+        }
+        var said: [String] = []
+        if TailscaleClient.serving(port: port).funnelled(on: host) {
+            said.append("  WARNING: Tailscale Funnel is on for port \(port), so the page is on the public internet.")
+        }
+        if !TailscaleClient.servingLive(port: port, host: host) {
+            said.append("  The page isn't up: the RoamRun app serves it while it runs, and it can take half a minute.")
+        }
+        return said + ["  Page: https://\(host):\(port)/ — anyone on the tailnet can open it and install these builds."]
     }
 
     /// The address, for pointing the device's camera at instead of typing it.
@@ -414,7 +432,7 @@ extension CLI {
 
     /// The whole profile: OTA also needs the entitlements, which tell a
     /// Development build (installs only through the bridge) from an Ad Hoc one.
-    static func profilePlist(of path: String) -> [String: Any]? {
+    nonisolated static func profilePlist(of path: String) -> [String: Any]? {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-install-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: dir) }
         var profile = URL(fileURLWithPath: path).appendingPathComponent("embedded.mobileprovision")
