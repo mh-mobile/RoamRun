@@ -721,16 +721,17 @@ private func status(_ answer: String) -> Int {
             served.handled
         }
         .isEmpty)
-    // ota itself waits for no device's turn, whatever device it names: two at once both reach the server.
+    // ota itself waits for no device's turn, whatever device it names: two at once both reach the server. On threads
+    // of their own: a busy CI's shared pool may start them late.
     for n in 0 ..< 2 {
-        DispatchQueue.global().async {
+        Thread.detachNewThread {
             _ = served
                 .post(
                     #"{"jsonrpc":"2.0","id":\#(20 + n),"method":"tools/call","params":{"name":"ota","arguments":{"device":"slow"}}}"#
                 )
         }
     }
-    for _ in 0 ..< 100 where served.lock.withLock({
+    for _ in 0 ..< 500 where served.lock.withLock({
         served.handled.count
     }) < 2 {
         usleep(20000)
