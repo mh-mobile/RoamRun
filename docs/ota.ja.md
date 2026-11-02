@@ -37,27 +37,35 @@ Ad Hoc ビルドをインストールできるのは、プロビジョニング�
 
 ## CI のジョブから
 
-ジョブは、Mac の前に誰もいなくても、ビルドをページに載せられます。使うのは、Mac のアプリの HTTP の MCP サーバーです。RoamRun が動いている Mac で、`--allow-ota` を付けて起動しておきます。トークンは、relay と同じ手順で作り、シークレットにも入れておきます（[ci.ja.md](ci.ja.md#relay-で用意すること) の手順 2）。ジョブは、そのシークレットを `$TOKEN` として使います。
+ジョブは、Mac の前に誰もいなくても、ビルドをページに載せられます。そのために、RoamRun のアプリが動いている Mac で、**OTA server** を起動しておきます。`roamrun mcp --http` に `--allow-ota` を付けたものです。OTA server のツールは `ota` の 1 つだけで、デバイスは操作しません。そのトークンを持つジョブにできるのは、ページへの公開だけです。トークンは relay のものとは別に作り、シークレット（ここでは `OTA_TOKEN`）にも入れておきます。ジョブは、そのシークレットを `$TOKEN` として使います。
 
 ```sh
-roamrun mcp --http 9090 --allow tag:ci --token-file ~/.config/roamrunctl/ci-token --allow-ota
+(umask 077 && mkdir -p ~/.config/roamrun && openssl rand -hex 32 > ~/.config/roamrun/ota-token)
+gh secret set OTA_TOKEN --repo <owner>/<repo> < ~/.config/roamrun/ota-token
+roamrun mcp --http 9091 --allow tag:ci --token-file ~/.config/roamrun/ota-token --allow-ota
 ```
 
-ジョブは、まず `PUT /upload` で .ipa を送り、返ってきた id と sha256 で `ota` ツールを呼びます。アップロードを使えるのは送ってきたマシンだけなので、2 つの呼び出しは同じマシンから行います。
+`--allow-ota` と `--allow-install` は、1 つのサーバーには付けられません。インストール用のサーバーは、別のポートで並べて動かせます。下の `$MAC` は Mac の Tailscale のアドレスで、サーバーが起動したときに表示します。
+
+ジョブは、まず `PUT /upload` で .ipa を送り、返ってきた id と sha256 で `ota` を呼びます。アップロードを使えるのは送ってきたマシンだけなので、2 つの呼び出しは同じマシンから行います。
 
 ```sh
-up=$(curl -fsS -H "Authorization: Bearer $TOKEN" -T MyApp.ipa "http://$MAC:9090/upload")
+up=$(curl -fsS -H "Authorization: Bearer $TOKEN" -T MyApp.ipa "http://$MAC:9091/upload")
 id=$(echo "$up" | jq -r .upload); sha=$(echo "$up" | jq -r .sha256)
 said=$(curl -fsS -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"ota\",\"arguments\":{\"upload\":\"$id\",\"sha256\":\"$sha\"}}}" \
-  "http://$MAC:9090/mcp")
+  "http://$MAC:9091/mcp")
 echo "$said" | jq -r '.result.content[0].text'
 echo "$said" | jq -e '.result.isError == false' > /dev/null   # 拒否されたビルドで手順を失敗にする
 ```
 
-`ota` は、`roamrun ota` と同じ検査をします。答えは、保存したもの、自分のデバイスのうちどれに入るか、ページのアドレスです。拒否されたビルドは、HTTP のエラーではなく、`isError` 付きの答えとして返ります。`"replace": true` を付けると、`--replace` と同じ動きになります。拒否されたビルドのアップロードは、もう一度試せるように残ります。保存されたら、そのアップロードは使い終わりです。`--allow-ota` で使えるのは `ota` だけで、`install` は使えません。`install` には `--allow-install` が必要で、両方を付けることもできます。`$MAC` は Mac の Tailscale のアドレスで、サーバーが起動したときに表示します。
+`ota` は、`roamrun ota` と同じ検査をします。答えは、保存したもの、自分のデバイスのうちどれに入るか、ページのアドレスです。拒否されたビルドは、HTTP のエラーではなく、`isError` 付きの答えとして返ります。`"replace": true` を付けると、`--replace` と同じ動きになります。拒否されたビルドのアップロードは、もう一度試せるように残ります。保存されたら、そのアップロードは使い終わりです。
 
-2026-11-02 に、この Mac 自身からトークン付きで試しました。テスト用アプリの Ad Hoc ビルドをアップロードして、保存できました。答えには、保存してあるデバイスのうち、そのプロファイルに入っている 2 台の名前が出ました。同じアップロードで 2 回目の `ota` を呼ぶと断られ、`install` は一覧に出ませんでした。CI のジョブからと、ほかのマシンからは、まだ試していません。
+- **保存できても、すぐにはページに出ません。** 手順が成功したということは、ビルドを保存できたということです。RoamRun のアプリが動いていれば、30 秒ほどでページに出ます。ページが出ていないときは、答えにそのことと理由が書かれます。
+- **Mac で動かし続けるもの。** RoamRun のアプリと、このサーバーです。`roamrun mcp --http` は Ctrl-C を押すまで動きます。サービスとして動かす形は試していません。ジョブのタグからこのポートへ届くことを、tailnet のアクセス規則で許可しておきます。
+- **公開するジョブは 1 つずつ動かします。** サーバーが持てるアップロードは 1 つだけです。このジョブが `ota` を呼ぶ前に、別のジョブがアップロードを始めたとします。すると、このジョブのアップロードは置き換えられ、送り直すように言われます。重なって動くジョブは、失敗することがあります。
+
+2026-11-02 に、この Mac 自身からトークン付きで試しました。テスト用アプリの Ad Hoc ビルドをアップロードして、保存できました。答えには、保存してあるデバイスのうち、そのプロファイルに入っている 2 台の名前が出ました。`tools/list` に出たのは `ota` だけで、`look` はすぐに断られました。`--allow-ota` と `--allow-install` を一緒に付けると、起動を断りました。同じ日のそれより前には、使い終わったアップロードで 2 回目の `ota` を呼び、断られることも確かめています。CI のジョブから、ほかのマシンから、インストール用のサーバーと並べた形では、まだ試していません。
 
 ## ポートと Funnel
 

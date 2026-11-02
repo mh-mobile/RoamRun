@@ -379,8 +379,10 @@ after 30 minutes unused, or at Ctrl-C; one left by a server that was killed goes
 the RoamRun app runs or when it, or another such server, starts. Without `--allow-install` or
 `--allow-ota` there is neither.
 
-With `--allow-ota` it offers `ota`, which puts an upload on the [OTA page](#installing-without-the-bridge-over-the-air)
-as `roamrun ota` puts a file, so that a CI job can publish its build: [docs/ota.md](docs/ota.md#from-a-ci-job).
+With `--allow-ota` instead, it is an OTA server: its one tool, `ota`, puts an upload on the
+[OTA page](#installing-without-the-bridge-over-the-air) as `roamrun ota` puts a file, so that a CI
+job can publish its build, and it operates no device: [docs/ota.md](docs/ota.md#from-a-ci-job).
+The two flags go on two servers, on two ports.
 
 **What the device does meanwhile.** Each look and each action runs a screen-sharing session on the
 device, which RoamRun keeps for about five seconds after the last one. The device showed it as
@@ -397,8 +399,8 @@ seen and operated too (seen), though unlocking still takes the passcode or Face 
 the MCP server over HTTP (`mcp --http`, above) runs, so can any program on the machines its `--allow` lets in** (each
 untagged machine of a login allowed, each machine with a tag allowed), on every device switched
 on, `launch` included; with `--allow-install` it can also replace the device's apps with any app
-signed for it, and with `--allow-ota` put an Ad Hoc or Enterprise build on the OTA page, for anyone
-on the tailnet to install. `--token-file` is the one check beyond the machine.
+signed for it. An OTA server (`--allow-ota`) operates no device: what it lets them do is put an Ad
+Hoc or Enterprise build on the OTA page, for anyone on the tailnet to install. `--token-file` is the one check beyond the machine.
 
 - The switch beside Device control on the device's page turns it off for every program, and back
   on. It is on after Set Up, Pair Again, `roamrun key import <file>` and `roamrun pair control --with <Tailscale name>`.

@@ -370,10 +370,10 @@ an .ipa or .app built and signed for the device answers at once with an id; ask
 device answer that it is installing meanwhile), then `launch` by its bundle
 identifier. Install only what the user asked for. Over HTTP, `install` is there only
 if the user started the server with `--allow-install`, and takes the id and sha256 that
-a `PUT /upload` of the .ipa answered, never a path. With `--allow-ota` (0.12.0+) the
-server offers `ota` instead or as well: it takes an upload the same way, without a device, and
-puts an Ad Hoc or Enterprise build on the OTA page, where anyone on the tailnet can install it —
-only when the user asked for that.
+a `PUT /upload` of the .ipa answered, never a path. A server started with
+`--allow-ota` (0.12.0+) is an OTA server instead: its one tool, `ota`, takes an upload the same
+way, without a device, and puts an Ad Hoc or Enterprise build on the OTA page, where anyone on the
+tailnet can install it — only when the user asked for that. It operates no device.
 An agent on another machine of the tailnet can have them over HTTP from
 `roamrun mcp --http <port> --allow <who>` (0.11.0+), which the user starts and stops —
 never you; it is called as `roamrunctl mcp --http` is (the roamrunctl skill's "Over HTTP"):

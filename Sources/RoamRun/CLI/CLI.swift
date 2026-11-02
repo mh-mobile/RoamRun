@@ -76,11 +76,12 @@ enum CLI {
       press <name> <button>          home, lock, volume-up or volume-down
       mcp                            The same as MCP tools, over stdin/stdout (for an agent's MCP config)
       mcp --http <port> --allow <tag:name or login> [--allow …] [--token-file <file>]
-          [--allow-install] [--allow-ota] [--max-upload <MiB>]
+          [--allow-install | --allow-ota] [--max-upload <MiB>]
                                      The same over HTTP, on this Mac's Tailscale address, for the
                                      machines Tailscale says are allowed; until Ctrl-C. With
-                                     --allow-install, install of an .ipa sent with PUT /upload;
-                                     with --allow-ota, the tool ota puts one on the OTA page
+                                     --allow-install, install of an .ipa sent with PUT /upload.
+                                     --allow-ota makes an OTA server instead: its one tool, ota,
+                                     puts such an .ipa on the OTA page; it operates no device
     Each look serves one action (type and paste may still go by it): look, act, look again.
     With --look, refused once another look (anyone's), a button, elements or an action without
     --look came since, or after a minute: what an agent sharing the device gives.

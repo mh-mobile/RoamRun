@@ -184,7 +184,7 @@ final class DeviceMCP: @unchecked Sendable {
                     "name": "roamrun",
                     "version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
                 ],
-                "instructions": Self.instructions])
+                "instructions": publish == nil ? Self.instructions : Self.otaInstructions])
         case "ping":
             return reply([:])
         case "tools/list":
@@ -272,6 +272,10 @@ final class DeviceMCP: @unchecked Sendable {
             [["type": "text", "text": s]]
         }
         let profiles = self.profiles
+        // An OTA server offers `ota` alone.
+        if publish != nil, tool != "ota" {
+            throw Failure(description: "no such tool: \(tool)")
+        }
         if tool == "devices" {
             return text(profiles.isEmpty ? "No devices saved in RoamRun." : profiles.map(\.displayName)
                 .joined(separator: "\n"))
@@ -595,8 +599,16 @@ final class DeviceMCP: @unchecked Sendable {
 
     enum Installs { case paths, uploads }
 
-    /// With `installs`, `install` (from a path on this Mac, or from an upload) and `install_status`; with `ota`, `ota`.
+    static let otaInstructions = """
+    Puts an app build on this Mac's OTA page, where anyone on the tailnet can install it: send the .ipa with \
+    PUT /upload, then call ota with the upload's id and sha256. Only an Ad Hoc or Enterprise build is taken. \
+    It operates no device.
+    """
+
+    /// With `installs`, `install` (from a path on this Mac, or from an upload) and `install_status`; with `ota`, an OTA
+    /// server's tools: `ota` alone.
     static func tools(installs: Installs?, ota: Bool = false) -> [[String: Any]] {
+        guard !ota else { return [otaTool] }
         let install = installs == .uploads ? tool(
             "install",
             "Start installing an .ipa sent with PUT /upload, built and signed for this device: the upload's id and sha256, as the upload answered them. It ends the app's running processes first. It answers at once; install_status says when the app is in (a megabyte takes a few seconds, a large app minutes), and until then other calls on the device answer that it is installing. An install the app begins uses the upload up.",
@@ -618,18 +630,20 @@ final class DeviceMCP: @unchecked Sendable {
         ] : []) + [
             tool("launch", "Launch an app on the device by its bundle identifier (one already running is ended first).",
                  ["bundle": ["type": "string"]], required: ["bundle"]),
-        ] + (ota ? [
-            tool(
-                "ota",
-                "Put an .ipa sent with PUT /upload on this Mac's OTA page, where anyone on the tailnet can install it: the upload's id and sha256, as the upload answered them. Only an Ad Hoc or Enterprise build with a profile not expired is taken. It answers with which of the saved devices it installs on and the page's address. The page keeps the latest five builds of each app; with replace, the new build takes the place of those with its version and build number. Taking it uses the upload up.",
-                ["upload": ["type": "string"], "sha256": ["type": "string"],
-                 "replace": [
-                     "type": "boolean",
-                     "description": "Remove the builds with the same version and build number"
-                 ]],
-                required: ["upload", "sha256"]
-            ),
-        ] : [])
+        ]
+    }
+
+    private static var otaTool: [String: Any] {
+        tool(
+            "ota",
+            "Put an .ipa sent with PUT /upload on this Mac's OTA page, where anyone on the tailnet can install it: the upload's id and sha256, as the upload answered them. Only an Ad Hoc or Enterprise build with a profile not expired is taken. It answers with which of the saved devices it installs on and the page's address. The page keeps the latest five builds of each app; with replace, the new build takes the place of those with its version and build number. Taking it uses the upload up.",
+            ["upload": ["type": "string"], "sha256": ["type": "string"],
+             "replace": [
+                 "type": "boolean",
+                 "description": "Remove the builds with the same version and build number"
+             ]],
+            required: ["upload", "sha256"]
+        )
     }
 
     private static var operating: [[String: Any]] {

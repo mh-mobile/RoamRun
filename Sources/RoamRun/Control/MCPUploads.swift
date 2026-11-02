@@ -56,9 +56,11 @@ extension MCPHTTP {
         }
     }
 
-    /// The one upload kept (`--allow-install`), in RoamRun's own folder, where the app takes an app to install from.
-    /// A new one replaces it.
+    /// The one upload kept (`--allow-install`, or `--allow-ota`), in RoamRun's own folder, where the app takes an app
+    /// to install from. A new one replaces it.
     final class Uploads: @unchecked Sendable {
+        /// An OTA server's (`--allow-ota`): what it says of an upload is about publishing, not installing.
+        let publishes: Bool
         /// An upload not used for this long is let go of.
         static let keptFor: TimeInterval = 30 * 60
         /// An upload file this old when a server starts was left by one that ended without Ctrl-C.
@@ -82,9 +84,10 @@ extension MCPHTTP {
         /// Stopping: no file is made any more (one made after `end` would be left).
         private var ended = false
 
-        init(folder: URL, most: Int) {
+        init(folder: URL, most: Int, publishes: Bool = false) {
             self.folder = folder
             self.most = most
+            self.publishes = publishes
             // What a server ended without Ctrl-C (killed, or the Mac gone down) left: none is kept that long.
             for name in (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
                 where name.hasPrefix("upload-") && name.hasSuffix(".ipa")
@@ -188,11 +191,11 @@ extension MCPHTTP {
         /// Why `owner` may not install the upload `id` it names by `sha256`, if it may not: before the call waits its turn.
         func refusal(id: String, owner: String, sha256: String) -> String? {
             lock.withLock {
-                guard let held = kept, held.upload.id == id, held.upload.owner == owner else { return Self.gone(id) }
+                guard let held = kept, held.upload.id == id, held.upload.owner == owner else { return gone(id) }
                 kept?.used = Date()
                 utimes(held.upload.path, nil) // its file's time too: a server starting goes by that
                 return held.upload.sha256.caseInsensitiveCompare(sha256) == .orderedSame ? nil :
-                    "sha256 \(sha256) isn't upload \(id)'s: nothing was installed"
+                    "sha256 \(sha256) isn't upload \(id)'s: nothing was \(publishes ? "published" : "installed")"
             }
         }
 
@@ -205,7 +208,7 @@ extension MCPHTTP {
             let upload = try lock.withLock { () -> Upload in
                 guard let held = kept, held.upload.id == id,
                       held.upload.sha256.caseInsensitiveCompare(sha256) == .orderedSame
-                else { throw Failure(description: Self.gone(id)) }
+                else { throw Failure(description: gone(id)) }
                 kept = nil
                 lent.append((held.upload, true))
                 return held.upload
@@ -224,7 +227,7 @@ extension MCPHTTP {
                 rmdir(own.path)
                 // Its own file gone (the folder removed meanwhile): nothing is kept.
                 settle(upload, taken: gone)
-                throw Failure(description: gone ? Self.gone(id) :
+                throw Failure(description: gone ? self.gone(id) :
                     "the upload couldn't be made ready for the app: \(why). It is kept: try again")
             }
             return (path, { [weak self] taken in
@@ -273,8 +276,9 @@ extension MCPHTTP {
             }
         }
 
-        static func gone(_ id: String) -> String {
-            "no upload \(id) is kept here for you (replaced by a later upload, used by an install, or dropped after \(Int(keptFor / 60)) minutes unused): send it again"
+        /// Begins "no upload ": what `roamrunctl ota` sends the file again on.
+        func gone(_ id: String) -> String {
+            "no upload \(id) is kept here for you (replaced by a later upload, used by \(publishes ? "ota" : "an install"), or dropped after \(Int(Self.keptFor / 60)) minutes unused): send it again"
         }
     }
 }

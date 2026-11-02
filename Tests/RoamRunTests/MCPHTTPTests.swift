@@ -663,10 +663,11 @@ private func status(_ answer: String) -> Int {
         .isEmpty)
 }
 
-/// Which of `install` and `ota` a call is given, by the server's flags: each only by its own.
+/// What a call is given, by the server's flags: `--allow-install` adds install to the device's tools; `--allow-ota` makes
+/// an OTA server, `ota` alone; the two aren't one server.
 @Test func installAndOtaAreGivenEachByItsOwnFlag() throws {
     let uploads = MCPHTTP.Uploads(folder: FileManager.default.temporaryDirectory, most: 1 << 20)
-    func listed(_ allowInstall: Bool, _ allowOTA: Bool) throws -> Set<String> {
+    func listed(_ allowInstall: Bool, _ allowOTA: Bool) throws -> [String] {
         let server = MCPHTTP.tools(folder: FileManager.default.temporaryDirectory, uploads: uploads,
                                    allowInstall: allowInstall, allowOTA: allowOTA, profiles: {
                                        []
@@ -676,11 +677,46 @@ private func status(_ answer: String) -> Int {
             ((try JSONSerialization.jsonObject(with: answer) as? [String: Any])?["result"] as? [String: Any])?["tools"]
                 as? [[String: Any]]
         )
-        return Set(tools.compactMap {
+        return tools.compactMap {
             $0["name"] as? String
-        }).intersection(["install", "install_status", "ota"])
+        }
     }
-    #expect(try listed(true, false) == ["install", "install_status"])
+    let device = try listed(false, false)
+    #expect(device.contains("look") && !device.contains("install") && !device.contains("ota"))
+    #expect(try listed(true, false) == device.filter {
+        $0 != "launch"
+    } + ["install", "install_status", "launch"])
     #expect(try listed(false, true) == ["ota"])
-    #expect(try listed(true, true) == ["install", "install_status", "ota"])
+    #expect(throws: MCPHTTP.Failure.self) {
+        try MCPHTTP.start(port: "9", allow: ["tag:ci"], tokenFile: nil, allowInstall: true, allowOTA: true)
+    }
+}
+
+/// An OTA server answers any other call at once, as no such tool: not a device's turn waited for, not the app asked,
+/// not even an install of the caller's own upload.
+@Test func anOTAServerAnswersOtherCallsAtOnce() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let uploads = MCPHTTP.Uploads(folder: folder, most: 1 << 20, publishes: true)
+    let served = try Served(uploads: uploads)
+    let sent = served.ask("PUT /upload HTTP/1.1\r\nHost: 127.0.0.1:\(served.port)\r\nContent-Length: 1\r\n\r\nx")
+    let id = try #require(sent.components(separatedBy: #""upload":""#).last?.prefix(32)).description
+    for (name, arguments) in [("look", #"{"device":"slow"}"#),
+                              ("install", #"{"device":"slow","upload":"\#(id)","sha256":"x"}"#)]
+    {
+        let answer = served.post(
+            #"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"\#(name)","arguments":\#(arguments)}}"#
+        )
+        #expect(answer.contains("no such tool: \(name)") && answer.contains(#""isError":true"#))
+    }
+    #expect(served.lock
+        .withLock {
+            served.handled
+        }
+        .isEmpty)
+    // A later upload replaces it: what the first's ota is told begins as roamrunctl ota looks for, and fits publishing.
+    _ = served.ask("PUT /upload HTTP/1.1\r\nHost: 127.0.0.1:\(served.port)\r\nContent-Length: 1\r\n\r\ny")
+    let gone = try #require(uploads.refusal(id: id, owner: "caller", sha256: "x"))
+    #expect(gone.hasPrefix("no upload ") && gone.contains("used by ota") && !gone.contains("install"))
 }

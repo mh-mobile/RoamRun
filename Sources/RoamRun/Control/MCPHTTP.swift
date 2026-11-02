@@ -810,6 +810,15 @@ final class MCPHTTP: @unchecked Sendable {
         if method.isEmpty {
             return refuse(400, "", Self.rpcError(id, -32600, "no method"))
         }
+        // An OTA server answers every other call at once: none waits for a device, or asks the app.
+        if uploads?.publishes == true, method == "tools/call", let name = params["name"] as? String, name != "ota" {
+            Self.respond(fd, 200, "", Self.json([
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": ["content": [["type": "text", "text": "no such tool: \(name)"]], "isError": true],
+            ]))
+            return "error"
+        }
         // An install or ota from another's upload, or one not as it was sent, is refused before it waits its turn.
         if let uploads, method == "tools/call", ["install", "ota"].contains(params["name"] as? String ?? ""),
            let upload = arguments["upload"] as? String,
@@ -1011,6 +1020,11 @@ extension MCPHTTP {
         }
         let allowed = try allow.map(Self.allow)
         let token = try tokenFile.map(Self.token(at:))
+        guard !(allowInstall && allowOTA) else {
+            throw Failure(
+                description: "--allow-ota makes an OTA server, which operates no device: run it on a port of its own beside one with --allow-install"
+            )
+        }
         guard maxUpload == nil || allowInstall || allowOTA
         else { throw Failure(description: "--max-upload goes with --allow-install or --allow-ota") }
         let mib = try maxUpload.map {
@@ -1031,7 +1045,7 @@ extension MCPHTTP {
             !$0.isEmpty
         }
         let folder = DeviceControlWire.socketFolder(in: ProfileStore.directory)
-        let uploads = allowInstall || allowOTA ? Uploads(folder: folder, most: mib << 20) : nil
+        let uploads = allowInstall || allowOTA ? Uploads(folder: folder, most: mib << 20, publishes: allowOTA) : nil
         if let uploads {
             // At stop, what was uploaded goes: Ctrl-C, and what a closed terminal sends.
             for stop in [SIGINT, SIGTERM, SIGHUP] {
@@ -1084,13 +1098,11 @@ extension MCPHTTP {
             }
         )
         let who = allow.joined(separator: ", ")
-        let took = [allowInstall ? "install" : nil, allowOTA ? "the OTA page" : nil].compactMap {
-            $0
-        }
-        let install = uploads == nil ? "" :
-            "; \(took.joined(separator: " and ")) for an .ipa sent to http://\(own):\(bound)/upload, \(mib) MiB at most"
-        let note =
-            "roamrun: the MCP tools for the devices saved in RoamRun at http://\(own):\(bound)/mcp, for \(who) on the tailnet\(token == nil ? "" : ", with the token")\(install). Ctrl-C ends it. What is sent and shown passes through whatever lies between (a cloud's proxy sees images and text)."
+        let whom = "for \(who) on the tailnet\(token == nil ? "" : ", with the token")"
+        let upload = "an .ipa sent to http://\(own):\(bound)/upload, \(mib) MiB at most"
+        let note = allowOTA ?
+            "roamrun: an OTA server at http://\(own):\(bound)/mcp, \(whom): its one tool, ota, puts \(upload) on the OTA page, where anyone on the tailnet can install it. It operates no device. Ctrl-C ends it." :
+            "roamrun: the MCP tools for the devices saved in RoamRun at http://\(own):\(bound)/mcp, \(whom)\(allowInstall ? "; install of \(upload)" : ""). Ctrl-C ends it. What is sent and shown passes through whatever lies between (a cloud's proxy sees images and text)."
         return (server, fd, note)
     }
 }
