@@ -721,6 +721,25 @@ private func status(_ answer: String) -> Int {
             served.handled
         }
         .isEmpty)
+    // ota itself waits for no device's turn, whatever device it names: two at once both reach the server.
+    for n in 0 ..< 2 {
+        DispatchQueue.global().async {
+            _ = served
+                .post(
+                    #"{"jsonrpc":"2.0","id":\#(20 + n),"method":"tools/call","params":{"name":"ota","arguments":{"device":"slow"}}}"#
+                )
+        }
+    }
+    for _ in 0 ..< 100 where served.lock.withLock({
+        served.handled.count
+    }) < 2 {
+        usleep(20000)
+    }
+    #expect(served.lock.withLock {
+        served.handled.count
+    } == 2)
+    served.slow.signal()
+    served.slow.signal()
     // A later upload replaces it: what the first's ota is told begins as roamrunctl ota looks for, and fits publishing.
     _ = served.ask("PUT /upload HTTP/1.1\r\nHost: 127.0.0.1:\(served.port)\r\nContent-Length: 1\r\n\r\ny")
     let gone = try #require(uploads.refusal(id: id, owner: "caller", sha256: "x"))
