@@ -692,6 +692,8 @@ pub fn run(command: Command) -> i32 {
             Ok(None) => install(&name, &path, launch),
             Err(why) => Err(why),
         },
+        Command::Ota { path, server, token_file, replace, timeout } => crate::remote::Relay::server(&server, token_file.as_deref())
+            .and_then(|server| server.ota(&path, replace, timeout)),
         Command::Launch { name, bundle, relay } => match relay.given() {
             Ok(Some((relay, token_file))) => crate::remote::Relay::new(&relay, token_file.as_deref())
                 .and_then(|relay| relay.call("launch", serde_json::json!({ "device": name, "bundle": bundle }))),

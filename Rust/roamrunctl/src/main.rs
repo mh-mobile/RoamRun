@@ -78,6 +78,23 @@ enum Command {
         #[arg(long, requires = "relay")]
         timeout: Option<u64>,
     },
+    /// Put an .ipa on a Mac's OTA page, through its OTA server (`roamrun mcp --http --allow-ota`), for testers to install from
+    Ota {
+        /// The .ipa, signed for Release Testing (Ad Hoc) or Enterprise, on this machine
+        path: std::path::PathBuf,
+        /// The OTA server's address and port, as it printed them (100.x.y.z:9091). Not a relay: a relay can't publish
+        #[arg(long)]
+        server: String,
+        /// The OTA server's token, in a file of the owner's alone (else ROAMRUNCTL_TOKEN holds it)
+        #[arg(long = "token-file")]
+        token_file: Option<std::path::PathBuf>,
+        /// Remove the builds on the page with the same version and build number
+        #[arg(long)]
+        replace: bool,
+        /// The most seconds the network part takes (else 2 s a MB, 30 s more, and 120 s for the server's checks)
+        #[arg(long)]
+        timeout: Option<u64>,
+    },
     /// Launch an app on the device (one already running is ended first)
     Launch {
         /// The device, as `roamrunctl devices` names it (with --relay, as the relay names it)

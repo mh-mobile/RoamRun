@@ -394,6 +394,32 @@ the device over Tailscale, as any using machine does, and needs no place beside 
   it passes the command fails; an install already begun goes on at the relay, and
   `install_status` there says how it ends.
 
+### `ota --server`
+
+`roamrunctl ota <app.ipa> --server <address>:<port> [--token-file <file>] [--replace] [--timeout <s>]`
+(0.12.0+) puts the `.ipa` on a Mac's OTA page through its **OTA server**: `roamrun mcp --http …
+--allow-ota` on the Mac that runs RoamRun ([ota.md](ota.md#from-a-ci-job)). An OTA server is not
+a relay: a relay (`roamrunctl mcp --http`) can't publish, and an OTA server operates no device.
+
+- `--server` takes the address and port, or the address the server printed; there is no
+  environment variable for it. The token, the lookup of a name and `ROAMRUNCTL_PROXY` are as for
+  `--relay`.
+- Before anything is sent it asks the server what it is (`initialize`, `tools/list`): a relay is
+  refused as one, and a server without `ota` (RoamRun before 0.12.0, or started without
+  `--allow-ota`) as such. The file has to be an `.ipa`; its signing is checked by the server.
+- Then, from one process: `PUT /upload`, retried 3 seconds apart while the server answers 409
+  (another upload coming in); the sha256 it answered compared with the file's; `ota` with the
+  upload and `replace`. It prints what `ota` said and exits 0 when the build is stored; that is
+  not yet on the page, which shows it within about 30 seconds while the RoamRun app runs.
+- Where `ota` answers that no such upload is kept (another job's upload replaced this one: refused
+  before `ota` ran, so nothing was stored), the file is sent again, once. A second time, it stops
+  and says so: jobs that publish at once can fail. A refused build stops it with what the server
+  said. A lost answer to `ota` isn't sent again: the build may have been stored.
+- `--timeout <s>` is the most the network part waits: the questions, the upload and its retries,
+  and `ota`, each read or write 120 seconds at most. Reading the file for its sha256 and looking up
+  a name aren't held to it. By default: 2 seconds a MB, 30 seconds, and 120 seconds for the
+  server's checks.
+
 ## Through an HTTP proxy (`ROAMRUNCTL_PROXY`)
 
 On a machine that reaches the tailnet only through an HTTP proxy, `ROAMRUNCTL_PROXY=http://<host>:<port>`
@@ -595,6 +621,11 @@ against a real device at the time these notes were written:
   same upload were refused meanwhile, it was installed after 10 s, the upload's file was gone
   after, and the folder was removed at Ctrl-C. `launch` of it over stdio answered with its pid
   in 1.3 s.
+- `ota --server` from another machine, through `ROAMRUNCTL_PROXY`, from CI, and on Windows or
+  Linux. It was run on 2026-11-02 on macOS from the Mac itself, with the token, against its own
+  `roamrun mcp --http --allow-ota`: an Ad Hoc build of a test app was stored and the answer
+  printed; against a `roamrunctl mcp --http` on the same machine it was refused as a relay before
+  anything was sent; without the token, 401 at `initialize`.
 - `launch --relay` from another machine; `install --relay` on Windows (from GitHub Actions' Linux
   runners it ran, as did `install --launch` without a relay: [ci.md](ci.md#what-was-run); and from
   Xcode Cloud and Bitrise); `--timeout` running out. They were run on macOS

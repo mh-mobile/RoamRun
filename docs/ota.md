@@ -71,23 +71,19 @@ roamrun mcp --http 9091 --allow tag:ci --token-file ~/.config/roamrun/ota-token 
 beside it on another port. `$MAC` below is the Mac's Tailscale address, which the server prints
 as it starts.
 
-The job sends the .ipa with `PUT /upload` and gets its id and sha256, then calls `ota` with them,
-from the same machine (an upload is kept for the caller that sent it):
+The job publishes with roamrunctl (0.12.0 or later; its archives are on the
+[releases](https://github.com/mh-mobile/RoamRun/releases) page):
 
 ```sh
-up=$(curl -fsS -H "Authorization: Bearer $TOKEN" -T MyApp.ipa "http://$MAC:9091/upload")
-id=$(echo "$up" | jq -r .upload); sha=$(echo "$up" | jq -r .sha256)
-said=$(curl -fsS -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"ota\",\"arguments\":{\"upload\":\"$id\",\"sha256\":\"$sha\"}}}" \
-  "http://$MAC:9091/mcp")
-echo "$said" | jq -r '.result.content[0].text'
-echo "$said" | jq -e '.result.isError == false' > /dev/null   # a refused build fails the step
+ROAMRUNCTL_TOKEN="$TOKEN" roamrunctl ota MyApp.ipa --server "$MAC:9091"
 ```
 
-`ota` checks the build as `roamrun ota` does and answers with what was stored, which of your
-devices it installs on, and the page's address; a refused build is an answer with `isError`, not
-an HTTP error. `"replace": true` does what `--replace` does. A build it refuses leaves the upload
-for another try; one it stores uses it up.
+It asks the server what it is before it sends anything (a relay, or a server without `ota`, is
+refused as such), uploads the .ipa, checks the sha256 the server answers, and calls `ota`. The
+server checks the build as `roamrun ota` does; the command prints what it said (what was stored,
+which of your devices it installs on, the page's address) and fails on a refused build.
+`--replace` does what it does for `roamrun ota`. Details:
+[the roamrunctl reference](roamrunctl-reference.md#ota---server).
 
 - **Stored is not yet on the page.** A step that succeeds means the build was stored. The page
   shows it within about 30 seconds while the RoamRun app runs; the answer says when the page isn't
@@ -96,8 +92,9 @@ for another try; one it stores uses it up.
   until Ctrl-C; running it as a service wasn't tried). The tailnet's access rules have to let the
   job's tag reach the server's port.
 - **One publishing job at a time.** The server keeps one upload: another job's upload, starting
-  before this one's `ota`, replaces it, and this one is told to send it again. Jobs that may
-  overlap can fail.
+  before this one's `ota`, replaces it. `roamrunctl ota` waits while another upload comes in and
+  sends its own again once; jobs that overlap more than that can fail, and a long wait may need
+  a larger `--timeout`.
 
 Run on 2026-11-02 from this Mac itself, with the token: an Ad Hoc build of a test app was uploaded
 and stored, and the answer named the two saved devices its profile lists. `tools/list` had `ota`

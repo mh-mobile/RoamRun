@@ -1,5 +1,6 @@
 //! `install` and `launch` with `--relay`: through `roamrunctl mcp --http` on the machine that holds the device's key
-//! (anywhere on the tailnet: it reaches the device over Tailscale, as this one would).
+//! (anywhere on the tailnet: it reaches the device over Tailscale, as this one would). `ota` with `--server`: through
+//! an OTA server, a Mac's `roamrun mcp --http --allow-ota`, which puts an .ipa on its OTA page.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
@@ -29,20 +30,31 @@ pub struct Relay {
     /// host:port, as connected to and as the Host the server checks.
     host: String,
     token: Option<String>,
+    /// What it is called in what is said: "the relay", or "the OTA server" (never the one for the other).
+    noun: &'static str,
 }
 
 impl Relay {
     /// `at`: host:port, or the address `mcp --http` printed (http://host:port/mcp). The token: `token_file`, else `TOKEN`.
     pub fn new(at: &str, token_file: Option<&Path>) -> Result<Relay, String> {
+        Self::named(at, token_file, "the relay", "--relay", "`roamrunctl mcp --http`")
+    }
+
+    /// An OTA server, `at` as for `new`.
+    pub fn server(at: &str, token_file: Option<&Path>) -> Result<Relay, String> {
+        Self::named(at, token_file, "the OTA server", "--server", "`roamrun mcp --http --allow-ota` on the Mac")
+    }
+
+    fn named(at: &str, token_file: Option<&Path>, noun: &'static str, flag: &str, printer: &str) -> Result<Relay, String> {
         let host = at.strip_prefix("http://").unwrap_or(at).split('/').next().unwrap_or("");
         if host.rsplit_once(':').is_none_or(|(name, port)| name.is_empty() || port.parse::<u16>().is_err()) {
-            return Err(format!("--relay {at}: the relay's address and port, as `roamrunctl mcp --http` printed them (100.x.y.z:9090)"));
+            return Err(format!("{flag} {at}: {noun}'s address and port, as {printer} printed them (100.x.y.z:9090)"));
         }
         let token = match token_file {
             Some(path) => Some(crate::http::token(path)?),
             None => std::env::var(TOKEN).ok().map(|token| token.trim().to_string()).filter(|token| !token.is_empty()),
         };
-        Ok(Relay { host: host.to_string(), token })
+        Ok(Relay { host: host.to_string(), token, noun })
     }
 
     /// One request, tried again while the relay answers 503: its status and body. `body` gives a body anew for each try.
@@ -58,23 +70,24 @@ impl Relay {
 
     /// One request, over by `until`.
     fn once(&self, method: &str, path: &str, body: &dyn Fn() -> std::io::Result<(u64, Box<dyn Read>)>, (until, why): Deadline) -> Result<(u16, String), String> {
-        let out = || format!("the relay at {}: {why}", self.host);
+        let noun = self.noun;
+        let out = || format!("{noun} at {}: {why}", self.host);
         let failed = |e: std::io::Error| match e.kind() {
             _ if Instant::now() >= until => out(),
             // A read or write given up before the deadline, at `ANSWER`.
-            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => format!("the relay at {}: no answer within {} s", self.host, ANSWER.as_secs()),
-            _ => format!("the relay at {}: {e}", self.host),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => format!("{noun} at {}: no answer within {} s", self.host, ANSWER.as_secs()),
+            _ => format!("{noun} at {}: {e}", self.host),
         };
         let left = || until.checked_duration_since(Instant::now()).filter(|left| !left.is_zero()).ok_or_else(out);
         let stream = match roamrun_device::proxy::named() {
             // Through the proxy named (ROAMRUNCTL_PROXY), which finds the relay itself.
             Some(proxy) => {
                 let (name, port) = self.host.rsplit_once(':').and_then(|(name, port)| Some((name, port.parse().ok()?))).ok_or_else(out)?;
-                roamrun_device::proxy::through(proxy, name, port, CONNECT.min(left()?)).map_err(|e| format!("the relay at {}: {e}", self.host))?
+                roamrun_device::proxy::through(proxy, name, port, CONNECT.min(left()?)).map_err(|e| format!("{noun} at {}: {e}", self.host))?
             }
             // It listens on IPv4 alone: each IPv4 address the name gives is tried.
             None => {
-                let mut stream = Err(format!("the relay at {}: no IPv4 address", self.host));
+                let mut stream = Err(format!("{noun} at {}: no IPv4 address", self.host));
                 for at in self.host.to_socket_addrs().map_err(failed)?.filter(SocketAddr::is_ipv4) {
                     stream = TcpStream::connect_timeout(&at, CONNECT.min(left()?)).map_err(failed);
                     if stream.is_ok() { break }
@@ -139,7 +152,7 @@ impl Relay {
     fn call_by(&self, tool: &str, arguments: Value, until: Deadline) -> Result<String, String> {
         let line = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": tool, "arguments": arguments } }).to_string();
         let (status, said) = self.ask("POST", "/mcp", &|| Ok((line.len() as u64, Box::new(std::io::Cursor::new(line.clone().into_bytes())))), until)?;
-        if status != 200 { return Err(refused(tool, status, &said)) }
+        if status != 200 { return Err(self.refused(tool, status, &said)) }
         let said: Value = serde_json::from_str(&said).map_err(|_| format!("{tool}: the relay's answer isn't JSON"))?;
         if let Some(message) = said["error"]["message"].as_str() { return Err(format!("{tool}: {message}")) }
         let text = said["result"]["content"].as_array().into_iter().flatten().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n");
@@ -158,17 +171,8 @@ impl Relay {
         let until = began + timeout.map_or(given + Duration::from_secs(60 + 2 * megabytes), Duration::from_secs);
         let why = format!("out of time ({} s{})", until.duration_since(began).as_secs(), if timeout.is_some() { ", --timeout" } else { ": what the relay gives the upload and the install; --timeout sets another" });
         let deadline = (until, why.as_str());
-        let opened = || std::fs::File::open(path).and_then(|file| Ok((file.metadata()?.len(), Box::new(file) as Box<dyn Read>)));
-        let mut hash = <sha2::Sha256 as sha2::Digest>::new();
-        std::io::copy(&mut opened().map_err(|e| format!("{}: {e}", path.display()))?.1, &mut hash).map_err(|e| format!("{}: {e}", path.display()))?;
-        let sha256: String = sha2::Digest::finalize(hash).iter().map(|b| format!("{b:02x}")).collect();
-        note!("Sending {} ({megabytes} MB) to the relay at {}", path.display(), self.host);
-        let (status, said) = self.ask("PUT", "/upload", &opened, deadline)?;
-        if status != 200 { return Err(refused("the upload", status, &said)) }
-        let said: Value = serde_json::from_str(&said).map_err(|_| "the relay's answer to the upload isn't JSON".to_string())?;
-        // What arrived is what was sent: else nothing is installed.
-        if said["sha256"].as_str() != Some(sha256.as_str()) { return Err(format!("the relay's sha256 of the upload isn't {}'s: nothing was installed", path.display())) }
-        let upload = said["upload"].as_str().ok_or("the relay's answer to the upload has no id")?;
+        let sha256 = sha256_of(path)?;
+        let upload = self.upload(path, &sha256, megabytes, false, "installed", deadline)?;
         let begun = self.call_by("install", json!({ "device": name, "upload": upload, "sha256": sha256 }), deadline)?;
         note!("{begun}");
         // Asked of by its id: another caller's install on the device meanwhile, of the same app even, isn't taken for this one.
@@ -183,6 +187,82 @@ impl Relay {
             if !said.starts_with("installing ") { return Err(said) }
         }
     }
+}
+
+impl Relay {
+    /// Sends the .ipa at `path`, whose sha256 is `sha256`: the upload's id. What arrived is what was sent, else nothing is
+    /// `done` with it. `busy`: a 409 (another upload coming in) is tried again, `APART` apart, until the deadline.
+    fn upload(&self, path: &Path, sha256: &str, megabytes: u64, busy: bool, done: &str, deadline: Deadline) -> Result<String, String> {
+        let opened = || std::fs::File::open(path).and_then(|file| Ok((file.metadata()?.len(), Box::new(file) as Box<dyn Read>)));
+        note!("Sending {} ({megabytes} MB) to {} at {}", path.display(), self.noun, self.host);
+        let (status, said) = loop {
+            let (status, said) = self.ask("PUT", "/upload", &opened, deadline)?;
+            if !(busy && status == 409 && Instant::now() + APART < deadline.0) { break (status, said) }
+            std::thread::sleep(APART);
+        };
+        if status != 200 { return Err(self.refused("the upload", status, &said)) }
+        let said: Value = serde_json::from_str(&said).map_err(|_| format!("{}'s answer to the upload isn't JSON", self.noun))?;
+        if said["sha256"].as_str() != Some(sha256) { return Err(format!("{}'s sha256 of the upload isn't {}'s: nothing was {done}", self.noun, path.display())) }
+        said["upload"].as_str().map(str::to_string).ok_or_else(|| format!("{}'s answer to the upload has no id", self.noun))
+    }
+
+    /// One JSON-RPC request's result: an error where there is none, or it isn't an object.
+    fn request(&self, method: &str, params: Value, until: Deadline) -> Result<Value, String> {
+        let line = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }).to_string();
+        let (status, said) = self.ask("POST", "/mcp", &|| Ok((line.len() as u64, Box::new(std::io::Cursor::new(line.clone().into_bytes())))), until)?;
+        if status != 200 { return Err(self.refused(method, status, &said)) }
+        let said: Value = serde_json::from_str(&said).map_err(|_| format!("{method}: {}'s answer isn't JSON", self.noun))?;
+        if let Some(message) = said["error"]["message"].as_str() { return Err(format!("{method}: {message}")) }
+        match &said["result"] {
+            result @ Value::Object(_) => Ok(result.clone()),
+            _ => Err(format!("{method}: {}'s answer has no result", self.noun)),
+        }
+    }
+
+    /// Puts the .ipa at `path` on the OTA page, through an OTA server, all within `timeout` (else 2 s a MB, as the server
+    /// gives an upload, 30 s more, and 120 s for `ota`). What the server said of it. The deadline is the network's: hashing
+    /// the file and finding the server's address aren't held to it.
+    pub fn ota(&self, path: &Path, replace: bool, timeout: Option<u64>) -> Result<String, String> {
+        let began = Instant::now();
+        let is_ipa = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("ipa"));
+        let size = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        if !size.is_file() || !is_ipa { return Err(format!("{}: an .ipa signed for Release Testing (Ad Hoc) or Enterprise", path.display())) }
+        let megabytes = size.len().div_ceil(1 << 20);
+        let until = began + timeout.map_or(Duration::from_secs(2 * megabytes + 30 + 120), Duration::from_secs);
+        let why = format!("out of time ({} s{})", until.duration_since(began).as_secs(), if timeout.is_some() { ", --timeout" } else { "; --timeout sets another" });
+        let deadline = (until, why.as_str());
+        // What it is, before anything is sent: a relay (which can't), or a RoamRun without `ota`.
+        let hello = self.request("initialize", json!({ "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "roamrunctl", "version": env!("ROAMRUN_VERSION") } }), deadline)?;
+        if hello["serverInfo"]["name"] == "roamrunctl" {
+            return Err(format!("{} is a relay (roamrunctl mcp --http), which can't publish to the OTA page: give --server the Mac's `roamrun mcp --http --allow-ota` (RoamRun 0.12.0 or later)", self.host));
+        }
+        let tools = self.request("tools/list", json!({}), deadline)?;
+        if !tools["tools"].as_array().into_iter().flatten().any(|tool| tool["name"] == "ota") {
+            return Err(format!("the server at {} has no ota: its RoamRun is older than 0.12.0, or it was started without --allow-ota", self.host));
+        }
+        let sha256 = sha256_of(path)?;
+        let mut again = false;
+        loop {
+            let upload = self.upload(path, &sha256, megabytes, true, "published", deadline)?;
+            let said = self.request("tools/call", json!({ "name": "ota", "arguments": { "upload": upload, "sha256": sha256, "replace": replace } }), deadline)
+                .map_err(|e| format!("{e}. The build may have been stored: look at the page before running this again"))?;
+            let text = said["content"].as_array().into_iter().flatten().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n");
+            if said["isError"] != true { return Ok(text) }
+            // Refused before ota ran (another upload replaced this one): nothing was stored, so it can go once more.
+            if !text.starts_with("no upload ") { return Err(text) }
+            if std::mem::replace(&mut again, true) {
+                return Err(format!("{text}\nIt was sent again once, and another job's upload replaced it again: publish one job at a time, or run this again"));
+            }
+        }
+    }
+}
+
+/// The file's sha256, as the server answers it.
+fn sha256_of(path: &Path) -> Result<String, String> {
+    let mut hash = <sha2::Sha256 as sha2::Digest>::new();
+    let mut file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    std::io::copy(&mut file, &mut hash).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(sha2::Digest::finalize(hash).iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// The id in what `install` answered: "… (install <id>) …".
@@ -240,15 +320,20 @@ fn answer_head(reader: &mut impl BufRead) -> std::io::Result<(u16, Option<u64>)>
     status.map(|status| (status, length)).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "not an HTTP answer"))
 }
 
-/// Why the relay refused `what`, said for the one who runs this.
-fn refused(what: &str, status: u16, said: &str) -> String {
-    let why = match status {
-        401 => "it wants its token (ROAMRUNCTL_TOKEN, or --token-file)".to_string(),
-        403 => "it doesn't let this machine in (its --allow)".to_string(),
-        404 if what == "the upload" => "it takes no installs (it runs without --allow-install)".to_string(),
-        _ => said.trim().chars().take(400).collect(),
-    };
-    format!("{what}: the relay answered {status}{}{why}", if why.is_empty() { "" } else { ": " })
+impl Relay {
+    /// Why it refused `what`, said for the one who runs this.
+    fn refused(&self, what: &str, status: u16, said: &str) -> String {
+        let server = self.noun == "the OTA server";
+        let why = match status {
+            401 => "it wants its token (ROAMRUNCTL_TOKEN, or --token-file)".to_string(),
+            403 => "it doesn't let this machine in (its --allow)".to_string(),
+            404 if what == "the upload" && server => "it isn't an OTA server (started without --allow-ota)".to_string(),
+            404 if what == "the upload" => "it takes no installs (it runs without --allow-install)".to_string(),
+            409 if server => "it was taking another upload all the time this waited: publish one job at a time".to_string(),
+            _ => said.trim().chars().take(400).collect(),
+        };
+        format!("{what}: {} answered {status}{}{why}", self.noun, if why.is_empty() { "" } else { ": " })
+    }
 }
 
 #[cfg(test)]
@@ -409,5 +494,118 @@ mod tests {
             let said = Relay::new(&at.to_string(), None).unwrap().once("PUT", "/upload", &big, (Instant::now() + Duration::from_secs(20), "out of time")).err().unwrap_or_default();
             assert!(["reset", "Broken pipe"].iter().any(|word| said.contains(word)) && !said.contains("Invalid argument"), "{said}");
         }
+    }
+
+    /// A server on 127.0.0.1 that answers its requests in turn with `answers` (status, body), keeping each request's
+    /// first line and body.
+    fn scripted(answers: Vec<(u16, String)>) -> (std::net::SocketAddr, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let at = listener.local_addr().unwrap();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let kept = seen.clone();
+        std::thread::spawn(move || {
+            for (status, body) in answers {
+                let Ok((stream, _)) = listener.accept() else { return };
+                let mut reader = BufReader::new(&stream);
+                let (mut first, mut length) = (String::new(), 0);
+                reader.read_line(&mut first).unwrap();
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" { break }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") { length = value.trim().parse().unwrap() }
+                }
+                // A refusal before the body, as the server's 401/404/409 come.
+                let refused = status != 200;
+                let mut taken = vec![0; if refused { 0 } else { length }];
+                if !refused { (&stream).write_all(b"HTTP/1.1 100 Continue\r\n\r\n").unwrap(); reader.read_exact(&mut taken).unwrap(); }
+                kept.lock().unwrap().push(format!("{} {}", first.trim_end(), String::from_utf8_lossy(&taken)));
+                let _ = (&stream).write_all(format!("HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes());
+            }
+        });
+        (at, seen)
+    }
+
+    fn rpc(result: Value) -> (u16, String) { (200, json!({ "jsonrpc": "2.0", "id": 1, "result": result }).to_string()) }
+    fn hello(name: &str) -> (u16, String) { rpc(json!({ "serverInfo": { "name": name, "version": "0.12.0" } })) }
+    fn listing(names: &[&str]) -> (u16, String) { rpc(json!({ "tools": names.iter().map(|name| json!({ "name": name })).collect::<Vec<_>>() })) }
+    fn said(text: &str, error: bool) -> (u16, String) { rpc(json!({ "content": [{ "type": "text", "text": text }], "isError": error })) }
+
+    /// An .ipa of a few bytes in a folder of its own, and its sha256: the client checks neither its shape nor its signing.
+    fn ipa() -> (std::path::PathBuf, String) {
+        let folder = std::env::temp_dir().join(format!("roamrunctl-ota-{}-{:?}", std::process::id(), std::thread::current().id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("App.ipa");
+        std::fs::write(&path, b"an app").unwrap();
+        let sha256 = sha256_of(&path).unwrap();
+        (path, sha256)
+    }
+
+    fn uploaded(sha256: &str) -> (u16, String) { (200, json!({ "upload": "u1", "size": 6, "sha256": sha256 }).to_string()) }
+
+    /// `ota` asks what the server is before it sends anything: a relay, or a RoamRun without `ota`, is refused so.
+    #[test]
+    fn ota_is_refused_by_a_relay_or_a_server_without_it_before_anything_is_sent() {
+        let (path, _) = ipa();
+        let (relay, seen) = scripted(vec![hello("roamrunctl")]);
+        let said = Relay::server(&relay.to_string(), None).unwrap().ota(&path, false, Some(10)).err().unwrap_or_default();
+        assert!(said.contains("is a relay") && said.contains("--allow-ota"), "{said}");
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        let (older, seen) = scripted(vec![hello("roamrun"), listing(&["devices", "look"])]);
+        let said = Relay::server(&older.to_string(), None).unwrap().ota(&path, false, Some(10)).err().unwrap_or_default();
+        assert!(said.contains("has no ota") && said.contains("0.12.0"), "{said}");
+        assert_eq!(seen.lock().unwrap().len(), 2);
+        // Its upload refused 404: the OTA server's own reason, not an install's.
+        let (plain, _) = scripted(vec![hello("roamrun"), listing(&["ota"]), (404, String::new())]);
+        let said = Relay::server(&plain.to_string(), None).unwrap().ota(&path, false, Some(10)).err().unwrap_or_default();
+        assert!(said.contains("the OTA server answered 404") && said.contains("--allow-ota") && !said.contains("relay"), "{said}");
+    }
+
+    /// Stored: what the server said, after a busy upload slot (409) was waited out; `replace` goes with the call.
+    #[test]
+    fn ota_waits_out_a_busy_slot_and_says_what_was_stored() {
+        let (path, sha256) = ipa();
+        let (at, seen) = scripted(vec![hello("roamrun"), listing(&["ota"]), (409, String::new()), uploaded(&sha256), said("Stored App 1.0.", false)]);
+        assert_eq!(Relay::server(&at.to_string(), None).unwrap().ota(&path, true, Some(20)), Ok("Stored App 1.0.".to_string()));
+        let seen = seen.lock().unwrap();
+        assert!(seen[4].contains(r#""name":"ota""#) && seen[4].contains(r#""replace":true"#) && seen[4].contains(&sha256), "{seen:?}");
+    }
+
+    /// Another job's upload replaced this one before its `ota`: sent again once; a second time, said so and left.
+    #[test]
+    fn ota_sends_again_once_when_another_upload_replaced_its_own() {
+        let (path, sha256) = ipa();
+        let gone = "no upload u1 is kept here for you (replaced by a later upload, used by ota, or dropped after 30 minutes unused): send it again";
+        let (at, _) = scripted(vec![hello("roamrun"), listing(&["ota"]), uploaded(&sha256), said(gone, true), uploaded(&sha256), said("Stored App 1.0.", false)]);
+        assert_eq!(Relay::server(&at.to_string(), None).unwrap().ota(&path, false, Some(20)), Ok("Stored App 1.0.".to_string()));
+        let (at, seen) = scripted(vec![hello("roamrun"), listing(&["ota"]), uploaded(&sha256), said(gone, true), uploaded(&sha256), said(gone, true)]);
+        let said = Relay::server(&at.to_string(), None).unwrap().ota(&path, false, Some(20)).err().unwrap_or_default();
+        assert!(said.contains("sent again once") && said.contains("one job at a time"), "{said}");
+        assert_eq!(seen.lock().unwrap().len(), 6);
+    }
+
+    /// A refusal is the step's failure; so are a sha256 that isn't the file's and an answer with no result.
+    #[test]
+    fn ota_fails_on_a_refusal_a_wrong_sha256_or_no_result() {
+        let (path, sha256) = ipa();
+        let (at, _) = scripted(vec![hello("roamrun"), listing(&["ota"]), uploaded(&sha256), said("That build is signed for Development", true)]);
+        assert_eq!(Relay::server(&at.to_string(), None).unwrap().ota(&path, false, Some(20)), Err("That build is signed for Development".to_string()));
+        let (at, _) = scripted(vec![hello("roamrun"), listing(&["ota"]), uploaded("00")]);
+        let said = Relay::server(&at.to_string(), None).unwrap().ota(&path, false, Some(20)).err().unwrap_or_default();
+        assert!(said.contains("the OTA server's sha256") && said.contains("nothing was published"), "{said}");
+        let (at, _) = scripted(vec![(200, json!({ "jsonrpc": "2.0", "id": 1 }).to_string())]);
+        let said = Relay::server(&at.to_string(), None).unwrap().ota(&path, false, Some(20)).err().unwrap_or_default();
+        assert!(said.contains("has no result"), "{said}");
+    }
+
+    /// A server that says nothing is left at the deadline, said as the OTA server's.
+    #[test]
+    fn ota_is_held_to_its_deadline() {
+        let (path, _) = ipa();
+        let at = serving(|_| std::thread::sleep(Duration::from_secs(8)));
+        let began = Instant::now();
+        let said = Relay::server(&at.to_string(), None).unwrap().ota(&path, false, Some(1)).err().unwrap_or_default();
+        assert!(said.starts_with(&format!("the OTA server at {at}: out of time (1 s, --timeout)")), "{said}");
+        assert!(began.elapsed() < Duration::from_secs(3), "{:?}", began.elapsed());
     }
 }
