@@ -687,9 +687,10 @@ private func status(_ answer: String) -> Int {
         $0 != "launch"
     } + ["install", "install_status", "launch"])
     #expect(try listed(false, true) == ["ota"])
-    #expect(throws: MCPHTTP.Failure.self) {
+    let both = #expect(throws: MCPHTTP.Failure.self) {
         try MCPHTTP.start(port: "9", allow: ["tag:ci"], tokenFile: nil, allowInstall: true, allowOTA: true)
     }
+    #expect(both?.description.contains("--allow-ota makes an OTA server") == true)
 }
 
 /// An OTA server answers any other call at once, as no such tool: not a device's turn waited for, not the app asked,
@@ -702,13 +703,18 @@ private func status(_ answer: String) -> Int {
     let served = try Served(uploads: uploads)
     let sent = served.ask("PUT /upload HTTP/1.1\r\nHost: 127.0.0.1:\(served.port)\r\nContent-Length: 1\r\n\r\nx")
     let id = try #require(sent.components(separatedBy: #""upload":""#).last?.prefix(32)).description
-    for (name, arguments) in [("look", #"{"device":"slow"}"#),
-                              ("install", #"{"device":"slow","upload":"\#(id)","sha256":"x"}"#)]
+    for (name, arguments) in [("look", #"{"device":"phone"}"#),
+                              ("install", #"{"device":"phone","upload":"\#(id)","sha256":"x"}"#)]
     {
         let answer = served.post(
             #"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"\#(name)","arguments":\#(arguments)}}"#
         )
         #expect(answer.contains("no such tool: \(name)") && answer.contains(#""isError":true"#))
+    }
+    // Nor one with no name, or one that isn't text.
+    for params in [#"{"arguments":{"device":"phone"}}"#, #"{"name":null,"arguments":{"device":"phone"}}"#] {
+        let answer = served.post(#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":\#(params)}"#)
+        #expect(answer.contains("no such tool") && answer.contains(#""isError":true"#))
     }
     #expect(served.lock
         .withLock {

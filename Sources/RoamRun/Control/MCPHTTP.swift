@@ -811,11 +811,13 @@ final class MCPHTTP: @unchecked Sendable {
             return refuse(400, "", Self.rpcError(id, -32600, "no method"))
         }
         // An OTA server answers every other call at once: none waits for a device, or asks the app.
-        if uploads?.publishes == true, method == "tools/call", let name = params["name"] as? String, name != "ota" {
+        let publishes = uploads?.publishes == true
+        if publishes, method == "tools/call", params["name"] as? String != "ota" {
             Self.respond(fd, 200, "", Self.json([
                 "jsonrpc": "2.0",
                 "id": id,
-                "result": ["content": [["type": "text", "text": "no such tool: \(name)"]], "isError": true],
+                "result": ["content": [["type": "text", "text": "no such tool: \(params["name"] as? String ?? "")"]],
+                           "isError": true],
             ]))
             return "error"
         }
@@ -832,7 +834,8 @@ final class MCPHTTP: @unchecked Sendable {
             return "error"
         }
         let line = Data(body)
-        guard method == "tools/call", let device = turnOf(arguments) else {
+        // An OTA server's `ota` waits for no device, whatever its arguments name.
+        guard method == "tools/call", !publishes, let device = turnOf(arguments) else {
             // Asks nothing of a device (`devices`, `initialize`, a device not saved): answered at once. An initialize
             // is given a session id, sent back with what follows.
             let answer = handle(line, DeviceControlWire.Asking()).flatMap {

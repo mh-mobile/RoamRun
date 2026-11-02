@@ -17,7 +17,7 @@ GitHub がホストするランナーで動く GitHub Actions のジョブから
 
 このページのジョブは、アプリのビルドや署名をしません。CI には、そのデバイス向けに署名済みの `.ipa`（そのデバイスを含む開発用プロファイルで署名したもの）が必要です。`roamrunctl` が確かめるのはアーカイブの構成だけで、署名は確かめずにそのままインストールします。下の実行では、ジョブは自分のリポジトリのリリースから `.ipa` を取得しました（`gh release download`）。
 
-テスターのために OTA のページへビルドを載せる場合は、ジョブが Mac のアプリのサーバー（`roamrun mcp --http --allow-ota`）を呼びます。[ota.ja.md](ota.ja.md#ci-のジョブから) にあります。
+テスターのために OTA のページへビルドを載せる場合は、ジョブが Mac の OTA server（`roamrun mcp --http --allow-ota`）を呼びます。[ota.ja.md](ota.ja.md#ci-のジョブから) にあります。
 
 ## action を使う
 
