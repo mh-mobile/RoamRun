@@ -99,8 +99,12 @@ which of your devices it installs on, the page's address) and fails on a refused
 Run on 2026-11-02 from this Mac itself, with the token: an Ad Hoc build of a test app was uploaded
 and stored, and the answer named the two saved devices its profile lists. `tools/list` had `ota`
 alone and `look` was refused at once; `--allow-ota` with `--allow-install` was refused. Earlier the
-same day, a second `ota` with a used upload was refused. Not yet from a CI job, nor from another
-machine, nor beside a server for installs.
+same day, a second `ota` with a used upload was refused. Then from another machine of the tailnet
+(a macOS VM, let in by the login), with this Mac running an OTA server on 9091 and a server for
+installs on 9090 side by side: `roamrunctl ota` stored a 25 MB Ad Hoc build (its upload took
+22 s), again through a local CONNECT proxy (`ROAMRUNCTL_PROXY`, with `--replace`), and the page
+fetched from that machine listed the build; pointed at 9090, it was refused as having no `ota`
+before anything was sent. Not yet from a CI job, nor from Linux or Windows.
 
 ## The port, and Funnel
 
