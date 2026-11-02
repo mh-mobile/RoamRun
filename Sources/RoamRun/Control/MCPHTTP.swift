@@ -810,8 +810,19 @@ final class MCPHTTP: @unchecked Sendable {
         if method.isEmpty {
             return refuse(400, "", Self.rpcError(id, -32600, "no method"))
         }
-        // An install from another's upload, or one not as it was sent, is refused before it waits its turn.
-        if let uploads, method == "tools/call", params["name"] as? String == "install",
+        // An OTA server answers every other call at once: none waits for a device, or asks the app.
+        let publishes = uploads?.publishes == true
+        if publishes, method == "tools/call", params["name"] as? String != "ota" {
+            Self.respond(fd, 200, "", Self.json([
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": ["content": [["type": "text", "text": "no such tool: \(params["name"] as? String ?? "")"]],
+                           "isError": true],
+            ]))
+            return "error"
+        }
+        // An install or ota from another's upload, or one not as it was sent, is refused before it waits its turn.
+        if let uploads, method == "tools/call", ["install", "ota"].contains(params["name"] as? String ?? ""),
            let upload = arguments["upload"] as? String,
            let why = uploads.refusal(id: upload, owner: caller.id, sha256: arguments["sha256"] as? String ?? "")
         {
@@ -823,7 +834,8 @@ final class MCPHTTP: @unchecked Sendable {
             return "error"
         }
         let line = Data(body)
-        guard method == "tools/call", let device = turnOf(arguments) else {
+        // An OTA server's `ota` waits for no device, whatever its arguments name.
+        guard method == "tools/call", !publishes, let device = turnOf(arguments) else {
             // Asks nothing of a device (`devices`, `initialize`, a device not saved): answered at once. An initialize
             // is given a session id, sent back with what follows.
             let answer = handle(line, DeviceControlWire.Asking()).flatMap {
@@ -835,7 +847,10 @@ final class MCPHTTP: @unchecked Sendable {
                 arc4random_buf(&bytes, bytes.count)
                 given = "Mcp-Session-Id: \(bytes.map { String(format: "%02x", $0) }.joined())\r\n"
             }
-            return refuse(200, given, answer)
+            let outcome = refuse(200, given, answer)
+            // A call (`ota`, `devices`) is logged by how it went, as one at a device is.
+            guard method == "tools/call" else { return outcome }
+            return Self.failed(Data(answer.utf8)) ? "error" : "ok"
         }
         var givenUp = false
         guard let answer = take(
@@ -848,10 +863,7 @@ final class MCPHTTP: @unchecked Sendable {
             givenUp: &givenUp
         )
         else { return "not begun" }
-        let failed =
-            ((try? JSONSerialization.jsonObject(with: answer) as? [String: Any])?["result"] as? [String: Any])?[
-                "isError"
-            ] as? Bool == true
+        let failed = Self.failed(answer)
         Self.respond(fd, 200, "", String(data: answer, encoding: .utf8) ?? "")
         // Its caller went, or took it back, while it was at the app: what it answers is no failure of the call's own.
         return givenUp ? "given up" : failed ? "error" : "ok"
@@ -952,6 +964,38 @@ final class MCPHTTP: @unchecked Sendable {
     }
 }
 
+extension MCPHTTP {
+    /// Whether an answer to a call says it failed.
+    static func failed(_ answer: Data) -> Bool {
+        ((try? JSONSerialization.jsonObject(with: answer) as? [String: Any])?["result"] as? [String: Any])?["isError"]
+            as? Bool == true
+    }
+
+    /// The tools one call is given: `install` from an upload with `--allow-install`, `ota` with `--allow-ota`.
+    static func tools(folder: URL, uploads: Uploads?, allowInstall: Bool, allowOTA: Bool,
+                      profiles: @escaping () -> [DeviceProfile] = {
+                          ProfileStore().load()
+                      },
+                      asking: DeviceControlWire.Asking) -> DeviceMCP
+    {
+        DeviceMCP(profiles: profiles, looks: folder, installsFromPaths: false,
+                  claimUpload: allowInstall ? uploads.map { uploads in
+                      { id, sha256 in
+                          try uploads.claim(id: id, sha256: sha256, into: folder)
+                      }
+                  } : nil,
+                  publish: allowOTA ? uploads.map { uploads in
+                      { id, sha256, replace in
+                          try publish(uploads, id: id, sha256: sha256, replace: replace, folder: folder)
+                      }
+                  } : nil,
+                  asking: asking)
+        {
+            try DeviceControlWire.ask($0, in: ProfileStore.directory, asking: asking)
+        }
+    }
+}
+
 /// The signal sources of a server with uploads, kept for as long as the process runs.
 nonisolated(unsafe) private var stopping: [DispatchSourceSignal] = []
 
@@ -964,6 +1008,7 @@ extension MCPHTTP {
         allow: [String],
         tokenFile: String?,
         allowInstall: Bool = false,
+        allowOTA: Bool = false,
         maxUpload: String? = nil
     ) throws -> (MCPHTTP, Int32, String) {
         // A log read through a pipe whose reader went: the write fails, the server goes on.
@@ -978,8 +1023,13 @@ extension MCPHTTP {
         }
         let allowed = try allow.map(Self.allow)
         let token = try tokenFile.map(Self.token(at:))
-        guard maxUpload == nil || allowInstall
-        else { throw Failure(description: "--max-upload goes with --allow-install") }
+        guard !(allowInstall && allowOTA) else {
+            throw Failure(
+                description: "--allow-ota makes an OTA server, which operates no device: run it on a port of its own beside one with --allow-install"
+            )
+        }
+        guard maxUpload == nil || allowInstall || allowOTA
+        else { throw Failure(description: "--max-upload goes with --allow-install or --allow-ota") }
         let mib = try maxUpload.map {
             guard let mib = Int($0), (1 ... 4096).contains(mib)
             else { throw Failure(description: "--max-upload takes MiB, 1...4096") }
@@ -998,7 +1048,7 @@ extension MCPHTTP {
             !$0.isEmpty
         }
         let folder = DeviceControlWire.socketFolder(in: ProfileStore.directory)
-        let uploads = allowInstall ? Uploads(folder: folder, most: mib << 20) : nil
+        let uploads = allowInstall || allowOTA ? Uploads(folder: folder, most: mib << 20, publishes: allowOTA) : nil
         if let uploads {
             // At stop, what was uploaded goes: Ctrl-C, and what a closed terminal sends.
             for stop in [SIGINT, SIGTERM, SIGHUP] {
@@ -1039,15 +1089,8 @@ extension MCPHTTP {
             },
             handle: { message, asking in
                 // Each call its own asking: one taken back gives up its own request to the app alone.
-                DeviceMCP(profiles: {
-                    ProfileStore().load()
-                }, looks: folder, installsFromPaths: false, claimUpload: uploads.map { uploads in
-                    { id, sha256 in
-                        try uploads.claim(id: id, sha256: sha256, into: folder)
-                    }
-                }, asking: asking) {
-                    try DeviceControlWire.ask($0, in: ProfileStore.directory, asking: asking)
-                }.handle(message)
+                tools(folder: folder, uploads: uploads, allowInstall: allowInstall, allowOTA: allowOTA, asking: asking)
+                    .handle(message)
             },
             turnOf: { arguments in
                 guard let name = arguments["device"] as? String else { return nil }
@@ -1058,9 +1101,11 @@ extension MCPHTTP {
             }
         )
         let who = allow.joined(separator: ", ")
-        let install = uploads == nil ? "" : "; install of an .ipa sent to http://\(own):\(bound)/upload, \(mib) MiB at most"
-        let note =
-            "roamrun: the MCP tools for the devices saved in RoamRun at http://\(own):\(bound)/mcp, for \(who) on the tailnet\(token == nil ? "" : ", with the token")\(install). Ctrl-C ends it. What is sent and shown passes through whatever lies between (a cloud's proxy sees images and text)."
+        let whom = "for \(who) on the tailnet\(token == nil ? "" : ", with the token")"
+        let upload = "an .ipa sent to http://\(own):\(bound)/upload, \(mib) MiB at most"
+        let note = allowOTA ?
+            "roamrun: an OTA server at http://\(own):\(bound)/mcp, \(whom): its one tool, ota, puts \(upload) on the OTA page, where anyone on the tailnet can install it. It operates no device. Ctrl-C ends it." :
+            "roamrun: the MCP tools for the devices saved in RoamRun at http://\(own):\(bound)/mcp, \(whom)\(allowInstall ? "; install of \(upload)" : ""). Ctrl-C ends it. What is sent and shown passes through whatever lies between (a cloud's proxy sees images and text)."
         return (server, fd, note)
     }
 }

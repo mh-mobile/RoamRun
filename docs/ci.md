@@ -32,6 +32,9 @@ development profile that lists it); `roamrunctl` checks the archive's shape, not
 and installs it as it is. In the runs below, the job took the `.ipa` from a release of its own
 repository (`gh release download`).
 
+To put the build on the OTA page for testers instead, a job calls the Mac's OTA server
+(`roamrun mcp --http --allow-ota`): [ota.md](ota.md#from-a-ci-job).
+
 ## With the action
 
 The GitHub Action [mh-mobile/roamrun-action](https://github.com/mh-mobile/roamrun-action) does either

@@ -17,6 +17,8 @@ GitHub がホストするランナーで動く GitHub Actions のジョブから
 
 このページのジョブは、アプリのビルドや署名をしません。CI には、そのデバイス向けに署名済みの `.ipa`（そのデバイスを含む開発用プロファイルで署名したもの）が必要です。`roamrunctl` が確かめるのはアーカイブの構成だけで、署名は確かめずにそのままインストールします。下の実行では、ジョブは自分のリポジトリのリリースから `.ipa` を取得しました（`gh release download`）。
 
+テスターのために OTA のページへビルドを載せる場合は、ジョブが Mac の OTA server（`roamrun mcp --http --allow-ota`）を呼びます。[ota.ja.md](ota.ja.md#ci-のジョブから) にあります。
+
 ## action を使う
 
 GitHub Action の [mh-mobile/roamrun-action](https://github.com/mh-mobile/roamrun-action) を使うと、どちらのやり方も 1 つのステップで書けます。Tailscale のステップのあとに置きます。この action は、roamrunctl（v1.1.0 からは既定で 0.11.0）を RoamRun のリリースから取得し、`roamrunctl-SHA256SUMS` と照らし合わせます。そのうえで、既定ではインストールして起動します。ランナーで動かすなら `key import -` と `install --launch`、relay に頼むなら `install --relay … --launch` を使います。relay の側は 0.10.0 以降です。使う前に、このページにある準備をしておきます。[Tailscale のタグと OAuth クライアント](#tailscaleタグと-oauth-クライアント)と、[CI 用のペアリング](#ci-用のペアリング)（シークレットを `key` に渡します）か [relay](#relay-に頼む) のどちらかです。
