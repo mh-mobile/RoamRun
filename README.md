@@ -791,6 +791,13 @@ implementation of the protocols a Mac speaks to a device; RoamRun builds it from
 pinned commit. The licenses of it and of the other crates are in
 [THIRD-PARTY-LICENSES.txt](THIRD-PARTY-LICENSES.txt), which the app carries too.
 
+## Article
+
+[I Built "RoamRun", an App That Lets You Use an iPhone on a Different Wi-Fi Directly from Xcode](https://zenn.dev/mh/articles/4380fe7546a237?locale=en)
+(Zenn, 2026-10-29)
+
+Why RoamRun was made and how it is used, as of 0.11.0.
+
 ## Related projects
 
 Projects on the same problem, or the same ground with other tools:

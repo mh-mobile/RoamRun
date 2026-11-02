@@ -531,6 +531,13 @@ RoamRun は、mh-mobile の指示のもとで、Claude Code（Claude Opus 5.5）
 
 デバイス操作は、[idevice](https://github.com/jkcoxson/idevice)（Jackson Coxson）を使っています。Mac がデバイスと通信するためのプロトコルを、Rust で実装したものです。RoamRun は、フォークの特定のコミットからビルドしています。idevice と、ほかのクレートのライセンスは、[THIRD-PARTY-LICENSES.txt](THIRD-PARTY-LICENSES.txt) にあります。同じファイルが、アプリにも入っています。
 
+## 記事
+
+[別の Wi-Fi にいる iPhone を Xcode からそのまま使えるアプリ「RoamRun」を作った](https://zenn.dev/mh/articles/4380fe7546a237)
+（Zenn、2026-10-29）
+
+RoamRun を作った理由と使い方を、0.11.0 の時点で書いた記事です。
+
 ## 関連プロジェクト
 
 同じ問題に取り組んでいるプロジェクトや、近い領域を別の道具で扱っているプロジェクトです。
