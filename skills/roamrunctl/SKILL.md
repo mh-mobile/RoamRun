@@ -252,7 +252,7 @@ believed the first time it is used — use it only if the user named it.
   Enterprise .ipa on a Mac's OTA page, where anyone on its tailnet can install it, through
   that Mac's OTA server (`roamrun mcp --http --allow-ota`) — not a relay, which refuses it.
   Only when the user asked for that. Exit 0 means stored; the page shows it within about
-  30 s. If it says another job's upload replaced its own, run it again later, once.
+  30 s while the RoamRun app runs on that Mac. If it says another job's upload replaced its own, run it again later, once.
 - `roamrunctl launch <name> <bundle id>` — one already running is ended first.
 - `roamrunctl mcp` — for an agent's MCP config (the command `roamrunctl`, the argument
   `mcp`): `devices`, `look`, `tap`, `swipe`, `elements`, `type`, `paste`, `press`,

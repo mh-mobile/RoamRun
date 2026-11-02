@@ -32,29 +32,31 @@ pub struct Relay {
     token: Option<String>,
     /// What it is called in what is said: "the relay", or "the OTA server" (never the one for the other).
     noun: &'static str,
+    /// Whether the last request's head went out: past that, a lost answer may hide what the server did.
+    sent: std::cell::Cell<bool>,
 }
 
 impl Relay {
     /// `at`: host:port, or the address `mcp --http` printed (http://host:port/mcp). The token: `token_file`, else `TOKEN`.
     pub fn new(at: &str, token_file: Option<&Path>) -> Result<Relay, String> {
-        Self::named(at, token_file, "the relay", "--relay", "`roamrunctl mcp --http`")
+        Self::named(at, token_file, "the relay", "--relay", "`roamrunctl mcp --http`", 9090)
     }
 
     /// An OTA server, `at` as for `new`.
     pub fn server(at: &str, token_file: Option<&Path>) -> Result<Relay, String> {
-        Self::named(at, token_file, "the OTA server", "--server", "`roamrun mcp --http --allow-ota` on the Mac")
+        Self::named(at, token_file, "the OTA server", "--server", "`roamrun mcp --http --allow-ota` on the Mac", 9091)
     }
 
-    fn named(at: &str, token_file: Option<&Path>, noun: &'static str, flag: &str, printer: &str) -> Result<Relay, String> {
+    fn named(at: &str, token_file: Option<&Path>, noun: &'static str, flag: &str, printer: &str, example: u16) -> Result<Relay, String> {
         let host = at.strip_prefix("http://").unwrap_or(at).split('/').next().unwrap_or("");
         if host.rsplit_once(':').is_none_or(|(name, port)| name.is_empty() || port.parse::<u16>().is_err()) {
-            return Err(format!("{flag} {at}: {noun}'s address and port, as {printer} printed them (100.x.y.z:9090)"));
+            return Err(format!("{flag} {at}: {noun}'s address and port, as {printer} printed them (100.x.y.z:{example})"));
         }
         let token = match token_file {
             Some(path) => Some(crate::http::token(path)?),
             None => std::env::var(TOKEN).ok().map(|token| token.trim().to_string()).filter(|token| !token.is_empty()),
         };
-        Ok(Relay { host: host.to_string(), token, noun })
+        Ok(Relay { host: host.to_string(), token, noun, sent: std::cell::Cell::new(false) })
     }
 
     /// One request, tried again while the relay answers 503: its status and body. `body` gives a body anew for each try.
@@ -108,6 +110,7 @@ impl Relay {
         let head = format!("{method} {path} HTTP/1.1\r\nHost: {}\r\n{token}Content-Type: {kind}\r\nContent-Length: {length}\r\nExpect: 100-continue\r\nConnection: close\r\n\r\n", self.host);
         within(ANSWER)?;
         (&stream).write_all(head.as_bytes()).map_err(failed)?;
+        self.sent.set(true);
         // A server that doesn't answer the Expect is sent the body all the same, after a while.
         within(CONTINUE)?;
         let early = match stream.peek(&mut [0]) {
@@ -208,10 +211,18 @@ impl Relay {
 
     /// One JSON-RPC request's result: an error where there is none, or it isn't an object.
     fn request(&self, method: &str, params: Value, until: Deadline) -> Result<Value, String> {
+        let (status, said) = self.post(method, params, until)?;
+        self.result(method, status, &said)
+    }
+
+    fn post(&self, method: &str, params: Value, until: Deadline) -> Result<(u16, String), String> {
         let line = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }).to_string();
-        let (status, said) = self.ask("POST", "/mcp", &|| Ok((line.len() as u64, Box::new(std::io::Cursor::new(line.clone().into_bytes())))), until)?;
-        if status != 200 { return Err(self.refused(method, status, &said)) }
-        let said: Value = serde_json::from_str(&said).map_err(|_| format!("{method}: {}'s answer isn't JSON", self.noun))?;
+        self.ask("POST", "/mcp", &|| Ok((line.len() as u64, Box::new(std::io::Cursor::new(line.clone().into_bytes())))), until)
+    }
+
+    fn result(&self, method: &str, status: u16, said: &str) -> Result<Value, String> {
+        if status != 200 { return Err(self.refused(method, status, said)) }
+        let said: Value = serde_json::from_str(said).map_err(|_| format!("{method}: {}'s answer isn't JSON", self.noun))?;
         if let Some(message) = said["error"]["message"].as_str() { return Err(format!("{method}: {message}")) }
         match &said["result"] {
             result @ Value::Object(_) => Ok(result.clone()),
@@ -244,9 +255,16 @@ impl Relay {
         let mut again = false;
         loop {
             let upload = self.upload(path, &sha256, megabytes, true, "published", deadline)?;
-            let said = self.request("tools/call", json!({ "name": "ota", "arguments": { "upload": upload, "sha256": sha256, "replace": replace } }), deadline)
-                .map_err(|e| format!("{e}. The build may have been stored: look at the page before running this again"))?;
-            let text = said["content"].as_array().into_iter().flatten().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n");
+            // Sent and not answered, or answered with what ota doesn't give: it may have stored the build. Not sent again.
+            let unknown = |why: String| format!("{why}. The build may have been stored: look at the page before running this again");
+            self.sent.set(false);
+            let (status, said) = self.post("tools/call", json!({ "name": "ota", "arguments": { "upload": upload, "sha256": sha256, "replace": replace } }), deadline)
+                .map_err(|e| if self.sent.get() { unknown(e) } else { e })?;
+            let said = self.result("ota", status, &said)?;
+            let (Some(content), true) = (said["content"].as_array(), said["isError"].is_boolean() || said["isError"].is_null()) else {
+                return Err(unknown(format!("ota: {}'s answer isn't one ota gives", self.noun)));
+            };
+            let text = content.iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n");
             if said["isError"] != true { return Ok(text) }
             // Refused before ota ran (another upload replaced this one): nothing was stored, so it can go once more.
             if !text.starts_with("no upload ") { return Err(text) }
@@ -496,8 +514,8 @@ mod tests {
         }
     }
 
-    /// A server on 127.0.0.1 that answers its requests in turn with `answers` (status, body), keeping each request's
-    /// first line and body.
+    /// A server on 127.0.0.1 that answers its requests in turn with `answers` (status, body; status 0: read, then closed
+    /// without an answer), keeping each request's first line and body.
     fn scripted(answers: Vec<(u16, String)>) -> (std::net::SocketAddr, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let at = listener.local_addr().unwrap();
@@ -516,10 +534,11 @@ mod tests {
                     if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") { length = value.trim().parse().unwrap() }
                 }
                 // A refusal before the body, as the server's 401/404/409 come.
-                let refused = status != 200;
+                let refused = status != 200 && status != 0;
                 let mut taken = vec![0; if refused { 0 } else { length }];
                 if !refused { (&stream).write_all(b"HTTP/1.1 100 Continue\r\n\r\n").unwrap(); reader.read_exact(&mut taken).unwrap(); }
                 kept.lock().unwrap().push(format!("{} {}", first.trim_end(), String::from_utf8_lossy(&taken)));
+                if status == 0 { continue }
                 let _ = (&stream).write_all(format!("HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes());
             }
         });
@@ -607,5 +626,41 @@ mod tests {
         let said = Relay::server(&at.to_string(), None).unwrap().ota(&path, false, Some(1)).err().unwrap_or_default();
         assert!(said.starts_with(&format!("the OTA server at {at}: out of time (1 s, --timeout)")), "{said}");
         assert!(began.elapsed() < Duration::from_secs(3), "{:?}", began.elapsed());
+    }
+
+    /// The token, who this is, and a busy check are said as the OTA server's; a 503 is tried again.
+    #[test]
+    fn ota_says_refusals_as_the_ota_servers_and_tries_a_503_again() {
+        let (path, sha256) = ipa();
+        for (status, word) in [(401, "ROAMRUNCTL_TOKEN"), (403, "--allow")] {
+            let (at, _) = scripted(vec![(status, String::new())]);
+            let said = Relay::server(&at.to_string(), None).unwrap().ota(&path, false, Some(10)).err().unwrap_or_default();
+            assert!(said.starts_with(&format!("initialize: the OTA server answered {status}")) && said.contains(word) && !said.contains("may have been stored"), "{said}");
+        }
+        let (at, _) = scripted(vec![(503, String::new()), hello("roamrun"), listing(&["ota"]), uploaded(&sha256), said("Stored App 1.0.", false)]);
+        assert_eq!(Relay::server(&at.to_string(), None).unwrap().ota(&path, false, Some(20)), Ok("Stored App 1.0.".to_string()));
+    }
+
+    /// An `ota` sent and not answered, or answered with what ota doesn't give, may have stored the build: said so, and
+    /// not sent again.
+    #[test]
+    fn ota_sent_and_not_answered_is_said_to_be_unknown_and_not_sent_again() {
+        let (path, sha256) = ipa();
+        let (at, seen) = scripted(vec![hello("roamrun"), listing(&["ota"]), uploaded(&sha256), (0, String::new())]);
+        let said = Relay::server(&at.to_string(), None).unwrap().ota(&path, false, Some(20)).err().unwrap_or_default();
+        assert!(said.contains("may have been stored"), "{said}");
+        assert_eq!(seen.lock().unwrap().iter().filter(|r| r.contains(r#""name":"ota""#)).count(), 1);
+        let (at, _) = scripted(vec![hello("roamrun"), listing(&["ota"]), uploaded(&sha256), rpc(json!({}))]);
+        let said = Relay::server(&at.to_string(), None).unwrap().ota(&path, false, Some(20)).err().unwrap_or_default();
+        assert!(said.contains("isn't one ota gives") && said.contains("may have been stored"), "{said}");
+    }
+
+    /// A slot busy all the time it is waited for: said as such, with what to do.
+    #[test]
+    fn ota_says_a_slot_busy_to_the_deadline() {
+        let (path, _) = ipa();
+        let (at, _) = scripted([hello("roamrun"), listing(&["ota"])].into_iter().chain(std::iter::repeat_n((409, String::new()), 60)).collect());
+        let said = Relay::server(&at.to_string(), None).unwrap().ota(&path, false, Some(1)).err().unwrap_or_default();
+        assert!(said.contains("answered 409") && said.contains("one job at a time"), "{said}");
     }
 }

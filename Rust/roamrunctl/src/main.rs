@@ -92,7 +92,7 @@ enum Command {
         #[arg(long)]
         replace: bool,
         /// The most seconds the network part takes (else 2 s a MB, 30 s more, and 120 s for the server's checks)
-        #[arg(long)]
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
         timeout: Option<u64>,
     },
     /// Launch an app on the device (one already running is ended first)
