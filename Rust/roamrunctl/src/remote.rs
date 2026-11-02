@@ -72,6 +72,7 @@ impl Relay {
 
     /// One request, over by `until`.
     fn once(&self, method: &str, path: &str, body: &dyn Fn() -> std::io::Result<(u64, Box<dyn Read>)>, (until, why): Deadline) -> Result<(u16, String), String> {
+        self.sent.set(false);
         let noun = self.noun;
         let out = || format!("{noun} at {}: {why}", self.host);
         let failed = |e: std::io::Error| match e.kind() {
@@ -257,11 +258,12 @@ impl Relay {
             let upload = self.upload(path, &sha256, megabytes, true, "published", deadline)?;
             // Sent and not answered, or answered with what ota doesn't give: it may have stored the build. Not sent again.
             let unknown = |why: String| format!("{why}. The build may have been stored: look at the page before running this again");
-            self.sent.set(false);
             let (status, said) = self.post("tools/call", json!({ "name": "ota", "arguments": { "upload": upload, "sha256": sha256, "replace": replace } }), deadline)
                 .map_err(|e| if self.sent.get() { unknown(e) } else { e })?;
-            let said = self.result("ota", status, &said)?;
-            let (Some(content), true) = (said["content"].as_array(), said["isError"].is_boolean() || said["isError"].is_null()) else {
+            // A 200 that isn't JSON-RPC's error, yet not a result either, may have come after ota ran.
+            let refusal = status != 200 || serde_json::from_str::<Value>(&said).is_ok_and(|said| said["error"]["message"].is_string());
+            let said = self.result("ota", status, &said).map_err(|e| if refusal { e } else { unknown(e) })?;
+            let (Some(content), true) = (said["content"].as_array(), said.get("isError").is_none_or(Value::is_boolean)) else {
                 return Err(unknown(format!("ota: {}'s answer isn't one ota gives", self.noun)));
             };
             let text = content.iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n");
@@ -655,12 +657,31 @@ mod tests {
         assert!(said.contains("isn't one ota gives") && said.contains("may have been stored"), "{said}");
     }
 
-    /// A slot busy all the time it is waited for: said as such, with what to do.
+    /// A slot busy all the time it was waited for is said as such, with what to do; a relay's 409 isn't.
     #[test]
-    fn ota_says_a_slot_busy_to_the_deadline() {
-        let (path, _) = ipa();
-        let (at, _) = scripted([hello("roamrun"), listing(&["ota"])].into_iter().chain(std::iter::repeat_n((409, String::new()), 60)).collect());
-        let said = Relay::server(&at.to_string(), None).unwrap().ota(&path, false, Some(1)).err().unwrap_or_default();
-        assert!(said.contains("answered 409") && said.contains("one job at a time"), "{said}");
+    fn a_busy_slot_is_said_with_what_to_do() {
+        let said = Relay::server("127.0.0.1:9", None).unwrap().refused("the upload", 409, "");
+        assert!(said.starts_with("the upload: the OTA server answered 409") && said.contains("one job at a time"), "{said}");
+        assert!(!Relay::new("127.0.0.1:9", None).unwrap().refused("the upload", 409, "").contains("one job at a time"));
+    }
+
+    /// An answer to `ota` that isn't JSON, has no result, or says isError as anything but true or false: unknown, not
+    /// success, not sent again. A 503 to `ota`, then no server at all: not sent, so not unknown.
+    #[test]
+    fn ota_answers_that_arent_ota_s_are_unknown() {
+        let (path, sha256) = ipa();
+        for answer in [(200, "not json".to_string()), (200, json!({ "jsonrpc": "2.0", "id": 1 }).to_string()), rpc(json!({ "content": [], "isError": null }))] {
+            let (at, seen) = scripted(vec![hello("roamrun"), listing(&["ota"]), uploaded(&sha256), answer]);
+            let said = Relay::server(&at.to_string(), None).unwrap().ota(&path, false, Some(20)).err().unwrap_or_default();
+            assert!(said.contains("may have been stored"), "{said}");
+            assert_eq!(seen.lock().unwrap().iter().filter(|r| r.contains(r#""name":"ota""#)).count(), 1);
+        }
+        let (at, _) = scripted(vec![hello("roamrun"), listing(&["ota"]), uploaded(&sha256), (200, json!({ "jsonrpc": "2.0", "id": 1, "error": { "code": -32602, "message": "bad params" } }).to_string())]);
+        let said = Relay::server(&at.to_string(), None).unwrap().ota(&path, false, Some(20)).err().unwrap_or_default();
+        assert!(said.contains("bad params") && !said.contains("may have been stored"), "{said}");
+        // The 503's server is gone when it is tried again: that try sent nothing.
+        let (at, _) = scripted(vec![hello("roamrun"), listing(&["ota"]), uploaded(&sha256), (503, String::new())]);
+        let said = Relay::server(&at.to_string(), None).unwrap().ota(&path, false, Some(20)).err().unwrap_or_default();
+        assert!(!said.contains("may have been stored"), "{said}");
     }
 }
