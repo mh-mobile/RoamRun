@@ -374,6 +374,13 @@ private func status(_ answer: String) -> Int {
             served.handled
         }
         .isEmpty)
+    // On a server for installs, ota is no upload's call: it goes on to the tools, which have no ota.
+    let none = served.post(
+        #"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"ota","arguments":{"upload":"\#(id)","sha256":"00"}}}"#
+    )
+    #expect(!none.contains("isn't upload") && served.lock.withLock {
+        served.handled
+    } == ["4"])
     #expect(uploads.refusal(id: id, owner: "someone-else", sha256: sha256) != nil)
     #expect(uploads.refusal(id: id, owner: "caller", sha256: sha256) == nil)
     // Handed to an install: linked where the app takes it from, the upload's own file kept meanwhile. Not taken by the
@@ -590,7 +597,7 @@ private func status(_ answer: String) -> Int {
     let store = folder.appendingPathComponent("ota")
     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: folder) }
-    let uploads = MCPHTTP.Uploads(folder: folder, most: 1 << 20)
+    let uploads = MCPHTTP.Uploads(folder: folder, most: 1 << 20, publishes: true)
     let served = try Served(uploads: uploads)
     let ipa = try Data(contentsOf: URL(fileURLWithPath: zippedIPA(folder.appendingPathComponent("src"),
                                                                   bundleID: "com.example.App")))

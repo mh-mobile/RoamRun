@@ -821,8 +821,9 @@ final class MCPHTTP: @unchecked Sendable {
             ]))
             return "error"
         }
-        // An install or ota from another's upload, or one not as it was sent, is refused before it waits its turn.
-        if let uploads, method == "tools/call", ["install", "ota"].contains(params["name"] as? String ?? ""),
+        // An install (or an OTA server's ota) from another's upload, or one not as it was sent, is refused before it
+        // waits its turn.
+        if let uploads, method == "tools/call", params["name"] as? String == (publishes ? "ota" : "install"),
            let upload = arguments["upload"] as? String,
            let why = uploads.refusal(id: upload, owner: caller.id, sha256: arguments["sha256"] as? String ?? "")
         {
