@@ -670,7 +670,7 @@ mod tests {
     #[test]
     fn ota_answers_that_arent_ota_s_are_unknown() {
         let (path, sha256) = ipa();
-        for answer in [(200, "not json".to_string()), (200, json!({ "jsonrpc": "2.0", "id": 1 }).to_string()), rpc(json!({ "content": [], "isError": null }))] {
+        for answer in [(200, "not json".to_string()), (200, json!({ "jsonrpc": "2.0", "id": 1 }).to_string()), rpc(json!({ "content": [], "isError": null })), rpc(json!({ "content": [], "isError": "yes" }))] {
             let (at, seen) = scripted(vec![hello("roamrun"), listing(&["ota"]), uploaded(&sha256), answer]);
             let said = Relay::server(&at.to_string(), None).unwrap().ota(&path, false, Some(20)).err().unwrap_or_default();
             assert!(said.contains("may have been stored"), "{said}");
