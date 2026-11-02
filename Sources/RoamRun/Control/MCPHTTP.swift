@@ -835,7 +835,10 @@ final class MCPHTTP: @unchecked Sendable {
                 arc4random_buf(&bytes, bytes.count)
                 given = "Mcp-Session-Id: \(bytes.map { String(format: "%02x", $0) }.joined())\r\n"
             }
-            return refuse(200, given, answer)
+            let outcome = refuse(200, given, answer)
+            // A call (`ota`, `devices`) is logged by how it went, as one at a device is.
+            guard method == "tools/call" else { return outcome }
+            return Self.failed(Data(answer.utf8)) ? "error" : "ok"
         }
         var givenUp = false
         guard let answer = take(
@@ -848,10 +851,7 @@ final class MCPHTTP: @unchecked Sendable {
             givenUp: &givenUp
         )
         else { return "not begun" }
-        let failed =
-            ((try? JSONSerialization.jsonObject(with: answer) as? [String: Any])?["result"] as? [String: Any])?[
-                "isError"
-            ] as? Bool == true
+        let failed = Self.failed(answer)
         Self.respond(fd, 200, "", String(data: answer, encoding: .utf8) ?? "")
         // Its caller went, or took it back, while it was at the app: what it answers is no failure of the call's own.
         return givenUp ? "given up" : failed ? "error" : "ok"
@@ -952,6 +952,38 @@ final class MCPHTTP: @unchecked Sendable {
     }
 }
 
+extension MCPHTTP {
+    /// Whether an answer to a call says it failed.
+    static func failed(_ answer: Data) -> Bool {
+        ((try? JSONSerialization.jsonObject(with: answer) as? [String: Any])?["result"] as? [String: Any])?["isError"]
+            as? Bool == true
+    }
+
+    /// The tools one call is given: `install` from an upload with `--allow-install`, `ota` with `--allow-ota`.
+    static func tools(folder: URL, uploads: Uploads?, allowInstall: Bool, allowOTA: Bool,
+                      profiles: @escaping () -> [DeviceProfile] = {
+                          ProfileStore().load()
+                      },
+                      asking: DeviceControlWire.Asking) -> DeviceMCP
+    {
+        DeviceMCP(profiles: profiles, looks: folder, installsFromPaths: false,
+                  claimUpload: allowInstall ? uploads.map { uploads in
+                      { id, sha256 in
+                          try uploads.claim(id: id, sha256: sha256, into: folder)
+                      }
+                  } : nil,
+                  publish: allowOTA ? uploads.map { uploads in
+                      { id, sha256, replace in
+                          try publish(uploads, id: id, sha256: sha256, replace: replace, folder: folder)
+                      }
+                  } : nil,
+                  asking: asking)
+        {
+            try DeviceControlWire.ask($0, in: ProfileStore.directory, asking: asking)
+        }
+    }
+}
+
 /// The signal sources of a server with uploads, kept for as long as the process runs.
 nonisolated(unsafe) private var stopping: [DispatchSourceSignal] = []
 
@@ -1040,19 +1072,8 @@ extension MCPHTTP {
             },
             handle: { message, asking in
                 // Each call its own asking: one taken back gives up its own request to the app alone.
-                DeviceMCP(profiles: {
-                    ProfileStore().load()
-                }, looks: folder, installsFromPaths: false, claimUpload: allowInstall ? uploads.map { uploads in
-                    { id, sha256 in
-                        try uploads.claim(id: id, sha256: sha256, into: folder)
-                    }
-                } : nil, publish: allowOTA ? uploads.map { uploads in
-                    { id, sha256, replace in
-                        try publish(uploads, id: id, sha256: sha256, replace: replace, folder: folder)
-                    }
-                } : nil, asking: asking) {
-                    try DeviceControlWire.ask($0, in: ProfileStore.directory, asking: asking)
-                }.handle(message)
+                tools(folder: folder, uploads: uploads, allowInstall: allowInstall, allowOTA: allowOTA, asking: asking)
+                    .handle(message)
             },
             turnOf: { arguments in
                 guard let name = arguments["device"] as? String else { return nil }

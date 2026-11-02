@@ -143,11 +143,23 @@ extension CLI {
             ]
         }
         var said: [String] = []
-        if TailscaleClient.serving(port: port).funnelled(on: host) {
+        let state = TailscaleClient.serving(port: port)
+        let here = state.root(on: host)
+        if state.funnelled(on: host) {
             said.append("  WARNING: Tailscale Funnel is on for port \(port), so the page is on the public internet.")
         }
-        if !TailscaleClient.servingLive(port: port, host: host) {
-            said.append("  The page isn't up: the RoamRun app serves it while it runs, and it can take half a minute.")
+        // The causes `ota` here tells apart, said in short: it says what to do about each.
+        if case .mounted = state,
+           !(state.alongside(host).isEmpty && (here == nil || AppCoordinator.isOurs(here!, on: port)))
+        {
+            said
+                .append(
+                    "  The page can't be served: port \(port) carries something else. `roamrun ota` on this Mac says what."
+                )
+        } else if !TailscaleClient.servingLive(port: port, host: host) {
+            said.append(TailscaleClient.httpsEnabled() == false
+                ? "  The page can't be served: the tailnet doesn't issue HTTPS certificates."
+                : "  The page isn't up: the RoamRun app serves it while it runs, and it can take half a minute.")
         }
         return said + ["  Page: https://\(host):\(port)/ — anyone on the tailnet can open it and install these builds."]
     }

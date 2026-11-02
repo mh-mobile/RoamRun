@@ -628,8 +628,21 @@ private func status(_ answer: String) -> Int {
                                 []
                             })
     }
-    let said = error?.description ?? ""
-    #expect(said.contains("upload \(id)") && !said.contains(folder.path))
+    #expect(error?.description.contains("upload \(id)") == true)
+    #expect(uploads.refusal(id: id, owner: "caller", sha256: sha256) == nil)
+    // One the store can't take: its folder on this Mac isn't named.
+    let blocked = folder.appendingPathComponent("blocked")
+    try Data().write(to: blocked)
+    let unstored = #expect(throws: MCPHTTP.Failure.self) {
+        try MCPHTTP.publish(uploads, id: id, sha256: sha256, replace: false, folder: folder, store: blocked,
+                            devices: devices, profile: { _ in
+                                ["ProvisionedDevices": ["x"], "Entitlements": [String: Any]()]
+                            }, page: {
+                                []
+                            })
+    }
+    let said = unstored?.description ?? ""
+    #expect(said.contains("the OTA folder") && !said.contains(blocked.path))
     #expect(uploads.refusal(id: id, owner: "caller", sha256: sha256) == nil)
 
     let stored = try MCPHTTP.publish(uploads, id: id, sha256: sha256, replace: false, folder: folder, store: store,
@@ -648,4 +661,26 @@ private func status(_ answer: String) -> Int {
             $0.hasPrefix("install-")
         }
         .isEmpty)
+}
+
+/// Which of `install` and `ota` a call is given, by the server's flags: each only by its own.
+@Test func installAndOtaAreGivenEachByItsOwnFlag() throws {
+    let uploads = MCPHTTP.Uploads(folder: FileManager.default.temporaryDirectory, most: 1 << 20)
+    func listed(_ allowInstall: Bool, _ allowOTA: Bool) throws -> Set<String> {
+        let server = MCPHTTP.tools(folder: FileManager.default.temporaryDirectory, uploads: uploads,
+                                   allowInstall: allowInstall, allowOTA: allowOTA, profiles: {
+                                       []
+                                   }, asking: .init())
+        let answer = try #require(server.handle(Data(#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#.utf8)))
+        let tools = try #require(
+            ((try JSONSerialization.jsonObject(with: answer) as? [String: Any])?["result"] as? [String: Any])?["tools"]
+                as? [[String: Any]]
+        )
+        return Set(tools.compactMap {
+            $0["name"] as? String
+        }).intersection(["install", "install_status", "ota"])
+    }
+    #expect(try listed(true, false) == ["install", "install_status"])
+    #expect(try listed(false, true) == ["ota"])
+    #expect(try listed(true, true) == ["install", "install_status", "ota"])
 }

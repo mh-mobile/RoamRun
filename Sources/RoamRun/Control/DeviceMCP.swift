@@ -276,7 +276,8 @@ final class DeviceMCP: @unchecked Sendable {
             return text(profiles.isEmpty ? "No devices saved in RoamRun." : profiles.map(\.displayName)
                 .joined(separator: "\n"))
         }
-        if tool == "ota", let publish {
+        if tool == "ota" {
+            guard let publish else { throw Failure(description: "no such tool: ota") }
             guard let upload = arguments["upload"] as? String, let sha256 = arguments["sha256"] as? String else {
                 throw Failure(description: "upload and sha256 are missing: as PUT /upload answered them")
             }
