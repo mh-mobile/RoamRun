@@ -250,7 +250,7 @@ believed the first time it is used — use it only if the user named it.
   `--token-file`. An .ipa only.
 - `roamrunctl ota App.ipa --server <address>:<port> [--replace]` (0.12.0+) puts an Ad Hoc or
   Enterprise .ipa on a Mac's OTA page, where anyone on its tailnet can install it, through
-  that Mac's OTA server (`roamrun mcp --http --allow-ota`) — not a relay, which refuses it.
+  that Mac's OTA server (`roamrun mcp --http <port> --allow <who> --allow-ota`) — not a relay, which refuses it.
   Only when the user asked for that. Exit 0 means stored; the page shows it within about
   30 s while the RoamRun app runs on that Mac. If it says another job's upload replaced its own, run it again later, once.
 - `roamrunctl launch <name> <bundle id>` — one already running is ended first.

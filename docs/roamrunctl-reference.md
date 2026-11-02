@@ -622,7 +622,7 @@ against a real device at the time these notes were written:
   after, and the folder was removed at Ctrl-C. `launch` of it over stdio answered with its pid
   in 1.3 s.
 - `ota --server` from CI, and on Windows or Linux. It was run on 2026-11-02 on macOS: from the
-  Mac itself, with the token, against its own `roamrun mcp --http --allow-ota`, an Ad Hoc build of
+  Mac itself, with the token, against its own `roamrun mcp --http <port> --allow <who> --allow-ota`, an Ad Hoc build of
   a test app was stored and the answer printed; against a `roamrunctl mcp --http` on the same
   machine it was refused as a relay before anything was sent; without the token, 401 at
   `initialize`. From a macOS VM on the tailnet, a 25 MB Ad Hoc build was stored directly (the
