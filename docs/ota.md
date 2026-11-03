@@ -57,7 +57,7 @@ build needs none of this.
 
 A job can put its build on the page with no one at the Mac. On the Mac, beside the RoamRun app,
 start an **OTA server**: `roamrun mcp --http` with `--allow-ota`. It has one tool, `ota`, and
-operates no device: a job that holds its token can publish to the page, and do nothing else. It
+operates no device: on it, a job that holds its token can publish to the page, and do nothing else. It
 gets a token of its own, not a relay's, stored as a secret (here `OTA_TOKEN`) that the job reads
 into `$TOKEN`:
 
@@ -68,7 +68,8 @@ roamrun mcp --http 9091 --allow tag:ci --token-file ~/.config/roamrun/ota-token 
 ```
 
 `--allow-ota` and `--allow-install` aren't given to one server; a server for installs can run
-beside it on another port. `$MAC` below is the Mac's Tailscale address, which the server prints
+beside it on another port. Give that one a token of its own: without one, a job its `--allow` lets
+in can install apps and operate the devices there. `$MAC` below is the Mac's Tailscale address, which the server prints
 as it starts.
 
 The job publishes with roamrunctl (0.12.0 or later; its archives are on the

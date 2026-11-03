@@ -37,7 +37,7 @@ Ad Hoc ビルドをインストールできるのは、プロビジョニング�
 
 ## CI のジョブから
 
-ジョブは、Mac の前に誰もいなくても、ビルドをページに載せられます。そのために、RoamRun のアプリが動いている Mac で、**OTA server** を起動しておきます。`roamrun mcp --http` に `--allow-ota` を付けたものです。OTA server のツールは `ota` の 1 つだけで、デバイスは操作しません。そのトークンを持つジョブにできるのは、ページへの公開だけです。トークンは relay のものとは別に作り、シークレット（ここでは `OTA_TOKEN`）にも入れておきます。ジョブは、そのシークレットを `$TOKEN` として使います。
+ジョブは、Mac の前に誰もいなくても、ビルドをページに載せられます。そのために、RoamRun のアプリが動いている Mac で、**OTA server** を起動しておきます。`roamrun mcp --http` に `--allow-ota` を付けたものです。OTA server のツールは `ota` の 1 つだけで、デバイスは操作しません。この OTA server で、そのトークンを持つジョブにできるのは、ページへの公開だけです。トークンは relay のものとは別に作り、シークレット（ここでは `OTA_TOKEN`）にも入れておきます。ジョブは、そのシークレットを `$TOKEN` として使います。
 
 ```sh
 (umask 077 && mkdir -p ~/.config/roamrun && openssl rand -hex 32 > ~/.config/roamrun/ota-token)
@@ -45,7 +45,7 @@ gh secret set OTA_TOKEN --repo <owner>/<repo> < ~/.config/roamrun/ota-token
 roamrun mcp --http 9091 --allow tag:ci --token-file ~/.config/roamrun/ota-token --allow-ota
 ```
 
-`--allow-ota` と `--allow-install` は、1 つのサーバーには付けられません。インストール用のサーバーは、別のポートで並べて動かせます。下の `$MAC` は Mac の Tailscale のアドレスで、サーバーが起動したときに表示します。
+`--allow-ota` と `--allow-install` は、1 つのサーバーには付けられません。インストール用のサーバーは、別のポートで並べて動かせます。そちらには別のトークンを付けてください。付けないと、その `--allow` が通すジョブは、そこからアプリのインストールやデバイスの操作ができます。下の `$MAC` は Mac の Tailscale のアドレスで、サーバーが起動したときに表示します。
 
 ジョブは、roamrunctl（0.12.0 以降。アーカイブは [Releases](https://github.com/mh-mobile/RoamRun/releases) にあります）で公開します。
 

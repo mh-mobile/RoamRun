@@ -252,7 +252,10 @@ impl Relay {
         if !tools["tools"].as_array().into_iter().flatten().any(|tool| tool["name"] == "ota") {
             return Err(format!("the server at {} has no ota: its RoamRun is older than 0.12.0, or it was started without --allow-ota", self.host));
         }
+        // Hashing is this Mac's time, not the network's: the deadline moves on by it.
+        let hashing = Instant::now();
         let sha256 = sha256_of(path)?;
+        let deadline = (until + hashing.elapsed(), deadline.1);
         let mut again = false;
         loop {
             let upload = self.upload(path, &sha256, megabytes, true, "published", deadline)?;
@@ -617,6 +620,19 @@ mod tests {
         let (at, _) = scripted(vec![(200, json!({ "jsonrpc": "2.0", "id": 1 }).to_string())]);
         let said = Relay::server(&at.to_string(), None).unwrap().ota(&path, false, Some(20)).err().unwrap_or_default();
         assert!(said.contains("has no result"), "{said}");
+    }
+
+    /// Hashing the file isn't held to the deadline: a 32 MB .ipa, hashed (unoptimised) for longer than its 1 s, is
+    /// still sent to a server that answers at once.
+    #[test]
+    fn ota_s_deadline_leaves_out_hashing_the_file() {
+        let (path, _) = ipa();
+        std::fs::write(&path, vec![7u8; 32 << 20]).unwrap();
+        let sha256 = sha256_of(&path).unwrap();
+        let (at, _) = scripted(vec![hello("roamrun"), listing(&["ota"]), uploaded(&sha256), said("Stored App 1.0.", false)]);
+        let stored = Relay::server(&at.to_string(), None).unwrap().ota(&path, false, Some(1));
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(stored, Ok("Stored App 1.0.".to_string()));
     }
 
     /// A server that says nothing is left at the deadline, said as the OTA server's.
