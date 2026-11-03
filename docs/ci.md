@@ -33,13 +33,14 @@ and installs it as it is. In the runs below, the job took the `.ipa` from a rele
 repository (`gh release download`).
 
 To put the build on the OTA page for testers instead, a job calls the Mac's OTA server
-(`roamrun mcp --http --allow-ota`): [ota.md](ota.md#from-a-ci-job).
+(`roamrun mcp --http --allow-ota`): [ota.md](ota.md#from-a-ci-job). The action below does that
+too, with `ota-server`.
 
 ## With the action
 
 The GitHub Action [mh-mobile/roamrun-action](https://github.com/mh-mobile/roamrun-action) does either
-of the two ways in one step, placed after the Tailscale step. It downloads roamrunctl (0.11.0 by
-default, from v1.1.0) from RoamRun's release, checks it against `roamrunctl-SHA256SUMS`, and by default installs
+of the two ways in one step, placed after the Tailscale step, or publishes to the OTA page
+(`ota-server`, from v1.2.0). It downloads roamrunctl (0.12.0 by default, from v1.2.0) from RoamRun's release, checks it against `roamrunctl-SHA256SUMS`, and by default installs
 and launches: `key import -` and `install --launch` on the runner, or `install --relay … --launch`
 through a relay, which runs 0.10.0 or later. Before using it, set up what this page describes: the
 [Tailscale tag and OAuth client](#tailscale-a-tag-and-an-oauth-client), and either
@@ -58,8 +59,9 @@ resolving. The action's README shows the line that puts the runner's own DNS bac
 steps. Its inputs (installing only, launching only, and more) and what was tried with it are in
 [its README](https://github.com/mh-mobile/roamrun-action#readme).
 
-What the action runs is the 0.11.0 form of [the runner's step](#the-runners-step) and
-[the step that calls the relay](#the-step-that-calls-the-relay). The rest of this page is the setup,
+What the action runs is the 0.12.0 form of [the runner's step](#the-runners-step) and
+[the step that calls the relay](#the-step-that-calls-the-relay), and with `ota-server`,
+`roamrunctl ota --server` as [ota.md](ota.md#from-a-ci-job) shows it. The rest of this page is the setup,
 and the runs made without the action.
 
 ## What was run

@@ -105,7 +105,11 @@ same day, a second `ota` with a used upload was refused. Then from another machi
 installs on 9090 side by side: `roamrunctl ota` stored a 25 MB Ad Hoc build (its upload took
 22 s), again through a local CONNECT proxy (`ROAMRUNCTL_PROXY`, with `--replace`), and the page
 fetched from that machine listed the build; pointed at 9090, it was refused as having no `ota`
-before anything was sent. Not yet from a CI job, nor from Linux or Windows.
+before anything was sent. On 2026-11-03 (UTC), from GitHub Actions (`ubuntu-24.04`, joined with a
+signed auth key as `tag:ci`) through roamrun-action's `ota-server` and the roamrunctl 0.12.0 it
+downloads: a 1 MB Ad Hoc build, first taken off the page, was stored, and the page fetched from the
+runner listed it. The same day, the Bitrise Step's `ota_server` with the Bitrise CLI on this Mac
+(the Step's own Tailscale in userspace) did the same. Not yet on bitrise.io, nor from Windows.
 
 ## The port, and Funnel
 

@@ -287,7 +287,7 @@ Mac 側の関連する実装は、`Sources/RoamRun/Pairing/` にあります。�
 - iPad、上下逆さまに持ったデバイス、`roamrunctl` と Apple Vision Pro の組み合わせ（RoamRun を入れた Mac では、Vision Pro で動かしています）
 - Mac を一度も使わない初期設定、Xcode で一度も準備したことのないデバイス、一度もペアリングしたことのないデバイス
 - x86_64 のマシン、Avahi のない Linux、ufw 以外のファイアウォールのツール
-- `ota --server` の次の使い方：CI から、Windows と Linux で。試したのは 2026-11-02 です。macOS の Mac 自身からトークン付きで、その Mac の OTA server に向けました。テスト用アプリの Ad Hoc ビルドが保存され、答えが表示されました。同じマシンの `roamrunctl mcp --http` に向けると、何も送る前に relay だとして断りました。トークンなしでは、`initialize` で 401 が返りました。tailnet の macOS の VM からは、25 MB の Ad Hoc ビルドを保存できました（アップロードは 22 秒）。手元の CONNECT プロキシ経由（`ROAMRUNCTL_PROXY`）でも保存できました。OTA server は、インストール用のサーバーと並べて動かしています。インストール用のサーバーに向けると、何も送る前に「`ota` がない」と断りました。
+- `ota --server` の次の使い方：Windows と bitrise.io で。2026-11-03（UTC）には、2 か所から試しました。1 つは GitHub Actions の `ubuntu-24.04`（Linux x86_64）で、roamrun-action の `ota-server` を使いました。もう 1 つは Mac の Bitrise CLI で動かした Bitrise Step で、Step の Tailscale のプロキシを通しました。どちらも、1 MB の Ad Hoc ビルドが保存され、ページに載りました。2026-11-02 にも試しています。macOS の Mac 自身からトークン付きで、その Mac の OTA server に向けました。テスト用アプリの Ad Hoc ビルドが保存され、答えが表示されました。同じマシンの `roamrunctl mcp --http` に向けると、何も送る前に relay だとして断りました。トークンなしでは、`initialize` で 401 が返りました。tailnet の macOS の VM からは、25 MB の Ad Hoc ビルドを保存できました（アップロードは 22 秒）。手元の CONNECT プロキシ経由（`ROAMRUNCTL_PROXY`）でも保存できました。OTA server は、インストール用のサーバーと並べて動かしています。インストール用のサーバーに向けると、何も送る前に「`ota` がない」と断りました。
 - 複数のデバイスへの同時の署名、`ROAMRUNCTL_SIGNER` による指定
 - RoamRun を入れた Mac を仲介マシンとし、`roamrunctl` を実行するマシンをホストとする構成
 - MCP 経由の swipe、最後まで通る paste（MCP を使わない形では確かめています）。Linux や Windows での MCP 経由のインストールと launch

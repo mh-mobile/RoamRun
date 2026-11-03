@@ -8,7 +8,9 @@ Bitrise's Step Library had no Tailscale Step when this was written, so this Step
 itself: it installs Tailscale with Homebrew and runs it without root, in userspace, and gives
 roamrunctl Tailscale's HTTP proxy into the tailnet (`ROAMRUNCTL_PROXY`, roamrunctl 0.10.0 or later).
 Then it installs and launches in either of [the GitHub Actions guide](ci.md)'s two ways: with the
-device's key on the build machine, or through a relay of yours. It runs on macOS stacks with macOS
+device's key on the build machine, or through a relay of yours. From 1.2.0, with `ota_server`, it
+puts the build on a Mac's OTA page instead ([ota.md](ota.md#from-a-ci-job), and the Step's README).
+It runs on macOS stacks with macOS
 15 or later (Xcode 16.3 or later), and stops on an older one.
 
 ```yaml
@@ -16,7 +18,7 @@ device's key on the build machine, or through a relay of yours. It runs on macOS
     inputs:
       - distribution_method: development
       - automatic_code_signing: api-key
-- git::https://github.com/mh-mobile/bitrise-step-roamrun.git@1.1.0:
+- git::https://github.com/mh-mobile/bitrise-step-roamrun.git@1.2.0:
     inputs:
       - tailscale_auth_key: $TS_AUTHKEY
       - roamrun_key: $ROAMRUN_KEY

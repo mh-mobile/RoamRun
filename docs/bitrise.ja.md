@@ -4,14 +4,14 @@
 
 Bitrise のビルドから、アーカイブしたアプリを Tailscale 越しに自分の iPhone へインストールし、起動できます。使うのは Bitrise Step の [mh-mobile/bitrise-step-roamrun](https://github.com/mh-mobile/bitrise-step-roamrun) です。
 
-これを書いた時点で、Bitrise の Step Library には Tailscale の Step がありませんでした。そのため、この Step が自分で tailnet に参加します。Tailscale は Homebrew で入れ、root なしの userspace で動かします。Tailscale が出す tailnet への HTTP プロキシを、`ROAMRUNCTL_PROXY` で roamrunctl に渡します。これは roamrunctl 0.10.0 からの機能です。インストールと起動には、[GitHub Actions の手順](ci.ja.md)の 2 つのやり方を使えます。デバイスの鍵をビルドのマシンに置くやり方と、手元の relay に頼むやり方です。macOS 15 以降（Xcode 16.3 以降）のスタックで動き、それより古いスタックでは止まります。
+これを書いた時点で、Bitrise の Step Library には Tailscale の Step がありませんでした。そのため、この Step が自分で tailnet に参加します。Tailscale は Homebrew で入れ、root なしの userspace で動かします。Tailscale が出す tailnet への HTTP プロキシを、`ROAMRUNCTL_PROXY` で roamrunctl に渡します。これは roamrunctl 0.10.0 からの機能です。インストールと起動には、[GitHub Actions の手順](ci.ja.md)の 2 つのやり方を使えます。デバイスの鍵をビルドのマシンに置くやり方と、手元の relay に頼むやり方です。1.2.0 からは、`ota_server` を渡すと、代わりに Mac の OTA のページへビルドを載せます（[ota.ja.md](ota.ja.md#ci-のジョブから) と Step の README にあります）。macOS 15 以降（Xcode 16.3 以降）のスタックで動き、それより古いスタックでは止まります。
 
 ```yaml
 - xcode-archive@6:
     inputs:
       - distribution_method: development
       - automatic_code_signing: api-key
-- git::https://github.com/mh-mobile/bitrise-step-roamrun.git@1.1.0:
+- git::https://github.com/mh-mobile/bitrise-step-roamrun.git@1.2.0:
     inputs:
       - tailscale_auth_key: $TS_AUTHKEY
       - roamrun_key: $ROAMRUN_KEY
