@@ -78,7 +78,7 @@ Bitrise では、[RoamRun の Step](https://github.com/mh-mobile/bitrise-step-ro
       - ota_server_token: $OTA_TOKEN
 ```
 
-Xcode Cloud では、`ci_post_xcodebuild.sh` が roamrunctl をダウンロードし、userspace の Tailscale を通して動かします（[xcode-cloud.ja.md](xcode-cloud.ja.md#ota-のページへ0120)）。
+Xcode Cloud では、`ci_post_xcodebuild.sh` が roamrunctl をダウンロードし、userspace の Tailscale を通して動かします。[xcode-cloud.ja.md](xcode-cloud.ja.md#ota-のページへ0120) にあります。
 
 - **保存できても、すぐにはページに出ません。** 手順が成功したということは、ビルドを保存できたということです。RoamRun のアプリが動いていれば、30 秒ほどでページに出ます。ページが出ていないときは、答えにそのことと理由が書かれます。
 - **Mac で動かし続けるもの。** RoamRun のアプリと、このサーバーです。`roamrun mcp --http` は Ctrl-C を押すまで動きます。サービスとして動かす形は試していません。ジョブのタグからこのポートへ届くことを、tailnet のアクセス規則で許可しておきます。
