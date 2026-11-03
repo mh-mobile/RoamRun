@@ -181,8 +181,8 @@ export XDG_CONFIG_HOME="$t/config"
   8 s. The key was made on a Mac with RoamRun (`roamrun key create iPhone ~/xcc-key.json --as
   xcc`) and given as the Secret variable `ROAMRUN_KEY`.
 - `$rr` was that build of roamrunctl, committed to the repository (`bin/roamrunctl`). With 0.10.0
-  released, a script would download the archive from RoamRun's release instead, as the GitHub
-  Action does; that wasn't run.
+  released, a script downloads the archive from RoamRun's release instead, as the GitHub Action
+  does: the script in [the next section](#to-the-ota-page-0120) does.
 
 With the key on the build machine, the variables are `TS_AUTHKEY` and `ROAMRUN_KEY`, both Secret;
 `RELAY`, `RELAY_TOKEN` and `RELAY_DEVICE` aren't used. The tailnet's policy has to let `tag:ci`
@@ -191,10 +191,58 @@ names, not only the relay's port. There is no relay to stop and no token to chan
 read `ROAMRUN_KEY` and reach the device can operate it until its name is removed from the device's
 Developer Mode list (Settings › Privacy & Security › Developer Mode).
 
+## To the OTA page (0.12.0)
+
+With RoamRun 0.12.0, the build can go on a Mac's OTA page instead, through that Mac's OTA server
+(`roamrun mcp --http … --allow-ota`, [ota.md](ota.md#from-a-ci-job)), with no device's key or relay.
+Xcode Cloud's Archive action exports an Ad Hoc `.ipa` too, in `CI_AD_HOC_SIGNED_APP_PATH`, signed
+with the profile Xcode Cloud manages, which lists the team's devices. The script, in
+`ci_scripts/ci_post_xcodebuild.sh`:
+
+```bash
+#!/bin/bash
+set -euo pipefail
+[ "${CI_XCODEBUILD_ACTION:-}" = archive ] || exit 0
+ipa=$(find "${CI_AD_HOC_SIGNED_APP_PATH:-/nonexistent}" -maxdepth 1 -name '*.ipa' | head -1)
+[ -n "$ipa" ] || { echo "no Ad Hoc .ipa in CI_AD_HOC_SIGNED_APP_PATH"; exit 1; }
+
+t=$(mktemp -d /tmp/ts.XXXXXX) # short: a unix socket's path must stay under 104 bytes
+version=0.12.0 archive=roamrunctl-macos-$( [ "$(uname -m)" = arm64 ] && echo aarch64 || echo x86_64 )
+base=https://github.com/mh-mobile/RoamRun/releases/download/v$version
+curl -fsSL --retry 3 -o "$t/$archive.tar.gz" "$base/$archive.tar.gz"
+curl -fsSL --retry 3 -o "$t/SHA256SUMS" "$base/roamrunctl-SHA256SUMS"
+(cd "$t" && grep " $archive.tar.gz\$" SHA256SUMS | shasum -a 256 -c)
+tar -xzf "$t/$archive.tar.gz" -C "$t" --strip-components 1 "$archive/roamrunctl"
+rr="$t/roamrunctl"
+
+HOMEBREW_NO_AUTO_UPDATE=1 brew install tailscale > /dev/null
+bin=$(brew --prefix)/bin
+"$bin/tailscaled" --tun=userspace-networking --socket="$t/sock" --statedir="$t/state" \
+  --outbound-http-proxy-listen=127.0.0.1:1056 > "$t/log" 2>&1 &
+daemon=$!
+ts() { "$bin/tailscale" --socket="$t/sock" "$@"; }
+trap 'ts logout > /dev/null 2>&1; kill "$daemon"; rm -rf "$t"' EXIT
+for _ in $(seq 20); do [ -S "$t/sock" ] && break; sleep 1; done
+ts up --auth-key="$TS_AUTHKEY" --hostname="xcode-cloud-$CI_BUILD_NUMBER" --accept-dns=false --timeout=120s
+export ROAMRUNCTL_PROXY=http://127.0.0.1:1056
+
+ROAMRUNCTL_TOKEN="$OTA_TOKEN" "$rr" ota "$ipa" --server "$OTA_SERVER"
+```
+
+The workflow's variables: `TS_AUTHKEY` and `OTA_TOKEN` (the OTA server's own token), both Secret,
+and `OTA_SERVER`, the Mac's Tailscale address and the server's port (`100.x.y.z:9091`). On the Mac,
+the RoamRun app and the OTA server keep running, and the tailnet's policy lets `tag:ci` reach the
+server's port.
+
+Run on 2026-11-03 (UTC), from the same repository and app as above, the build started by a push to
+`main`, with a signed auth key on a tailnet with Tailnet Lock: the script downloaded roamrunctl
+0.12.0, and the OTA server logged `initialize`, `tools/list`, the upload and `ota` from `tag:ci`
+within 2 s. The page then listed the app (it hadn't been on it before). The stored `.ipa` carried
+Xcode Cloud's "iOS Team Ad Hoc Provisioning Profile", listing 7 devices. Installing it from the page
+wasn't tried.
+
 ## Not tried
 
-- A script that downloads roamrunctl 0.10.0 from its release (a build of the change was committed
-  instead).
 - An OAuth client instead of an auth key; a Tailscale policy narrowed to `tag:ci`'s needs.
 - Other Xcode or macOS versions on Xcode Cloud, other Distribution Preparation settings, a larger
   app, an iPad.
