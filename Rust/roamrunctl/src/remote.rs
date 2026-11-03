@@ -542,7 +542,8 @@ mod tests {
                 let refused = status != 200 && status != 0;
                 let mut taken = vec![0; if refused { 0 } else { length }];
                 if !refused { (&stream).write_all(b"HTTP/1.1 100 Continue\r\n\r\n").unwrap(); reader.read_exact(&mut taken).unwrap(); }
-                kept.lock().unwrap().push(format!("{} {}", first.trim_end(), String::from_utf8_lossy(&taken)));
+                // A large body is kept by its start: a test reads only the JSON or a few bytes.
+                kept.lock().unwrap().push(format!("{} {}", first.trim_end(), String::from_utf8_lossy(&taken[..taken.len().min(1 << 16)])));
                 if status == 0 { continue }
                 let _ = (&stream).write_all(format!("HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes());
             }
@@ -622,15 +623,17 @@ mod tests {
         assert!(said.contains("has no result"), "{said}");
     }
 
-    /// Hashing the file isn't held to the deadline: a 32 MB .ipa, hashed (unoptimised) for longer than its 1 s, is
-    /// still sent to a server that answers at once.
+    /// Hashing the file isn't held to the deadline: a 64 MB .ipa, given half the time hashing it took here (unoptimised;
+    /// 1 s at least), is still sent to a server that answers at once. The rest of that time is the upload's, on this machine.
     #[test]
     fn ota_s_deadline_leaves_out_hashing_the_file() {
         let (path, _) = ipa();
-        std::fs::write(&path, vec![7u8; 32 << 20]).unwrap();
+        std::fs::write(&path, vec![7u8; 64 << 20]).unwrap();
+        let began = Instant::now();
         let sha256 = sha256_of(&path).unwrap();
+        let timeout = (began.elapsed().as_secs() / 2).max(1);
         let (at, _) = scripted(vec![hello("roamrun"), listing(&["ota"]), uploaded(&sha256), said("Stored App 1.0.", false)]);
-        let stored = Relay::server(&at.to_string(), None).unwrap().ota(&path, false, Some(1));
+        let stored = Relay::server(&at.to_string(), None).unwrap().ota(&path, false, Some(timeout));
         std::fs::remove_file(&path).unwrap();
         assert_eq!(stored, Ok("Stored App 1.0.".to_string()));
     }
