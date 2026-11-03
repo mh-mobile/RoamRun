@@ -626,7 +626,8 @@ against a real device at the time these notes were written:
 - `ota --server` on Windows, and on bitrise.io. On 2026-11-03 (UTC) it ran from GitHub Actions on
   `ubuntu-24.04` (Linux x86_64, through roamrun-action's `ota-server`) and from the Bitrise Step with
   the Bitrise CLI on a Mac (through the Step's Tailscale proxy): a 1 MB Ad Hoc build was stored and
-  the page listed it. It was run on 2026-11-02 on macOS: from the
+  the page listed it. The same day, from Xcode Cloud through Tailscale's proxy, its Ad Hoc export
+  was stored and the page listed it ([xcode-cloud.md](xcode-cloud.md#to-the-ota-page-0120)). It was run on 2026-11-02 on macOS: from the
   Mac itself, with the token, against its own `roamrun mcp --http <port> --allow <who> --allow-ota`, an Ad Hoc build of
   a test app was stored and the answer printed; against a `roamrunctl mcp --http` on the same
   machine it was refused as a relay before anything was sent; without the token, 401 at

@@ -78,11 +78,13 @@ Bitrise では、[RoamRun の Step](https://github.com/mh-mobile/bitrise-step-ro
       - ota_server_token: $OTA_TOKEN
 ```
 
+Xcode Cloud では、`ci_post_xcodebuild.sh` が roamrunctl をダウンロードし、userspace の Tailscale を通して動かします。[xcode-cloud.ja.md](xcode-cloud.ja.md#ota-のページへ0120) にあります。
+
 - **保存できても、すぐにはページに出ません。** 手順が成功したということは、ビルドを保存できたということです。RoamRun のアプリが動いていれば、30 秒ほどでページに出ます。ページが出ていないときは、答えにそのことと理由が書かれます。
 - **Mac で動かし続けるもの。** RoamRun のアプリと、このサーバーです。`roamrun mcp --http` は Ctrl-C を押すまで動きます。サービスとして動かす形は試していません。ジョブのタグからこのポートへ届くことを、tailnet のアクセス規則で許可しておきます。
 - **公開するジョブは 1 つずつ動かします。** サーバーが持てるアップロードは 1 つだけです。このジョブが `ota` を呼ぶ前に、別のジョブがアップロードを始めたとします。すると、このジョブのアップロードは置き換えられます。`roamrunctl ota` は、ほかのアップロードの最中なら待ち、置き換えられたら 1 回だけ送り直します。それ以上に重なると失敗することがあり、長く待つ場合は `--timeout` を延ばす必要があります。GitHub Actions では、公開するジョブを 1 つの [concurrency](https://docs.github.com/actions/using-jobs/using-concurrency) のグループに入れます。
 
-2026-11-02 に、この Mac 自身からトークン付きで試しました。テスト用アプリの Ad Hoc ビルドをアップロードして、保存できました。答えには、保存してあるデバイスのうち、そのプロファイルに入っている 2 台の名前が出ました。`tools/list` に出たのは `ota` だけで、`look` はすぐに断られました。`--allow-ota` と `--allow-install` を一緒に付けると、起動を断りました。同じ日のそれより前には、使い終わったアップロードで 2 回目の `ota` を呼び、断られることも確かめています。そのあと、tailnet の別のマシン（ログイン名で許可した macOS の VM）からも試しました。この Mac では、9091 で OTA server を、9090 でインストール用のサーバーを並べて動かしました。`roamrunctl ota` は 25 MB の Ad Hoc ビルドを保存しました（アップロードは 22 秒）。手元の CONNECT プロキシを通しても（`ROAMRUNCTL_PROXY`、`--replace` 付き）保存できました。そのマシンから取得したページには、そのビルドが載っていました。9090 に向けると、何も送る前に「`ota` がない」と断りました。2026-11-03（UTC）には、GitHub Actions の `ubuntu-24.04` からも試しました。ランナーは、署名した auth key で `tag:ci` として参加しました。使ったのは roamrun-action の `ota-server` と、それが取得した roamrunctl 0.12.0 です。1 MB の Ad Hoc ビルドを、先にページから外しておいて公開しました。ビルドは保存され、ランナーから取得したページにも載っていました。同じ日に、Bitrise Step の `ota_server` を、この Mac の Bitrise CLI で動かしました（Step 自身の Tailscale を userspace で使用）。結果は同じでした。bitrise.io と Windows からは、まだ試していません。
+2026-11-02 に、この Mac 自身からトークン付きで試しました。テスト用アプリの Ad Hoc ビルドをアップロードして、保存できました。答えには、保存してあるデバイスのうち、そのプロファイルに入っている 2 台の名前が出ました。`tools/list` に出たのは `ota` だけで、`look` はすぐに断られました。`--allow-ota` と `--allow-install` を一緒に付けると、起動を断りました。同じ日のそれより前には、使い終わったアップロードで 2 回目の `ota` を呼び、断られることも確かめています。そのあと、tailnet の別のマシン（ログイン名で許可した macOS の VM）からも試しました。この Mac では、9091 で OTA server を、9090 でインストール用のサーバーを並べて動かしました。`roamrunctl ota` は 25 MB の Ad Hoc ビルドを保存しました（アップロードは 22 秒）。手元の CONNECT プロキシを通しても（`ROAMRUNCTL_PROXY`、`--replace` 付き）保存できました。そのマシンから取得したページには、そのビルドが載っていました。9090 に向けると、何も送る前に「`ota` がない」と断りました。2026-11-03（UTC）には、GitHub Actions の `ubuntu-24.04` からも試しました。ランナーは、署名した auth key で `tag:ci` として参加しました。使ったのは roamrun-action の `ota-server` と、それが取得した roamrunctl 0.12.0 です。1 MB の Ad Hoc ビルドを、先にページから外しておいて公開しました。ビルドは保存され、ランナーから取得したページにも載っていました。同じ日に、Bitrise Step の `ota_server` を、この Mac の Bitrise CLI で動かしました（Step 自身の Tailscale を userspace で使用）。結果は同じでした。Xcode Cloud のビルドからも、Ad Hoc で書き出したビルドで同じ結果になりました（[xcode-cloud.ja.md](xcode-cloud.ja.md#ota-のページへ0120)）。bitrise.io と Windows からは、まだ試していません。
 
 ## ポートと Funnel
 
