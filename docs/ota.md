@@ -86,6 +86,34 @@ which of your devices it installs on, the page's address) and fails on a refused
 `--replace` does what it does for `roamrun ota`. Details:
 [the roamrunctl reference](roamrunctl-reference.md#ota---server).
 
+In GitHub Actions, [roamrun-action](https://github.com/mh-mobile/roamrun-action#publishing-to-the-ota-page)
+(v1.2.0 or later) is that step, after the job has joined the tailnet with the tag the server lets
+in ([ci.md](ci.md#tailscale-a-tag-and-an-oauth-client)):
+
+```yaml
+- uses: mh-mobile/roamrun-action@v1
+  with:
+    ota-server: 100.x.y.z:9091          # the Mac's Tailscale address, as the server printed it
+    ota-server-token: ${{ secrets.OTA_TOKEN }}
+    ipa: build/MyApp.ipa
+```
+
+In Bitrise, [the RoamRun Step](https://github.com/mh-mobile/bitrise-step-roamrun#to-the-ota-page)
+(1.2.0 or later) joins the tailnet itself and does the same ([bitrise.md](bitrise.md)). Its
+`ipa_path` is by default the `.ipa` Xcode Archive & Export made before it, exported `ad-hoc` (or
+`enterprise`), not `development` as for installing; the token is a Bitrise Secret `OTA_TOKEN`:
+
+```yaml
+- xcode-archive@6:
+    inputs:
+      - distribution_method: ad-hoc
+- git::https://github.com/mh-mobile/bitrise-step-roamrun.git@1.2.0:
+    inputs:
+      - tailscale_auth_key: $TS_AUTHKEY
+      - ota_server: 100.x.y.z:9091
+      - ota_server_token: $OTA_TOKEN
+```
+
 - **Stored is not yet on the page.** A step that succeeds means the build was stored. The page
   shows it within about 30 seconds while the RoamRun app runs; the answer says when the page isn't
   up, and why.
@@ -95,7 +123,8 @@ which of your devices it installs on, the page's address) and fails on a refused
 - **One publishing job at a time.** The server keeps one upload: another job's upload, starting
   before this one's `ota`, replaces it. `roamrunctl ota` waits while another upload comes in and
   sends its own again once; jobs that overlap more than that can fail, and a long wait may need
-  a larger `--timeout`.
+  a larger `--timeout`. In GitHub Actions, give the publishing jobs one
+  [concurrency](https://docs.github.com/actions/using-jobs/using-concurrency) group.
 
 Run on 2026-11-02 from this Mac itself, with the token: an Ad Hoc build of a test app was uploaded
 and stored, and the answer named the two saved devices its profile lists. `tools/list` had `ota`
@@ -105,7 +134,11 @@ same day, a second `ota` with a used upload was refused. Then from another machi
 installs on 9090 side by side: `roamrunctl ota` stored a 25 MB Ad Hoc build (its upload took
 22 s), again through a local CONNECT proxy (`ROAMRUNCTL_PROXY`, with `--replace`), and the page
 fetched from that machine listed the build; pointed at 9090, it was refused as having no `ota`
-before anything was sent. Not yet from a CI job, nor from Linux or Windows.
+before anything was sent. On 2026-11-03 (UTC), from GitHub Actions (`ubuntu-24.04`, joined with a
+signed auth key as `tag:ci`) through roamrun-action's `ota-server` and the roamrunctl 0.12.0 it
+downloads: a 1 MB Ad Hoc build, first taken off the page, was stored, and the page fetched from the
+runner listed it. The same day, the Bitrise Step's `ota_server` with the Bitrise CLI on this Mac
+(the Step's own Tailscale in userspace) did the same. Not yet on bitrise.io, nor from Windows.
 
 ## The port, and Funnel
 

@@ -55,11 +55,34 @@ ROAMRUNCTL_TOKEN="$TOKEN" roamrunctl ota MyApp.ipa --server "$MAC:9091"
 
 このコマンドは、何かを送る前に、相手のサーバーが何かを尋ねます。relay や、`ota` のないサーバーなら、そう言って断ります。そのあと .ipa をアップロードし、サーバーが答えた sha256 を確かめてから、`ota` を呼びます。ビルドは、サーバーが `roamrun ota` と同じように検査します。コマンドは、サーバーの答え（保存したもの、自分のデバイスのうちどれに入るか、ページのアドレス）を表示します。ビルドが拒否されたら失敗します。`--replace` は、`roamrun ota` の `--replace` と同じです。詳しくは [roamrunctl のリファレンス](roamrunctl-reference.ja.md#ota---server)にあります。
 
+GitHub Actions では、[roamrun-action](https://github.com/mh-mobile/roamrun-action#publishing-to-the-ota-page)（v1.2.0 以降）がこの手順になります。ジョブが、サーバーの許可するタグで tailnet へ参加したあとに置きます（[ci.ja.md](ci.ja.md#tailscaleタグと-oauth-クライアント)）。
+
+```yaml
+- uses: mh-mobile/roamrun-action@v1
+  with:
+    ota-server: 100.x.y.z:9091          # Mac の Tailscale のアドレス。サーバーが表示したもの
+    ota-server-token: ${{ secrets.OTA_TOKEN }}
+    ipa: build/MyApp.ipa
+```
+
+Bitrise では、[RoamRun の Step](https://github.com/mh-mobile/bitrise-step-roamrun#to-the-ota-page)（1.2.0 以降）が、自分で tailnet に参加して同じことをします（[bitrise.ja.md](bitrise.ja.md)）。`ipa_path` の既定は、前に置いた Xcode Archive & Export が作った `.ipa` です。インストールのときの `development` ではなく、`ad-hoc`（または `enterprise`）で書き出します。トークンは Bitrise の Secret の `OTA_TOKEN` に入れます。
+
+```yaml
+- xcode-archive@6:
+    inputs:
+      - distribution_method: ad-hoc
+- git::https://github.com/mh-mobile/bitrise-step-roamrun.git@1.2.0:
+    inputs:
+      - tailscale_auth_key: $TS_AUTHKEY
+      - ota_server: 100.x.y.z:9091
+      - ota_server_token: $OTA_TOKEN
+```
+
 - **保存できても、すぐにはページに出ません。** 手順が成功したということは、ビルドを保存できたということです。RoamRun のアプリが動いていれば、30 秒ほどでページに出ます。ページが出ていないときは、答えにそのことと理由が書かれます。
 - **Mac で動かし続けるもの。** RoamRun のアプリと、このサーバーです。`roamrun mcp --http` は Ctrl-C を押すまで動きます。サービスとして動かす形は試していません。ジョブのタグからこのポートへ届くことを、tailnet のアクセス規則で許可しておきます。
-- **公開するジョブは 1 つずつ動かします。** サーバーが持てるアップロードは 1 つだけです。このジョブが `ota` を呼ぶ前に、別のジョブがアップロードを始めたとします。すると、このジョブのアップロードは置き換えられます。`roamrunctl ota` は、ほかのアップロードの最中なら待ち、置き換えられたら 1 回だけ送り直します。それ以上に重なると失敗することがあり、長く待つ場合は `--timeout` を延ばす必要があります。
+- **公開するジョブは 1 つずつ動かします。** サーバーが持てるアップロードは 1 つだけです。このジョブが `ota` を呼ぶ前に、別のジョブがアップロードを始めたとします。すると、このジョブのアップロードは置き換えられます。`roamrunctl ota` は、ほかのアップロードの最中なら待ち、置き換えられたら 1 回だけ送り直します。それ以上に重なると失敗することがあり、長く待つ場合は `--timeout` を延ばす必要があります。GitHub Actions では、公開するジョブを 1 つの [concurrency](https://docs.github.com/actions/using-jobs/using-concurrency) のグループに入れます。
 
-2026-11-02 に、この Mac 自身からトークン付きで試しました。テスト用アプリの Ad Hoc ビルドをアップロードして、保存できました。答えには、保存してあるデバイスのうち、そのプロファイルに入っている 2 台の名前が出ました。`tools/list` に出たのは `ota` だけで、`look` はすぐに断られました。`--allow-ota` と `--allow-install` を一緒に付けると、起動を断りました。同じ日のそれより前には、使い終わったアップロードで 2 回目の `ota` を呼び、断られることも確かめています。そのあと、tailnet の別のマシン（ログイン名で許可した macOS の VM）からも試しました。この Mac では、9091 で OTA server を、9090 でインストール用のサーバーを並べて動かしました。`roamrunctl ota` は 25 MB の Ad Hoc ビルドを保存しました（アップロードは 22 秒）。手元の CONNECT プロキシを通しても（`ROAMRUNCTL_PROXY`、`--replace` 付き）保存できました。そのマシンから取得したページには、そのビルドが載っていました。9090 に向けると、何も送る前に「`ota` がない」と断りました。CI のジョブから、Linux と Windows からは、まだ試していません。
+2026-11-02 に、この Mac 自身からトークン付きで試しました。テスト用アプリの Ad Hoc ビルドをアップロードして、保存できました。答えには、保存してあるデバイスのうち、そのプロファイルに入っている 2 台の名前が出ました。`tools/list` に出たのは `ota` だけで、`look` はすぐに断られました。`--allow-ota` と `--allow-install` を一緒に付けると、起動を断りました。同じ日のそれより前には、使い終わったアップロードで 2 回目の `ota` を呼び、断られることも確かめています。そのあと、tailnet の別のマシン（ログイン名で許可した macOS の VM）からも試しました。この Mac では、9091 で OTA server を、9090 でインストール用のサーバーを並べて動かしました。`roamrunctl ota` は 25 MB の Ad Hoc ビルドを保存しました（アップロードは 22 秒）。手元の CONNECT プロキシを通しても（`ROAMRUNCTL_PROXY`、`--replace` 付き）保存できました。そのマシンから取得したページには、そのビルドが載っていました。9090 に向けると、何も送る前に「`ota` がない」と断りました。2026-11-03（UTC）には、GitHub Actions の `ubuntu-24.04` からも試しました。ランナーは、署名した auth key で `tag:ci` として参加しました。使ったのは roamrun-action の `ota-server` と、それが取得した roamrunctl 0.12.0 です。1 MB の Ad Hoc ビルドを、先にページから外しておいて公開しました。ビルドは保存され、ランナーから取得したページにも載っていました。同じ日に、Bitrise Step の `ota_server` を、この Mac の Bitrise CLI で動かしました（Step 自身の Tailscale を userspace で使用）。結果は同じでした。bitrise.io と Windows からは、まだ試していません。
 
 ## ポートと Funnel
 
