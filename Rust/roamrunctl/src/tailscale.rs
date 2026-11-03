@@ -102,9 +102,37 @@ fn exe() -> std::path::PathBuf {
     candidates.iter().find(|p| p.is_absolute() && p.exists() || in_path(p)).cloned().unwrap_or_else(|| candidates[0].clone())
 }
 
-fn run(args: &[&str]) -> Result<String, String> {
+fn command() -> Command {
+    let mut command = Command::new(exe());
     // Not handed what opens a pairing: it has no use for it.
-    let out = Command::new(exe()).args(args).env_remove("ROAMRUNCTL_PASSPHRASE").output().map_err(|e| format!("tailscale isn't installed here ({e})"))?;
+    command.env_remove("ROAMRUNCTL_PASSPHRASE");
+    if let Some(term) = term(std::env::var_os("TERM")) {
+        command.env("TERM", term);
+    }
+    command
+}
+
+/// The TERM to give Tailscale where this process has none. Tailscale.app's binary is the GUI and the CLI in
+/// one: with none of TERM, TERM_PROGRAM and SHLVL (as from an MCP client that is an app, or launchd) it takes
+/// itself for the GUI, prints that the GUI failed to start and exits 0.
+fn term(current: Option<std::ffi::OsString>) -> Option<&'static str> {
+    current.is_none_or(|term| term.is_empty()).then_some("dumb")
+}
+
+/// What Tailscale printed where it isn't JSON, rather than where parsing it stopped.
+fn unreadable(what: &str, out: &str, e: serde_json::Error) -> String {
+    let said = out.trim();
+    if said.starts_with('{') {
+        return format!("tailscale {what} wasn't readable ({e})");
+    }
+    if said.is_empty() {
+        return format!("tailscale {what} printed nothing");
+    }
+    format!("tailscale {what} printed something other than JSON: {}", said.chars().take(200).collect::<String>())
+}
+
+fn run(args: &[&str]) -> Result<String, String> {
+    let out = command().args(args).output().map_err(|e| format!("tailscale isn't installed here ({e})"))?;
     if !out.status.success() {
         return Err(format!("tailscale {}: {}", args[0], String::from_utf8_lossy(&out.stderr).trim()));
     }
@@ -114,7 +142,7 @@ fn run(args: &[&str]) -> Result<String, String> {
 /// The same, given `within` to answer: what waits on it (a request) isn't held by a Tailscale that hangs. Not
 /// given this process's input, which is `mcp`'s requests over stdio.
 fn run_within(args: &[&str], within: Duration) -> Result<String, String> {
-    let mut child = Command::new(exe()).args(args).env_remove("ROAMRUNCTL_PASSPHRASE").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped())
+    let mut child = command().args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped())
         .spawn().map_err(|e| format!("tailscale isn't installed here ({e})"))?;
     let read = |mut from: Box<dyn Read + Send>| std::thread::spawn(move || { let mut out = String::new(); let _ = from.read_to_string(&mut out); out });
     let reading = read(Box::new(child.stdout.take().ok_or("tailscale gave no output")?));
@@ -165,7 +193,7 @@ pub struct WhoisUser {
 /// Who is at `ip`, with five seconds for Tailscale to say.
 pub fn whois(ip: IpAddr) -> Result<Whois, String> {
     let out = run_within(&["whois", "--json", &ip.to_string()], Duration::from_secs(5))?;
-    serde_json::from_str(&out).map_err(|e| format!("tailscale whois wasn't readable ({e})"))
+    serde_json::from_str(&out).map_err(|e| unreadable("whois", &out, e))
 }
 
 /// With ten seconds to answer: a listener asks it for each connection, and a signature for each one made.
@@ -180,7 +208,7 @@ fn status_from(out: &str) -> Result<Status, String> {
     if let Some(problem) = serde_json::from_str::<State>(out).ok().and_then(|s| state_problem(&s.backend_state)) {
         return Err(problem);
     }
-    serde_json::from_str(out).map_err(|e| format!("tailscale status wasn't readable ({e})"))
+    serde_json::from_str(out).map_err(|e| unreadable("status", out, e))
 }
 
 /// None while Tailscale is up (or too old to say); else what to do.
@@ -264,6 +292,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn tailscale_is_given_a_term_only_where_there_is_none() {
+        assert_eq!(term(None), Some("dumb"));
+        assert_eq!(term(Some("".into())), Some("dumb"));
+        assert_eq!(term(Some("xterm-256color".into())), None);
+    }
+
+    /// What Tailscale.app's binary printed, started as the GUI from an app (seen with 1.104.4): said as it is.
+    #[test]
+    fn what_tailscale_printed_instead_of_json_is_said() {
+        let gui = "The Tailscale GUI failed to start: The operation couldn’t be completed. (Tailscale.CLIError error 3.)\n";
+        let why = status_from(gui).err().unwrap();
+        assert!(why.contains("other than JSON") && why.contains("The Tailscale GUI failed to start"), "{why}");
+        assert!(status_from("").err().unwrap().contains("printed nothing"));
+        assert!(status_from(r#"{"Self": 3}"#).err().unwrap().contains("wasn't readable"));
+        let long = "x".repeat(1000);
+        assert!(status_from(&long).err().unwrap().len() < 300);
+    }
+
+    #[test]
     fn only_this_users_own_machines_that_are_online_are_asked() {
         let status = |me: &str| -> Status { serde_json::from_str(&format!(r#"{{"Self":{{"ID":"me","DNSName":"box.tail.ts.net.","TailscaleIPs":["100.64.0.1"],"UserID":7{me}}},"Peer":{{
             "a":{{"ID":"a","DNSName":"laptop.tail.ts.net.","TailscaleIPs":["100.64.0.2","fd7a::2"],"UserID":7,"Online":true}},
@@ -338,7 +385,7 @@ mod tests {
         let addressless = r#"{"BackendState":"Running","Self":{"ID":"n1","TailscaleIPs":["100.64.0.2"]},"Peer":{"k":{"ID":"n2","TailscaleIPs":null}}}"#;
         assert!(status_from(addressless).is_ok_and(|s| s.peers["k"].ips.is_empty()));
         assert!(status_from(alone).is_ok_and(|s| s.peers.is_empty() && s.this.ips.len() == 1));
-        assert!(status_from("not json").err().is_some_and(|e| e.contains("wasn't readable")));
+        assert!(status_from("not json").err().is_some_and(|e| e.contains("other than JSON: not json")));
     }
 
     #[test]

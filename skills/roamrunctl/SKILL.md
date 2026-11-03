@@ -248,6 +248,11 @@ believed the first time it is used — use it only if the user named it.
   `install <its name there> App.ipa --relay … [--launch] [--timeout <s>]` uploads the .ipa,
   checks the sha256, installs and waits; the token comes from `ROAMRUNCTL_TOKEN` or
   `--token-file`. An .ipa only.
+- `roamrunctl ota App.ipa --server <address>:<port> [--replace]` (0.12.0+) puts an Ad Hoc or
+  Enterprise .ipa on a Mac's OTA page, where anyone on its tailnet can install it, through
+  that Mac's OTA server (`roamrun mcp --http <port> --allow <who> --allow-ota`) — not a relay: roamrunctl refuses one.
+  Only when the user asked for that. Exit 0 means stored; the page shows it within about
+  30 s while the RoamRun app runs on that Mac. If it says another job's upload replaced its own, run it again later, once.
 - `roamrunctl launch <name> <bundle id>` — one already running is ended first.
 - `roamrunctl mcp` — for an agent's MCP config (the command `roamrunctl`, the argument
   `mcp`): `devices`, `look`, `tap`, `swipe`, `elements`, `type`, `paste`, `press`,

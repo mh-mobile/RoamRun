@@ -16,7 +16,7 @@
 
 <p align="center"><img src="docs/images/main.png" width="800" alt="RoamRun のメイン画面"></p>
 
-RoamRun は、macOS のメニューバーアプリです。Xcode のワイヤレスデバッグを、Tailscale などの mesh VPN 越しでも使えるようにします。`roamrun` コマンドも付いています。iPhone、iPad、Apple Vision Pro が Mac と別のネットワークにあっても、Xcode や `devicectl` からは手元のデバイスとして見えます。ビルド、インストール、起動、デバッグは、いつもどおりにできます。RoamRun では、このつながりを「ブリッジ」と呼びます。
+RoamRun は、macOS のメニューバーアプリです。Xcode のワイヤレスデバッグを、Tailscale などの mesh VPN 越しでも使えるようにします。`roamrun` コマンドも付いています。iPhone、iPad、Apple Vision Pro、Apple TV が Mac と別のネットワークにあっても、Xcode や `devicectl` からは手元のデバイスとして見えます。ビルド、インストール、起動、デバッグは、いつもどおりにできます。RoamRun では、このつながりを「ブリッジ」と呼びます。
 
 ほかに、次の 3 つのことができます。
 
@@ -52,7 +52,7 @@ flowchart LR
 ## 必要なもの
 
 - **Apple シリコンの Mac と、macOS 13 以降**。管理者アカウントも必要です。RoamRun は `log stream` で `remotepairingd` のログを読みます。macOS から管理者権限が必要だと返された場合は、その旨を表示して止まります。
-- **iOS 17.4 以降のデバイス**。RoamRun が中継するのは TCP だけです。iOS 17.0〜17.3 の QUIC トンネルには対応していません。iPad と Apple Vision Pro でも動かしています。以下の「デバイス」は、この 3 種類を指します。
+- **iOS 17.4 以降のデバイス**。RoamRun が中継するのは TCP だけです。iOS 17.0〜17.3 の QUIC トンネルには対応していません。iPad、Apple Vision Pro、Apple TV でも動かしています。以下の「デバイス」は、この 4 種類を指します。Apple Watch は、手元に実機がないため試していません。watchOS 用の Tailscale のアプリはないので、Apple Watch だけをブリッジできません。ペアの iPhone のブリッジを通して届くかどうかは、わかっていません。
 - **`devicectl` を含む Xcode**（Xcode 15 以降）。デバイスの iOS のバージョンに対応している必要があります。対応は [Apple の表](https://developer.apple.com/support/xcode/)で確かめられます。`roamrun logs` と `run --logs` は、Xcode 16 で入った `devicectl` の `--console` を使います。
 - **Tailscale**。デバイスのアドレスを手で入力する形なら、ほかの mesh VPN でも使えます。Mac とデバイスの両方で接続しておきます。
 - **この Mac と一度ペアリングしたデバイス**。デベロッパモードを有効にしておきます。ペアリングは、USB で行うか、Xcode 27 と iOS 27 なら同じ Wi-Fi 上で行えます（Device Hub › ＋ › Pair Nearby Device）。
@@ -242,11 +242,13 @@ roamrun elements iPhone                   # アクセシビリティが返す画
 
 **tailnet のほかのマシンにいるエージェントからも使えます**（0.11.0 以降）。同じツールを HTTP で提供するには、`roamrun mcp --http <ポート> --allow <who>` を動かします。`<who>` には `tag:<名前>` かログイン名を書きます。`--allow` は何回でも指定できます。`--token-file <ファイル>` を付けると、どのリクエストにも `Authorization: Bearer <ファイルのトークン>` を求めます。ファイルは自分だけが読めるもので、トークンは 32 文字以上です。この Mac 自身からの呼び出しは、トークンがあるときだけ受け付けます。Ctrl-C で止まります。この Mac の Tailscale の IPv4 アドレスでだけ待ち受け、エンドポイントは `http://<そのアドレス>:<ポート>/mcp` です。クラウドの環境にはふつう MagicDNS がないので、名前ではなくアドレスを渡してください。受け付けるのは、`tailscale whois` がそのタグを持つと答えたマシンと、そのユーザーのタグのないマシンです。リクエストの扱い、断る場合、デバイスごとの順番、ログは、`roamrunctl mcp --http` と同じです（[その決まり](docs/roamrunctl-reference.ja.md#http-で使う-mcp)）。違いは次のとおりです。コマンドラインでデバイスを指定するのではなく、RoamRun に保存したデバイスを提供し、アプリでスイッチがオンのデバイスだけを操作します。ここでの順番が来たあとに呼び出し元が切れたり取り消したりした呼び出しは、`roamrun mcp` と同じくアプリで取りやめます。デバイスのほかの利用者の後ろでアプリの順番を待っていれば始めず、動いている途中ならきりのよいところで止めます。アップロードは、実行ごとに作るフォルダではなく、RoamRun 自身のフォルダに置きます。`roamrun mcp` と同じく、RoamRun のアプリが動いている必要があります。見せるものと送るものは、間にあるものを通ります。クラウドのプロキシには、画像、入力や貼り付けた文字、アップロードしたもの、トークンが見えます。呼び出したのは、トークンを付けたこの Mac 自身と、ログイン名で許可した tailnet のタグのない Linux マシンからです。Linux マシンからは `scripts/mcp-http-check.py` を通し、アップロード、`install`、`launch` まで進めました。`--allow tag:ci` で起動したときは、そのマシンは 403 で断られました。2026-10-27 には、tailnet に入ったクラウドの Linux マシンからも呼びました。Grok Bot のコンピューターから mcp-remote を通し、iPhone Duo で look と tap を確かめました。クラウドのプロキシを通しての呼び出しと、数百 MB のアップロードは、まだ試していません。
 
-`--allow-install [--max-upload <MiB>]` を付けると、roamrunctl と同じように、`install` および `install_status` を提供します。呼び出し元は `PUT /upload` で .ipa を送り（既定では 1024 MiB まで）、返ってきた id と sha256 でインストールします。パスでは受け付けません。アップロードは 1 つだけ、送ってきたマシンがインストールするために置きます。アプリが始めなかったインストール（デバイスが設定されていない、スイッチがオフ、インストール中、デバイスにつながらない、アプリでの順番の前に呼び出し元が切れた）では、使われずに残ります。その .ipa のインストールを始めたとアプリが答えたとき、どの呼び出し元でも次のアップロードを始めたとき、使われないまま 30 分たったとき、Ctrl-C で止めたときに消えます。強制終了したサーバーが残したものは、1 日以上たってから消えます。RoamRun のアプリが動いている間か、アプリか `--allow-install` を付けたサーバーが起動したときです。`--allow-install` を付けなければ、どちらもありません。
+`--allow-install [--max-upload <MiB>]` を付けると、roamrunctl と同じように、`install` および `install_status` を提供します。呼び出し元は `PUT /upload` で .ipa を送り（既定では 1024 MiB まで）、返ってきた id と sha256 でインストールします。パスでは受け付けません。アップロードは 1 つだけ、送ってきたマシンがインストールするために置きます。アプリが始めなかったインストール（デバイスが設定されていない、スイッチがオフ、インストール中、デバイスにつながらない、アプリでの順番の前に呼び出し元が切れた）では、使われずに残ります。アップロードが消えるのは、次のときです。その .ipa のインストールを始めたとアプリが答えたとき、`ota` が保存したとき、どの呼び出し元でも次のアップロードを始めたとき、使われないまま 30 分たったとき、Ctrl-C で止めたときです。強制終了したサーバーが残したものは、1 日以上たってから消えます。消すのは、RoamRun のアプリが動いている間か、アプリが起動したときです。`--allow-install` か `--allow-ota` を付けたサーバーが起動したときにも消します。`--allow-install` も `--allow-ota` も付けなければ、どちらもありません。
+
+代わりに `--allow-ota` を付けると、OTA server になります。ツールは `ota` の 1 つだけで、`roamrun ota` がファイルを載せるのと同じように、アップロードを [OTA のページ](#ブリッジを使わずにインストールするota)に載せます。CI のジョブがビルドを公開するためのもので、デバイスは操作しません（[docs/ota.ja.md](docs/ota.ja.md#ci-のジョブから)）。2 つのフラグは、ポートを分けた 2 つのサーバーに付けます。
 
 **操作している間、デバイスでは画面共有のセッションが動きます**。`look` や操作のたびにセッションが始まり、RoamRun は最後の操作から約 5 秒間、そのセッションを保ちます。デバイスには、画面共有として表示されました（確認済み）。セッション中の音とマイクの様子は、一度の試行でアプリごとに記録してあります。音が鳴り続けたアプリもあれば、再生は続いても聞こえなくなったアプリ、再生の止まったアプリも 1 つありました。音声入力は何も拾いませんでした。詳しくは [docs/sound-while-looking.md](docs/sound-while-looking.md)（英語）にあります。
 
-デバイス操作は、特定のエージェントやコマンドだけに許可されるものではありません。スイッチがオンの間は、**この Mac で実行したどのプログラムでも、アプリを通じてデバイスを見て操作でき、アプリを入れて起動もできます**。ビルドスクリプト、パッケージのインストール処理、別のエージェントも含まれます。`look` には、画面に出ているものがすべて写ります。通知やメッセージも例外ではありません。デバイスをロックしても、操作は止まりません。ロック画面も見えて、操作できました（確認済み）。ただし、ロックの解除には、パスコードか Face ID が必要です。**HTTP の MCP サーバー（上で説明した `mcp --http`）が動いている間は、`--allow` で許可したマシンのどのプログラムでも、同じことができます**。許可したログイン名のタグのないマシンと、許可したタグのマシンのすべてが対象で、スイッチがオンのデバイスすべてを操作でき、`launch` も使えます。`--allow-install` を付けると、デバイス向けに署名されたどのアプリにも入れ替えられます。マシンのほかに確かめるのは、`--token-file` のトークンだけです。
+デバイス操作は、特定のエージェントやコマンドだけに許可されるものではありません。スイッチがオンの間は、**この Mac で実行したどのプログラムでも、アプリを通じてデバイスを見て操作でき、アプリを入れて起動もできます**。ビルドスクリプト、パッケージのインストール処理、別のエージェントも含まれます。`look` には、画面に出ているものがすべて写ります。通知やメッセージも例外ではありません。デバイスをロックしても、操作は止まりません。ロック画面も見えて、操作できました（確認済み）。ただし、ロックの解除には、パスコードか Face ID が必要です。**HTTP の MCP サーバー（上で説明した `mcp --http`）が動いている間は、`--allow` で許可したマシンのどのプログラムでも、同じことができます**。許可したログイン名のタグのないマシンと、許可したタグのマシンのすべてが対象で、スイッチがオンのデバイスすべてを操作でき、`launch` も使えます。`--allow-install` を付けると、デバイス向けに署名されたどのアプリにも入れ替えられます。OTA server（`--allow-ota`）はデバイスを操作しません。許可したマシンにできるのは、Ad Hoc か Enterprise のビルドを OTA のページに載せることで、載せたビルドは tailnet の誰でもインストールできます。マシンのほかに確かめるのは、`--token-file` のトークンだけです。
 
 - デバイスのページの Device control の横にあるスイッチで、すべてのプログラムからの操作をまとめてオフにできます。もう一度押すと、オンに戻ります。Set Up と Pair Again のあとは、スイッチがオンになっています。`roamrun key import <file>` と `roamrun pair control --with <Tailscale name>` のあとも同じです。自分の作業でデバイスを使っていないときは、オフにしてください。
 - `look` で保存したファイルは、本人だけが読めます。削除するまで残ります。
@@ -363,17 +365,21 @@ roamrun up iphone-15-pro
 
 `roamrun` と `roamrunctl` は互いに通信するので、同じバージョンにそろえてください。0.7.0 より前の `pair introduce` は、相手のマシンを `--mac` で指定していました。いまは、どちらのコマンドでも `--host` です。
 
-### Apple Vision Pro
+<a id="apple-vision-pro"></a>
 
-Apple Vision Pro のペアリングは、iPhone とは手順が違います。Vision Pro のほうが待っていて、Mac が Vision Pro を選びます。使うコマンドは、iPhone の場合と同じ 2 つです。
+### Apple Vision Pro と Apple TV
+
+Apple Vision Pro と Apple TV のペアリングは、iPhone とは手順が違います。デバイスのほうが待っていて、Mac がデバイスを選びます。使うコマンドは、iPhone の場合と同じ 2 つです。Apple TV には、tvOS 用の Tailscale のアプリを入れておきます。また、両方の Mac に RoamRun 0.12.0 以降が必要です。それより古い RoamRun は、iPhone、iPad、Apple Vision Pro のどれでもないとして Apple TV を断ります。
 
 ```sh
-# デバイスで。設定 › 一般 › Remote Devices を開いたままにする
+# デバイスで、次の画面を開いたままにする
+#   Apple Vision Pro: 設定 › 一般 › Remote Devices
+#   Apple TV: 設定 › リモコンとデバイス › リモコンアプリとデバイス
 # 離れた Mac で
 roamrun pair xcode --with home-mac            # home-mac は、デバイスのそばの Mac の Tailscale 上の名前
 # デバイスのそばの Mac で。デバイスは、デバイスのそばの Mac の RoamRun に保存しておく
 roamrun pair introduce --host cloud-mac --to vision-pro
-# 離れた Mac で。コマンドに案内が出たら、Device Hub › ＋ › Pair Nearby Device › Apple Vision Pro を開き、
+# 離れた Mac で。コマンドに案内が出たら、Device Hub › ＋ › Pair Nearby Device › Apple Vision Pro（または Apple TV）を開き、
 # デバイスを選んで Next を押し、デバイスに表示されたコードを入力する
 roamrun up vision-pro
 ```
@@ -381,10 +387,14 @@ roamrun up vision-pro
 - 離れた Mac のコマンドは、Device Hub でペアリングが済むと、自動で終了します。終了の判断には、Device Hub がシステムログに書く 1 行を使います。この行にはデバイスの名前が含まれません。そのため、コマンドが動いている間は、Device Hub でほかのデバイスをペアリングしないでください。コマンドは、Ctrl-C を押したときと、5 分たったときにも終了します。
 - デバイスのそばの Mac から、Tailscale がデバイスに IPv4 で直接つながっている必要があります。
 - コマンドが動いている間、離れた Mac は、自分のネットワーク上にデバイスを公開します。中継するのは、離れた Mac 自身からデバイスへの接続だけです。コマンドが終了するまでに離れた Mac がデバイスに接続できていれば、デバイスが保存されます。
-- `--host` に指定できるのは Mac だけです。待っている状態のデバイスに対して、`pair introduce` は Mac 以外の `--host` を拒否します。Introducer アプリと `roamrunctl` は、Vision Pro の仲介に対応していません。
+- `--host` に指定できるのは Mac だけです。待っている状態のデバイスに対して、`pair introduce` は Mac 以外の `--host` を拒否します。Introducer アプリと `roamrunctl` は、Vision Pro と Apple TV の仲介に対応していません。
 - ペアリングのあと、Device Hub にデバイスが出てこない場合は、「Available」と「Unavailable」の見出しが折りたたまれていないか確かめてください。見出しにポインタを合わせると矢印が出るので、それをクリックします。
 
-2026-10-13 に、Apple Vision Pro 1 台と、仮想マシンの離れた Mac で、上のコマンドを実行しました。ペアリングができ、離れた Mac のコマンドが自動で終了し、離れた Mac でブリッジが Ready になりました。ブレークポイント、自宅の外にあるデバイス、Apple TV は試していません。
+2026-10-13 に、Apple Vision Pro 1 台と、仮想マシンの離れた Mac で、上のコマンドを実行しました。ペアリングができ、離れた Mac のコマンドが自動で終了し、離れた Mac でブリッジが Ready になりました。
+
+2026-11-01 には、tvOS 27.2 の Apple TV 4K（第 2 世代）で同じ手順を実行しました。離れた Mac は、Apple TV のそばの Mac の中で動く仮想マシンです。仮想マシンは、そばの Mac とは別のネットワークにあります。ペアリングができ、離れた Mac のコマンドが自動で終了し、ブリッジが Ready になりました。さらに、離れた Mac の Xcode 27.0 からアプリを実行し、ブレークポイントで止まりました。Apple TV の画面の名前は、日本語の表示で確かめたものです。
+
+試していないのは、自宅の外にある離れた Mac、自宅の外にあるデバイス、Apple TV でのデバイスの操作（look や tap）です。
 
 ## ブリッジを使わずにインストールする（OTA）
 
@@ -520,6 +530,13 @@ RoamRun は、mh-mobile の指示のもとで、Claude Code（Claude Opus 5.5）
 - Kevin Paterson, ["How to remotely iterate & deploy your sideloaded iOS-apps over tailnet"](https://dev.to/kvnpt/how-to-remotely-iterate-deploy-your-sideloaded-ios-apps-over-tailnet-jak)
 
 デバイス操作は、[idevice](https://github.com/jkcoxson/idevice)（Jackson Coxson）を使っています。Mac がデバイスと通信するためのプロトコルを、Rust で実装したものです。RoamRun は、フォークの特定のコミットからビルドしています。idevice と、ほかのクレートのライセンスは、[THIRD-PARTY-LICENSES.txt](THIRD-PARTY-LICENSES.txt) にあります。同じファイルが、アプリにも入っています。
+
+## 記事
+
+[別の Wi-Fi にいる iPhone を Xcode からそのまま使えるアプリ「RoamRun」を作った](https://zenn.dev/mh/articles/4380fe7546a237)
+（Zenn、2026-10-29）
+
+RoamRun を作った理由と使い方を、0.11.0 の時点で書いた記事です。
 
 ## 関連プロジェクト
 

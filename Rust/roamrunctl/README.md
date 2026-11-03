@@ -292,6 +292,11 @@ roamrunctl mcp --http 9090 --allow tag:codex phone
 - What is shown and sent passes through whatever lies between: a cloud's proxy sees the
   images, the text typed or pasted, what is uploaded, and the token.
 
+A Mac that runs RoamRun can also take a build for its OTA page, where testers install it from:
+`roamrunctl ota App.ipa --server <the Mac's address>:9091` (0.12.0+), through the Mac's OTA
+server, `roamrun mcp --http <port> --allow <who> --allow-ota`. That isn't a relay, and a relay can't do it:
+[docs/ota.md](../../docs/ota.md#from-a-ci-job).
+
 Installing and launching from a GitHub Actions job, with roamrunctl on the runner or through
 `mcp --http` on a machine beside the device, is in [docs/ci.md](../../docs/ci.md), and the
 GitHub Action [mh-mobile/roamrun-action](https://github.com/mh-mobile/roamrun-action) does it in one step.

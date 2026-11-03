@@ -674,3 +674,61 @@ import ImageIO
     let local = server(uploads: false)
     #expect(try said(local, "install_status", #"{"device":"iPhone","install":"cd34"}"#).contains("install-0A1B"))
 }
+
+/// Over HTTP with `--allow-ota`, an OTA server: `ota` alone, asking for no device; nothing else is done, not even asked.
+@Test func otaIsOfferedWithItsOwnFlagAndTakesNoDevice() throws {
+    var given: (String, String, Bool)?
+    var asked = false
+    let server = DeviceMCP(profiles: {
+        [profile("iPhone")]
+    }, looks: FileManager.default.temporaryDirectory, installsFromPaths: false, publish: { upload, sha256, replace in
+        given = (upload, sha256, replace)
+        return "Stored App 1.0."
+    }) { _ in
+        asked = true
+        return .init(ok: true)
+    }
+    func tools(_ server: DeviceMCP) throws -> [[String: Any]] {
+        let listed = try #require(server.handle(Data(#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#.utf8)))
+        return try #require(
+            ((try JSONSerialization.jsonObject(with: listed) as? [String: Any])?["result"] as? [String: Any])?["tools"]
+                as? [[String: Any]]
+        )
+    }
+    let listed = try tools(server)
+    #expect(listed.compactMap {
+        $0["name"] as? String
+    } == ["ota"])
+    #expect((listed.first?["inputSchema"] as? [String: Any])?["required"] as? [String] == ["upload", "sha256"])
+    let hello = try #require(server.handle(Data(#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}"#.utf8)))
+    #expect(String(decoding: hello, as: UTF8.self).contains("operates no device"))
+    for (name, arguments) in [
+        ("devices", "{}"),
+        ("look", #"{"device":"iPhone"}"#),
+        ("launch", #"{"device":"iPhone","bundle":"a.b"}"#)
+    ] {
+        let refused = try #require(server.handle(Data(
+            #"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"\#(name)","arguments":\#(arguments)}}"#
+                .utf8
+        )))
+        #expect(String(decoding: refused, as: UTF8.self).contains("no such tool: \(name)"))
+    }
+    #expect(!asked)
+    let answer = try #require(server.handle(Data(
+        #"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ota","arguments":{"upload":"u1","sha256":"ab","replace":true}}}"#
+            .utf8
+    )))
+    #expect(String(decoding: answer, as: UTF8.self).contains("Stored App 1.0."))
+    #expect(given?.0 == "u1" && given?.1 == "ab" && given?.2 == true)
+
+    let installs = DeviceMCP(profiles: {
+        []
+    }, looks: FileManager.default.temporaryDirectory, installsFromPaths: false, claimUpload: { _, _ in
+        ("/x", { _ in })
+    }) { _ in
+        .init(ok: true)
+    }
+    #expect(try !tools(installs).contains {
+        $0["name"] as? String == "ota"
+    })
+}

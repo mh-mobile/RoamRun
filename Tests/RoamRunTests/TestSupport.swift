@@ -480,3 +480,22 @@ func until(_ what: () -> Bool) -> Bool {
     } // 10 s: other tests may hold the threads meanwhile
     return what()
 }
+
+/// A real archive, as far as `OTA.read` looks: Payload/<app>.app/Info.plist, zipped.
+func zippedIPA(_ root: URL, bundleID: String) throws -> String {
+    let work = root.appendingPathComponent(UUID().uuidString)
+    let app = work.appendingPathComponent("Payload/App.app")
+    try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+    let info: [String: Any] = ["CFBundleIdentifier": bundleID, "CFBundleShortVersionString": "1.0",
+                               "CFBundleVersion": "1"]
+    try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+        .write(to: app.appendingPathComponent("Info.plist"))
+    let zip = Process()
+    zip.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
+    zip.arguments = ["-qr", "app.ipa", "Payload"]
+    zip.currentDirectoryURL = work
+    try zip.run()
+    zip.waitUntilExit()
+    #expect(zip.terminationStatus == 0)
+    return work.appendingPathComponent("app.ipa").path
+}

@@ -21,6 +21,26 @@ import Testing
     #expect(args(["bridge100": "198.19.249.3"]) == record) // no interface holds it: as before
 }
 
+/// An Apple TV waits as an Apple Vision Pro does, in the same record (as tvOS 27.2 announced it):
+/// its line reads back, and its kind is told by the model it announces or by devicectl's deviceType.
+@Test func anAppleTVWaitsAsAnAppleVisionProDoes() {
+    let txt = [
+        "identifier": "0E8C1D52-3A44-4F0B-9D27-6B1A2F3C4D5E",
+        "authTag": "Xk3pQ9aT",
+        "model": "AppleTV11,1",
+        "name": "ホームシアター (4)",
+        "ver": "26",
+        "minVer": "17"
+    ]
+    let line = Introduction.line(Introduction.Pairable(instance: "ホームシアター (4)", port: 54796, txt: txt))
+    #expect((try? Introduction.pairable(from: line).get())?.txt == txt)
+    #expect(Introduction.waiting(line: line)?.name == "Apple TV")
+    #expect(Introduction.waiting(deviceType: "appleTV") == Introduction.waiting(model: "AppleTV11,1"))
+    #expect(Introduction.waiting(model: "RealityDevice14,1")?.deviceType == "realityDevice")
+    #expect(Introduction.waiting(model: "iPhone19,4") == nil && Introduction.waiting(deviceType: "iPhone") == nil)
+    #expect(Introduction.waiting(deviceType: nil) == nil)
+}
+
 /// The line for a device that a Mac picks: read back as written, not taken for the other lines
 /// (nor they for it), and nothing in it that isn't plainly a value of its kind.
 @Test func aPairableDevicesLineIsReadOnlyAsWhatItIs() {

@@ -28,7 +28,9 @@ import Testing
     #expect(p.symbol == "iphone")
     p.deviceType = "iPad"
     #expect(p.symbol == "ipad")
-    p.deviceType = "appleTV" // unknown kinds fall back
+    p.deviceType = "appleTV"
+    #expect(p.symbol == "appletv")
+    p.deviceType = "appleWatch" // unknown kinds fall back
     #expect(p.symbol == "iphone")
 }
 

@@ -76,10 +76,12 @@ enum CLI {
       press <name> <button>          home, lock, volume-up or volume-down
       mcp                            The same as MCP tools, over stdin/stdout (for an agent's MCP config)
       mcp --http <port> --allow <tag:name or login> [--allow …] [--token-file <file>]
-          [--allow-install [--max-upload <MiB>]]
+          [--allow-install | --allow-ota] [--max-upload <MiB>]
                                      The same over HTTP, on this Mac's Tailscale address, for the
                                      machines Tailscale says are allowed; until Ctrl-C. With
-                                     --allow-install, install of an .ipa sent with PUT /upload
+                                     --allow-install, install of an .ipa sent with PUT /upload.
+                                     --allow-ota makes an OTA server instead: its one tool, ota,
+                                     puts such an .ipa on the OTA page; it operates no device
     Each look serves one action (type and paste may still go by it): look, act, look again.
     With --look, refused once another look (anyone's), a button, elements or an action without
     --look came since, or after a minute: what an agent sharing the device gives.
@@ -133,8 +135,8 @@ enum CLI {
                                      naming this Mac) and hand it the device afterwards. --host may also
                                      name a machine that waits with `pair control --with` (RoamRun's, or
                                      roamrunctl's on Linux or Windows): it then pairs for device control.
-                                     An Apple Vision Pro waits to be picked instead (Settings › General ›
-                                     Remote Devices, open): without <offer>, what it announces goes to
+                                     An Apple Vision Pro or Apple TV waits to be picked instead (the
+                                     screen where it waits, open): without <offer>, what it announces goes to
                                      that Mac, which announces it there for its own Device Hub to pick
       up <name> [-v] [-d]            Bridge a device until Ctrl-C (-v: activity log; -d: run in the background —
                                      waits up to 60s for Ready or On this Wi-Fi (exit 0); otherwise exits 1
@@ -181,7 +183,7 @@ enum CLI {
     Exit codes: 0 ok/ready, 1 not ready or a check failed, 2 usage error.
     Name a device when a script needs the answer to be about that one.
 
-    Add devices (iPhone, iPad, Vision Pro) in the RoamRun app first (one-time, with the device on this
+    Add devices (iPhone, iPad, Vision Pro, Apple TV) in the RoamRun app first (one-time, with the device on this
     Wi-Fi or USB).
     """
 
@@ -454,6 +456,7 @@ enum CLI {
                         allow: parsed.lists["--allow"] ?? [],
                         tokenFile: parsed.values["--token-file"],
                         allowInstall: parsed.flags.contains("--allow-install"),
+                        allowOTA: parsed.flags.contains("--allow-ota"),
                         maxUpload: parsed.values["--max-upload"]
                     )
                     MCPHTTP.note(note + "\n")
@@ -466,10 +469,11 @@ enum CLI {
                 }
             case "mcp":
                 guard parsed.lists["--allow"] == nil, parsed.values["--token-file"] == nil,
-                      !parsed.flags.contains("--allow-install"), parsed.values["--max-upload"] == nil
+                      !parsed.flags.contains("--allow-install"), !parsed.flags.contains("--allow-ota"),
+                      parsed.values["--max-upload"] == nil
                 else {
                     fail(
-                        "--allow, --token-file, --allow-install and --max-upload go with --http: roamrun mcp --http <port> --allow <who>"
+                        "--allow, --token-file, --allow-install, --allow-ota and --max-upload go with --http: roamrun mcp --http <port> --allow <who>"
                     )
                 }
                 // Off the main thread: it reads stdin until the client closes it.
@@ -547,7 +551,10 @@ enum CLI {
         all["paste"] = (["--look="], 0 ... 2)
         all["press"] = ([], 0 ... 2)
         all["elements"] = ([], 0 ... 2)
-        all["mcp"] = (["--http=", "--allow=", "--token-file=", "--allow-install", "--max-upload="], 0 ... 0)
+        all["mcp"] = (
+            ["--http=", "--allow=", "--token-file=", "--allow-install", "--allow-ota", "--max-upload="],
+            0 ... 0
+        )
         all["key"] = (["--as="], 0 ... 3)
         return all
     }()

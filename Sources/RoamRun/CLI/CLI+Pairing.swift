@@ -76,9 +76,9 @@ extension CLI {
             )
         }
         // What Tailscale's client on it says it is: turns a wrong name away, and is no proof of what it is.
-        guard ["ios", "ipados", "visionos"].contains(found.os.lowercased()) else {
+        guard ["ios", "ipados", "visionos", "tvos"].contains(found.os.lowercased()) else {
             throw Refusal(
-                "\(found.dnsName) is a \(found.os.isEmpty ? "device of another kind" : found.os) device, not an iPhone, iPad or Apple Vision Pro: --peer <Tailscale name> names the right one"
+                "\(found.dnsName) is a \(found.os.isEmpty ? "device of another kind" : found.os) device, not an iPhone, iPad, Apple Vision Pro or Apple TV: --peer <Tailscale name> names the right one"
             )
         }
         return (device, found)
@@ -691,7 +691,7 @@ extension CLI {
         Waiting for \(other.dnsName), 10 minutes at most; only \(itself ? "it" : other.os.lowercased() == "macos" ? "that Mac" : "that machine") is answered.
           There\(itself ? ":  the RoamRun Introducer app, far Mac “\(me)”, Introduce" : " (on the device's Wi‑Fi):  \(introduce)\(without)")
           Here:  Xcode's Device Hub: + › Pair Nearby Device, and leave “Waiting to pair.” open (before or after)
-                 (for an Apple Vision Pro, with Remote Devices open on it, nothing is pressed yet: this says when)
+                 (for an Apple Vision Pro or an Apple TV, waiting to be picked, nothing is pressed yet: this says when)
         """)
         // Held by the firewall, a connection looks made to the other Mac and never arrives here.
         if Proc.run("/usr/libexec/ApplicationFirewall/socketfilterfw", ["--getglobalstate"], timeout: 5)
@@ -893,10 +893,13 @@ extension CLI {
 
     /// What `profile` announces while it waits to be picked by a Mac, as a line; nil for a device that
     /// picks the Mac itself (an iPhone, an iPad). Which of the devices waiting on this Wi‑Fi it is, is told
-    /// by its address here, as Tailscale has it. Stops where it is known to be an Apple Vision Pro and isn't found waiting.
+    /// by its address here, as Tailscale has it. Stops where it is known to wait (an Apple Vision Pro, an Apple TV)
+    /// and isn't found waiting.
     private static func pairable(_ profile: DeviceProfile) async -> String? {
         let known = profile.deviceType
-        guard known == nil || known == "realityDevice" else { return nil }
+        let kind = Introduction.waiting(deviceType: known)
+        guard known == nil || kind != nil else { return nil }
+        let opens = kind?.settings ?? Introduction.waitingSettings
         let capture = BonjourCapture()
         capture.start(serviceType: Introduction.pairableService)
         try? await Task.sleep(for: .seconds(3))
@@ -904,7 +907,7 @@ extension CLI {
         let seen = capture.services
             .values
             .filter {
-                ($0.txt["model"] ?? "").hasPrefix("RealityDevice") && Introduction.shows($0.instanceName)
+                Introduction.waiting(model: $0.txt["model"] ?? "") != nil && Introduction.shows($0.instanceName)
             }
             .sorted {
                 $0.instanceName < $1.instanceName
@@ -915,7 +918,7 @@ extension CLI {
                 return nil
             }
             stop(
-                "\(profile.displayName) isn't waiting to be paired. On it: Settings › General › Remote Devices, left open; then run this again"
+                "\(profile.displayName) isn't waiting to be paired. On it: \(opens), left open; then run this again"
             )
         }
         let ip = profile.providerIP
@@ -946,7 +949,7 @@ extension CLI {
                 return nil
             }
             stop(
-                "\(profile.displayName) isn't waiting to be paired (\(seen.count == 1 ? "another device is" : "\(seen.count) other devices are"): \(seen.map(\.instanceName).joined(separator: ", "))). On it: Settings › General › Remote Devices, left open; then run this again"
+                "\(profile.displayName) isn't waiting to be paired (\(seen.count == 1 ? "another device is" : "\(seen.count) other devices are"): \(seen.map(\.instanceName).joined(separator: ", "))). On it: \(opens), left open; then run this again"
             )
         }
         guard let read = Introduction.pairable(its) else {
@@ -1023,7 +1026,7 @@ extension CLI {
             case .announced(let interface, _, _):
                 note("""
                 Announced on \(interface) (seen by that network); only this Mac's connections are carried to \(device.dnsName).
-                  Here, in Device Hub: + › Pair Nearby Device › Apple Vision Pro, pick “\(shown)”, Next, and type the code the device shows.
+                  Here, in Device Hub: + › Pair Nearby Device › \(Introduction.waiting(model: read.txt["model"] ?? "")?.name ?? "the device's kind"), pick “\(shown)”, Next, and type the code the device shows.
                   This ends once Device Hub has paired (if it doesn't: Ctrl-C when Device Hub says it is paired), or after 5 minutes;
                   the device is saved if this Mac connected to it.
                 """)
@@ -1107,6 +1110,8 @@ extension CLI {
             .map(String.init) ?? "<this Mac's Tailscale name>"
         let client = TailscaleClient.fromSettings()
         let waits = await pairable(profile)
+        let kind = waits.flatMap(Introduction.waiting(line:))
+        let opens = kind?.settings ?? Introduction.waitingSettings
         if waits != nil, far.os.lowercased() != "macos" {
             stop(
                 "\(profile.displayName) waits to be picked by a Mac (Device Hub pairs it), and \(far.dnsName) isn't one: --host <a Mac>"
@@ -1131,7 +1136,7 @@ extension CLI {
                         +
                         (waits == nil && profile.deviceType == nil && far.os
                             .lowercased() == "macos" ?
-                            "\nIf \(profile.displayName) is an Apple Vision Pro: open Settings › General › Remote Devices on it, and run this again." :
+                            "\nIf \(profile.displayName) waits to be picked by a Mac: open \(Introduction.waitingSettings), and run this again." :
                             ""))
                 case .connected: note(waits == nil ? "\(far.dnsName) answered; waiting for its offer." :
                         "\(far.dnsName) answered.")
@@ -1140,12 +1145,15 @@ extension CLI {
         )
         if waits != nil {
             note(
-                "\(profile.displayName) waits to be picked by a Mac: what it announces goes to \(far.dnsName), which announces it there. Keep Remote Devices open on it; the code it shows is typed in Device Hub on \(far.dnsName)."
+                "\(profile.displayName) waits to be picked by a Mac: what it announces goes to \(far.dnsName), which announces it there. Keep \(opens) open on it; the code it shows is typed in Device Hub on \(far.dnsName)."
             )
-            // Read again once that Mac answers: the device changes its port now and then.
-            switch await Task.detached(operation: {
+            // Read again once that Mac answers: the device changes its port now and then. Read as the kind
+            // it was found to be, so that not finding it again says why.
+            var found = profile
+            found.deviceType = kind?.deviceType ?? profile.deviceType
+            switch await Task.detached(operation: { [found] in
                 await home.hand(pairable: {
-                    await pairable(profile)
+                    await pairable(found)
                 })
             })
             .value {
@@ -1158,7 +1166,7 @@ extension CLI {
                     "\(far.dnsName) says it connected to \(profile.displayName), but didn't save it: what it printed says why. By hand: `roamrun devices export \(profile.displayName)` here, `roamrun devices add <line>` there"
                 )
             case .notWaiting: stop(
-                    "\(profile.displayName) stopped waiting before \(far.dnsName) answered: Settings › General › Remote Devices on it, left open; then run this again"
+                    "\(profile.displayName) stopped waiting before \(far.dnsName) answered: \(opens) on it, left open; then run this again"
                 )
             case .ended(.unreachable): stop(
                     "\(far.dnsName) couldn't reach \(profile.displayName) on the port it waits on (Tailscale may not reach the device from there): what it printed says more"
@@ -1167,7 +1175,7 @@ extension CLI {
                     "\(far.dnsName) didn't take what \(profile.displayName) announces, or the device: what it printed says why"
                 )
             case .ended(.deadline): stop(
-                    "\(far.dnsName) didn't connect to \(profile.displayName) in 5 minutes: there, Device Hub: + › Pair Nearby Device › Apple Vision Pro; run both commands again"
+                    "\(far.dnsName) didn't connect to \(profile.displayName) in 5 minutes: there, Device Hub: + › Pair Nearby Device › \(kind?.name ?? "the device's kind"); run both commands again"
                 )
             case .ended(.failed): stop(
                     "\(far.dnsName) doesn't stand in for a device as it runs now: there, `roamrun pair xcode --with \(me)` (not `pair control`), and what it printed says more"

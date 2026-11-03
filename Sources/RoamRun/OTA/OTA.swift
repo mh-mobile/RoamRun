@@ -131,8 +131,56 @@ enum OTA {
 
     // MARK: - Reading an archive
 
+    /// One copy of the archive to read, check, store and take the icon from. Read
+    /// from `path` each time, a build script exporting to it meanwhile could have
+    /// the page describe one archive and serve another. On APFS the copy is a clone.
+    static func withCopy<T>(of path: String, shown: String? = nil, _ body: (String) throws -> T) throws -> T {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-ota-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        do { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
+        catch { throw Problem.failed("couldn't make \(dir.path): \(error.localizedDescription)") }
+        let copy = dir.appendingPathComponent("app.ipa")
+        do { try FileManager.default.copyItem(at: URL(fileURLWithPath: path), to: copy) }
+        catch { throw Problem.failed("couldn't copy \(shown ?? path) to read it: \(error.localizedDescription)") }
+        return try body(copy.path)
+    }
+
+    /// A build stored for the page, and what to say of it.
+    struct Published {
+        let build: Build
+        let coverage: Coverage
+        /// Older builds under its label `replacing` left on the page; nil when their folder couldn't be read.
+        let notReplaced: Int?
+        /// `replacing` asked for and not done: nothing of yours can install the new build.
+        let replaceIgnored: Bool
+    }
+
+    /// `roamrun ota` and the MCP tool `ota`: the .ipa at `path` read, checked and stored from one copy of it, named
+    /// `shown` in what goes wrong.
+    static func publish(ipa path: String, shown: String, devices: [Device], replacing: Bool,
+                        profile: (String) -> [String: Any]? = CLI.profilePlist(of:),
+                        in root: URL? = nil) throws -> Published
+    {
+        try withCopy(of: path, shown: shown) { ipa in
+            var build = try read(ipa: ipa, shown: shown)
+            let checked = try check(profile(ipa), against: devices, path: shown)
+            build.expires = checked.expires
+            // Not while nothing of yours can take it: replacing would remove the build people are running to make room
+            // for one they can't install, and there would be no way back to it.
+            var noneOfYours = false
+            if case .noneOfYours = checked.coverage {
+                noneOfYours = true
+            }
+            let added = try add(ipa: ipa, build, replacing: replacing && !noneOfYours, in: root)
+            return Published(build: build, coverage: checked.coverage, notReplaced: added.notReplaced,
+                             replaceIgnored: replacing && noneOfYours)
+        }
+    }
+
     /// What the .ipa says about itself, or why it can't be served.
-    static func read(ipa path: String) throws -> Build {
+    /// `shown`: how to name it, when `path` is a copy.
+    static func read(ipa path: String, shown: String? = nil) throws -> Build {
+        let name = shown ?? path
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("roamrun-ota-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: dir) }
         do { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
@@ -142,17 +190,17 @@ enum OTA {
         // 1 is "warnings, but it worked" and 11 is "nothing matched", which the
         // guard below reports better. Anything above that is a broken archive.
         if unzip.status < 0 || (unzip.status > 1 && unzip.status != 11) {
-            throw Problem
-                .failed("couldn't unpack \(path): \(unzip.err.trimmingCharacters(in: .whitespacesAndNewlines))")
+            let why = unzip.err.replacingOccurrences(of: path, with: name)
+            throw Problem.failed("couldn't unpack \(name): \(why.trimmingCharacters(in: .whitespacesAndNewlines))")
         }
         let payload = dir.appendingPathComponent("Payload")
         guard let app = appBundle(in: payload),
               let plist = inside(payload.appendingPathComponent(app).appendingPathComponent("Info.plist"), dir),
               let info = NSDictionary(contentsOf: plist) as? [String: Any]
-        else { throw Problem.notAnArchive(path) }
+        else { throw Problem.notAnArchive(name) }
 
-        guard let bundleID = info["CFBundleIdentifier"] as? String else { throw Problem.unreadable(path) }
-        guard isPlainName(bundleID) else { throw Problem.oddBundleID(path: path, id: bundleID) }
+        guard let bundleID = info["CFBundleIdentifier"] as? String else { throw Problem.unreadable(name) }
+        guard isPlainName(bundleID) else { throw Problem.oddBundleID(path: name, id: bundleID) }
         let size = ((try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int64) ?? 0
 
         let version = (info["CFBundleShortVersionString"] as? String) ?? "0"

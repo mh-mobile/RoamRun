@@ -787,6 +787,42 @@ private func sized(_ path: String, _ b: OTA.Build) -> OTA.Build {
     #expect(OTA.builds(of: "com.example.App", in: root)?.count == 2)
 }
 
+@Test func anArchiveRewrittenWhileOtaRunsIsntMixedWithTheOneItRead() throws {
+    let root = otaScratch()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let given = try zippedIPA(root.appendingPathComponent("src"), bundleID: "com.example.App")
+    let first = try Data(contentsOf: URL(fileURLWithPath: given))
+    let later = try zippedIPA(root.appendingPathComponent("src"), bundleID: "com.example.Other")
+    var copy = ""
+    let added = try OTA.withCopy(of: given) { ipa in
+        copy = ipa
+        let build = try OTA.read(ipa: ipa, shown: given)
+        // A build script exporting to the same path between the checks and the store.
+        try FileManager.default.removeItem(atPath: given)
+        try FileManager.default.copyItem(atPath: later, toPath: given)
+        return try OTA.add(ipa: ipa, build, in: root)
+    }
+    #expect(added.dir.deletingLastPathComponent().lastPathComponent == "com.example.App")
+    #expect(try Data(contentsOf: added.dir.appendingPathComponent("app.ipa")) == first)
+    #expect(copy != given && !FileManager.default.fileExists(atPath: copy))
+}
+
+@Test func aBrokenArchiveIsNamedByThePathGivenNotByItsCopy() throws {
+    let root = otaScratch()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let given = try fakeIPA(root.appendingPathComponent("src"), "not a zip")
+    var copy = ""
+    let error = #expect(throws: OTA.Problem.self) {
+        try OTA.withCopy(of: given) { ipa in
+            copy = ipa
+            return try OTA.read(ipa: ipa, shown: given)
+        }
+    }
+    let said = error?.localizedDescription ?? ""
+    #expect(said.contains(given) && !said.contains(copy))
+    #expect(!copy.isEmpty && !FileManager.default.fileExists(atPath: copy))
+}
+
 @Test func nothingIsKeptBeyondTheLimitEvenWhenTheNewBuildSortsLast() throws {
     let root = otaScratch()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -1329,4 +1365,45 @@ func publishStepsAsideWhenTurnedOff(_ c: PublishCase) async {
         #expect(step == .ran(after: mounted(41443, mine), said: ""))
         #expect(fake.offs.isEmpty && fake.record == ["41443 \(mine)"])
     }
+}
+
+/// An Ad Hoc profile naming `udids`, as `security cms -D` reads one.
+private func adHoc(_ udids: [String]) -> [String: Any] {
+    ["ProvisionedDevices": udids, "Entitlements": ["get-task-allow": false],
+     "ExpirationDate": Date().addingTimeInterval(86400)]
+}
+
+/// What `roamrun ota` and the MCP tool both do: read, checked against the devices, and stored, from one copy.
+@Test func aPublishedBuildIsStoredAndSaysWhichDevicesTakeIt() throws {
+    let root = otaScratch()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let given = try zippedIPA(root.appendingPathComponent("src"), bundleID: "com.example.App")
+    let store = root.appendingPathComponent("store")
+    let devices = [OTA.Device(name: "iPhone", udid: "00008130-AAAA"), OTA.Device(name: "iPad", udid: nil)]
+    let published = try OTA.publish(ipa: given, shown: "MyApp.ipa", devices: devices, replacing: false,
+                                    profile: { _ in
+                                        adHoc(["00008130-aaaa"])
+                                    }, in: store)
+    #expect(published.coverage == .devices(covers: ["iPhone"], unchecked: ["iPad"]))
+    #expect(OTA.builds(of: "com.example.App", in: store)?.count == 1)
+    let said = CLI.otaSaid(published)
+    #expect(said.first?.hasPrefix("Stored ") == true && said.contains("  Installs on: iPhone."))
+
+    // Nothing of yours takes it: stored, and replacing is not done.
+    let none = try OTA.publish(ipa: given, shown: "MyApp.ipa", devices: devices, replacing: true,
+                               profile: { _ in
+                                   adHoc(["other"])
+                               }, in: store)
+    #expect(none.replaceIgnored)
+    #expect(CLI.otaSaid(none, replace: "replace").contains {
+        $0.contains("replace was ignored") && !$0.contains("--")
+    })
+    // Development signing is refused, and named as given.
+    let error = #expect(throws: OTA.Problem.self) {
+        try OTA.publish(ipa: given, shown: "MyApp.ipa", devices: devices, replacing: false,
+                        profile: { _ in
+                            ["ProvisionedDevices": ["x"], "Entitlements": ["get-task-allow": true]]
+                        }, in: store)
+    }
+    #expect(error?.localizedDescription.contains("MyApp.ipa") == true)
 }
