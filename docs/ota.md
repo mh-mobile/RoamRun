@@ -114,6 +114,9 @@ In Bitrise, [the RoamRun Step](https://github.com/mh-mobile/bitrise-step-roamrun
       - ota_server_token: $OTA_TOKEN
 ```
 
+In Xcode Cloud, a `ci_post_xcodebuild.sh` downloads roamrunctl and runs it with Tailscale in
+userspace: [xcode-cloud.md](xcode-cloud.md#to-the-ota-page-0120).
+
 - **Stored is not yet on the page.** A step that succeeds means the build was stored. The page
   shows it within about 30 seconds while the RoamRun app runs; the answer says when the page isn't
   up, and why.
@@ -138,7 +141,9 @@ before anything was sent. On 2026-11-03 (UTC), from GitHub Actions (`ubuntu-24.0
 signed auth key as `tag:ci`) through roamrun-action's `ota-server` and the roamrunctl 0.12.0 it
 downloads: a 1 MB Ad Hoc build, first taken off the page, was stored, and the page fetched from the
 runner listed it. The same day, the Bitrise Step's `ota_server` with the Bitrise CLI on this Mac
-(the Step's own Tailscale in userspace) did the same. Not yet on bitrise.io, nor from Windows.
+(the Step's own Tailscale in userspace) did the same, and so did an Xcode Cloud build with its Ad Hoc
+export ([xcode-cloud.md](xcode-cloud.md#to-the-ota-page-0120)). Not yet on bitrise.io, nor from
+Windows.
 
 ## The port, and Funnel
 

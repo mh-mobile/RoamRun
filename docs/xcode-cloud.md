@@ -8,7 +8,8 @@ tailnet and calls the relay's `roamrunctl mcp --http`. It runs Tailscale without
 so it reaches the tailnet through Tailscale's SOCKS5 proxy; roamrunctl 0.9.0 has no way to go
 through a proxy, so of [the GitHub Actions guide](ci.md)'s two ways this is the relay's, with
 `curl` calling the relay. From 0.10.0, roamrunctl goes through an HTTP proxy, and both ways work:
-[With roamrunctl itself](#with-roamrunctl-itself-0100).
+[With roamrunctl itself](#with-roamrunctl-itself-0100). From 0.12.0, it can also put the build on a
+Mac's OTA page instead: [To the OTA page](#to-the-ota-page-0120).
 
 Whoever holds the auth key can join your tailnet as `tag:ci` and reach whatever your policy lets
 that tag reach (with a policy that allows everything, every machine: see
@@ -51,8 +52,8 @@ uses it), **Ephemeral** (the build's machine leaves the tailnet when it logs out
 (set up as in [the GitHub Actions guide](ci.md#tailscale-a-tag-and-an-oauth-client)), and a short
 expiry. An OAuth client, which GitHub Actions uses, wasn't tried here. On a tailnet with Tailnet
 Lock, sign the key first and give the signed one, which passes the lock for whoever holds it
-([as for GitHub Actions](ci.md#tailscale-a-tag-and-an-oauth-client); run from there, not from
-Xcode Cloud).
+([as for GitHub Actions](ci.md#tailscale-a-tag-and-an-oauth-client); run from there, and from
+Xcode Cloud [to the OTA page](#to-the-ota-page-0120)).
 
 ### The relay
 
@@ -181,8 +182,9 @@ export XDG_CONFIG_HOME="$t/config"
   8 s. The key was made on a Mac with RoamRun (`roamrun key create iPhone ~/xcc-key.json --as
   xcc`) and given as the Secret variable `ROAMRUN_KEY`.
 - `$rr` was that build of roamrunctl, committed to the repository (`bin/roamrunctl`). With 0.10.0
-  released, a script downloads the archive from RoamRun's release instead, as the GitHub Action
-  does: the script in [the next section](#to-the-ota-page-0120) does.
+  released, a script can download the archive from RoamRun's release instead, as the GitHub
+  Action does. The script in [the next section](#to-the-ota-page-0120) does, for `ota`; the two
+  ways above weren't run that way.
 
 With the key on the build machine, the variables are `TS_AUTHKEY` and `ROAMRUN_KEY`, both Secret;
 `RELAY`, `RELAY_TOKEN` and `RELAY_DEVICE` aren't used. The tailnet's policy has to let `tag:ci`
@@ -194,9 +196,10 @@ Developer Mode list (Settings › Privacy & Security › Developer Mode).
 ## To the OTA page (0.12.0)
 
 With RoamRun 0.12.0, the build can go on a Mac's OTA page instead, through that Mac's OTA server
-(`roamrun mcp --http … --allow-ota`, [ota.md](ota.md#from-a-ci-job)), with no device's key or relay.
-Xcode Cloud's Archive action exports an Ad Hoc `.ipa` too, in `CI_AD_HOC_SIGNED_APP_PATH`, signed
-with the profile Xcode Cloud manages, which lists the team's devices. The script, in
+(`roamrun mcp --http 9091 --allow tag:ci --token-file <file> --allow-ota`, as
+[ota.md](ota.md#from-a-ci-job) sets it up), with no device's key or relay. The script needs an Ad Hoc
+`.ipa` in `CI_AD_HOC_SIGNED_APP_PATH`, signed with a profile that lists the devices to install on:
+an Ad Hoc build installs on those only. In the run below there was one (see there). The script, in
 `ci_scripts/ci_post_xcodebuild.sh`:
 
 ```bash
@@ -231,15 +234,20 @@ ROAMRUNCTL_TOKEN="$OTA_TOKEN" "$rr" ota "$ipa" --server "$OTA_SERVER"
 
 The workflow's variables: `TS_AUTHKEY` and `OTA_TOKEN` (the OTA server's own token), both Secret,
 and `OTA_SERVER`, the Mac's Tailscale address and the server's port (`100.x.y.z:9091`). On the Mac,
-the RoamRun app and the OTA server keep running, and the tailnet's policy lets `tag:ci` reach the
-server's port.
+the RoamRun app and the OTA server have to keep running, and the tailnet's policy has to let `tag:ci`
+reach the server's port. Whoever can start the workflow's builds, or commit to a branch it builds,
+can publish to the page with `OTA_TOKEN`, as with the relay's token above; a new token file and
+restarting the OTA server end it. Builds that publish to one OTA server have to run one at a time:
+[ota.md](ota.md#from-a-ci-job) says why.
 
-Run on 2026-11-03 (UTC), from the same repository and app as above, the build started by a push to
-`main`, with a signed auth key on a tailnet with Tailnet Lock: the script downloaded roamrunctl
-0.12.0, and the OTA server logged `initialize`, `tools/list`, the upload and `ota` from `tag:ci`
-within 2 s. The page then listed the app (it hadn't been on it before). The stored `.ipa` carried
-Xcode Cloud's "iOS Team Ad Hoc Provisioning Profile", listing 7 devices. Installing it from the page
-wasn't tried.
+Run on 2026-11-03 (UTC), from the same repository and app as above, with the script above plus lines
+that printed each signed-app path and `roamrunctl --version`; the build started by a push to
+`main`, with a signed auth key on a tailnet with Tailnet Lock. Its Archive action's Distribution
+Preparation was None when set on 2026-10-24, not checked again; the build's log wasn't read (nor the
+Xcode and macOS versions). The OTA server logged `initialize`, `tools/list`, the upload and `ota`
+from `tag:ci` between 03:28:54 and 03:28:56 UTC, which only roamrunctl 0.12.0 or later does, and the
+page then listed the app (it hadn't been on it before). The stored `.ipa` carried Xcode Cloud's "iOS
+Team Ad Hoc Provisioning Profile", listing 7 devices. Installing it from the page wasn't tried.
 
 ## Not tried
 
