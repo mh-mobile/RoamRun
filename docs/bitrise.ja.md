@@ -25,9 +25,11 @@ Step は Bitrise の Step Library にありません。上のように、`bitris
 - デバイスを含む開発用プロファイルで署名したアプリ（デバイスをチームのデバイス一覧に登録しておきます）。Xcode Archive & Export を `distribution_method: development` で動かし、Bitrise にコード署名を設定します。下の 3 回目の試行では、次の 2 つを設定しました。
   - App Store Connect の API キー（役割は Developer）。追加は Workspace の Settings › Integrations › App Store Connect で行いました。プロジェクトでの選択は、Project settings › Integrations › Stores で行いました。
   - Apple Development の証明書。`.p12` にして、Project settings › Code signing に入れました。
-- Tailscale の auth key（管理画面の Settings › Keys）。OAuth クライアントでは試していません。Reusable と Ephemeral をオンにし、タグは `tag:ci`、期限は短くします。タグとポリシーは [GitHub Actions の手順](ci.ja.md#tailscaleタグと-oauth-クライアント)と同じです。鍵をビルドのマシンに置くなら、ポリシーで、タグからデバイスそのものへの接続を許す必要があります。relay への接続だけでは足りません。Tailnet Lock を有効にした tailnet では、鍵を先に署名し、署名した鍵を渡します。署名した鍵は、持つ人なら誰でも Tailnet Lock を通れます。やり方は同じ手順のページにあります。GitHub Actions からは試しましたが、Bitrise からは試していません。
+- Tailscale の auth key（管理画面の Settings › Keys）。OAuth クライアントでは試していません。Reusable と Ephemeral をオンにし、タグは `tag:ci`、期限は短くします。タグとポリシーは [GitHub Actions の手順](ci.ja.md#tailscaleタグと-oauth-クライアント)と同じです。鍵をビルドのマシンに置くなら、ポリシーで、タグからデバイスそのものへの接続を許す必要があります。relay への接続だけでは足りません。Tailnet Lock を有効にした tailnet では、鍵を先に署名し、署名した鍵を渡します。署名した鍵は、持つ人なら誰でも Tailnet Lock を通れます。やり方は同じ手順のページにあります。GitHub Actions と、Mac の Bitrise CLI では試しました。bitrise.io では試していません。
 - デバイスの鍵（[CI 用のペアリング](ci.ja.md#ci-用のペアリング)）。`roamrun key create` が書いたファイルか、`roamrunctl pair control` が保存したファイルを使います。中身をまるごと Secret に入れます。または [relay](ci.ja.md#relay-で用意すること)。
 - auth key、デバイスの鍵、relay のトークンを入れる Bitrise の Secret。relay のアドレスとデバイスの名前は、Secret にしなくてかまいません。Bitrise は、Secret の値と同じ文字列をログの中で全部伏せます。そのため、`relay` のような名前を Secret にすると、roamrunctl のメッセージの一部が `[REDACTED]` になります。
+
+- 代わりに OTA のページへ載せる（`ota_server`）なら、デバイスの鍵も relay も要りません。Xcode Archive & Export は、`distribution_method: ad-hoc`（デバイスを含むプロファイル）か `enterprise` で動かします。開発用のビルドは、OTA server に断られます。OTA server のトークンを Secret の `OTA_TOKEN` に入れます。Mac では、RoamRun のアプリと OTA server を動かしておきます（[ota.ja.md](ota.ja.md#ci-のジョブから)）。
 
 1 台のデバイスへのインストールは、同時に 1 つです。同じデバイスへインストールするビルドが重ならないようにします（下で使った Hobby プランは、同時に 1 ビルドです）。
 
@@ -59,8 +61,16 @@ Step は Bitrise の Step Library にありません。上のように、`bitris
 
 リリース後の 2026-10-24（UTC）には、1 つ目のワークフローをもう一度流しました。Step は `1.0.0` で、`roamrunctl_path` は渡していません。Step はこのリポジトリのリリースから roamrunctl 0.10.0 をダウンロードし、`roamrunctl-SHA256SUMS` と照らし合わせました。そのうえで、同じ `.ipa` をインストールして起動しました。Step は 27 秒でした。
 
+2026-11-03（UTC）には、Step の `ota` ワークフロー（Step の `bitrise.yml`）を、MacBook Pro（macOS 27）の Bitrise CLI で動かしました。Step は 8eb6d37 で、1.2.0 はこれに README の行を足しただけです。`roamrunctl_path` は渡していません。
+
+- Step は roamrunctl 0.12.0 をダウンロードし、Homebrew は Tailscale 1.104.4 を入れました。
+- マシンは、署名した auth key で `bitrise-local` として参加しました。tailnet では Tailnet Lock が有効です。
+- 1 MB の Ad Hoc の `.ipa` を、同じ MacBook Pro の OTA server に送りました。ビルドは保存されました。
+- 先にページからそのビルドを外しておき、実行のあとでその Mac からページを見ると、載っていました。
+
 試していないことは、次のとおりです。ほかにも、Step の README に挙げています。
 
 - 時間切れで止められた Step。
-- 手元の Mac での Bitrise CLI。
+- bitrise.io での `ota_server`。
+- Bitrise CLI でのインストールと起動。
 - iPad。

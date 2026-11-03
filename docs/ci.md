@@ -43,8 +43,10 @@ of the two ways in one step, placed after the Tailscale step, or publishes to th
 (`ota-server`, from v1.2.0). It downloads roamrunctl (0.12.0 by default, from v1.2.0) from RoamRun's release, checks it against `roamrunctl-SHA256SUMS`, and by default installs
 and launches: `key import -` and `install --launch` on the runner, or `install --relay … --launch`
 through a relay, which runs 0.10.0 or later. Before using it, set up what this page describes: the
-[Tailscale tag and OAuth client](#tailscale-a-tag-and-an-oauth-client), and either
-[a pairing for CI](#a-pairing-for-ci), given as the secret `key`, or [a relay](#a-relay).
+[Tailscale tag and OAuth client](#tailscale-a-tag-and-an-oauth-client), and to install, either
+[a pairing for CI](#a-pairing-for-ci), given as the secret `key`, or [a relay](#a-relay). To
+publish, neither: the Mac's OTA server and its own token ([ota.md](ota.md#from-a-ci-job)), with
+`key`, `relay`, `token` and `device` left out.
 
 ```yaml
 - uses: mh-mobile/roamrun-action@v1

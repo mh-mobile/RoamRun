@@ -87,7 +87,8 @@ which of your devices it installs on, the page's address) and fails on a refused
 [the roamrunctl reference](roamrunctl-reference.md#ota---server).
 
 In GitHub Actions, [roamrun-action](https://github.com/mh-mobile/roamrun-action#publishing-to-the-ota-page)
-(v1.2.0 or later) is that step, after the job has joined the tailnet ([ci.md](ci.md)):
+(v1.2.0 or later) is that step, after the job has joined the tailnet with the tag the server lets
+in ([ci.md](ci.md#tailscale-a-tag-and-an-oauth-client)):
 
 ```yaml
 - uses: mh-mobile/roamrun-action@v1
@@ -98,9 +99,14 @@ In GitHub Actions, [roamrun-action](https://github.com/mh-mobile/roamrun-action#
 ```
 
 In Bitrise, [the RoamRun Step](https://github.com/mh-mobile/bitrise-step-roamrun#to-the-ota-page)
-(1.2.0 or later) joins the tailnet itself and does the same ([bitrise.md](bitrise.md)):
+(1.2.0 or later) joins the tailnet itself and does the same ([bitrise.md](bitrise.md)). Its
+`ipa_path` is by default the `.ipa` Xcode Archive & Export made before it, exported `ad-hoc` (or
+`enterprise`), not `development` as for installing; the token is a Bitrise Secret `OTA_TOKEN`:
 
 ```yaml
+- xcode-archive@6:
+    inputs:
+      - distribution_method: ad-hoc
 - git::https://github.com/mh-mobile/bitrise-step-roamrun.git@1.2.0:
     inputs:
       - tailscale_auth_key: $TS_AUTHKEY
@@ -117,7 +123,8 @@ In Bitrise, [the RoamRun Step](https://github.com/mh-mobile/bitrise-step-roamrun
 - **One publishing job at a time.** The server keeps one upload: another job's upload, starting
   before this one's `ota`, replaces it. `roamrunctl ota` waits while another upload comes in and
   sends its own again once; jobs that overlap more than that can fail, and a long wait may need
-  a larger `--timeout`.
+  a larger `--timeout`. In GitHub Actions, give the publishing jobs one
+  [concurrency](https://docs.github.com/actions/using-jobs/using-concurrency) group.
 
 Run on 2026-11-02 from this Mac itself, with the token: an Ad Hoc build of a test app was uploaded
 and stored, and the answer named the two saved devices its profile lists. `tools/list` had `ota`

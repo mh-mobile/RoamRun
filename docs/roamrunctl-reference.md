@@ -587,7 +587,9 @@ against a real device at the time these notes were written:
   was run with one).
 - A fully Mac-free initial setup, a device never prepared by Xcode, or a device never
   paired with anything.
-- x86_64 machines, Linux without Avahi, and firewall tools other than ufw.
+- x86_64 machines with the device on their own network (from GitHub Actions' x86_64 Linux runners,
+  `install`, `install --relay` and `ota --server` were run: [ci.md](ci.md#what-was-run)), Linux
+  without Avahi, and firewall tools other than ufw.
 - Signing multiple devices at once, and the `ROAMRUNCTL_SIGNER` override.
 - A Mac's `roamrun pair introduce` introducing a machine running `roamrunctl`.
 - Through MCP: swipe and a paste that goes through (these had been tested outside MCP).
