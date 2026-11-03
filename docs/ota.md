@@ -86,6 +86,28 @@ which of your devices it installs on, the page's address) and fails on a refused
 `--replace` does what it does for `roamrun ota`. Details:
 [the roamrunctl reference](roamrunctl-reference.md#ota---server).
 
+In GitHub Actions, [roamrun-action](https://github.com/mh-mobile/roamrun-action#publishing-to-the-ota-page)
+(v1.2.0 or later) is that step, after the job has joined the tailnet ([ci.md](ci.md)):
+
+```yaml
+- uses: mh-mobile/roamrun-action@v1
+  with:
+    ota-server: 100.x.y.z:9091          # the Mac's Tailscale address, as the server printed it
+    ota-server-token: ${{ secrets.OTA_TOKEN }}
+    ipa: build/MyApp.ipa
+```
+
+In Bitrise, [the RoamRun Step](https://github.com/mh-mobile/bitrise-step-roamrun#to-the-ota-page)
+(1.2.0 or later) joins the tailnet itself and does the same ([bitrise.md](bitrise.md)):
+
+```yaml
+- git::https://github.com/mh-mobile/bitrise-step-roamrun.git@1.2.0:
+    inputs:
+      - tailscale_auth_key: $TS_AUTHKEY
+      - ota_server: 100.x.y.z:9091
+      - ota_server_token: $OTA_TOKEN
+```
+
 - **Stored is not yet on the page.** A step that succeeds means the build was stored. The page
   shows it within about 30 seconds while the RoamRun app runs; the answer says when the page isn't
   up, and why.

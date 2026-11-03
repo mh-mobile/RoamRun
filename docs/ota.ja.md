@@ -55,6 +55,26 @@ ROAMRUNCTL_TOKEN="$TOKEN" roamrunctl ota MyApp.ipa --server "$MAC:9091"
 
 このコマンドは、何かを送る前に、相手のサーバーが何かを尋ねます。relay や、`ota` のないサーバーなら、そう言って断ります。そのあと .ipa をアップロードし、サーバーが答えた sha256 を確かめてから、`ota` を呼びます。ビルドは、サーバーが `roamrun ota` と同じように検査します。コマンドは、サーバーの答え（保存したもの、自分のデバイスのうちどれに入るか、ページのアドレス）を表示します。ビルドが拒否されたら失敗します。`--replace` は、`roamrun ota` の `--replace` と同じです。詳しくは [roamrunctl のリファレンス](roamrunctl-reference.ja.md#ota---server)にあります。
 
+GitHub Actions では、[roamrun-action](https://github.com/mh-mobile/roamrun-action#publishing-to-the-ota-page)（v1.2.0 以降）がこの手順になります。ジョブが tailnet へ参加したあとに置きます（[ci.ja.md](ci.ja.md)）。
+
+```yaml
+- uses: mh-mobile/roamrun-action@v1
+  with:
+    ota-server: 100.x.y.z:9091          # Mac の Tailscale のアドレス。サーバーが表示したもの
+    ota-server-token: ${{ secrets.OTA_TOKEN }}
+    ipa: build/MyApp.ipa
+```
+
+Bitrise では、[RoamRun の Step](https://github.com/mh-mobile/bitrise-step-roamrun#to-the-ota-page)（1.2.0 以降）が、自分で tailnet に参加して同じことをします（[bitrise.ja.md](bitrise.ja.md)）。
+
+```yaml
+- git::https://github.com/mh-mobile/bitrise-step-roamrun.git@1.2.0:
+    inputs:
+      - tailscale_auth_key: $TS_AUTHKEY
+      - ota_server: 100.x.y.z:9091
+      - ota_server_token: $OTA_TOKEN
+```
+
 - **保存できても、すぐにはページに出ません。** 手順が成功したということは、ビルドを保存できたということです。RoamRun のアプリが動いていれば、30 秒ほどでページに出ます。ページが出ていないときは、答えにそのことと理由が書かれます。
 - **Mac で動かし続けるもの。** RoamRun のアプリと、このサーバーです。`roamrun mcp --http` は Ctrl-C を押すまで動きます。サービスとして動かす形は試していません。ジョブのタグからこのポートへ届くことを、tailnet のアクセス規則で許可しておきます。
 - **公開するジョブは 1 つずつ動かします。** サーバーが持てるアップロードは 1 つだけです。このジョブが `ota` を呼ぶ前に、別のジョブがアップロードを始めたとします。すると、このジョブのアップロードは置き換えられます。`roamrunctl ota` は、ほかのアップロードの最中なら待ち、置き換えられたら 1 回だけ送り直します。それ以上に重なると失敗することがあり、長く待つ場合は `--timeout` を延ばす必要があります。
