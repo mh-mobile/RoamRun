@@ -308,6 +308,7 @@ roamrun look iPhone /tmp/now.png          # the screen now, as PNG, 1280 pixels 
 roamrun tap iPhone 295 640                # a point, in the pixels of that image (--look 12: of that look only)
 roamrun look iPhone /tmp/now.png          # look again before the next action
 roamrun swipe iPhone 295 900 295 450      # drag from one point to another
+roamrun pinch iPhone 295 640 2            # two fingers about a point: 2 zooms in, 0.5 out
 roamrun type iPhone "hello"               # US keys; right only while the device's keyboard is an English one
 roamrun paste iPhone "任意の文字列"         # any text, through the device's pasteboard; iOS asks "Allow Paste"
 roamrun press iPhone home                 # home, lock, volume-up, volume-down
@@ -316,26 +317,36 @@ roamrun elements iPhone                   # what accessibility says is on the sc
 
 The rules:
 
-- **Look, act, look again.** A `tap` or `swipe` needs a `look` taken within the last minute, and
+- **Look, act, look again.** A `tap`, `swipe` or `pinch` needs a `look` taken within the last minute, and
   each look serves one action. `type` and `paste` may still go by a look an action used (look, tap
   a field, type), and wait until a second after the last input before they are sent.
-- `--look <n>` on `tap`, `swipe`, `type` and `paste` (after the text for those two) holds them to
+- `--look <n>` on `tap`, `swipe`, `pinch`, `type` and `paste` (after the text for those two) holds them to
   look n, the number `look` prints: refused once another look (by any caller), a button,
-  `elements` or an action without `--look` came since, or after a minute. Without it, a `tap` or `swipe` goes by the last look, and `type` or `paste` needs none.
+  `elements` or an action without `--look` came since, or after a minute. Without it, a `tap`, `swipe` or `pinch` goes by the last look, and `type` or `paste` needs none.
 - The image is the screen as the device holds it. An app in landscape appeared turned on its side
   (seen), and points are still pixels of that image.
 - `type` sends at most 2000 characters, about 16 a second, and a newline is Return. Under a
   Japanese keyboard even a space converts instead of being typed (seen); use `paste` there.
 - `swipe` takes a duration in milliseconds as a last argument (50–5000, default 300). `elements`
   takes a limit (default 40) and may scroll the screen while it reads.
+- `pinch <name> <x> <y> <scale> [ms] [--rotate <degrees>]` puts two
+  fingers about the point and moves them until they are `scale` (0.25–4) times as far apart as
+  they began, turned clockwise by `--rotate` (−180–180), over ms (50–5000, default 500), then lifts
+  them. The wider of the two spreads is 40% of the screen's shorter side; a finger that would leave
+  the screen is refused, not moved. Scale 1 without `--rotate` is a two-finger tap. Tried on one
+  device, an iPhone Duo, in Google Maps (2026-11-04): opened, scale 1 zoomed out, 2 in,
+  `--rotate 45` turned the map clockwise, and after Ctrl-C part-way through a pinch a two-finger
+  tap still zoomed out (no finger was left down); folded, scale 1 and 2 did the same; through
+  `roamrun mcp`, scale 2 zoomed in.
 
 **For an agent** the same are MCP tools: `claude mcp add roamrun -- roamrun mcp`, or the like for
-another agent. The tools are `devices`, `look`, `tap`, `swipe`, `type`, `paste`, `press` and
+another agent. The tools are `devices`, `look`, `tap`, `swipe`, `pinch`, `type`, `paste`, `press` and
 `elements`, with the three for apps below. They differ from the commands in four ways: `device` is the name saved in RoamRun, as
 `devices` lists it, not a Tailscale name or an id; `look` returns the picture to the agent,
 with the look's id, instead of writing a file; `type` takes 500 characters a call; and `tap`,
-`swipe`, `type` and `paste` must give that id (`"look": 12`), as `--look` does. An app older than
-the `roamrun` it is asked from gets none of these four tools.
+`swipe`, `pinch`, `type` and `paste` must give that id (`"look": 12`), as `--look` does. An app from before
+0.8.0 isn't sent any of these five (it doesn't hold an action to a look); one from 0.8.0 to 0.12
+takes all but `pinch`, which comes back saying the app is older.
 
 `install`, `install_status` and `launch` (0.11.0+) put an app on the device and start it, with no
 Xcode: `install` takes the path of an .ipa or an .app folder on this Mac, built and signed for the

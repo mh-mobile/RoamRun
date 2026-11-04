@@ -414,6 +414,11 @@ private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> {
 @Test func aCommandMayNameItsLook() throws {
     #expect(try CLI.parse(["tap", "iPhone", "1", "2", "--look", "5"]).get().values["--look"] == "5")
     #expect(try CLI.parse(["swipe", "iPhone", "1", "2", "3", "4", "--look=6"]).get().values["--look"] == "6")
+    // A pinch's turn, negative too, and its look.
+    let pinch = try CLI.parse(["pinch", "iPhone", "1", "2", "0.5", "800", "--rotate", "-45", "--look", "8"]).get()
+    #expect(pinch.words == ["iPhone", "1", "2", "0.5", "800"] && pinch.values["--rotate"] == "-45" && pinch
+        .values["--look"] == "8")
+    #expect(throws: CLI.ArgumentError.self) { try CLI.parse(["pinch", "iPhone", "1", "2", "2", "500", "9"]).get() }
     for command in ["type", "paste"] {
         let parsed = try CLI.parse([command, "iPhone", "hello", "--look", "7"]).get()
         #expect(parsed.words == ["iPhone", "hello"] && parsed.values["--look"] == "7", "\(command)")

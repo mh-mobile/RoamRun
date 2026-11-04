@@ -282,6 +282,13 @@ public final class DeviceSession: @unchecked Sendable {
         }
     }
 
+    /// Two fingers about a point: see rr_device_pinch.
+    public func pinch(at centre: (x: Double, y: Double), scale: Double, degrees: Double, milliseconds: Int) throws {
+        _ = try answer(repeatable: false) {
+            rr_device_pinch($0, centre.x, centre.y, scale, degrees, UInt32(clamping: max(milliseconds, 0)))
+        }
+    }
+
     public func type(_ text: String) throws {
         try whole(text)
         _ = try answer(repeatable: false) {

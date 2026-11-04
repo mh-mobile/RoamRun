@@ -137,6 +137,7 @@ import ImageIO
 
         func tap(x: Double, y: Double) throws {}
         func swipe(from: (x: Double, y: Double), to: (x: Double, y: Double), milliseconds: Int) throws {}
+        func pinch(at centre: (x: Double, y: Double), scale: Double, degrees: Double, milliseconds: Int) throws {}
         func type(_ text: String) throws {}
         func paste(_ text: String) throws {}
         func press(_ button: String) throws {}

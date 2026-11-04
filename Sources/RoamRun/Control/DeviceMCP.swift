@@ -260,6 +260,9 @@ final class DeviceMCP: @unchecked Sendable {
         }
     }
 
+    /// An app older than pinch: it answers "unknown request".
+    static let olderForPinch = "the RoamRun app running is older than this roamrun: it can't pinch. Quit it and open the RoamRun this command came with"
+
     static let olderForApps = "the RoamRun app running is older than this roamrun: it can't install or launch. Quit it and open the RoamRun this command came with"
 
     /// Whether the app's answer to "rules" is an older app's: one that doesn't hold an action to the look given.
@@ -338,7 +341,7 @@ final class DeviceMCP: @unchecked Sendable {
             return [["type": "image", "data": jpeg.base64EncodedString(), "mimeType": "image/jpeg"]]
                 +
                 text(
-                    "\(Int(size.width)) x \(Int(size.height)), look \(id). Points for tap and swipe are pixels of this image, given with look \(id). Within a minute it serves one tap, swipe, type or paste, and type and paste after that: look again before another tap or swipe."
+                    "\(Int(size.width)) x \(Int(size.height)), look \(id). Points for tap, swipe and pinch are pixels of this image, given with look \(id). Within a minute it serves one tap, swipe, pinch, type or paste, and type and paste after that: look again before another tap, swipe or pinch."
                 )
         case "tap":
             let look = try Self.look(of: arguments)
@@ -368,6 +371,36 @@ final class DeviceMCP: @unchecked Sendable {
                 look: look
             ))
             return text("swiped; look to see what it did")
+        case "pinch":
+            let look = try Self.look(of: arguments)
+            let (x, y) = (try number("x"), try number("y"))
+            func or(_ key: String, _ otherwise: Double) throws -> Double {
+                arguments[key] == nil || arguments[key] is NSNull ? otherwise : try number(key)
+            }
+            let (scale, degrees) = (try or("scale", 1), try or("degrees", 0))
+            var ms: Int?
+            if let given = arguments["milliseconds"], !(given is NSNull) {
+                guard let n = Self.whole(given),
+                      (50 ... 5000).contains(n)
+                else { throw Failure(description: "milliseconds is a whole number, 50...5000") }
+                ms = n
+            }
+            try heldToLooks()
+            do {
+                _ = try send(.init(
+                    op: "pinch",
+                    device: device.id,
+                    x: x,
+                    y: y,
+                    milliseconds: ms,
+                    scale: scale,
+                    degrees: degrees,
+                    look: look
+                ))
+            } catch let failure as Failure where failure.description == "unknown request" {
+                throw Failure(description: Self.olderForPinch)
+            }
+            return text("pinched; look to see what it did")
         case "elements":
             let r = try send(.init(
                 op: "elements",
@@ -572,7 +605,8 @@ final class DeviceMCP: @unchecked Sendable {
     /// there, or can't be undone from here (`lock`).
     static func hints(_ name: String) -> [String: Bool] {
         ["readOnlyHint": ["devices", "look", "install_status"].contains(name),
-         "destructiveHint": ["tap", "swipe", "type", "paste", "press", "install", "launch", "ota"].contains(name)]
+         "destructiveHint": ["tap", "swipe", "pinch", "type", "paste", "press", "install", "launch", "ota"]
+             .contains(name)]
     }
 
     // Computed: JSON objects aren't Sendable, and a static stored one would have to be.
@@ -651,7 +685,7 @@ final class DeviceMCP: @unchecked Sendable {
             tool("devices", "The devices saved in RoamRun, one name a line."),
             tool(
                 "look",
-                "The device's screen now, as an image, and the look's id. Do this before every tap or swipe: it serves one, which gives that id."
+                "The device's screen now, as an image, and the look's id. Do this before every tap, swipe or pinch: it serves one, which gives that id."
             ),
             tool("tap", "Tap a point of the last look. Operates the device: whatever is there gets pressed.",
                  ["look": lookGiven, "x": point, "y": point], required: ["look", "x", "y"]),
@@ -664,6 +698,21 @@ final class DeviceMCP: @unchecked Sendable {
                      "description": "How long the drag takes (50...5000, default 300)"
                  ]],
                 required: ["look", "x1", "y1", "x2", "y2"]
+            ),
+            tool(
+                "pinch",
+                "Two fingers about a point of the last look, moving apart or together and turning, then lifted: scale 2 zooms in, 0.5 out; degrees turn them (clockwise). Neither: a two-finger tap. A finger that would leave the screen is refused. Operates the device.",
+                ["look": lookGiven, "x": point, "y": point,
+                 "scale": [
+                     "type": "number",
+                     "description": "How far apart the fingers end, against where they began (0.25...4, default 1)"
+                 ],
+                 "degrees": ["type": "number", "description": "How far they turn, clockwise (-180...180, default 0)"],
+                 "milliseconds": [
+                     "type": "integer",
+                     "description": "How long it takes (50...5000, default 500)"
+                 ]],
+                required: ["look", "x", "y"]
             ),
             tool(
                 "elements",

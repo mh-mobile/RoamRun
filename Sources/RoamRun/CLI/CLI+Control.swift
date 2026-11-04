@@ -331,6 +331,9 @@ extension CLI {
             stop("\(request.op) failed: \(DeviceMCP.olderApp)")
         }
         let r = askApp(request)
+        if request.op == "pinch", r.error == "unknown request" {
+            stop("pinch failed: \(DeviceMCP.olderForPinch)")
+        }
         guard r.ok else { stop("\(request.op) failed: \(r.error ?? "no answer")") }
         if request.op == "type", let note = request.text.flatMap(DeviceControlWire.typed) {
             print(note)

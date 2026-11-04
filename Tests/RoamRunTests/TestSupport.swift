@@ -380,6 +380,7 @@ final class StandInDevice: ControlledDevice, @unchecked Sendable {
     var screen = (width: 100, height: 200)
     /// Where the last tap went, as fractions of the screen.
     var tapped: (x: Double, y: Double)?
+    var pinched: (x: Double, y: Double, scale: Double, degrees: Double, milliseconds: Int)?
     func elements(limit: Int) throws -> (captions: [String], complete: Bool) {
         count("elements")
         return ([], true)
@@ -395,6 +396,13 @@ final class StandInDevice: ControlledDevice, @unchecked Sendable {
 
     func swipe(from: (x: Double, y: Double), to: (x: Double, y: Double), milliseconds: Int) throws {
         try input("swipe")
+    }
+
+    func pinch(at centre: (x: Double, y: Double), scale: Double, degrees: Double, milliseconds: Int) throws {
+        try input("pinch")
+        lock.withLock {
+            pinched = (centre.x, centre.y, scale, degrees, milliseconds)
+        }
     }
 
     func type(_ text: String) throws {

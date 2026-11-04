@@ -91,6 +91,16 @@ char *rr_device_swipe(RRDevice *device, double x1, double y1, double x2, double 
                       uint32_t duration_ms);
 
 /**
+ * Two fingers about (x, y), over duration_ms (50...5000), then lifted: their spread goes from one
+ * to `scale` (0.25...4) times it, the larger of the two 40% of the screen's shorter side, and turns
+ * `degrees` (-180...180, clockwise). Scale 1 and no turn: a two-finger tap. A finger that would
+ * leave the screen is refused, not moved; a turn needs the screen's size, and is refused when the
+ * device doesn't say it.
+ */
+char *rr_device_pinch(RRDevice *device, double x, double y, double scale, double degrees,
+                      uint32_t duration_ms);
+
+/**
  * Types `text` as a hardware keyboard would, into whatever has the keyboard's focus. Only
  * what a US keyboard has (ASCII, and newline for Return); anything else is refused before
  * a key is sent.
