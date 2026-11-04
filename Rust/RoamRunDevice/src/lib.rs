@@ -152,10 +152,10 @@ static OPEN: Mutex<Vec<std::sync::Weak<Held>>> = Mutex::new(Vec::new());
 pub fn stop_streams() {
     ENDING.store(true, Ordering::Relaxed);
     let open = std::mem::take(&mut *OPEN.lock().unwrap_or_else(|e| e.into_inner()));
+    // A call part-way sees ENDING within a frame and lets go of what it holds: waited for, briefly, on all devices together.
+    let until = Instant::now() + Duration::from_millis(1500);
     let _ = with_room(|| {
         for held in open.iter().filter_map(std::sync::Weak::upgrade) {
-            // A call part-way sees ENDING within a frame and lets go of what it holds: waited for, briefly.
-            let until = Instant::now() + Duration::from_millis(1500);
             let link = loop {
                 match held.link.try_lock() {
                     Ok(link) => break Some(link),
@@ -791,8 +791,6 @@ pub unsafe extern "C" fn rr_app_checked(path: *const c_char) -> *mut c_char {
 enum Input {
     /// What fingers do: a tap, a swipe, a pinch placed.
     Touch(Vec<Touch>),
-    /// Placed on the shown display before it is sent (see `pinch_steps`).
-    Pinch(Pinch),
     Type(Vec<(u64, bool)>),
     Paste(String),
     Button(u64, u64, u64),
@@ -801,24 +799,32 @@ enum Input {
 /// # Safety
 /// `device` came from rr_device_open and wasn't closed, or is null.
 unsafe fn run(device: *mut RRDevice, input: Result<Input, String>) -> *mut c_char {
+    unsafe { run_placed(device, input, |_, _, input| Ok(input)) }
+}
+
+/// As `run`, what was asked made the input by `place`, under the device's lock (a pinch is placed
+/// on the shown display): one it refuses is refused as an invalid input is, nothing sent.
+///
+/// # Safety
+/// As `run`.
+unsafe fn run_placed<T: Send>(
+    device: *mut RRDevice, asked: Result<T, String>,
+    place: impl FnOnce(&tokio::runtime::Runtime, &mut Link, T) -> Result<Input, String> + Send,
+) -> *mut c_char {
     let Some(device) = (unsafe { device.as_ref() }) else { return std::ptr::null_mut() };
-    let input = match input {
-        Ok(input) => input,
+    let asked = match asked {
+        Ok(asked) => asked,
         // Refused for what it says, before anything went to the device: "invalid" tells the
         // caller its connection is none the worse for it.
         Err(why) => return c_string(format!("{{\"ok\":false,\"invalid\":true,\"error\":{}}}", quoted(&why))),
     };
     let started = Instant::now();
-    // A pinch is placed here, on the shown display: one that can't be is refused as above, nothing sent.
     let result = with_room(|| {
         let mut link = device.link.lock().unwrap_or_else(|e| e.into_inner());
         if link.stop.raised() { return Err(STOPPED.into()); }
-        let input = match input {
-            Input::Pinch(pinch) => match device.runtime.block_on(placed(&mut link, &pinch)) {
-                Ok(steps) => Input::Touch(steps),
-                Err(why) => return Ok(Err(why)),
-            },
-            input => input,
+        let input = match place(&device.runtime, &mut link, asked) {
+            Ok(input) => input,
+            Err(why) => return Ok(Err(why)),
         };
         let before = link.resent;
         device.runtime.block_on(perform(&mut link, input)).map(|()| Ok(link.resent != before))
@@ -860,11 +866,11 @@ pub unsafe extern "C" fn rr_device_swipe(device: *mut RRDevice, x1: f64, y1: f64
 pub unsafe extern "C" fn rr_device_pinch(device: *mut RRDevice, x: f64, y: f64, scale: f64, degrees: f64, duration_ms: u32) -> *mut c_char {
     let input = on_screen(&[x, y]).and_then(|()| {
         if !(0.25..=4.0).contains(&scale) { return Err("scale must be 0.25...4".into()) }
-        if !(-180.0..=180.0).contains(&degrees) { return Err("degrees must be -180...180".into()) }
+        if !(-180.0..=180.0).contains(&degrees) { return Err("the turn (degrees, or --rotate) must be -180...180".into()) }
         if !(50..=5000).contains(&duration_ms) { return Err("duration must be 50...5000 ms".into()) }
-        Ok(Input::Pinch(Pinch { centre: (x, y), scale, degrees, ms: duration_ms }))
+        Ok(Pinch { centre: (x, y), scale, degrees, ms: duration_ms })
     });
-    unsafe { run(device, input) }
+    unsafe { run_placed(device, input, |runtime, link, pinch| runtime.block_on(placed(link, &pinch)).map(Input::Touch)) }
 }
 
 /// # Safety
@@ -1152,14 +1158,13 @@ fn type_steps(strokes: &[(u64, bool)]) -> Vec<Step> {
 fn input_time(input: &Input) -> Duration {
     let own = match input {
         Input::Touch(steps) => steps.iter().map(|s| if let Touch::Wait(ms) = s { *ms } else { 0 }).sum(),
-        Input::Pinch(pinch) => pinch.ms as u64,
         Input::Type(strokes) => strokes.len() as u64 * 200,
         // Sent once for each kind of text it is put in as (three), at 50 KB/s at least.
         Input::Paste(text) => 5_000 + text.len() as u64 * 3 / 50,
         Input::Button(_, _, hold) => *hold,
     };
     // A touch may first find its surface on a new connection.
-    let finding = if matches!(input, Input::Touch(_) | Input::Pinch(_)) { DISPLAY_WAIT * 2 } else { Duration::ZERO };
+    let finding = if matches!(input, Input::Touch(_)) { DISPLAY_WAIT * 2 } else { Duration::ZERO };
     Duration::from_millis(own) + Duration::from_secs(10) + finding
 }
 
@@ -1322,7 +1327,7 @@ fn pinch_steps(pinch: &Pinch, (w, h): (f64, f64)) -> Result<Vec<Touch>, String> 
         let (dx, dy) = (r * turn.cos() / w, r * turn.sin() / h);
         let ends = [(pinch.centre.0 + dx, pinch.centre.1 + dy), (pinch.centre.0 - dx, pinch.centre.1 - dy)];
         if ends.iter().any(|&(x, y)| !(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y)) {
-            return Err("a finger would go off the screen: pinch nearer the middle, or less".into());
+            return Err("a finger would go off the screen: pinch nearer the middle, or with a scale nearer 1".into());
         }
         last = ends.iter().enumerate().map(|(n, &(x, y))| TouchscreenContact { identity: n as u8, touching: true, x: unit(x), y: unit(y) }).collect();
         if i > 0 { steps.push(Touch::Wait(16)); }
@@ -1375,12 +1380,19 @@ async fn touch(link: &mut Link, steps: &[Touch]) -> Result<(), String> {
             match step {
                 Touch::Wait(ms) => tokio::time::sleep(Duration::from_millis(*ms)).await,
                 Touch::At(contacts) => {
-                    // Told to stop part-way (with more than the lift left): the fingers down are lifted, and nothing more is sent.
-                    if sent_any && link.stop.raised() && contacts.iter().any(|c| c.touching) {
-                        if let Ok(up) = build_multitouch_report(&lifted(&link.fingers), None) {
-                            if hid.send_report(surface, up).await.is_ok() { link.fingers.clear(); }
+                    match at_stop(link.stop.raised(), &link.fingers, contacts) {
+                        AtStop::GoOn => {}
+                        AtStop::Stop => return Err(STOPPED.into()),
+                        AtStop::Lift(up) => {
+                            let lifted = match build_multitouch_report(&up, None) {
+                                Ok(up) => hid.send_report(surface, up).await.is_ok(),
+                                Err(_) => false,
+                            };
+                            link.fingers.clear();
+                            if lifted { return Err(STOPPED.into()); }
+                            link.hid = None;   // as a failed send: not kept, and not said to be stopped (the connection is in doubt)
+                            return Err(LIFT_LOST.into());
                         }
-                        return Err(STOPPED.into());
                     }
                     let report = build_multitouch_report(contacts, None).map_err(|e| format!("touch: {e:?}"))?;
                     // Noted before it is sent, as a key is: cut off on its way, they may be down.
@@ -1406,6 +1418,24 @@ async fn touch(link: &mut Link, steps: &[Touch]) -> Result<(), String> {
     }
     unreachable!("the second attempt returns")
 }
+
+/// What a touch does before its next frame, `next`: goes on (not told to stop, or only the lift is left, which is sent as
+/// ever), stops with no finger down, or lifts the fingers `down` and stops.
+#[derive(Debug, PartialEq)]
+enum AtStop {
+    GoOn,
+    Stop,
+    Lift(Vec<TouchscreenContact>),
+}
+
+fn at_stop(raised: bool, down: &[TouchscreenContact], next: &[TouchscreenContact]) -> AtStop {
+    if !raised || !next.iter().any(|c| c.touching) { AtStop::GoOn }
+    else if down.is_empty() { AtStop::Stop }
+    else { AtStop::Lift(lifted(down)) }
+}
+
+/// A touch told to stop whose lift then failed: its fingers may still be down.
+const LIFT_LOST: &str = "touch: told to stop part-way, and the fingers' lift didn't reach the device: they may still be down, look at the device before going on";
 
 /// One thing a keyboard or a button does.
 enum Step {
@@ -1482,7 +1512,6 @@ async fn press(link: &mut Link, steps: &[Step]) -> Result<(), String> {
 async fn send(link: &mut Link, input: &Input) -> Result<(), String> {
     match input {
         Input::Touch(steps) => touch(link, steps).await,
-        Input::Pinch(_) => unreachable!("placed in `run`"),
         Input::Paste(text) => {
             // The text goes onto the device's pasteboard, then Command-V as a keyboard would press it.
             let mut board = PasteboardServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)
@@ -2250,6 +2279,33 @@ mod tests {
         // Without the screen's size, not turned: the fingers lie across, 40% of its width apart.
         let across = frames(&pinch_steps(&pinch(1.0, 0.0), (1.0, 1.0)).unwrap(), (1179.0, 2556.0));
         assert!((spread(&across[0]) - 0.4 * 1179.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn a_touch_told_to_stop_lifts_only_what_is_down() {
+        let steps = pinch_steps(&Pinch { centre: (0.5, 0.5), scale: 2.0, degrees: 0.0, ms: 100 }, (1.0, 1.0)).unwrap();
+        let at: Vec<_> = steps.iter().filter_map(|s| if let Touch::At(c) = s { Some(c.clone()) } else { None }).collect();
+        // What goes to the device when the stop is raised before frame `k`, its frames walked as `touch` walks them.
+        let sent = |k: usize| {
+            let (mut down, mut sent) = (Vec::new(), Vec::new());
+            for (i, next) in at.iter().enumerate() {
+                match at_stop(i >= k, &down, next) {
+                    AtStop::GoOn => {}
+                    AtStop::Stop => break,
+                    AtStop::Lift(up) => { sent.push(up); break }
+                }
+                sent.push(next.clone());
+                down = next.iter().filter(|c| c.touching).cloned().collect();
+            }
+            sent
+        };
+        // Before the first frame (the HID connection or the surface was being found): nothing at all, not a tap.
+        assert_eq!(sent(0), Vec::<Vec<TouchscreenContact>>::new());
+        // After a down frame: that frame's fingers lifted where they are, and nothing more.
+        assert_eq!(sent(3), vec![at[0].clone(), at[1].clone(), at[2].clone(), lifted(&at[2])]);
+        // At the final lift: it goes as ever, the touch whole.
+        assert_eq!(sent(at.len() - 1), at);
+        assert_eq!(sent(usize::MAX), at);
     }
 
     #[test]
