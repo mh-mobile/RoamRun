@@ -105,7 +105,7 @@ pub fn token(path: &Path) -> Result<String, String> {
 }
 
 /// What a caller sent, as the log shows it: no control characters (a newline, a terminal's escape), 200 at most.
-fn printable(said: &str) -> String {
+pub(crate) fn printable(said: &str) -> String {
     said.chars().take(200).map(|c| if c.is_control() { '?' } else { c }).collect()
 }
 
@@ -131,7 +131,7 @@ impl Read for Timed {
 }
 
 /// Equal, in a time that doesn't tell how much of it was.
-fn same(a: &[u8], b: &[u8]) -> bool {
+pub(crate) fn same(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |differ, (x, y)| differ | (x ^ y)) == 0
 }
 
@@ -272,7 +272,7 @@ fn rpc_error(id: Value, code: i32, message: &str) -> String {
 }
 
 /// The time of day in UTC, as a cloud's logs give it.
-fn clock() -> String {
+pub(crate) fn clock() -> String {
     let s = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()) % 86_400;
     format!("{:02}:{:02}:{:02} UTC", s / 3600, s / 60 % 60, s % 60)
 }
@@ -438,7 +438,7 @@ fn gone(id: &str) -> String {
 
 /// `mcp --http` as root: refused (by its effective user id). Not checked on Windows.
 #[cfg(unix)]
-fn not_root(uid: u32) -> Result<(), String> {
+pub(crate) fn not_root(uid: u32) -> Result<(), String> {
     if uid == 0 { Err("not as root: start it as the user whose devices it offers".into()) } else { Ok(()) }
 }
 
@@ -530,7 +530,7 @@ fn offerable(devices: &[String]) -> Result<Vec<Offered>, String> {
 
 /// What a request's Host may name: this machine's address, or one of its Tailscale names, with the port — or
 /// without it where the port is HTTP's own, as a client then sends it.
-fn hosts(ip: IpAddr, names: Vec<String>, port: u16) -> Vec<String> {
+pub(crate) fn hosts(ip: IpAddr, names: Vec<String>, port: u16) -> Vec<String> {
     std::iter::once(ip.to_string()).chain(names).flat_map(|host| [Some(format!("{host}:{port}")), (port == 80).then_some(host)]).flatten().collect()
 }
 
@@ -543,13 +543,7 @@ pub fn serve(options: Options) -> Result<String, String> {
     let offered = offerable(&options.devices)?;
     // Asked for what it offers, as it starts: from a device's worker later, nobody would answer.
     crate::secret::ask_no_more();
-    let status = tailscale::status()?;
-    let own: Ipv4Addr = status.this.ips.iter().find_map(|a| a.parse().ok()).ok_or("this machine has no IPv4 address on the tailnet")?;
-    let listener = TcpListener::bind((own, options.port)).map_err(|e| match e.kind() {
-        std::io::ErrorKind::AddrInUse => format!("port {} is taken on {own}", options.port),
-        std::io::ErrorKind::AddrNotAvailable => format!("can't listen on {own}: this machine's Tailscale gives it no address of its own to listen on (userspace networking?)"),
-        _ => format!("can't listen on {own}:{}: {e}", options.port),
-    })?;
+    let (listener, status, own, names) = listen(options.port)?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     // At stop, what was uploaded goes with its folder: Ctrl-C, and what a closed terminal sends. Set up before the
     // folder is made, so that a failure here leaves none.
@@ -575,9 +569,22 @@ pub fn serve(options: Options) -> Result<String, String> {
     note!("roamrunctl: the MCP tools for {} at http://{own}:{port}/mcp, for {} on the tailnet{}{}. Ctrl-C ends it. What is sent and shown passes through whatever lies between (a cloud's proxy sees images and text).",
         options.devices.join(", "), who.join(", "), if options.token.is_some() { ", with the token" } else { "" },
         options.uploads.map_or(String::new(), |most| format!("; install of an .ipa sent to http://{own}:{port}/upload, {} MiB at most", most >> 20)));
+    run(listener, options, offered, IpAddr::V4(own), names, status.this.id.clone(), HEAD_WITHIN, Box::new(tailscale::whois), uploads)
+}
+
+/// A listener on `port` of this machine's Tailscale IPv4 address; Tailscale's word on this machine, the address,
+/// and the names a request's Host may give for it.
+pub(crate) fn listen(port: u16) -> Result<(TcpListener, tailscale::Status, Ipv4Addr, Vec<String>), String> {
+    let status = tailscale::status()?;
+    let own: Ipv4Addr = status.this.ips.iter().find_map(|a| a.parse().ok()).ok_or("this machine has no IPv4 address on the tailnet")?;
+    let listener = TcpListener::bind((own, port)).map_err(|e| match e.kind() {
+        std::io::ErrorKind::AddrInUse => format!("port {port} is taken on {own}"),
+        std::io::ErrorKind::AddrNotAvailable => format!("can't listen on {own}: this machine's Tailscale gives it no address of its own to listen on (userspace networking?)"),
+        _ => format!("can't listen on {own}:{port}: {e}"),
+    })?;
     let dns = status.this.dns_name.trim_end_matches('.');
     let names = [dns, tailscale::short(dns)].into_iter().filter(|n| !n.is_empty()).map(str::to_string).collect();
-    run(listener, options, offered, IpAddr::V4(own), names, status.this.id.clone(), HEAD_WITHIN, Box::new(tailscale::whois), uploads)
+    Ok((listener, status, own, names))
 }
 
 /// What `serve` does once it listens; `own_ip`, `names`, `own_id`: this machine on the tailnet (its names, a Host

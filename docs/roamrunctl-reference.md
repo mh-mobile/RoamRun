@@ -420,6 +420,56 @@ a relay: a relay (`roamrunctl mcp --http`) can't publish, and an OTA server oper
   a name aren't held to it. By default: 2 seconds a MB, 30 seconds, and 120 seconds for the
   server's checks.
 
+## The screen in a browser (`view`, a prototype)
+
+`roamrunctl view <device> --http <port> --allow <who> [--allow <who>…] [--token-file <file>]`, until Ctrl-C.
+A prototype, for watching and touching your own device from elsewhere on the tailnet. It hasn't
+been tried on a device or in a browser yet: its tests run without either.
+
+- It listens on this machine's Tailscale IPv4 address only, and serves a page at `/` and a
+  WebSocket at `/ws`. As `mcp --http`, it doesn't start without Tailscale or `--allow`, or as
+  root; `--allow` and `--token-file` are read as there.
+- The page decodes the device's HEVC stream with WebCodecs' `VideoDecoder`, which a browser
+  offers only to a secure page, and `http://` on a tailnet address isn't one. To try it, open
+  `http://<address>:<port>/` in Chrome started with
+  `--unsafely-treat-insecure-origin-as-secure=http://<address>:<port>`. The page says whether it
+  is a secure page, whether it has `VideoDecoder`, and what `VideoDecoder.isConfigSupported`
+  answers for the stream's codec (as `hev1` and as `hvc1`). HTTPS through `tailscale serve` isn't
+  built: callers would then come from this machine itself, and be told apart differently.
+- Each connection is asked of `tailscale whois` once: the page's, and the WebSocket's before it is
+  taken. Refused, in this order: a `Host` that isn't this server's address or Tailscale name with
+  its port (400); an `Origin` other than this server's own (403; the page may come without one,
+  the WebSocket must have it); a method other than `GET` (405); another path (404); a caller
+  `tailscale whois` doesn't say (503) or one not allowed (403). This machine itself is let in
+  only with `--token-file`. The token isn't in the URL: the page asks for it and sends it in its
+  first message; a wrong one, or none where one is set, closes the WebSocket with 1008.
+- 8 connections at once, 4 from one address; more are closed unanswered. The head has 10 s for
+  each read, and so has the first message; after that nothing is cut for being slow or quiet.
+- The device is this command's alone while it runs: don't use it from another command meanwhile.
+  The screen stream runs while a page watches. Each page gets the access units as they come, none
+  before a key frame. A page whose oldest frame not yet shown (waiting, or sent and not yet
+  acknowledged by the page) is older than 0.5 s is cut to the next key frame, and one is asked
+  for (the device answers one each 1.05 s at most). When the last page goes, the stream stops
+  within about 5 s, as after a look; Ctrl-C stops it too.
+- Frame acknowledgements and receiver reports (every 50 ms) go back to the device, as idevice's
+  `build_frame_ack` and `build_rctl` document them; `ROAMRUNCTL_VIEW_FEEDBACK=off` sends neither,
+  to compare.
+- From the page: a click is a tap, a drag a swipe (50 to 5000 ms); a key is typed (what a US
+  keyboard types, and Return: the page says so of any other key); buttons press home, lock and
+  the volume. Inputs go to the device one at a time, and the page is told how each went.
+- The page shows the bytes and frames received each second, the decode time, the key frames
+  asked for and answered, how often it was cut, and click-to-change: the time from a click to
+  the first decoded picture in which the 48 × 48 pixels around it changed. It also shows the
+  size the server read from the stream's SPS, the size the picture is cut to (the stream can
+  carry padding on the right and at the bottom), and the size the browser decoded.
+- One line a connection on standard error, as `mcp --http` writes them. Never the token, what is
+  typed, or pictures.
+- The WebSocket's messages: the server's binary ones are a byte (1: a key frame), the server's
+  time in ms (8 bytes, big-endian), and the access unit (Annex B). Its text ones are JSON:
+  `hello`, `picture` (`codec`, `width`, `height`, `crop`), `counts`, `status`, `done`, `error`.
+  The page's are JSON: `hello` (`token`), `ack` (`t`), `tap` (`x`, `y`, 0 to 1), `swipe` (`x1`,
+  `y1`, `x2`, `y2`, `ms`), `type` (`text`), `press` (`button`), `keyframe`.
+
 ## Through an HTTP proxy (`ROAMRUNCTL_PROXY`)
 
 On a machine that reaches the tailnet only through an HTTP proxy, `ROAMRUNCTL_PROXY=http://<host>:<port>`
@@ -647,6 +697,7 @@ against a real device at the time these notes were written:
   answered `(install <id>)`, `install_status` asked by it said the app was in after 5 s, and it
   launched; `install_status` with another id was then an error, and without one answered of
   that install.
+- `view` (a prototype): not yet on a device, nor in any browser.
 - Tailscale userspace networking with no address available to bind.
 - Xcode pairing through `pair introduce` since the `--mac` → `--host` change.
 

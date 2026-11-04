@@ -361,6 +361,12 @@ Mac introducing this machine, `mcp`'s swipe and a paste that goes through, `mcp 
 Windows (it builds there). If one of those fails, say what it
 said; don't work around it.
 
+**`roamrunctl view <device> --http <port> --allow <login>`** is a prototype, not yet tried on a
+device or in a browser: the user's own device's screen in a browser elsewhere on the tailnet, to
+watch and touch (the page needs WebCodecs; roamrunctl's reference, under “The screen in a browser”, says how to
+open it). It is the user's to start, at a terminal of their own. While it runs, the
+device is its alone: don't `look`, tap or install on that device meanwhile, nor serve it with `mcp`.
+
 ## 6. What it doesn't do
 
 It doesn't bridge to Xcode, build, sign or debug. Where it only introduced (sections

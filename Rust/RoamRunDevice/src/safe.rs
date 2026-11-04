@@ -93,6 +93,13 @@ impl Device {
         Ok(bytes)
     }
 
+    /// The screen stream, read by the `Watch` alone while it is held (see `watch`). `feedback`: frame acks and
+    /// receiver reports go back to the device; `wanted`, raised, asks for a key frame.
+    pub fn watch(&self, feedback: bool, wanted: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Result<crate::watch::Watch, String> {
+        let held = unsafe { &*self.0 }.held.clone();
+        crate::watch::Watch::start(held, feedback, wanted)
+    }
+
     fn with(&self, text: &str, call: impl FnOnce(*mut RRDevice, *const c_char) -> *mut c_char) -> String {
         match c(text) {
             Ok(text) => take(call(self.0, text.as_ptr())),

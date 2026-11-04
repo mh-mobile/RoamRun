@@ -5,6 +5,7 @@ pub mod proxy;
 #[cfg(target_os = "macos")]
 pub mod hevc;
 pub mod safe;
+pub mod watch;
 
 use std::ffi::{c_char, CStr, CString};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -88,6 +89,8 @@ struct Link {
     shown_id: Option<i64>,
     /// That display's touch surface, found on the HID connection; again after a stream starts.
     touchscreen: Option<u64>,
+    /// A `Watch` reads the stream: nothing else does, and it isn't stopped meanwhile.
+    watched: bool,
     verified_ms: u128,
     tunnel_ms: u128,
     rsd_ms: u128,
@@ -130,7 +133,7 @@ fn watch_idle_stream(held: &Arc<Held>) {
         std::thread::sleep(Duration::from_secs(1));
         let Some(held) = held.upgrade() else { return };
         let mut link = held.link.lock().unwrap_or_else(|e| e.into_inner());
-        if link.stream.is_some() && link.stream_used.elapsed() >= STREAM_IDLE {
+        if link.stream.is_some() && !link.watched && link.stream_used.elapsed() >= STREAM_IDLE {
             if let Some(mut stream) = link.stream.take() {
                 held.runtime.block_on(stream.stop());
                 link.stream_stopped = Some(Instant::now());
@@ -674,6 +677,7 @@ fn app(device: &RRDevice, what: App) -> String {
 /// A stream a look left, stopped before what holds the link for long (an install, a launch, a walk): the idle watcher
 /// can't stop it meanwhile, and the device would list screen sharing all that time.
 async fn stream_ended(link: &mut Link) {
+    if link.watched { return }
     if let Some(mut stream) = link.stream.take() {
         stream.stop().await;
         link.stream_stopped = Some(Instant::now());
@@ -1080,7 +1084,7 @@ async fn connect(ip: &str, port: u16, file: &[u8], signer: Option<Signer>) -> Re
 
     let rsd = handle.connect(info.server_rsd_port).await.map_err(|e| format!("RSD: {e:?}"))?;
     let handshake = RsdHandshake::new(rsd).await.map_err(|e| format!("RSD handshake: {e:?}"))?;
-    Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_stopped: None, stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, resent: 0, bare_inputs: false, stop: Stop(std::ptr::null()), held: None, finger: None, shown: None, shown_id: None, touchscreen: None, verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
+    Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_stopped: None, stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, resent: 0, bare_inputs: false, stop: Stop(std::ptr::null()), held: None, finger: None, shown: None, shown_id: None, touchscreen: None, watched: false, verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
 }
 
 /// The most that is typed in one call: beyond it, a slip in the middle is too costly, and paste does it in one.
@@ -1147,6 +1151,7 @@ async fn perform(link: &mut Link, input: Input) -> Result<(), String> {
 async fn stream_for_input(link: &mut Link) -> Result<(), String> {
     // Looked at where it is kept: taken out, it would be dropped unstopped if this were cut short.
     let alive = match link.stream.as_mut() {
+        Some(_) if link.watched => true,
         Some(stream) => stream.alive().await,
         None => false,
     };
@@ -1411,8 +1416,9 @@ const SUPPORTED_FEATURES: u64 = 140;
 /// A screen stream that is running.
 struct Stream {
     display: DisplayServiceClient<Box<dyn ReadWrite>>,
-    video: UdpSocketHandle,
-    audio: UdpSocketHandle,
+    /// Shared with a `Watch`, which reads them without the link.
+    video: Arc<UdpSocketHandle>,
+    audio: Arc<UdpSocketHandle>,
     /// Ours, as declared in the offer: the device heeds feedback only from it.
     ssrc: u32,
     /// The device's, once a packet has shown it.
@@ -1569,7 +1575,7 @@ async fn start_stream(link: &mut Link) -> Result<Stream, String> {
         },
         Err(why) => Err(why),
     };
-    let mut stream = Stream { display, video, audio, ssrc, media: None, feedback_port: None, requests: 0, keyframe_at: Instant::now() };
+    let mut stream = Stream { display, video: Arc::new(video), audio: Arc::new(audio), ssrc, media: None, feedback_port: None, requests: 0, keyframe_at: Instant::now() };
     if let Err(why) = video_started {
         // The sound's half did start, or may have (no answer isn't no): it is ended, not left running on the device.
         stream.stop().await;
@@ -1593,6 +1599,7 @@ const FIRST_KEYFRAME: Duration = Duration::from_secs(6);
 /// is one datagram, and can be lost); when none comes for the asking, or no stream runs, the
 /// stream is started over, which opens with one.
 async fn keyframe(link: &mut Link) -> Result<Vec<u8>, String> {
+    if link.watched { return Err("the screen is being watched (roamrunctl view): no look meanwhile".into()) }
     // Asked where it is kept: taken out, it would be dropped unstopped if this were cut short.
     if let Some(stream) = link.stream.as_mut() {
         if stream.drain().await {

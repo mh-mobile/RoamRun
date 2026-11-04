@@ -15,6 +15,7 @@ mod lines;
 mod relay;
 mod remote;
 mod tailscale;
+mod view;
 mod wire;
 
 use clap::{Args, Parser, Subcommand};
@@ -124,6 +125,20 @@ enum Command {
         /// Over HTTP, the devices offered, as `roamrunctl devices` names them: no other is listed or used
         #[arg(requires = "http")]
         devices: Vec<String>,
+    },
+    /// A prototype: the device's screen in a browser elsewhere on the tailnet, to watch and touch, until Ctrl-C. The page decodes with WebCodecs, which a browser offers only to a secure page: open http://<address>:<port>/ in Chrome started with --unsafely-treat-insecure-origin-as-secure=http://<address>:<port>
+    View {
+        /// The device, as `roamrunctl devices` names it
+        name: String,
+        /// Serve on this port of this machine's Tailscale IPv4 address
+        #[arg(long)]
+        http: u16,
+        /// Who may watch: a login (a person's own machines) or tag:<name>, as `tailscale whois` names them; again for more
+        #[arg(long)]
+        allow: Vec<String>,
+        /// A token the page must also give (it asks): a file of the owner's alone, 32 characters or more. Needed for this machine itself
+        #[arg(long = "token-file")]
+        token_file: Option<std::path::PathBuf>,
     },
     /// Keep the pairings saved here to yourself and sign with them for another machine, which then uses the devices without having their keys; until Ctrl-C
     Sign {

@@ -33,6 +33,8 @@ plist = "1"
 getrandom = "0.3"
 # An upload's sha256: age's and idevice's own already.
 sha2 = "0.10"
+# A WebSocket's handshake (`view`): idevice's own already.
+sha1 = "0.10"
 
 [profile.release]
 opt-level = "s"

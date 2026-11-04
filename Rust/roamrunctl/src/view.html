@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>roamrunctl view (prototype)</title>
+<style>
+  body { margin: 0; font: 13px system-ui, sans-serif; background: #111; color: #ddd; display: flex; gap: 12px; padding: 12px; }
+  #screen { max-height: calc(100vh - 24px); max-width: 60vw; background: #000; touch-action: none; cursor: crosshair; }
+  #side { display: flex; flex-direction: column; gap: 8px; min-width: 280px; }
+  button { font: inherit; padding: 4px 8px; }
+  pre { margin: 0; white-space: pre-wrap; font: 12px ui-monospace, monospace; }
+  #log { max-height: 30vh; overflow: auto; color: #aaa; }
+  .bad { color: #f77; }
+</style>
+</head>
+<body>
+<canvas id="screen" width="390" height="844"></canvas>
+<div id="side">
+  <b>roamrunctl view — a prototype</b>
+  <pre id="support"></pre>
+  <div>
+    <button data-press="home">Home</button> <button data-press="lock">Lock</button>
+    <button data-press="volume-up">Vol +</button> <button data-press="volume-down">Vol −</button>
+    <button id="key">Key frame</button>
+  </div>
+  <pre id="overlay"></pre>
+  <pre id="log"></pre>
+</div>
+<script>
+"use strict";
+const canvas = document.getElementById("screen");
+const context = canvas.getContext("2d");
+const $ = (id) => document.getElementById(id);
+const log = (text, bad) => {
+  const line = document.createElement("div");
+  line.textContent = new Date().toLocaleTimeString() + " " + text;
+  if (bad) line.className = "bad";
+  $("log").prepend(line);
+};
+
+const support = [];
+const supported = (line, bad) => { support.push((bad ? "✗ " : "✓ ") + line); $("support").textContent = support.join("\n"); };
+supported("secure context (WebCodecs needs one)", !window.isSecureContext);
+supported("VideoDecoder", typeof VideoDecoder === "undefined");
+if (!window.isSecureContext || typeof VideoDecoder === "undefined") {
+  supported("This browser gives this page no VideoDecoder. Chrome: start it with --unsafely-treat-insecure-origin-as-secure=" + location.origin, true);
+}
+
+let socket, decoder, picture, waitKey = true, token = sessionStorage.getItem("roamrunctl-token") || "";
+let connectedAt = 0, firstPicture = false;
+const decodeStarted = new Map();
+const stats = { bytes: 0, frames: 0, decodeMs: [], rate: 0, fps: 0, counts: {}, feedback: null, frameSize: "" };
+const latencies = [];
+let pending = null;   // a click whose change is being looked for
+
+function percentile(list, p) {
+  if (!list.length) return "-";
+  const sorted = [...list].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))].toFixed(0);
+}
+
+setInterval(() => {
+  stats.rate = stats.bytes; stats.fps = stats.frames; stats.bytes = 0; stats.frames = 0;
+  const decode = stats.decodeMs.splice(0);
+  const c = stats.counts;
+  $("overlay").textContent = [
+    `received: ${(stats.rate / 1024).toFixed(0)} KB/s, ${stats.fps} frames/s`,
+    `decode: median ${percentile(decode, 0.5)} ms, p90 ${percentile(decode, 0.9)} ms`,
+    `click-to-change: last ${latencies.length ? latencies[latencies.length - 1].toFixed(0) : "-"} ms, median ${percentile(latencies, 0.5)}, p90 ${percentile(latencies, 0.9)} (n=${latencies.length})`,
+    `key frames asked ${c.keyframesAsked ?? "-"}, answered ${c.keyframesAnswered ?? "-"}; cut to a key frame ${c.cuts ?? "-"}×`,
+    `feedback to the device (acks, reports): ${stats.feedback === null ? "-" : stats.feedback ? "on" : "off"}`,
+    picture ? `codec ${picture.codec}; server: ${picture.width}×${picture.height}, cut to ${picture.crop.join("×")}; decoded: ${stats.frameSize}` : "no picture yet",
+  ].join("\n");
+}, 1000);
+
+function newDecoder() {
+  if (decoder && decoder.state !== "closed") decoder.close();
+  decoder = new VideoDecoder({
+    output: (frame) => {
+      const started = decodeStarted.get(frame.timestamp);
+      if (started !== undefined) { stats.decodeMs.push(performance.now() - started); decodeStarted.delete(frame.timestamp); }
+      stats.frameSize = `${frame.displayWidth}×${frame.displayHeight}`;
+      const [w, h] = picture.crop;
+      context.drawImage(frame, 0, 0, w, h, 0, 0, w, h);
+      frame.close();
+      if (!firstPicture) { firstPicture = true; log(`first picture ${(performance.now() - connectedAt).toFixed(0)} ms after connecting`); }
+      if (pending) looked();
+    },
+    error: (e) => {
+      log("decoder: " + e.message + " — a key frame is asked for", true);
+      waitKey = true;
+      if (picture) configure(picture);
+      send({ type: "keyframe" });
+    },
+  });
+}
+
+const checked = new Set();
+async function check(codec) {
+  if (checked.has(codec)) return;
+  checked.add(codec);
+  try {
+    const { supported: yes } = await VideoDecoder.isConfigSupported({ codec, optimizeForLatency: true });
+    supported(`isConfigSupported ${codec}: ${yes}`, !yes);
+  } catch (e) { supported(`isConfigSupported ${codec}: ${e.message}`, true); }
+}
+
+// Configured at once, not after the checks: the key frame that follows the picture's message is decoded.
+function configure(said) {
+  picture = said;
+  canvas.width = said.crop[0];
+  canvas.height = said.crop[1];
+  if (typeof VideoDecoder === "undefined") return;
+  check(said.codec);
+  check(said.codec.replace(/^hev1/, "hvc1"));
+  newDecoder();
+  try { decoder.configure({ codec: said.codec, optimizeForLatency: true }); } catch (e) { log("configure: " + e.message, true); }
+  waitKey = true;
+}
+
+function send(message) { if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message)); }
+
+function connect() {
+  socket = new WebSocket(`ws://${location.host}/ws`);
+  socket.binaryType = "arraybuffer";
+  connectedAt = performance.now();
+  firstPicture = false;
+  socket.onopen = () => socket.send(JSON.stringify({ type: "hello", token }));
+  socket.onclose = (e) => {
+    if (e.code === 1008) {
+      token = prompt("This server takes a token (its --token-file):") || "";
+      sessionStorage.setItem("roamrunctl-token", token);
+    } else log(`disconnected (${e.code}): connecting again`, true);
+    setTimeout(connect, 1000);
+  };
+  socket.onmessage = (e) => {
+    if (typeof e.data === "string") return said(JSON.parse(e.data));
+    const view = new DataView(e.data);
+    const key = view.getUint8(0) === 1;
+    const ms = Number(view.getBigUint64(1));
+    send({ type: "ack", t: ms });
+    stats.bytes += e.data.byteLength;
+    stats.frames++;
+    if (!decoder || decoder.state !== "configured") return;
+    if (waitKey && !key) return;
+    waitKey = false;
+    decodeStarted.set(ms * 1000, performance.now());
+    if (decodeStarted.size > 300) decodeStarted.clear();
+    decoder.decode(new EncodedVideoChunk({ type: key ? "key" : "delta", timestamp: ms * 1000, data: new Uint8Array(e.data, 9) }));
+  };
+}
+
+function said(message) {
+  switch (message.type) {
+    case "hello": stats.feedback = message.feedback; break;
+    case "picture":
+      if (!picture || picture.codec !== message.codec) log(`picture: ${message.codec} ${message.width}×${message.height}, cut to ${message.crop.join("×")}`);
+      configure(message);
+      break;
+    case "counts": stats.counts = message; break;
+    case "status": log(message.text, true); break;
+    case "done": log(`${message.what}: ${message.ms} ms`); break;
+    case "error": log(`${message.what}: ${message.error}`, true); break;
+  }
+}
+
+// A click's change: the first decoded picture where the 48×48 pixels around it differ from when it was clicked.
+function looked() {
+  const now = context.getImageData(pending.x, pending.y, pending.w, pending.h).data;
+  let differ = 0;
+  for (let i = 0; i < now.length; i += 4) differ += Math.abs(now[i] - pending.before[i]) + Math.abs(now[i + 1] - pending.before[i + 1]) + Math.abs(now[i + 2] - pending.before[i + 2]);
+  if (differ / (now.length / 4) > 12) {
+    latencies.push(performance.now() - pending.at);
+    pending = null;
+  } else if (performance.now() - pending.at > 3000) {
+    log("click-to-change: nothing changed there within 3 s (not counted)");
+    pending = null;
+  }
+}
+
+function at(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)), t: performance.now() };
+}
+let down = null;
+canvas.addEventListener("pointerdown", (e) => { down = at(e); canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener("pointerup", (e) => {
+  if (!down) return;
+  const up = at(e), r = canvas.getBoundingClientRect();
+  const moved = Math.hypot((up.x - down.x) * r.width, (up.y - down.y) * r.height);
+  if (moved < 10) {
+    const w = 48, h = 48, x = Math.max(0, Math.round(up.x * canvas.width) - w / 2), y = Math.max(0, Math.round(up.y * canvas.height) - h / 2);
+    pending = { at: performance.now(), x, y, w, h, before: context.getImageData(x, y, w, h).data };
+    send({ type: "tap", x: up.x, y: up.y });
+  } else {
+    send({ type: "swipe", x1: down.x, y1: down.y, x2: up.x, y2: up.y, ms: Math.round(Math.min(5000, Math.max(50, up.t - down.t))) });
+  }
+  down = null;
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const text = e.key === "Enter" ? "\n" : e.key.length === 1 ? e.key : null;
+  if (text === null) { if (!["Shift", "CapsLock"].includes(e.key)) log(`${e.key}: can't be sent (type takes what a US keyboard types, and Return)`, true); return; }
+  e.preventDefault();
+  send({ type: "type", text });
+});
+for (const button of document.querySelectorAll("[data-press]")) button.onclick = () => send({ type: "press", button: button.dataset.press });
+$("key").onclick = () => { waitKey = true; send({ type: "keyframe" }); };
+
+connect();
+</script>
+</body>
+</html>
