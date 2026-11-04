@@ -229,18 +229,24 @@ needed to establish each new device connection.
   (next section). `look` returns a JPEG image
   to the agent, while the standalone `roamrunctl look` command saves a PNG; the longer
   image side is at most 1280 pixels.
-- An MCP `look` answers with an id, which `tap`, `swipe`, `type` and `paste` give
+- An MCP `look` answers with an id, which `tap`, `swipe`, `pinch`, `type` and `paste` give
   (`"look": 12`). It stands for 60 seconds, and only while it is the device's latest:
   another look since — by any client, one that failed too — or `press`, `elements`,
   `install`, or `launch` ends it, and so does a call that fails in a way that may have
-  reached the device, or another device saved under the name. It authorizes **one** `tap` or
-  `swipe`: after a tap, swipe, `type`, or `paste` by it, a tap or swipe needs another `look`,
+  reached the device, or another device saved under the name. It authorizes **one** `tap`,
+  `swipe` or `pinch`: after a tap, swipe, pinch, `type`, or `paste` by it, a tap, swipe or pinch needs another `look`,
   while `type` and `paste` still go by it (look → tap a field → type needs one look). Ids
   start from a random number at each start, so one kept from an earlier run isn't taken for
   a later look.
 - For a PNG look, rotation is rejected when reported orientation or image-shape checks detect a mismatch;
   it is **not guaranteed** to be detected if the device reports no orientation.
-  Tap/swipe coordinates are pixels in the image returned by the last `look`.
+  Tap/swipe/pinch coordinates are pixels in the image returned by the last `look`.
+- `pinch` (0.13.0+; not yet tried on a device) puts two fingers about `x`, `y` and moves them
+  until they are `scale` (0.25–4, default 1) times as far apart as they began, turned clockwise
+  by `degrees` (−180–180, default 0), over `milliseconds` (50–5000, default 500), then lifts them.
+  The wider of the two spreads is 40% of the screen's shorter side; a finger that would leave the
+  screen is refused, not moved, and the look stands. Scale 1 and no turn is a two-finger tap. The
+  degrees are clockwise in the look's image, whichever way the device is turned.
 - `type`, `paste`, and `press` act on the currently focused interface. `press` isn't held to a
   look. `paste` makes the device ask “Allow Paste” each time. `type` and `paste`, as a `look`
   does, wait until a second after the last input: keys sent at once after a tap on a field
@@ -592,7 +598,7 @@ against a real device at the time these notes were written:
   without Avahi, and firewall tools other than ufw.
 - Signing multiple devices at once, and the `ROAMRUNCTL_SIGNER` override.
 - A Mac's `roamrun pair introduce` introducing a machine running `roamrunctl`.
-- Through MCP: swipe and a paste that goes through (these had been tested outside MCP).
+- Through MCP: swipe and a paste that goes through (these had been tested outside MCP), and pinch.
   Installing and launching through MCP on Linux or Windows.
 - On Windows: `pair control --with`, MCP, install, and launch.
 - On macOS, a look from the screen stream on any device but an iPhone Duo, or over a relay or

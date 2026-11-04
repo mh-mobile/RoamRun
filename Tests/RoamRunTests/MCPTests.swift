@@ -134,6 +134,7 @@ import ImageIO
         "look",
         "tap",
         "swipe",
+        "pinch",
         "elements",
         "type",
         "paste",
@@ -151,7 +152,7 @@ import ImageIO
         })
     }
     #expect(hinted("readOnlyHint") == ["devices", "look", "install_status"])
-    #expect(hinted("destructiveHint") == ["tap", "swipe", "type", "paste", "press", "install", "launch"])
+    #expect(hinted("destructiveHint") == ["tap", "swipe", "pinch", "type", "paste", "press", "install", "launch"])
 
     // What holds an action to a look, and says which.
     func required(_ name: String) -> [String] {
@@ -159,7 +160,7 @@ import ImageIO
             $0["name"] as? String == name
         }?["inputSchema"] as? [String: Any])?["required"] as? [String] ?? []
     }
-    for name in ["tap", "swipe", "type", "paste"] {
+    for name in ["tap", "swipe", "pinch", "type", "paste"] {
         #expect(required(name).contains("look"), "\(name)")
     }
     #expect(!required("press").contains("look") && !required("look").contains("look"))
@@ -193,6 +194,23 @@ import ImageIO
             "isError"
         ] as? Bool == false)
     #expect(asked.last == .init(op: "swipe", device: device.id, x: 1, y: 2, x2: 3, y2: 4, milliseconds: 2000, look: 6))
+    // A pinch with nothing but its centre: a two-finger tap, its length the app's.
+    #expect(try call("pinch", #"{"device":"iPhone","look":6,"x":5,"y":6}"#)["isError"] as? Bool == false)
+    #expect(asked.last == .init(op: "pinch", device: device.id, x: 5, y: 6, scale: 1, degrees: 0, look: 6))
+    #expect(try call("pinch",
+                     #"{"device":"iPhone","look":6,"x":5,"y":6,"scale":0.5,"degrees":-45,"milliseconds":900}"#)[
+            "isError"
+        ] as? Bool == false)
+    #expect(asked.last == .init(
+        op: "pinch",
+        device: device.id,
+        x: 5,
+        y: 6,
+        milliseconds: 900,
+        scale: 0.5,
+        degrees: -45,
+        look: 6
+    ))
     // A whole number only, as JSON writes one: not 6.0, nor a duration as text or out of its range.
     let before = asked.count
     #expect(said(try call("tap", #"{"device":"iPhone","look":6.0,"x":1,"y":1}"#)).hasPrefix("look isn't a look's id"))
@@ -204,6 +222,9 @@ import ImageIO
         )
         #expect(said(refused) == "milliseconds is a whole number, 50...5000", "\(ms)")
     }
+    #expect(said(try call("pinch", #"{"device":"iPhone","look":6,"x":1,"y":1,"milliseconds":10}"#)) ==
+        "milliseconds is a whole number, 50...5000")
+    #expect(said(try call("pinch", #"{"device":"iPhone","look":6,"x":1,"y":1,"scale":"2"}"#)) == "scale is missing")
     #expect(asked.count == before)
     #expect(try call("press", #"{"device":"iPhone","button":"home"}"#)["isError"] as? Bool == false)
     #expect(asked.last == .init(op: "press", device: device.id, text: "home"))
@@ -252,6 +273,22 @@ import ImageIO
     )))
     #expect(!DeviceMCP.older(.init(ok: true, rules: DeviceControlHub.rules)) && !DeviceMCP
         .older(.failure("device control isn't set up for this device")))
+}
+
+/// An app that holds to looks but has no pinch answers "unknown request": said to be older, not as it says.
+@Test func aPinchSentToAnAppWithoutItSaysTheAppIsOlder() throws {
+    let device = profile("iPhone")
+    let server = DeviceMCP(profiles: {
+        [device]
+    }, looks: FileManager.default.temporaryDirectory) { request in
+        request.op == "rules" ? .init(ok: true, rules: DeviceControlHub.rules) : .failure("unknown request")
+    }
+    let json = #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"pinch","arguments":{"device":"iPhone","look":1,"x":1,"y":1}}}"#
+    let answer = try #require(server.handle(Data(json.utf8)))
+    let result =
+        try #require((try JSONSerialization.jsonObject(with: answer) as? [String: Any])?["result"] as? [String: Any])
+    #expect(result["isError"] as? Bool == true)
+    #expect((result["content"] as? [[String: Any]])?.first?["text"] as? String == DeviceMCP.olderForPinch)
 }
 
 /// A blank line is no message: nothing is answered, as `roamrunctl mcp` does. A line that isn't

@@ -1,4 +1,4 @@
-//! RoamRun's C ABI over idevice. rr_device_tap, _swipe, _type, _paste and
+//! RoamRun's C ABI over idevice. rr_device_tap, _swipe, _pinch, _type, _paste and
 //! _button operate the device; rr_device_elements can scroll it.
 
 pub mod proxy;
@@ -12,8 +12,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use idevice::core_device::hid::{
-    build_touchscreen_report, ButtonState, HidSurface, IndigoHidClient, UniversalHidServiceClient, DIGITIZER_SURFACE_MAIN_TOUCHSCREEN,
-    TOUCHSCREEN_STATE_CONTACT, TOUCHSCREEN_STATE_RELEASE,
+    build_multitouch_report, ButtonState, HidSurface, IndigoHidClient, TouchscreenContact, UniversalHidServiceClient,
+    DIGITIZER_SURFACE_MAIN_TOUCHSCREEN,
 };
 use idevice::dvt::message::AuxValue;
 use idevice::dvt::remote_server::RemoteServerClient;
@@ -80,12 +80,14 @@ struct Link {
     /// The key or button down now (not Shift or Command), as (is a button, page or 0, usage):
     /// let go of when an input is cut off between its down and its up.
     held: Option<(bool, u64, u64)>,
-    /// Where a finger is down on the screen, for the same.
-    finger: Option<(u16, u16)>,
+    /// The fingers down on the screen, for the same.
+    fingers: Vec<TouchscreenContact>,
     /// The uniqueId of the display on when the device last answered (a stream starting, a screenshot), for touches to go to it.
     shown: Option<String>,
     /// That display's id, for a stream to show it.
     shown_id: Option<i64>,
+    /// That display's size in pixels, held upright: a pinch is turned in it.
+    shown_size: Option<(u32, u32)>,
     /// That display's touch surface, found on the HID connection; again after a stream starts.
     touchscreen: Option<u64>,
     verified_ms: u128,
@@ -407,6 +409,7 @@ async fn ask_shown(link: &mut Link) {
     let (unique, id) = kept_shown((link.shown.clone(), link.shown_id), displays.as_ref());
     if unique != link.shown { link.touchscreen = None; }
     (link.shown, link.shown_id) = (unique, id);
+    if let Some(displays) = &displays { link.shown_size = screen_size(displays); }
 }
 
 /// Which display is on, from the device's answer; with none in time, the one known before (off if folded since).
@@ -771,8 +774,10 @@ pub unsafe extern "C" fn rr_app_checked(path: *const c_char) -> *mut c_char {
 
 /// One thing done to the device.
 enum Input {
-    Tap(f64, f64),
-    Swipe { from: (f64, f64), to: (f64, f64), ms: u32 },
+    /// What fingers do: a tap, a swipe, a pinch placed.
+    Touch(Vec<Touch>),
+    /// Placed on the shown display before it is sent (see `pinch_steps`).
+    Pinch(Pinch),
     Type(Vec<(u64, bool)>),
     Paste(String),
     Button(u64, u64, u64),
@@ -789,15 +794,24 @@ unsafe fn run(device: *mut RRDevice, input: Result<Input, String>) -> *mut c_cha
         Err(why) => return c_string(format!("{{\"ok\":false,\"invalid\":true,\"error\":{}}}", quoted(&why))),
     };
     let started = Instant::now();
+    // A pinch is placed here, on the shown display: one that can't be is refused as above, nothing sent.
     let result = with_room(|| {
         let mut link = device.link.lock().unwrap_or_else(|e| e.into_inner());
         if link.stop.raised() { return Err(STOPPED.into()); }
+        let input = match input {
+            Input::Pinch(pinch) => match device.runtime.block_on(placed(&mut link, &pinch)) {
+                Ok(steps) => Input::Touch(steps),
+                Err(why) => return Ok(Err(why)),
+            },
+            input => input,
+        };
         let before = link.resent;
-        device.runtime.block_on(perform(&mut link, input)).map(|()| link.resent != before)
+        device.runtime.block_on(perform(&mut link, input)).map(|()| Ok(link.resent != before))
     });
     c_string(match result {
         // "reconnected": the kept connection was gone, and the input went on a new one.
-        Ok(anew) => format!("{{\"ok\":true,\"ms\":{},\"reconnected\":{anew}}}", started.elapsed().as_millis()),
+        Ok(Ok(anew)) => format!("{{\"ok\":true,\"ms\":{},\"reconnected\":{anew}}}", started.elapsed().as_millis()),
+        Ok(Err(why)) => format!("{{\"ok\":false,\"invalid\":true,\"error\":{}}}", quoted(&why)),
         Err(why) => failure(&why),
     })
 }
@@ -811,7 +825,7 @@ fn on_screen(points: &[f64]) -> Result<(), String> {
 /// `device` came from rr_device_open and wasn't closed.
 #[no_mangle]
 pub unsafe extern "C" fn rr_device_tap(device: *mut RRDevice, x: f64, y: f64) -> *mut c_char {
-    unsafe { run(device, on_screen(&[x, y]).map(|()| Input::Tap(x, y))) }
+    unsafe { run(device, on_screen(&[x, y]).map(|()| Input::Touch(tap_steps(unit(x), unit(y))))) }
 }
 
 /// # Safety
@@ -819,8 +833,21 @@ pub unsafe extern "C" fn rr_device_tap(device: *mut RRDevice, x: f64, y: f64) ->
 #[no_mangle]
 pub unsafe extern "C" fn rr_device_swipe(device: *mut RRDevice, x1: f64, y1: f64, x2: f64, y2: f64, duration_ms: u32) -> *mut c_char {
     let input = on_screen(&[x1, y1, x2, y2]).and_then(|()| {
-        if (50..=5000).contains(&duration_ms) { Ok(Input::Swipe { from: (x1, y1), to: (x2, y2), ms: duration_ms }) }
+        if (50..=5000).contains(&duration_ms) { Ok(Input::Touch(drag_steps((unit(x1), unit(y1)), (unit(x2), unit(y2)), (duration_ms / 16).max(2), 16))) }
         else { Err("duration must be 50...5000 ms".into()) }
+    });
+    unsafe { run(device, input) }
+}
+
+/// # Safety
+/// `device` came from rr_device_open and wasn't closed.
+#[no_mangle]
+pub unsafe extern "C" fn rr_device_pinch(device: *mut RRDevice, x: f64, y: f64, scale: f64, degrees: f64, duration_ms: u32) -> *mut c_char {
+    let input = on_screen(&[x, y]).and_then(|()| {
+        if !(0.25..=4.0).contains(&scale) { return Err("scale must be 0.25...4".into()) }
+        if !(-180.0..=180.0).contains(&degrees) { return Err("degrees must be -180...180".into()) }
+        if !(50..=5000).contains(&duration_ms) { return Err("duration must be 50...5000 ms".into()) }
+        Ok(Input::Pinch(Pinch { centre: (x, y), scale, degrees, ms: duration_ms }))
     });
     unsafe { run(device, input) }
 }
@@ -1080,7 +1107,7 @@ async fn connect(ip: &str, port: u16, file: &[u8], signer: Option<Signer>) -> Re
 
     let rsd = handle.connect(info.server_rsd_port).await.map_err(|e| format!("RSD: {e:?}"))?;
     let handshake = RsdHandshake::new(rsd).await.map_err(|e| format!("RSD handshake: {e:?}"))?;
-    Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_stopped: None, stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, resent: 0, bare_inputs: false, stop: Stop(std::ptr::null()), held: None, finger: None, shown: None, shown_id: None, touchscreen: None, verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
+    Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_stopped: None, stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, resent: 0, bare_inputs: false, stop: Stop(std::ptr::null()), held: None, fingers: Vec::new(), shown: None, shown_id: None, shown_size: None, touchscreen: None, verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
 }
 
 /// The most that is typed in one call: beyond it, a slip in the middle is too costly, and paste does it in one.
@@ -1109,15 +1136,15 @@ fn type_steps(strokes: &[(u64, bool)]) -> Vec<Step> {
 /// room for a slow link.
 fn input_time(input: &Input) -> Duration {
     let own = match input {
-        Input::Tap(..) => 100,
-        Input::Swipe { ms, .. } => *ms as u64,
+        Input::Touch(steps) => steps.iter().map(|s| if let Touch::Wait(ms) = s { *ms } else { 0 }).sum(),
+        Input::Pinch(pinch) => pinch.ms as u64,
         Input::Type(strokes) => strokes.len() as u64 * 200,
         // Sent once for each kind of text it is put in as (three), at 50 KB/s at least.
         Input::Paste(text) => 5_000 + text.len() as u64 * 3 / 50,
         Input::Button(_, _, hold) => *hold,
     };
     // A touch may first find its surface on a new connection.
-    let finding = if matches!(input, Input::Tap(..) | Input::Swipe { .. }) { DISPLAY_WAIT * 2 } else { Duration::ZERO };
+    let finding = if matches!(input, Input::Touch(_) | Input::Pinch(_)) { DISPLAY_WAIT * 2 } else { Duration::ZERO };
     Duration::from_millis(own) + Duration::from_secs(10) + finding
 }
 
@@ -1167,9 +1194,12 @@ async fn stream_for_input(link: &mut Link) -> Result<(), String> {
 /// After an input cut short: the keys and a finger left down are let go as far as that can still
 /// be said, and the connections it used aren't kept.
 async fn let_go(link: &mut Link) {
-    if let (Some(hid), Some((x, y))) = (link.hid.as_mut(), link.finger.take()) {
+    let fingers = std::mem::take(&mut link.fingers);
+    if let (Some(hid), false) = (link.hid.as_mut(), fingers.is_empty()) {
         let surface = link.touchscreen.unwrap_or(DIGITIZER_SURFACE_MAIN_TOUCHSCREEN);
-        let _ = tokio::time::timeout(Duration::from_secs(1), hid.send_report(surface, build_touchscreen_report(TOUCHSCREEN_STATE_RELEASE, x, y, None))).await;
+        if let Ok(up) = build_multitouch_report(&lifted(&fingers), None) {
+            let _ = tokio::time::timeout(Duration::from_secs(1), hid.send_report(surface, up)).await;
+        }
     }
     if let Some(keys) = link.keys.as_mut() {
         let held = link.held.take();
@@ -1184,7 +1214,6 @@ async fn let_go(link: &mut Link) {
         }).await;
     }
     link.held = None;
-    link.finger = None;
     link.keys = None;
     link.hid = None;
 }
@@ -1202,16 +1231,29 @@ fn again(attempt: usize, kept: bool, sent_any: bool, error: &idevice::IdeviceErr
     attempt == 0 && kept && !sent_any && gone(error)
 }
 
-/// One thing a finger does: a report of where it is (down or up), or a wait.
-#[derive(Debug, PartialEq, Clone, Copy)]
+/// What fingers do: a report of each one on the screen (down, or lifted), or a wait.
+#[derive(Debug, PartialEq, Clone)]
 enum Touch {
-    At(u8, u16, u16),
+    At(Vec<TouchscreenContact>),
     Wait(u64),
+}
+
+/// The touchscreen takes 0...65535 across each axis.
+fn unit(v: f64) -> u16 { (v * 65535.0).round() as u16 }
+
+/// One finger: identity 2, which a one-finger report always had (so its bytes are as they were).
+fn finger(touching: bool, x: u16, y: u16) -> Vec<TouchscreenContact> {
+    vec![TouchscreenContact { identity: 2, touching, x, y }]
+}
+
+/// The same fingers, lifted where they are.
+fn lifted(fingers: &[TouchscreenContact]) -> Vec<TouchscreenContact> {
+    fingers.iter().map(|f| TouchscreenContact { touching: false, ..*f }).collect()
 }
 
 /// A tap: down, held long enough to count, up.
 fn tap_steps(x: u16, y: u16) -> Vec<Touch> {
-    vec![Touch::At(TOUCHSCREEN_STATE_CONTACT, x, y), Touch::Wait(50), Touch::At(TOUCHSCREEN_STATE_RELEASE, x, y)]
+    vec![Touch::At(finger(true, x, y)), Touch::Wait(50), Touch::At(finger(false, x, y))]
 }
 
 /// A drag: down at the start, on along the line a sample every `every` ms (slow enough to read
@@ -1221,12 +1263,58 @@ fn drag_steps(from: (u16, u16), to: (u16, u16), samples: u32, every: u64) -> Vec
     let along = |a: u16, b: u16, i: u32| (a as f64 + (b as f64 - a as f64) * (i as f64 / samples as f64)).round() as u16;
     let mut steps = Vec::with_capacity(samples as usize * 2 + 2);
     for i in 0..samples {
-        steps.push(Touch::At(TOUCHSCREEN_STATE_CONTACT, along(from.0, to.0, i), along(from.1, to.1, i)));
+        steps.push(Touch::At(finger(true, along(from.0, to.0, i), along(from.1, to.1, i))));
         steps.push(Touch::Wait(every));
     }
-    steps.push(Touch::At(TOUCHSCREEN_STATE_CONTACT, to.0, to.1));
-    steps.push(Touch::At(TOUCHSCREEN_STATE_RELEASE, to.0, to.1));
+    steps.push(Touch::At(finger(true, to.0, to.1)));
+    steps.push(Touch::At(finger(false, to.0, to.1)));
     steps
+}
+
+/// Two fingers about a centre (fractions of the screen): their spread goes from one to `scale`
+/// times it, the larger of the two 40% of the screen's shorter side, and turns `degrees`
+/// (clockwise, y going down). Scale 1, no turn: a two-finger tap.
+struct Pinch {
+    centre: (f64, f64),
+    scale: f64,
+    degrees: f64,
+    ms: u32,
+}
+
+/// A pinch on the shown display: its size is asked for a turn, which is refused without it.
+async fn placed(link: &mut Link, pinch: &Pinch) -> Result<Vec<Touch>, String> {
+    if pinch.degrees != 0.0 && link.shown_size.is_none() { ask_shown(link).await; }
+    let size = match link.shown_size {
+        Some((w, h)) => (w as f64, h as f64),
+        // Not turned, the fingers lie across: the screen's width, held upright, is its shorter side.
+        None if pinch.degrees == 0.0 => (1.0, 1.0),
+        None => return Err("the device didn't say its screen's size, which a turn needs: pinch without one, or try again".into()),
+    };
+    pinch_steps(pinch, size)
+}
+
+/// The pinch's frames, a frame every 16 ms, on a screen `size` pixels: both fingers in each, both lifted at the end.
+/// Refused, not clamped, where a finger would leave the screen.
+fn pinch_steps(pinch: &Pinch, (w, h): (f64, f64)) -> Result<Vec<Touch>, String> {
+    let far = 0.2 * w.min(h);
+    let from = if pinch.scale >= 1.0 { far / pinch.scale } else { far };
+    let samples = (pinch.ms / 16).max(2);
+    let mut steps = Vec::with_capacity(samples as usize * 2 + 2);
+    let mut last = Vec::new();
+    for i in 0..=samples {
+        let t = i as f64 / samples as f64;
+        let (r, turn) = (from * (1.0 + (pinch.scale - 1.0) * t), (pinch.degrees * t).to_radians());
+        let (dx, dy) = (r * turn.cos() / w, r * turn.sin() / h);
+        let ends = [(pinch.centre.0 + dx, pinch.centre.1 + dy), (pinch.centre.0 - dx, pinch.centre.1 - dy)];
+        if ends.iter().any(|&(x, y)| !(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y)) {
+            return Err("a finger would go off the screen: pinch nearer the middle, or less".into());
+        }
+        last = ends.iter().enumerate().map(|(n, &(x, y))| TouchscreenContact { identity: n as u8, touching: true, x: unit(x), y: unit(y) }).collect();
+        if i > 0 { steps.push(Touch::Wait(16)); }
+        steps.push(Touch::At(last.clone()));
+    }
+    steps.push(Touch::At(lifted(&last)));
+    Ok(steps)
 }
 
 /// The touch surface of the shown display (the stream's, else asked): a device with two screens
@@ -1269,15 +1357,23 @@ async fn touch(link: &mut Link, steps: &[Touch]) -> Result<(), String> {
         let mut sent_any = false;
         let mut failed = None;
         for step in steps {
-            match *step {
-                Touch::Wait(ms) => tokio::time::sleep(Duration::from_millis(ms)).await,
-                Touch::At(state, x, y) => {
-                    // Noted before it is sent, as a key is: cut off on its way, it may be down.
-                    if state == TOUCHSCREEN_STATE_CONTACT { link.finger = Some((x, y)); }
-                    match hid.send_report(surface, build_touchscreen_report(state, x, y, None)).await {
+            match step {
+                Touch::Wait(ms) => tokio::time::sleep(Duration::from_millis(*ms)).await,
+                Touch::At(contacts) => {
+                    // Told to stop part-way (with more than the lift left): the fingers down are lifted, and nothing more is sent.
+                    if sent_any && link.stop.raised() && contacts.iter().any(|c| c.touching) {
+                        if let Ok(up) = build_multitouch_report(&lifted(&link.fingers), None) {
+                            if hid.send_report(surface, up).await.is_ok() { link.fingers.clear(); }
+                        }
+                        return Err(STOPPED.into());
+                    }
+                    let report = build_multitouch_report(contacts, None).map_err(|e| format!("touch: {e:?}"))?;
+                    // Noted before it is sent, as a key is: cut off on its way, they may be down.
+                    link.fingers = contacts.clone();
+                    match hid.send_report(surface, report).await {
                         Ok(()) => {
                             sent_any = true;
-                            if state == TOUCHSCREEN_STATE_RELEASE { link.finger = None; }
+                            link.fingers.retain(|f| f.touching);
                         }
                         Err(e) => { failed = Some(e); break }
                     }
@@ -1286,7 +1382,7 @@ async fn touch(link: &mut Link, steps: &[Touch]) -> Result<(), String> {
         }
         let Some(e) = failed else { return Ok(()) };
         link.hid = None;   // a dead connection isn't kept for the next call
-        link.finger = None;
+        link.fingers.clear();
         if again(attempt, kept, sent_any, &e) {
             link.resent += 1;
             continue;
@@ -1369,13 +1465,9 @@ async fn press(link: &mut Link, steps: &[Step]) -> Result<(), String> {
 }
 
 async fn send(link: &mut Link, input: &Input) -> Result<(), String> {
-    // The touchscreen takes 0...65535 across each axis.
-    let unit = |v: f64| (v * 65535.0).round() as u16;
     match input {
-        Input::Tap(x, y) => touch(link, &tap_steps(unit(*x), unit(*y))).await,
-        Input::Swipe { from, to, ms } => {
-            touch(link, &drag_steps((unit(from.0), unit(from.1)), (unit(to.0), unit(to.1)), (ms / 16).max(2), 16)).await
-        }
+        Input::Touch(steps) => touch(link, steps).await,
+        Input::Pinch(_) => unreachable!("placed in `run`"),
         Input::Paste(text) => {
             // The text goes onto the device's pasteboard, then Command-V as a keyboard would press it.
             let mut board = PasteboardServiceClient::connect_rsd(&mut link.handle, &mut link.handshake)
@@ -2081,15 +2173,90 @@ mod tests {
 
     #[test]
     fn a_tap_and_a_drag_are_what_a_finger_does() {
-        assert_eq!(tap_steps(10, 20), vec![Touch::At(TOUCHSCREEN_STATE_CONTACT, 10, 20), Touch::Wait(50), Touch::At(TOUCHSCREEN_STATE_RELEASE, 10, 20)]);
+        use idevice::core_device::hid::{build_touchscreen_report, TOUCHSCREEN_STATE_CONTACT, TOUCHSCREEN_STATE_RELEASE};
+        // Each report, as the one-finger report it was before the fingers went as contacts: byte for byte.
+        let reports = |steps: &[Touch]| -> Vec<Vec<u8>> {
+            steps.iter().filter_map(|s| match s { Touch::At(c) => Some(build_multitouch_report(c, Some(7)).unwrap()), _ => None }).collect()
+        };
+        let one = |state, x, y| build_touchscreen_report(state, x, y, Some(7));
+        let tap = tap_steps(10, 20);
+        assert_eq!(reports(&tap), vec![one(TOUCHSCREEN_STATE_CONTACT, 10, 20), one(TOUCHSCREEN_STATE_RELEASE, 10, 20)]);
+        assert_eq!(tap.iter().filter(|s| matches!(s, Touch::Wait(50))).count(), 1);
         let drag = drag_steps((0, 100), (100, 0), 4, 16);
-        let at: Vec<_> = drag.iter().filter_map(|s| match s { Touch::At(state, x, y) => Some((*state, *x, *y)), _ => None }).collect();
-        assert_eq!(at, vec![
-            (TOUCHSCREEN_STATE_CONTACT, 0, 100), (TOUCHSCREEN_STATE_CONTACT, 25, 75), (TOUCHSCREEN_STATE_CONTACT, 50, 50),
-            (TOUCHSCREEN_STATE_CONTACT, 75, 25), (TOUCHSCREEN_STATE_CONTACT, 100, 0), (TOUCHSCREEN_STATE_RELEASE, 100, 0),
+        assert_eq!(reports(&drag), vec![
+            one(TOUCHSCREEN_STATE_CONTACT, 0, 100), one(TOUCHSCREEN_STATE_CONTACT, 25, 75), one(TOUCHSCREEN_STATE_CONTACT, 50, 50),
+            one(TOUCHSCREEN_STATE_CONTACT, 75, 25), one(TOUCHSCREEN_STATE_CONTACT, 100, 0), one(TOUCHSCREEN_STATE_RELEASE, 100, 0),
         ]);
         assert_eq!(drag.iter().filter(|s| matches!(s, Touch::Wait(16))).count(), 4);
         assert_eq!(drag_steps((5, 5), (9, 9), 0, 16).len(), 4);   // never no samples
+    }
+
+    /// Each frame's two fingers, in pixels of a screen `size`.
+    fn frames(steps: &[Touch], (w, h): (f64, f64)) -> Vec<[(bool, f64, f64); 2]> {
+        let px = |c: &TouchscreenContact| (c.touching, c.x as f64 / 65535.0 * w, c.y as f64 / 65535.0 * h);
+        steps.iter().filter_map(|s| match s {
+            Touch::At(c) => {
+                assert_eq!(c.iter().map(|c| c.identity).collect::<Vec<_>>(), [0, 1], "both fingers in every frame");
+                Some([px(&c[0]), px(&c[1])])
+            }
+            _ => None,
+        }).collect()
+    }
+
+    #[test]
+    fn a_pinch_spreads_two_fingers_about_its_centre() {
+        let size = (1179.0, 2556.0);
+        let pinch = |scale, degrees| Pinch { centre: (0.5, 0.4), scale, degrees, ms: 500 };
+        let spread = |f: &[(bool, f64, f64); 2]| ((f[0].1 - f[1].1).powi(2) + (f[0].2 - f[1].2).powi(2)).sqrt();
+        for scale in [2.0, 0.5, 4.0, 0.25] {
+            let steps = pinch_steps(&pinch(scale, 0.0), size).unwrap();
+            let all = frames(&steps, size);
+            let (first, end) = (&all[0], &all[all.len() - 2]);
+            // The spread ends `scale` times what it began at, the larger 40% of the shorter side.
+            assert!((spread(end) / spread(first) - scale).abs() < 0.01, "{scale}");
+            assert!((spread(first).max(spread(end)) - 0.4 * 1179.0).abs() < 1.0);
+            for f in &all {
+                assert!(((f[0].1 + f[1].1) / 2.0 - 0.5 * 1179.0).abs() < 1.0 && ((f[0].2 + f[1].2) / 2.0 - 0.4 * 2556.0).abs() < 1.0, "the centre stays");
+            }
+            // A frame every 16 ms, both down until the last, which lifts both where they were.
+            assert_eq!(steps.iter().filter(|s| matches!(s, Touch::Wait(16))).count(), 31);
+            assert!(all[..all.len() - 1].iter().all(|f| f[0].0 && f[1].0));
+            let last = all.last().unwrap();
+            assert!(!last[0].0 && !last[1].0 && (last[0].1, last[1].1) == (end[0].1, end[1].1));
+        }
+        // Scale 1, no turn: two fingers down and up where they are.
+        let tap = frames(&pinch_steps(&pinch(1.0, 0.0), size).unwrap(), size);
+        assert!(tap.windows(2).all(|w| (w[0][0].1, w[0][1].1, w[0][0].2) == (w[1][0].1, w[1][1].1, w[1][0].2)));
+        assert!((spread(&tap[0]) - 0.4 * 1179.0).abs() < 1.0);
+        // Off the screen, refused rather than moved in: at the edge, or spread wider than the room there.
+        assert!(pinch_steps(&Pinch { centre: (0.1, 0.5), scale: 1.0, degrees: 0.0, ms: 500 }, size).is_err());
+        assert!(pinch_steps(&Pinch { centre: (0.5, 0.02), scale: 1.0, degrees: 90.0, ms: 500 }, size).is_err());
+        assert!(pinch_steps(&Pinch { centre: (0.5, 0.5), scale: 0.25, degrees: 180.0, ms: 5000 }, size).is_ok());
+        // Without the screen's size, not turned: the fingers lie across, 40% of its width apart.
+        let across = frames(&pinch_steps(&pinch(1.0, 0.0), (1.0, 1.0)).unwrap(), (1179.0, 2556.0));
+        assert!((spread(&across[0]) - 0.4 * 1179.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn a_pinch_turns_clockwise_by_its_degrees() {
+        let size = (1179.0, 2556.0);
+        let angle = |f: &[(bool, f64, f64); 2]| (f[0].2 - f[1].2).atan2(f[0].1 - f[1].1).to_degrees();
+        for degrees in [45.0, -45.0, 90.0, -170.0] {
+            let all = frames(&pinch_steps(&Pinch { centre: (0.5, 0.5), scale: 1.0, degrees, ms: 500 }, size).unwrap(), size);
+            assert!(angle(&all[0]).abs() < 0.5);
+            // Clockwise on the screen: y goes down, so the first finger goes down as it turns.
+            assert!((angle(&all[all.len() - 2]) - degrees).abs() < 0.5, "{degrees}");
+            assert_eq!(all[1][0].2 > all[0][0].2, degrees > 0.0);
+        }
+    }
+
+    #[test]
+    fn fingers_cut_off_are_all_lifted_at_once() {
+        let down = [TouchscreenContact { identity: 0, touching: true, x: 1, y: 2 }, TouchscreenContact { identity: 1, touching: true, x: 3, y: 4 }];
+        assert_eq!(lifted(&down), [TouchscreenContact { identity: 0, touching: false, x: 1, y: 2 }, TouchscreenContact { identity: 1, touching: false, x: 3, y: 4 }]);
+        let report = build_multitouch_report(&lifted(&down), Some(7)).unwrap();
+        // Two contacts in the one report, each its identity with nothing touching.
+        assert_eq!((report[1], report[3], report[8]), (2, 0x00, 0x01));
     }
 
     #[test]
@@ -2157,8 +2324,10 @@ mod tests {
     fn an_input_gets_the_time_its_length_needs() {
         let ten = Duration::from_secs(10);
         // A touch has room to find its surface besides.
-        assert_eq!(input_time(&Input::Tap(0.5, 0.5)), ten + DISPLAY_WAIT * 2 + Duration::from_millis(100));
-        assert_eq!(input_time(&Input::Swipe { from: (0.0, 0.0), to: (1.0, 1.0), ms: 5000 }), ten + DISPLAY_WAIT * 2 + Duration::from_secs(5));
+        assert_eq!(input_time(&Input::Touch(tap_steps(1, 1))), ten + DISPLAY_WAIT * 2 + Duration::from_millis(50));
+        assert_eq!(input_time(&Input::Touch(drag_steps((0, 0), (9, 9), 5000 / 16, 16))), ten + DISPLAY_WAIT * 2 + Duration::from_millis(4992));
+        let pinch = pinch_steps(&Pinch { centre: (0.5, 0.5), scale: 2.0, degrees: 0.0, ms: 5000 }, (1.0, 1.0)).unwrap();
+        assert_eq!(input_time(&Input::Touch(pinch)), ten + DISPLAY_WAIT * 2 + Duration::from_millis(4992));
         let long = Input::Type(vec![(0x04, false); LONGEST_TYPED]);
         assert_eq!(input_time(&long), ten + Duration::from_secs(400));   // 2000 keys at 200 ms each
         assert!(input_time(&Input::Type(vec![(0x04, false); 5])) < DEADLINE);

@@ -236,7 +236,7 @@ clients that accept an `mcpServers` configuration, register it like this:
 ```
 
 Use the full executable path if the client cannot find `roamrunctl` in its `PATH`.
-The tools are `devices`, `look`, `tap`, `swipe`,
+The tools are `devices`, `look`, `tap`, `swipe`, `pinch` (two fingers; not yet tried on a device),
 `elements`, `type`, `paste`, `press`, `install`, `install_status`, and `launch`. Since 0.8.0,
 `install` answers once the install has begun; `install_status` says when the app is in, and until
 then other calls on that device answer that it is installing.
