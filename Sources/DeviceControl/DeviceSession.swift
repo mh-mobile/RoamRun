@@ -253,20 +253,18 @@ public final class DeviceSession: @unchecked Sendable {
         return cut(try decodeKeyFrame(frame), to: screen)
     }
 
-    /// Accessibility's captions; `complete` is false when the walk was cut short. Can scroll the screen.
-    public func elements(limit: Int = 40) throws -> (captions: [String], complete: Bool) {
+    /// What accessibility says is on the screen; `complete` is false when the walk was cut short. Can scroll the screen.
+    public func elements(limit: Int = 40) throws -> (elements: [ScreenElement], complete: Bool) {
         // Not repeated: each walk moves the screen.
         let object = try answer(repeatable: false) {
             rr_device_elements($0, UInt32(clamping: max(limit, 1)))
         }
-        let captions = (object["elements"] as? [[String: Any]] ?? []).map {
-            $0["caption"] as? String ?? ""
-        }
+        let found = ScreenElement.list(object["elements"])
         // How it ended (round, quiet, limit, deadline) and how long it took: what tells a screen read whole from one cut short.
         onEvent?(
-            "elements: \(captions.count), ended \(object["ended"] as? String ?? "?") in \(object["ms"] as? Int ?? 0) ms"
+            "elements: \(found.count), ended \(object["ended"] as? String ?? "?") in \(object["ms"] as? Int ?? 0) ms"
         )
-        return (captions, object["complete"] as? Bool ?? false)
+        return (found, object["complete"] as? Bool ?? false)
     }
 
     // These operate the device. Points are fractions 0...1 of the screen.
@@ -480,5 +478,30 @@ public final class DeviceSession: @unchecked Sendable {
             onEvent?("reopened")
             return true
         })
+    }
+}
+
+/// One element accessibility says is on the screen: its caption, and its identifier if the app set one.
+public struct ScreenElement: Codable, Equatable, Sendable {
+    public var caption: String
+    public var identifier: String?
+
+    public init(caption: String, identifier: String? = nil) {
+        self.caption = caption
+        self.identifier = identifier
+    }
+
+    /// As the library answers them: a field missing, or not text, isn't there.
+    public static func list(_ answered: Any?) -> [ScreenElement] {
+        (answered as? [[String: Any]] ?? []).map {
+            ScreenElement(caption: $0["caption"] as? String ?? "", identifier: $0["identifier"] as? String)
+        }
+    }
+
+    /// Its caption, then its identifier if it has one. The same in `roamrunctl mcp`.
+    public var line: String {
+        identifier.map {
+            "\(caption) — id: \($0)"
+        } ?? caption
     }
 }

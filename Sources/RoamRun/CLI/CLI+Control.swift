@@ -341,16 +341,16 @@ extension CLI {
         exit(0)
     }
 
-    /// Accessibility's captions, one a line. Can scroll the screen.
+    /// What accessibility says is on the screen, one element a line. Can scroll the screen.
     static func elements(_ profile: DeviceProfile, limit: Int?) -> Never {
         let r = askApp(.init(op: "elements", device: profile.id, limit: limit))
-        guard r.ok, let captions = r.captions else { stop("elements failed: \(r.error ?? "no answer")") }
-        captions.forEach {
+        guard r.ok, let lines = r.elementLines else { stop("elements failed: \(r.error ?? "no answer")") }
+        lines.forEach {
             print($0)
         }
         if r.complete != true {
             FileHandle.standardError
-                .write(Data("roamrun: \(captions.count) elements; the walk was cut short, there may be more\n".utf8))
+                .write(Data("roamrun: \(lines.count) elements; the walk was cut short, there may be more\n".utf8))
         }
         exit(0)
     }

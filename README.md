@@ -338,6 +338,10 @@ The rules:
   `--rotate 45` turned the map clockwise, and after Ctrl-C part-way through a pinch a two-finger
   tap still zoomed out (no finger was left down); folded, scale 1 and 2 did the same; through
   `roamrun mcp`, scale 2 zoomed in.
+- `elements` prints one caption a line, followed by ` — id: <identifier>` when the app set an
+  accessibility identifier (`com.apple.settings.airplaneMode`). The identifier was seen in what an
+  iPhone Duo sent in Settings, where each of the five elements read had one; an app that sets none
+  wasn't tried, and neither was this output on a device. What the device sent held no positions.
 
 **For an agent** the same are MCP tools: `claude mcp add roamrun -- roamrun mcp`, or the like for
 another agent. The tools are `devices`, `look`, `tap`, `swipe`, `pinch`, `type`, `paste`, `press` and

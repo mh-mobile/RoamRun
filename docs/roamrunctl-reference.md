@@ -261,6 +261,11 @@ needed to establish each new device connection.
   is pressed or typed acts as it would by hand (a tap can delete or send, a typed newline is
   Return), `press lock` can't be undone from here, `launch` ends a running app first, and
   `install` replaces one. What a client does with the hints is the client's; none was checked.
+- `elements` answers one caption a line, followed by ` — id: <identifier>` when the app set an
+  accessibility identifier (`com.apple.settings.airplaneMode`). The identifier was seen in what an
+  iPhone Duo sent in Settings, where each of the five elements read had one; an app that sets
+  none wasn't tried, and neither was this answer on a device. There are no positions: what the
+  device sent held none.
 - A queued call cancelled before it starts is not executed; a call already running may
   complete. MCP keeps connections open and reopens a device when its saved association
   changes or its connection fails.

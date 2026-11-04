@@ -954,9 +954,9 @@ pub unsafe extern "C" fn rr_device_elements(device: *mut RRDevice, limit: u32) -
         })
     });
     c_string(match result {
-        Ok((captions, complete, ended)) => format!(
+        Ok((found, complete, ended)) => format!(
             "{{\"ok\":true,\"elements\":[{}],\"complete\":{complete},\"ended\":\"{ended}\",\"ms\":{}}}",
-            captions.iter().map(|c| format!("{{\"caption\":{}}}", quoted(c))).collect::<Vec<_>>().join(","),
+            found.iter().map(Element::json).collect::<Vec<_>>().join(","),
             started.elapsed().as_millis()
         ),
         Err(why) => failure(&why),
@@ -986,8 +986,34 @@ async fn within<T>(until: Instant, sending: impl std::future::Future<Output = T>
         .map_err(|_| "the accessibility service stopped taking what was sent".to_string())
 }
 
-/// Captions in the inspector's order, and whether the walk came round (true) or was cut short.
-async fn elements(link: &mut Link, limit: usize, until: Instant) -> Result<(Vec<String>, bool, &'static str), String> {
+#[derive(Debug, PartialEq)]
+struct Element {
+    caption: String,
+    identifier: Option<String>,
+}
+
+impl Element {
+    /// The token that says when the walk has come round, and the element.
+    fn of(focus: &plist::Value) -> (Option<String>, Element) {
+        let inner = unwrapped(unwrapped(focus)).as_dictionary();
+        let field = |key: &str| inner.and_then(|d| d.get(key)).map(unwrapped);
+        let element = field("ElementValue_v1").map(unwrapped);
+        let identifier = element.and_then(|e| e.as_dictionary()?.get("AccessibilityIdentifier_v1"))
+            .and_then(|v| unwrapped(v).as_string()).filter(|s| !s.is_empty()).map(str::to_string);
+        let caption = field("CaptionTextValue_v1").and_then(|v| v.as_string()).unwrap_or_default().to_string();
+        (element.map(|e| format!("{e:?}")), Element { caption, identifier })
+    }
+
+    fn json(&self) -> String {
+        match &self.identifier {
+            Some(id) => format!("{{\"caption\":{},\"identifier\":{}}}", quoted(&self.caption), quoted(id)),
+            None => format!("{{\"caption\":{}}}", quoted(&self.caption)),
+        }
+    }
+}
+
+/// Elements in the inspector's order, and whether the walk came round (true) or was cut short.
+async fn elements(link: &mut Link, limit: usize, until: Instant) -> Result<(Vec<Element>, bool, &'static str), String> {
     let port = link.handshake.services.get(WANTED[3].1).ok_or("no accessibility service on this device")?.port;
     let call = |name: &'static str, argument: plist::Value| (name, Some(vec![AuxValue::archived_value(argument)]));
     // Getting to the service has the deadline every call has: one that takes the connection and
@@ -1014,14 +1040,14 @@ async fn elements(link: &mut Link, limit: usize, until: Instant) -> Result<(Vec<
         within(until, client.root_channel().call_method(Some(name), arguments, false)).await?.map_err(|e| format!("{name} {e:?}"))?;
     }
 
-    let mut captions = Vec::new();
+    let mut found = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut asked_twice = false;
     // How the walk gets to its first element: 0 asks for the first; 1 takes a step away; 2 asks for the first again.
     let mut start = 0u8;
     let mut step = 0;
     while step < limit {
-        if Instant::now() >= until { return Ok((captions, false, "deadline")); }
+        if Instant::now() >= until { return Ok((found, false, "deadline")); }
         if link.stop.raised() { return Err(STOPPED.into()); }   // a walk moves the focus, and can scroll
         // From the first element each time a walk starts: the focus is wherever the last one left it.
         let options: plist::Dictionary = [
@@ -1060,24 +1086,22 @@ async fn elements(link: &mut Link, limit: usize, until: Instant) -> Result<(Vec<
                 continue;
             }
             // A screen read whole ends by coming round (seen on the device); silence is a walk cut short.
-            return Ok((captions, false, "quiet"));
+            return Ok((found, false, "quiet"));
         };
         if step == 0 && start == 1 {
             start = 2;   // that was the step away, not the first element
             continue;
         }
         asked_twice = false;
-        let inner = unwrapped(unwrapped(&focus)).as_dictionary();
-        let field = |key: &str| inner.and_then(|d| d.get(key)).map(unwrapped);
+        let (token, element) = Element::of(&focus);
         // The element's token says when the walk has come round to where it began.
-        let token = field("ElementValue_v1").map(|e| format!("{:?}", unwrapped(e)));
         if let Some(token) = token {
-            if !seen.insert(token) { return Ok((captions, true, "round")); }
+            if !seen.insert(token) { return Ok((found, true, "round")); }
         }
-        captions.push(field("CaptionTextValue_v1").and_then(|v| v.as_string()).unwrap_or("").to_string());
+        found.push(element);
         step += 1;
     }
-    Ok((captions, false, "limit"))
+    Ok((found, false, "limit"))
 }
 
 /// What a failed verification is said as. The caller knows three of them by how they begin (the
@@ -2026,6 +2050,26 @@ async fn accept_pairing(pairing: &RRPairing, show: &(impl Fn(&str) + Sync)) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_element_carries_its_identifier_when_the_app_set_one() {
+        // An element as an iPhone sent it in Settings, read the way the walk reads it.
+        let focus = ns_keyed_archive::decode::from_bytes(include_bytes!("../tests/airplane-mode-element.plist")).unwrap();
+        let (token, element) = Element::of(&focus);
+        assert!(token.is_some());
+        assert_eq!(element, Element { caption: "機内モード, 0, ボタン, 静的テキスト, 切り替える".into(), identifier: Some("com.apple.settings.airplaneMode".into()) });
+        assert_eq!(element.json(), r#"{"caption":"機内モード, 0, ボタン, 静的テキスト, 切り替える","identifier":"com.apple.settings.airplaneMode"}"#);
+
+        // None set: the caption alone.
+        let inner: plist::Dictionary = [
+            ("CaptionTextValue_v1".to_string(), wrapped("General, button".into())),
+            ("ElementValue_v1".to_string(), wrapped(wrapped(plist::Value::Dictionary(plist::Dictionary::new())))),
+        ].into_iter().collect();
+        let bytes = ns_keyed_archive::encode::encode_to_bytes(wrapped(wrapped(plist::Value::Dictionary(inner)))).unwrap();
+        let (token, element) = Element::of(&ns_keyed_archive::decode::from_bytes(&bytes).unwrap());
+        assert!(token.is_some());
+        assert_eq!(element.json(), r#"{"caption":"General, button"}"#);
+    }
 
     #[test]
     fn only_the_processes_of_the_app_replaced_are_ended() {

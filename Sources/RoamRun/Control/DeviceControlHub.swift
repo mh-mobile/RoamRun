@@ -56,7 +56,7 @@ protocol ControlledDevice: AnyObject, Sendable {
     func gate(_ mayBegin: @escaping @Sendable () -> Bool)
     func close()
     func look() throws -> CGImage
-    func elements(limit: Int) throws -> (captions: [String], complete: Bool)
+    func elements(limit: Int) throws -> (elements: [ScreenElement], complete: Bool)
     func tap(x: Double, y: Double) throws
     func swipe(from: (x: Double, y: Double), to: (x: Double, y: Double), milliseconds: Int) throws
     func pinch(at centre: (x: Double, y: Double), scale: Double, degrees: Double, milliseconds: Int) throws
@@ -1482,7 +1482,8 @@ final class DeviceControlHub: @unchecked Sendable {
                 }) {
                     try walked.elements(limit: limit)
                 }
-                return .init(ok: true, captions: found.captions, complete: found.complete)
+                return .init(ok: true, captions: found.elements.map(\.caption), elements: found.elements,
+                             complete: found.complete)
             case "swipe":
                 // A request refused for what it says leaves the look to be used: it is spent by what reaches the device.
                 guard pointable() != nil, let size = h.looked else { return .failure(Self.lookFirst) }
