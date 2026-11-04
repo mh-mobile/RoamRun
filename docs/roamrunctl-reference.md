@@ -241,12 +241,17 @@ needed to establish each new device connection.
 - For a PNG look, rotation is rejected when reported orientation or image-shape checks detect a mismatch;
   it is **not guaranteed** to be detected if the device reports no orientation.
   Tap/swipe/pinch coordinates are pixels in the image returned by the last `look`.
-- `pinch` (0.13.0+; not yet tried on a device) puts two fingers about `x`, `y` and moves them
+- `pinch` (0.13.0+) puts two fingers about `x`, `y` and moves them
   until they are `scale` (0.25–4, default 1) times as far apart as they began, turned clockwise
   by `degrees` (−180–180, default 0), over `milliseconds` (50–5000, default 500), then lifts them.
   The wider of the two spreads is 40% of the screen's shorter side; a finger that would leave the
   screen is refused, not moved, and the look stands. Scale 1 and no turn is a two-finger tap. The
-  degrees are clockwise in the look's image, whichever way the device is turned.
+  degrees are clockwise in the look's image, whichever way the device is turned. Tried through
+  `mcp` over stdio on macOS, on one device (an iPhone Duo, opened), 2026-11-04: in Google Maps
+  scale 1 zoomed out a step, 2 in and 0.5 out, `degrees` 45 turned the map clockwise, and a
+  point too near the edge was refused, after which the look served a swipe; in Photos, scale 2
+  zoomed in; Ctrl-C part-way through a 5000 ms pinch answered `stopped:`, and a two-finger tap
+  right after zoomed out (no finger was left down).
 - `type`, `paste`, and `press` act on the currently focused interface. `press` isn't held to a
   look. `paste` makes the device ask “Allow Paste” each time. `type` and `paste`, as a `look`
   does, wait until a second after the last input: keys sent at once after a tap on a field
@@ -265,7 +270,7 @@ needed to establish each new device connection.
   and 10 to 36 s as a PNG. The device lists the stream as screen sharing, which its user can
   see, until about five seconds after the last look or action, and some apps' sound goes silent
   meanwhile, as during RoamRun's looks ([sound-while-looking.md](sound-while-looking.md)). The
-  picture is the display's own way up (portrait on an iPhone Duo held sideways, seen); taps and swipes go
+  picture is the display's own way up (portrait on an iPhone Duo held sideways, seen); taps, swipes and pinches go
   by its pixels all the same, and a turn of the device after it isn't checked. During a phone
   or VoIP call the device refuses the stream (seen during a VoIP call), and the look is the
   PNG; so is it where the device doesn't say its screen's size, or the frame doesn't fit it
@@ -598,8 +603,10 @@ against a real device at the time these notes were written:
   without Avahi, and firewall tools other than ufw.
 - Signing multiple devices at once, and the `ROAMRUNCTL_SIGNER` override.
 - A Mac's `roamrun pair introduce` introducing a machine running `roamrunctl`.
-- Through MCP: swipe and a paste that goes through (these had been tested outside MCP), and pinch.
+- Through MCP: swipe and a paste that goes through (these had been tested outside MCP).
   Installing and launching through MCP on Linux or Windows.
+- Pinch on Linux or Windows, or through `mcp --http` (it was run through `mcp` over stdio on
+  macOS, on an iPhone Duo).
 - On Windows: `pair control --with`, MCP, install, and launch.
 - On macOS, a look from the screen stream on any device but an iPhone Duo, or over a relay or
   cellular.

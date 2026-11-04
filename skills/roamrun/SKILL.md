@@ -409,13 +409,13 @@ have the user add the MCP tools, which run outside it.
   shows turned on its side in it, and its points are still the image's.
 - `roamrun swipe iPhone 295 900 295 450 [ms]` drags; start on something that
   does nothing when pressed if you can.
-- `roamrun pinch iPhone 295 640 <scale> [ms] [--rotate <degrees>]` (0.13.0+; not yet tried on a
-  device) puts two fingers about the point and moves them until they are `scale` (0.25–4) times
+- `roamrun pinch iPhone 295 640 <scale> [ms] [--rotate <degrees>]` (0.13.0+) puts two fingers about the point and moves them until they are `scale` (0.25–4) times
   as far apart as they began — 2 zooms in, 0.5 out — turned clockwise by `--rotate` (−180–180),
   over ms (50–5000, default 500), then lifts them. Scale 1 without `--rotate` is a two-finger tap.
   The wider of the two spreads is 40% of the screen's shorter side: a point too near the edge for
   that is refused, not moved. The tool is `pinch` with `x`, `y`, `scale`, `degrees` and
-  `milliseconds`. Look after it to see what it did.
+  `milliseconds`. Look after it to see what it did. Tried on one device, an iPhone Duo (opened
+  and folded), in Google Maps: 2 zoomed in, 1 out, `--rotate 45` turned the map clockwise.
 - `roamrun elements iPhone [limit]` prints what accessibility says is on the
   screen, one caption a line ("Home, tab, selected"). It gives **no positions** —
   a caption can't be tapped by name; find it in a `look`. The screen may scroll

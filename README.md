@@ -329,19 +329,24 @@ The rules:
   Japanese keyboard even a space converts instead of being typed (seen); use `paste` there.
 - `swipe` takes a duration in milliseconds as a last argument (50–5000, default 300). `elements`
   takes a limit (default 40) and may scroll the screen while it reads.
-- `pinch <name> <x> <y> <scale> [ms] [--rotate <degrees>]` (not yet tried on a device) puts two
+- `pinch <name> <x> <y> <scale> [ms] [--rotate <degrees>]` puts two
   fingers about the point and moves them until they are `scale` (0.25–4) times as far apart as
   they began, turned clockwise by `--rotate` (−180–180), over ms (50–5000, default 500), then lifts
   them. The wider of the two spreads is 40% of the screen's shorter side; a finger that would leave
-  the screen is refused, not moved. Scale 1 without `--rotate` is a two-finger tap.
+  the screen is refused, not moved. Scale 1 without `--rotate` is a two-finger tap. Tried on one
+  device, an iPhone Duo, in Google Maps (2026-11-04): opened, scale 1 zoomed out, 2 in,
+  `--rotate 45` turned the map clockwise, and after Ctrl-C part-way through a pinch a two-finger
+  tap still zoomed out (no finger was left down); folded, scale 1 and 2 did the same; through
+  `roamrun mcp`, scale 2 zoomed in.
 
 **For an agent** the same are MCP tools: `claude mcp add roamrun -- roamrun mcp`, or the like for
 another agent. The tools are `devices`, `look`, `tap`, `swipe`, `pinch`, `type`, `paste`, `press` and
 `elements`, with the three for apps below. They differ from the commands in four ways: `device` is the name saved in RoamRun, as
 `devices` lists it, not a Tailscale name or an id; `look` returns the picture to the agent,
 with the look's id, instead of writing a file; `type` takes 500 characters a call; and `tap`,
-`swipe`, `pinch`, `type` and `paste` must give that id (`"look": 12`), as `--look` does. An app older than
-the `roamrun` it is asked from gets none of these five tools.
+`swipe`, `pinch`, `type` and `paste` must give that id (`"look": 12`), as `--look` does. An app from before
+0.8.0 isn't sent any of these five (it doesn't hold an action to a look); one from 0.8.0 to 0.12
+takes all but `pinch`, which comes back saying the app is older.
 
 `install`, `install_status` and `launch` (0.11.0+) put an app on the device and start it, with no
 Xcode: `install` takes the path of an .ipa or an .app folder on this Mac, built and signed for the

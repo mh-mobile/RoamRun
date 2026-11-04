@@ -356,12 +356,13 @@ Tailscale. Whether launching works on a device no Xcode ever met wasn't tried.
 
 Tried against a device, on Linux and macOS, in an earlier form of each: `pair control
 --with`, a key from a Mac, look, tap, type, a button, install, launch, `mcp`'s look and
-tap, and B. On macOS, in a later form: `pair control --to`, and `mcp --http` called from the
+tap, and B. On macOS, in a later form: `pair control --to`, `mcp`'s pinch over stdio (on an iPhone Duo, in
+Google Maps and Photos), and `mcp --http` called from the
 machine itself with the token (look, tap, type, `elements`, calls taken back in a session;
 a button in a form just before this one; uploads and their refusals; an install over stdio
 and one from an upload, with `install_status`, and `launch` after). Not
 yet: `sign` as it is now and `ROAMRUNCTL_SIGNER`, `--passphrase`, the Introducer app or a
-Mac introducing this machine, `mcp`'s swipe and pinch and a paste that goes through, `mcp --http` from a cloud other than GitHub Actions, and anything on
+Mac introducing this machine, `mcp`'s swipe and a paste that goes through, pinch on Linux or through `mcp --http`, `mcp --http` from a cloud other than GitHub Actions, and anything on
 Windows (it builds there). If one of those fails, say what it
 said; don't work around it.
 

@@ -236,17 +236,19 @@ clients that accept an `mcpServers` configuration, register it like this:
 ```
 
 Use the full executable path if the client cannot find `roamrunctl` in its `PATH`.
-The tools are `devices`, `look`, `tap`, `swipe`, `pinch` (two fingers; not yet tried on a device),
+The tools are `devices`, `look`, `tap`, `swipe`, `pinch` (two fingers, 0.13.0+),
 `elements`, `type`, `paste`, `press`, `install`, `install_status`, and `launch`. Since 0.8.0,
 `install` answers once the install has begun; `install_status` says when the app is in, and until
-then other calls on that device answer that it is installing.
+then other calls on that device answer that it is installing. `pinch` was tried through `mcp`
+over stdio on macOS, on one device (an iPhone Duo, opened) in Google Maps and Photos
+(2026-11-04); not on Linux or Windows, nor through `mcp --http`.
 
-For `tap`, `swipe`, `type` and `paste`, the agent must first call `look`, and give the id
+For `tap`, `swipe`, `pinch`, `type` and `paste`, the agent must first call `look`, and give the id
 that look answered with (`"look": 12`; 0.8.0+). A look stands for 60 seconds, and only while it is
 the device's latest: another look by any agent (one that failed too), or `press`,
-`elements`, `install` or `launch` on that device, ends it. It permits one tap or swipe;
-after a tap, swipe, `type` or `paste` by it, a tap or swipe needs another look, while `type`
-and `paste` still go by it, so look → tap a field → type needs one look. A tap or swipe is
+`elements`, `install` or `launch` on that device, ends it. It permits one tap, swipe or pinch;
+after a tap, swipe, pinch, `type` or `paste` by it, a tap, swipe or pinch needs another look, while `type`
+and `paste` still go by it, so look → tap a field → type needs one look. A tap, swipe or pinch is
 also refused if the device reports that it was turned since a PNG look (below), and a call
 that fails in a way that may have reached the device ends the look.
 
