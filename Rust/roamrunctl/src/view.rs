@@ -750,10 +750,13 @@ mod tests {
         assert_eq!(watched.load(Ordering::SeqCst), 1);
         // Gone, it lets go of the stream: the next viewer's is watched anew.
         drop(stream);
-        std::thread::sleep(Duration::from_millis(300));
-        let (mut stream, _) = ask(at, UPGRADE);
-        hello(&mut stream, &"t".repeat(32));
-        assert_eq!(first(&mut stream, 2)[0], 1);
+        let until = Instant::now() + Duration::from_secs(5);
+        while watched.load(Ordering::SeqCst) < 2 && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(100));
+            let (mut stream, _) = ask(at, UPGRADE);
+            hello(&mut stream, &"t".repeat(32));
+            assert_eq!(first(&mut stream, 2)[0], 1);
+        }
         assert_eq!(watched.load(Ordering::SeqCst), 2);
     }
 

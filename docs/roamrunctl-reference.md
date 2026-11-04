@@ -432,7 +432,10 @@ been tried on a device or in a browser yet: its tests run without either.
 - The page decodes the device's HEVC stream with WebCodecs' `VideoDecoder`, which a browser
   offers only to a secure page, and `http://` on a tailnet address isn't one. To try it, open
   `http://<address>:<port>/` in Chrome started with
-  `--unsafely-treat-insecure-origin-as-secure=http://<address>:<port>`. The page says whether it
+  `--unsafely-treat-insecure-origin-as-secure=http://<address>:<port>` (with a profile of its own,
+`--user-data-dir=<folder>`: untried whether the flag needs it). A page on `localhost` would be a
+secure one, but this server isn't reached that way: it listens on the Tailscale address alone, and
+a port forwarded to it brings `Host: localhost:…`, which is refused. The page says whether it
   is a secure page, whether it has `VideoDecoder`, and what `VideoDecoder.isConfigSupported`
   answers for the stream's codec (as `hev1` and as `hvc1`). HTTPS through `tailscale serve` isn't
   built: callers would then come from this machine itself, and be told apart differently.
