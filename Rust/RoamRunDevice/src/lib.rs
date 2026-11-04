@@ -100,8 +100,11 @@ struct Stop(*const AtomicBool);
 unsafe impl Send for Stop {}
 
 impl Stop {
-    fn raised(&self) -> bool { !self.0.is_null() && unsafe { &*self.0 }.load(Ordering::Relaxed) }
+    fn raised(&self) -> bool { ENDING.load(Ordering::Relaxed) || !self.0.is_null() && unsafe { &*self.0 }.load(Ordering::Relaxed) }
 }
+
+/// Set by `stop_streams`: the process is ending, so a call part-way stops as told to (a touch lifts its fingers).
+static ENDING: AtomicBool = AtomicBool::new(false);
 
 /// What the C side holds. The runtime has a thread of its own: the tunnel is served between calls.
 pub struct RRDevice {
@@ -144,13 +147,25 @@ fn watch_idle_stream(held: &Arc<Held>) {
 /// The devices open in this process, for `stop_streams`.
 static OPEN: Mutex<Vec<std::sync::Weak<Held>>> = Mutex::new(Vec::new());
 
-/// At the process's end (Ctrl-C): a stream a look left is stopped, not left for the device to time out. One whose
-/// device is busy with a call is left: the end doesn't wait for it.
+/// At the process's end (Ctrl-C): fingers or a key a call left down are let go, and a stream a look left is stopped,
+/// not left for the device to time out. A device still busy with a call after 1.5 s is left: the end doesn't wait longer.
 pub fn stop_streams() {
+    ENDING.store(true, Ordering::Relaxed);
     let open = std::mem::take(&mut *OPEN.lock().unwrap_or_else(|e| e.into_inner()));
     let _ = with_room(|| {
         for held in open.iter().filter_map(std::sync::Weak::upgrade) {
-            let Ok(mut link) = held.link.try_lock() else { continue };
+            // A call part-way sees ENDING within a frame and lets go of what it holds: waited for, briefly.
+            let until = Instant::now() + Duration::from_millis(1500);
+            let link = loop {
+                match held.link.try_lock() {
+                    Ok(link) => break Some(link),
+                    Err(std::sync::TryLockError::Poisoned(e)) => break Some(e.into_inner()),
+                    Err(_) if Instant::now() < until => std::thread::sleep(Duration::from_millis(20)),
+                    Err(_) => break None,
+                }
+            };
+            let Some(mut link) = link else { continue };
+            if !link.fingers.is_empty() || link.held.is_some() { held.runtime.block_on(let_go(&mut link)); }
             if let Some(mut stream) = link.stream.take() { held.runtime.block_on(stream.stop()); }
         }
         Ok(())
