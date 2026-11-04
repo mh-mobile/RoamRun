@@ -116,7 +116,7 @@ final class TunnelPortWatcher: @unchecked Sendable {
                 ambiguousUntil = now + 5
             }
             if let v4, let port = UInt16(v4.2) {
-                onPort?(port, owners.count == 1 && now >= ambiguousUntil ? owners.first : nil, String(v4.1))
+                onPort?(port, owners.count == 1 && now.atOrAfter(ambiguousUntil) ? owners.first : nil, String(v4.1))
             }
             // Unknown whose request this answered, so the rest can't be trusted either.
             if owners.count > 1 {

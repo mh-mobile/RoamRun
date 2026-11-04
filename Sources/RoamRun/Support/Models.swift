@@ -312,3 +312,19 @@ extension Array where Element == DeviceProfile {
             }!
     }
 }
+
+extension Date {
+    /// `>=` and `<=` on Date are `@backDeployed(before: macOS 27.2)`, so a build made
+    /// against that SDK calls the OS's own symbol once the OS says it is 27.2 or newer.
+    /// Some 27.2 builds say so without exporting it yet: the stub is null and the
+    /// process dies branching to 0x0 — the whole app, from whatever thread got there
+    /// first. `<` and `>` are long-standing symbols, so these stand on them instead.
+    /// Use them for every Date-to-Date `>=`/`<=` comparison.
+    func atOrAfter(_ other: Date) -> Bool {
+        !(self < other)
+    }
+
+    func atOrBefore(_ other: Date) -> Bool {
+        !(self > other)
+    }
+}

@@ -393,7 +393,7 @@ enum PairByName {
                 if stopped() {
                     return .stopped
                 }
-                if Date() >= until {
+                if Date().atOrAfter(until) {
                     return .noOne
                 }
                 guard let (link, from) = listener.accept(within: 0.25) else { continue }
@@ -453,7 +453,7 @@ enum PairByName {
                     // Said, so the other Mac doesn't go on asking a Mac that has stopped.
                     if stopped() {
                         link.send(.ended(.stopped))
-                    } else if Date() >= until {
+                    } else if Date().atOrAfter(until) {
                         link.send(.ended(.noOffer))
                     }
                     continue
@@ -521,7 +521,7 @@ enum PairByName {
                 if stopped() {
                     return .stopped
                 }
-                if Date() >= until {
+                if Date().atOrAfter(until) {
                     return .noOne
                 }
                 guard let link = connect() else {
@@ -600,7 +600,7 @@ enum PairByName {
                 if stopped() {
                     return .stopped
                 }
-                if Date() >= until {
+                if Date().atOrAfter(until) {
                     return .noOne
                 }
                 guard let link = connect() else {
@@ -719,7 +719,7 @@ enum PairByName {
                 if stopped() {
                     return .stopped
                 }
-                if Date() >= until {
+                if Date().atOrAfter(until) {
                     return .noOne
                 }
                 guard let (link, from) = listener.accept(within: 0.25) else { continue }

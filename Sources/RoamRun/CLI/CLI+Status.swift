@@ -221,7 +221,7 @@ extension CLI {
             rows = targets.map {
                 row($0, live[$0.id], deep: true, by: budget, coreState: coreState)
             }
-            if rows.contains(where: \.ready) || Date.now >= deadline {
+            if rows.contains(where: \.ready) || Date.now.atOrAfter(deadline) {
                 break
             }
             usleep(useconds_t(min(3, max(0.1, deadline.timeIntervalSinceNow)) *

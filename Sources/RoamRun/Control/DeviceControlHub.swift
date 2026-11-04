@@ -1044,7 +1044,8 @@ final class DeviceControlHub: @unchecked Sendable {
         let now = Date()
         let due = lock.withLock { () -> [(UUID, any ControlledDevice)] in
             let due = held.filter {
-                !$0.value.connecting && $0.value.nextTry <= now && !$0.value.session.isOpen && !$0.value.session
+                let session = $0.value.session
+                return !$0.value.connecting && $0.value.nextTry.atOrBefore(now) && !session.isOpen && !session
                     .isRefused
             }
             for id in due.keys {

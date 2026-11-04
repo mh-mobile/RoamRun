@@ -83,7 +83,7 @@ import Testing
     #expect(cli.update {
         $0 = [moved, removed, new]
     })
-    #expect(try #require(app.written) >= first)
+    #expect(try #require(app.written).atOrAfter(first))
     #expect(app.savedElsewhere(base: read, mine: [kept]) == [new]) // …and what it has keeps what it has
     var again = profile("iPhone")
     again.providerIP = "100.64.0.3"

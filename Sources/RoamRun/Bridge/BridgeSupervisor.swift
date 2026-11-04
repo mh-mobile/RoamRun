@@ -262,7 +262,7 @@ final class DeviceMemory {
     }
 
     func retryDue(now: Date) -> Bool {
-        now >= retryAt
+        now.atOrAfter(retryAt)
     }
 
     func pauseScans(of endpoint: String, until: Date) {
@@ -280,6 +280,6 @@ final class DeviceMemory {
 
     func scansPaused(of endpoint: String, now: Date) -> Bool {
         guard let scanPause, scanPause.endpoint == endpoint else { return false }
-        return now <= scanPause.until
+        return now.atOrBefore(scanPause.until)
     }
 }
