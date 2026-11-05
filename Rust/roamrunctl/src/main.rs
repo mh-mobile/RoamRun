@@ -126,7 +126,7 @@ enum Command {
         #[arg(requires = "http")]
         devices: Vec<String>,
     },
-    /// A prototype: the device's screen in a browser elsewhere on the tailnet, to watch and touch, until Ctrl-C. The page decodes with WebCodecs, which a browser offers only to a secure page: open http://<address>:<port>/ in Chrome started with --unsafely-treat-insecure-origin-as-secure=http://<address>:<port> (and --user-data-dir=<folder>; untried whether the flag needs it)
+    /// A prototype: the device's screen in a browser elsewhere on the tailnet, to watch and touch, until Ctrl-C. The page decodes with WebCodecs, which Chrome offers only to a secure page (Safari on an iPhone offered it to the page as it is): open http://<address>:<port>/ in Chrome started with --unsafely-treat-insecure-origin-as-secure=http://<address>:<port> (and --user-data-dir=<folder>; untried whether the flag needs it)
     View {
         /// The device, as `roamrunctl devices` names it
         name: String,

@@ -8,6 +8,8 @@
   body { margin: 0; font: 13px system-ui, sans-serif; background: #111; color: #ddd; display: flex; gap: 12px; padding: 12px; }
   #screen { max-height: calc(100vh - 24px); max-width: 60vw; background: #000; touch-action: none; cursor: crosshair; }
   #side { display: flex; flex-direction: column; gap: 8px; min-width: 280px; }
+  /* A narrow screen (a phone held upright): the picture across it, what is beside it below. */
+  @media (max-width: 700px) { body { flex-direction: column; } #screen { max-width: 100%; max-height: 75vh; align-self: center; } #side { min-width: 0; } }
   button { font: inherit; padding: 4px 8px; }
   pre { margin: 0; white-space: pre-wrap; font: 12px ui-monospace, monospace; }
   #log { max-height: 30vh; overflow: auto; color: #aaa; }
@@ -41,9 +43,9 @@ const log = (text, bad) => {
 
 const support = [];
 const supported = (line, bad) => { support.push((bad ? "✗ " : "✓ ") + line); $("support").textContent = support.join("\n"); };
-supported("secure context (WebCodecs needs one)", !window.isSecureContext);
+supported("secure context (Chrome gives VideoDecoder only to one)", !window.isSecureContext);
 supported("VideoDecoder", typeof VideoDecoder === "undefined");
-if (!window.isSecureContext || typeof VideoDecoder === "undefined") {
+if (typeof VideoDecoder === "undefined") {
   supported("This browser gives this page no VideoDecoder. Chrome: start it with --unsafely-treat-insecure-origin-as-secure=" + location.origin, true);
 }
 

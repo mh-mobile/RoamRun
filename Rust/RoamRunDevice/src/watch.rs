@@ -12,8 +12,20 @@ use crate::{stream_for_input, with_room, Held, KEYFRAME_APART, KEYFRAME_WAIT, LA
 
 /// How often the receiver's report goes, as idevice's `build_rctl` documents it.
 const RCTL_EVERY: Duration = Duration::from_millis(50);
-/// Nothing at all from the device for this long, asked or not: the stream is taken as gone.
+/// No video from the device for this long, key frames asked for or not: the stream is started again, on the display that is on.
 const SILENT: Duration = Duration::from_secs(8);
+/// No picture with anything in it for this long: which display is on is asked, again each `LOOK_EVERY` meanwhile. A
+/// folded Duo's inner screen goes on sending pictures of a few hundred bytes, unchanged, for about 9 s.
+const QUIET: Duration = Duration::from_secs(1);
+const LOOK_EVERY: Duration = Duration::from_secs(2);
+/// A picture this small changed nothing (a still screen's are about 150 bytes).
+const EMPTY: usize = 1024;
+
+/// Milliseconds since the first trace, for lines that say when.
+fn now_ms() -> u128 {
+    static BEGAN: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    BEGAN.get_or_init(Instant::now).elapsed().as_millis()
+}
 
 /// One access unit of the stream, Annex B; `key` where it holds an IRAP picture (with its parameter sets before it).
 pub struct Frame {
@@ -53,6 +65,9 @@ pub struct Watch {
     /// The next number the depacketizer is given.
     fed: u16,
     broken_at: Option<Instant>,
+    looked_at: Instant,
+    /// When a picture with something in it last came.
+    busy_at: Instant,
     /// Access units already cut from what the depacketizer gave, not yet handed on.
     ready: std::collections::VecDeque<Vec<u8>>,
     /// A packet went missing: nothing is given until a whole IRAP picture comes.
@@ -66,6 +81,7 @@ pub struct Watch {
 impl Watch {
     /// The stream, started if it doesn't run. One watch at a time.
     pub(crate) fn start(held: Arc<Held>, feedback: bool, wanted: Arc<AtomicBool>) -> Result<Watch, String> {
+        let began = Instant::now();
         let watch = with_room(|| {
             let mut link = held.link.lock().unwrap_or_else(|e| e.into_inner());
             if link.stop.raised() { return Err(STOPPED.into()) }
@@ -77,12 +93,13 @@ impl Watch {
             Ok(parts)
         })?;
         let (video, audio, ssrc, media, feedback_port, keyframe_at) = watch;
+        if std::env::var_os("ROAMRUNCTL_VIEW_TRACE").is_some() { eprintln!("trace: {} ms: watching, the stream ready in {} ms", now_ms(), began.elapsed().as_millis()) }
         let now = Instant::now();
         wanted.store(true, Ordering::Relaxed);
         Ok(Watch {
             held, video, audio, ssrc, media, feedback_port, frames: HevcDepacketizer::new(), feedback, began: now, rctl_at: now, heard_at: now,
             count: 0, first_seq: None, highest_seq: 0, keyframe_at, asked_at: None, requests: 0, wanted, asked: 0, answered: 0,
-            last_seq: None, gap: 0, frame_first: None, trace: std::env::var_os("ROAMRUNCTL_VIEW_TRACE").is_some(), broken: false, skip_rasl: false, max_datagram: 0, fed: 0, broken_at: None, ready: Default::default(), lost: 0, dropped: 0,
+            last_seq: None, gap: 0, frame_first: None, trace: std::env::var_os("ROAMRUNCTL_VIEW_TRACE").is_some(), broken: false, skip_rasl: false, max_datagram: 0, fed: 0, broken_at: None, looked_at: now, busy_at: now, ready: Default::default(), lost: 0, dropped: 0,
         })
     }
 
@@ -90,88 +107,125 @@ impl Watch {
     /// From a thread of its own, with room (8 MB).
     pub fn frame(&mut self) -> Result<Frame, String> {
         let held = self.held.clone();
-        held.runtime.block_on(async {
-            loop {
-                if let Some(data) = self.ready.pop_front() {
-                    let key = has_irap(&data);
-                    if key { self.keyframe_at = Instant::now() }
-                    if self.broken && !key { self.dropped += 1; continue }
-                    if key {
-                        self.skip_rasl = std::mem::take(&mut self.broken);
-                        if let (Some(at), true) = (self.broken_at.take(), self.trace) { eprintln!("trace: whole again after {} ms", at.elapsed().as_millis()) }
-                    }
-                    else if self.skip_rasl && is_rasl(&data) { self.dropped += 1; continue }
-                    else { self.skip_rasl = false }
-                    if key {
-                        if self.asked_at.take().is_some() { self.answered += 1 }
-                        self.wanted.store(false, Ordering::Relaxed);
-                    }
-                    return Ok(Frame { key, data });
-                }
-                while let Ok(Ok(_)) = tokio::time::timeout(Duration::ZERO, self.audio.recv()).await {}
-                self.ask_if_wanted().await;
-                if self.feedback && self.rctl_at.elapsed() >= RCTL_EVERY {
-                    self.rctl_at = Instant::now();
-                    let clock = self.began.elapsed().as_millis() as u16;
-                    let highest = self.highest_seq.wrapping_sub(self.first_seq.unwrap_or(self.highest_seq));
-                    self.send(build_rctl(self.ssrc, clock, self.count, highest)).await;
-                }
-                let datagram = match tokio::time::timeout(RCTL_EVERY, self.video.recv()).await {
-                    Ok(Ok(datagram)) => datagram,
-                    Ok(Err(e)) => return Err(format!("video: {e:?}")),
-                    Err(_) if self.heard_at.elapsed() >= SILENT => return Err(format!("no frames for {} s", SILENT.as_secs())),
-                    Err(_) => continue,
-                };
-                self.heard_at = Instant::now();
-                if is_rtcp(&datagram.data) {
-                    self.feedback_port = Some(datagram.source_port);
-                    continue;
-                }
-                self.max_datagram = self.max_datagram.max(datagram.data.len());
-                let Some(packet) = RtpPacket::parse(&datagram.data) else { continue };
-                if *self.media.get_or_insert(packet.ssrc) != packet.ssrc { continue }
-                self.first_seq.get_or_insert(packet.sequence_number);
-                let mut hole = false;
-                if let Some(last) = self.last_seq {
-                    let step = packet.sequence_number.wrapping_sub(last);
-                    // Late or repeated packets (step past half the range) aren't losses.
-                    if step >= 0x8000 && self.trace { eprintln!("trace: late {} after {last} (back {})", packet.sequence_number, 0u16.wrapping_sub(step)) }
-                    if step >= 0x8000 { continue }
-                    hole = step != 1;
-                    if hole { self.gap += u32::from(step.wrapping_sub(1)); if self.trace { eprintln!("trace: seq {last} -> {} (step {step})", packet.sequence_number) } }
-                }
-                if self.last_seq.is_none_or(|last| packet.sequence_number.wrapping_sub(last) < 0x8000) { self.last_seq = Some(packet.sequence_number) }
-                self.highest_seq = packet.sequence_number;
-                // A picture that opens right after a hole can come whole: what refers to the lost one waits for a key frame.
-                if feed(&mut self.frames, &mut self.fed, hole, packet.timestamp, packet.payload) {
-                    self.lost += std::mem::take(&mut self.gap);
-                    self.frame_first = None;
-                    self.broke();
-                }
-                self.frame_first.get_or_insert(packet.sequence_number);
-                if !packet.marker { continue }
-                let data = self.frames.take_output();
-                if data.is_empty() { continue }
-                self.count = self.count.wrapping_add(1);
-                if self.feedback { self.send(build_frame_ack(self.ssrc, packet.timestamp)).await }
-                if self.trace && (self.gap > 0 || self.count.is_multiple_of(120)) {
-                    eprintln!("trace: frame {} seq {}-{} bytes {} gap {} ts {} max datagram {} units {}", self.count, self.frame_first.unwrap_or(0), packet.sequence_number, data.len(), self.gap, packet.timestamp, self.max_datagram, access_units(&data).len());
-                }
-                let whole = self.gap == 0;
-                self.lost += self.gap;
-                self.gap = 0;
-                self.frame_first = None;
-                // A picture with a hole decodes as garbage, or not at all, and so does all that refers to it.
-                if !whole {
-                    self.broke();
-                    self.dropped += 1;
-                    if has_irap(&data) { self.keyframe_at = Instant::now() }
-                    continue;
-                }
-                // Several pictures can come out at one marker: each is given on its own, as a decoder takes them.
-                self.ready.extend(access_units(&data));
+        loop {
+            if let Some(frame) = held.runtime.block_on(self.next())? { return Ok(frame) }
+            // Quiet a while: whether the display streamed is still the one on (a Duo folded). Asked only while
+            // nothing comes, which a service connection then can't hold up.
+            let mut link = held.link.lock().unwrap_or_else(|e| e.into_inner());
+            let (streamed, asked) = (link.shown_id, Instant::now());
+            held.runtime.block_on(crate::ask_shown(&mut link));
+            if self.trace { eprintln!("trace: {} ms: quiet; display streamed {streamed:?}, on {:?} (asked in {} ms)", now_ms(), link.shown_id, asked.elapsed().as_millis()) }
+            if link.shown_id != streamed {
+                drop(link);
+                held.runtime.block_on(self.let_stream_go());
+                return Err("another display is on".into());
             }
-        })
+        }
+    }
+
+    /// The next access unit, or None once nothing has changed on the screen for `QUIET` (and each `LOOK_EVERY` after).
+    async fn next(&mut self) -> Result<Option<Frame>, String> {
+        loop {
+            if let Some(data) = self.ready.pop_front() {
+                let key = has_irap(&data);
+                if key { self.keyframe_at = Instant::now() }
+                if self.broken && !key { self.dropped += 1; continue }
+                if key {
+                    self.skip_rasl = std::mem::take(&mut self.broken);
+                    if let (Some(at), true) = (self.broken_at.take(), self.trace) { eprintln!("trace: whole again after {} ms", at.elapsed().as_millis()) }
+                    if self.trace && self.count < 300 && self.answered == 0 { eprintln!("trace: {} ms: a key frame given", now_ms()) }
+                }
+                else if self.skip_rasl && is_rasl(&data) { self.dropped += 1; continue }
+                else { self.skip_rasl = false }
+                if key {
+                    if self.asked_at.take().is_some() { self.answered += 1 }
+                    self.wanted.store(false, Ordering::Relaxed);
+                }
+                return Ok(Some(Frame { key, data }));
+            }
+            while let Ok(Ok(_)) = tokio::time::timeout(Duration::ZERO, self.audio.recv()).await {}
+            self.ask_if_wanted().await;
+            if self.feedback && self.rctl_at.elapsed() >= RCTL_EVERY {
+                self.rctl_at = Instant::now();
+                let clock = self.began.elapsed().as_millis() as u16;
+                let highest = self.highest_seq.wrapping_sub(self.first_seq.unwrap_or(self.highest_seq));
+                self.send(build_rctl(self.ssrc, clock, self.count, highest)).await;
+            }
+            // Video, not the device's reports, which go on when the screen streamed went out (a Duo folded).
+            if self.busy_at.elapsed() >= QUIET && self.looked_at.elapsed() >= LOOK_EVERY {
+                self.looked_at = Instant::now();
+                return Ok(None);
+            }
+            if self.heard_at.elapsed() >= SILENT {
+                self.let_stream_go().await;
+                return Err(format!("no frames for {} s", SILENT.as_secs()));
+            }
+            let datagram = match tokio::time::timeout(RCTL_EVERY, self.video.recv()).await {
+                Ok(Ok(datagram)) => datagram,
+                Ok(Err(e)) => return Err(format!("video: {e:?}")),
+                Err(_) => continue,
+            };
+            if is_rtcp(&datagram.data) {
+                self.feedback_port = Some(datagram.source_port);
+                continue;
+            }
+            self.heard_at = Instant::now();
+            self.max_datagram = self.max_datagram.max(datagram.data.len());
+            let Some(packet) = RtpPacket::parse(&datagram.data) else { continue };
+            if *self.media.get_or_insert(packet.ssrc) != packet.ssrc { continue }
+            self.first_seq.get_or_insert(packet.sequence_number);
+            let mut hole = false;
+            if let Some(last) = self.last_seq {
+                let step = packet.sequence_number.wrapping_sub(last);
+                // Late or repeated packets (step past half the range) aren't losses.
+                if step >= 0x8000 && self.trace { eprintln!("trace: late {} after {last} (back {})", packet.sequence_number, 0u16.wrapping_sub(step)) }
+                if step >= 0x8000 { continue }
+                hole = step != 1;
+                if hole { self.gap += u32::from(step.wrapping_sub(1)); if self.trace { eprintln!("trace: seq {last} -> {} (step {step})", packet.sequence_number) } }
+            }
+            if self.last_seq.is_none_or(|last| packet.sequence_number.wrapping_sub(last) < 0x8000) { self.last_seq = Some(packet.sequence_number) }
+            self.highest_seq = packet.sequence_number;
+            // A picture that opens right after a hole can come whole: what refers to the lost one waits for a key frame.
+            if feed(&mut self.frames, &mut self.fed, hole, packet.timestamp, packet.payload) {
+                self.lost += std::mem::take(&mut self.gap);
+                self.frame_first = None;
+                self.broke();
+            }
+            self.frame_first.get_or_insert(packet.sequence_number);
+            if !packet.marker { continue }
+            let data = self.frames.take_output();
+            if data.is_empty() { continue }
+            self.count = self.count.wrapping_add(1);
+            if self.feedback { self.send(build_frame_ack(self.ssrc, packet.timestamp)).await }
+            if data.len() > EMPTY { self.busy_at = Instant::now() }
+            if self.trace && (self.gap > 0 || self.count.is_multiple_of(120)) {
+                eprintln!("trace: frame {} seq {}-{} bytes {} gap {} ts {} max datagram {} units {}", self.count, self.frame_first.unwrap_or(0), packet.sequence_number, data.len(), self.gap, packet.timestamp, self.max_datagram, access_units(&data).len());
+            }
+            let whole = self.gap == 0;
+            self.lost += self.gap;
+            self.gap = 0;
+            self.frame_first = None;
+            // A picture with a hole decodes as garbage, or not at all, and so does all that refers to it.
+            if !whole {
+                self.broke();
+                self.dropped += 1;
+                if has_irap(&data) { self.keyframe_at = Instant::now() }
+                continue;
+            }
+            // Several pictures can come out at one marker: each is given on its own, as a decoder takes them.
+            self.ready.extend(access_units(&data));
+        }
+    }
+
+    /// The stream stopped, not reused: its reports would still say it is alive, and the next start asks which display is on.
+    async fn let_stream_go(&self) {
+        let stream = self.held.link.lock().unwrap_or_else(|e| e.into_inner()).stream.take();
+        if let Some(mut stream) = stream {
+            let began = Instant::now();
+            stream.stop().await;
+            if self.trace { eprintln!("trace: {} ms: stream stopped in {} ms", now_ms(), began.elapsed().as_millis()) }
+            self.held.link.lock().unwrap_or_else(|e| e.into_inner()).stream_stopped = Some(Instant::now());
+        }
     }
 
     /// A picture was lost: what refers to it isn't given until a whole IRAP, which is asked for.

@@ -431,8 +431,9 @@ at its address on the home Wi‑Fi, and 38 times through Tailscale (another run:
 - It listens on this machine's Tailscale IPv4 address only, and serves a page at `/` and a
   WebSocket at `/ws`. As `mcp --http`, it doesn't start without Tailscale or `--allow`, or as
   root; `--allow` and `--token-file` are read as there.
-- The page decodes the device's HEVC stream with WebCodecs' `VideoDecoder`, which a browser
-  offers only to a secure page, and `http://` on a tailnet address isn't one. To try it, open
+- The page decodes the device's HEVC stream with WebCodecs' `VideoDecoder`, which Chrome
+  offers only to a secure page, and `http://` on a tailnet address isn't one. Safari on an
+  iPhone 15 Pro offered it to the page as it is, and decoded the stream. In Chrome, open
   `http://<address>:<port>/` in Chrome started with
   `--unsafely-treat-insecure-origin-as-secure=http://<address>:<port>` (with a profile of its own,
 `--user-data-dir=<folder>`: untried whether the flag needs it). A page on `localhost` would be a
@@ -453,14 +454,21 @@ a port forwarded to it brings `Host: localhost:…`, which is refused. The page 
 - `--at <address>` reaches the device at that address instead of the one it was saved with: its
   address on this machine's Wi‑Fi, so that the stream doesn't go through Tailscale. The pairing
   opens it as ever, and the page is still served on the Tailscale address. A device another
-  machine signs for takes `--at` once `view` has opened it without. The Wi‑Fi counts above were
-  taken with a copy of the saved device that held its LAN address; `--at` itself hasn't been run.
+  machine signs for takes `--at` once `view` has opened it without. With `--at` and a video
+  playing on the device: 6 and 13 holes in two runs of 30 s (about 3 % of the packets), against
+  19 and 56 through Tailscale in the runs between (8 % and 58 %).
 - The device is this command's alone while it runs: don't use it from another command meanwhile.
   The screen stream runs while a page watches. Each page gets the access units as they come, none
   before a key frame. A page whose oldest frame not yet shown (waiting, or sent and not yet
   acknowledged by the page) is older than 0.5 s is cut to the next key frame, and one is asked
   for (the device answers one each 1.05 s at most). When the last page goes, the stream stops
   within about 5 s, as after a look; Ctrl-C stops it too.
+- Once the pictures have changed nothing for 1 s (each a few hundred bytes), the device is asked
+  which display is on, again every 2 s while that lasts. Where it isn't the one streamed (an iPhone
+  Duo folded or opened), the stream is stopped and started on the one that is on. On the Duo that
+  took about 3 s from closing it to the outer screen in the page: its inner screen goes on sending
+  unchanged pictures for about 9 s after it is closed. A stream with no video at all for 8 s is
+  started again too.
 - Frame acknowledgements and receiver reports (every 50 ms) go back to the device, as idevice's
   `build_frame_ack` and `build_rctl` document them; `ROAMRUNCTL_VIEW_FEEDBACK=off` sends neither,
   to compare.
@@ -707,8 +715,8 @@ against a real device at the time these notes were written:
   answered `(install <id>)`, `install_status` asked by it said the app was in after 5 s, and it
   launched; `install_status` with another id was then an error, and without one answered of
   that install.
-- `view` (a prototype): `--at` itself, browsers other than Chrome, a browser on a phone (none has
-  Chrome's flag for a secure page), and a device reached over the internet.
+- `view` (a prototype): browsers other than Chrome on a Mac and Safari on an iPhone, and the
+  page opened from outside the home network.
 - Tailscale userspace networking with no address available to bind.
 - Xcode pairing through `pair introduce` since the `--mac` → `--host` change.
 

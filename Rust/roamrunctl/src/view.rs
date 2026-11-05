@@ -218,7 +218,7 @@ pub fn serve(options: Options) -> Result<String, String> {
     // The stream stopped at Ctrl-C, not left listed on the device as screen sharing.
     crate::at_stop()?.then(|| {});
     let feedback = std::env::var(FEEDBACK).map_or(true, |v| v != "off");
-    note!("roamrunctl: {}'s screen at http://{own}:{port}/ (a prototype), for {} on the tailnet{}{}. The page needs WebCodecs, which a browser offers only to a secure page: see `roamrunctl view --help`. Ctrl-C ends it.",
+    note!("roamrunctl: {}'s screen at http://{own}:{port}/ (a prototype), for {} on the tailnet{}{}. The page needs WebCodecs, which Chrome offers only to a secure page: see `roamrunctl view --help`. Ctrl-C ends it.",
         options.device, options.allowed.iter().map(|a| match a { Allow::Tag(s) | Allow::Login(s) => s.as_str() }).collect::<Vec<_>>().join(", "),
         if options.token.is_some() { ", with the token" } else { "" }, if feedback { "" } else { "; no frame acks or receiver reports to the device" });
     let screen = Arc::new(OnDevice { device: Mutex::new(device), feedback });
