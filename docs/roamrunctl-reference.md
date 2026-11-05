@@ -488,8 +488,11 @@ a port forwarded to it brings `Host: localhost:…`, which is refused. The page 
 - Sound: the device sends its sound as AAC-ELD, which neither Chrome nor Safari decodes (asked of
   `AudioDecoder` on a Mac and an iPhone). Where this machine is a Mac, it is decoded here with
   AudioToolbox, and a page whose Sound button was pressed gets it as PCM (48 kHz, two channels,
-  16-bit: about 190 KB/s), played as it comes, 60 ms ahead. On Linux and Windows there is none.
-  Heard from an iPhone Duo over USB in Chrome on a Mac; the delay against the picture hasn't been
+  16-bit: about 190 KB/s), played as it comes on a WebSocket of its own,
+  kept 0.15 to 0.5 s ahead (each gap adds 50 ms, each 10 s without one takes 25 ms off; what comes
+  beyond that is let go). In Safari on an iPhone through Tailscale, with the sound on the
+  picture's WebSocket it stopped for up to 2 s behind the frames; on its own one it barely gaps. On Linux and Windows there is none.
+  Heard from an iPhone Duo over USB in Chrome on a Mac and in Safari on an iPhone; the delay against the picture hasn't been
   measured.
 - The header says whether the picture is live, and the frames and KB a second. Details shows the bytes and frames received each second, the decode time, the key frames
   asked for and answered, how often it was cut, and click-to-change: the time from a click to
@@ -503,7 +506,8 @@ a port forwarded to it brings `Host: localhost:…`, which is refused. The page 
   `hello`, `picture` (`codec`, `width`, `height`, `crop`), `counts`, `status`, `done`, `error`.
   Sound is a binary message too: a byte (2), the time, then the PCM (little-endian).
   The page's are JSON: `hello` (`token`), `ack` (`t`), `tap` (`x`, `y`, 0 to 1), `swipe` (`x1`,
-  `y1`, `x2`, `y2`, `ms`), `type` (`text`), `press` (`button`), `keyframe`, `sound` (`on`).
+  `y1`, `x2`, `y2`, `ms`), `type` (`text`), `press` (`button`), `keyframe`. For the sound the page opens a second WebSocket, whose `hello` has `only: "sound"`: it
+  carries the sound alone, so that no frame holds it up.
 
 ## Through an HTTP proxy (`ROAMRUNCTL_PROXY`)
 

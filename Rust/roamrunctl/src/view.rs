@@ -101,6 +101,8 @@ const SOUND_KEPT: usize = 50;
 struct Viewer {
     out: Mutex<Out>,
     ready: Condvar,
+    /// A connection the page opens for the sound alone: no frames on it, so that none holds the sound up behind it.
+    sound_only: bool,
 }
 
 impl Viewer {
@@ -196,7 +198,7 @@ impl Hub {
     fn push(&self, frame: Sent) {
         let frame = Arc::new(frame);
         let now = Instant::now();
-        for viewer in self.viewers.lock().unwrap_or_else(|e| e.into_inner()).iter() {
+        for viewer in self.viewers.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|v| !v.sound_only) {
             if viewer.out.lock().unwrap_or_else(|e| e.into_inner()).queue.push(frame.clone(), now) { self.wanted.store(true, Ordering::Relaxed) }
             viewer.ready.notify_one();
         }
@@ -410,10 +412,11 @@ fn connection(stream: TcpStream, from: IpAddr, hub: &Hub, who: &mut String, what
     // A stream isn't cut for being quiet, or slow to take what is written.
     let _ = reader.get_ref().set_read_timeout(None);
     let _ = writer.set_write_timeout(None);
-    let viewer = Arc::new(Viewer { out: Mutex::new(Out { queue: Queue::new(), texts: VecDeque::new(), hears: false, sounds: VecDeque::new(), closed: false }), ready: Condvar::new() });
+    let sound_only = hello["only"] == "sound";
+    let viewer = Arc::new(Viewer { out: Mutex::new(Out { queue: Queue::new(), texts: VecDeque::new(), hears: sound_only, sounds: VecDeque::new(), closed: false }), ready: Condvar::new(), sound_only });
     viewer.say(json!({ "type": "hello", "feedback": hub.feedback }).to_string());
     hub.viewers.lock().unwrap_or_else(|e| e.into_inner()).push(viewer.clone());
-    hub.wanted.store(true, Ordering::Relaxed);
+    if !sound_only { hub.wanted.store(true, Ordering::Relaxed) }
     hub.joined.notify_all();
     let ended = std::thread::scope(|scope| {
         scope.spawn(|| write_to(&mut writer, &viewer, hub));
@@ -444,11 +447,6 @@ fn read_from(reader: &mut impl BufRead, viewer: &Arc<Viewer>, hub: &Hub) -> Stri
         let message: Value = serde_json::from_str(&text).unwrap_or_default();
         match message["type"].as_str().unwrap_or("") {
             "ack" => if let Some(ms) = message["t"].as_u64() { viewer.out.lock().unwrap_or_else(|e| e.into_inner()).queue.acked(ms) },
-            "sound" => {
-                let mut out = viewer.out.lock().unwrap_or_else(|e| e.into_inner());
-                out.hears = message["on"].as_bool().unwrap_or(false);
-                if !out.hears { out.sounds.clear() }
-            }
             "keyframe" => {
                 viewer.out.lock().unwrap_or_else(|e| e.into_inner()).queue.restart();
                 hub.wanted.store(true, Ordering::Relaxed);

@@ -154,6 +154,7 @@ setInterval(() => {
     `click-to-change: last ${latencies.length ? latencies[latencies.length - 1].toFixed(0) : "-"} ms, median ${percentile(latencies, 0.5)}, p90 ${percentile(latencies, 0.9)} (n=${latencies.length})`,
     `key frames asked ${c.keyframesAsked ?? "-"}, answered ${c.keyframesAnswered ?? "-"}; cut to a key frame ${c.cuts ?? "-"}×`,
     `feedback to the device (acks, reports): ${stats.feedback === null ? "-" : stats.feedback ? "on" : "off"}`,
+    hearing ? `sound: ${gaps} gaps, ${(ahead * 1000).toFixed(0)} ms ahead; longest wait between pieces ${longestWait.toFixed(0)} ms` : "sound: off",
     picture ? `codec ${picture.codec}; server: ${picture.width}×${picture.height}, cut to ${picture.crop.join("×")}; decoded: ${stats.frameSize}` : "no picture yet",
   ].join("\n");
 }, 1000);
@@ -235,7 +236,7 @@ function connect() {
   connectedAt = performance.now();
   firstPicture = false;
   state("wait", "connecting");
-  socket.onopen = () => { socket.send(JSON.stringify({ type: "hello", token })); if (hearing) send({ type: "sound", on: true }); };
+  socket.onopen = () => socket.send(JSON.stringify({ type: "hello", token }));
   socket.onclose = (e) => {
     if (e.code === 1008) {
       state("down", "a token is needed");
@@ -250,7 +251,6 @@ function connect() {
   socket.onmessage = (e) => {
     if (typeof e.data === "string") return said(JSON.parse(e.data));
     const view = new DataView(e.data);
-    if (view.getUint8(0) === 2) return heard(e.data);
     const key = view.getUint8(0) === 1;
     const ms = Number(view.getBigUint64(1));
     send({ type: "ack", t: ms });
@@ -343,11 +343,16 @@ for (const button of document.querySelectorAll("[data-press]")) button.onclick =
 $("key").onclick = () => { waitKey = true; send({ type: "keyframe" }); };
 $("info").onclick = () => { $("panel").hidden = !$("panel").hidden; $("info").classList.toggle("on", !$("panel").hidden); };
 
-// Sound: PCM from the server (48 kHz, two channels interleaved, 16-bit), played as it comes, a little ahead.
-let hearing = false, ears = null, playAt = 0;
+// Sound: PCM from the server (48 kHz, two channels interleaved, 16-bit), played as it comes, `ahead` ahead.
+// Seconds of sound kept ahead: what the way to this page may hold up without a gap. Each gap adds 50 ms, to 0.5 s;
+// each 10 s without one takes 25 ms off, to 0.15 s again.
+let hearing = false, ears = null, playAt = 0, ahead = 0.15, gaps = 0, lastHeard = 0, longestWait = 0, lastGap = 0;
 function heard(message) {
   if (!ears) return;
   stats.bytes += message.byteLength;
+  const arrived = performance.now();
+  if (lastHeard) longestWait = Math.max(longestWait, arrived - lastHeard);
+  lastHeard = arrived;
   const pcm = new Int16Array(message.slice(9)), frames = pcm.length / 2;
   if (!frames) return;
   const buffer = ears.createBuffer(2, frames, 48000), left = buffer.getChannelData(0), right = buffer.getChannelData(1);
@@ -355,11 +360,27 @@ function heard(message) {
   const source = ears.createBufferSource();
   source.buffer = buffer;
   source.connect(ears.destination);
-  // Behind (a gap) or too far ahead (a burst): taken up again 60 ms from now.
+  // Run dry (a gap): taken up again `ahead` from now, and `ahead` grows. Further ahead than wanted (a burst after a
+  // stall, or `ahead` just shortened): this piece is let go, so that the sound doesn't lag more than `ahead`.
   const now = ears.currentTime;
-  if (playAt < now + 0.01 || playAt > now + 0.4) playAt = now + 0.06;
+  if (ahead > 0.15 && arrived - lastGap > 10000) { ahead = Math.max(0.15, ahead - 0.025); lastGap = arrived; }
+  if (playAt < now + 0.005) {
+    if (playAt) { gaps++; ahead = Math.min(0.5, ahead + 0.05); }
+    playAt = now + ahead;
+    lastGap = arrived;
+  } else if (playAt > now + ahead + 0.05) return;
   source.start(playAt);
   playAt += buffer.duration;
+}
+// The sound comes on a connection of its own: on the picture's, a large frame held it up behind it for seconds
+// (Safari on an iPhone, through Tailscale).
+let earSocket = null;
+function listen() {
+  earSocket = new WebSocket(`ws://${location.host}/ws`);
+  earSocket.binaryType = "arraybuffer";
+  earSocket.onopen = () => earSocket.send(JSON.stringify({ type: "hello", token, only: "sound" }));
+  earSocket.onmessage = (e) => { if (typeof e.data !== "string" && new DataView(e.data).getUint8(0) === 2) heard(e.data); };
+  earSocket.onclose = () => { if (hearing) setTimeout(listen, 1000); };
 }
 $("sound").onclick = async () => {
   hearing = !hearing;
@@ -367,9 +388,9 @@ $("sound").onclick = async () => {
   if (hearing) {
     ears = ears || new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
     await ears.resume();
-    playAt = 0;
-  }
-  send({ type: "sound", on: hearing });
+    playAt = 0; lastHeard = 0; longestWait = 0; gaps = 0; ahead = 0.15;
+    listen();
+  } else if (earSocket) earSocket.close();
   log(hearing ? "sound on (the Mac serving this decodes it: none from Linux or Windows)" : "sound off");
 };
 
