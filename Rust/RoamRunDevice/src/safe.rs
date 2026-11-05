@@ -9,8 +9,10 @@ use crate::*;
 /// A device that is open. Closed when dropped.
 pub struct Device(*mut RRDevice);
 
-// The C side's own rule: one call at a time, from any thread (a lock is held inside each).
+// The C side's own rule: one call at a time, from any thread (a lock is held inside each). Shared too: each call
+// takes the device's link lock itself (`with_room` holds only a shared reference), so calls from two threads queue.
 unsafe impl Send for Device {}
+unsafe impl Sync for Device {}
 
 fn take(said: *mut c_char) -> String {
     if said.is_null() { return "{\"ok\":false,\"error\":\"no answer\"}".into(); }
@@ -24,6 +26,10 @@ fn c(text: &str) -> Result<CString, String> {
 }
 
 impl Device {
+    /// A device that is none: every call answers that nothing answered. For tests that need one in place.
+    #[doc(hidden)]
+    pub fn none() -> Device { Device(std::ptr::null_mut()) }
+
     /// `pairing`: the pairing itself (a property list's bytes), not a path.
     pub fn open(ip: &str, port: u16, pairing: &[u8]) -> Result<Device, String> {
         let ip = c(ip)?;
@@ -106,7 +112,8 @@ impl Device {
     /// The screen stream, read by the `Watch` alone while it is held (see `watch`). `feedback`: frame acks and
     /// receiver reports go back to the device; `wanted`, raised, asks for a key frame.
     pub fn watch(&self, feedback: bool, wanted: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Result<crate::watch::Watch, String> {
-        let held = unsafe { &*self.0 }.held.clone();
+        let Some(device) = (unsafe { self.0.as_ref() }) else { return Err("no device".into()) };
+        let held = device.held.clone();
         crate::watch::Watch::start(held, feedback, wanted)
     }
 

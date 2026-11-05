@@ -151,19 +151,19 @@ impl Frames for Watch {
 }
 
 struct OnDevice {
-    device: Mutex<Device>,
+    device: Arc<Device>,
     feedback: bool,
 }
 
 impl Screen for OnDevice {
     fn watch(&self, wanted: Arc<AtomicBool>) -> Result<Box<dyn Frames>, String> {
-        let device = self.device.lock().unwrap_or_else(|e| e.into_inner());
+        let device = &self.device;
         device.watch(self.feedback, wanted).map(|watch| Box::new(watch) as Box<dyn Frames>)
     }
-    fn size(&self) -> Option<(u32, u32)> { crate::device::screen_size(&self.device.lock().unwrap_or_else(|e| e.into_inner())) }
-    fn way(&self) -> u8 { self.device.lock().unwrap_or_else(|e| e.into_inner()).way() }
+    fn size(&self) -> Option<(u32, u32)> { crate::device::screen_size(&self.device) }
+    fn way(&self) -> u8 { self.device.way() }
     fn input(&self, input: &Input) -> Result<(), String> {
-        let device = self.device.lock().unwrap_or_else(|e| e.into_inner());
+        let device = &self.device;
         crate::device::said(match input {
             Input::Tap(x, y) => device.tap(*x, *y),
             Input::Swipe(from, to, ms) => device.swipe(*from, *to, *ms),
@@ -239,7 +239,7 @@ pub fn serve(options: Options) -> Result<String, String> {
     note!("roamrunctl: {}'s screen at http://{own}:{port}/ (a prototype), for {} on the tailnet{}{}. The page needs WebCodecs, which Chrome offers only to a secure page: see `roamrunctl view --help`. Ctrl-C ends it.",
         device_name, options.allowed.iter().map(|a| match a { Allow::Tag(s) | Allow::Login(s) => s.as_str() }).collect::<Vec<_>>().join(", "),
         if options.token.is_some() { ", with the token" } else { "" }, if feedback { "" } else { "; no frame acks or receiver reports to the device" });
-    let screen = Arc::new(OnDevice { device: Mutex::new(device), feedback });
+    let screen = Arc::new(OnDevice { device: Arc::new(device), feedback });
     run(listener, screen, options.allowed, options.token, http::hosts(IpAddr::V4(own), names, port), IpAddr::V4(own), status.this.id.clone(), feedback, Box::new(crate::tailscale::whois))
 }
 

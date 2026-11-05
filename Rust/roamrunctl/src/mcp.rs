@@ -106,7 +106,8 @@ pub type Offered = (String, Option<Vec<u8>>);
 #[derive(Default)]
 pub struct Server {
     /// Each with its saved file as it was when it was opened: a name saved anew since isn't this device.
-    open: HashMap<String, crate::device::Held>,
+    /// Shared, so that `view --mcp` can hand over the device it streams from.
+    open: HashMap<String, (Arc<Device>, Option<Vec<u8>>)>,
     shown: HashMap<String, Shown>,
     acted: HashMap<String, Instant>,
     /// Over HTTP (`mcp --http`): the devices named there, each with its saved file as it was then (see
@@ -329,7 +330,7 @@ impl Server {
             let held = if offered.is_some() { device::held_here(name)?.ok_or_else(|| anew(name))? } else { device::held(name)? };
             if offered.as_ref().is_some_and(|was| held.1 != *was) { return Err(anew(name)) }
             if by.is_some_and(|by| held.1 != *by) { return Err(OF_ANOTHER.into()) }
-            self.open.insert(name.to_string(), held);
+            self.open.insert(name.to_string(), (Arc::new(held.0), held.1));
         }
         Ok(&self.open[name].0)
     }
