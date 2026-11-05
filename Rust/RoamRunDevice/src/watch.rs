@@ -50,6 +50,9 @@ pub struct Watch {
     frame_first: Option<u16>,
     trace: bool,
     max_datagram: usize,
+    /// The next number the depacketizer is given.
+    fed: u16,
+    broken_at: Option<Instant>,
     /// Access units already cut from what the depacketizer gave, not yet handed on.
     ready: std::collections::VecDeque<Vec<u8>>,
     /// A packet went missing: nothing is given until a whole IRAP picture comes.
@@ -79,7 +82,7 @@ impl Watch {
         Ok(Watch {
             held, video, audio, ssrc, media, feedback_port, frames: HevcDepacketizer::new(), feedback, began: now, rctl_at: now, heard_at: now,
             count: 0, first_seq: None, highest_seq: 0, keyframe_at, asked_at: None, requests: 0, wanted, asked: 0, answered: 0,
-            last_seq: None, gap: 0, frame_first: None, trace: std::env::var_os("ROAMRUNCTL_VIEW_TRACE").is_some(), broken: false, skip_rasl: false, max_datagram: 0, ready: Default::default(), lost: 0, dropped: 0,
+            last_seq: None, gap: 0, frame_first: None, trace: std::env::var_os("ROAMRUNCTL_VIEW_TRACE").is_some(), broken: false, skip_rasl: false, max_datagram: 0, fed: 0, broken_at: None, ready: Default::default(), lost: 0, dropped: 0,
         })
     }
 
@@ -93,7 +96,10 @@ impl Watch {
                     let key = has_irap(&data);
                     if key { self.keyframe_at = Instant::now() }
                     if self.broken && !key { self.dropped += 1; continue }
-                    if key { self.skip_rasl = std::mem::take(&mut self.broken) }
+                    if key {
+                        self.skip_rasl = std::mem::take(&mut self.broken);
+                        if let (Some(at), true) = (self.broken_at.take(), self.trace) { eprintln!("trace: whole again after {} ms", at.elapsed().as_millis()) }
+                    }
                     else if self.skip_rasl && is_rasl(&data) { self.dropped += 1; continue }
                     else { self.skip_rasl = false }
                     if key {
@@ -125,16 +131,19 @@ impl Watch {
                 let Some(packet) = RtpPacket::parse(&datagram.data) else { continue };
                 if *self.media.get_or_insert(packet.ssrc) != packet.ssrc { continue }
                 self.first_seq.get_or_insert(packet.sequence_number);
+                let mut hole = false;
                 if let Some(last) = self.last_seq {
                     let step = packet.sequence_number.wrapping_sub(last);
                     // Late or repeated packets (step past half the range) aren't losses.
                     if step >= 0x8000 && self.trace { eprintln!("trace: late {} after {last} (back {})", packet.sequence_number, 0u16.wrapping_sub(step)) }
-                    if step != 1 && step < 0x8000 { self.gap += u32::from(step.wrapping_sub(1)); if self.trace { eprintln!("trace: seq {last} -> {} (step {step})", packet.sequence_number) } }
+                    if step >= 0x8000 { continue }
+                    hole = step != 1;
+                    if hole { self.gap += u32::from(step.wrapping_sub(1)); if self.trace { eprintln!("trace: seq {last} -> {} (step {step})", packet.sequence_number) } }
                 }
                 if self.last_seq.is_none_or(|last| packet.sequence_number.wrapping_sub(last) < 0x8000) { self.last_seq = Some(packet.sequence_number) }
                 self.frame_first.get_or_insert(packet.sequence_number);
                 self.highest_seq = packet.sequence_number;
-                self.frames.push(packet.sequence_number, packet.timestamp, packet.payload);
+                feed(&mut self.frames, &mut self.fed, hole, packet.timestamp, packet.payload);
                 if !packet.marker { continue }
                 let data = self.frames.take_output();
                 if data.is_empty() { continue }
@@ -150,6 +159,7 @@ impl Watch {
                 // A picture with a hole decodes as garbage, or not at all, and so does all that refers to it.
                 if !whole {
                     if !self.broken && self.trace { eprintln!("trace: broken from frame {}", self.count) }
+                    self.broken_at.get_or_insert_with(Instant::now);
                     self.broken = true;
                     self.dropped += 1;
                     self.wanted.store(true, Ordering::Relaxed);
@@ -230,6 +240,17 @@ pub fn is_rasl(annexb: &[u8]) -> bool {
     slices.peek().is_some() && slices.all(|t| t == 8 || t == 9)
 }
 
+/// A packet to the depacketizer under a number of its own, without holes: at a hole it would hold up to 128 packets
+/// for a late one, which this tunnel (TCP) never brings. An empty aggregation packet ends a fragment the hole cut.
+fn feed(frames: &mut HevcDepacketizer, fed: &mut u16, hole: bool, timestamp: u32, payload: &[u8]) {
+    if hole {
+        frames.push(*fed, timestamp, &[0x60, 0x01]);
+        *fed = fed.wrapping_add(1);
+    }
+    frames.push(*fed, timestamp, payload);
+    *fed = fed.wrapping_add(1);
+}
+
 /// The NAL units of Annex B, without their start codes; empty ones left out.
 pub fn nal_units(annexb: &[u8]) -> impl Iterator<Item = &[u8]> {
     let mut starts = Vec::new();
@@ -285,11 +306,13 @@ mod tests {
 
     /// As `frame` does it: RTP through idevice's depacketizer, then the key flag from what came out.
     fn units(packets: &[Vec<u8>]) -> Vec<(bool, Vec<u8>)> {
-        let mut frames = HevcDepacketizer::new();
+        let (mut frames, mut fed, mut last) = (HevcDepacketizer::new(), 0, None::<u16>);
         let mut out = Vec::new();
         for datagram in packets {
             let packet = RtpPacket::parse(datagram).unwrap();
-            frames.push(packet.sequence_number, packet.timestamp, packet.payload);
+            let hole = last.is_some_and(|l| packet.sequence_number.wrapping_sub(l) != 1);
+            last = Some(packet.sequence_number);
+            feed(&mut frames, &mut fed, hole, packet.timestamp, packet.payload);
             if packet.marker {
                 let data = frames.take_output();
                 out.push((has_irap(&data), data));
@@ -315,6 +338,15 @@ mod tests {
         assert_eq!(first, [&vps[..], &sps, &pps, &[0x26, 0x01, 1, 2, 3]]);
         // The next unit opens with the delimiter the depacketizer writes, and isn't taken for a key frame by it.
         assert_eq!(nal_units(&got[1].1).next().unwrap(), [0x46, 0x01, 0x50]);
+    }
+
+    /// After a lost packet the next picture comes out at its marker, not 128 packets later, without the fragment cut.
+    #[test]
+    fn a_hole_is_not_waited_out() {
+        let trail = [0x02, 0x01, 9, 9];
+        let got = units(&[rtp(1, 100, false, &[0x62, 0x01, 0x80 | 19, 1, 2]), rtp(3, 200, true, &trail)]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(nal_units(&got[0].1).collect::<Vec<_>>(), [&[0x46, 0x01, 0x50][..], &trail]);
     }
 
     #[test]
