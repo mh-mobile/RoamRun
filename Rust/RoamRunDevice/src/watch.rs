@@ -12,8 +12,8 @@ use crate::{stream_for_input, with_room, Held, KEYFRAME_APART, KEYFRAME_WAIT, LA
 
 /// How often the receiver's report goes, as idevice's `build_rctl` documents it.
 const RCTL_EVERY: Duration = Duration::from_millis(50);
-/// Nothing at all from the device for this long: the stream is taken as gone.
-const SILENT: Duration = Duration::from_secs(2);
+/// Nothing at all from the device for this long, asked or not: the stream is taken as gone.
+const SILENT: Duration = Duration::from_secs(8);
 
 /// One access unit of the stream, Annex B; `key` where it holds an IRAP picture (with its parameter sets before it).
 pub struct Frame {
