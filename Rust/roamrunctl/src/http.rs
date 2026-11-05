@@ -18,11 +18,11 @@ use crate::tailscale::{self, Whois};
 
 /// A request's head at most, and a message's body.
 const HEAD: usize = 16 * 1024;
-const BODY: usize = 1 << 20;
+pub(crate) const BODY: usize = 1 << 20;
 /// For a request's head, from when it connected (before it is known who it is), and then for its body: all of
 /// it, not each read — what trickles in is waited for no longer. And for writing an answer.
 const HEAD_WITHIN: Duration = Duration::from_secs(10);
-const BODY_WITHIN: Duration = Duration::from_secs(30);
+pub(crate) const BODY_WITHIN: Duration = Duration::from_secs(30);
 const WRITE: Duration = Duration::from_secs(30);
 /// Nor is one read waited for longer than this: an upload whose caller went without a word lets go of its slot.
 #[cfg(not(test))]
@@ -260,14 +260,14 @@ fn reason(status: u16) -> &'static str {
     }
 }
 
-fn respond(stream: &mut TcpStream, status: u16, extra: &str, body: &str) {
+pub(crate) fn respond(stream: &mut TcpStream, status: u16, extra: &str, body: &str) {
     let kind = if body.starts_with('{') { "application/json" } else { "text/plain; charset=utf-8" };
     let head = format!("HTTP/1.1 {status} {}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n{extra}\r\n", reason(status), body.len());
     let _ = stream.write_all(head.as_bytes()).and_then(|()| stream.write_all(body.as_bytes())).and_then(|()| stream.flush());
 }
 
 /// A JSON-RPC error, sent with a 400 (with no id where the request can't be read: what the MCP SDKs do).
-fn rpc_error(id: Value, code: i32, message: &str) -> String {
+pub(crate) fn rpc_error(id: Value, code: i32, message: &str) -> String {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } }).to_string()
 }
 
@@ -654,7 +654,7 @@ fn connection(mut stream: TcpStream, from: IpAddr, s: &Shared) {
 /// What the caller still sends after its answer (a body not read, where it was refused first) is read and
 /// dropped for a moment before the connection closes: closed with it unread, the system resets the
 /// connection, and the caller can lose the answer it was given.
-fn linger(mut stream: &TcpStream) {
+pub(crate) fn linger(mut stream: &TcpStream) {
     let _ = stream.shutdown(std::net::Shutdown::Write);
     let _ = stream.set_read_timeout(Some(Duration::from_millis(250)));
     let (until, mut left, mut rest) = (Instant::now() + Duration::from_secs(1), BODY, [0u8; 8192]);
@@ -785,7 +785,7 @@ fn request_id(id: &Value) -> bool {
 /// Whether the caller's connection is closed or broken. Nothing more is due from a caller once its request is
 /// in, so a read that ends, or fails, says so — a caller that only shuts its own side to wait is taken as gone
 /// too: that can't be told apart, and a call for nobody isn't made.
-fn closed(stream: &TcpStream) -> bool {
+pub(crate) fn closed(stream: &TcpStream) -> bool {
     if stream.set_nonblocking(true).is_err() { return true }
     let ended = match stream.peek(&mut [0u8; 1]) {
         Ok(read) => read == 0,

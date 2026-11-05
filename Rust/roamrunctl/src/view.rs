@@ -20,8 +20,9 @@ use crate::tailscale::Whois;
 
 const PAGE: &str = include_str!("view.html");
 /// Connections at once, and from one address.
-const AT_ONCE: usize = 8;
-const FROM_ONE: usize = 4;
+const AT_ONCE: usize = 12;
+/// A page takes two (its picture and its sound), an MCP client two or three at once.
+const FROM_ONE: usize = 6;
 /// For a request's head, each read; and for a viewer's first message.
 const HEAD_WITHIN: Duration = Duration::from_secs(10);
 /// A viewer whose oldest frame not yet shown is older than this is cut to the next key frame.
@@ -193,6 +194,7 @@ struct Hub {
     whois: Box<dyn Fn(IpAddr) -> Result<Whois, String> + Send + Sync>,
     inputs: Mutex<mpsc::Sender<(Arc<Viewer>, Input)>>,
     sound: Mutex<mpsc::Sender<Vec<u8>>>,
+    mcp: Option<Mcp>,
     open: Mutex<std::collections::HashMap<IpAddr, usize>>,
 }
 
@@ -218,6 +220,16 @@ pub struct Options {
     pub at: Option<IpAddr>,
     /// The device connected by USB with this UDID; empty: the only one.
     pub usb: Option<String>,
+    /// `POST /mcp`: roamrunctl's MCP tools on this device, through this connection (needs the token).
+    pub mcp: bool,
+}
+
+/// `view --mcp`: the MCP server on view's own device, and the name it goes by there.
+struct Mcp {
+    name: String,
+    server: Mutex<crate::mcp::Server>,
+    /// The page's inputs, counted for the server (see `PageInputs`).
+    page: Arc<crate::mcp::PageInputs>,
 }
 
 /// `roamrunctl view`: until Ctrl-C.
@@ -239,18 +251,26 @@ pub fn serve(options: Options) -> Result<String, String> {
     note!("roamrunctl: {}'s screen at http://{own}:{port}/ (a prototype), for {} on the tailnet{}{}. The page needs WebCodecs, which Chrome offers only to a secure page: see `roamrunctl view --help`. Ctrl-C ends it.",
         device_name, options.allowed.iter().map(|a| match a { Allow::Tag(s) | Allow::Login(s) => s.as_str() }).collect::<Vec<_>>().join(", "),
         if options.token.is_some() { ", with the token" } else { "" }, if feedback { "" } else { "; no frame acks or receiver reports to the device" });
-    let screen = Arc::new(OnDevice { device: Arc::new(device), feedback });
-    run(listener, screen, options.allowed, options.token, http::hosts(IpAddr::V4(own), names, port), IpAddr::V4(own), status.this.id.clone(), feedback, Box::new(crate::tailscale::whois))
+    let device = Arc::new(device);
+    let page = Arc::new(crate::mcp::PageInputs::default());
+    // The name an agent gives: the saved one, or for USB the UDID, else `usb`.
+    let mcp = options.mcp.then(|| {
+        let name = match &options.usb { Some(udid) if udid.is_empty() => "usb".to_string(), Some(udid) => udid.clone(), None => options.device.clone() };
+        note!("roamrunctl: MCP at http://{own}:{port}/mcp for the same callers, with the token as a bearer: its device is “{name}”");
+        Mcp { server: Mutex::new(crate::mcp::Server::holding(&name, device.clone(), Some(page.clone()))), name, page }
+    });
+    let screen = Arc::new(OnDevice { device, feedback });
+    run(listener, screen, options.allowed, options.token, http::hosts(IpAddr::V4(own), names, port), IpAddr::V4(own), status.this.id.clone(), feedback, mcp, Box::new(crate::tailscale::whois))
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run(listener: TcpListener, screen: Arc<dyn Screen>, allowed: Vec<Allow>, token: Option<String>, hosts: Vec<String>, own_ip: IpAddr, own_id: String, feedback: bool,
+fn run(listener: TcpListener, screen: Arc<dyn Screen>, allowed: Vec<Allow>, token: Option<String>, hosts: Vec<String>, own_ip: IpAddr, own_id: String, feedback: bool, mcp: Option<Mcp>,
        whois: Box<dyn Fn(IpAddr) -> Result<Whois, String> + Send + Sync>) -> Result<String, String> {
     let (inputs, asked) = mpsc::channel::<(Arc<Viewer>, Input)>();
     let (sound, heard) = mpsc::channel::<Vec<u8>>();
     let hub = Arc::new(Hub {
         viewers: Mutex::new(Vec::new()), joined: Condvar::new(), wanted: Arc::new(AtomicBool::new(false)), asked: AtomicU32::new(0), answered: AtomicU32::new(0),
-        way: std::sync::atomic::AtomicU8::new(0), began: Instant::now(), feedback, allowed, token, hosts, own_ip, own_id, whois, inputs: Mutex::new(inputs), sound: Mutex::new(sound), open: Mutex::new(Default::default()),
+        way: std::sync::atomic::AtomicU8::new(0), began: Instant::now(), feedback, allowed, token, hosts, own_ip, own_id, whois, inputs: Mutex::new(inputs), sound: Mutex::new(sound), open: Mutex::new(Default::default()), mcp,
     });
     // The sound decoded on a thread of its own, and given to the pages that asked for it.
     let hearing = hub.clone();
@@ -274,11 +294,16 @@ fn run(listener: TcpListener, screen: Arc<dyn Screen>, allowed: Vec<Allow>, toke
     });
     // Inputs one at a time, on a thread of their own: a long `type` doesn't hold up what the page acknowledges.
     let device = screen.clone();
+    let pages = hub.mcp.as_ref().map(|mcp| mcp.page.clone());
     std::thread::spawn(move || {
         for (viewer, input) in asked {
             let began = Instant::now();
             let what = match &input { Input::Tap(..) => "tap", Input::Swipe(..) => "swipe", Input::Type(_) => "type", Input::Paste(_) => "paste", Input::Press(_) => "press" };
-            viewer.say(match device.input(&input) {
+            // Counted before it begins and timed once it ends: an agent's look meanwhile isn't taken to be current.
+            if let Some(page) = &pages { page.count.fetch_add(1, Ordering::SeqCst); }
+            let said = device.input(&input);
+            if let Some(page) = &pages { *page.ended.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now()); }
+            viewer.say(match said {
                 Ok(()) => json!({ "type": "done", "what": what, "ms": began.elapsed().as_millis() as u64 }),
                 Err(why) => json!({ "type": "error", "what": what, "error": why }),
             }.to_string());
@@ -313,7 +338,10 @@ fn run(listener: TcpListener, screen: Arc<dyn Screen>, allowed: Vec<Allow>, toke
         std::thread::spawn(move || {
             let began = Instant::now();
             let (mut who, mut what) = ("-".to_string(), "-".to_string());
+            let lingering = stream.try_clone().ok();
             let outcome = connection(stream, from, &hub, &mut who, &mut what);
+            // A body not read (refused first) is drained a moment, so that the caller isn't reset before its answer.
+            if let Some(stream) = lingering.filter(|_| what.starts_with("POST")) { http::linger(&stream) }
             note!("{} {from} {} {} {outcome} {:.1}s", http::clock(), http::printable(&who), what, began.elapsed().as_secs_f64());
             let mut open = hub.open.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(n) = open.get_mut(&from) { *n -= 1; if *n == 0 { open.remove(&from); } }
@@ -371,6 +399,7 @@ fn connection(stream: TcpStream, from: IpAddr, hub: &Hub, who: &mut String, what
     let request = match http::head(&mut reader) { Ok(request) => request, Err(status) => return refuse(&mut writer, status) };
     *what = format!("{} {}", http::printable(&request.method), http::printable(&request.path));
     let Some(host) = request.header("host").filter(|host| hub.hosts.iter().any(|h| h.eq_ignore_ascii_case(host))) else { return refuse(&mut writer, 400) };
+    if request.path == "/mcp" { return mcp_call(&mut reader, &mut writer, &request, from, hub, who, what) }
     // A page of this server's own, or none (the page itself, opened): not one of another site.
     let own_origin = format!("http://{host}");
     let socket = request.path == "/ws";
@@ -514,6 +543,63 @@ fn write_to(writer: &mut TcpStream, viewer: &Viewer, hub: &Hub) {
             return;
         }
     }
+}
+
+/// `POST /mcp` (`view --mcp`): roamrunctl's MCP tools on view's own device, by its connection and its stream, so that
+/// an agent's look starts no second screen stream (which stops view's). Asked as `mcp --http` asks: no Origin (no
+/// browser's page, this one's included), the token as a bearer, `--allow`. A call waits for the one before it.
+fn mcp_call(reader: &mut BufReader<TcpStream>, writer: &mut TcpStream, request: &http::Request, from: IpAddr, hub: &Hub, who: &mut String, what: &mut String) -> String {
+    let Some(mcp) = &hub.mcp else { return reply(writer, 404, "", "") };
+    if request.header("origin").is_some() { return reply(writer, 403, "", "") }
+    if request.method != "POST" { return reply(writer, 405, "Allow: POST\r\n", "") }
+    let presented = request.header("authorization").and_then(|v| v.split_once(' ')).filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer")).map(|(_, t)| t.trim());
+    let token = matches!((&hub.token, presented), (Some(t), Some(p)) if http::same(t.as_bytes(), p.as_bytes()));
+    if !token { return reply(writer, 401, "WWW-Authenticate: Bearer\r\n", "") }
+    let whois = match (hub.whois)(from) {
+        Ok(whois) => whois,
+        Err(why) => { *who = format!("(whois: {why})"); return reply(writer, 503, "", "the caller couldn't be looked up (tailscale whois): try again\n") }
+    };
+    let own = from == hub.own_ip || (!hub.own_id.is_empty() && whois.node.id == hub.own_id);
+    match http::judged(&whois, &hub.allowed, own, token) {
+        Ok(name) => *who = name,
+        Err(why) => { *who = why; return reply(writer, 403, "", "") }
+    }
+    if let Some(version) = request.header("mcp-protocol-version").filter(|v| !crate::mcp::VERSIONS.contains(v)) {
+        return reply(writer, 400, "", &http::rpc_error(Value::Null, -32000, &format!("Bad Request: Unsupported protocol version: {version} (supported: {})", crate::mcp::VERSIONS.join(", "))));
+    }
+    let _ = reader.get_ref().set_read_timeout(Some(http::BODY_WITHIN));
+    if request.header("expect").is_some_and(|e| e.eq_ignore_ascii_case("100-continue")) { let _ = writer.write_all(b"HTTP/1.1 100 Continue\r\n\r\n"); }
+    let body = match http::body(reader, request, http::BODY) { Ok(body) => body, Err(status) => return reply(writer, status, "", "") };
+    let Ok(message) = serde_json::from_slice::<Value>(&body) else { return reply(writer, 400, "", &http::rpc_error(Value::Null, -32700, "not JSON")) };
+    if !message.is_object() { return reply(writer, 400, "", &http::rpc_error(Value::Null, -32600, "one message a request, as an object")) }
+    let method = message["method"].as_str().unwrap_or("");
+    *what = match method {
+        "tools/call" => format!("POST /mcp tools/call {}", message["params"]["name"].as_str().unwrap_or("?")),
+        "" => "POST /mcp a response".into(),
+        method => format!("POST /mcp {method}"),
+    };
+    // A notification or a response: nothing to answer (a cancel does nothing here; closing the connection does).
+    let response = method.is_empty() && (message.get("result").is_some() || message.get("error").is_some());
+    if response || message.get("id").is_none() { return reply(writer, 202, "", "") }
+    let line = message.to_string();
+    let answer = if method == "tools/call" {
+        let mut server = mcp.server.lock().unwrap_or_else(|e| e.into_inner());
+        // Gone while it waited its turn: not made for nobody (a client that tries again would have it twice).
+        if http::closed(writer) { return "not begun".into() }
+        server.handle(&line)
+    } else {
+        // Asks nothing of the device: answered at once, by a server like it, not after the call that runs.
+        crate::mcp::Server::holding(&mcp.name, Arc::new(Device::none()), None).handle(&line)
+    }.unwrap_or_default();
+    let failed = serde_json::from_str::<Value>(&answer).is_ok_and(|a| a["result"]["isError"] == true);
+    reply(writer, 200, "", &answer);
+    if failed { "error".into() } else { "ok".into() }
+}
+
+/// An answer to `/mcp`, and its status for the log.
+fn reply(writer: &mut TcpStream, status: u16, extra: &str, body: &str) -> String {
+    http::respond(writer, status, extra, body);
+    status.to_string()
 }
 
 /// A frame as the page reads it: a flag byte (1: a key frame), the server's time in ms (8 bytes, big-endian), the
@@ -763,14 +849,19 @@ mod tests {
 
     /// A server on 127.0.0.1 that takes `login`'s machines, with a token; Tailscale says each caller is `caller`.
     /// And how many times the stream was watched.
-    fn served(caller: &'static str) -> (std::net::SocketAddr, Arc<AtomicU32>) {
+    fn served(caller: &'static str) -> (std::net::SocketAddr, Arc<AtomicU32>) { served_with(caller, false) }
+
+    /// As `served`, with `--mcp` where `mcp` is (its device none, named `fake`).
+    fn served_with(caller: &'static str, mcp: bool) -> (std::net::SocketAddr, Arc<AtomicU32>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let at = listener.local_addr().unwrap();
         let hosts = vec![at.to_string()];
         let watched = Arc::new(AtomicU32::new(0));
         let fake = Fake { watched: watched.clone() };
         std::thread::spawn(move || run(listener, Arc::new(fake), vec![Allow::Login("me@example.com".into())], Some("t".repeat(32)), hosts,
-            "100.64.0.1".parse().unwrap(), "own".into(), true, Box::new(move |_| Ok(whois(caller)))));
+            "100.64.0.1".parse().unwrap(), "own".into(), true,
+            mcp.then(|| Mcp { name: "fake".into(), server: Mutex::new(crate::mcp::Server::holding("fake", Arc::new(Device::none()), None)), page: Default::default() }),
+            Box::new(move |_| Ok(whois(caller)))));
         (at, watched)
     }
 
@@ -844,5 +935,44 @@ mod tests {
         let (at, _) = served("other@example.com");
         assert!(ask(at, "GET / HTTP/1.1\r\nHost: {at}\r\n\r\n").1.starts_with("HTTP/1.1 403"));
         assert!(ask(at, UPGRADE).1.starts_with("HTTP/1.1 403"));
+    }
+
+    /// One POST to /mcp with `extra` head lines and `body`: the status line and the body.
+    fn posted(at: std::net::SocketAddr, extra: &str, body: &str) -> (String, String) {
+        let mut stream = TcpStream::connect(at).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        stream.write_all(format!("POST /mcp HTTP/1.1\r\nHost: {at}\r\n{extra}Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes()).unwrap();
+        let mut answer = String::new();
+        let _ = stream.read_to_string(&mut answer);
+        let (head, body) = answer.split_once("\r\n\r\n").unwrap_or((&answer, ""));
+        (head.lines().next().unwrap_or("").to_string(), body.to_string())
+    }
+
+    /// `/mcp` asks as `mcp --http` does (no Origin, the token as a bearer, `--allow`), answers initialize and
+    /// tools/list at once, takes notifications, and refuses a tap without a look; without `--mcp` there is none.
+    #[test]
+    fn mcp_is_asked_like_mcp_over_http() {
+        let bearer = format!("Authorization: Bearer {}\r\n", "t".repeat(32));
+        let init = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}"#;
+        let (at, _) = served("me@example.com");
+        assert!(posted(at, &bearer, init).0.starts_with("HTTP/1.1 404"));
+        let (at, watched) = served_with("me@example.com", true);
+        assert!(posted(at, "", init).0.starts_with("HTTP/1.1 401"));
+        assert!(posted(at, "Authorization: Bearer nope\r\n", init).0.starts_with("HTTP/1.1 401"));
+        assert!(posted(at, &format!("{bearer}Origin: http://{at}\r\n"), init).0.starts_with("HTTP/1.1 403"));
+        assert!(posted(at, &format!("{bearer}MCP-Protocol-Version: 1999-01-01\r\n"), init).0.starts_with("HTTP/1.1 400"));
+        let (status, body) = posted(at, &bearer, init);
+        assert!(status.starts_with("HTTP/1.1 200") && body.contains("serverInfo"), "{status} {body}");
+        let (status, body) = posted(at, &bearer, r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
+        assert!(status.starts_with("HTTP/1.1 200") && body.contains("\"tap\"") && !body.contains("\"install\""), "{body}");
+        assert!(posted(at, &bearer, r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).0.starts_with("HTTP/1.1 202"));
+        let (_, body) = posted(at, &bearer, r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"tap","arguments":{"device":"fake","look":1,"x":1,"y":1}}}"#);
+        assert!(body.contains("look first") && body.contains("\"isError\":true"), "{body}");
+        let (_, body) = posted(at, &bearer, r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"devices","arguments":{}}}"#);
+        assert!(body.contains("fake"), "{body}");
+        // No stream was started for any of it.
+        assert_eq!(watched.load(Ordering::SeqCst), 0);
+        let (at, _) = served_with("other@example.com", true);
+        assert!(posted(at, &bearer, init).0.starts_with("HTTP/1.1 403"));
     }
 }
