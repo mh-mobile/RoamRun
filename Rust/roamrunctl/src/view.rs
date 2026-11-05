@@ -89,8 +89,14 @@ impl Queue {
 struct Out {
     queue: Queue,
     texts: VecDeque<String>,
+    /// The device's sound, for a page that asked for it: PCM messages not yet written, the oldest let go past `SOUND_KEPT`.
+    hears: bool,
+    sounds: VecDeque<Arc<Vec<u8>>>,
     closed: bool,
 }
+
+/// About half a second of sound waits for a page at most; more, and the oldest goes.
+const SOUND_KEPT: usize = 50;
 
 struct Viewer {
     out: Mutex<Out>,
@@ -129,12 +135,15 @@ trait Screen: Send + Sync {
 
 trait Frames: Send {
     fn frame(&mut self) -> Result<roamrun_device::watch::Frame, String>;
+    /// The sound's access units to `to` from now on, where there is sound.
+    fn sound_to(&mut self, _to: mpsc::Sender<Vec<u8>>) {}
     /// Key frames asked for, and answered.
     fn counts(&self) -> (u32, u32);
 }
 
 impl Frames for Watch {
     fn frame(&mut self) -> Result<roamrun_device::watch::Frame, String> { Watch::frame(self) }
+    fn sound_to(&mut self, to: mpsc::Sender<Vec<u8>>) { Watch::sound_to(self, to) }
     fn counts(&self) -> (u32, u32) { (self.asked, self.answered) }
 }
 
@@ -179,6 +188,7 @@ struct Hub {
     own_id: String,
     whois: Box<dyn Fn(IpAddr) -> Result<Whois, String> + Send + Sync>,
     inputs: Mutex<mpsc::Sender<(Arc<Viewer>, Input)>>,
+    sound: Mutex<mpsc::Sender<Vec<u8>>>,
     open: Mutex<std::collections::HashMap<IpAddr, usize>>,
 }
 
@@ -233,9 +243,30 @@ pub fn serve(options: Options) -> Result<String, String> {
 fn run(listener: TcpListener, screen: Arc<dyn Screen>, allowed: Vec<Allow>, token: Option<String>, hosts: Vec<String>, own_ip: IpAddr, own_id: String, feedback: bool,
        whois: Box<dyn Fn(IpAddr) -> Result<Whois, String> + Send + Sync>) -> Result<String, String> {
     let (inputs, asked) = mpsc::channel::<(Arc<Viewer>, Input)>();
+    let (sound, heard) = mpsc::channel::<Vec<u8>>();
     let hub = Arc::new(Hub {
         viewers: Mutex::new(Vec::new()), joined: Condvar::new(), wanted: Arc::new(AtomicBool::new(false)), asked: AtomicU32::new(0), answered: AtomicU32::new(0),
-        way: std::sync::atomic::AtomicU8::new(0), began: Instant::now(), feedback, allowed, token, hosts, own_ip, own_id, whois, inputs: Mutex::new(inputs), open: Mutex::new(Default::default()),
+        way: std::sync::atomic::AtomicU8::new(0), began: Instant::now(), feedback, allowed, token, hosts, own_ip, own_id, whois, inputs: Mutex::new(inputs), sound: Mutex::new(sound), open: Mutex::new(Default::default()),
+    });
+    // The sound decoded on a thread of its own, and given to the pages that asked for it.
+    let hearing = hub.clone();
+    std::thread::spawn(move || {
+        let mut decoder = match roamrun_device::sound::Decoder::new() {
+            Ok(decoder) => Some(decoder),
+            Err(why) => { note!("roamrunctl: no sound for the page: {why}"); None }
+        };
+        for unit in heard {
+            let Some(pcm) = decoder.as_mut().and_then(|d| d.decode(&unit)) else { continue };
+            let message = Arc::new(sound_message(hearing.began.elapsed().as_millis() as u64, &pcm));
+            for viewer in hearing.viewers.lock().unwrap_or_else(|e| e.into_inner()).iter() {
+                let mut out = viewer.out.lock().unwrap_or_else(|e| e.into_inner());
+                if !out.hears { continue }
+                out.sounds.push_back(message.clone());
+                while out.sounds.len() > SOUND_KEPT { out.sounds.pop_front(); }
+                drop(out);
+                viewer.ready.notify_one();
+            }
+        }
     });
     // Inputs one at a time, on a thread of their own: a long `type` doesn't hold up what the page acknowledges.
     let device = screen.clone();
@@ -304,6 +335,7 @@ fn pump(hub: &Hub, screen: &dyn Screen) {
                 continue;
             }
         };
+        frames.sound_to(hub.sound.lock().unwrap_or_else(|e| e.into_inner()).clone());
         while !hub.viewers.lock().unwrap_or_else(|e| e.into_inner()).is_empty() {
             let frame = match frames.frame() {
                 Ok(frame) => frame,
@@ -378,7 +410,7 @@ fn connection(stream: TcpStream, from: IpAddr, hub: &Hub, who: &mut String, what
     // A stream isn't cut for being quiet, or slow to take what is written.
     let _ = reader.get_ref().set_read_timeout(None);
     let _ = writer.set_write_timeout(None);
-    let viewer = Arc::new(Viewer { out: Mutex::new(Out { queue: Queue::new(), texts: VecDeque::new(), closed: false }), ready: Condvar::new() });
+    let viewer = Arc::new(Viewer { out: Mutex::new(Out { queue: Queue::new(), texts: VecDeque::new(), hears: false, sounds: VecDeque::new(), closed: false }), ready: Condvar::new() });
     viewer.say(json!({ "type": "hello", "feedback": hub.feedback }).to_string());
     hub.viewers.lock().unwrap_or_else(|e| e.into_inner()).push(viewer.clone());
     hub.wanted.store(true, Ordering::Relaxed);
@@ -412,6 +444,11 @@ fn read_from(reader: &mut impl BufRead, viewer: &Arc<Viewer>, hub: &Hub) -> Stri
         let message: Value = serde_json::from_str(&text).unwrap_or_default();
         match message["type"].as_str().unwrap_or("") {
             "ack" => if let Some(ms) = message["t"].as_u64() { viewer.out.lock().unwrap_or_else(|e| e.into_inner()).queue.acked(ms) },
+            "sound" => {
+                let mut out = viewer.out.lock().unwrap_or_else(|e| e.into_inner());
+                out.hears = message["on"].as_bool().unwrap_or(false);
+                if !out.hears { out.sounds.clear() }
+            }
             "keyframe" => {
                 viewer.out.lock().unwrap_or_else(|e| e.into_inner()).queue.restart();
                 hub.wanted.store(true, Ordering::Relaxed);
@@ -445,17 +482,19 @@ fn write_to(writer: &mut TcpStream, viewer: &Viewer, hub: &Hub) {
     let mut picture: Option<Arc<str>> = None;
     let mut counted = Instant::now();
     loop {
-        let (texts, frame, cuts) = {
+        let (texts, sounds, frame, cuts) = {
             let mut out = viewer.out.lock().unwrap_or_else(|e| e.into_inner());
-            while !out.closed && out.texts.is_empty() && out.queue.waiting.is_empty() && counted.elapsed() < Duration::from_secs(1) {
+            while !out.closed && out.texts.is_empty() && out.sounds.is_empty() && out.queue.waiting.is_empty() && counted.elapsed() < Duration::from_secs(1) {
                 out = viewer.ready.wait_timeout(out, Duration::from_secs(1)).unwrap_or_else(|e| e.into_inner()).0;
             }
             if out.closed { return }
             let texts: Vec<String> = out.texts.drain(..).collect();
-            (texts, out.queue.take(Instant::now()), out.queue.cuts)
+            let sounds: Vec<Arc<Vec<u8>>> = out.sounds.drain(..).collect();
+            (texts, sounds, out.queue.take(Instant::now()), out.queue.cuts)
         };
         let mut bytes = Vec::new();
         for text in texts { bytes.extend(ws_frame(1, text.as_bytes())) }
+        for sound in sounds { bytes.extend(ws_frame(2, &sound)) }
         if counted.elapsed() >= Duration::from_secs(1) {
             counted = Instant::now();
             let counts = json!({ "type": "counts", "keyframesAsked": hub.asked.load(Ordering::Relaxed), "keyframesAnswered": hub.answered.load(Ordering::Relaxed), "cuts": cuts, "way": hub.way.load(Ordering::Relaxed) });
@@ -483,6 +522,16 @@ fn frame_message(key: bool, ms: u64, data: &[u8]) -> Vec<u8> {
     message.push(key as u8);
     message.extend_from_slice(&ms.to_be_bytes());
     message.extend_from_slice(data);
+    message
+}
+
+/// Sound as the page reads it: a flag byte (2), the server's time in ms (8 bytes, big-endian), then PCM (`roamrun_device::sound::RATE`,
+/// `roamrun_device::sound::CHANNELS` interleaved, 16-bit little-endian).
+fn sound_message(ms: u64, pcm: &[u8]) -> Vec<u8> {
+    let mut message = Vec::with_capacity(9 + pcm.len());
+    message.push(2);
+    message.extend_from_slice(&ms.to_be_bytes());
+    message.extend_from_slice(pcm);
     message
 }
 

@@ -25,6 +25,8 @@ let targets: [Target] = [
         linkerSettings: [
             .unsafeFlags(["-L", ".build/device/release"]),
             .linkedLibrary("roamrun_device"),
+            // The device's sound for `roamrunctl view` (sound.rs): a static library doesn't carry its frameworks.
+            .linkedFramework("AudioToolbox"),
         ]
     ),
     .executableTarget(

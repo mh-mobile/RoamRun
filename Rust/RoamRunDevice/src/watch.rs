@@ -17,6 +17,8 @@ const SILENT: Duration = Duration::from_secs(8);
 /// No picture with anything in it for this long: which display is on is asked, again each `LOOK_EVERY` meanwhile. A
 /// folded Duo's inner screen goes on sending pictures of a few hundred bytes, unchanged, for about 9 s.
 const QUIET: Duration = Duration::from_secs(1);
+/// The sound's RTP payload type.
+const SOUND_PAYLOAD: u8 = 101;
 const LOOK_EVERY: Duration = Duration::from_secs(2);
 /// A picture this small changed nothing (a still screen's are about 150 bytes).
 const EMPTY: usize = 1024;
@@ -68,6 +70,8 @@ pub struct Watch {
     looked_at: Instant,
     /// When a picture with something in it last came.
     busy_at: Instant,
+    /// Where the sound's access units go, if anywhere.
+    sound: Option<std::sync::mpsc::Sender<Vec<u8>>>,
     /// Raised by `ask_aside` where another display is on than the one streamed.
     moved: Arc<AtomicBool>,
     asking: Arc<AtomicBool>,
@@ -102,12 +106,15 @@ impl Watch {
         Ok(Watch {
             held, video, audio, ssrc, media, feedback_port, frames: HevcDepacketizer::new(), feedback, began: now, rctl_at: now, heard_at: now,
             count: 0, first_seq: None, highest_seq: 0, keyframe_at, asked_at: None, requests: 0, wanted, asked: 0, answered: 0,
-            last_seq: None, gap: 0, frame_first: None, trace: std::env::var_os("ROAMRUNCTL_VIEW_TRACE").is_some(), broken: false, skip_rasl: false, max_datagram: 0, fed: 0, broken_at: None, looked_at: now, busy_at: now, moved: Default::default(), asking: Default::default(), ready: Default::default(), lost: 0, dropped: 0,
+            last_seq: None, gap: 0, frame_first: None, trace: std::env::var_os("ROAMRUNCTL_VIEW_TRACE").is_some(), broken: false, skip_rasl: false, max_datagram: 0, fed: 0, broken_at: None, looked_at: now, busy_at: now, sound: None, moved: Default::default(), asking: Default::default(), ready: Default::default(), lost: 0, dropped: 0,
         })
     }
 
     /// The next access unit; an error once nothing has come for `SILENT` (the stream is then let go of: watch anew).
     /// From a thread of its own, with room (8 MB).
+    /// The sound's access units (AAC-ELD, 48 kHz, stereo, 480 samples each) from now on to `to`, as they come.
+    pub fn sound_to(&mut self, to: std::sync::mpsc::Sender<Vec<u8>>) { self.sound = Some(to) }
+
     pub fn frame(&mut self) -> Result<Frame, String> {
         let held = self.held.clone();
         held.runtime.block_on(self.next())
@@ -153,7 +160,11 @@ impl Watch {
                 }
                 return Ok(Frame { key, data });
             }
-            while let Ok(Ok(_)) = tokio::time::timeout(Duration::ZERO, self.audio.recv()).await {}
+            // The sound's RTP: each payload an AAC-ELD access unit (48 kHz, stereo, 480 samples), given on where it is wanted.
+            while let Ok(Ok(datagram)) = tokio::time::timeout(Duration::ZERO, self.audio.recv()).await {
+                let (Some(to), Some(packet)) = (&self.sound, RtpPacket::parse(&datagram.data)) else { continue };
+                if packet.payload_type == SOUND_PAYLOAD && to.send(packet.payload.to_vec()).is_err() { self.sound = None }
+            }
             self.ask_if_wanted().await;
             if self.feedback && self.rctl_at.elapsed() >= RCTL_EVERY {
                 self.rctl_at = Instant::now();

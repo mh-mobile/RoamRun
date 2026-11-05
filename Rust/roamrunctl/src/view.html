@@ -78,6 +78,7 @@
   <button data-press="lock" title="Lock"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span class="label">Lock</span></button>
   <button data-press="volume-down" title="Volume down"><svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M17 12h4"/></svg><span class="label">Vol −</span></button>
   <button data-press="volume-up" title="Volume up"><svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M17 12h4M19 10v4"/></svg><span class="label">Vol +</span></button>
+  <button id="sound" title="Hear the device here (macOS serving it only): a press starts it, as browsers want"><svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg><span class="label">Sound</span></button>
   <span class="sep"></span>
   <button id="keyboard" title="Type on the device: what a US keyboard types, and Return, to what has focus there"><svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg><span class="label">Type</span></button>
   <button id="key" title="Ask for a fresh picture (a key frame)"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v5h-5"/></svg><span class="label">Refresh</span></button>
@@ -116,6 +117,14 @@ const support = [];
 const supported = (line, bad) => { support.push((bad ? "✗ " : "✓ ") + line); $("support").textContent = support.join("\n"); };
 supported("secure context (Chrome gives VideoDecoder only to one)", !window.isSecureContext);
 supported("VideoDecoder", typeof VideoDecoder === "undefined");
+// Sound: what the device sends (AAC-ELD) and what else a browser may take.
+(async () => {
+  if (typeof AudioDecoder === "undefined") return supported("AudioDecoder", true);
+  for (const codec of ["mp4a.40.39", "mp4a.40.2", "opus"]) {
+    try { const { supported: yes } = await AudioDecoder.isConfigSupported({ codec, sampleRate: 48000, numberOfChannels: 2 }); supported(`AudioDecoder ${codec}: ${yes}`, !yes); }
+    catch (e) { supported(`AudioDecoder ${codec}: ${e.message}`, true); }
+  }
+})();
 if (typeof VideoDecoder === "undefined") {
   supported("This browser gives this page no VideoDecoder. Chrome: start it with --unsafely-treat-insecure-origin-as-secure=" + location.origin, true);
   $("panel").hidden = false;
@@ -226,7 +235,7 @@ function connect() {
   connectedAt = performance.now();
   firstPicture = false;
   state("wait", "connecting");
-  socket.onopen = () => socket.send(JSON.stringify({ type: "hello", token }));
+  socket.onopen = () => { socket.send(JSON.stringify({ type: "hello", token })); if (hearing) send({ type: "sound", on: true }); };
   socket.onclose = (e) => {
     if (e.code === 1008) {
       state("down", "a token is needed");
@@ -241,6 +250,7 @@ function connect() {
   socket.onmessage = (e) => {
     if (typeof e.data === "string") return said(JSON.parse(e.data));
     const view = new DataView(e.data);
+    if (view.getUint8(0) === 2) return heard(e.data);
     const key = view.getUint8(0) === 1;
     const ms = Number(view.getBigUint64(1));
     send({ type: "ack", t: ms });
@@ -332,6 +342,36 @@ typing.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDe
 for (const button of document.querySelectorAll("[data-press]")) button.onclick = () => send({ type: "press", button: button.dataset.press });
 $("key").onclick = () => { waitKey = true; send({ type: "keyframe" }); };
 $("info").onclick = () => { $("panel").hidden = !$("panel").hidden; $("info").classList.toggle("on", !$("panel").hidden); };
+
+// Sound: PCM from the server (48 kHz, two channels interleaved, 16-bit), played as it comes, a little ahead.
+let hearing = false, ears = null, playAt = 0;
+function heard(message) {
+  if (!ears) return;
+  stats.bytes += message.byteLength;
+  const pcm = new Int16Array(message.slice(9)), frames = pcm.length / 2;
+  if (!frames) return;
+  const buffer = ears.createBuffer(2, frames, 48000), left = buffer.getChannelData(0), right = buffer.getChannelData(1);
+  for (let i = 0; i < frames; i++) { left[i] = pcm[2 * i] / 32768; right[i] = pcm[2 * i + 1] / 32768; }
+  const source = ears.createBufferSource();
+  source.buffer = buffer;
+  source.connect(ears.destination);
+  // Behind (a gap) or too far ahead (a burst): taken up again 60 ms from now.
+  const now = ears.currentTime;
+  if (playAt < now + 0.01 || playAt > now + 0.4) playAt = now + 0.06;
+  source.start(playAt);
+  playAt += buffer.duration;
+}
+$("sound").onclick = async () => {
+  hearing = !hearing;
+  $("sound").classList.toggle("on", hearing);
+  if (hearing) {
+    ears = ears || new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+    await ears.resume();
+    playAt = 0;
+  }
+  send({ type: "sound", on: hearing });
+  log(hearing ? "sound on (the Mac serving this decodes it: none from Linux or Windows)" : "sound off");
+};
 
 // Full screen: the browser's where it gives a page one, else the whole window (Safari on an iPhone).
 const full = document.documentElement;

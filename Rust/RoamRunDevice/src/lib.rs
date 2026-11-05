@@ -5,6 +5,7 @@ pub mod proxy;
 #[cfg(target_os = "macos")]
 pub mod hevc;
 pub mod safe;
+pub mod sound;
 pub mod watch;
 
 use std::ffi::{c_char, CStr, CString};

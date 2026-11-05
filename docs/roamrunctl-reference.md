@@ -481,8 +481,17 @@ a port forwarded to it brings `Host: localhost:…`, which is refused. The page 
   to compare.
 - From the page: a click is a tap, a drag a swipe (50 to 5000 ms); a key is typed (what a US
   keyboard types, and Return: the page says so of any other key); buttons press home, lock and
-  the volume. Inputs go to the device one at a time, and the page is told how each went.
-- The page shows the bytes and frames received each second, the decode time, the key frames
+  the volume. Type brings up a phone's on-screen keyboard and sends what is typed there; Refresh
+  asks for a key frame; Full screen takes the browser's full screen, or the whole window where the
+  browser gives a page none (Safari on an iPhone). Inputs go to the device one at a time, and the
+  page is told how each went.
+- Sound: the device sends its sound as AAC-ELD, which neither Chrome nor Safari decodes (asked of
+  `AudioDecoder` on a Mac and an iPhone). Where this machine is a Mac, it is decoded here with
+  AudioToolbox, and a page whose Sound button was pressed gets it as PCM (48 kHz, two channels,
+  16-bit: about 190 KB/s), played as it comes, 60 ms ahead. On Linux and Windows there is none.
+  Heard from an iPhone Duo over USB in Chrome on a Mac; the delay against the picture hasn't been
+  measured.
+- The header says whether the picture is live, and the frames and KB a second. Details shows the bytes and frames received each second, the decode time, the key frames
   asked for and answered, how often it was cut, and click-to-change: the time from a click to
   the first decoded picture in which the 48 × 48 pixels around it changed. It also shows the
   size the server read from the stream's SPS, the size the picture is cut to (the stream can
@@ -492,8 +501,9 @@ a port forwarded to it brings `Host: localhost:…`, which is refused. The page 
 - The WebSocket's messages: the server's binary ones are a byte (1: a key frame), the server's
   time in ms (8 bytes, big-endian), and the access unit (Annex B). Its text ones are JSON:
   `hello`, `picture` (`codec`, `width`, `height`, `crop`), `counts`, `status`, `done`, `error`.
+  Sound is a binary message too: a byte (2), the time, then the PCM (little-endian).
   The page's are JSON: `hello` (`token`), `ack` (`t`), `tap` (`x`, `y`, 0 to 1), `swipe` (`x1`,
-  `y1`, `x2`, `y2`, `ms`), `type` (`text`), `press` (`button`), `keyframe`.
+  `y1`, `x2`, `y2`, `ms`), `type` (`text`), `press` (`button`), `keyframe`, `sound` (`on`).
 
 ## Through an HTTP proxy (`ROAMRUNCTL_PROXY`)
 
