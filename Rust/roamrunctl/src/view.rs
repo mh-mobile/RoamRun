@@ -122,6 +122,7 @@ enum Input {
     Tap(f64, f64),
     Swipe((f64, f64), (f64, f64), u32),
     Type(String),
+    Paste(String),
     Press(String),
 }
 
@@ -167,6 +168,7 @@ impl Screen for OnDevice {
             Input::Tap(x, y) => device.tap(*x, *y),
             Input::Swipe(from, to, ms) => device.swipe(*from, *to, *ms),
             Input::Type(text) => device.type_text(text),
+            Input::Paste(text) => device.paste(text),
             Input::Press(button) => device.button(button),
         }).map(|_| ())
     }
@@ -275,7 +277,7 @@ fn run(listener: TcpListener, screen: Arc<dyn Screen>, allowed: Vec<Allow>, toke
     std::thread::spawn(move || {
         for (viewer, input) in asked {
             let began = Instant::now();
-            let what = match &input { Input::Tap(..) => "tap", Input::Swipe(..) => "swipe", Input::Type(_) => "type", Input::Press(_) => "press" };
+            let what = match &input { Input::Tap(..) => "tap", Input::Swipe(..) => "swipe", Input::Type(_) => "type", Input::Paste(_) => "paste", Input::Press(_) => "press" };
             viewer.say(match device.input(&input) {
                 Ok(()) => json!({ "type": "done", "what": what, "ms": began.elapsed().as_millis() as u64 }),
                 Err(why) => json!({ "type": "error", "what": what, "error": why }),
@@ -470,6 +472,7 @@ fn input(message: &Value) -> Result<Input, String> {
             Ok(Input::Swipe((at("x1")?, at("y1")?), (at("x2")?, at("y2")?), ms as u32))
         }
         "type" => Ok(Input::Type(word("text")?)),
+        "paste" => Ok(Input::Paste(word("text")?)),
         "press" => Ok(Input::Press(word("button")?)),
         other => Err(format!("nothing is done for {:?}", http::printable(other))),
     }
@@ -732,6 +735,7 @@ mod tests {
         assert!(parse(r#"{"type":"swipe","x1":0,"y1":0,"x2":1,"y2":1,"ms":10}"#).is_err());
         assert_eq!(parse(r#"{"type":"press","button":"home"}"#), Ok(Input::Press("home".into())));
         assert!(parse(r#"{"type":"type","text":""}"#).is_err());
+        assert_eq!(parse(r#"{"type":"paste","text":"日本語"}"#), Ok(Input::Paste("日本語".into())));
         assert!(parse(r#"{"type":"elements"}"#).is_err());
     }
 

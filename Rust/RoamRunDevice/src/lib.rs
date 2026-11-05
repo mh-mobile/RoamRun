@@ -906,6 +906,8 @@ fn key(c: char) -> Option<(u64, bool)> {
         '1'..='9' => (0x1E + (c as u64 - '1' as u64), false),
         '0' => (0x27, false),
         '\n' => (0x28, false),
+        // Backspace (U+0008): the key that deletes what is before the cursor.
+        '\u{8}' => (0x2A, false),
         ' ' => (0x2C, false),
         _ => {
             if let Some(i) = PLAIN.find(c) { (PLAIN_USAGE[i], false) }
@@ -2262,6 +2264,7 @@ mod tests {
         assert_eq!(key(')'), Some((0x27, true)));
         assert_eq!(key(' '), Some((0x2C, false)));
         assert_eq!(key('\n'), Some((0x28, false)));
+        assert_eq!(key('\u{8}'), Some((0x2A, false)));
         assert_eq!(key('-'), Some((0x2D, false)));
         assert_eq!(key('_'), Some((0x2D, true)));
         assert_eq!(key('?'), Some((0x38, true)));
