@@ -415,7 +415,7 @@ have the user add the MCP tools, which run outside it.
   to what it visits. Nothing on the home screen; under a system alert, only the alert.
 - `roamrun type iPhone "text"` types US-keyboard characters (the text may
   start with `-`; 2000 characters at most, `paste` for more); a newline in the
-  text is Return (`$'search this\n'` in a shell — the two characters `\n` are typed as such).
+  text is Return, and U+0008 Backspace (`$'search this\n'` in a shell — the two characters `\n` are typed as such).
   It comes out right only while the device's keyboard is an English one: look
   first, and switch with the globe key if it shows Japanese (there keys go to
   its conversion — even a single space converts or confirms instead of being

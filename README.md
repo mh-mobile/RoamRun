@@ -324,7 +324,7 @@ The rules:
   `elements` or an action without `--look` came since, or after a minute. Without it, a `tap` or `swipe` goes by the last look, and `type` or `paste` needs none.
 - The image is the screen as the device holds it. An app in landscape appeared turned on its side
   (seen), and points are still pixels of that image.
-- `type` sends at most 2000 characters, about 16 a second, and a newline is Return. Under a
+- `type` sends at most 2000 characters, about 16 a second; a newline is Return, and U+0008 Backspace. Under a
   Japanese keyboard even a space converts instead of being typed (seen); use `paste` there.
 - `swipe` takes a duration in milliseconds as a last argument (50–5000, default 300). `elements`
   takes a limit (default 40) and may scroll the screen while it reads.

@@ -480,8 +480,11 @@ a port forwarded to it brings `Host: localhost:…`, which is refused. The page 
   `build_frame_ack` and `build_rctl` document them; `ROAMRUNCTL_VIEW_FEEDBACK=off` sends neither,
   to compare.
 - From the page: a click is a tap, a drag a swipe (50 to 5000 ms); a key is typed (what a US
-  keyboard types, and Return: the page says so of any other key); buttons press home, lock and
-  the volume. Type brings up a phone's on-screen keyboard and sends what is typed there; Refresh
+  keyboard types, Return and Backspace: the page says so of any other key); buttons press home,
+  lock and the volume. Type brings up a phone's on-screen keyboard (or takes this machine's input
+  method) and sends what is typed there: typed key by key, or, where a US keyboard doesn't type it
+  (Japanese), by `paste`, once the input method has it chosen, which takes a few seconds and leaves it
+  on the device's pasteboard; Refresh
   asks for a key frame; Full screen takes the browser's full screen, or the whole window where the
   browser gives a page none (Safari on an iPhone). Inputs go to the device one at a time, and the
   page is told how each went.
