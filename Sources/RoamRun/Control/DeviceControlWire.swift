@@ -13,9 +13,12 @@ enum DeviceControlWire {
         var x2: Double?
         var y2: Double?
         var milliseconds: Int?
+        /// For "pinch": how far apart the fingers end against where they began, and how far they turn (clockwise).
+        var scale: Double?
+        var degrees: Double?
         var text: String?
         var limit: Int?
-        /// For "tap", "swipe", "type" and "paste": the look the points or the text are held to, when
+        /// For "tap", "swipe", "pinch", "type" and "paste": the look the points or the text are held to, when
         /// the caller keeps it (the MCP tools do; a command run by hand is of whatever was looked at last).
         var look: Int?
         /// For "install_status": the install asked about, by the id "install" answered.

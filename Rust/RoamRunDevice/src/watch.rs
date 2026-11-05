@@ -200,9 +200,9 @@ impl Watch {
                 let step = packet.sequence_number.wrapping_sub(last);
                 // Late or repeated packets (step past half the range) aren't losses.
                 if step >= 0x8000 && self.trace { eprintln!("trace: late {} after {last} (back {})", packet.sequence_number, 0u16.wrapping_sub(step)) }
-                if step >= 0x8000 { continue }
-                hole = step != 1;
-                if hole { self.gap += u32::from(step.wrapping_sub(1)); if self.trace { eprintln!("trace: seq {last} -> {} (step {step})", packet.sequence_number) } }
+                let Some(lost) = lost_between(last, packet.sequence_number) else { continue };
+                hole = lost != 0;
+                if hole { self.gap += u32::from(lost); if self.trace { eprintln!("trace: seq {last} -> {} (step {step})", packet.sequence_number) } }
             }
             if self.last_seq.is_none_or(|last| packet.sequence_number.wrapping_sub(last) < 0x8000) { self.last_seq = Some(packet.sequence_number) }
             self.highest_seq = packet.sequence_number;
@@ -291,6 +291,12 @@ impl Drop for Watch {
     }
 }
 
+/// Duplicates and late RTP packets are ignored; forward gaps wrap at 65536.
+fn lost_between(last: u16, next: u16) -> Option<u16> {
+    let step = next.wrapping_sub(last);
+    (step > 0 && step < 0x8000).then(|| step - 1)
+}
+
 /// Whether Annex B holds an IRAP slice (NAL types 16...23), wherever it came from (a single, fragmented or
 /// aggregated packet).
 pub fn has_irap(annexb: &[u8]) -> bool {
@@ -376,6 +382,21 @@ pub fn nal_units(annexb: &[u8]) -> impl Iterator<Item = &[u8]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duplicate_and_late_packets_dont_break_the_next_picture() {
+        let (mut last, mut lost, mut accepted) = (65533, 0, Vec::new());
+        for next in [65534, 65535, 65535, 0, 65535, 2] {
+            if let Some(gap) = lost_between(last, next) {
+                lost += gap;
+                last = next;
+                accepted.push(next);
+            }
+        }
+        assert_eq!(accepted, [65534, 65535, 0, 2]);
+        assert_eq!(lost, 1);
+    }
+
 
     /// Several pictures that came out at one marker are given one by one, each from its delimiter; parameter sets
     /// before the first delimiter stay with the first picture.

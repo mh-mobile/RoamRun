@@ -190,13 +190,18 @@ pub struct WhoisUser {
     pub login: String,
 }
 
-/// Who is at `ip`, with five seconds for Tailscale to say.
 /// HTTPS on the tailnet at `https` (Tailscale's certificate for this machine's name), handed to `target` on this
 /// machine, in the background: refused where something is served at that port already.
 pub fn serve_https(https: u16, target: &str) -> Result<(), String> {
-    let status: serde_json::Value = serde_json::from_str(&run(&["serve", "status", "--json"])?).unwrap_or_default();
-    if !status["TCP"][https.to_string()].is_null() { return Err(format!("port {https} is served already (tailscale serve status): pick another for --https")) }
+    serve_port_free(&run(&["serve", "status", "--json"])?, https)?;
     run(&["serve", "--bg", "--yes", &format!("--https={https}"), target]).map(|_| ())
+}
+
+fn serve_port_free(out: &str, https: u16) -> Result<(), String> {
+    let status: serde_json::Value = serde_json::from_str(out).map_err(|e| unreadable("serve status", out, e))?;
+    if !status.is_object() { return Err("tailscale serve status wasn't an object".into()) }
+    if !status["TCP"][https.to_string()].is_null() { return Err(format!("port {https} is served already (tailscale serve status): pick another for --https")) }
+    Ok(())
 }
 
 /// That HTTPS port no longer served; the rest of `tailscale serve` as it is.
@@ -204,6 +209,7 @@ pub fn serve_https_off(https: u16) -> Result<(), String> {
     run(&["serve", &format!("--https={https}"), "off"]).map(|_| ())
 }
 
+/// Who is at `ip`, with five seconds for Tailscale to say.
 pub fn whois(ip: IpAddr) -> Result<Whois, String> {
     let out = run_within(&["whois", "--json", &ip.to_string()], Duration::from_secs(5))?;
     serde_json::from_str(&out).map_err(|e| unreadable("whois", &out, e))
@@ -409,4 +415,12 @@ mod tests {
         assert!(state_problem("Stopped").unwrap().contains("disconnected"));
         assert!(state_problem("Starting").unwrap().contains("Starting"));
     }
+    #[test]
+    fn serve_never_overwrites_a_port_or_an_unreadable_status() {
+        assert!(serve_port_free("{}", 8443).is_ok());
+        assert!(serve_port_free(r#"{"TCP":{"443":{"HTTPS":true}}}"#, 8443).is_ok());
+        assert!(serve_port_free(r#"{"TCP":{"8443":{"HTTPS":true}}}"#, 8443).unwrap_err().contains("served already"));
+        for out in ["", "not JSON", "null", "[]"] { assert!(serve_port_free(out, 8443).is_err()); }
+    }
+
 }

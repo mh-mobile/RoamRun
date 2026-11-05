@@ -297,20 +297,28 @@ pub fn serve(options: Options) -> Result<String, String> {
     }
     // HTTPS, by Tailscale in front of the loopback listener: a secure page to any browser on the tailnet. Taken off
     // `tailscale serve` again at Ctrl-C.
+    let mut forwarded = None;
     if let Some(https) = options.https {
-        if local.is_none() { return Err(format!("--https needs view on localhost:{port}, which it couldn't listen on")) }
-        crate::tailscale::serve_https(https, &format!("http://127.0.0.1:{port}"))?;
+        let proxy = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).map_err(|e| e.to_string())?;
+        crate::tailscale::serve_https(https, &format!("http://{}", proxy.local_addr().map_err(|e| e.to_string())?))?;
+        forwarded = Some(proxy);
         stop.then(move || { let _ = crate::tailscale::serve_https_off(https); });
-        hosts.extend(names.iter().map(|name| format!("{name}:{https}")));
+        hosts.extend(https_hosts(&names, https));
         note!("roamrunctl: and at https://{}:{https}/ for the same callers, by tailscale serve, with the token (taken off it at Ctrl-C)", names.first().map_or("this machine", String::as_str));
     } else {
         stop.then(|| {});
     }
-    run(listener, local, screen, options.allowed, options.token, hosts, IpAddr::V4(own), status.this.id.clone(), feedback, mcp, Box::new(crate::tailscale::whois))
+    run(listener, local, forwarded, screen, options.allowed, options.token, hosts, IpAddr::V4(own), status.this.id.clone(), feedback, mcp, Box::new(crate::tailscale::whois))
+}
+
+fn https_hosts(names: &[String], port: u16) -> Vec<String> {
+    names.iter().flat_map(|name| {
+        std::iter::once(format!("{name}:{port}")).chain((port == 443).then(|| name.clone()))
+    }).collect()
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run(listener: TcpListener, local: Option<TcpListener>, screen: Arc<dyn Screen>, allowed: Vec<Allow>, token: Option<String>, hosts: Vec<String>, own_ip: IpAddr, own_id: String, feedback: bool, mcp: Option<Mcp>,
+fn run(listener: TcpListener, local: Option<TcpListener>, forwarded: Option<TcpListener>, screen: Arc<dyn Screen>, allowed: Vec<Allow>, token: Option<String>, hosts: Vec<String>, own_ip: IpAddr, own_id: String, feedback: bool, mcp: Option<Mcp>,
        whois: Box<dyn Fn(IpAddr) -> Result<Whois, String> + Send + Sync>) -> Result<String, String> {
     let (inputs, asked) = mpsc::channel::<(Arc<Viewer>, Input)>();
     let (sound, heard) = mpsc::channel::<Vec<u8>>();
@@ -383,17 +391,20 @@ fn run(listener: TcpListener, local: Option<TcpListener>, screen: Arc<dyn Screen
     });
     let pumped = hub.clone();
     std::thread::Builder::new().stack_size(8 << 20).spawn(move || pump(&pumped, screen.as_ref())).map_err(|e| e.to_string())?;
-    if let Some(local) = local {
+    for (listener, route) in local.into_iter().map(|l| (l, Route::Local)).chain(forwarded.into_iter().map(|l| (l, Route::Serve))) {
         let hub = hub.clone();
-        std::thread::spawn(move || accept(local, &hub, true));
+        std::thread::spawn(move || accept(listener, &hub, route));
     }
-    accept(listener, &hub, false);
+    accept(listener, &hub, Route::Tailnet);
     Ok(String::new())
 }
 
-/// Each connection on its own thread, within the limits. `local`: the listener on this machine's loopback, whose
-/// callers are this machine (a page on `localhost` is a secure one to a browser, which then gives it WebCodecs).
-fn accept(listener: TcpListener, hub: &Arc<Hub>, local: bool) {
+/// How a connection arrived; Serve never inherits the local caller's allowance.
+#[derive(Clone, Copy)]
+enum Route { Tailnet, Local, Serve }
+
+/// Each connection on its own thread, within the limits.
+fn accept(listener: TcpListener, hub: &Arc<Hub>, route: Route) {
     for stream in listener.incoming() {
         let Ok(stream) = stream else { std::thread::sleep(Duration::from_millis(100)); continue };
         let Ok(from) = stream.peer_addr().map(|a| a.ip()) else { continue };
@@ -408,7 +419,7 @@ fn accept(listener: TcpListener, hub: &Arc<Hub>, local: bool) {
             let began = Instant::now();
             let (mut who, mut what) = ("-".to_string(), "-".to_string());
             let lingering = stream.try_clone().ok();
-            let outcome = connection(stream, from, local, &hub, &mut who, &mut what);
+            let outcome = connection(stream, from, route, &hub, &mut who, &mut what);
             // A body not read (refused first) is drained a moment, so that the caller isn't reset before its answer.
             if let Some(stream) = lingering.filter(|_| what.starts_with("POST")) { http::linger(&stream) }
             note!("{} {from} {} {} {outcome} {:.1}s", http::clock(), http::printable(&who), what, began.elapsed().as_secs_f64());
@@ -418,19 +429,23 @@ fn accept(listener: TcpListener, hub: &Arc<Hub>, local: bool) {
     }
 }
 
-/// Who calls, and whether it is this machine: Tailscale says, except on the loopback listener, which is this machine.
-/// There a request `tailscale serve` handed on (`--https`) says whose it is (`Tailscale-User-Login`), and is judged
-/// as that login, by `--allow` (it gives the token too: `--https` takes one). One with none is this machine's.
-fn caller(hub: &Hub, from: IpAddr, local: bool, request: &http::Request) -> Result<(Whois, bool), String> {
-    if local {
-        return Ok(match request.header("tailscale-user-login") {
-            Some(login) => (Whois { user: crate::tailscale::WhoisUser { login: login.to_string() }, ..Whois::default() }, false),
-            None => (Whois { user: crate::tailscale::WhoisUser { login: "localhost".into() }, ..Whois::default() }, true),
-        })
+/// Only Serve's dedicated loopback listener trusts Tailscale's identity header.
+fn caller(hub: &Hub, from: IpAddr, route: Route, request: &http::Request) -> Result<(Whois, bool), String> {
+    match route {
+        Route::Local => return Ok((whois_local(), true)),
+        Route::Serve => return Ok((Whois {
+            user: crate::tailscale::WhoisUser { login: request.header("tailscale-user-login").unwrap_or("").to_string() },
+            ..Whois::default()
+        }, false)),
+        Route::Tailnet => {}
     }
     let whois = (hub.whois)(from)?;
     let own = from == hub.own_ip || (!hub.own_id.is_empty() && whois.node.id == hub.own_id);
     Ok((whois, own))
+}
+
+fn whois_local() -> Whois {
+    Whois { user: crate::tailscale::WhoisUser { login: "localhost".into() }, ..Whois::default() }
 }
 
 /// While anyone watches: the stream, to each viewer. Once nobody does, it is let go of (and the device stops it).
@@ -476,7 +491,7 @@ fn pump(hub: &Hub, screen: &dyn Screen) {
 }
 
 /// One connection: the page, or a viewer's WebSocket. What is shown or typed is never logged.
-fn connection(stream: TcpStream, from: IpAddr, local: bool, hub: &Hub, who: &mut String, what: &mut String) -> String {
+fn connection(stream: TcpStream, from: IpAddr, route: Route, hub: &Hub, who: &mut String, what: &mut String) -> String {
     let _ = stream.set_read_timeout(Some(HEAD_WITHIN));
     let Ok(mut writer) = stream.try_clone() else { return "gone".into() };
     let mut reader = BufReader::new(stream);
@@ -484,7 +499,7 @@ fn connection(stream: TcpStream, from: IpAddr, local: bool, hub: &Hub, who: &mut
     let request = match http::head(&mut reader) { Ok(request) => request, Err(status) => return refuse(&mut writer, status) };
     *what = format!("{} {}", http::printable(&request.method), http::printable(&request.path));
     let Some(host) = request.header("host").filter(|host| hub.hosts.iter().any(|h| h.eq_ignore_ascii_case(host))) else { return refuse(&mut writer, 400) };
-    if request.path == "/mcp" { return mcp_call(&mut reader, &mut writer, &request, from, local, hub, who, what) }
+    if request.path == "/mcp" { return mcp_call(&mut reader, &mut writer, &request, from, route, hub, who, what) }
     // A page of this server's own, or none (the page itself, opened): not one of another site.
     // http, or https where Tailscale serves it in front (`--https`).
     let own_origin = |origin: &str| origin.eq_ignore_ascii_case(&format!("http://{host}")) || origin.eq_ignore_ascii_case(&format!("https://{host}"));
@@ -496,7 +511,7 @@ fn connection(stream: TcpStream, from: IpAddr, local: bool, hub: &Hub, who: &mut
     }
     if request.method != "GET" { return refuse(&mut writer, 405) }
     if !socket && request.path != "/" { return refuse(&mut writer, 404) }
-    let (whois, own) = match caller(hub, from, local, &request) {
+    let (whois, own) = match caller(hub, from, route, &request) {
         Ok(caller) => caller,
         Err(why) => { *who = format!("(whois: {why})"); return refuse(&mut writer, 503) }
     };
@@ -636,7 +651,7 @@ fn from_stream(hub: std::sync::Weak<Hub>) -> crate::mcp::Pictures {
     Box::new(move || {
         let hub = hub.upgrade().ok_or("view is ending")?;
         let frame = hub.keyframe(LOOK_WAIT).ok_or(format!("no key frame came from it within {} s", LOOK_WAIT.as_secs()))?;
-        decoded(&frame.data)
+        decoded(&frame.data).map(|picture| (picture, frame.at))
     })
 }
 
@@ -660,14 +675,14 @@ fn whole(annexb: &[u8]) -> bool {
 /// an agent's look starts no second screen stream (which stops view's). Asked as `mcp --http` asks: no Origin (no
 /// browser's page, this one's included), the token as a bearer, `--allow`. A call waits for the one before it.
 #[allow(clippy::too_many_arguments)]
-fn mcp_call(reader: &mut BufReader<TcpStream>, writer: &mut TcpStream, request: &http::Request, from: IpAddr, local: bool, hub: &Hub, who: &mut String, what: &mut String) -> String {
+fn mcp_call(reader: &mut BufReader<TcpStream>, writer: &mut TcpStream, request: &http::Request, from: IpAddr, route: Route, hub: &Hub, who: &mut String, what: &mut String) -> String {
     let Some(mcp) = &hub.mcp else { return reply(writer, 404, "", "") };
     if request.header("origin").is_some() { return reply(writer, 403, "", "") }
     if request.method != "POST" { return reply(writer, 405, "Allow: POST\r\n", "") }
     let presented = request.header("authorization").and_then(|v| v.split_once(' ')).filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer")).map(|(_, t)| t.trim());
     let token = matches!((&hub.token, presented), (Some(t), Some(p)) if http::same(t.as_bytes(), p.as_bytes()));
     if !token { return reply(writer, 401, "WWW-Authenticate: Bearer\r\n", "") }
-    let (whois, own) = match caller(hub, from, local, request) {
+    let (whois, own) = match caller(hub, from, route, request) {
         Ok(caller) => caller,
         Err(why) => { *who = format!("(whois: {why})"); return reply(writer, 503, "", "the caller couldn't be looked up (tailscale whois): try again\n") }
     };
@@ -977,7 +992,7 @@ mod tests {
         let hosts = vec![at.to_string()];
         let watched = Arc::new(AtomicU32::new(0));
         let fake = Fake { watched: watched.clone(), whole };
-        std::thread::spawn(move || run(listener, None, Arc::new(fake), vec![Allow::Login("me@example.com".into())], Some("t".repeat(32)), hosts,
+        std::thread::spawn(move || run(listener, None, None, Arc::new(fake), vec![Allow::Login("me@example.com".into())], Some("t".repeat(32)), hosts,
             "100.64.0.1".parse().unwrap(), "own".into(), true,
             mcp.then(|| Mcp { name: "fake".into(), server: Mutex::new(crate::mcp::Server::holding("fake", Arc::new(Device::none()), None)), page: Default::default() }),
             Box::new(move |_| Ok(whois(caller)))));
@@ -1128,7 +1143,7 @@ mod tests {
         let host = format!("localhost:{}", at.port());
         let hosts = vec![main.local_addr().unwrap().to_string(), host.clone()];
         let fake = Fake { watched: Arc::new(AtomicU32::new(0)), whole: true };
-        std::thread::spawn(move || run(main, Some(local), Arc::new(fake), vec![Allow::Login("me@example.com".into())], Some("t".repeat(32)), hosts,
+        std::thread::spawn(move || run(main, Some(local), None, Arc::new(fake), vec![Allow::Login("me@example.com".into())], Some("t".repeat(32)), hosts,
             "100.64.0.1".parse().unwrap(), "own".into(), true,
             Some(Mcp { name: "fake".into(), server: Mutex::new(crate::mcp::Server::holding("fake", Arc::new(Device::none()), None)), page: Default::default() }),
             Box::new(|_| Ok(whois("other@example.com")))));
@@ -1145,13 +1160,42 @@ mod tests {
         };
         assert!(post(&format!("Authorization: Bearer {}\r\n", "t".repeat(32))).starts_with("HTTP/1.1 200"));
         assert!(post("").starts_with("HTTP/1.1 401"));
-        // Handed on by `tailscale serve` (--https): judged as the login it names, by --allow.
-        let (_, first) = ask(at, &format!("GET / HTTP/1.1\r\nHost: {host}\r\nTailscale-User-Login: other@example.com\r\n\r\n"));
-        assert!(first.starts_with("HTTP/1.1 403"), "{first}");
-        let (_, first) = ask(at, &format!("GET / HTTP/1.1\r\nHost: {host}\r\nTailscale-User-Login: me@example.com\r\n\r\n"));
-        assert!(first.starts_with("HTTP/1.1 200"), "{first}");
         // The page's WebSocket from an https page of this server (Tailscale's HTTPS in front) is its own.
         let (_, first) = ask(at, &UPGRADE.replace("Origin: http://{at}", &format!("Origin: https://{host}")).replace("Host: {at}", &format!("Host: {host}")));
         assert!(first.starts_with("HTTP/1.1 101"), "{first}");
     }
+    #[test]
+    fn serve_needs_an_allowed_identity_even_with_the_token() {
+        let main = TcpListener::bind("127.0.0.1:0").unwrap();
+        let proxy = TcpListener::bind("127.0.0.1:0").unwrap();
+        let (direct, at) = (main.local_addr().unwrap(), proxy.local_addr().unwrap());
+        let fake = Fake { watched: Arc::new(AtomicU32::new(0)), whole: true };
+        let mut hosts = vec![direct.to_string(), at.to_string()];
+        hosts.extend(https_hosts(&["view.example.ts.net".into()], 443));
+        std::thread::spawn(move || run(main, None, Some(proxy), Arc::new(fake), vec![Allow::Login("me@example.com".into())], Some("t".repeat(32)),
+            hosts, "100.64.0.1".parse().unwrap(), "own".into(), true,
+            Some(Mcp { name: "fake".into(), server: Mutex::new(crate::mcp::Server::holding("fake", Arc::new(Device::none()), None)), page: Default::default() }),
+            Box::new(|_| Ok(whois("other@example.com")))));
+        let bearer = format!("Authorization: Bearer {}\r\n", "t".repeat(32));
+        let ping = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
+        for login in ["", "Tailscale-User-Login: other@example.com\r\n"] {
+            assert!(posted(at, &(bearer.clone() + login), ping).0.starts_with("HTTP/1.1 403"));
+            assert!(ask(at, &format!("GET / HTTP/1.1\r\nHost: {{at}}\r\n{login}\r\n")).1.starts_with("HTTP/1.1 403"));
+            assert!(ask(at, &UPGRADE.replace("\r\n\r\n", &format!("\r\n{login}\r\n"))).1.starts_with("HTTP/1.1 403"));
+        }
+        let login = "Tailscale-User-Login: me@example.com\r\n";
+        assert!(posted(at, &(bearer.clone() + login), ping).0.starts_with("HTTP/1.1 200"));
+        assert!(posted(at, login, ping).0.starts_with("HTTP/1.1 401"));
+        assert!(ask(at, &format!("GET / HTTP/1.1\r\nHost: view.example.ts.net\r\n{login}\r\n")).1.starts_with("HTTP/1.1 200"));
+        // A direct tailnet caller can't claim the proxy's login.
+        assert!(posted(direct, &(bearer + login), ping).0.starts_with("HTTP/1.1 403"));
+        let (mut stream, status) = ask(at, &UPGRADE.replace("\r\n\r\n", &format!("\r\n{login}\r\n")));
+        assert!(status.starts_with("HTTP/1.1 101"));
+        hello(&mut stream, "wrong");
+        assert_eq!(first(&mut stream, 8), [0x03, 0xf0]);
+        let (mut stream, _) = ask(at, &UPGRADE.replace("\r\n\r\n", &format!("\r\n{login}\r\n")));
+        hello(&mut stream, &"t".repeat(32));
+        assert_eq!(first(&mut stream, 2)[0], 1);
+    }
+
 }

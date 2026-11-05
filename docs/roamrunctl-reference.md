@@ -229,18 +229,29 @@ needed to establish each new device connection.
   (next section). `look` returns a JPEG image
   to the agent, while the standalone `roamrunctl look` command saves a PNG; the longer
   image side is at most 1280 pixels.
-- An MCP `look` answers with an id, which `tap`, `swipe`, `type` and `paste` give
+- An MCP `look` answers with an id, which `tap`, `swipe`, `pinch`, `type` and `paste` give
   (`"look": 12`). It stands for 60 seconds, and only while it is the device's latest:
   another look since — by any client, one that failed too — or `press`, `elements`,
   `install`, or `launch` ends it, and so does a call that fails in a way that may have
-  reached the device, or another device saved under the name. It authorizes **one** `tap` or
-  `swipe`: after a tap, swipe, `type`, or `paste` by it, a tap or swipe needs another `look`,
+  reached the device, or another device saved under the name. It authorizes **one** `tap`,
+  `swipe` or `pinch`: after a tap, swipe, pinch, `type`, or `paste` by it, a tap, swipe or pinch needs another `look`,
   while `type` and `paste` still go by it (look → tap a field → type needs one look). Ids
   start from a random number at each start, so one kept from an earlier run isn't taken for
   a later look.
 - For a PNG look, rotation is rejected when reported orientation or image-shape checks detect a mismatch;
   it is **not guaranteed** to be detected if the device reports no orientation.
-  Tap/swipe coordinates are pixels in the image returned by the last `look`.
+  Tap/swipe/pinch coordinates are pixels in the image returned by the last `look`.
+- `pinch` (0.13.0+) puts two fingers about `x`, `y` and moves them
+  until they are `scale` (0.25–4, default 1) times as far apart as they began, turned clockwise
+  by `degrees` (−180–180, default 0), over `milliseconds` (50–5000, default 500), then lifts them.
+  The wider of the two spreads is 40% of the screen's shorter side; a finger that would leave the
+  screen is refused, not moved, and the look stands. Scale 1 and no turn is a two-finger tap. The
+  degrees are clockwise in the look's image, whichever way the device is turned. Tried through
+  `mcp` over stdio on macOS, on one device (an iPhone Duo, opened), 2026-11-04: in Google Maps
+  scale 1 zoomed out a step, 2 in and 0.5 out, `degrees` 45 turned the map clockwise, and a
+  point too near the edge was refused, after which the look served a swipe; in Photos, scale 2
+  zoomed in; Ctrl-C part-way through a 5000 ms pinch answered `stopped:`, and a two-finger tap
+  right after zoomed out (no finger was left down).
 - `type`, `paste`, and `press` act on the currently focused interface. `press` isn't held to a
   look. `paste` makes the device ask “Allow Paste” each time. `type` and `paste`, as a `look`
   does, wait until a second after the last input: keys sent at once after a tap on a field
@@ -259,7 +270,7 @@ needed to establish each new device connection.
   and 10 to 36 s as a PNG. The device lists the stream as screen sharing, which its user can
   see, until about five seconds after the last look or action, and some apps' sound goes silent
   meanwhile, as during RoamRun's looks ([sound-while-looking.md](sound-while-looking.md)). The
-  picture is the display's own way up (portrait on an iPhone Duo held sideways, seen); taps and swipes go
+  picture is the display's own way up (portrait on an iPhone Duo held sideways, seen); taps, swipes and pinches go
   by its pixels all the same, and a turn of the device after it isn't checked. During a phone
   or VoIP call the device refuses the stream (seen during a VoIP call), and the look is the
   PNG; so is it where the device doesn't say its screen's size, or the frame doesn't fit it
@@ -429,21 +440,17 @@ A prototype, for watching and touching your own device from elsewhere on the tai
 picture then stops until the next key frame: over 30 s, 1 to 3.5 times with the device reached
 at its address on the home Wi‑Fi, and 38 times through Tailscale (another run: 12 in 70 s).
 
-- It listens on this machine's Tailscale IPv4 address only, and serves a page at `/` and a
+- It listens on this machine's Tailscale IPv4 address and loopback, and serves a page at `/` and a
   WebSocket at `/ws`. As `mcp --http`, it doesn't start without Tailscale or `--allow`, or as
   root; `--allow` and `--token-file` are read as there.
-- The page decodes the device's HEVC stream with WebCodecs' `VideoDecoder`, which Chrome
-  offers only to a secure page, and `http://` on a tailnet address isn't one. Safari on an
-  iPhone 15 Pro offered it to the page as it is, and decoded the stream. In Chrome, open
-  `http://<address>:<port>/` in Chrome started with
-  `--unsafely-treat-insecure-origin-as-secure=http://<address>:<port>` (with a profile of its own,
-`--user-data-dir=<folder>`: untried whether the flag needs it). A page on `localhost` would be a
-secure one, but this server isn't reached that way: it listens on the Tailscale address alone, and
-a port forwarded to it brings `Host: localhost:…`, which is refused. The page says whether it
-  is a secure page, whether it has `VideoDecoder`, and what `VideoDecoder.isConfigSupported`
-  answers for the stream's codec (as `hev1` and as `hvc1`). HTTPS through `tailscale serve` isn't
-  built: callers would then come from this machine itself, and be told apart differently.
-- Each connection is asked of `tailscale whois` once: the page's, and the WebSocket's before it is
+- The page decodes HEVC with WebCodecs' `VideoDecoder`. Use `http://localhost:<port>/` on
+  this machine, or `--https` and the printed HTTPS address from elsewhere on the tailnet.
+  Both are secure contexts, including in embedded browsers such as T3 Code's. The browser
+  must still support HEVC. Safari on an iPhone 15 Pro also decoded over plain tailnet HTTP;
+  Chrome needs HTTPS, localhost, or its `--unsafely-treat-insecure-origin-as-secure` flag.
+  The page reports secure context, `VideoDecoder` availability and codec support; when it
+  cannot decode, it explains why instead of waiting for a picture indefinitely.
+- Each direct tailnet connection is asked of `tailscale whois` once: the page's, and the WebSocket's before it is
   taken. Refused, in this order: a `Host` that isn't this server's address or Tailscale name with
   its port (400); an `Origin` other than this server's own (403; the page may come without one,
   the WebSocket must have it); a method other than `GET` (405); another path (404); a caller
@@ -458,13 +465,15 @@ a port forwarded to it brings `Host: localhost:…`, which is refused. The page 
   app has: T3 Code's gave the page `VideoDecoder` there, and none at the Tailscale address) shows
   the picture there. Callers there are this machine, not asked of Tailscale, and give the token.
 - `--https <port>` (it takes `--token-file`) puts the page on HTTPS too, at
-  `https://<this machine's Tailscale name>:<port>/`, by `tailscale serve` in front of the loopback
-  listener, with Tailscale's certificate: a secure page to any browser on the tailnet, an app's own
+  `https://<this machine's Tailscale name>:<port>/`, by `tailscale serve` in front of a dedicated loopback
+  listener, separate from the localhost page, with Tailscale's certificate: a secure page to any browser on the tailnet, an app's own
   included (T3 Code's gave it `VideoDecoder` there). A port `tailscale serve` already serves is
   refused, and the rest of `tailscale serve` is left as it is; at Ctrl-C that port alone is taken
   off it (a view that is killed leaves it: `tailscale serve --https=<port> off`). A request handed
   on so says whose it is (`Tailscale-User-Login`), and is judged by `--allow` as that login; one
-  without (a tagged machine's) is taken as this machine's. All give the token.
+  without an allowed login is refused, even with the token. Tagged machines use the direct
+  tailnet HTTP endpoint with `--allow tag:<name>`; Serve does not supply their login. All HTTPS
+  callers give the token. Port 443 also accepts the address without `:443`.
 - `--at <address>` reaches the device at that address instead of the one it was saved with: its
   address on this machine's Wi‑Fi, so that the stream doesn't go through Tailscale. The pairing
   opens it as ever, and the page is still served on the Tailscale address. A device another
@@ -493,8 +502,11 @@ a port forwarded to it brings `Host: localhost:…`, which is refused. The page 
   and 0.5–1.3 s over the home Wi‑Fi (back to back about 1.05 s apart, as key frames are), and the
   page's picture never stopped; looked at through another connection instead (RoamRun's app),
   the page's picture stopped about 9 s, as the device sends one screen stream at a time. Tried
-  from a plain JSON-RPC client; not yet with a coding agent's MCP client. For Claude Code that
-  would be `claude mcp add --transport http <name> http://<address>:<port>/mcp --header
+  first from a plain JSON-RPC client. On 2026-11-06, Codex app-server 0.156.1
+  connected over HTTPS using its MCP client: tool discovery, look, tap and swipe succeeded,
+  and T3 Code's browser displayed the tap and swipe rings while the picture stayed live.
+  The calls used app-server's `mcpServer/tool/call`, driven by Codex; no separate model turn ran.
+  For Claude Code the configuration is `claude mcp add --transport http <name> http://<address>:<port>/mcp --header
   "Authorization: Bearer <token>"`.
 - The device is this command's alone while it runs: don't use it from another command meanwhile
   (with `--mcp`, an agent uses `/mcp` instead).
@@ -719,6 +731,8 @@ against a real device at the time these notes were written:
 - A Mac's `roamrun pair introduce` introducing a machine running `roamrunctl`.
 - Through MCP: swipe and a paste that goes through (these had been tested outside MCP).
   Installing and launching through MCP on Linux or Windows.
+- Pinch on Linux or Windows, or through `mcp --http` (it was run through `mcp` over stdio on
+  macOS, on an iPhone Duo).
 - On Windows: `pair control --with`, MCP, install, and launch.
 - On macOS, a look from the screen stream on any device but an iPhone Duo, or over a relay or
   cellular.
@@ -772,7 +786,7 @@ against a real device at the time these notes were written:
   answered `(install <id>)`, `install_status` asked by it said the app was in after 5 s, and it
   launched; `install_status` with another id was then an error, and without one answered of
   that install.
-- `view` (a prototype): browsers other than Chrome on a Mac and Safari on an iPhone, and the
+- `view` (a prototype): browsers other than Chrome on a Mac, T3 Code's browser and Safari on an iPhone, and the
   page opened from outside the home network.
 - Tailscale userspace networking with no address available to bind.
 - Xcode pairing through `pair introduce` since the `--mac` → `--host` change.

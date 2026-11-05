@@ -79,6 +79,9 @@ impl Device {
     pub fn swipe(&self, from: (f64, f64), to: (f64, f64), ms: u32) -> String {
         take(unsafe { rr_device_swipe(self.0, from.0, from.1, to.0, to.1, ms) })
     }
+    pub fn pinch(&self, centre: (f64, f64), scale: f64, degrees: f64, ms: u32) -> String {
+        take(unsafe { rr_device_pinch(self.0, centre.0, centre.1, scale, degrees, ms) })
+    }
     pub fn type_text(&self, text: &str) -> String { self.with(text, |d, t| unsafe { rr_device_type(d, t) }) }
     pub fn paste(&self, text: &str) -> String { self.with(text, |d, t| unsafe { rr_device_paste(d, t) }) }
     pub fn button(&self, name: &str) -> String { self.with(name, |d, t| unsafe { rr_device_button(d, t) }) }

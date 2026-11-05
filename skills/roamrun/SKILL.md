@@ -360,7 +360,7 @@ roamrun look iPhone /tmp/now.png     # what it became
 
 The same is there as MCP tools (`look` returns the image itself, scaled to what
 you are shown, and its id; points are that image's pixels, and `tap`, `swipe`,
-`type` and `paste` give the id as `"look": 12`): the user adds it once with
+`pinch`, `type` and `paste` give the id as `"look": 12`): the user adds it once with
 `claude mcp add roamrun -- roamrun mcp`, or the like for another agent. Their
 `device` is the name RoamRun saved, as `devices` lists it — not a Tailscale name
 or an id. Use the tools when you have them; the rules below hold for both.
@@ -388,9 +388,9 @@ shell runs in a sandbox that keeps it from the app (the app may well be
 running — don't try to start it): ask to run `roamrun` outside the sandbox, or
 have the user add the MCP tools, which run outside it.
 
-- **Each look serves one action.** `tap` and `swipe` are refused until there
+- **Each look serves one action.** `tap`, `swipe` and `pinch` are refused until there
   has been a `look`, and any action (or `elements`) uses it up for them: look, act,
-  look again. Give the look's number with each `tap`, `swipe`, `type` and `paste`
+  look again. Give the look's number with each `tap`, `swipe`, `pinch`, `type` and `paste`
   (`--look 12` with the commands, after the text for `type` and `paste`;
   `"look": 12` with the tools): after another agent's look, yours is refused —
   look again. `type` and `paste` may still go by a look an action used (look, tap
@@ -409,6 +409,13 @@ have the user add the MCP tools, which run outside it.
   shows turned on its side in it, and its points are still the image's.
 - `roamrun swipe iPhone 295 900 295 450 [ms]` drags; start on something that
   does nothing when pressed if you can.
+- `roamrun pinch iPhone 295 640 <scale> [ms] [--rotate <degrees>]` (0.13.0+) puts two fingers about the point and moves them until they are `scale` (0.25–4) times
+  as far apart as they began — 2 zooms in, 0.5 out — turned clockwise by `--rotate` (−180–180),
+  over ms (50–5000, default 500), then lifts them. Scale 1 without `--rotate` is a two-finger tap.
+  The wider of the two spreads is 40% of the screen's shorter side: a point too near the edge for
+  that is refused, not moved. The tool is `pinch` with `x`, `y`, `scale`, `degrees` and
+  `milliseconds`. Look after it to see what it did. Tried on one device, an iPhone Duo (opened
+  and folded), in Google Maps: 2 zoomed in, 1 out, `--rotate 45` turned the map clockwise.
 - `roamrun elements iPhone [limit]` prints what accessibility says is on the
   screen, one caption a line ("Home, tab, selected"). It gives **no positions** —
   a caption can't be tapped by name; find it in a `look`. The screen may scroll

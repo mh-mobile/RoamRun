@@ -109,7 +109,7 @@ pub struct PageInputs {
 }
 
 /// Where a look takes its picture instead of asking the device for one (`view --mcp`: view's own stream).
-pub type Pictures = Box<dyn Fn() -> Result<device::Picture, String> + Send>;
+pub type Pictures = Box<dyn Fn() -> Result<(device::Picture, Instant), String> + Send>;
 
 /// Told of each tap and swipe an agent made, in the device's upright terms (0…1): `view --mcp` shows it on its pages.
 pub type Seen = Box<dyn Fn(&str, &[(f64, f64)]) + Send>;
@@ -185,7 +185,7 @@ pub fn begun(what: &str, megabytes: u64, name: &str, id: &str, given: Duration) 
 /// can't be undone from here (`lock`), ends an app, or replaces one.
 fn hints(name: &str) -> Value {
     let reads = matches!(name, "devices" | "look" | "install_status");
-    let destroys = matches!(name, "tap" | "swipe" | "type" | "paste" | "press" | "install" | "launch");
+    let destroys = matches!(name, "tap" | "swipe" | "pinch" | "type" | "paste" | "press" | "install" | "launch");
     json!({ "readOnlyHint": reads, "destructiveHint": destroys })
 }
 
@@ -196,11 +196,17 @@ fn tools(remote: bool, installs: bool) -> Value {
     let since = json!({ "type": "integer", "description": "The id of the device's latest look, less than a minute old, with no other look, button, launch, install or elements since (taps, swipes, types and pastes by it are fine)" });
     let all = json!([
         tool("devices", "The devices this machine can use, one a line: its name, a tab, and how it is kept (one sentence where there is none). One \"not used here yet\" is offered by another machine and believed the first time it is used: use it only if the user named it.", json!({}), &[]),
-        tool("look", "The device's screen now, as an image, and the look's id. Do this before every tap or swipe: it serves one action, which gives that id.", json!({}), &[]),
+        tool("look", "The device's screen now, as an image, and the look's id. Do this before every tap, swipe or pinch: it serves one action, which gives that id.", json!({}), &[]),
         tool("tap", "Tap a point of the last look. Operates the device: whatever is there gets pressed.", json!({ "look": look, "x": point, "y": point }), &["look", "x", "y"]),
         tool("swipe", "Drag from one point of the last look to another (to scroll, or move something). Operates the device.",
              json!({ "look": look, "x1": point, "y1": point, "x2": point, "y2": point, "milliseconds": { "type": "integer", "description": "How long the drag takes (50...5000, default 300)" } }),
              &["look", "x1", "y1", "x2", "y2"]),
+        tool("pinch", "Two fingers about a point of the last look, moving apart or together and turning, then lifted: scale 2 zooms in, 0.5 out; degrees turn them (clockwise). Neither: a two-finger tap. A finger that would leave the screen is refused. Operates the device.",
+             json!({ "look": look, "x": point, "y": point,
+                     "scale": { "type": "number", "description": "How far apart the fingers end, against where they began (0.25...4, default 1)" },
+                     "degrees": { "type": "number", "description": "How far they turn, clockwise (-180...180, default 0)" },
+                     "milliseconds": { "type": "integer", "description": "How long it takes (50...5000, default 500)" } }),
+             &["look", "x", "y"]),
         tool("elements", "What accessibility says is on the screen, one caption a line (\"Home, tab, selected\"). No positions: find a caption in a look to tap it. The screen may scroll to what is visited. Nothing on the home screen.",
              json!({ "limit": { "type": "integer", "description": "How many at most (default 40)" } }), &[]),
         tool("type", "Type text on the device's keyboard, into whatever has its focus. US-keyboard characters only; a newline is Return. Right only while the device's keyboard is an English one — look first: under a Japanese one keys go to its conversion. 500 characters at most.",
@@ -241,6 +247,14 @@ fn look_of(arguments: &Value) -> Result<u64, String> {
     if given.is_null() { return Err("look is missing: give the id the last look answered with".into()) }
     given.as_u64().or_else(|| given.as_str()?.trim().parse().ok())
         .ok_or_else(|| "look isn't a look's id: give the id the last look answered with, a whole number".to_string())
+}
+
+/// A swipe's or a pinch's length, `default` when not given.
+fn milliseconds(arguments: &Value, default: u32) -> Result<u32, String> {
+    match &arguments["milliseconds"] {
+        Value::Null => Ok(default),
+        given => Ok(given.as_u64().filter(|ms| (50..=5000).contains(ms)).ok_or("milliseconds is a whole number, 50...5000")? as u32),
+    }
 }
 
 /// Whether the call `line` asks for was taken back by a message that came after it (notifications/cancelled):
@@ -487,10 +501,10 @@ impl Server {
                 let of = self.open[&name].1.clone();
                 let device = &self.open[&name].0;
                 // From view's stream where it gives one; else the device is asked, and the look says why.
-                let (taken, aside) = match self.pictures.as_ref().map(|pictures| pictures()) {
-                    Some(Ok(picture)) => (Ok(picture), None),
-                    Some(Err(why)) => (device::picture(device), Some(why)),
-                    None => (device::picture(device), None),
+                let (taken, aside, captured) = match self.pictures.as_ref().map(|pictures| pictures()) {
+                    Some(Ok((picture, at))) => (Ok(picture), None, at),
+                    Some(Err(why)) => (device::picture(device), Some(why), Instant::now()),
+                    None => (device::picture(device), None, Instant::now()),
                 };
                 let picture = match taken {
                     Ok(picture) => picture,
@@ -523,15 +537,15 @@ impl Server {
                 let way = if native { 1 } else { match device.way() { 0 => device.way(), way => way } };
                 let (jpeg, width, height) = device::fitted(picture.image, image::ImageFormat::Jpeg)?;
                 let id = self.next_look();
-                self.shown.insert(name, Shown { size: (width as f64, height as f64), way, native, at: Instant::now(), of, id, spent: false });
+                self.shown.insert(name, Shown { size: (width as f64, height as f64), way, native, at: captured, of, id, spent: false });
                 let mut content = vec![json!({ "type": "image", "data": base64::engine::general_purpose::STANDARD.encode(jpeg), "mimeType": "image/jpeg" })];
                 // Said, so that a look much slower than the last isn't a mystery.
                 let png = if streamed && !native { " (The device's PNG: the screen stream's frame couldn't be cut to the screen, or the device didn't say its size.)" } else { "" };
                 let aside = aside.map(|why| format!(" (Not from view's stream: {why}.)")).unwrap_or_default();
-                content.extend(text(format!("{width} x {height}, look {id}. Points for tap and swipe are pixels of this image, given with look {id}. It serves one tap or swipe, and type and paste, within a minute: look again after them.{png}{aside}")));
+                content.extend(text(format!("{width} x {height}, look {id}. Points for tap, swipe and pinch are pixels of this image, given with look {id}. It serves one tap, swipe or pinch, and type and paste, within a minute: look again after them.{png}{aside}")));
                 Ok(content)
             }
-            "tap" | "swipe" => {
+            "tap" | "swipe" | "pinch" => {
                 // The look is spent by what reaches the device: a call refused for what it says leaves it.
                 let before = self.shown.get(&name).filter(|shown| !shown.spent).ok_or("look first: a point is given in the pixels of the image a look returns")?.clone();
                 let (id, size, way, native, of) = (before.id, before.size, before.way, before.native, before.of.clone());
@@ -558,17 +572,22 @@ impl Server {
                     let done = self.ask(&name, Some(&of), Some(before), |d| d.tap(x, y)).map(|_| "tapped; look to see what it did");
                     if let (Ok(_), Some(seen)) = (&done, &self.seen) { seen("tap", &[(x, y)]) }
                     done
-                } else {
+                } else if tool == "swipe" {
                     let (from, to) = (real(number("x1")?, number("y1")?)?, real(number("x2")?, number("y2")?)?);
-                    let ms = match &arguments["milliseconds"] {
-                        Value::Null => 300,
-                        given => given.as_u64().filter(|ms| (50..=5000).contains(ms)).ok_or("milliseconds is a whole number, 50...5000")? as u32,
-                    };
+                    let ms = milliseconds(arguments, 300)?;
                     self.spend(&name);
                     if !native { self.unturned(&name, way, &of)?; }
                     let done = self.ask(&name, Some(&of), Some(before), |d| d.swipe(from, to, ms)).map(|_| "swiped; look to see what it did");
                     if let (Ok(_), Some(seen)) = (&done, &self.seen) { seen("swipe", &[from, to]) }
                     done
+                } else {
+                    let centre = real(number("x")?, number("y")?)?;
+                    let or = |key: &str, default: f64| if arguments[key].is_null() { Ok(default) } else { number(key) };
+                    let (scale, degrees, ms) = (or("scale", 1.0)?, or("degrees", 0.0)?, milliseconds(arguments, 500)?);
+                    // Turned as the look was, clockwise there is clockwise held upright: the degrees go as they are.
+                    self.spend(&name);
+                    if !native { self.unturned(&name, way, &of)?; }
+                    self.ask(&name, Some(&of), Some(before), |d| d.pinch(centre, scale, degrees, ms)).map(|_| "pinched; look to see what it did")
                 };
                 done.map(text)
             }
@@ -710,6 +729,23 @@ pub(crate) mod tests {
         assert_eq!((upright(1, true, (0.25, 0.1)), upright(3, false, (0.25, 0.1))), (None, None));
     }
 
+    /// A pinch's degrees go to the device as they are: clockwise in a look turned any way is clockwise held upright.
+    #[test]
+    fn a_turn_in_a_look_is_the_same_turn_held_upright() {
+        let held = (1179.0, 2556.0);
+        for way in 1..=4u8 {
+            let sideways = way >= 3;
+            let look = if sideways { (held.1, held.0) } else { held };
+            // From the centre, a point to the right and one turned 30° clockwise from it (y going down), in the look's pixels.
+            let [c, a, b] = [(0.5, 0.5), (0.6, 0.5), (0.5 + 0.1 * 30f64.to_radians().cos(), 0.5 + 0.1 * 30f64.to_radians().sin() * look.0 / look.1)];
+            let px = |p: (f64, f64)| { let (x, y) = upright(way, sideways, p).unwrap(); (x * held.0, y * held.1) };
+            let (c, a, b) = (px(c), px(a), px(b));
+            let (u, v) = ((a.0 - c.0, a.1 - c.1), (b.0 - c.0, b.1 - c.1));
+            let turn = (u.0 * v.1 - u.1 * v.0).atan2(u.0 * v.0 + u.1 * v.1).to_degrees();
+            assert!((turn - 30.0).abs() < 0.01, "way {way}: {turn}");
+        }
+    }
+
     #[test]
     fn the_server_says_what_it_is_and_what_it_has() {
         let mut server = Server::default();
@@ -732,7 +768,7 @@ pub(crate) mod tests {
         }
         let listed: Value = serde_json::from_str(&server.handle(r#"{"jsonrpc":"2.0","id":"a","method":"tools/list"}"#).unwrap()).unwrap();
         let names: Vec<&str> = listed["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["devices", "look", "tap", "swipe", "elements", "type", "paste", "press", "install", "install_status", "launch"]);
+        assert_eq!(names, ["devices", "look", "tap", "swipe", "pinch", "elements", "type", "paste", "press", "install", "install_status", "launch"]);
         assert_eq!(listed["id"], "a");
         // Every tool but `devices` names its device, and says whether it only reads.
         for t in listed["result"]["tools"].as_array().unwrap() {
@@ -740,7 +776,7 @@ pub(crate) mod tests {
         }
         let hinted = |hint: &str| -> Vec<&str> { listed["result"]["tools"].as_array().unwrap().iter().filter(|t| t["annotations"][hint] == true).map(|t| t["name"].as_str().unwrap()).collect() };
         assert_eq!(hinted("readOnlyHint"), ["devices", "look", "install_status"]);
-        assert_eq!(hinted("destructiveHint"), ["tap", "swipe", "type", "paste", "press", "install", "launch"]);
+        assert_eq!(hinted("destructiveHint"), ["tap", "swipe", "pinch", "type", "paste", "press", "install", "launch"]);
         // A notification gets no answer; an unknown method gets an error with its id.
         assert!(server.handle(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).is_none());
         let garbled: Value = serde_json::from_str(&server.handle("not json").unwrap()).unwrap();
@@ -782,7 +818,7 @@ pub(crate) mod tests {
         // A tap, swipe, type or paste gives look 7 unless it says another.
         let call = |server: &mut Server, tool: &str, mut arguments: Value| -> String {
             arguments["device"] = json!(name);
-            if matches!(tool, "tap" | "swipe" | "type" | "paste") && arguments["look"].is_null() { arguments["look"] = json!(7) }
+            if matches!(tool, "tap" | "swipe" | "pinch" | "type" | "paste") && arguments["look"].is_null() { arguments["look"] = json!(7) }
             server.call(tool, &arguments).err().unwrap_or_else(|| "done".into())
         };
         let look = |server: &mut Server, size, way, at| {
@@ -794,6 +830,9 @@ pub(crate) mod tests {
         look(&mut server, upright, 1, now());
         assert!(call(&mut server, "tap", json!({ "x": 100, "y": 1 })).contains("inside the image"));
         assert!(call(&mut server, "swipe", json!({ "x1": 1, "y1": 1, "x2": 2, "y2": 2, "milliseconds": 10 })).contains("50...5000"));
+        assert!(call(&mut server, "pinch", json!({ "x": 50, "y": 100, "milliseconds": 6000 })).contains("50...5000"));
+        assert!(call(&mut server, "pinch", json!({ "x": 50, "y": 300 })).contains("inside the image"));
+        assert!(call(&mut server, "pinch", json!({ "x": 50, "y": 100, "scale": "2" })).contains("scale is missing"));
         assert!(call(&mut server, "type", json!({ "text": "a".repeat(501) })).starts_with("too long"));
         assert!(server.shown.contains_key(&name));
         // Sent, it is spent — though the device didn't answer.
@@ -1184,6 +1223,20 @@ pub(crate) mod tests {
         *page.ended.lock().unwrap() = Some(Instant::now() - Duration::from_secs(5));
         looked(&mut server, Instant::now());
         assert!(!server.call("tap", &tap).unwrap_err().contains("used from view's page"));
+    }
+
+    #[test]
+    fn a_slow_look_keeps_the_frames_time_for_page_inputs() {
+        let page = Arc::new(PageInputs::default());
+        let mut server = Server::holding("usb", Arc::new(Device::none()), Some(page.clone()));
+        let captured = Instant::now() - Duration::from_secs(3);
+        *page.ended.lock().unwrap() = Some(captured + Duration::from_secs(1));
+        server.take_pictures(Box::new(move || Ok((device::Picture {
+            image: image::DynamicImage::new_rgb8(100, 200), native: false,
+        }, captured))));
+        server.call("look", &json!({ "device": "usb" })).unwrap();
+        let id = server.shown["usb"].id;
+        assert!(server.call("tap", &json!({ "device": "usb", "look": id, "x": 10, "y": 10 })).unwrap_err().contains("used from view's page"));
     }
 
     /// Only what reached the device is told to the watchers: a tap the device didn't take isn't.

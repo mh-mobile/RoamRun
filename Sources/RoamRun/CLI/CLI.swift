@@ -42,6 +42,7 @@ enum CLI {
         "look",
         "tap",
         "swipe",
+        "pinch",
         "type",
         "paste",
         "press",
@@ -66,6 +67,10 @@ enum CLI {
                                      Tap a point given in the pixels of the last look (of look n only)
       swipe <name> <x1> <y1> <x2> <y2> [ms] [--look <n>]
                                      Drag from one point of the last look to another
+      pinch <name> <x> <y> <scale> [ms] [--rotate <degrees>] [--look <n>]
+                                     Two fingers about a point of the last look, ending <scale> times as far
+                                     apart (2 zooms in, 0.5 out) and turned clockwise by --rotate; scale 1
+                                     without --rotate is a two-finger tap. 500 ms unless given
       elements <name> [limit]        What accessibility says is on the screen, one caption a line
                                      (no positions; the screen may scroll)
       type <name> <text> [--look <n>]
@@ -515,6 +520,27 @@ enum CLI {
                     milliseconds: ms,
                     look: lookGiven(parsed)
                 ))
+            case "pinch":
+                let rotate = parsed.values["--rotate"].map {
+                    CLI.finite([$0])?.first
+                }
+                guard name != nil, let p = targets.first, let numbers = finite(words.dropFirst()),
+                      (3 ... 4).contains(numbers.count), rotate != .some(nil),
+                      let ms = numbers.count == 4 ? Int(exactly: numbers[3].rounded()) : 500
+                else {
+                    fail("usage: roamrun pinch <name> <x> <y> <scale> [milliseconds] [--rotate <degrees>] [--look <n>] — pixels of the last `roamrun look`. " +
+                        names(profiles))
+                }
+                operate(.init(
+                    op: "pinch",
+                    device: p.id,
+                    x: numbers[0],
+                    y: numbers[1],
+                    milliseconds: ms,
+                    scale: numbers[2],
+                    degrees: rotate ?? 0,
+                    look: lookGiven(parsed)
+                ))
             case "type", "paste", "press":
                 guard name != nil, let p = targets.first, words.count == 2 else {
                     fail("usage: roamrun \(args[0]) <name> \(args[0] == "press" ? "<home|lock|volume-up|volume-down>" : "<text> [--look <n>]"). " +
@@ -547,6 +573,7 @@ enum CLI {
         all["look"] = ([], 0 ... 2)
         all["tap"] = (["--look="], 0 ... 3)
         all["swipe"] = (["--look="], 0 ... 6)
+        all["pinch"] = (["--look=", "--rotate="], 0 ... 5)
         all["type"] = (["--look="], 0 ... 2)
         all["paste"] = (["--look="], 0 ... 2)
         all["press"] = ([], 0 ... 2)
@@ -661,8 +688,11 @@ enum CLI {
                 continue
             }
             if spec.options.contains(a + "=") {
-                // --arg values are often flags themselves (-ShowScreen), --wait may be negative (refused below).
-                guard i + 1 < args.count, !args[i + 1].hasPrefix("-") || a == "--wait" || a == "--arg" else {
+                // --arg values are often flags themselves (-ShowScreen), --wait may be negative (refused below),
+                // --rotate turns either way.
+                guard i + 1 < args.count,
+                      !args[i + 1].hasPrefix("-") || ["--wait", "--arg", "--rotate"].contains(a)
+                else {
                     return .failure(.init(message: a == "--wait" ? "--wait needs a number of seconds" :
                             "\(a) needs a value"))
                 }

@@ -126,7 +126,7 @@ enum Command {
         #[arg(requires = "http")]
         devices: Vec<String>,
     },
-    /// A prototype: the device's screen in a browser elsewhere on the tailnet, to watch and touch, until Ctrl-C. The page decodes with WebCodecs, which Chrome offers only to a secure page (Safari on an iPhone offered it to the page as it is): open http://<address>:<port>/ in Chrome started with --unsafely-treat-insecure-origin-as-secure=http://<address>:<port> (and --user-data-dir=<folder>; untried whether the flag needs it)
+    /// A prototype: watch and touch the device in a browser until Ctrl-C. Open localhost on this machine, or use --https for browsers elsewhere on the tailnet; the browser needs HEVC in WebCodecs
     View {
         /// The device, as `roamrunctl devices` names it (none with --usb)
         #[arg(required_unless_present = "usb", conflicts_with = "usb")]
@@ -149,7 +149,7 @@ enum Command {
         /// Serve roamrunctl's MCP tools on POST /mcp too, on this device through this connection: an agent's look then takes the picture from this stream instead of starting another (which stops this one's). Callers as for the page, with the token as a bearer
         #[arg(long, requires = "token_file")]
         mcp: bool,
-        /// The page over HTTPS too, at this port of this machine's Tailscale name (https://<name>:<port>/), by `tailscale serve` in front of view on localhost: a secure page to any browser on the tailnet, an app's own included. Taken off `tailscale serve` at Ctrl-C; callers give the token
+        /// The page over HTTPS too, at this port of this machine's Tailscale name (https://<name>:<port>/), by `tailscale serve` in front of view on localhost: a secure page to any browser on the tailnet, an app's own included. Taken off `tailscale serve` at Ctrl-C; callers need an allowed login and the token (tagged callers use direct HTTP)
         #[arg(long, value_name = "PORT", requires = "token_file")]
         https: Option<u16>,
     },
