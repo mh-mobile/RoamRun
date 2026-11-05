@@ -35,6 +35,16 @@ impl Device {
         Ok(Device(device))
     }
 
+    /// The device connected by USB with this UDID, or the only one connected by USB: see rr_device_open_usb.
+    pub fn open_usb(udid: Option<&str>) -> Result<Device, String> {
+        let udid = udid.map(c).transpose()?;
+        let mut error = std::ptr::null_mut();
+        let device = unsafe { rr_device_open_usb(udid.as_ref().map_or(std::ptr::null(), |u| u.as_ptr()), &mut error) };
+        if device.is_null() { return Err(take(error)); }
+        unsafe { rr_device_bare_inputs(device, true) };
+        Ok(Device(device))
+    }
+
     /// As `open`, for a pairing whose private key is kept elsewhere: `sign` is asked for the one signature a
     /// connection takes (None: it wasn't given), and `pairing` holds any key in the private key's place.
     pub fn open_signed(ip: &str, port: u16, pairing: &[u8], sign: impl Fn(&[u8]) -> Option<[u8; 64]> + Send + Sync) -> Result<Device, String> {

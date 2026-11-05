@@ -128,8 +128,9 @@ enum Command {
     },
     /// A prototype: the device's screen in a browser elsewhere on the tailnet, to watch and touch, until Ctrl-C. The page decodes with WebCodecs, which Chrome offers only to a secure page (Safari on an iPhone offered it to the page as it is): open http://<address>:<port>/ in Chrome started with --unsafely-treat-insecure-origin-as-secure=http://<address>:<port> (and --user-data-dir=<folder>; untried whether the flag needs it)
     View {
-        /// The device, as `roamrunctl devices` names it
-        name: String,
+        /// The device, as `roamrunctl devices` names it (none with --usb)
+        #[arg(required_unless_present = "usb", conflicts_with = "usb")]
+        name: Option<String>,
         /// Serve on this port of this machine's Tailscale IPv4 address
         #[arg(long)]
         http: u16,
@@ -140,8 +141,11 @@ enum Command {
         #[arg(long = "token-file")]
         token_file: Option<std::path::PathBuf>,
         /// Reach the device at this address, not the one it was saved with: its address on this machine's Wi‑Fi, so that the stream doesn't go through Tailscale
-        #[arg(long, value_name = "ADDRESS")]
+        #[arg(long, value_name = "ADDRESS", conflicts_with = "usb")]
         at: Option<std::net::IpAddr>,
+        /// The device connected to this machine by USB, through usbmuxd and the pairing this machine's system keeps with it (it trusts this machine): no pairing of roamrunctl's. With several connected, name one by its UDID
+        #[arg(long, value_name = "UDID", num_args = 0..=1, default_missing_value = "")]
+        usb: Option<String>,
     },
     /// Keep the pairings saved here to yourself and sign with them for another machine, which then uses the devices without having their keys; until Ctrl-C
     Sign {

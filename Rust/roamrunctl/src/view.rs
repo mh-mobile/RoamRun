@@ -202,6 +202,8 @@ pub struct Options {
     pub allowed: Vec<Allow>,
     pub token: Option<String>,
     pub at: Option<IpAddr>,
+    /// The device connected by USB with this UDID; empty: the only one.
+    pub usb: Option<String>,
 }
 
 /// `roamrunctl view`: until Ctrl-C.
@@ -209,17 +211,19 @@ pub fn serve(options: Options) -> Result<String, String> {
     #[cfg(unix)]
     http::not_root(roamrun_device::safe::effective_user())?;
     if options.allowed.is_empty() { return Err("who may watch: --allow <login> (your own machines), or --allow tag:<name>".into()) }
-    let device = match options.at {
-        Some(at) => crate::device::opened_at(&options.device, at)?,
-        None => crate::device::opened(&options.device)?,
+    let device = match (&options.usb, options.at) {
+        (Some(udid), _) => Device::open_usb(Some(udid.as_str()).filter(|u| !u.is_empty()))?,
+        (None, Some(at)) => crate::device::opened_at(&options.device, at)?,
+        (None, None) => crate::device::opened(&options.device)?,
     };
+    let device_name = match &options.usb { Some(udid) if udid.is_empty() => "the USB device".to_string(), Some(udid) => udid.clone(), None => options.device.clone() };
     let (listener, status, own, names) = http::listen(options.port)?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     // The stream stopped at Ctrl-C, not left listed on the device as screen sharing.
     crate::at_stop()?.then(|| {});
     let feedback = std::env::var(FEEDBACK).map_or(true, |v| v != "off");
     note!("roamrunctl: {}'s screen at http://{own}:{port}/ (a prototype), for {} on the tailnet{}{}. The page needs WebCodecs, which Chrome offers only to a secure page: see `roamrunctl view --help`. Ctrl-C ends it.",
-        options.device, options.allowed.iter().map(|a| match a { Allow::Tag(s) | Allow::Login(s) => s.as_str() }).collect::<Vec<_>>().join(", "),
+        device_name, options.allowed.iter().map(|a| match a { Allow::Tag(s) | Allow::Login(s) => s.as_str() }).collect::<Vec<_>>().join(", "),
         if options.token.is_some() { ", with the token" } else { "" }, if feedback { "" } else { "; no frame acks or receiver reports to the device" });
     let screen = Arc::new(OnDevice { device: Mutex::new(device), feedback });
     run(listener, screen, options.allowed, options.token, http::hosts(IpAddr::V4(own), names, port), IpAddr::V4(own), status.this.id.clone(), feedback, Box::new(crate::tailscale::whois))

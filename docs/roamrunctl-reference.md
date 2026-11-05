@@ -422,7 +422,8 @@ a relay: a relay (`roamrunctl mcp --http`) can't publish, and an OTA server oper
 
 ## The screen in a browser (`view`, a prototype)
 
-`roamrunctl view <device> --http <port> --allow <who> [--allow <who>…] [--token-file <file>] [--at <address>]`, until Ctrl-C.
+`roamrunctl view <device> --http <port> --allow <who> [--allow <who>…] [--token-file <file>] [--at <address>]`, or
+`roamrunctl view --usb [<UDID>] --http <port> --allow <who> …`, until Ctrl-C.
 A prototype, for watching and touching your own device from elsewhere on the tailnet. Tried on
 2026-11-05 on an iPhone Duo (iOS 27) in Chrome. Packets the device sends go missing, and the
 picture then stops until the next key frame: over 30 s, 1 to 3.5 times with the device reached
@@ -457,6 +458,12 @@ a port forwarded to it brings `Host: localhost:…`, which is refused. The page 
   machine signs for takes `--at` once `view` has opened it without. With `--at` and a video
   playing on the device: 6 and 13 holes in two runs of 30 s (about 3 % of the packets), against
   19 and 56 through Tailscale in the runs between (8 % and 58 %).
+- `--usb` takes the device connected to this machine by USB instead of a saved one: through usbmuxd,
+  with the pairing this machine's system keeps with it (it trusts this machine), so no pairing of
+  roamrunctl's is needed. With several connected by USB, `--usb <UDID>` names one. On the iPhone
+  Duo with a video playing, two runs of 30 s over USB lost no packet, against 26 and 12 holes
+  (43 % and 14 % of the packets) with `--at` in the runs between; the first picture came 0.2 s after
+  connecting, against about 1.1 s over the Wi‑Fi. Tried on macOS only.
 - The device is this command's alone while it runs: don't use it from another command meanwhile.
   The screen stream runs while a page watches. Each page gets the access units as they come, none
   before a key frame. A page whose oldest frame not yet shown (waiting, or sent and not yet

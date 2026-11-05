@@ -261,21 +261,42 @@ unsafe fn open_with(ip: *const c_char, port: u16, pairing: *const u8, pairing_le
     let ip = (!ip.is_null()).then(|| unsafe { CStr::from_ptr(ip) }.to_str().ok()).flatten();
     let file = (!pairing.is_null()).then(|| unsafe { std::slice::from_raw_parts(pairing, pairing_len) });
     let opened = match (ip, file) {
-        (Some(ip), Some(file)) => tokio::runtime::Builder::new_multi_thread().worker_threads(1).thread_stack_size(STACK).enable_all().build()
-            .map_err(|e| format!("no runtime: {e}"))
-            .and_then(|runtime| {
-                let link = with_room(|| runtime.block_on(async {
-                    tokio::time::timeout(DEADLINE, connect(ip, port, file, signer.clone())).await.unwrap_or_else(|_| Err("timed out".into()))
-                }))?;
-                let held = Arc::new(Held { runtime, link: Mutex::new(link) });
-                watch_idle_stream(&held);
-                let mut open = OPEN.lock().unwrap_or_else(|e| e.into_inner());
-                open.retain(|held| held.strong_count() > 0);
-                open.push(Arc::downgrade(&held));
-                Ok(RRDevice { held })
-            }),
+        (Some(ip), Some(file)) => held_by(|| connect(ip, port, file, signer.clone())),
         _ => Err("bad arguments".into()),
     };
+    unsafe { given(opened, error) }
+}
+
+/// Opens the device connected by USB with this UDID (null: the only one connected by USB), through usbmuxd and the
+/// pairing this machine's system keeps with it (the device's “Trust”): no pairing of RoamRun's is used.
+/// # Safety
+/// `udid` is null or a C string; `error` as rr_device_open's.
+#[no_mangle]
+pub unsafe extern "C" fn rr_device_open_usb(udid: *const c_char, error: *mut *mut c_char) -> *mut RRDevice {
+    let udid = (!udid.is_null()).then(|| unsafe { CStr::from_ptr(udid) }.to_str().map(str::to_string));
+    let opened = match udid {
+        Some(Err(_)) => Err("bad arguments".into()),
+        udid => { let udid = udid.and_then(Result::ok); held_by(|| connect_usb(udid.clone())) }
+    };
+    unsafe { given(opened, error) }
+}
+
+/// A link made by `connecting`, held with a runtime of its own and listed among those open.
+fn held_by<F: std::future::Future<Output = Result<Link, String>>>(connecting: impl Fn() -> F + Send + Sync) -> Result<RRDevice, String> {
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(1).thread_stack_size(STACK).enable_all().build()
+        .map_err(|e| format!("no runtime: {e}"))?;
+    let link = with_room(|| runtime.block_on(async {
+        tokio::time::timeout(DEADLINE, connecting()).await.unwrap_or_else(|_| Err("timed out".into()))
+    }))?;
+    let held = Arc::new(Held { runtime, link: Mutex::new(link) });
+    watch_idle_stream(&held);
+    let mut open = OPEN.lock().unwrap_or_else(|e| e.into_inner());
+    open.retain(|held| held.strong_count() > 0);
+    open.push(Arc::downgrade(&held));
+    Ok(RRDevice { held })
+}
+
+unsafe fn given(opened: Result<RRDevice, String>, error: *mut *mut c_char) -> *mut RRDevice {
     match opened {
         Ok(device) => Box::into_raw(Box::new(device)),
         Err(why) => {
@@ -1085,6 +1106,32 @@ async fn connect(ip: &str, port: u16, file: &[u8], signer: Option<Signer>) -> Re
     let rsd = handle.connect(info.server_rsd_port).await.map_err(|e| format!("RSD: {e:?}"))?;
     let handshake = RsdHandshake::new(rsd).await.map_err(|e| format!("RSD handshake: {e:?}"))?;
     Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_stopped: None, stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, resent: 0, bare_inputs: false, stop: Stop(std::ptr::null()), held: None, finger: None, shown: None, shown_id: None, touchscreen: None, watched: false, verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
+}
+
+/// The device connected by USB with this UDID, or the only one: a tunnel through its CoreDeviceProxy service, which
+/// lockdown starts with the pairing the system keeps for it, then RSD as over the network.
+async fn connect_usb(udid: Option<String>) -> Result<Link, String> {
+    use idevice::usbmuxd::{Connection, UsbmuxdAddr, UsbmuxdConnection};
+    use idevice::IdeviceService;
+    let started = Instant::now();
+    let mut mux = UsbmuxdConnection::default().await.map_err(|e| format!("usbmuxd: {e:?}"))?;
+    let mut usb: Vec<_> = mux.get_devices().await.map_err(|e| format!("usbmuxd: {e:?}"))?
+        .into_iter().filter(|d| matches!(d.connection_type, Connection::Usb)).collect();
+    let device = match (udid, usb.len()) {
+        (Some(udid), _) => usb.into_iter().find(|d| d.udid == udid).ok_or(format!("no device {udid} is connected by USB"))?,
+        (None, 1) => usb.remove(0),
+        (None, 0) => return Err("no device is connected by USB (one that trusts this machine, unlocked once since)".into()),
+        (None, _) => return Err(format!("{} devices are connected by USB: name one by its UDID ({})", usb.len(), usb.iter().map(|d| d.udid.as_str()).collect::<Vec<_>>().join(", "))),
+    };
+    let provider = device.to_provider(UsbmuxdAddr::default(), LABEL);
+    let proxy = idevice::core_device_proxy::CoreDeviceProxy::connect(&provider).await.map_err(|e| format!("CoreDeviceProxy: {e:?}"))?;
+    let rsd_port = proxy.tunnel_info().server_rsd_port;
+    let adapter = proxy.create_software_tunnel().map_err(|e| format!("tunnel: {e:?}"))?;
+    let mut handle = adapter.to_async_handle();
+    let tunnel_ms = started.elapsed().as_millis();
+    let rsd = handle.connect(rsd_port).await.map_err(|e| format!("RSD: {e:?}"))?;
+    let handshake = RsdHandshake::new(rsd).await.map_err(|e| format!("RSD handshake: {e:?}"))?;
+    Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_stopped: None, stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, resent: 0, bare_inputs: false, stop: Stop(std::ptr::null()), held: None, finger: None, shown: None, shown_id: None, touchscreen: None, watched: false, verified_ms: 0, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
 }
 
 /// The most that is typed in one call: beyond it, a slip in the middle is too costly, and paste does it in one.

@@ -363,7 +363,8 @@ said; don't work around it.
 
 **`roamrunctl view <device> --http <port> --allow <login> [--at <address>]`** is a prototype, tried
 on an iPhone Duo in Chrome (through Tailscale its picture often stops until a key frame; `--at`
-reaches the device at its address on this machine's Wi‑Fi instead): the user's own device's screen
+reaches the device at its address on this machine's Wi‑Fi instead, and `--usb [<UDID>]` in place of
+`<device>` takes the one connected by USB, which lost nothing): the user's own device's screen
 in a browser elsewhere on the tailnet, to watch and touch (the page needs WebCodecs; roamrunctl's reference, under “The screen in a browser”, says how to
 open it). It is the user's to start, at a terminal of their own. While it runs, the
 device is its alone: don't `look`, tap or install on that device meanwhile, nor serve it with `mcp`.
