@@ -21,6 +21,9 @@ use crate::tailscale::Whois;
 const PAGE: &str = include_str!("view.html");
 /// Connections at once, and from one address.
 const AT_ONCE: usize = 12;
+/// How long an agent's look waits for a whole key frame from the stream (asked for, at most each 1.05 s; a stream
+/// that starts gives its first within some seconds) before the device is asked for its picture instead.
+const LOOK_WAIT: Duration = if cfg!(test) { Duration::from_secs(1) } else { Duration::from_secs(8) };
 /// A page takes two (its picture and its sound), an MCP client two or three at once.
 const FROM_ONE: usize = 6;
 /// For a request's head, each read; and for a viewer's first message.
@@ -195,6 +198,8 @@ struct Hub {
     inputs: Mutex<mpsc::Sender<(Arc<Viewer>, Input)>>,
     sound: Mutex<mpsc::Sender<Vec<u8>>>,
     mcp: Option<Mcp>,
+    /// Agents' looks waiting for the next whole key frame.
+    waiting: Mutex<Vec<mpsc::Sender<Arc<Sent>>>>,
     open: Mutex<std::collections::HashMap<IpAddr, usize>>,
 }
 
@@ -202,10 +207,30 @@ impl Hub {
     fn push(&self, frame: Sent) {
         let frame = Arc::new(frame);
         let now = Instant::now();
+        // A key frame without its parameter sets can't be decoded alone: the looks wait on for the next one, asked for
+        // again (the stream lowered the asking at this one).
+        if frame.key {
+            let mut waiting = self.waiting.lock().unwrap_or_else(|e| e.into_inner());
+            if whole(&frame.data) { for look in waiting.drain(..) { let _ = look.send(frame.clone()); } }
+            else if !waiting.is_empty() { self.wanted.store(true, Ordering::Relaxed) }
+        }
         for viewer in self.viewers.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|v| !v.sound_only) {
             if viewer.out.lock().unwrap_or_else(|e| e.into_inner()).queue.push(frame.clone(), now) { self.wanted.store(true, Ordering::Relaxed) }
             viewer.ready.notify_one();
         }
+    }
+    /// The next whole key frame from the stream, within `within`. The stream runs for it with no page open: a
+    /// viewer that takes nothing stands in meanwhile, and the stream stops some seconds after, as after a page.
+    fn keyframe(&self, within: Duration) -> Option<Arc<Sent>> {
+        let (look, came) = mpsc::channel();
+        self.waiting.lock().unwrap_or_else(|e| e.into_inner()).push(look);
+        let standing = Arc::new(Viewer { out: Mutex::new(Out { queue: Queue::new(), texts: VecDeque::new(), hears: false, sounds: VecDeque::new(), closed: false }), ready: Condvar::new(), sound_only: true });
+        self.viewers.lock().unwrap_or_else(|e| e.into_inner()).push(standing.clone());
+        self.joined.notify_all();
+        self.wanted.store(true, Ordering::Relaxed);
+        let frame = came.recv_timeout(within).ok();
+        self.viewers.lock().unwrap_or_else(|e| e.into_inner()).retain(|viewer| !Arc::ptr_eq(viewer, &standing));
+        frame
     }
     fn say(&self, text: &str) {
         for viewer in self.viewers.lock().unwrap_or_else(|e| e.into_inner()).iter() { viewer.say(text.to_string()) }
@@ -268,9 +293,13 @@ fn run(listener: TcpListener, screen: Arc<dyn Screen>, allowed: Vec<Allow>, toke
        whois: Box<dyn Fn(IpAddr) -> Result<Whois, String> + Send + Sync>) -> Result<String, String> {
     let (inputs, asked) = mpsc::channel::<(Arc<Viewer>, Input)>();
     let (sound, heard) = mpsc::channel::<Vec<u8>>();
-    let hub = Arc::new(Hub {
+    // An agent's look takes view's stream: the server is given it (by a weak hold: the hub holds the server).
+    let hub = Arc::new_cyclic(|hub: &std::sync::Weak<Hub>| {
+        if let Some(mcp) = &mcp { mcp.server.lock().unwrap_or_else(|e| e.into_inner()).take_pictures(from_stream(hub.clone())) }
+        Hub {
         viewers: Mutex::new(Vec::new()), joined: Condvar::new(), wanted: Arc::new(AtomicBool::new(false)), asked: AtomicU32::new(0), answered: AtomicU32::new(0),
-        way: std::sync::atomic::AtomicU8::new(0), began: Instant::now(), feedback, allowed, token, hosts, own_ip, own_id, whois, inputs: Mutex::new(inputs), sound: Mutex::new(sound), open: Mutex::new(Default::default()), mcp,
+        way: std::sync::atomic::AtomicU8::new(0), began: Instant::now(), feedback, allowed, token, hosts, own_ip, own_id, whois, inputs: Mutex::new(inputs), sound: Mutex::new(sound), open: Mutex::new(Default::default()), mcp, waiting: Mutex::new(Vec::new()),
+        }
     });
     // The sound decoded on a thread of its own, and given to the pages that asked for it.
     let hearing = hub.clone();
@@ -545,6 +574,32 @@ fn write_to(writer: &mut TcpStream, viewer: &Viewer, hub: &Hub) {
             return;
         }
     }
+}
+
+/// A look's picture from view's stream: the next whole key frame, decoded here (macOS: VideoToolbox), the display's
+/// own way up, as a look from the stream is anywhere.
+fn from_stream(hub: std::sync::Weak<Hub>) -> crate::mcp::Pictures {
+    Box::new(move || {
+        let hub = hub.upgrade().ok_or("view is ending")?;
+        let frame = hub.keyframe(LOOK_WAIT).ok_or(format!("no key frame came from it within {} s", LOOK_WAIT.as_secs()))?;
+        decoded(&frame.data)
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn decoded(frame: &[u8]) -> Result<crate::device::Picture, String> {
+    let (rgb, width, height) = roamrun_device::hevc::decode(frame)?;
+    let image = image::RgbImage::from_raw(width, height, rgb).ok_or("decode: a short image")?;
+    Ok(crate::device::Picture { image: image::DynamicImage::ImageRgb8(image), native: true })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn decoded(_: &[u8]) -> Result<crate::device::Picture, String> { Err("it is decoded on macOS only".into()) }
+
+/// Whether an access unit carries its parameter sets (VPS, SPS, PPS) and a slice: decodable alone.
+fn whole(annexb: &[u8]) -> bool {
+    let types: Vec<u8> = nal_units(annexb).map(|nal| (nal[0] >> 1) & 0x3f).collect();
+    [32, 33, 34].iter().all(|t| types.contains(t)) && types.iter().any(|t| *t < 32)
 }
 
 /// `POST /mcp` (`view --mcp`): roamrunctl's MCP tools on view's own device, by its connection and its stream, so that
@@ -828,18 +883,23 @@ mod tests {
     }
 
     /// A screen whose frames are made up: one key frame, then others, while it is watched.
-    struct Fake { watched: Arc<AtomicU32> }
-    struct FakeFrames { n: u32 }
+    /// `whole`: its key frames carry their parameter sets, as the device's do.
+    struct Fake { watched: Arc<AtomicU32>, whole: bool }
+    struct FakeFrames { n: u32, whole: bool }
+    /// A key frame as the stream gives one: VPS, SPS, PPS, then an IDR slice.
+    const FAKE_KEY: [u8; 20] = [0, 0, 1, 0x40, 1, 0, 0, 1, 0x42, 1, 0, 0, 1, 0x44, 1, 0, 0, 1, 0x26, 1];
     impl Frames for FakeFrames {
         fn frame(&mut self) -> Result<roamrun_device::watch::Frame, String> {
             std::thread::sleep(Duration::from_millis(5));
             self.n += 1;
-            Ok(roamrun_device::watch::Frame { key: self.n % 50 == 1, data: vec![0, 0, 1, if self.n % 50 == 1 { 0x26 } else { 0x02 }, 1] })
+            let key = self.n % 50 == 1;
+            let data = match (key, self.whole) { (true, true) => FAKE_KEY.to_vec(), (true, false) => vec![0, 0, 1, 0x26, 1], _ => vec![0, 0, 1, 0x02, 1] };
+            Ok(roamrun_device::watch::Frame { key, data })
         }
         fn counts(&self) -> (u32, u32) { (0, 0) }
     }
     impl Screen for Fake {
-        fn watch(&self, _: Arc<AtomicBool>) -> Result<Box<dyn Frames>, String> { self.watched.fetch_add(1, Ordering::SeqCst); Ok(Box::new(FakeFrames { n: 0 })) }
+        fn watch(&self, _: Arc<AtomicBool>) -> Result<Box<dyn Frames>, String> { self.watched.fetch_add(1, Ordering::SeqCst); Ok(Box::new(FakeFrames { n: 0, whole: self.whole })) }
         fn size(&self) -> Option<(u32, u32)> { None }
         fn input(&self, _: &Input) -> Result<(), String> { Ok(()) }
         fn way(&self) -> u8 { 1 }
@@ -854,12 +914,15 @@ mod tests {
     fn served(caller: &'static str) -> (std::net::SocketAddr, Arc<AtomicU32>) { served_with(caller, false) }
 
     /// As `served`, with `--mcp` where `mcp` is (its device none, named `fake`).
-    fn served_with(caller: &'static str, mcp: bool) -> (std::net::SocketAddr, Arc<AtomicU32>) {
+    fn served_with(caller: &'static str, mcp: bool) -> (std::net::SocketAddr, Arc<AtomicU32>) { served_as(caller, mcp, true) }
+
+    /// As `served_with`, its key frames whole or not.
+    fn served_as(caller: &'static str, mcp: bool, whole: bool) -> (std::net::SocketAddr, Arc<AtomicU32>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let at = listener.local_addr().unwrap();
         let hosts = vec![at.to_string()];
         let watched = Arc::new(AtomicU32::new(0));
-        let fake = Fake { watched: watched.clone() };
+        let fake = Fake { watched: watched.clone(), whole };
         std::thread::spawn(move || run(listener, Arc::new(fake), vec![Allow::Login("me@example.com".into())], Some("t".repeat(32)), hosts,
             "100.64.0.1".parse().unwrap(), "own".into(), true,
             mcp.then(|| Mcp { name: "fake".into(), server: Mutex::new(crate::mcp::Server::holding("fake", Arc::new(Device::none()), None)), page: Default::default() }),
@@ -918,7 +981,7 @@ mod tests {
         hello(&mut stream, &"t".repeat(32));
         let frame = first(&mut stream, 2);
         assert_eq!(frame[0], 1);
-        assert_eq!(&frame[9..], [0, 0, 1, 0x26, 1]);
+        assert_eq!(&frame[9..], FAKE_KEY);
         assert_eq!(watched.load(Ordering::SeqCst), 1);
         // Gone, it lets go of the stream: the next viewer's is watched anew.
         drop(stream);
@@ -976,5 +1039,29 @@ mod tests {
         assert_eq!(watched.load(Ordering::SeqCst), 0);
         let (at, _) = served_with("other@example.com", true);
         assert!(posted(at, &bearer, init).0.starts_with("HTTP/1.1 403"));
+    }
+
+    /// An agent's look takes its picture from view's stream, which runs for it with no page open: a whole key frame
+    /// comes (the Fake's isn't HEVC, so its decoding is what fails, not the wait); with none whole, the look waits
+    /// LOOK_WAIT, asks the device instead (none here) and says why.
+    #[test]
+    fn an_agents_look_takes_a_whole_key_frame_from_the_stream() {
+        let bearer = format!("Authorization: Bearer {}\r\n", "t".repeat(32));
+        let look = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"device":"fake"}}}"#;
+        let (at, watched) = served_as("me@example.com", true, true);
+        let (_, body) = posted(at, &bearer, look);
+        assert_eq!(watched.load(Ordering::SeqCst), 1);
+        assert!(body.contains("from view's stream") && !body.contains("no key frame came"), "{body}");
+        let (at, _) = served_as("me@example.com", true, false);
+        let began = Instant::now();
+        let (_, body) = posted(at, &bearer, look);
+        assert!(body.contains("no key frame came") && began.elapsed() >= LOOK_WAIT, "{body}");
+    }
+
+    #[test]
+    fn a_key_frame_is_whole_with_its_parameter_sets() {
+        assert!(whole(&FAKE_KEY));
+        assert!(!whole(&[0, 0, 1, 0x26, 1]));
+        assert!(!whole(&FAKE_KEY[..15]));
     }
 }

@@ -108,6 +108,9 @@ pub struct PageInputs {
     pub ended: std::sync::Mutex<Option<Instant>>,
 }
 
+/// Where a look takes its picture instead of asking the device for one (`view --mcp`: view's own stream).
+pub type Pictures = Box<dyn Fn() -> Result<device::Picture, String> + Send>;
+
 /// What the library says of a tunnel that closed (the device unplugged, or it let the connection go).
 pub const GONE: &str = "adapter closed";
 
@@ -146,6 +149,8 @@ pub struct Server {
     /// `view --mcp`: what its pages do on the device, and the count each device's latest look began at.
     page: Option<Arc<PageInputs>>,
     looked_page: HashMap<String, u64>,
+    /// `view --mcp`: a look's picture from view's stream; where none comes, the device is asked as ever.
+    pictures: Option<Pictures>,
 }
 
 fn text(s: impl Into<String>) -> Vec<Value> { vec![json!({ "type": "text", "text": s.into() })] }
@@ -263,6 +268,9 @@ impl Server {
         server.page = page;
         server
     }
+
+    /// For `view --mcp`: looks take their picture from `pictures` first.
+    pub fn take_pictures(&mut self, pictures: Pictures) { self.pictures = Some(pictures) }
 
     /// A held device whose connection is gone (its tunnel closed: unplugged, or the device let it go) is said to be,
     /// with what to do: it isn't opened again here.
@@ -471,9 +479,15 @@ impl Server {
                 self.device(&name, None)?;
                 let of = self.open[&name].1.clone();
                 let device = &self.open[&name].0;
-                let picture = match device::picture(device) {
+                // From view's stream where it gives one; else the device is asked, and the look says why.
+                let (taken, aside) = match self.pictures.as_ref().map(|pictures| pictures()) {
+                    Some(Ok(picture)) => (Ok(picture), None),
+                    Some(Err(why)) => (device::picture(device), Some(why)),
+                    None => (device::picture(device), None),
+                };
+                let picture = match taken {
                     Ok(picture) => picture,
-                    Err(why) if self.pinned => return Err(why),
+                    Err(why) if self.pinned => return Err(match &aside { Some(stream) => format!("{why} (and from view's stream: {stream})"), None => why }),
                     Err(_) => {
                         // Let go of meanwhile: once more, on a new connection.
                         self.open.remove(&name);
@@ -506,7 +520,8 @@ impl Server {
                 let mut content = vec![json!({ "type": "image", "data": base64::engine::general_purpose::STANDARD.encode(jpeg), "mimeType": "image/jpeg" })];
                 // Said, so that a look much slower than the last isn't a mystery.
                 let png = if streamed && !native { " (The device's PNG: the screen stream's frame couldn't be cut to the screen, or the device didn't say its size.)" } else { "" };
-                content.extend(text(format!("{width} x {height}, look {id}. Points for tap and swipe are pixels of this image, given with look {id}. It serves one tap or swipe, and type and paste, within a minute: look again after them.{png}")));
+                let aside = aside.map(|why| format!(" (Not from view's stream: {why}.)")).unwrap_or_default();
+                content.extend(text(format!("{width} x {height}, look {id}. Points for tap and swipe are pixels of this image, given with look {id}. It serves one tap or swipe, and type and paste, within a minute: look again after them.{png}{aside}")));
                 Ok(content)
             }
             "tap" | "swipe" => {
