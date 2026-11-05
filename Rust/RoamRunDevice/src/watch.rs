@@ -45,6 +45,19 @@ pub struct Watch {
     wanted: Arc<AtomicBool>,
     pub asked: u32,
     pub answered: u32,
+    last_seq: Option<u16>,
+    gap: u32,
+    frame_first: Option<u16>,
+    trace: bool,
+    max_datagram: usize,
+    /// Access units already cut from what the depacketizer gave, not yet handed on.
+    ready: std::collections::VecDeque<Vec<u8>>,
+    /// A packet went missing: nothing is given until a whole IRAP picture comes.
+    broken: bool,
+    /// Taken up again at an IRAP after a hole: its RASL pictures refer to what was lost, and aren't given.
+    skip_rasl: bool,
+    pub lost: u32,
+    pub dropped: u32,
 }
 
 impl Watch {
@@ -66,6 +79,7 @@ impl Watch {
         Ok(Watch {
             held, video, audio, ssrc, media, feedback_port, frames: HevcDepacketizer::new(), feedback, began: now, rctl_at: now, heard_at: now,
             count: 0, first_seq: None, highest_seq: 0, keyframe_at, asked_at: None, requests: 0, wanted, asked: 0, answered: 0,
+            last_seq: None, gap: 0, frame_first: None, trace: std::env::var_os("ROAMRUNCTL_VIEW_TRACE").is_some(), broken: false, skip_rasl: false, max_datagram: 0, ready: Default::default(), lost: 0, dropped: 0,
         })
     }
 
@@ -75,6 +89,19 @@ impl Watch {
         let held = self.held.clone();
         held.runtime.block_on(async {
             loop {
+                if let Some(data) = self.ready.pop_front() {
+                    let key = has_irap(&data);
+                    if key { self.keyframe_at = Instant::now() }
+                    if self.broken && !key { self.dropped += 1; continue }
+                    if key { self.skip_rasl = std::mem::take(&mut self.broken) }
+                    else if self.skip_rasl && is_rasl(&data) { self.dropped += 1; continue }
+                    else { self.skip_rasl = false }
+                    if key {
+                        if self.asked_at.take().is_some() { self.answered += 1 }
+                        self.wanted.store(false, Ordering::Relaxed);
+                    }
+                    return Ok(Frame { key, data });
+                }
                 while let Ok(Ok(_)) = tokio::time::timeout(Duration::ZERO, self.audio.recv()).await {}
                 self.ask_if_wanted().await;
                 if self.feedback && self.rctl_at.elapsed() >= RCTL_EVERY {
@@ -94,9 +121,18 @@ impl Watch {
                     self.feedback_port = Some(datagram.source_port);
                     continue;
                 }
+                self.max_datagram = self.max_datagram.max(datagram.data.len());
                 let Some(packet) = RtpPacket::parse(&datagram.data) else { continue };
                 if *self.media.get_or_insert(packet.ssrc) != packet.ssrc { continue }
                 self.first_seq.get_or_insert(packet.sequence_number);
+                if let Some(last) = self.last_seq {
+                    let step = packet.sequence_number.wrapping_sub(last);
+                    // Late or repeated packets (step past half the range) aren't losses.
+                    if step >= 0x8000 && self.trace { eprintln!("trace: late {} after {last} (back {})", packet.sequence_number, 0u16.wrapping_sub(step)) }
+                    if step != 1 && step < 0x8000 { self.gap += u32::from(step.wrapping_sub(1)); if self.trace { eprintln!("trace: seq {last} -> {} (step {step})", packet.sequence_number) } }
+                }
+                if self.last_seq.is_none_or(|last| packet.sequence_number.wrapping_sub(last) < 0x8000) { self.last_seq = Some(packet.sequence_number) }
+                self.frame_first.get_or_insert(packet.sequence_number);
                 self.highest_seq = packet.sequence_number;
                 self.frames.push(packet.sequence_number, packet.timestamp, packet.payload);
                 if !packet.marker { continue }
@@ -104,13 +140,24 @@ impl Watch {
                 if data.is_empty() { continue }
                 self.count = self.count.wrapping_add(1);
                 if self.feedback { self.send(build_frame_ack(self.ssrc, packet.timestamp)).await }
-                let key = has_irap(&data);
-                if key {
-                    self.keyframe_at = Instant::now();
-                    if self.asked_at.take().is_some() { self.answered += 1 }
-                    self.wanted.store(false, Ordering::Relaxed);
+                if self.trace && (self.gap > 0 || self.count.is_multiple_of(120)) {
+                    eprintln!("trace: frame {} seq {}-{} bytes {} gap {} ts {} max datagram {} units {}", self.count, self.frame_first.unwrap_or(0), packet.sequence_number, data.len(), self.gap, packet.timestamp, self.max_datagram, access_units(&data).len());
                 }
-                return Ok(Frame { key, data });
+                let whole = self.gap == 0;
+                self.lost += self.gap;
+                self.gap = 0;
+                self.frame_first = None;
+                // A picture with a hole decodes as garbage, or not at all, and so does all that refers to it.
+                if !whole {
+                    if !self.broken && self.trace { eprintln!("trace: broken from frame {}", self.count) }
+                    self.broken = true;
+                    self.dropped += 1;
+                    self.wanted.store(true, Ordering::Relaxed);
+                    if has_irap(&data) { self.keyframe_at = Instant::now() }
+                    continue;
+                }
+                // Several pictures can come out at one marker: each is given on its own, as a decoder takes them.
+                self.ready.extend(access_units(&data));
             }
         })
     }
@@ -121,6 +168,7 @@ impl Watch {
         let (Some(media), true) = (self.media, self.wanted.load(Ordering::Relaxed)) else { return };
         if self.keyframe_at.elapsed() < KEYFRAME_APART || self.asked_at.is_some_and(|at| at.elapsed() < KEYFRAME_WAIT) { return }
         self.requests = self.requests.wrapping_add(1);
+        if self.trace { eprintln!("trace: key frame asked ({}), to {:?}", self.requests, self.feedback_port) }
         self.asked += 1;
         self.asked_at = Some(Instant::now());
         let request = build_keyframe_request(self.ssrc, LABEL, media, &[], self.requests);
@@ -154,6 +202,34 @@ pub fn has_irap(annexb: &[u8]) -> bool {
     nal_units(annexb).any(|nal| (16..=23).contains(&((nal[0] >> 1) & 0x3f)))
 }
 
+/// Annex B cut into access units at its access unit delimiters (NAL type 35), which the depacketizer puts
+/// at each new picture; what comes before the first delimiter goes with it.
+pub fn access_units(annexb: &[u8]) -> Vec<Vec<u8>> {
+    let mut cuts = Vec::new();
+    let mut i = 0;
+    while i + 4 <= annexb.len() {
+        if annexb[i..i + 3] == [0, 0, 1] && (annexb[i + 3] >> 1) & 0x3f == 35 {
+            // A four-byte start code starts a zero earlier.
+            cuts.push(if i > 0 && annexb[i - 1] == 0 { i - 1 } else { i });
+            i += 3;
+        } else { i += 1 }
+    }
+    let mut units = Vec::new();
+    let mut from = 0;
+    for cut in cuts.into_iter().filter(|&c| c > 0) {
+        if annexb[from..cut].iter().any(|&b| b != 0) { units.push(annexb[from..cut].to_vec()) }
+        from = cut;
+    }
+    if from < annexb.len() { units.push(annexb[from..].to_vec()) }
+    units
+}
+
+/// Whether every slice is a RASL picture's (NAL types 8 and 9), which refers to pictures before its IRAP.
+pub fn is_rasl(annexb: &[u8]) -> bool {
+    let mut slices = nal_units(annexb).map(|nal| (nal[0] >> 1) & 0x3f).filter(|t| *t < 32).peekable();
+    slices.peek().is_some() && slices.all(|t| t == 8 || t == 9)
+}
+
 /// The NAL units of Annex B, without their start codes; empty ones left out.
 pub fn nal_units(annexb: &[u8]) -> impl Iterator<Item = &[u8]> {
     let mut starts = Vec::new();
@@ -172,6 +248,31 @@ pub fn nal_units(annexb: &[u8]) -> impl Iterator<Item = &[u8]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Several pictures that came out at one marker are given one by one, each from its delimiter; parameter sets
+    /// before the first delimiter stay with the first picture.
+    #[test]
+    fn several_pictures_at_one_marker_are_cut_at_their_delimiters() {
+        let vps = [0, 0, 0, 1, 0x40, 0x01, 0xaa];
+        let aud = [0, 0, 0, 1, 0x46, 0x01, 0x50];
+        let idr = [0, 0, 1, 0x28, 0x01, 0xbb, 0xcc];
+        let trail = [0, 0, 1, 0x02, 0x01, 0xdd];
+        let joined: Vec<u8> = [&aud[..], &vps, &idr, &aud, &trail, &aud, &trail].concat();
+        let units = access_units(&joined);
+        assert_eq!(units.len(), 3, "{units:?}");
+        assert!(has_irap(&units[0]) && !has_irap(&units[1]) && !has_irap(&units[2]));
+        assert_eq!(units.concat(), joined);
+        assert_eq!(access_units(&[&vps[..], &idr].concat()).len(), 1);
+    }
+
+    /// RASL pictures (8, 9) are told from others, which a resumed decoder can take.
+    #[test]
+    fn rasl_pictures_are_told_apart() {
+        let aud = [0, 0, 1, 0x46, 0x01, 0x50];
+        assert!(is_rasl(&[&aud[..], &[0, 0, 1, 0x10, 0x01, 0xaa]].concat()));    // type 8
+        assert!(!is_rasl(&[&aud[..], &[0, 0, 1, 0x02, 0x01, 0xaa]].concat()));   // type 1
+        assert!(!is_rasl(&aud));
+    }
 
     fn rtp(seq: u16, ts: u32, marker: bool, payload: &[u8]) -> Vec<u8> {
         let mut p = vec![0x80, if marker { 0x80 | 100 } else { 100 }];
