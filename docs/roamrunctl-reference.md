@@ -422,7 +422,7 @@ a relay: a relay (`roamrunctl mcp --http`) can't publish, and an OTA server oper
 
 ## The screen in a browser (`view`, a prototype)
 
-`roamrunctl view <device> --http <port> --allow <who> [--allow <who>…] [--token-file <file>] [--at <address>] [--mcp]`, or
+`roamrunctl view <device> --http <port> --allow <who> [--allow <who>…] [--token-file <file>] [--at <address>] [--mcp] [--https <port>]`, or
 `roamrunctl view --usb [<UDID>] --http <port> --allow <who> …`, until Ctrl-C.
 A prototype, for watching and touching your own device from elsewhere on the tailnet. Tried on
 2026-11-05 on an iPhone Duo (iOS 27) in Chrome. Packets the device sends go missing, and the
@@ -457,6 +457,14 @@ a port forwarded to it brings `Host: localhost:…`, which is refused. The page 
   on `localhost` for a secure one, so one that takes no flags (an app's own, as a coding agent's
   app has: T3 Code's gave the page `VideoDecoder` there, and none at the Tailscale address) shows
   the picture there. Callers there are this machine, not asked of Tailscale, and give the token.
+- `--https <port>` (it takes `--token-file`) puts the page on HTTPS too, at
+  `https://<this machine's Tailscale name>:<port>/`, by `tailscale serve` in front of the loopback
+  listener, with Tailscale's certificate: a secure page to any browser on the tailnet, an app's own
+  included (T3 Code's gave it `VideoDecoder` there). A port `tailscale serve` already serves is
+  refused, and the rest of `tailscale serve` is left as it is; at Ctrl-C that port alone is taken
+  off it (a view that is killed leaves it: `tailscale serve --https=<port> off`). A request handed
+  on so says whose it is (`Tailscale-User-Login`), and is judged by `--allow` as that login; one
+  without (a tagged machine's) is taken as this machine's. All give the token.
 - `--at <address>` reaches the device at that address instead of the one it was saved with: its
   address on this machine's Wi‑Fi, so that the stream doesn't go through Tailscale. The pairing
   opens it as ever, and the page is still served on the Tailscale address. A device another

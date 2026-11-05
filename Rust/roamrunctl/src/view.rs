@@ -247,6 +247,8 @@ pub struct Options {
     pub usb: Option<String>,
     /// `POST /mcp`: roamrunctl's MCP tools on this device, through this connection (needs the token).
     pub mcp: bool,
+    /// The page over HTTPS too, at this port of this machine's tailnet name, by `tailscale serve` (needs the token).
+    pub https: Option<u16>,
 }
 
 /// `view --mcp`: the MCP server on view's own device, and the name it goes by there.
@@ -271,7 +273,7 @@ pub fn serve(options: Options) -> Result<String, String> {
     let (listener, status, own, names) = http::listen(options.port)?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     // The stream stopped at Ctrl-C, not left listed on the device as screen sharing.
-    crate::at_stop()?.then(|| {});
+    let stop = crate::at_stop()?;
     let feedback = std::env::var(FEEDBACK).map_or(true, |v| v != "off");
     note!("roamrunctl: {}'s screen at http://{own}:{port}/ (a prototype), for {} on the tailnet{}{}. The page needs WebCodecs, which Chrome offers only to a secure page: see `roamrunctl view --help`. Ctrl-C ends it.",
         device_name, options.allowed.iter().map(|a| match a { Allow::Tag(s) | Allow::Login(s) => s.as_str() }).collect::<Vec<_>>().join(", "),
@@ -288,10 +290,21 @@ pub fn serve(options: Options) -> Result<String, String> {
     // On this machine's loopback too, for a browser on this machine that takes no flags (an app's own): there the page
     // is a secure one. Callers there are this machine, so they give the token.
     let local = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).map_err(|e| note!("roamrunctl: not on localhost:{port} too ({e})")).ok();
-    let mut hosts = http::hosts(IpAddr::V4(own), names, port);
+    let mut hosts = http::hosts(IpAddr::V4(own), names.clone(), port);
     if local.is_some() {
         hosts.extend([format!("localhost:{port}"), format!("127.0.0.1:{port}")]);
         note!("roamrunctl: and on this machine at http://localhost:{port}/ (a secure page to any browser here), with the token");
+    }
+    // HTTPS, by Tailscale in front of the loopback listener: a secure page to any browser on the tailnet. Taken off
+    // `tailscale serve` again at Ctrl-C.
+    if let Some(https) = options.https {
+        if local.is_none() { return Err(format!("--https needs view on localhost:{port}, which it couldn't listen on")) }
+        crate::tailscale::serve_https(https, &format!("http://127.0.0.1:{port}"))?;
+        stop.then(move || { let _ = crate::tailscale::serve_https_off(https); });
+        hosts.extend(names.iter().map(|name| format!("{name}:{https}")));
+        note!("roamrunctl: and at https://{}:{https}/ for the same callers, by tailscale serve, with the token (taken off it at Ctrl-C)", names.first().map_or("this machine", String::as_str));
+    } else {
+        stop.then(|| {});
     }
     run(listener, local, screen, options.allowed, options.token, hosts, IpAddr::V4(own), status.this.id.clone(), feedback, mcp, Box::new(crate::tailscale::whois))
 }
@@ -406,8 +419,15 @@ fn accept(listener: TcpListener, hub: &Arc<Hub>, local: bool) {
 }
 
 /// Who calls, and whether it is this machine: Tailscale says, except on the loopback listener, which is this machine.
-fn caller(hub: &Hub, from: IpAddr, local: bool) -> Result<(Whois, bool), String> {
-    if local { return Ok((Whois { user: crate::tailscale::WhoisUser { login: "localhost".into() }, ..Whois::default() }, true)) }
+/// There a request `tailscale serve` handed on (`--https`) says whose it is (`Tailscale-User-Login`), and is judged
+/// as that login, by `--allow` (it gives the token too: `--https` takes one). One with none is this machine's.
+fn caller(hub: &Hub, from: IpAddr, local: bool, request: &http::Request) -> Result<(Whois, bool), String> {
+    if local {
+        return Ok(match request.header("tailscale-user-login") {
+            Some(login) => (Whois { user: crate::tailscale::WhoisUser { login: login.to_string() }, ..Whois::default() }, false),
+            None => (Whois { user: crate::tailscale::WhoisUser { login: "localhost".into() }, ..Whois::default() }, true),
+        })
+    }
     let whois = (hub.whois)(from)?;
     let own = from == hub.own_ip || (!hub.own_id.is_empty() && whois.node.id == hub.own_id);
     Ok((whois, own))
@@ -466,16 +486,17 @@ fn connection(stream: TcpStream, from: IpAddr, local: bool, hub: &Hub, who: &mut
     let Some(host) = request.header("host").filter(|host| hub.hosts.iter().any(|h| h.eq_ignore_ascii_case(host))) else { return refuse(&mut writer, 400) };
     if request.path == "/mcp" { return mcp_call(&mut reader, &mut writer, &request, from, local, hub, who, what) }
     // A page of this server's own, or none (the page itself, opened): not one of another site.
-    let own_origin = format!("http://{host}");
+    // http, or https where Tailscale serves it in front (`--https`).
+    let own_origin = |origin: &str| origin.eq_ignore_ascii_case(&format!("http://{host}")) || origin.eq_ignore_ascii_case(&format!("https://{host}"));
     let socket = request.path == "/ws";
     match request.header("origin") {
-        Some(origin) if origin.eq_ignore_ascii_case(&own_origin) => {}
+        Some(origin) if own_origin(origin) => {}
         None if !socket => {}
         _ => return refuse(&mut writer, 403),
     }
     if request.method != "GET" { return refuse(&mut writer, 405) }
     if !socket && request.path != "/" { return refuse(&mut writer, 404) }
-    let (whois, own) = match caller(hub, from, local) {
+    let (whois, own) = match caller(hub, from, local, &request) {
         Ok(caller) => caller,
         Err(why) => { *who = format!("(whois: {why})"); return refuse(&mut writer, 503) }
     };
@@ -646,7 +667,7 @@ fn mcp_call(reader: &mut BufReader<TcpStream>, writer: &mut TcpStream, request: 
     let presented = request.header("authorization").and_then(|v| v.split_once(' ')).filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer")).map(|(_, t)| t.trim());
     let token = matches!((&hub.token, presented), (Some(t), Some(p)) if http::same(t.as_bytes(), p.as_bytes()));
     if !token { return reply(writer, 401, "WWW-Authenticate: Bearer\r\n", "") }
-    let (whois, own) = match caller(hub, from, local) {
+    let (whois, own) = match caller(hub, from, local, request) {
         Ok(caller) => caller,
         Err(why) => { *who = format!("(whois: {why})"); return reply(writer, 503, "", "the caller couldn't be looked up (tailscale whois): try again\n") }
     };
@@ -1124,5 +1145,13 @@ mod tests {
         };
         assert!(post(&format!("Authorization: Bearer {}\r\n", "t".repeat(32))).starts_with("HTTP/1.1 200"));
         assert!(post("").starts_with("HTTP/1.1 401"));
+        // Handed on by `tailscale serve` (--https): judged as the login it names, by --allow.
+        let (_, first) = ask(at, &format!("GET / HTTP/1.1\r\nHost: {host}\r\nTailscale-User-Login: other@example.com\r\n\r\n"));
+        assert!(first.starts_with("HTTP/1.1 403"), "{first}");
+        let (_, first) = ask(at, &format!("GET / HTTP/1.1\r\nHost: {host}\r\nTailscale-User-Login: me@example.com\r\n\r\n"));
+        assert!(first.starts_with("HTTP/1.1 200"), "{first}");
+        // The page's WebSocket from an https page of this server (Tailscale's HTTPS in front) is its own.
+        let (_, first) = ask(at, &UPGRADE.replace("Origin: http://{at}", &format!("Origin: https://{host}")).replace("Host: {at}", &format!("Host: {host}")));
+        assert!(first.starts_with("HTTP/1.1 101"), "{first}");
     }
 }

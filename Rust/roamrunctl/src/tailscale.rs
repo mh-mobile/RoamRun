@@ -191,6 +191,19 @@ pub struct WhoisUser {
 }
 
 /// Who is at `ip`, with five seconds for Tailscale to say.
+/// HTTPS on the tailnet at `https` (Tailscale's certificate for this machine's name), handed to `target` on this
+/// machine, in the background: refused where something is served at that port already.
+pub fn serve_https(https: u16, target: &str) -> Result<(), String> {
+    let status: serde_json::Value = serde_json::from_str(&run(&["serve", "status", "--json"])?).unwrap_or_default();
+    if !status["TCP"][https.to_string()].is_null() { return Err(format!("port {https} is served already (tailscale serve status): pick another for --https")) }
+    run(&["serve", "--bg", "--yes", &format!("--https={https}"), target]).map(|_| ())
+}
+
+/// That HTTPS port no longer served; the rest of `tailscale serve` as it is.
+pub fn serve_https_off(https: u16) -> Result<(), String> {
+    run(&["serve", &format!("--https={https}"), "off"]).map(|_| ())
+}
+
 pub fn whois(ip: IpAddr) -> Result<Whois, String> {
     let out = run_within(&["whois", "--json", &ip.to_string()], Duration::from_secs(5))?;
     serde_json::from_str(&out).map_err(|e| unreadable("whois", &out, e))

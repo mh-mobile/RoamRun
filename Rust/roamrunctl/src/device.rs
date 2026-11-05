@@ -717,8 +717,8 @@ pub fn run(command: Command) -> i32 {
         Command::Mcp { http: Some(port), allow, token_file, allow_install, max_upload, devices } => allow.iter().map(|a| crate::http::allow(a)).collect::<Result<Vec<_>, _>>()
             .and_then(|allowed| Ok(crate::http::Options { port, allowed, token: token_file.as_deref().map(crate::http::token).transpose()?, devices, uploads: allow_install.then_some(max_upload << 20) }))
             .and_then(crate::http::serve),
-        Command::View { name, http, allow, token_file, at, usb, mcp } => allow.iter().map(|a| crate::http::allow(a)).collect::<Result<Vec<_>, _>>()
-            .and_then(|allowed| Ok(crate::view::Options { device: name.unwrap_or_default(), port: http, allowed, token: token_file.as_deref().map(crate::http::token).transpose()?, at, usb, mcp }))
+        Command::View { name, http, allow, token_file, at, usb, mcp, https } => allow.iter().map(|a| crate::http::allow(a)).collect::<Result<Vec<_>, _>>()
+            .and_then(|allowed| Ok(crate::view::Options { device: name.unwrap_or_default(), port: http, allowed, token: token_file.as_deref().map(crate::http::token).transpose()?, at, usb, mcp, https }))
             .and_then(crate::view::serve),
         Command::Sign { names, machine } => keys(&names).and_then(|(keys, told, marks)| {
             // The file it was read from, still: not another saved under the name since.

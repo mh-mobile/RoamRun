@@ -371,6 +371,8 @@ device is its alone: don't `look`, tap or install on that device meanwhile, nor 
 a look through another connection stops the page's picture for about 9 s. Started with `--mcp`, it
 serves the same MCP tools (no install) at `http://<address>:<port>/mcp` with its token as a bearer:
 an agent operates the device there while people watch, its looks taken from the page's own stream.
+A browser that can't be given Chrome's flag (an app's own) shows the page at `http://localhost:<port>/`
+on that machine, or anywhere on the tailnet at `https://<name>:<port>/` when started with `--https <port>`.
 
 ## 6. What it doesn't do
 

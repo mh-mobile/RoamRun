@@ -149,6 +149,9 @@ enum Command {
         /// Serve roamrunctl's MCP tools on POST /mcp too, on this device through this connection: an agent's look then takes the picture from this stream instead of starting another (which stops this one's). Callers as for the page, with the token as a bearer
         #[arg(long, requires = "token_file")]
         mcp: bool,
+        /// The page over HTTPS too, at this port of this machine's Tailscale name (https://<name>:<port>/), by `tailscale serve` in front of view on localhost: a secure page to any browser on the tailnet, an app's own included. Taken off `tailscale serve` at Ctrl-C; callers give the token
+        #[arg(long, value_name = "PORT", requires = "token_file")]
+        https: Option<u16>,
     },
     /// Keep the pairings saved here to yourself and sign with them for another machine, which then uses the devices without having their keys; until Ctrl-C
     Sign {

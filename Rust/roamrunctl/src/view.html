@@ -270,7 +270,7 @@ function configure(said) {
 function send(message) { if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message)); }
 
 function connect() {
-  socket = new WebSocket(`ws://${location.host}/ws`);
+  socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
   socket.binaryType = "arraybuffer";
   connectedAt = performance.now();
   firstPicture = false;
@@ -430,7 +430,7 @@ function heard(message) {
 // (Safari on an iPhone, through Tailscale).
 let earSocket = null;
 function listen() {
-  earSocket = new WebSocket(`ws://${location.host}/ws`);
+  earSocket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
   earSocket.binaryType = "arraybuffer";
   earSocket.onopen = () => earSocket.send(JSON.stringify({ type: "hello", token, only: "sound" }));
   earSocket.onmessage = (e) => { if (typeof e.data !== "string" && new DataView(e.data).getUint8(0) === 2) heard(e.data); };
