@@ -367,7 +367,10 @@ reaches the device at its address on this machine's Wi‑Fi instead, and `--usb 
 `<device>` takes the one connected by USB, which lost nothing): the user's own device's screen
 in a browser elsewhere on the tailnet, to watch and touch (the page needs WebCodecs; roamrunctl's reference, under “The screen in a browser”, says how to
 open it). It is the user's to start, at a terminal of their own. While it runs, the
-device is its alone: don't `look`, tap or install on that device meanwhile, nor serve it with `mcp`.
+device is its alone: don't `look`, tap or install on that device meanwhile, nor serve it with `mcp` —
+a look through another connection stops the page's picture for about 9 s. Started with `--mcp`, it
+serves the same MCP tools (no install) at `http://<address>:<port>/mcp` with its token as a bearer:
+an agent operates the device there while people watch, its looks taken from the page's own stream.
 
 ## 6. What it doesn't do
 

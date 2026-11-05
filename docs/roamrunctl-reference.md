@@ -422,7 +422,7 @@ a relay: a relay (`roamrunctl mcp --http`) can't publish, and an OTA server oper
 
 ## The screen in a browser (`view`, a prototype)
 
-`roamrunctl view <device> --http <port> --allow <who> [--allow <who>…] [--token-file <file>] [--at <address>]`, or
+`roamrunctl view <device> --http <port> --allow <who> [--allow <who>…] [--token-file <file>] [--at <address>] [--mcp]`, or
 `roamrunctl view --usb [<UDID>] --http <port> --allow <who> …`, until Ctrl-C.
 A prototype, for watching and touching your own device from elsewhere on the tailnet. Tried on
 2026-11-05 on an iPhone Duo (iOS 27) in Chrome. Packets the device sends go missing, and the
@@ -450,7 +450,8 @@ a port forwarded to it brings `Host: localhost:…`, which is refused. The page 
   `tailscale whois` doesn't say (503) or one not allowed (403). This machine itself is let in
   only with `--token-file`. The token isn't in the URL: the page asks for it and sends it in its
   first message; a wrong one, or none where one is set, closes the WebSocket with 1008.
-- 8 connections at once, 4 from one address; more are closed unanswered. The head has 10 s for
+- 12 connections at once, 6 from one address (a page takes two, an MCP client two or three); more
+  are closed unanswered. The head has 10 s for
   each read, and so has the first message; after that nothing is cut for being slow or quiet.
 - `--at <address>` reaches the device at that address instead of the one it was saved with: its
   address on this machine's Wi‑Fi, so that the stream doesn't go through Tailscale. The pairing
@@ -464,7 +465,27 @@ a port forwarded to it brings `Host: localhost:…`, which is refused. The page 
   Duo with a video playing, two runs of 30 s over USB lost no packet, against 26 and 12 holes
   (43 % and 14 % of the packets) with `--at` in the runs between; the first picture came 0.2 s after
   connecting, against about 1.1 s over the Wi‑Fi. Tried on macOS only.
-- The device is this command's alone while it runs: don't use it from another command meanwhile.
+- `--mcp` (it takes `--token-file`) also serves roamrunctl's MCP tools at `POST /mcp`, on this
+  device through this connection, for an agent on the tailnet or on this machine while people watch.
+  It is asked as `mcp --http` is: no `Origin`, the token as `Authorization: Bearer`, `--allow`.
+  The tools are those of `mcp --http` without install, for the one device, which `devices` names
+  (the saved name, or for `--usb` the UDID, else `usb`). A look takes its picture from this
+  stream: it waits for the next whole key frame (one is asked for), decodes it here (macOS) and
+  gives it the display's own way up; with no page open the stream runs for it and stops some
+  seconds after. Where none comes within 8 s, or off macOS, the device's PNG is taken instead, and
+  the look says why. A tap, swipe, type or paste by a look is refused ("look again") once a page
+  acted on the device since that look began, or within 0.5 s before its picture. What an agent
+  taps or swipes is shown on the pages as a ring. A connection to the device that is gone isn't
+  opened again (another would start a second stream): the agent and the page are told to start
+  view again. On the iPhone Duo, with a page watching in Chrome: a look took 0.4–1.1 s over USB
+  and 0.5–1.3 s over the home Wi‑Fi (back to back about 1.05 s apart, as key frames are), and the
+  page's picture never stopped; looked at through another connection instead (RoamRun's app),
+  the page's picture stopped about 9 s, as the device sends one screen stream at a time. Tried
+  from a plain JSON-RPC client; not yet with a coding agent's MCP client. For Claude Code that
+  would be `claude mcp add --transport http <name> http://<address>:<port>/mcp --header
+  "Authorization: Bearer <token>"`.
+- The device is this command's alone while it runs: don't use it from another command meanwhile
+  (with `--mcp`, an agent uses `/mcp` instead).
   The screen stream runs while a page watches. Each page gets the access units as they come, none
   before a key frame. A page whose oldest frame not yet shown (waiting, or sent and not yet
   acknowledged by the page) is older than 0.5 s is cut to the next key frame, and one is asked
