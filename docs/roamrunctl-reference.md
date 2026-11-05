@@ -453,6 +453,10 @@ a port forwarded to it brings `Host: localhost:…`, which is refused. The page 
 - 12 connections at once, 6 from one address (a page takes two, an MCP client two or three); more
   are closed unanswered. The head has 10 s for
   each read, and so has the first message; after that nothing is cut for being slow or quiet.
+- It listens on this machine's loopback too, at `http://localhost:<port>/`: a browser takes a page
+  on `localhost` for a secure one, so one that takes no flags (an app's own, as a coding agent's
+  app has: T3 Code's gave the page `VideoDecoder` there, and none at the Tailscale address) shows
+  the picture there. Callers there are this machine, not asked of Tailscale, and give the token.
 - `--at <address>` reaches the device at that address instead of the one it was saved with: its
   address on this machine's Wi‑Fi, so that the stream doesn't go through Tailscale. The pairing
   opens it as ever, and the page is still served on the Tailscale address. A device another

@@ -115,6 +115,14 @@ const log = (text, bad) => {
 };
 // What the header says of the connection: live (green), waiting (amber), down (red).
 function state(kind, text) {
+  // A browser that gives this page no decoder never shows a picture: said, not waited for.
+  if (typeof VideoDecoder === "undefined") {
+    $("state").className = "pill down";
+    $("stateText").textContent = "can't decode here";
+    $("veil").hidden = false;
+    $("veil").textContent = "This browser gives this page no VideoDecoder. Details says where to open it instead.";
+    return;
+  }
   $("state").className = "pill " + kind;
   $("stateText").textContent = text;
   $("veil").hidden = kind === "live";
@@ -134,7 +142,7 @@ supported("VideoDecoder", typeof VideoDecoder === "undefined");
   }
 })();
 if (typeof VideoDecoder === "undefined") {
-  supported("This browser gives this page no VideoDecoder. Chrome: start it with --unsafely-treat-insecure-origin-as-secure=" + location.origin, true);
+  supported("This browser gives this page no VideoDecoder: it isn't a secure page here. On this machine open http://localhost:" + location.port + "/ instead (a secure page); Safari on an iPhone gives it one as it is; Chrome: start it with --unsafely-treat-insecure-origin-as-secure=" + location.origin, true);
   $("panel").hidden = false;
 }
 

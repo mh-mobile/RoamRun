@@ -285,11 +285,19 @@ pub fn serve(options: Options) -> Result<String, String> {
         Mcp { server: Mutex::new(crate::mcp::Server::holding(&name, device.clone(), Some(page.clone()))), name, page }
     });
     let screen = Arc::new(OnDevice { device, feedback });
-    run(listener, screen, options.allowed, options.token, http::hosts(IpAddr::V4(own), names, port), IpAddr::V4(own), status.this.id.clone(), feedback, mcp, Box::new(crate::tailscale::whois))
+    // On this machine's loopback too, for a browser on this machine that takes no flags (an app's own): there the page
+    // is a secure one. Callers there are this machine, so they give the token.
+    let local = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).map_err(|e| note!("roamrunctl: not on localhost:{port} too ({e})")).ok();
+    let mut hosts = http::hosts(IpAddr::V4(own), names, port);
+    if local.is_some() {
+        hosts.extend([format!("localhost:{port}"), format!("127.0.0.1:{port}")]);
+        note!("roamrunctl: and on this machine at http://localhost:{port}/ (a secure page to any browser here), with the token");
+    }
+    run(listener, local, screen, options.allowed, options.token, hosts, IpAddr::V4(own), status.this.id.clone(), feedback, mcp, Box::new(crate::tailscale::whois))
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run(listener: TcpListener, screen: Arc<dyn Screen>, allowed: Vec<Allow>, token: Option<String>, hosts: Vec<String>, own_ip: IpAddr, own_id: String, feedback: bool, mcp: Option<Mcp>,
+fn run(listener: TcpListener, local: Option<TcpListener>, screen: Arc<dyn Screen>, allowed: Vec<Allow>, token: Option<String>, hosts: Vec<String>, own_ip: IpAddr, own_id: String, feedback: bool, mcp: Option<Mcp>,
        whois: Box<dyn Fn(IpAddr) -> Result<Whois, String> + Send + Sync>) -> Result<String, String> {
     let (inputs, asked) = mpsc::channel::<(Arc<Viewer>, Input)>();
     let (sound, heard) = mpsc::channel::<Vec<u8>>();
@@ -362,6 +370,17 @@ fn run(listener: TcpListener, screen: Arc<dyn Screen>, allowed: Vec<Allow>, toke
     });
     let pumped = hub.clone();
     std::thread::Builder::new().stack_size(8 << 20).spawn(move || pump(&pumped, screen.as_ref())).map_err(|e| e.to_string())?;
+    if let Some(local) = local {
+        let hub = hub.clone();
+        std::thread::spawn(move || accept(local, &hub, true));
+    }
+    accept(listener, &hub, false);
+    Ok(String::new())
+}
+
+/// Each connection on its own thread, within the limits. `local`: the listener on this machine's loopback, whose
+/// callers are this machine (a page on `localhost` is a secure one to a browser, which then gives it WebCodecs).
+fn accept(listener: TcpListener, hub: &Arc<Hub>, local: bool) {
     for stream in listener.incoming() {
         let Ok(stream) = stream else { std::thread::sleep(Duration::from_millis(100)); continue };
         let Ok(from) = stream.peer_addr().map(|a| a.ip()) else { continue };
@@ -376,7 +395,7 @@ fn run(listener: TcpListener, screen: Arc<dyn Screen>, allowed: Vec<Allow>, toke
             let began = Instant::now();
             let (mut who, mut what) = ("-".to_string(), "-".to_string());
             let lingering = stream.try_clone().ok();
-            let outcome = connection(stream, from, &hub, &mut who, &mut what);
+            let outcome = connection(stream, from, local, &hub, &mut who, &mut what);
             // A body not read (refused first) is drained a moment, so that the caller isn't reset before its answer.
             if let Some(stream) = lingering.filter(|_| what.starts_with("POST")) { http::linger(&stream) }
             note!("{} {from} {} {} {outcome} {:.1}s", http::clock(), http::printable(&who), what, began.elapsed().as_secs_f64());
@@ -384,7 +403,14 @@ fn run(listener: TcpListener, screen: Arc<dyn Screen>, allowed: Vec<Allow>, toke
             if let Some(n) = open.get_mut(&from) { *n -= 1; if *n == 0 { open.remove(&from); } }
         });
     }
-    Ok(String::new())
+}
+
+/// Who calls, and whether it is this machine: Tailscale says, except on the loopback listener, which is this machine.
+fn caller(hub: &Hub, from: IpAddr, local: bool) -> Result<(Whois, bool), String> {
+    if local { return Ok((Whois { user: crate::tailscale::WhoisUser { login: "localhost".into() }, ..Whois::default() }, true)) }
+    let whois = (hub.whois)(from)?;
+    let own = from == hub.own_ip || (!hub.own_id.is_empty() && whois.node.id == hub.own_id);
+    Ok((whois, own))
 }
 
 /// While anyone watches: the stream, to each viewer. Once nobody does, it is let go of (and the device stops it).
@@ -430,7 +456,7 @@ fn pump(hub: &Hub, screen: &dyn Screen) {
 }
 
 /// One connection: the page, or a viewer's WebSocket. What is shown or typed is never logged.
-fn connection(stream: TcpStream, from: IpAddr, hub: &Hub, who: &mut String, what: &mut String) -> String {
+fn connection(stream: TcpStream, from: IpAddr, local: bool, hub: &Hub, who: &mut String, what: &mut String) -> String {
     let _ = stream.set_read_timeout(Some(HEAD_WITHIN));
     let Ok(mut writer) = stream.try_clone() else { return "gone".into() };
     let mut reader = BufReader::new(stream);
@@ -438,7 +464,7 @@ fn connection(stream: TcpStream, from: IpAddr, hub: &Hub, who: &mut String, what
     let request = match http::head(&mut reader) { Ok(request) => request, Err(status) => return refuse(&mut writer, status) };
     *what = format!("{} {}", http::printable(&request.method), http::printable(&request.path));
     let Some(host) = request.header("host").filter(|host| hub.hosts.iter().any(|h| h.eq_ignore_ascii_case(host))) else { return refuse(&mut writer, 400) };
-    if request.path == "/mcp" { return mcp_call(&mut reader, &mut writer, &request, from, hub, who, what) }
+    if request.path == "/mcp" { return mcp_call(&mut reader, &mut writer, &request, from, local, hub, who, what) }
     // A page of this server's own, or none (the page itself, opened): not one of another site.
     let own_origin = format!("http://{host}");
     let socket = request.path == "/ws";
@@ -449,11 +475,10 @@ fn connection(stream: TcpStream, from: IpAddr, hub: &Hub, who: &mut String, what
     }
     if request.method != "GET" { return refuse(&mut writer, 405) }
     if !socket && request.path != "/" { return refuse(&mut writer, 404) }
-    let whois = match (hub.whois)(from) {
-        Ok(whois) => whois,
+    let (whois, own) = match caller(hub, from, local) {
+        Ok(caller) => caller,
         Err(why) => { *who = format!("(whois: {why})"); return refuse(&mut writer, 503) }
     };
-    let own = from == hub.own_ip || (!hub.own_id.is_empty() && whois.node.id == hub.own_id);
     // This machine's own users take the token: they are let in to the page, and asked for it in the first message.
     match http::judged(&whois, &hub.allowed, own, own && hub.token.is_some() || !socket) {
         Ok(name) => *who = name,
@@ -613,18 +638,18 @@ fn whole(annexb: &[u8]) -> bool {
 /// `POST /mcp` (`view --mcp`): roamrunctl's MCP tools on view's own device, by its connection and its stream, so that
 /// an agent's look starts no second screen stream (which stops view's). Asked as `mcp --http` asks: no Origin (no
 /// browser's page, this one's included), the token as a bearer, `--allow`. A call waits for the one before it.
-fn mcp_call(reader: &mut BufReader<TcpStream>, writer: &mut TcpStream, request: &http::Request, from: IpAddr, hub: &Hub, who: &mut String, what: &mut String) -> String {
+#[allow(clippy::too_many_arguments)]
+fn mcp_call(reader: &mut BufReader<TcpStream>, writer: &mut TcpStream, request: &http::Request, from: IpAddr, local: bool, hub: &Hub, who: &mut String, what: &mut String) -> String {
     let Some(mcp) = &hub.mcp else { return reply(writer, 404, "", "") };
     if request.header("origin").is_some() { return reply(writer, 403, "", "") }
     if request.method != "POST" { return reply(writer, 405, "Allow: POST\r\n", "") }
     let presented = request.header("authorization").and_then(|v| v.split_once(' ')).filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer")).map(|(_, t)| t.trim());
     let token = matches!((&hub.token, presented), (Some(t), Some(p)) if http::same(t.as_bytes(), p.as_bytes()));
     if !token { return reply(writer, 401, "WWW-Authenticate: Bearer\r\n", "") }
-    let whois = match (hub.whois)(from) {
-        Ok(whois) => whois,
+    let (whois, own) = match caller(hub, from, local) {
+        Ok(caller) => caller,
         Err(why) => { *who = format!("(whois: {why})"); return reply(writer, 503, "", "the caller couldn't be looked up (tailscale whois): try again\n") }
     };
-    let own = from == hub.own_ip || (!hub.own_id.is_empty() && whois.node.id == hub.own_id);
     match http::judged(&whois, &hub.allowed, own, token) {
         Ok(name) => *who = name,
         Err(why) => { *who = why; return reply(writer, 403, "", "") }
@@ -931,7 +956,7 @@ mod tests {
         let hosts = vec![at.to_string()];
         let watched = Arc::new(AtomicU32::new(0));
         let fake = Fake { watched: watched.clone(), whole };
-        std::thread::spawn(move || run(listener, Arc::new(fake), vec![Allow::Login("me@example.com".into())], Some("t".repeat(32)), hosts,
+        std::thread::spawn(move || run(listener, None, Arc::new(fake), vec![Allow::Login("me@example.com".into())], Some("t".repeat(32)), hosts,
             "100.64.0.1".parse().unwrap(), "own".into(), true,
             mcp.then(|| Mcp { name: "fake".into(), server: Mutex::new(crate::mcp::Server::holding("fake", Arc::new(Device::none()), None)), page: Default::default() }),
             Box::new(move |_| Ok(whois(caller)))));
@@ -1071,5 +1096,33 @@ mod tests {
         assert!(whole(&FAKE_KEY));
         assert!(!whole(&[0, 0, 1, 0x26, 1]));
         assert!(!whole(&FAKE_KEY[..15]));
+    }
+
+    /// The loopback listener's callers are this machine: Tailscale isn't asked (here it would refuse them), and they
+    /// give the token, as this machine's do.
+    #[test]
+    fn a_caller_on_localhost_is_this_machine_with_the_token() {
+        let (main, local) = (TcpListener::bind("127.0.0.1:0").unwrap(), TcpListener::bind("127.0.0.1:0").unwrap());
+        let at = local.local_addr().unwrap();
+        let host = format!("localhost:{}", at.port());
+        let hosts = vec![main.local_addr().unwrap().to_string(), host.clone()];
+        let fake = Fake { watched: Arc::new(AtomicU32::new(0)), whole: true };
+        std::thread::spawn(move || run(main, Some(local), Arc::new(fake), vec![Allow::Login("me@example.com".into())], Some("t".repeat(32)), hosts,
+            "100.64.0.1".parse().unwrap(), "own".into(), true,
+            Some(Mcp { name: "fake".into(), server: Mutex::new(crate::mcp::Server::holding("fake", Arc::new(Device::none()), None)), page: Default::default() }),
+            Box::new(|_| Ok(whois("other@example.com")))));
+        let (_, first) = ask(at, &format!("GET / HTTP/1.1\r\nHost: {host}\r\n\r\n"));
+        assert!(first.starts_with("HTTP/1.1 200"), "{first}");
+        let init = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}"#;
+        let post = |extra: &str| {
+            let mut stream = TcpStream::connect(at).unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            stream.write_all(format!("POST /mcp HTTP/1.1\r\nHost: {host}\r\n{extra}Content-Length: {}\r\n\r\n{init}", init.len()).as_bytes()).unwrap();
+            let mut answer = String::new();
+            let _ = stream.read_to_string(&mut answer);
+            answer.lines().next().unwrap_or("").to_string()
+        };
+        assert!(post(&format!("Authorization: Bearer {}\r\n", "t".repeat(32))).starts_with("HTTP/1.1 200"));
+        assert!(post("").starts_with("HTTP/1.1 401"));
     }
 }
