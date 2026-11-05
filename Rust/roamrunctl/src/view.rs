@@ -295,7 +295,15 @@ fn run(listener: TcpListener, screen: Arc<dyn Screen>, allowed: Vec<Allow>, toke
     let (sound, heard) = mpsc::channel::<Vec<u8>>();
     // An agent's look takes view's stream: the server is given it (by a weak hold: the hub holds the server).
     let hub = Arc::new_cyclic(|hub: &std::sync::Weak<Hub>| {
-        if let Some(mcp) = &mcp { mcp.server.lock().unwrap_or_else(|e| e.into_inner()).take_pictures(from_stream(hub.clone())) }
+        if let Some(mcp) = &mcp {
+            let mut server = mcp.server.lock().unwrap_or_else(|e| e.into_inner());
+            server.take_pictures(from_stream(hub.clone()));
+            // What an agent pressed, shown to whoever watches (a ring where it tapped, a line where it swiped).
+            let told = hub.clone();
+            server.tell(Box::new(move |what, points| {
+                if let Some(hub) = told.upgrade() { hub.say(&json!({ "type": "agent", "what": what, "points": points }).to_string()) }
+            }));
+        }
         Hub {
         viewers: Mutex::new(Vec::new()), joined: Condvar::new(), wanted: Arc::new(AtomicBool::new(false)), asked: AtomicU32::new(0), answered: AtomicU32::new(0),
         way: std::sync::atomic::AtomicU8::new(0), began: Instant::now(), feedback, allowed, token, hosts, own_ip, own_id, whois, inputs: Mutex::new(inputs), sound: Mutex::new(sound), open: Mutex::new(Default::default()), mcp, waiting: Mutex::new(Vec::new()),

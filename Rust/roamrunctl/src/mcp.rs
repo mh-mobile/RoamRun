@@ -111,6 +111,9 @@ pub struct PageInputs {
 /// Where a look takes its picture instead of asking the device for one (`view --mcp`: view's own stream).
 pub type Pictures = Box<dyn Fn() -> Result<device::Picture, String> + Send>;
 
+/// Told of each tap and swipe an agent made, in the device's upright terms (0…1): `view --mcp` shows it on its pages.
+pub type Seen = Box<dyn Fn(&str, &[(f64, f64)]) + Send>;
+
 /// What the library says of a tunnel that closed (the device unplugged, or it let the connection go).
 pub const GONE: &str = "adapter closed";
 
@@ -151,6 +154,7 @@ pub struct Server {
     looked_page: HashMap<String, u64>,
     /// `view --mcp`: a look's picture from view's stream; where none comes, the device is asked as ever.
     pictures: Option<Pictures>,
+    seen: Option<Seen>,
 }
 
 fn text(s: impl Into<String>) -> Vec<Value> { vec![json!({ "type": "text", "text": s.into() })] }
@@ -271,6 +275,9 @@ impl Server {
 
     /// For `view --mcp`: looks take their picture from `pictures` first.
     pub fn take_pictures(&mut self, pictures: Pictures) { self.pictures = Some(pictures) }
+
+    /// For `view --mcp`: each tap and swipe made is told to `seen`.
+    pub fn tell(&mut self, seen: Seen) { self.seen = Some(seen) }
 
     /// A held device whose connection is gone (its tunnel closed: unplugged, or the device let it go) is said to be,
     /// with what to do: it isn't opened again here.
@@ -548,7 +555,9 @@ impl Server {
                     let (x, y) = real(number("x")?, number("y")?)?;
                     self.spend(&name);
                     if !native { self.unturned(&name, way, &of)?; }
-                    self.ask(&name, Some(&of), Some(before), |d| d.tap(x, y)).map(|_| "tapped; look to see what it did")
+                    let done = self.ask(&name, Some(&of), Some(before), |d| d.tap(x, y)).map(|_| "tapped; look to see what it did");
+                    if let (Ok(_), Some(seen)) = (&done, &self.seen) { seen("tap", &[(x, y)]) }
+                    done
                 } else {
                     let (from, to) = (real(number("x1")?, number("y1")?)?, real(number("x2")?, number("y2")?)?);
                     let ms = match &arguments["milliseconds"] {
@@ -557,7 +566,9 @@ impl Server {
                     };
                     self.spend(&name);
                     if !native { self.unturned(&name, way, &of)?; }
-                    self.ask(&name, Some(&of), Some(before), |d| d.swipe(from, to, ms)).map(|_| "swiped; look to see what it did")
+                    let done = self.ask(&name, Some(&of), Some(before), |d| d.swipe(from, to, ms)).map(|_| "swiped; look to see what it did");
+                    if let (Ok(_), Some(seen)) = (&done, &self.seen) { seen("swipe", &[from, to]) }
+                    done
                 };
                 done.map(text)
             }
@@ -1173,5 +1184,17 @@ pub(crate) mod tests {
         *page.ended.lock().unwrap() = Some(Instant::now() - Duration::from_secs(5));
         looked(&mut server, Instant::now());
         assert!(!server.call("tap", &tap).unwrap_err().contains("used from view's page"));
+    }
+
+    /// Only what reached the device is told to the watchers: a tap the device didn't take isn't.
+    #[test]
+    fn a_failed_tap_isnt_shown() {
+        let told = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let mut server = Server::holding("usb", Arc::new(Device::none()), None);
+        let count = told.clone();
+        server.tell(Box::new(move |_, _| { count.fetch_add(1, std::sync::atomic::Ordering::SeqCst); }));
+        server.shown.insert("usb".into(), Shown { size: (100.0, 200.0), way: 1, native: true, at: Instant::now(), of: None, id: 7, spent: false });
+        assert!(server.call("tap", &json!({ "device": "usb", "look": 7, "x": 10, "y": 10 })).is_err());
+        assert_eq!(told.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 }

@@ -20,6 +20,10 @@
   main { flex: 1; display: flex; min-height: 0; }
   #stage { flex: 1; position: relative; display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 0; padding: 14px; }
   #screen { max-width: 100%; max-height: 100%; background: #000; border-radius: 18px; box-shadow: 0 0 0 1px var(--line), 0 12px 40px rgba(0, 0, 0, .5); touch-action: none; cursor: crosshair; }
+  /* Where an agent pressed: a ring that grows and fades, over the picture. */
+  .press { position: fixed; width: 44px; height: 44px; margin: -22px 0 0 -22px; border: 3px solid #ffcc33; border-radius: 50%; pointer-events: none; animation: press .9s ease-out forwards; z-index: 4; }
+  .press.end { border-color: #ff8a33; }
+  @keyframes press { from { transform: scale(.5); opacity: 1; } to { transform: scale(1.6); opacity: 0; } }
   #veil { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--dim); pointer-events: none; }
   #veil[hidden] { display: none; }
   #typing { position: absolute; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; font-size: 16px; }
@@ -213,6 +217,29 @@ function fit() {
   if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
 }
 
+// A point in the device's own upright terms (0…1) as seen on the canvas: `upright` the other way.
+function shown(d) {
+  if (way === 3) return { x: d[1], y: 1 - d[0] };
+  if (way === 4) return { x: 1 - d[1], y: d[0] };
+  if (way === 2) return { x: 1 - d[0], y: 1 - d[1] };
+  return { x: d[0], y: d[1] };
+}
+
+// An agent's tap (one point) or swipe (from, to) through /mcp, shown where it was pressed.
+function agentPressed(what, points) {
+  const r = canvas.getBoundingClientRect();
+  points.forEach((d, i) => {
+    const p = shown(d), ring = document.createElement("div");
+    ring.className = "press" + (i ? " end" : "");
+    ring.style.left = (r.left + p.x * r.width) + "px";
+    ring.style.top = (r.top + p.y * r.height) + "px";
+    if (i) ring.style.animationDelay = "0.25s";
+    document.body.appendChild(ring);
+    setTimeout(() => ring.remove(), 1300);
+  });
+  log(`agent: ${what}`);
+}
+
 // A point of the canvas as seen, in the device's own upright terms (0…1).
 function upright(p) {
   if (way === 3) return { x: 1 - p.y, y: p.x };
@@ -285,6 +312,7 @@ function said(message) {
       break;
     case "counts": stats.counts = message; if (message.way && message.way !== way) { way = message.way; log(`the interface is ${["", "upright", "upside down", "on its side (home at the right)", "on its side (home at the left)"][way]}`); } break;
     case "status": log(message.text, true); state("wait", "starting the stream again"); break;
+    case "agent": agentPressed(message.what, message.points || []); break;
     case "done": log(`${message.what}: ${message.ms} ms`); break;
     case "error": log(`${message.what}: ${message.error}`, true); break;
   }
