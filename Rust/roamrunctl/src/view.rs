@@ -362,6 +362,8 @@ fn pump(hub: &Hub, screen: &dyn Screen) {
         let mut frames = match screen.watch(hub.wanted.clone()) {
             Ok(frames) => frames,
             Err(why) => {
+                // Not opened again here (another connection would start a second stream): said, each time it is tried.
+                let why = if why.contains(crate::mcp::GONE) { format!("the connection to the device is gone ({why}): start view again, with the device connected") } else { why };
                 hub.say(&json!({ "type": "status", "text": format!("the stream didn't start: {why}") }).to_string());
                 std::thread::sleep(Duration::from_secs(2));
                 continue;

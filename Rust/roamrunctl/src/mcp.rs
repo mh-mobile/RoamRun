@@ -108,6 +108,9 @@ pub struct PageInputs {
     pub ended: std::sync::Mutex<Option<Instant>>,
 }
 
+/// What the library says of a tunnel that closed (the device unplugged, or it let the connection go).
+pub const GONE: &str = "adapter closed";
+
 /// A page's input this short a time before a look's picture may not be in it yet (the picture comes late).
 const PAGE_SHOWN: Duration = Duration::from_millis(500);
 
@@ -261,6 +264,12 @@ impl Server {
         server
     }
 
+    /// A held device whose connection is gone (its tunnel closed: unplugged, or the device let it go) is said to be,
+    /// with what to do: it isn't opened again here.
+    fn gone(&self, why: String) -> String {
+        if self.pinned && why.contains(GONE) { format!("view's connection to the device is gone ({why}): start view again, with the device connected") } else { why }
+    }
+
     /// Whether a page acted on the device since the look began, or so shortly before its picture that it may not show.
     fn page_since(&self, name: &str, picture: Instant) -> bool {
         let Some(page) = &self.page else { return false };
@@ -331,7 +340,7 @@ impl Server {
             }),
             "ping" => json!({}),
             "tools/list" => json!({ "tools": tools(self.offered.is_some(), self.uploads.is_some()) }),
-            "tools/call" => match self.call(params["name"].as_str().unwrap_or(""), &params["arguments"]) {
+            "tools/call" => match self.call(params["name"].as_str().unwrap_or(""), &params["arguments"]).map_err(|why| self.gone(why)) {
                 Ok(content) => json!({ "content": content, "isError": false }),
                 Err(why) => json!({ "content": text(why), "isError": true }),
             },
@@ -1122,6 +1131,9 @@ pub(crate) mod tests {
         assert!(server.call("look", &json!({ "device": "other" })).unwrap_err().contains("isn't offered here"));
         assert_eq!(server.call("devices", &json!({})).unwrap()[0]["text"], "usb");
         assert!(!tools(true, false).to_string().contains("\"install\""));
+        // Its tunnel closed (unplugged overnight, seen): said so, and what to do.
+        assert!(server.gone(format!("display service: Socket({GONE})")).contains("start view again"));
+        assert!(!Server::default().gone(format!("x {GONE}")).contains("start view again"));
     }
 
     /// A look isn't acted by once view's page acted on the device since it began, or so shortly before its picture
