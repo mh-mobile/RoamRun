@@ -123,6 +123,8 @@ trait Screen: Send + Sync {
     /// The screen's size by the device's word, as a frame is cut to.
     fn size(&self) -> Option<(u32, u32)>;
     fn input(&self, input: &Input) -> Result<(), String>;
+    /// Which way up the interface is (rr_device_way: 1–4, 0 unknown): the picture comes in the device's own terms.
+    fn way(&self) -> u8;
 }
 
 trait Frames: Send {
@@ -147,6 +149,7 @@ impl Screen for OnDevice {
         device.watch(self.feedback, wanted).map(|watch| Box::new(watch) as Box<dyn Frames>)
     }
     fn size(&self) -> Option<(u32, u32)> { crate::device::screen_size(&self.device.lock().unwrap_or_else(|e| e.into_inner())) }
+    fn way(&self) -> u8 { self.device.lock().unwrap_or_else(|e| e.into_inner()).way() }
     fn input(&self, input: &Input) -> Result<(), String> {
         let device = self.device.lock().unwrap_or_else(|e| e.into_inner());
         crate::device::said(match input {
@@ -165,6 +168,8 @@ struct Hub {
     wanted: Arc<AtomicBool>,
     asked: AtomicU32,
     answered: AtomicU32,
+    /// The interface's way up, as last asked (0 until then).
+    way: std::sync::atomic::AtomicU8,
     began: Instant,
     feedback: bool,
     allowed: Vec<Allow>,
@@ -222,7 +227,7 @@ fn run(listener: TcpListener, screen: Arc<dyn Screen>, allowed: Vec<Allow>, toke
     let (inputs, asked) = mpsc::channel::<(Arc<Viewer>, Input)>();
     let hub = Arc::new(Hub {
         viewers: Mutex::new(Vec::new()), joined: Condvar::new(), wanted: Arc::new(AtomicBool::new(false)), asked: AtomicU32::new(0), answered: AtomicU32::new(0),
-        began: Instant::now(), feedback, allowed, token, hosts, own_ip, own_id, whois, inputs: Mutex::new(inputs), open: Mutex::new(Default::default()),
+        way: std::sync::atomic::AtomicU8::new(0), began: Instant::now(), feedback, allowed, token, hosts, own_ip, own_id, whois, inputs: Mutex::new(inputs), open: Mutex::new(Default::default()),
     });
     // Inputs one at a time, on a thread of their own: a long `type` doesn't hold up what the page acknowledges.
     let device = screen.clone();
@@ -234,6 +239,20 @@ fn run(listener: TcpListener, screen: Arc<dyn Screen>, allowed: Vec<Allow>, toke
                 Ok(()) => json!({ "type": "done", "what": what, "ms": began.elapsed().as_millis() as u64 }),
                 Err(why) => json!({ "type": "error", "what": what, "error": why }),
             }.to_string());
+        }
+    });
+    // The way up, asked when someone starts watching and then every 10 s: each asking opens a service connection
+    // in the tunnel, and asked every 2 s that went with three times the packets lost.
+    let (turned, asking) = (hub.clone(), screen.clone());
+    std::thread::spawn(move || {
+        let mut asked: Option<Instant> = None;
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            if turned.viewers.lock().unwrap_or_else(|e| e.into_inner()).is_empty() { asked = None; continue }
+            if asked.is_some_and(|at| at.elapsed() < Duration::from_secs(10)) { continue }
+            asked = Some(Instant::now());
+            let way = asking.way();
+            if way != 0 { turned.way.store(way, Ordering::Relaxed) }
         }
     });
     let pumped = hub.clone();
@@ -431,7 +450,7 @@ fn write_to(writer: &mut TcpStream, viewer: &Viewer, hub: &Hub) {
         for text in texts { bytes.extend(ws_frame(1, text.as_bytes())) }
         if counted.elapsed() >= Duration::from_secs(1) {
             counted = Instant::now();
-            let counts = json!({ "type": "counts", "keyframesAsked": hub.asked.load(Ordering::Relaxed), "keyframesAnswered": hub.answered.load(Ordering::Relaxed), "cuts": cuts });
+            let counts = json!({ "type": "counts", "keyframesAsked": hub.asked.load(Ordering::Relaxed), "keyframesAnswered": hub.answered.load(Ordering::Relaxed), "cuts": cuts, "way": hub.way.load(Ordering::Relaxed) });
             bytes.extend(ws_frame(1, counts.to_string().as_bytes()));
         }
         if let Some(frame) = frame {
@@ -676,6 +695,7 @@ mod tests {
         fn watch(&self, _: Arc<AtomicBool>) -> Result<Box<dyn Frames>, String> { self.watched.fetch_add(1, Ordering::SeqCst); Ok(Box::new(FakeFrames { n: 0 })) }
         fn size(&self) -> Option<(u32, u32)> { None }
         fn input(&self, _: &Input) -> Result<(), String> { Ok(()) }
+        fn way(&self) -> u8 { 1 }
     }
 
     fn whois(login: &str) -> Whois {

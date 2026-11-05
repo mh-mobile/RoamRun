@@ -47,7 +47,7 @@ if (!window.isSecureContext || typeof VideoDecoder === "undefined") {
   supported("This browser gives this page no VideoDecoder. Chrome: start it with --unsafely-treat-insecure-origin-as-secure=" + location.origin, true);
 }
 
-let socket, decoder, picture, waitKey = true, token = sessionStorage.getItem("roamrunctl-token") || "";
+let way = 1, socket, decoder, picture, waitKey = true, token = sessionStorage.getItem("roamrunctl-token") || "";
 let connectedAt = 0, firstPicture = false;
 const decodeStarted = new Map();
 const stats = { bytes: 0, frames: 0, decodeMs: [], rate: 0, fps: 0, counts: {}, feedback: null, frameSize: "" };
@@ -82,7 +82,14 @@ function newDecoder() {
       if (started !== undefined) { stats.decodeMs.push(performance.now() - started); decodeStarted.delete(frame.timestamp); }
       stats.frameSize = `${frame.displayWidth}×${frame.displayHeight}`;
       const [w, h] = picture.crop;
+      fit();
+      // Drawn turned as the interface is: the stream comes in the device's own (upright) terms.
+      context.save();
+      if (way === 3) { context.translate(0, canvas.height); context.rotate(-Math.PI / 2); }
+      else if (way === 4) { context.translate(canvas.width, 0); context.rotate(Math.PI / 2); }
+      else if (way === 2) { context.translate(canvas.width, canvas.height); context.rotate(Math.PI); }
       context.drawImage(frame, 0, 0, w, h, 0, 0, w, h);
+      context.restore();
       frame.close();
       if (!firstPicture) { firstPicture = true; log(`first picture ${(performance.now() - connectedAt).toFixed(0)} ms after connecting`); }
       if (pending) looked();
@@ -107,10 +114,25 @@ async function check(codec) {
 }
 
 // Configured at once, not after the checks: the key frame that follows the picture's message is decoded.
+// The canvas is the picture as the interface stands: on its side, width and height trade places.
+function fit() {
+  if (!picture) return;
+  const [w, h] = picture.crop, side = way === 3 || way === 4;
+  const [cw, ch] = side ? [h, w] : [w, h];
+  if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
+}
+
+// A point of the canvas as seen, in the device's own upright terms (0…1).
+function upright(p) {
+  if (way === 3) return { x: 1 - p.y, y: p.x };
+  if (way === 4) return { x: p.y, y: 1 - p.x };
+  if (way === 2) return { x: 1 - p.x, y: 1 - p.y };
+  return p;
+}
+
 function configure(said) {
   picture = said;
-  canvas.width = said.crop[0];
-  canvas.height = said.crop[1];
+  fit();
   if (typeof VideoDecoder === "undefined") return;
   check(said.codec);
   check(said.codec.replace(/^hev1/, "hvc1"));
@@ -158,7 +180,7 @@ function said(message) {
       if (!picture || picture.codec !== message.codec) log(`picture: ${message.codec} ${message.width}×${message.height}, cut to ${message.crop.join("×")}`);
       configure(message);
       break;
-    case "counts": stats.counts = message; break;
+    case "counts": stats.counts = message; if (message.way && message.way !== way) { way = message.way; log(`the interface is ${["", "upright", "upside down", "on its side (home at the right)", "on its side (home at the left)"][way]}`); } break;
     case "status": log(message.text, true); break;
     case "done": log(`${message.what}: ${message.ms} ms`); break;
     case "error": log(`${message.what}: ${message.error}`, true); break;
@@ -192,9 +214,11 @@ canvas.addEventListener("pointerup", (e) => {
   if (moved < 10) {
     const w = 48, h = 48, x = Math.max(0, Math.round(up.x * canvas.width) - w / 2), y = Math.max(0, Math.round(up.y * canvas.height) - h / 2);
     pending = { at: performance.now(), x, y, w, h, before: context.getImageData(x, y, w, h).data };
-    send({ type: "tap", x: up.x, y: up.y });
+    const at = upright(up);
+    send({ type: "tap", x: at.x, y: at.y });
   } else {
-    send({ type: "swipe", x1: down.x, y1: down.y, x2: up.x, y2: up.y, ms: Math.round(Math.min(5000, Math.max(50, up.t - down.t))) });
+    const from = upright(down), to = upright(up);
+    send({ type: "swipe", x1: from.x, y1: from.y, x2: to.x, y2: to.y, ms: Math.round(Math.min(5000, Math.max(50, up.t - down.t))) });
   }
   down = null;
 });
