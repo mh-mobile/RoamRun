@@ -68,6 +68,9 @@ pub struct Watch {
     looked_at: Instant,
     /// When a picture with something in it last came.
     busy_at: Instant,
+    /// Raised by `ask_aside` where another display is on than the one streamed.
+    moved: Arc<AtomicBool>,
+    asking: Arc<AtomicBool>,
     /// Access units already cut from what the depacketizer gave, not yet handed on.
     ready: std::collections::VecDeque<Vec<u8>>,
     /// A packet went missing: nothing is given until a whole IRAP picture comes.
@@ -99,7 +102,7 @@ impl Watch {
         Ok(Watch {
             held, video, audio, ssrc, media, feedback_port, frames: HevcDepacketizer::new(), feedback, began: now, rctl_at: now, heard_at: now,
             count: 0, first_seq: None, highest_seq: 0, keyframe_at, asked_at: None, requests: 0, wanted, asked: 0, answered: 0,
-            last_seq: None, gap: 0, frame_first: None, trace: std::env::var_os("ROAMRUNCTL_VIEW_TRACE").is_some(), broken: false, skip_rasl: false, max_datagram: 0, fed: 0, broken_at: None, looked_at: now, busy_at: now, ready: Default::default(), lost: 0, dropped: 0,
+            last_seq: None, gap: 0, frame_first: None, trace: std::env::var_os("ROAMRUNCTL_VIEW_TRACE").is_some(), broken: false, skip_rasl: false, max_datagram: 0, fed: 0, broken_at: None, looked_at: now, busy_at: now, moved: Default::default(), asking: Default::default(), ready: Default::default(), lost: 0, dropped: 0,
         })
     }
 
@@ -107,25 +110,32 @@ impl Watch {
     /// From a thread of its own, with room (8 MB).
     pub fn frame(&mut self) -> Result<Frame, String> {
         let held = self.held.clone();
-        loop {
-            if let Some(frame) = held.runtime.block_on(self.next())? { return Ok(frame) }
-            // Quiet a while: whether the display streamed is still the one on (a Duo folded). Asked only while
-            // nothing comes, which a service connection then can't hold up.
-            let mut link = held.link.lock().unwrap_or_else(|e| e.into_inner());
-            let (streamed, asked) = (link.shown_id, Instant::now());
-            held.runtime.block_on(crate::ask_shown(&mut link));
-            if self.trace { eprintln!("trace: {} ms: quiet; display streamed {streamed:?}, on {:?} (asked in {} ms)", now_ms(), link.shown_id, asked.elapsed().as_millis()) }
-            if link.shown_id != streamed {
-                drop(link);
-                held.runtime.block_on(self.let_stream_go());
-                return Err("another display is on".into());
-            }
-        }
+        held.runtime.block_on(self.next())
     }
 
-    /// The next access unit, or None once nothing has changed on the screen for `QUIET` (and each `LOOK_EVERY` after).
-    async fn next(&mut self) -> Result<Option<Frame>, String> {
+    /// Whether the display streamed is still the one on (a Duo folded), asked on a thread of its own: the video
+    /// is read on meanwhile, however long the device takes to answer. Asked only while the screen changes
+    /// nothing, which a service connection then can't hold up.
+    fn ask_aside(&self) {
+        let (held, moved, asking, trace) = (self.held.clone(), self.moved.clone(), self.asking.clone(), self.trace);
+        if asking.swap(true, Ordering::Relaxed) { return }
+        let asked = std::thread::Builder::new().stack_size(8 << 20).spawn(move || {
+            let mut link = held.link.lock().unwrap_or_else(|e| e.into_inner());
+            let (streamed, began) = (link.shown_id, Instant::now());
+            held.runtime.block_on(crate::ask_shown(&mut link));
+            if trace { eprintln!("trace: {} ms: quiet; display streamed {streamed:?}, on {:?} (asked in {} ms)", now_ms(), link.shown_id, began.elapsed().as_millis()) }
+            if link.shown_id != streamed { moved.store(true, Ordering::Relaxed) }
+            asking.store(false, Ordering::Relaxed);
+        });
+        if asked.is_err() { self.asking.store(false, Ordering::Relaxed) }
+    }
+
+    async fn next(&mut self) -> Result<Frame, String> {
         loop {
+            if self.moved.swap(false, Ordering::Relaxed) {
+                self.let_stream_go().await;
+                return Err("another display is on".into());
+            }
             if let Some(data) = self.ready.pop_front() {
                 let key = has_irap(&data);
                 if key { self.keyframe_at = Instant::now() }
@@ -141,7 +151,7 @@ impl Watch {
                     if self.asked_at.take().is_some() { self.answered += 1 }
                     self.wanted.store(false, Ordering::Relaxed);
                 }
-                return Ok(Some(Frame { key, data }));
+                return Ok(Frame { key, data });
             }
             while let Ok(Ok(_)) = tokio::time::timeout(Duration::ZERO, self.audio.recv()).await {}
             self.ask_if_wanted().await;
@@ -154,7 +164,7 @@ impl Watch {
             // Video, not the device's reports, which go on when the screen streamed went out (a Duo folded).
             if self.busy_at.elapsed() >= QUIET && self.looked_at.elapsed() >= LOOK_EVERY {
                 self.looked_at = Instant::now();
-                return Ok(None);
+                self.ask_aside();
             }
             if self.heard_at.elapsed() >= SILENT {
                 self.let_stream_go().await;
