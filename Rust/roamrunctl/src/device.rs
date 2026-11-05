@@ -539,6 +539,15 @@ pub fn opened(name: &str) -> Result<Device, String> {
     held(name).map(|(device, _)| device)
 }
 
+/// The device named, reached at another address than it was saved with; its pairing is what opens it, as ever.
+pub fn opened_at(name: &str, at: std::net::IpAddr) -> Result<Device, String> {
+    let (mut saved, file) = load(name)?;
+    // One another machine offers is held to on its first use, which `held` does: from then on it can be reached elsewhere.
+    if file.is_none() { return Err(format!("{name} isn't used here yet: start `roamrunctl view {name}` once without --at, which holds to the machine that signs for it")) }
+    saved.ip = at.to_string();
+    open(&saved)
+}
+
 /// The device saved here under `name`, opened, and its file as read; None where none is saved. Never one only a
 /// machine that signs offers: `mcp --http` holds to what it offered, and asks no other machine.
 pub fn held_here(name: &str) -> Result<Option<Held>, String> {
@@ -708,8 +717,8 @@ pub fn run(command: Command) -> i32 {
         Command::Mcp { http: Some(port), allow, token_file, allow_install, max_upload, devices } => allow.iter().map(|a| crate::http::allow(a)).collect::<Result<Vec<_>, _>>()
             .and_then(|allowed| Ok(crate::http::Options { port, allowed, token: token_file.as_deref().map(crate::http::token).transpose()?, devices, uploads: allow_install.then_some(max_upload << 20) }))
             .and_then(crate::http::serve),
-        Command::View { name, http, allow, token_file } => allow.iter().map(|a| crate::http::allow(a)).collect::<Result<Vec<_>, _>>()
-            .and_then(|allowed| Ok(crate::view::Options { device: name, port: http, allowed, token: token_file.as_deref().map(crate::http::token).transpose()? }))
+        Command::View { name, http, allow, token_file, at } => allow.iter().map(|a| crate::http::allow(a)).collect::<Result<Vec<_>, _>>()
+            .and_then(|allowed| Ok(crate::view::Options { device: name, port: http, allowed, token: token_file.as_deref().map(crate::http::token).transpose()?, at }))
             .and_then(crate::view::serve),
         Command::Sign { names, machine } => keys(&names).and_then(|(keys, told, marks)| {
             // The file it was read from, still: not another saved under the name since.

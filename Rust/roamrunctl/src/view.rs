@@ -201,6 +201,7 @@ pub struct Options {
     pub port: u16,
     pub allowed: Vec<Allow>,
     pub token: Option<String>,
+    pub at: Option<IpAddr>,
 }
 
 /// `roamrunctl view`: until Ctrl-C.
@@ -208,7 +209,10 @@ pub fn serve(options: Options) -> Result<String, String> {
     #[cfg(unix)]
     http::not_root(roamrun_device::safe::effective_user())?;
     if options.allowed.is_empty() { return Err("who may watch: --allow <login> (your own machines), or --allow tag:<name>".into()) }
-    let device = crate::device::opened(&options.device)?;
+    let device = match options.at {
+        Some(at) => crate::device::opened_at(&options.device, at)?,
+        None => crate::device::opened(&options.device)?,
+    };
     let (listener, status, own, names) = http::listen(options.port)?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     // The stream stopped at Ctrl-C, not left listed on the device as screen sharing.

@@ -422,9 +422,11 @@ a relay: a relay (`roamrunctl mcp --http`) can't publish, and an OTA server oper
 
 ## The screen in a browser (`view`, a prototype)
 
-`roamrunctl view <device> --http <port> --allow <who> [--allow <who>…] [--token-file <file>]`, until Ctrl-C.
-A prototype, for watching and touching your own device from elsewhere on the tailnet. It hasn't
-been tried on a device or in a browser yet: its tests run without either.
+`roamrunctl view <device> --http <port> --allow <who> [--allow <who>…] [--token-file <file>] [--at <address>]`, until Ctrl-C.
+A prototype, for watching and touching your own device from elsewhere on the tailnet. Tried on
+2026-11-05 on an iPhone Duo (iOS 27) in Chrome. Packets the device sends go missing, and the
+picture then stops until the next key frame: over 30 s, 1 to 3.5 times with the device reached
+at its address on the home Wi‑Fi, and 38 times through Tailscale (another run: 12 in 70 s).
 
 - It listens on this machine's Tailscale IPv4 address only, and serves a page at `/` and a
   WebSocket at `/ws`. As `mcp --http`, it doesn't start without Tailscale or `--allow`, or as
@@ -448,6 +450,11 @@ a port forwarded to it brings `Host: localhost:…`, which is refused. The page 
   first message; a wrong one, or none where one is set, closes the WebSocket with 1008.
 - 8 connections at once, 4 from one address; more are closed unanswered. The head has 10 s for
   each read, and so has the first message; after that nothing is cut for being slow or quiet.
+- `--at <address>` reaches the device at that address instead of the one it was saved with: its
+  address on this machine's Wi‑Fi, so that the stream doesn't go through Tailscale. The pairing
+  opens it as ever, and the page is still served on the Tailscale address. A device another
+  machine signs for takes `--at` once `view` has opened it without. The Wi‑Fi counts above were
+  taken with a copy of the saved device that held its LAN address; `--at` itself hasn't been run.
 - The device is this command's alone while it runs: don't use it from another command meanwhile.
   The screen stream runs while a page watches. Each page gets the access units as they come, none
   before a key frame. A page whose oldest frame not yet shown (waiting, or sent and not yet
@@ -700,7 +707,8 @@ against a real device at the time these notes were written:
   answered `(install <id>)`, `install_status` asked by it said the app was in after 5 s, and it
   launched; `install_status` with another id was then an error, and without one answered of
   that install.
-- `view` (a prototype): not yet on a device, nor in any browser.
+- `view` (a prototype): `--at` itself, browsers other than Chrome, a browser on a phone (none has
+  Chrome's flag for a secure page), and a device reached over the internet.
 - Tailscale userspace networking with no address available to bind.
 - Xcode pairing through `pair introduce` since the `--mac` → `--host` change.
 

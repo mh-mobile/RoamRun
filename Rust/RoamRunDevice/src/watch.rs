@@ -141,9 +141,14 @@ impl Watch {
                     if hole { self.gap += u32::from(step.wrapping_sub(1)); if self.trace { eprintln!("trace: seq {last} -> {} (step {step})", packet.sequence_number) } }
                 }
                 if self.last_seq.is_none_or(|last| packet.sequence_number.wrapping_sub(last) < 0x8000) { self.last_seq = Some(packet.sequence_number) }
-                self.frame_first.get_or_insert(packet.sequence_number);
                 self.highest_seq = packet.sequence_number;
-                feed(&mut self.frames, &mut self.fed, hole, packet.timestamp, packet.payload);
+                // A picture that opens right after a hole can come whole: what refers to the lost one waits for a key frame.
+                if feed(&mut self.frames, &mut self.fed, hole, packet.timestamp, packet.payload) {
+                    self.lost += std::mem::take(&mut self.gap);
+                    self.frame_first = None;
+                    self.broke();
+                }
+                self.frame_first.get_or_insert(packet.sequence_number);
                 if !packet.marker { continue }
                 let data = self.frames.take_output();
                 if data.is_empty() { continue }
@@ -158,11 +163,8 @@ impl Watch {
                 self.frame_first = None;
                 // A picture with a hole decodes as garbage, or not at all, and so does all that refers to it.
                 if !whole {
-                    if !self.broken && self.trace { eprintln!("trace: broken from frame {}", self.count) }
-                    self.broken_at.get_or_insert_with(Instant::now);
-                    self.broken = true;
+                    self.broke();
                     self.dropped += 1;
-                    self.wanted.store(true, Ordering::Relaxed);
                     if has_irap(&data) { self.keyframe_at = Instant::now() }
                     continue;
                 }
@@ -170,6 +172,14 @@ impl Watch {
                 self.ready.extend(access_units(&data));
             }
         })
+    }
+
+    /// A picture was lost: what refers to it isn't given until a whole IRAP, which is asked for.
+    fn broke(&mut self) {
+        if !self.broken && self.trace { eprintln!("trace: broken from frame {}", self.count) }
+        self.broken_at.get_or_insert_with(Instant::now);
+        self.broken = true;
+        self.wanted.store(true, Ordering::Relaxed);
     }
 
     /// A request for a key frame, where one is wanted: not sooner after the last than the device answers, and again
@@ -242,13 +252,35 @@ pub fn is_rasl(annexb: &[u8]) -> bool {
 
 /// A packet to the depacketizer under a number of its own, without holes: at a hole it would hold up to 128 packets
 /// for a late one, which this tunnel (TCP) never brings. An empty aggregation packet ends a fragment the hole cut.
-fn feed(frames: &mut HevcDepacketizer, fed: &mut u16, hole: bool, timestamp: u32, payload: &[u8]) {
+/// Where the packet after a hole opens a picture, what came before it (cut short) is let go, and true is returned.
+fn feed(frames: &mut HevcDepacketizer, fed: &mut u16, hole: bool, timestamp: u32, payload: &[u8]) -> bool {
+    let fresh = hole && starts_picture(payload);
+    if fresh { frames.take_output(); }
     if hole {
         frames.push(*fed, timestamp, &[0x60, 0x01]);
         *fed = fed.wrapping_add(1);
     }
     frames.push(*fed, timestamp, payload);
     *fed = fed.wrapping_add(1);
+    fresh
+}
+
+/// Whether an RTP payload opens a picture: a parameter set, delimiter or prefix SEI, or the first slice segment of one
+/// (first_slice_segment_in_pic_flag, the slice header's first bit), alone, as a fragment's start, or first in an
+/// aggregation packet.
+fn starts_picture(payload: &[u8]) -> bool {
+    let opens = |nal: &[u8]| match nal.first().map(|b| (b >> 1) & 0x3f) {
+        Some(0..=31) => nal.get(2).is_some_and(|b| b & 0x80 != 0),
+        Some(32..=35 | 39) => true,
+        _ => false,
+    };
+    match payload.first().map(|b| (b >> 1) & 0x3f) {
+        // An FU: its header's S bit and type, then the NAL's payload (its header isn't repeated).
+        Some(49) => payload.get(2).is_some_and(|fu| fu & 0x80 != 0 && fu & 0x3f < 32) && payload.get(3).is_some_and(|b| b & 0x80 != 0),
+        Some(48) => payload.get(4..).is_some_and(opens),
+        Some(_) => opens(payload),
+        None => false,
+    }
 }
 
 /// The NAL units of Annex B, without their start codes; empty ones left out.
@@ -347,6 +379,27 @@ mod tests {
         let got = units(&[rtp(1, 100, false, &[0x62, 0x01, 0x80 | 19, 1, 2]), rtp(3, 200, true, &trail)]);
         assert_eq!(got.len(), 1);
         assert_eq!(nal_units(&got[0].1).collect::<Vec<_>>(), [&[0x46, 0x01, 0x50][..], &trail]);
+    }
+
+    /// A picture whose first packet comes right after a hole is given whole; what the hole cut short isn't.
+    #[test]
+    fn a_picture_that_starts_after_a_hole_comes_whole() {
+        let next = [0x02, 0x01, 0x80, 7];
+        let got = units(&[rtp(1, 100, false, &[0x02, 0x01, 0x80, 1]), rtp(3, 200, true, &next)]);
+        assert_eq!(nal_units(&got[0].1).collect::<Vec<_>>(), [&[0x46, 0x01, 0x50][..], &next]);
+    }
+
+    /// What opens a picture: its first slice segment, alone, as a fragment's start or first in an aggregation packet,
+    /// and parameter sets; not a later slice segment nor a fragment's middle.
+    #[test]
+    fn what_opens_a_picture() {
+        assert!(starts_picture(&[0x26, 0x01, 0x80, 1]));                 // IDR, first slice segment
+        assert!(!starts_picture(&[0x02, 0x01, 0x40, 1]));                // a later slice segment
+        assert!(starts_picture(&[0x62, 0x01, 0x80 | 19, 0x80, 1]));      // FU start of a first slice segment
+        assert!(!starts_picture(&[0x62, 0x01, 19, 0x80, 1]));            // FU middle
+        assert!(!starts_picture(&[0x62, 0x01, 0x80 | 19, 0x00, 1]));     // FU start of a later segment
+        assert!(starts_picture(&[0x60, 0x01, 0, 3, 0x40, 0x01, 0xaa]));  // AP opening with a VPS
+        assert!(!starts_picture(&[0x60, 0x01]));                         // an empty AP (what `feed` puts at a hole)
     }
 
     #[test]

@@ -139,6 +139,9 @@ enum Command {
         /// A token the page must also give (it asks): a file of the owner's alone, 32 characters or more. Needed for this machine itself
         #[arg(long = "token-file")]
         token_file: Option<std::path::PathBuf>,
+        /// Reach the device at this address, not the one it was saved with: its address on this machine's Wi‑Fi, so that the stream doesn't go through Tailscale
+        #[arg(long, value_name = "ADDRESS")]
+        at: Option<std::net::IpAddr>,
     },
     /// Keep the pairings saved here to yourself and sign with them for another machine, which then uses the devices without having their keys; until Ctrl-C
     Sign {
