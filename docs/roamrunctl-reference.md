@@ -561,8 +561,11 @@ connection goes, start view again. Sound comes only from a Mac.
   asks for a key frame; Full screen takes the browser's full screen, or the whole window where the
   browser gives a page none (Safari on an iPhone). Inputs go to the device one at a time, 20 at most
   waiting from one page (more are refused), and those of a page that is gone aren't made; the page
-  is told how each went, and one that failed is shown over the picture. The long press and the
-  pinch from the page haven't been tried on a device.
+  is told how each went, and one that failed is shown over the picture. On 2026-11-06, from Safari
+  on the iPhone Duo itself (the page showing its own screen, over `--https`): a press held on a
+  home-screen icon opened its menu, and pinches zoomed a map in and out. Opened on the device it
+  shows, the page shows itself over and over, which the device both sends and decodes: there it
+  lagged, and connected again every 20 to 50 s. Open it elsewhere.
 - Sound: the device sends its sound as AAC-ELD, which neither Chrome nor Safari decodes (asked of
   `AudioDecoder` on a Mac and an iPhone). Where this machine is a Mac, it is decoded here with
   AudioToolbox, and a page whose Sound button was pressed gets it as PCM (48 kHz, two channels,
