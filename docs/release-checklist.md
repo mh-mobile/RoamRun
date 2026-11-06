@@ -140,8 +140,8 @@ tunnel and Xcode has to run again.
     off and quit at once (⌘Q), reopen — off; (c) `chmod 000 profiles.json`, open RoamRun, wait a
     minute, quit, restore the mode, reopen — every switch as it was; (d) **Pair Again…** on a
     device that was switched off — it reads on, and the sheet says so.
-20. `roamrun look <name> /tmp/a.png`, then `tap`, `swipe`, `type`, `paste`, `press home` and
-    `elements`, a `look` after each: each did what it says. The same through `roamrun mcp`
+20. `roamrun look <name> /tmp/a.png`, then `tap`, `swipe`, `pinch` (2 on a map: it zooms in), `type`,
+    `paste`, `press home` and `elements`, a `look` after each: each did what it says. The same through `roamrun mcp`
     from an agent. There too (when the hub's install or launch changed): `install` of an .app or
     .ipa signed for the device → answered at once; a `look` meanwhile → "installing";
     `install_status` until installed; `launch` → the app in front; no `install-*` left in
@@ -285,7 +285,7 @@ tunnel and Xcode has to run again.
     (the device saved in RoamRun there); `pair control --with <the device>` with the Introducer
     app → paired each time (each pairing takes the place of the one before on the device: the
     name of the last is the one used below); a wrong code → nothing kept. Then there: `install` and `launch`
-    of an app built for the device; `roamrunctl mcp` under an agent: look, tap, swipe, type, paste,
+    of an app built for the device; `roamrunctl mcp` under an agent: look, tap, swipe, pinch, type, paste,
     press, elements, with music playing on the device → it goes on sounding, and no screen-sharing
     session is listed. `--passphrase` once: `look` asks for it; `mcp` takes it from
     `ROAMRUNCTL_PASSPHRASE_FILE`. The key elsewhere: two devices paired on one machine, `roamrunctl
