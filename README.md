@@ -340,8 +340,10 @@ The rules:
   `roamrun mcp`, scale 2 zoomed in.
 - `elements` prints one caption a line, followed by ` — id: <identifier>` when the app set an
   accessibility identifier (`com.apple.settings.airplaneMode`). The identifier was seen in what an
-  iPhone Duo sent in Settings, where each of the five elements read had one; an app that sets none
-  wasn't tried, and neither was this output on a device. What the device sent held no positions.
+  iPhone Duo sent in Settings, where each of the five elements read had one. What the device sent
+  held no positions. On 2026-11-06, `roamrunctl mcp`'s `elements` on that iPhone Duo gave the
+  identifier on each of 12 lines in Settings, and on a screen of widgets the caption alone for a
+  search widget's elements; `roamrun elements` itself wasn't run on a device.
 
 **For an agent** the same are MCP tools: `claude mcp add roamrun -- roamrun mcp`, or the like for
 another agent. The tools are `devices`, `look`, `tap`, `swipe`, `pinch`, `type`, `paste`, `press` and
