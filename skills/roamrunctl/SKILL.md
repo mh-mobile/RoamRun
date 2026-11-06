@@ -272,6 +272,8 @@ believed the first time it is used — use it only if the user named it.
   finger that would leave the screen is refused. `press` isn't held to a look and
   goes to whatever is on the screen: look before it too. A
   call that fails may or may not have reached the device — look before doing it again.
+  `elements` gives one caption a line, followed by ` — id: <identifier>` when the app set an
+  accessibility identifier; no positions: find what to tap in a look.
   A call you take back before its turn isn't made. On an iPhone with two screens, opened
   (tried: a foldable one on iOS 27.1), the first tap or swipe of an `mcp` run does nothing (and,
   as seen with RoamRun on a Mac, the first after the device is opened); the next one works: if

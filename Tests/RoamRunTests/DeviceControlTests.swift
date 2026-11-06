@@ -1150,6 +1150,32 @@ private func listenerSoon(
     #expect(try JSONDecoder().decode(DeviceControlWire.Response.self, from: JSONEncoder().encode(answer)) == answer)
 }
 
+/// An element's line carries its identifier when it has one, and an older app's answer,
+/// captions alone, is read as before.
+@Test func elementsSayTheirIdentifier() throws {
+    let found = ScreenElement.list([
+        ["caption": "Bluetooth, button", "identifier": "com.apple.settings.bluetooth"],
+        ["caption": "General, button", "identifier": 3],
+        ["identifier": "x"],
+    ])
+    #expect(found == [
+        ScreenElement(caption: "Bluetooth, button", identifier: "com.apple.settings.bluetooth"),
+        ScreenElement(caption: "General, button"),
+        ScreenElement(caption: "", identifier: "x"),
+    ])
+    #expect(found.map(\.line) == [
+        "Bluetooth, button — id: com.apple.settings.bluetooth", "General, button", " — id: x",
+    ])
+
+    let decode = { (json: String) in
+        try JSONDecoder().decode(DeviceControlWire.Response.self, from: Data(json.utf8))
+    }
+    #expect(try decode(#"{"ok":true,"captions":["a","b"],"complete":true}"#).elementLines == ["a", "b"])
+    let newer = try decode(#"{"ok":true,"captions":["a"],"elements":[{"caption":"a","identifier":"i"}]}"#)
+    #expect(newer.elementLines == ["a — id: i"])
+    #expect(try decode(#"{"ok":false,"error":"no"}"#).elementLines == nil)
+}
+
 /// A look's number isn't counted from the same place by every run of the app: one kept from
 /// before a restart isn't taken for one made since.
 @Test func looksAreNotNumberedAlikeByEveryStart() throws {

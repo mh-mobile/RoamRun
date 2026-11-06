@@ -15,9 +15,8 @@ KNOWN = {
     "RUSTSEC-2026-0173": "proc-macro-error2: build-time only (a proc-macro under age), not in the binary",
     # Unmaintained too. i18n-config reads i18n.toml with it, only for age's proc-macros (i18n-embed-fl, -impl).
     "RUSTSEC-2026-0374": "basic-toml: build-time only (under age's proc-macros), not in the binary",
-    # A panic in the callback leaves the cursor kept inside the block invalid (fixed in 0.12.1). The
-    # 0.10.4 that digest 0.10 pins keeps it in its own field, set only once the callback returned.
-    "GHSA-qwgh-2vcv-g2f7": "block-buffer 0.10: the cursor is its own field, so a panic leaves it valid",
+    # Unmaintained; wasmtimer brings it through jktcp only on wasm32. RoamRun ships native targets.
+    "RUSTSEC-2026-0441": "pin-utils: only wasmtimer on wasm32 uses it; absent from our native builds",
 }
 
 def ask(url, body=None):

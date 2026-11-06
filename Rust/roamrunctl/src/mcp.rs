@@ -176,7 +176,7 @@ fn tools(remote: bool, installs: bool) -> Value {
                      "degrees": { "type": "number", "description": "How far they turn, clockwise (-180...180, default 0)" },
                      "milliseconds": { "type": "integer", "description": "How long it takes (50...5000, default 500)" } }),
              &["look", "x", "y"]),
-        tool("elements", "What accessibility says is on the screen, one caption a line (\"Home, tab, selected\"). No positions: find a caption in a look to tap it. The screen may scroll to what is visited. Nothing on the home screen.",
+        tool("elements", "What accessibility says is on the screen, one element a line: its caption (\"Home, tab, selected\"), then \" — id: \" and its accessibility identifier when the app set one. No positions: find a caption in a look to tap it. The screen may scroll to what is visited. Nothing on the home screen.",
              json!({ "limit": { "type": "integer", "description": "How many at most (default 40)" } }), &[]),
         tool("type", "Type text on the device's keyboard, into whatever has its focus. US-keyboard characters only; a newline is Return. Right only while the device's keyboard is an English one — look first: under a Japanese one keys go to its conversion. 500 characters at most.",
              json!({ "look": since, "text": { "type": "string" } }), &["look", "text"]),
@@ -197,6 +197,15 @@ fn tools(remote: bool, installs: bool) -> Value {
              json!({ "bundle": { "type": "string" } }), &["bundle"]),
     ]);
     Value::Array(all.as_array().into_iter().flatten().filter(|t| !remote || installs || !t["name"].as_str().is_some_and(|n| n.starts_with("install"))).cloned().collect())
+}
+
+/// An element as a line: its caption, then its identifier if it has one. The same in `roamrun mcp`.
+fn element_line(element: &Value) -> Option<String> {
+    let caption = element["caption"].as_str()?;
+    Some(match element["identifier"].as_str() {
+        Some(id) => format!("{caption} — id: {id}"),
+        None => caption.to_string(),
+    })
 }
 
 /// Over HTTP, of an offered device removed, or another saved under its name, since the server began.
@@ -514,9 +523,9 @@ impl Server {
                 self.shown.remove(&name);   // the walk can scroll the screen
                 let limit = arguments["limit"].as_u64().unwrap_or(40) as u32;
                 let said = self.ask(&name, None, None, |d| d.elements(limit))?;
-                let captions: Vec<&str> = said["elements"].as_array().map(|all| all.iter().filter_map(|e| e["caption"].as_str()).collect()).unwrap_or_default();
-                let more = if said["complete"] == true { String::new() } else { format!("\n({} elements; the walk was cut short, there may be more)", captions.len()) };
-                Ok(text(captions.join("\n") + &more))
+                let lines: Vec<String> = said["elements"].as_array().map(|all| all.iter().filter_map(element_line).collect()).unwrap_or_default();
+                let more = if said["complete"] == true { String::new() } else { format!("\n({} elements; the walk was cut short, there may be more)", lines.len()) };
+                Ok(text(lines.join("\n") + &more))
             }
             "type" | "paste" | "press" => {
                 let value = word(if tool == "press" { "button" } else { "text" })?;
@@ -633,6 +642,13 @@ impl Server {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn an_element_is_its_caption_then_its_identifier() {
+        assert_eq!(element_line(&json!({ "caption": "General, button" })).as_deref(), Some("General, button"));
+        assert_eq!(element_line(&json!({ "caption": "Bluetooth, button", "identifier": "com.apple.settings.bluetooth" })).as_deref(), Some("Bluetooth, button — id: com.apple.settings.bluetooth"));
+        assert_eq!(element_line(&json!({ "identifier": "x" })), None);
+    }
 
     #[test]
     fn a_point_is_turned_back_to_the_device_held_upright() {

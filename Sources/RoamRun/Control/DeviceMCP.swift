@@ -407,10 +407,10 @@ final class DeviceMCP: @unchecked Sendable {
                 device: device.id,
                 limit: (arguments["limit"] as? NSNumber)?.intValue
             ))
-            let captions = r.captions ?? []
-            return text(captions
+            let lines = r.elementLines ?? []
+            return text(lines
                 .joined(separator: "\n") +
-                (r.complete == true ? "" : "\n(\(captions.count) elements; the walk was cut short, there may be more)"))
+                (r.complete == true ? "" : "\n(\(lines.count) elements; the walk was cut short, there may be more)"))
         case "type", "paste", "press":
             guard let value = arguments[tool == "press" ? "button" : "text"] as? String
             else { throw Failure(description: "nothing to send") }
@@ -716,7 +716,7 @@ final class DeviceMCP: @unchecked Sendable {
             ),
             tool(
                 "elements",
-                "What accessibility says is on the screen, one caption a line (\"Home, tab, selected\"). No positions: find a caption in a look to tap it. The screen may scroll to what is visited. Nothing on the home screen.",
+                "What accessibility says is on the screen, one element a line: its caption (\"Home, tab, selected\"), then \" — id: \" and its accessibility identifier when the app set one. No positions: find a caption in a look to tap it. The screen may scroll to what is visited. Nothing on the home screen.",
                 ["limit": ["type": "integer", "description": "How many at most (default 40)"]]
             ),
             tool(
