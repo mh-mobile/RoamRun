@@ -1,4 +1,4 @@
-//! `roamrunctl view <device> --http <port> --allow <who>`: a prototype. The device's screen stream in a browser on
+//! `roamrunctl view <device> --http <port> --allow <who>`: experimental. The device's screen stream in a browser on
 //! the tailnet, as WebCodecs decodes it, and taps, swipes, keys and buttons back. One page (`view.html`), one
 //! WebSocket for each viewer; the stream runs while one watches. The device is this process's alone meanwhile.
 
@@ -310,7 +310,7 @@ pub fn serve(options: Options) -> Result<String, String> {
     // The stream stopped at Ctrl-C, not left listed on the device as screen sharing.
     let stop = crate::at_stop()?;
     let feedback = std::env::var(FEEDBACK).map_or(true, |v| v != "off");
-    note!("roamrunctl: {}'s screen at http://{own}:{port}/ (a prototype), for {} on the tailnet{}{}. The page needs WebCodecs, which Chrome offers only to a secure page: see `roamrunctl view --help`. Ctrl-C ends it.",
+    note!("roamrunctl: {}'s screen at http://{own}:{port}/ (experimental), for {} on the tailnet{}{}. The page needs WebCodecs, which Chrome offers only to a secure page: see `roamrunctl view --help`. Ctrl-C ends it.",
         device_name, options.allowed.iter().map(|a| match a { Allow::Tag(s) | Allow::Login(s) => s.as_str() }).collect::<Vec<_>>().join(", "),
         if options.token.is_some() { ", with the token" } else { "" }, if feedback { "" } else { "; no frame acks or receiver reports to the device" });
     let device = Arc::new(device);

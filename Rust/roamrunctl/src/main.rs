@@ -126,7 +126,7 @@ enum Command {
         #[arg(requires = "http")]
         devices: Vec<String>,
     },
-    /// A prototype: watch and touch the device in a browser until Ctrl-C. With --token-file: open localhost on this machine, or add --https for browsers elsewhere on the tailnet; the browser needs HEVC in WebCodecs
+    /// Experimental: watch and touch the device in a browser until Ctrl-C. With --token-file: open localhost on this machine, or add --https for browsers elsewhere on the tailnet; the browser needs HEVC in WebCodecs
     View {
         /// The device, as `roamrunctl devices` names it (none with --usb)
         #[arg(required_unless_present = "usb", conflicts_with = "usb")]

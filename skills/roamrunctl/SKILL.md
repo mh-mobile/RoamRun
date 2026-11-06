@@ -368,7 +368,7 @@ Mac introducing this machine, `mcp`'s swipe and a paste that goes through, pinch
 Windows (it builds there). If one of those fails, say what it
 said; don't work around it.
 
-**`roamrunctl view <device> --http <port> --allow <login> [--at <address>]`** is a prototype, tried
+**`roamrunctl view <device> --http <port> --allow <login> [--at <address>]`** is experimental, tried
 on an iPhone Duo in Chrome (through Tailscale its picture often stops until a key frame; `--at`
 reaches the device at its address on this machine's Wi‑Fi instead, and `--usb [<UDID>]` in place of
 `<device>` takes the one connected by USB, which lost nothing): the user's own device's screen

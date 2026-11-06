@@ -196,14 +196,14 @@ roamrunctl ota <app.ipa> --server <アドレス>:<ポート> [--token-file <フ�
 - `ota` が「そのアップロードはない」と答えた場合は、ファイルを 1 回だけ送り直します。別のジョブのアップロードに置き換えられた場合で、`ota` が動く前に断られるので、何も保存されていません。2 回目も同じなら、そう表示して止まります。同時に公開するジョブは、失敗することがあります。ビルドが拒否されたら、サーバーの答えを表示して止まります。`ota` の答えが届かなかったときは、送り直しません。ビルドが保存されている場合があるからです。
 - `--timeout <秒>` は、ネットワークの処理で待つ最大の時間です。尋ねる要求、アップロードとその送り直し、`ota` が含まれます。1 回の読み書きで待つのは最大 120 秒です。sha256 のためにファイルを読む時間と、名前を引く時間は含みません。既定は、1 MB あたり 2 秒に、30 秒と、サーバーの検査の分の 120 秒を足した時間です。
 
-## ブラウザで画面を見る（`view`、試作）
+## ブラウザで画面を見る（`view`、実験的）
 
 ```
 roamrunctl view <デバイス> --http <ポート> --allow <相手> [--allow <相手>…] [--token-file <ファイル>] [--at <アドレス>] [--mcp] [--https <ポート>]
 roamrunctl view --usb [<UDID>] --http <ポート> --allow <相手> …
 ```
 
-Ctrl-C で止めるまで動きます。自分のデバイスを家に置いたまま、tailnet のほかの場所からブラウザで見て操作するための試作です。2026-11-05 に、iPhone Duo（iOS 27）と Chrome で試しました。デバイスが送るパケットは途中で欠けることがあり、欠けると次のキーフレームまで画像が止まります。30 秒のうちに欠けた回数は、自宅の Wi‑Fi のアドレスでデバイスにつないだときは 1〜3.5 回でした。Tailscale を通したときは 38 回でした（別の回では 70 秒で 12 回）。
+Ctrl-C で止めるまで動きます。自分のデバイスを家に置いたまま、tailnet のほかの場所からブラウザで見て操作するための、実験的な機能です。オプションやメッセージの形は変わることがあります。Wi‑Fi のスマホで見ると、ときどき画像が止まります（後述）。2026-11-05 に、iPhone Duo（iOS 27）と Chrome で試しました。デバイスが送るパケットは途中で欠けることがあり、欠けると次のキーフレームまで画像が止まります。30 秒のうちに欠けた回数は、自宅の Wi‑Fi のアドレスでデバイスにつないだときは 1〜3.5 回でした。Tailscale を通したときは 38 回でした（別の回では 70 秒で 12 回）。
 
 使い方の要点は次のとおりです。デバイスをつないだ Mac で動かします。つなぎ方は USB（`--usb`）か同じ Wi‑Fi（`--at`）で、Tailscale は通しません。`--token-file` も付けます。その Mac では `http://localhost:<ポート>/` を開きます。tailnet のほかのマシンからは、さらに `--https <ポート>` を付けて起動し、表示された HTTPS のアドレスを開きます。ブラウザは HEVC を復号できる必要があります（試したのは Mac の Chrome と iPhone の Safari です）。デバイスへの接続が切れたら、view を起動し直します。音が出るのは、Mac で動かしたときだけです。
 
@@ -333,7 +333,7 @@ Mac 側の関連する実装は、`Sources/RoamRun/Pairing/` にあります。�
 - macOS で、iPhone Duo 以外のデバイスや、relay またはモバイル回線を通しての、画面のストリームからの look。
 - Windows で使う `mcp --http`。クラウドからは、GitHub Actions のほかに Codex Cloud、Xcode Cloud、Bitrise から呼びました。Codex Cloud からは 2026-10-19 に呼びました。0.8.0 のリリース前のビルドを手元の Mac と Linux で動かし、look、tap、アップロード、`install`、`launch` まで通しています。Xcode Cloud と Bitrise は、[xcode-cloud.ja.md](xcode-cloud.ja.md) と [bitrise.ja.md](bitrise.ja.md) にあります。GitHub Actions のランナーからは、macOS と Linux の relay の両方で動かしました。ランナーは `tag:ci` で許可した別のマシンです（[ci.ja.md](ci.ja.md#実行した環境と結果)）。ログイン名で許可した別のマシンからは、2026-10-26 に試しました。tailnet のタグのない Linux マシンから、macOS の relay に `scripts/mcp-http-check.py` を通しました。その relay を通して、iPhone Duo にアップロード、`install`、`launch` も進めました。`--allow tag:ci` で起動したときは、403 で断られました。macOS では、そのマシン自身からもトークン付きで `scripts/mcp-http-check.py` を通しました。iPhone では、look、tap、type、press、`elements` を確かめています。ほかの呼び出し元の look のあとの tap と、古い look での type と paste は、断られました。順番待ちの呼び出しは、接続を閉じても、セッションの中の `notifications/cancelled` でも取り消せました。このうち、look、tap、type、`elements` と、セッションの中の取り消し（取り消しが呼び出しより前に届いた場合と後に届いた場合）は、そのあとの形でも確かめています。ほかは、それより前の形での確認です。アップロードは、macOS でそのマシン自身からトークン付きで、何もないアドレスで保存したデバイスに対して確かめました。アップロードの答えに大きさと、`shasum` と同じ sha256 が入ること。`--max-upload` を超えるものが断られ、保持していたものは残ること。それを `install` すると、デバイスを開けないので断られ、アップロードは残ること。フォルダが 0700 で作られ、Ctrl-C で消えること（終了コード 130）。トークンなしでは、このマシン自身からの `/upload` が断られることです。そのあと iPhone 15 Pro に、8.5 MB の `.ipa`（アプリ 1 つで、検査は通るもの）を入れました。標準入出力では、パスを渡した `install` が 1 秒で答え、その間の `look` には「インストール中」と答えました。15 秒後に `install_status` が「入った」と答えました。HTTP では、アップロードが 0.6 秒で終わり、sha256 は `shasum` と同じでした。`install` はすぐに答えました。その間の `look` と、同じアップロードでの 2 回目の `install` は断られました。10 秒後に入り、アップロードのファイルは消えていました。Ctrl-C でフォルダも消えました。入れたアプリは、標準入出力の `launch` で起動でき、1.3 秒で pid が返りました。
 - 別のマシンからの `launch --relay`。Windows での `install --relay`。GitHub Actions の Linux のランナー、Xcode Cloud、Bitrise からは動かしました。relay を使わない `install --launch` も同じです（[ci.ja.md](ci.ja.md#実行した環境と結果)）。`--timeout` が切れる場合。macOS では、そのマシン自身の `mcp --http` に、そのマシンからトークン付きで当てました。対象は iPhone 15 Pro（iOS 27.0）で、入れるアプリは前面に出ていない状態です。トークンなしでは、`.ipa` を送る前にアップロードが断られました（401）。トークンを付けた `install --relay --launch` は、1 MB の `.ipa` で 6.7 秒かかり（インストールは 5 秒）、アプリが起動しました。`launch --relay`（relay は `ROAMRUNCTL_RELAY` で指定）は 0.6 秒で答えました。ここまでは、`install` が id を答える前の形での確認です。id を答える形では、`install --relay --launch` が 8.9 秒で終わりました。`install` が `(install <id>)` を答え、その id で尋ねた `install_status` が 5 秒後に「入った」と答え、アプリが起動しました。そのあと、別の id を渡した `install_status` はエラーになり、id なしではそのインストールについて答えました。
-- `view`（試作）。Mac の Chrome と iPhone の Safari 以外のブラウザ。自宅の外のネットワークから開いたページ。
+- `view`（実験的）。Mac の Chrome と iPhone の Safari 以外のブラウザ。自宅の外のネットワークから開いたページ。
 - 待ち受けるアドレスのない、Tailscale のユーザースペースネットワーキング
 - `--mac` から `--host` への変更後に、`pair introduce` を使って Xcode とペアリングする構成
 

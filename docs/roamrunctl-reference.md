@@ -437,11 +437,12 @@ a relay: a relay (`roamrunctl mcp --http`) can't publish, and an OTA server oper
   a name aren't held to it. By default: 2 seconds a MB, 30 seconds, and 120 seconds for the
   server's checks.
 
-## The screen in a browser (`view`, a prototype)
+## The screen in a browser (`view`, experimental)
 
 `roamrunctl view <device> --http <port> --allow <who> [--allow <who>…] [--token-file <file>] [--at <address>] [--mcp] [--https <port>]`, or
 `roamrunctl view --usb [<UDID>] --http <port> --allow <who> …`, until Ctrl-C.
-A prototype, for watching and touching your own device from elsewhere on the tailnet. Tried on
+Experimental: its options and messages may change, and a phone watching over Wi‑Fi can stall now
+and then (below). For watching and touching your own device from elsewhere on the tailnet. Tried on
 2026-11-05 on an iPhone Duo (iOS 27) in Chrome. Packets the device sends go missing, and the
 picture then stops until the next key frame: over 30 s, 1 to 3.5 times with the device reached
 at its address on the home Wi‑Fi, and 38 times through Tailscale (another run: 12 in 70 s).
@@ -832,7 +833,7 @@ against a real device at the time these notes were written:
   answered `(install <id>)`, `install_status` asked by it said the app was in after 5 s, and it
   launched; `install_status` with another id was then an error, and without one answered of
   that install.
-- `view` (a prototype): browsers other than Chrome on a Mac, T3 Code's browser and Safari on an iPhone, and the
+- `view` (experimental): browsers other than Chrome on a Mac, T3 Code's browser and Safari on an iPhone, and the
   page opened from outside the home network.
 - Tailscale userspace networking with no address available to bind.
 - Xcode pairing through `pair introduce` since the `--mac` → `--host` change.
