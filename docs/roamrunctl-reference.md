@@ -437,6 +437,173 @@ a relay: a relay (`roamrunctl mcp --http`) can't publish, and an OTA server oper
   a name aren't held to it. By default: 2 seconds a MB, 30 seconds, and 120 seconds for the
   server's checks.
 
+## The screen in a browser (`view`, experimental)
+
+`roamrunctl view <device> --http <port> --allow <who> [--allow <who>…] [--token-file <file>] [--at <address>] [--mcp] [--https <port>]`, or
+`roamrunctl view --usb [<UDID>] --http <port> --allow <who> …`, until Ctrl-C.
+Experimental: its options and messages may change, and a phone watching over Wi‑Fi can stall now
+and then (below). For watching and touching your own device from elsewhere on the tailnet. Tried on
+2026-11-05 on an iPhone Duo (iOS 27) in Chrome. Packets the device sends go missing, and the
+picture then stops until the next key frame: over 30 s, 1 to 3.5 times with the device reached
+at its address on the home Wi‑Fi, and 38 times through Tailscale (another run: 12 in 70 s).
+
+In short: run it on the Mac the device is connected to, by USB (`--usb`) or on the same Wi‑Fi
+(`--at`), not through Tailscale, and give it `--token-file`. Open `http://localhost:<port>/` on
+that Mac, or start it with `--https <port>` too and open the HTTPS address it prints from another
+machine on the tailnet. The
+browser must decode HEVC (tried: Chrome on a Mac, Safari on an iPhone). If the device's
+connection goes, start view again. Sound comes only from a Mac.
+
+- It listens on this machine's Tailscale IPv4 address and, with `--token-file`, loopback, and serves a page at `/` and a
+  WebSocket at `/ws`. As `mcp --http`, it doesn't start without Tailscale or `--allow`, or as
+  root; `--allow` and `--token-file` are read as there.
+- The page decodes HEVC with WebCodecs' `VideoDecoder`. Use `http://localhost:<port>/` on
+  this machine, or `--https` and the printed HTTPS address from elsewhere on the tailnet.
+  Both are secure contexts, including in embedded browsers such as T3 Code's. The browser
+  must still support HEVC. Safari on an iPhone 15 Pro also decoded over plain tailnet HTTP;
+  Chrome needs HTTPS, localhost, or its `--unsafely-treat-insecure-origin-as-secure` flag.
+  The page reports secure context, `VideoDecoder` availability and codec support; when it
+  cannot decode, it explains why instead of waiting for a picture indefinitely.
+- Each direct tailnet connection is asked of `tailscale whois` once: the page's, and the WebSocket's before it is
+  taken. Refused, in this order: a `Host` that isn't this server's address or Tailscale name with
+  its port (400); an `Origin` other than this server's own (403; the page may come without one,
+  the WebSocket must have it); a method other than `GET` (405); another path (404); a caller
+  `tailscale whois` doesn't say (503) or one not allowed (403; the page's says why, as text). This machine
+  itself is let in only with `--token-file`. The token isn't in the URL: the page asks for it and sends it in its
+  first message; a wrong one, or none where one is set, closes the WebSocket with 1008.
+- 12 connections at once, 6 from one address by one way in (the Tailscale address, this machine's
+  localhost and Serve's loopback are counted apart; a page takes two, an MCP client two or three);
+  more are closed unanswered. A caller not yet let in has 10 s for the head, the page's first
+  message or an MCP request's body, each read and all together. Each page is pinged every 5 s; one
+  whose browser says nothing for 20 s (no pong, no acknowledgement) is let go of. A browser answers
+  pings with its page's script asleep in a background tab too. One slow to take what is written isn't
+  cut for that.
+- With `--token-file` it listens on this machine's loopback too, at `http://localhost:<port>/` (without one,
+  this machine can't watch at all, and it says so as it starts): a browser takes a page
+  on `localhost` for a secure one, so one that takes no flags (an app's own, as a coding agent's
+  app has: T3 Code's gave the page `VideoDecoder` there, and none at the Tailscale address) shows
+  the picture there. Callers there are this machine, not asked of Tailscale, and give the token.
+- `--https <port>` (it takes `--token-file`) puts the page on HTTPS too, at
+  `https://<this machine's Tailscale name>:<port>/`, by `tailscale serve` in front of a dedicated loopback
+  listener, separate from the localhost page, with Tailscale's certificate: a secure page to any browser on the tailnet, an app's own
+  included (T3 Code's gave it `VideoDecoder` there). A port `tailscale serve` already serves is
+  refused, and the rest of `tailscale serve` is left as it is; at Ctrl-C that port alone is taken
+  off it (a view that is killed leaves it: `tailscale serve --https=<port> off`). A request handed
+  on so says whose it is (`Tailscale-User-Login`), and is judged by `--allow` as that login; one
+  without an allowed login is refused, even with the token. Tagged machines use the direct
+  tailnet HTTP endpoint with `--allow tag:<name>`; Serve does not supply their login. All HTTPS
+  callers give the token. Port 443 also accepts the address without `:443`.
+- `--at <address>` reaches the device at that address instead of the one it was saved with: its
+  address on this machine's Wi‑Fi, so that the stream doesn't go through Tailscale. The pairing
+  opens it as ever, and the page is still served on the Tailscale address. A device another
+  machine signs for takes `--at` once `view` has opened it without. With `--at` and a video
+  playing on the device: 6 and 13 holes in two runs of 30 s (about 3 % of the packets), against
+  19 and 56 through Tailscale in the runs between (8 % and 58 %).
+- `--usb` takes the device connected to this machine by USB instead of a saved one: through usbmuxd,
+  with the pairing this machine's system keeps with it (it trusts this machine), so no pairing of
+  roamrunctl's is needed. With several connected by USB, `--usb <UDID>` names one. On the iPhone
+  Duo with a video playing, two runs of 30 s over USB lost no packet, against 26 and 12 holes
+  (43 % and 14 % of the packets) with `--at` in the runs between; the first picture came 0.2 s after
+  connecting, against about 1.1 s over the Wi‑Fi. Tried on macOS only.
+- `--mcp` (it takes `--token-file`) also serves roamrunctl's MCP tools at `POST /mcp`, on this
+  device through this connection, for an agent on the tailnet or on this machine while people watch.
+  It is asked as `mcp --http` is: no `Origin`, the token as `Authorization: Bearer`, `--allow`.
+  The tools are those of `mcp --http` without install, for the one device, which `devices` names
+  (the saved name, or for `--usb` the UDID, else `usb`). A look takes its picture from this
+  stream: it waits for the next whole key frame (one is asked for), decodes it here (macOS) and
+  gives it the display's own way up; with no page open the stream runs for it and stops some
+  seconds after. Where none comes within 8 s, or off macOS, the device's PNG is taken instead, and
+  the look says why. A tap, swipe, type or paste by a look is refused ("look again") once a page
+  acted on the device since that look began, or within 0.5 s before its picture; one made while a
+  page's input runs waits for it to end, and is then refused. What an agent
+  taps or swipes is shown on the pages as a ring. A connection to the device that is gone isn't
+  opened again (another would start a second stream): the agent and the page are told to start
+  view again. On the iPhone Duo, with a page watching in Chrome: a look took 0.4–1.1 s over USB
+  and 0.5–1.3 s over the home Wi‑Fi (back to back about 1.05 s apart, as key frames are), and the
+  page's picture never stopped; looked at through another connection instead (RoamRun's app),
+  the page's picture stopped about 9 s, as the device sends one screen stream at a time. Tried
+  first from a plain JSON-RPC client. On 2026-11-06, Codex app-server 0.156.1
+  connected over HTTPS using its MCP client: tool discovery, look, tap and swipe succeeded,
+  and T3 Code's browser displayed the tap and swipe rings while the picture stayed live.
+  The calls used app-server's `mcpServer/tool/call`, driven by Codex; no separate model turn ran.
+  For Claude Code the configuration is `claude mcp add --transport http <name> http://<address>:<port>/mcp --header
+  "Authorization: Bearer <token>"`.
+- The device is this command's alone while it runs: don't use it from another command meanwhile
+  (with `--mcp`, an agent uses `/mcp` instead).
+  The screen stream runs while a page watches. Each page gets the access units as they come, none
+  before a key frame that carries its parameter sets: one that comes without (an IDR right after
+  another) is given those last seen. A page acknowledges a frame once it has decoded it. A page whose oldest frame
+  not yet shown (waiting, or sent and not yet acknowledged) is older than 0.5 s beyond that page's
+  shortest round trip (taken as 1.5 s until its first acknowledgement) is cut to the next key frame, and one is asked for (the device answers one
+  each 1.05 s at most). When the last page goes, the stream stops within about 5 s, as after a
+  look, during a still screen's pause too; Ctrl-C stops it too.
+- Once the pictures have changed nothing for 1 s (each a few hundred bytes), the device is asked
+  which display is on, again every 2 s while that lasts. Where it isn't the one streamed (an iPhone
+  Duo folded or opened), the stream is stopped and started on the one that is on. On the Duo that
+  took about 3 s from closing it to the outer screen in the page: its inner screen goes on sending
+  unchanged pictures for about 9 s after it is closed. On a still screen the device pauses the
+  video by itself (on the Duo by USB, up to 9.7 s in 5 minutes) while its reports go on, and sends
+  again later: the stream is kept meanwhile. It is started again when neither video nor reports
+  have come for 8 s, or when a key frame asked for (a new page, a look) doesn't come during a pause.
+- Frame acknowledgements and receiver reports (every 50 ms) go back to the device, as idevice's
+  `build_frame_ack` and `build_rctl` document them; `ROAMRUNCTL_VIEW_FEEDBACK=off` sends neither,
+  to compare.
+- From the page: a click is a tap, a drag a swipe (50 to 5000 ms), and a press held still for
+  0.5 s or more a long press (a swipe that doesn't move, as long as it was held); two fingers pinch
+  (how much closer or further apart they end, and how far they turn, about where they began), sent
+  as the first lifts; three or more send nothing. A key is typed (what a US keyboard types, Return
+  and Backspace: the page says so of any other key; keys a US keyboard doesn't have, pressed one
+  after another, go together as one paste); a button that has the keyboard's focus is pressed by
+  Enter and Space instead; buttons press home,
+  lock and the volume. Type brings up a phone's on-screen keyboard (or takes this machine's input
+  method) and sends what is typed there: typed key by key, or, where a US keyboard doesn't type it
+  (Japanese), by `paste`, once the input method has it chosen, which takes a few seconds and leaves it
+  on the device's pasteboard; Refresh
+  asks for a key frame; Full screen takes the browser's full screen, or the whole window where the
+  browser gives a page none (Safari on an iPhone). Inputs go to the device one at a time, 20 at most
+  waiting from one page (more are refused), and those of a page that is gone aren't made; the page
+  is told how each went, and one that failed is shown over the picture. On 2026-11-06, from Safari
+  on the iPhone Duo itself (the page showing its own screen, over `--https`): a press held on a
+  home-screen icon opened its menu, and pinches zoomed a map in and out. Opened on the device it
+  shows, the page shows itself over and over, which the device both sends and decodes: there it
+  lagged, and connected again every 20 to 50 s. Open it elsewhere. In Safari on an iPhone 15 Pro on
+  the same home Wi‑Fi (Tailscale direct), the page was cut to a key frame once in 2–3 s and lagged a
+  little, decoding in 5 ms: the same over plain HTTP as over `--https`, and with the sound off as on.
+  A headless Chrome on the serving Mac (localhost) wasn't cut after its first second. Letting a page
+  be later before it is cut (up to 2 s) was tried there and made it worse: about 8 s behind.
+- Sound: the device sends its sound as AAC-ELD, which neither Chrome nor Safari decodes (asked of
+  `AudioDecoder` on a Mac and an iPhone). Where this machine is a Mac, it is decoded here with
+  AudioToolbox, and a page whose Sound button was pressed gets it as PCM (48 kHz, two channels,
+  16-bit: about 190 KB/s), played as it comes on a WebSocket of its own,
+  kept 0.15 to 0.5 s ahead (each gap adds 50 ms, each 10 s without one takes 25 ms off; what comes
+  beyond that is let go). In Safari on an iPhone through Tailscale, with the sound on the
+  picture's WebSocket it stopped for up to 2 s behind the frames; on its own one it barely gaps. On Linux and Windows there is none,
+  and the page's Sound button says so (the server's `hello` says whether there is sound).
+  Heard from an iPhone Duo over USB in Chrome on a Mac and in Safari on an iPhone; the delay against the picture hasn't been
+  measured.
+- Where the page can't show the device it says why over the picture, and doesn't wait on: a browser
+  without `VideoDecoder`, a page that isn't a secure one (and where to open it instead), a browser
+  whose decoder doesn't take HEVC (as the decoder says, or three failures in 10 s before any picture
+  on that connection), a token refused, the device's connection gone (start view again). A server
+  that sends nothing for 5 s once connected (it sends its counts each second), or a connection not
+  open within 15 s, is connected to again.
+- The header says whether the picture is live, and the frames and KB a second. Details shows the bytes and frames received each second, the decode time, the key frames
+  asked for and answered, how often it was cut, and click-to-change: the time from a click to
+  the first decoded picture in which the 48 × 48 pixels around it changed. It also shows the
+  size the server read from the stream's SPS, the size the picture is cut to (the stream can
+  carry padding on the right and at the bottom), and the size the browser decoded.
+- One line a connection on standard error, as `mcp --http` writes them. Never the token, what is
+  typed, or pictures.
+- The WebSocket's messages: the server's binary ones are a byte (1: a key frame), the server's
+  time in ms (8 bytes, big-endian), and the access unit (Annex B). Its text ones are JSON:
+  `hello` (`feedback`, `sound`: true, or why there is none), `picture` (`codec`, `width`, `height`,
+  `crop`), `counts`, `status`, `agent` (`what`, `points`), `done`, `error`.
+  Sound is a binary message too: a byte (2), the time, then the PCM (little-endian).
+  The page's are JSON: `hello` (`token`), `ack` (`t`), `tap` (`x`, `y`, 0 to 1), `swipe` (`x1`,
+  `y1`, `x2`, `y2`, `ms`), `pinch` (`x`, `y`, `scale` 0.25 to 4, `degrees` −180 to 180, `ms`),
+  `type` (`text`), `paste` (`text`), `press` (`button`), `keyframe`. For the sound the page opens a second WebSocket, whose `hello` has `only: "sound"`: it
+  carries the sound alone, so that no frame holds it up.
+
 ## Through an HTTP proxy (`ROAMRUNCTL_PROXY`)
 
 On a machine that reaches the tailnet only through an HTTP proxy, `ROAMRUNCTL_PROXY=http://<host>:<port>`
@@ -666,6 +833,8 @@ against a real device at the time these notes were written:
   answered `(install <id>)`, `install_status` asked by it said the app was in after 5 s, and it
   launched; `install_status` with another id was then an error, and without one answered of
   that install.
+- `view` (experimental): browsers other than Chrome on a Mac, T3 Code's browser and Safari on an iPhone, and the
+  page opened from outside the home network.
 - Tailscale userspace networking with no address available to bind.
 - Xcode pairing through `pair introduce` since the `--mac` → `--host` change.
 

@@ -1,0 +1,641 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>roamrunctl view</title>
+<style>
+  :root { color-scheme: dark; --bg: #0d0f12; --panel: #171a1f; --line: #2a2f37; --text: #e6e8eb; --dim: #8b929c; --accent: #4f9dff; --good: #3ecf8e; --warn: #f5b041; --bad: #ff6b6b; }
+  * { box-sizing: border-box; }
+  /* No zoom on a double tap (a button pressed twice), nor on the field Type uses: Safari zooms into a field whose
+     text is under 16 px, and the page then stays zoomed. */
+  html, body { height: 100%; margin: 0; touch-action: manipulation; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.4 system-ui, -apple-system, sans-serif; display: flex; flex-direction: column; overflow: hidden; }
+  header { display: flex; align-items: center; gap: 8px; padding: 8px 14px; padding-top: max(8px, env(safe-area-inset-top)); border-bottom: 1px solid var(--line); }
+  header b { font-weight: 600; margin-right: 4px; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; background: var(--panel); color: var(--dim); font-size: 12px; white-space: nowrap; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); }
+  .live .dot { background: var(--good); } .wait .dot { background: var(--warn); } .down .dot { background: var(--bad); }
+  .grow { flex: 1; }
+  main { flex: 1; display: flex; min-height: 0; }
+  #stage { flex: 1; position: relative; display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 0; padding: 14px; }
+  #screen { max-width: 100%; max-height: 100%; background: #000; border-radius: 18px; box-shadow: 0 0 0 1px var(--line), 0 12px 40px rgba(0, 0, 0, .5); touch-action: none; cursor: crosshair; }
+  /* Where an agent pressed: a ring that grows and fades, over the picture. */
+  .press { position: fixed; width: 44px; height: 44px; margin: -22px 0 0 -22px; border: 3px solid #ffcc33; border-radius: 50%; pointer-events: none; animation: press .9s ease-out forwards; z-index: 4; }
+  .press.end { border-color: #ff8a33; }
+  @keyframes press { from { transform: scale(.5); opacity: 1; } to { transform: scale(1.6); opacity: 0; } }
+  #veil { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--dim); pointer-events: none; padding: 24px; text-align: center; }
+  #veil.bad { color: var(--text); }
+  /* What failed, or what takes a while (a paste): a moment over the picture, without opening Details. */
+  #toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); max-width: calc(100% - 24px); background: rgba(23, 26, 31, .94); border: 1px solid var(--line); border-radius: 10px; padding: 6px 12px; pointer-events: none; z-index: 3; }
+  #toast.bad { border-color: var(--bad); }
+  #toast[hidden] { display: none; }
+  #veil[hidden] { display: none; }
+  #typing { position: absolute; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; font-size: 16px; }
+  nav { display: flex; justify-content: center; align-items: center; gap: 6px; padding: 8px; padding-bottom: max(8px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); flex-wrap: wrap; }
+  nav .sep { width: 1px; height: 24px; background: var(--line); margin: 0 4px; }
+  button { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; cursor: pointer; }
+  button:hover { border-color: #3a414b; }
+  button:active { transform: translateY(1px); }
+  button.on { background: #1d2b40; border-color: var(--accent); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  aside { width: 330px; border-left: 1px solid var(--line); overflow: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 14px; }
+  aside[hidden] { display: none; }
+  h3 { margin: 0 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); font-weight: 600; }
+  aside .head { display: flex; justify-content: space-between; align-items: center; }
+  aside .head button { padding: 2px 9px; }
+  pre { margin: 0; white-space: pre-wrap; font: 12px/1.5 ui-monospace, Menlo, monospace; }
+  #log div { color: var(--dim); }
+  #log .bad { color: var(--bad); }
+  #ask { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, .6); z-index: 10; }
+  #ask[hidden] { display: none; }
+  #ask form { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px; width: min(360px, 90vw); display: flex; flex-direction: column; gap: 10px; }
+  #ask input { font: inherit; font-size: 16px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+  /* Narrow (a phone): labels go, and the details come up from below over the picture. */
+  @media (max-width: 760px) {
+    nav .label, nav .sep, body.filled #info { display: none; }
+    nav { gap: 4px; }
+    nav button { padding: 6px 7px; }
+    aside { position: fixed; left: 0; right: 0; bottom: 0; width: auto; max-height: 55vh; border-left: 0; border-top: 1px solid var(--line); background: var(--bg); z-index: 5; padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+    #stage { padding: 8px; }
+  }
+  /* Filled: the picture alone, the controls over it, faint until the pointer moves. Full screen where the browser
+     gives a page one, the whole window where it doesn't (Safari on an iPhone). */
+  body.filled header, body.filled aside { display: none; }
+  body.filled #stage { padding: 0; }
+  body.filled #screen { border-radius: 0; box-shadow: none; }
+  body.filled nav { position: fixed; left: 50%; transform: translateX(-50%); max-width: calc(100vw - 12px); bottom: max(10px, env(safe-area-inset-bottom)); border: 1px solid var(--line); border-radius: 14px; background: rgba(23, 26, 31, .85); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); opacity: .2; transition: opacity .25s; flex-wrap: nowrap; }
+  body.filled nav:hover, body.filled nav:focus-within, body.filled.awake nav { opacity: 1; }
+</style>
+</head>
+<body>
+<header>
+  <b>roamrunctl view</b>
+  <span class="pill wait" id="state" role="status" aria-live="polite"><span class="dot"></span><span id="stateText">connecting</span></span>
+  <span class="pill" id="rate">–</span>
+  <span class="grow"></span>
+  <span class="pill" title="Its options and messages may change; a phone over Wi‑Fi can stall now and then">experimental</span>
+</header>
+<main>
+  <div id="stage">
+    <canvas id="screen" width="390" height="844"></canvas>
+    <div id="veil">Connecting…</div>
+    <div id="toast" role="status" aria-live="polite" hidden></div>
+    <input id="typing" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Text for the device">
+  </div>
+  <aside id="panel" hidden>
+    <div class="head"><h3>Details</h3><button id="close" title="Close the details (Escape)" aria-label="Close the details">✕</button></div>
+    <section><h3>Browser</h3><pre id="support"></pre></section>
+    <section><h3>Stream</h3><pre id="overlay"></pre></section>
+    <section><h3>Log</h3><pre id="log"></pre></section>
+  </aside>
+</main>
+<nav>
+  <button data-press="home" title="Home"><svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg><span class="label">Home</span></button>
+  <button data-press="lock" title="Lock"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span class="label">Lock</span></button>
+  <button data-press="volume-down" title="Volume down"><svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M17 12h4"/></svg><span class="label">Vol −</span></button>
+  <button data-press="volume-up" title="Volume up"><svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M17 12h4M19 10v4"/></svg><span class="label">Vol +</span></button>
+  <button id="sound" title="Hear the device here (macOS serving it only): a press starts it, as browsers want"><svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg><span class="label">Sound</span></button>
+  <span class="sep"></span>
+  <button id="keyboard" title="Type on the device: what a US keyboard types, and Return, to what has focus there"><svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg><span class="label">Type</span></button>
+  <button id="key" title="Ask for a fresh picture (a key frame)"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v5h-5"/></svg><span class="label">Refresh</span></button>
+  <span class="sep"></span>
+  <button id="info" title="Stream details and log"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg><span class="label">Details</span></button>
+  <button id="full" title="Full screen"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg><span class="label">Full screen</span></button>
+</nav>
+<div id="ask" hidden>
+  <form>
+    <label for="tokenInput"><b>Token</b></label>
+    <span id="tokenWhy" style="color: var(--dim)">This server takes a token (its <code>--token-file</code>).</span>
+    <input id="tokenInput" type="password" autocomplete="off" required>
+    <button type="submit">Connect</button>
+  </form>
+</div>
+<script>
+"use strict";
+const canvas = document.getElementById("screen");
+const context = canvas.getContext("2d");
+const $ = (id) => document.getElementById(id);
+const log = (text, bad) => {
+  const line = document.createElement("div");
+  line.textContent = new Date().toLocaleTimeString() + " " + text;
+  if (bad) line.className = "bad";
+  const all = $("log");
+  all.prepend(line);
+  while (all.childElementCount > 200) all.lastElementChild.remove();
+};
+// A note over the picture for a moment (`ms`; 0: until another), for what failed or what takes a while.
+let toastTimer;
+function toast(text, bad, ms = 5000) {
+  const note = $("toast");
+  note.textContent = text;
+  note.className = bad ? "bad" : "";
+  note.hidden = false;
+  clearTimeout(toastTimer);
+  if (ms) toastTimer = setTimeout(() => { note.hidden = true; }, ms);
+}
+// Why this browser can't show the device, once that is known: said, and not waited out.
+let cannot = null;
+// What the header says of the connection: live (green), waiting (amber), down (red); `detail` over the picture.
+function state(kind, text, detail) {
+  if (cannot) [kind, text, detail] = ["down", cannot.short, cannot.long];
+  $("state").className = "pill " + kind;
+  $("stateText").textContent = text;
+  $("veil").hidden = kind === "live";
+  $("veil").className = detail ? "bad" : "";
+  if (kind !== "live") $("veil").textContent = detail || text[0].toUpperCase() + text.slice(1) + "…";
+}
+function unable(short, long) {
+  if (cannot) return;
+  cannot = { short, long };
+  state("down");
+  log(long, true);
+  // Nothing more is asked of the device for this page: its stream stops once no other page watches.
+  if (socket) { socket.onclose = null; socket.close(); }
+  soundOff();
+}
+
+const support = [];
+const supported = (line, bad) => { support.push((bad ? "✗ " : "✓ ") + line); $("support").textContent = support.join("\n"); };
+supported("secure context (Chrome gives VideoDecoder only to one)", !window.isSecureContext);
+supported("VideoDecoder", typeof VideoDecoder === "undefined");
+// Sound: what the device sends (AAC-ELD) and what else a browser may take.
+(async () => {
+  if (typeof AudioDecoder === "undefined") return supported("AudioDecoder", true);
+  for (const codec of ["mp4a.40.39", "mp4a.40.2", "opus"]) {
+    try { const { supported: yes } = await AudioDecoder.isConfigSupported({ codec, sampleRate: 48000, numberOfChannels: 2 }); supported(`AudioDecoder ${codec}: ${yes}`, !yes); }
+    catch (e) { supported(`AudioDecoder ${codec}: ${e.message}`, true); }
+  }
+})();
+const tried = "Tried: Chrome on a Mac, Safari on an iPhone.";
+function noVideoDecoder() {
+  if (typeof VideoDecoder !== "undefined") return;
+  const here = location.hostname === "localhost" || location.hostname === "127.0.0.1";
+  if (!window.isSecureContext) {
+    unable("not a secure page", "This browser decodes video only on a secure page, and plain http to another machine isn't one. "
+      + (here ? "" : "On the Mac running view (started with --token-file), open http://localhost" + (location.port ? ":" + location.port : "") + "/; from anywhere on the tailnet, start view with --token-file and --https <port>, and open https://<the Mac's Tailscale name>:<port>/. ")
+      + "Safari on an iPhone decodes it on this page as it is.");
+  } else {
+    unable("can't decode here", "This browser has no VideoDecoder (WebCodecs), so it can't show the device. " + tried);
+  }
+}
+
+let way = 1, socket, decoder, picture, waitKey = true, token = sessionStorage.getItem("roamrunctl-token") || "";
+let connectedAt = 0, firstPicture = false, heardAt = 0, tokenSent = false;
+const decodeStarted = new Map();
+const stats = { bytes: 0, frames: 0, decodeMs: [], rate: 0, fps: 0, counts: {}, feedback: null, frameSize: "" };
+const latencies = [];
+let pending = null;   // a click whose change is being looked for
+let shownFrame = null;   // the last picture, drawn again when the interface turns before another comes
+const failures = [];   // when the decoder last failed
+
+function percentile(list, p) {
+  if (!list.length) return "-";
+  const sorted = [...list].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))].toFixed(0);
+}
+
+setInterval(() => {
+  stats.rate = stats.bytes; stats.fps = stats.frames; stats.bytes = 0; stats.frames = 0;
+  const decode = stats.decodeMs.splice(0);
+  const c = stats.counts;
+  $("rate").textContent = `${stats.fps} fps · ${(stats.rate / 1024).toFixed(0)} KB/s`;
+  $("overlay").textContent = [
+    `received: ${(stats.rate / 1024).toFixed(0)} KB/s, ${stats.fps} frames/s`,
+    `decode: median ${percentile(decode, 0.5)} ms, p90 ${percentile(decode, 0.9)} ms`,
+    `click-to-change: last ${latencies.length ? latencies[latencies.length - 1].toFixed(0) : "-"} ms, median ${percentile(latencies, 0.5)}, p90 ${percentile(latencies, 0.9)} (n=${latencies.length})`,
+    `key frames asked ${c.keyframesAsked ?? "-"}, answered ${c.keyframesAnswered ?? "-"}; cut to a key frame ${c.cuts ?? "-"}×`,
+    `feedback to the device (acks, reports): ${stats.feedback === null ? "-" : stats.feedback ? "on" : "off"}`,
+    hearing ? `sound: ${gaps} gaps, ${(ahead * 1000).toFixed(0)} ms ahead; longest wait between pieces ${longestWait.toFixed(0)} ms` : "sound: off",
+    picture ? `codec ${picture.codec}; server: ${picture.width}×${picture.height}, cut to ${picture.crop.join("×")}; decoded: ${stats.frameSize}` : "no picture yet",
+  ].join("\n");
+  // The server says something each second (its counts): from one that went quiet, nothing more comes (a link that
+  // dropped without closing). The video pausing on a still screen isn't that.
+  // Opening has 15 s of its own (a slow TLS handshake through Tailscale Serve isn't a server gone quiet).
+  if (socket && socket.readyState === WebSocket.OPEN && performance.now() - heardAt > 5000) dropped("nothing from the server for 5 s");
+  if (socket && socket.readyState === WebSocket.CONNECTING && performance.now() - connectedAt > 15000) dropped("not connected within 15 s");
+}, 1000);
+
+// Drawn turned as the interface is: the stream comes in the device's own (upright) terms.
+function draw(frame) {
+  const [w, h] = picture.crop;
+  fit();
+  context.save();
+  if (way === 3) { context.translate(0, canvas.height); context.rotate(-Math.PI / 2); }
+  else if (way === 4) { context.translate(canvas.width, 0); context.rotate(Math.PI / 2); }
+  else if (way === 2) { context.translate(canvas.width, canvas.height); context.rotate(Math.PI); }
+  context.drawImage(frame, 0, 0, w, h, 0, 0, w, h);
+  context.restore();
+}
+
+function newDecoder() {
+  if (decoder && decoder.state !== "closed") decoder.close();
+  if (shownFrame) { shownFrame.close(); shownFrame = null; }
+  decoder = new VideoDecoder({
+    output: (frame) => {
+      // Acknowledged once decoded: a page whose decoder falls behind is late, and is cut to the next key frame.
+      send({ type: "ack", t: Math.round(frame.timestamp / 1000) });
+      const started = decodeStarted.get(frame.timestamp);
+      if (started !== undefined) { stats.decodeMs.push(performance.now() - started); decodeStarted.delete(frame.timestamp); }
+      stats.frameSize = `${frame.displayWidth}×${frame.displayHeight}`;
+      draw(frame);
+      if (shownFrame) shownFrame.close();
+      shownFrame = frame;
+      failures.length = 0;
+      if (!firstPicture) { firstPicture = true; log(`first picture ${(performance.now() - connectedAt).toFixed(0)} ms after connecting`); }
+      state("live", "live");
+      if (pending) looked();
+    },
+    error: (e) => {
+      if (e.name === "NotSupportedError") return noHevc(e.message);
+      const now = performance.now();
+      failures.push(now);
+      while (failures.length && now - failures[0] > 10000) failures.shift();
+      // Failing before any picture was shown: this browser doesn't decode it (after one, a picture was bad: asked again).
+      if (!firstPicture && failures.length >= 3) return unable("decoding fails", `The decoder failed ${failures.length} times in 10 s (${e.message}): this browser doesn't decode the device's video. ${tried}`);
+      log("decoder: " + e.message + " — a key frame is asked for", true);
+      state("wait", "waiting for a picture");
+      waitKey = true;
+      if (picture) configure(picture);
+      send({ type: "keyframe" });
+    },
+  });
+}
+
+function noHevc(why) {
+  unable("no HEVC here", `This browser can't decode the device's video (HEVC, ${picture ? picture.codec : "H.265"}): ${why}. ${tried}`);
+}
+
+const verdicts = new Map();
+function check(codec) {
+  if (!verdicts.has(codec)) verdicts.set(codec, VideoDecoder.isConfigSupported({ codec, optimizeForLatency: true })
+    .then(({ supported: yes }) => { supported(`isConfigSupported ${codec}: ${yes}`, !yes); return yes; })
+    .catch((e) => { supported(`isConfigSupported ${codec}: ${e.message}`, true); return false; }));
+  return verdicts.get(codec);
+}
+
+// The canvas is the picture as the interface stands: on its side, width and height trade places.
+function fit() {
+  if (!picture) return;
+  const [w, h] = picture.crop, side = way === 3 || way === 4;
+  const [cw, ch] = side ? [h, w] : [w, h];
+  if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
+}
+
+// A point in the device's own upright terms (0…1) as seen on the canvas: `upright` the other way.
+function shown(d) {
+  if (way === 3) return { x: d[1], y: 1 - d[0] };
+  if (way === 4) return { x: 1 - d[1], y: d[0] };
+  if (way === 2) return { x: 1 - d[0], y: 1 - d[1] };
+  return { x: d[0], y: d[1] };
+}
+
+// An agent's tap (one point) or swipe (from, to) through /mcp, shown where it was pressed.
+function agentPressed(what, points) {
+  const r = canvas.getBoundingClientRect();
+  points.forEach((d, i) => {
+    const p = shown(d), ring = document.createElement("div");
+    ring.className = "press" + (i ? " end" : "");
+    ring.style.left = (r.left + p.x * r.width) + "px";
+    ring.style.top = (r.top + p.y * r.height) + "px";
+    if (i) ring.style.animationDelay = "0.25s";
+    document.body.appendChild(ring);
+    setTimeout(() => ring.remove(), 1300);
+  });
+  log(`agent: ${what}`);
+}
+
+// A point of the canvas as seen, in the device's own upright terms (0…1).
+function upright(p) {
+  if (way === 3) return { x: 1 - p.y, y: p.x };
+  if (way === 4) return { x: p.y, y: 1 - p.x };
+  if (way === 2) return { x: 1 - p.x, y: 1 - p.y };
+  return p;
+}
+
+// Configured at once, not after the checks (shown in Details): the key frame that follows the picture's message is
+// decoded. Whether the browser decodes it is what the decoder says, not what the checks do.
+function configure(said) {
+  picture = said;
+  fit();
+  if (typeof VideoDecoder === "undefined" || cannot) return;
+  check(said.codec);
+  check(said.codec.replace(/^hev1/, "hvc1"));
+  newDecoder();
+  waitKey = true;
+  try { decoder.configure({ codec: said.codec, optimizeForLatency: true }); } catch (e) { return noHevc(e.message); }
+}
+
+// What the device is asked to do: text still held (keys outside US ones, see `unusual`) goes before it, in order.
+const INPUTS = new Set(["tap", "swipe", "pinch", "type", "paste", "press"]);
+function send(message) {
+  if (INPUTS.has(message.type) && unusual) flushUnusual();   // it empties `unusual` before its own paste
+  if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+}
+
+// A connection given up on: opened again in a second.
+function dropped(why) {
+  log(`${why}: connecting again`, true);
+  state("down", "reconnecting");
+  if (socket) { socket.onclose = null; socket.close(); }
+  setTimeout(connect, 1000);
+}
+
+function connect() {
+  if (cannot) return;
+  socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+  socket.binaryType = "arraybuffer";
+  connectedAt = performance.now();
+  firstPicture = false;
+  failures.length = 0;
+  $("toast").hidden = true;   // what was said of the last connection's inputs ("Pasting…") isn't of this one's
+  state("wait", "connecting");
+  socket.onopen = () => {
+    heardAt = performance.now();   // counted from now: a connection that opens and says nothing is given up on too
+    tokenSent = token !== "";
+    socket.send(JSON.stringify({ type: "hello", token }));
+  };
+  socket.onclose = (e) => {
+    if (e.code === 1008) {
+      state("down", tokenSent ? "the token was refused" : "a token is needed");
+      $("tokenWhy").textContent = tokenSent ? "That token was refused: give the one in the file view was started with (--token-file)." : "This server takes a token (its --token-file).";
+      if (tokenSent) { $("tokenInput").value = ""; sessionStorage.removeItem("roamrunctl-token"); }
+      $("ask").hidden = false;
+      $("tokenInput").focus();
+      return;
+    }
+    dropped(`disconnected (${e.code})`);
+  };
+  socket.onmessage = (e) => {
+    heardAt = performance.now();
+    if (typeof e.data === "string") return said(JSON.parse(e.data));
+    const view = new DataView(e.data);
+    const key = view.getUint8(0) === 1;
+    const ms = Number(view.getBigUint64(1));
+    stats.bytes += e.data.byteLength;
+    stats.frames++;
+    // Not decoded: acknowledged now (one decoded is acknowledged once it is).
+    if (!decoder || decoder.state !== "configured" || (waitKey && !key)) return send({ type: "ack", t: ms });
+    waitKey = false;
+    decodeStarted.set(ms * 1000, performance.now());
+    if (decodeStarted.size > 300) decodeStarted.clear();
+    decoder.decode(new EncodedVideoChunk({ type: key ? "key" : "delta", timestamp: ms * 1000, data: new Uint8Array(e.data, 9) }));
+  };
+}
+$("ask").querySelector("form").onsubmit = (e) => {
+  e.preventDefault();
+  token = $("tokenInput").value;
+  sessionStorage.setItem("roamrunctl-token", token);
+  $("ask").hidden = true;
+  connect();
+};
+
+function said(message) {
+  switch (message.type) {
+    case "hello":
+      stats.feedback = message.feedback;
+      state("wait", "waiting for a picture");
+      if (typeof message.sound === "string") {
+        soundOff();
+        $("sound").disabled = true;
+        $("sound").title = "No sound from this server: " + message.sound;
+      }
+      break;
+    case "picture":
+      if (!picture || picture.codec !== message.codec) log(`picture: ${message.codec} ${message.width}×${message.height}, cut to ${message.crop.join("×")}`);
+      configure(message);
+      break;
+    case "counts":
+      stats.counts = message;
+      if (message.way && message.way !== way) {
+        way = message.way;
+        log(`the interface is ${["", "upright", "upside down", "on its side (home at the right)", "on its side (home at the left)"][way]}`);
+        // Drawn turned at once, so that what is pressed is where it is seen.
+        if (shownFrame && picture) draw(shownFrame);
+      }
+      break;
+    case "status":
+      log(message.text, true);
+      // The device's connection gone: view has to be started again, which this page can't do.
+      if (message.text.includes("start view again")) state("down", "the device is gone", message.text[0].toUpperCase() + message.text.slice(1) + ".");
+      else state("wait", "starting the stream again");
+      break;
+    case "agent": agentPressed(message.what, message.points || []); break;
+    case "done":
+      log(`${message.what}: ${message.ms} ms`);
+      if (message.what === "paste") $("toast").hidden = true;
+      break;
+    case "error": log(`${message.what}: ${message.error}`, true); toast(`${message.what} failed: ${message.error}`, true); break;
+  }
+}
+
+// A click's change: the first decoded picture where the 48×48 pixels around it differ from when it was clicked.
+function looked() {
+  const now = context.getImageData(pending.x, pending.y, pending.w, pending.h).data;
+  let differ = 0;
+  for (let i = 0; i < now.length; i += 4) differ += Math.abs(now[i] - pending.before[i]) + Math.abs(now[i + 1] - pending.before[i + 1]) + Math.abs(now[i + 2] - pending.before[i + 2]);
+  if (differ / (now.length / 4) > 12) {
+    latencies.push(performance.now() - pending.at);
+    pending = null;
+  } else if (performance.now() - pending.at > 3000) {
+    log("click-to-change: nothing changed there within 3 s (not counted)");
+    pending = null;
+  }
+}
+
+function at(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)), t: performance.now() };
+}
+// Fingers on the picture: one taps, holds (a long press, 0.5 s or more) or swipes; two pinch (closer or further apart,
+// and turned), sent as the first of them lifts; three or more send nothing.
+const fingers = new Map();
+let two = null, spoilt = false;
+const ms = (t) => Math.round(Math.min(5000, Math.max(50, t)));
+canvas.addEventListener("pointerdown", (e) => {
+  e.preventDefault();   // the field Type uses keeps its focus
+  canvas.setPointerCapture(e.pointerId);
+  fingers.set(e.pointerId, { from: at(e), to: at(e) });
+  if (fingers.size === 2) two = [...fingers.values()].map((f) => ({ ...f.to }));
+  if (fingers.size > 2) spoilt = true;
+});
+canvas.addEventListener("pointermove", (e) => { const f = fingers.get(e.pointerId); if (f) f.to = at(e); });
+function lifted(e, cancelled) {
+  const finger = fingers.get(e.pointerId);
+  if (!finger) return;
+  finger.to = at(e);
+  const r = canvas.getBoundingClientRect();
+  if (!cancelled && !spoilt && two && fingers.size === 2) {
+    const [a, b] = [...fingers.values()].map((f) => f.to);
+    const px = (p, q) => [(q.x - p.x) * r.width, (q.y - p.y) * r.height];
+    const [dx0, dy0] = px(two[0], two[1]), [dx1, dy1] = px(a, b);
+    let scale = Math.min(4, Math.max(0.25, Math.hypot(dx1, dy1) / Math.max(1, Math.hypot(dx0, dy0))));
+    let degrees = (Math.atan2(dy1, dx1) - Math.atan2(dy0, dx0)) * 180 / Math.PI;
+    degrees = ((degrees + 540) % 360) - 180;
+    // Fingers never move quite alike: a turn under 10° is none, a change under 5 % none (a two-finger tap).
+    if (Math.abs(degrees) < 10) degrees = 0;
+    if (Math.abs(scale - 1) < 0.05) scale = 1;
+    const centre = upright({ x: (two[0].x + two[1].x) / 2, y: (two[0].y + two[1].y) / 2 });
+    send({ type: "pinch", x: centre.x, y: centre.y, scale, degrees, ms: ms(finger.to.t - two[1].t) });
+    spoilt = true;   // the other finger, lifted after, sends nothing
+  } else if (!cancelled && !spoilt && !two) {
+    const { from, to } = finger, held = to.t - from.t;
+    if (Math.hypot((to.x - from.x) * r.width, (to.y - from.y) * r.height) < 10) {
+      const w = 48, h = 48, x = Math.max(0, Math.round(to.x * canvas.width) - w / 2), y = Math.max(0, Math.round(to.y * canvas.height) - h / 2);
+      pending = { at: performance.now(), x, y, w, h, before: context.getImageData(x, y, w, h).data };
+      const point = upright(to);
+      // Held still: a long press, the finger down as long as it was here.
+      if (held >= 500) send({ type: "swipe", x1: point.x, y1: point.y, x2: point.x, y2: point.y, ms: ms(held) });
+      else send({ type: "tap", x: point.x, y: point.y });
+    } else {
+      const p = upright(from), q = upright(to);
+      send({ type: "swipe", x1: p.x, y1: p.y, x2: q.x, y2: q.y, ms: ms(held) });
+    }
+  }
+  fingers.delete(e.pointerId);
+  if (!fingers.size) { two = null; spoilt = false; }
+}
+canvas.addEventListener("pointerup", (e) => lifted(e, false));
+canvas.addEventListener("pointercancel", (e) => lifted(e, true));
+
+// Text to the device: what a US keyboard types (with Return and Backspace) is typed key by key; anything else
+// (Japanese, emoji) goes through its pasteboard, which takes a few seconds.
+function typed(text) {
+  const ascii = /^[\x20-\x7e\n\b]*$/.test(text);
+  if (!ascii) toast("Pasting… (through the device's pasteboard: a few seconds)", false, 0);
+  send({ type: ascii ? "type" : "paste", text });
+}
+// Keys that aren't US-keyboard ones (ä, é), pressed one by one outside Type, go together as one paste.
+let unusual = "", unusualTimer;
+function flushUnusual() { clearTimeout(unusualTimer); if (unusual) { const text = unusual; unusual = ""; typed(text); } }
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("panel").hidden) { showDetails(false); return; }
+  if (e.metaKey || e.ctrlKey || e.altKey || e.isComposing || e.target === $("typing") || e.target === $("tokenInput")) return;
+  // A button with the keyboard's focus is pressed by Enter and Space, as any: they aren't sent.
+  if ((e.key === "Enter" || e.key === " ") && e.target.closest && e.target.closest("button")) return;
+  const text = e.key === "Enter" ? "\n" : e.key === "Backspace" ? "\b" : e.key.length === 1 || [...e.key].length === 1 ? e.key : null;
+  if (text === null) {
+    if (!["Shift", "CapsLock", "Escape", "Process", "Tab", "Dead"].includes(e.key)) toast(`${e.key} can't be sent: Type takes text, Return and Backspace`, true, 3000);
+    return;
+  }
+  e.preventDefault();
+  if (/^[\x20-\x7e\n\b]$/.test(text)) { flushUnusual(); typed(text); }
+  else { unusual += text; clearTimeout(unusualTimer); unusualTimer = setTimeout(flushUnusual, 400); }
+});
+// A button pressed with the pointer gives the keyboard back to the device's keys.
+document.addEventListener("click", (e) => { const button = e.target.closest && e.target.closest("nav button"); if (button && e.detail) button.blur(); });
+// Type: a field kept out of sight takes the text, so that a phone brings up its on-screen keyboard and an input
+// method (Japanese) can compose in it; what is composed goes once it is chosen. The field always holds one space,
+// so that Backspace has something to delete, and a deletion is seen.
+const typing = $("typing"), SPACE = " ";
+let composing = false;
+function emptied() { typing.value = SPACE; typing.setSelectionRange(1, 1); }
+// Pressing Type doesn't take the focus from the field, so that a second press puts it away.
+$("keyboard").addEventListener("pointerdown", (e) => e.preventDefault());
+$("keyboard").onclick = () => { if (document.activeElement === typing) typing.blur(); else { typing.focus(); emptied(); } };
+typing.addEventListener("focus", () => $("keyboard").classList.add("on"));
+typing.addEventListener("blur", () => $("keyboard").classList.remove("on"));
+typing.addEventListener("compositionstart", () => { composing = true; });
+typing.addEventListener("compositionend", () => { composing = false; took(); });
+function took() {
+  if (composing) return;
+  const value = typing.value;
+  if (value === "") typed("\b");
+  else if (value.startsWith(SPACE) && value.length > 1) typed(value.slice(1));
+  emptied();
+}
+typing.addEventListener("input", (e) => { if (!e.isComposing) took(); });
+typing.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); typed("\n"); } });
+
+for (const button of document.querySelectorAll("[data-press]")) button.onclick = () => send({ type: "press", button: button.dataset.press });
+$("key").onclick = () => { waitKey = true; send({ type: "keyframe" }); toast("A fresh picture is asked for", false, 1500); };
+function showDetails(on) { $("panel").hidden = !on; $("info").classList.toggle("on", on); }
+$("info").onclick = () => showDetails($("panel").hidden);
+$("close").onclick = () => showDetails(false);
+
+// Sound: PCM from the server (48 kHz, two channels interleaved, 16-bit), played as it comes, `ahead` ahead.
+// Seconds of sound kept ahead: what the way to this page may hold up without a gap. Each gap adds 50 ms, to 0.5 s;
+// each 10 s without one takes 25 ms off, to 0.15 s again.
+let hearing = false, ears = null, playAt = 0, ahead = 0.15, gaps = 0, lastHeard = 0, longestWait = 0, lastGap = 0;
+function heard(message) {
+  if (!hearing || !ears) return;
+  stats.bytes += message.byteLength;
+  const arrived = performance.now();
+  if (lastHeard) longestWait = Math.max(longestWait, arrived - lastHeard);
+  lastHeard = arrived;
+  const pcm = new Int16Array(message.slice(9)), frames = pcm.length / 2;
+  if (!frames) return;
+  const buffer = ears.createBuffer(2, frames, 48000), left = buffer.getChannelData(0), right = buffer.getChannelData(1);
+  for (let i = 0; i < frames; i++) { left[i] = pcm[2 * i] / 32768; right[i] = pcm[2 * i + 1] / 32768; }
+  const source = ears.createBufferSource();
+  source.buffer = buffer;
+  source.connect(ears.destination);
+  // Run dry (a gap): taken up again `ahead` from now, and `ahead` grows. Further ahead than wanted (a burst after a
+  // stall, or `ahead` just shortened): this piece is let go, so that the sound doesn't lag more than `ahead`.
+  const now = ears.currentTime;
+  if (ahead > 0.15 && arrived - lastGap > 10000) { ahead = Math.max(0.15, ahead - 0.025); lastGap = arrived; }
+  if (playAt < now + 0.005) {
+    if (playAt) { gaps++; ahead = Math.min(0.5, ahead + 0.05); }
+    playAt = now + ahead;
+    lastGap = arrived;
+  } else if (playAt > now + ahead + 0.05) return;
+  source.start(playAt);
+  playAt += buffer.duration;
+}
+// The sound comes on a connection of its own: on the picture's, a large frame held it up behind it for seconds
+// (Safari on an iPhone, through Tailscale). Opened again after a drop only while the sound is wanted.
+let earSocket = null, earTimer = null;
+function listen() {
+  if (!hearing) return;
+  const ear = earSocket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+  ear.binaryType = "arraybuffer";
+  ear.onopen = () => ear.send(JSON.stringify({ type: "hello", token, only: "sound" }));
+  ear.onmessage = (e) => { if (ear === earSocket && typeof e.data !== "string" && new DataView(e.data).getUint8(0) === 2) heard(e.data); };
+  ear.onclose = () => { if (hearing && ear === earSocket) earTimer = setTimeout(listen, 1000); };
+}
+// Off, and its connection with it: nothing opened again for it.
+function soundOff() {
+  hearing = false;
+  $("sound").classList.remove("on");
+  clearTimeout(earTimer);
+  const ear = earSocket;
+  earSocket = null;
+  if (ear) ear.close();
+}
+$("sound").onclick = async () => {
+  if (hearing) { soundOff(); log("sound off"); return; }
+  if (cannot) return;
+  soundOff();
+  hearing = true;
+  $("sound").classList.add("on");
+  log("sound on (the Mac serving this decodes it: none from Linux or Windows)");
+  ears = ears || new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+  await ears.resume();
+  if (!hearing) return;   // turned off again meanwhile
+  playAt = 0; lastHeard = 0; longestWait = 0; gaps = 0; ahead = 0.15;
+  listen();
+};
+
+// Full screen: the browser's where it gives a page one, else the whole window (Safari on an iPhone).
+const full = document.documentElement;
+async function fill(on) {
+  document.body.classList.toggle("filled", on);
+  $("full").classList.toggle("on", on);
+  const fullscreen = document.fullscreenElement || document.webkitFullscreenElement;
+  if (on && !fullscreen) await (full.requestFullscreen || full.webkitRequestFullscreen || (() => Promise.resolve())).call(full)?.catch?.(() => {});
+  if (!on && fullscreen) await (document.exitFullscreen || document.webkitExitFullscreen).call(document)?.catch?.(() => {});
+}
+$("full").onclick = () => fill(!document.body.classList.contains("filled"));
+for (const event of ["fullscreenchange", "webkitfullscreenchange"]) document.addEventListener(event, () => { if (!(document.fullscreenElement || document.webkitFullscreenElement)) fill(false); });
+// Full: the controls come up when the pointer moves or a finger touches, and fade after.
+let sleepy;
+const wake = () => { document.body.classList.add("awake"); clearTimeout(sleepy); sleepy = setTimeout(() => document.body.classList.remove("awake"), 2500); };
+for (const event of ["pointermove", "pointerdown"]) document.addEventListener(event, wake);
+
+noVideoDecoder();
+connect();
+</script>
+</body>
+</html>
