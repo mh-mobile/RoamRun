@@ -749,19 +749,20 @@ fn decoded(frame: &[u8]) -> Result<crate::device::Picture, String> {
 #[cfg(not(target_os = "macos"))]
 fn decoded(_: &[u8]) -> Result<crate::device::Picture, String> { Err("it is decoded on macOS only".into()) }
 
-/// A key frame as it came where it carries its parameter sets (which are kept in `sets`); otherwise those kept, after
-/// its access unit delimiter: the depacketizer gives them with the first IRAP after a picture of another kind only,
-/// so consecutive ones come without.
+/// A key frame with the parameter sets it lacks: the depacketizer gives them with the first IRAP after a picture of
+/// another kind only, so consecutive ones come without. Those it carries replace the kept ones of their kind (in
+/// `sets`, by kind) first, so that a new SPS (a display that changed) isn't given an old one; a frame that lacks
+/// none goes as it came. Otherwise the sets, in order (VPS, SPS, PPS), follow its access unit delimiter.
 fn with_parameter_sets(data: Vec<u8>, sets: &mut Vec<Vec<u8>>) -> Vec<u8> {
     let kind = |nal: &[u8]| (nal[0] >> 1) & 0x3f;
-    if whole(&data) {
-        *sets = nal_units(&data).filter(|nal| (32..=34).contains(&kind(nal))).map(<[u8]>::to_vec).collect();
-        return data;
-    }
-    if sets.is_empty() { return data }
+    let carried: Vec<&[u8]> = nal_units(&data).filter(|nal| (32..=34).contains(&kind(nal))).collect();
+    sets.retain(|set| carried.iter().all(|nal| kind(nal) != kind(set)));
+    sets.extend(carried.iter().map(|nal| nal.to_vec()));
+    sets.sort_by_key(|set| kind(set));
+    if whole(&data) || ![32, 33, 34].iter().all(|k| sets.iter().any(|set| kind(set) == *k)) { return data }
     let mut made = Vec::with_capacity(data.len() + sets.iter().map(|set| set.len() + 4).sum::<usize>());
     let mut put = false;
-    for nal in nal_units(&data) {
+    for nal in nal_units(&data).filter(|nal| !(32..=34).contains(&kind(nal))) {
         if !put && kind(nal) != 35 {
             for set in sets.iter() { made.extend([0, 0, 0, 1]); made.extend(set) }
             put = true;
@@ -1427,6 +1428,16 @@ mod tests {
         assert!(whole(&made));
         let kinds: Vec<u8> = nal_units(&made).map(|nal| (nal[0] >> 1) & 0x3f).collect();
         assert_eq!(kinds, [35, 32, 33, 34, 19]);
+
+        // A new SPS alone (the display changed): it is kept, and given with the rest, not the old one.
+        let new_sps = [0x42, 1, 0xbb];
+        let changed = [&[0, 0, 0, 1, 0x46, 1, 0x50][..], &[0, 0, 0, 1], &new_sps, &[0, 0, 1, 0x26, 1, 0xaa]].concat();
+        let made = with_parameter_sets(changed, &mut sets);
+        let units: Vec<&[u8]> = nal_units(&made).collect();
+        assert_eq!(units.iter().map(|nal| (nal[0] >> 1) & 0x3f).collect::<Vec<_>>(), [35, 32, 33, 34, 19]);
+        assert_eq!(units[2], new_sps);
+        let bare = vec![0, 0, 0, 1, 0x46, 1, 0x50, 0, 0, 1, 0x26, 1, 0xcc];
+        assert_eq!(nal_units(&with_parameter_sets(bare, &mut sets)).nth(2).unwrap(), new_sps);
     }
 
     #[test]
