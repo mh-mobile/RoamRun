@@ -376,8 +376,12 @@ device is its alone: don't `look`, tap or install on that device meanwhile, nor 
 a look through another connection stops the page's picture for about 9 s. Started with `--mcp`, it
 serves the same MCP tools (no install) at `http://<address>:<port>/mcp` with its token as a bearer:
 an agent operates the device there while people watch, its looks taken from the page's own stream.
+A tap, swipe, type or paste there is refused (“look again”) once a page acted on the device since the
+look; one made while a page's input runs waits for it, then is refused: look again and go on.
+If view's connection to the device goes, it says so: the user starts view again.
 A browser that can't be given Chrome's flag (an app's own) shows the page at `http://localhost:<port>/`
-on that machine, or elsewhere on the tailnet at `https://<name>:<port>/` when started with `--https <port>`.
+on that machine (only with `--token-file`), or elsewhere on the tailnet at `https://<name>:<port>/` when
+started with `--https <port>`.
 HTTPS requires `--token-file` and an allowed login; a connection without Tailscale's login header is
 refused. Tagged machines use the direct HTTP endpoint with `--allow tag:<name>`.
 Codex's MCP client was checked over HTTPS with look, tap and swipe while T3 Code's browser watched.

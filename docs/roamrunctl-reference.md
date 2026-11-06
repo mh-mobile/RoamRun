@@ -440,7 +440,13 @@ A prototype, for watching and touching your own device from elsewhere on the tai
 picture then stops until the next key frame: over 30 s, 1 to 3.5 times with the device reached
 at its address on the home Wi‑Fi, and 38 times through Tailscale (another run: 12 in 70 s).
 
-- It listens on this machine's Tailscale IPv4 address and loopback, and serves a page at `/` and a
+In short: run it on the Mac the device is connected to, by USB (`--usb`) or on the same Wi‑Fi
+(`--at`), not through Tailscale. Open `http://localhost:<port>/` on that Mac, or start it with
+`--https <port>` and open the HTTPS address it prints from another machine on the tailnet. The
+browser must decode HEVC (tried: Chrome on a Mac, Safari on an iPhone). If the device's
+connection goes, start view again. Sound comes only from a Mac.
+
+- It listens on this machine's Tailscale IPv4 address and, with `--token-file`, loopback, and serves a page at `/` and a
   WebSocket at `/ws`. As `mcp --http`, it doesn't start without Tailscale or `--allow`, or as
   root; `--allow` and `--token-file` are read as there.
 - The page decodes HEVC with WebCodecs' `VideoDecoder`. Use `http://localhost:<port>/` on
@@ -454,13 +460,17 @@ at its address on the home Wi‑Fi, and 38 times through Tailscale (another run:
   taken. Refused, in this order: a `Host` that isn't this server's address or Tailscale name with
   its port (400); an `Origin` other than this server's own (403; the page may come without one,
   the WebSocket must have it); a method other than `GET` (405); another path (404); a caller
-  `tailscale whois` doesn't say (503) or one not allowed (403). This machine itself is let in
-  only with `--token-file`. The token isn't in the URL: the page asks for it and sends it in its
+  `tailscale whois` doesn't say (503) or one not allowed (403; the page's says why, as text). This machine
+  itself is let in only with `--token-file`. The token isn't in the URL: the page asks for it and sends it in its
   first message; a wrong one, or none where one is set, closes the WebSocket with 1008.
-- 12 connections at once, 6 from one address (a page takes two, an MCP client two or three); more
-  are closed unanswered. The head has 10 s for
-  each read, and so has the first message; after that nothing is cut for being slow or quiet.
-- It listens on this machine's loopback too, at `http://localhost:<port>/`: a browser takes a page
+- 12 connections at once, 6 from one address by one way in (the Tailscale address, this machine's
+  localhost and Serve's loopback are counted apart; a page takes two, an MCP client two or three);
+  more are closed unanswered. A caller not yet let in has 10 s for the head, the page's first
+  message or an MCP request's body, each read and all together. A page that says nothing for 20 s
+  is let go of (a page acknowledges frames, and says `alive` every 5 s while the video pauses); one
+  slow to take what is written isn't cut for that.
+- With `--token-file` it listens on this machine's loopback too, at `http://localhost:<port>/` (without one,
+  this machine can't watch at all, and it says so as it starts): a browser takes a page
   on `localhost` for a secure one, so one that takes no flags (an app's own, as a coding agent's
   app has: T3 Code's gave the page `VideoDecoder` there, and none at the Tailscale address) shows
   the picture there. Callers there are this machine, not asked of Tailscale, and give the token.
@@ -495,7 +505,8 @@ at its address on the home Wi‑Fi, and 38 times through Tailscale (another run:
   gives it the display's own way up; with no page open the stream runs for it and stops some
   seconds after. Where none comes within 8 s, or off macOS, the device's PNG is taken instead, and
   the look says why. A tap, swipe, type or paste by a look is refused ("look again") once a page
-  acted on the device since that look began, or within 0.5 s before its picture. What an agent
+  acted on the device since that look began, or within 0.5 s before its picture; one made while a
+  page's input runs waits for it to end, and is then refused. What an agent
   taps or swipes is shown on the pages as a ring. A connection to the device that is gone isn't
   opened again (another would start a second stream): the agent and the page are told to start
   view again. On the iPhone Duo, with a page watching in Chrome: a look took 0.4–1.1 s over USB
@@ -511,10 +522,11 @@ at its address on the home Wi‑Fi, and 38 times through Tailscale (another run:
 - The device is this command's alone while it runs: don't use it from another command meanwhile
   (with `--mcp`, an agent uses `/mcp` instead).
   The screen stream runs while a page watches. Each page gets the access units as they come, none
-  before a key frame. A page whose oldest frame not yet shown (waiting, or sent and not yet
-  acknowledged by the page) is older than 0.5 s is cut to the next key frame, and one is asked
-  for (the device answers one each 1.05 s at most). When the last page goes, the stream stops
-  within about 5 s, as after a look; Ctrl-C stops it too.
+  before a key frame. A page acknowledges a frame once it has decoded it. A page whose oldest frame
+  not yet shown (waiting, or sent and not yet acknowledged) is older than 0.5 s beyond that page's
+  shortest round trip is cut to the next key frame, and one is asked for (the device answers one
+  each 1.05 s at most). When the last page goes, the stream stops within about 5 s, as after a
+  look, during a still screen's pause too; Ctrl-C stops it too.
 - Once the pictures have changed nothing for 1 s (each a few hundred bytes), the device is asked
   which display is on, again every 2 s while that lasts. Where it isn't the one streamed (an iPhone
   Duo folded or opened), the stream is stopped and started on the one that is on. On the Duo that
@@ -526,24 +538,37 @@ at its address on the home Wi‑Fi, and 38 times through Tailscale (another run:
 - Frame acknowledgements and receiver reports (every 50 ms) go back to the device, as idevice's
   `build_frame_ack` and `build_rctl` document them; `ROAMRUNCTL_VIEW_FEEDBACK=off` sends neither,
   to compare.
-- From the page: a click is a tap, a drag a swipe (50 to 5000 ms); a key is typed (what a US
-  keyboard types, Return and Backspace: the page says so of any other key); buttons press home,
+- From the page: a click is a tap, a drag a swipe (50 to 5000 ms), and a press held still for
+  0.5 s or more a long press (a swipe that doesn't move, as long as it was held); two fingers pinch
+  (how much closer or further apart they end, and how far they turn, about where they began), sent
+  as the first lifts; three or more send nothing. A key is typed (what a US keyboard types, Return
+  and Backspace: the page says so of any other key; keys a US keyboard doesn't have, pressed one
+  after another, go together as one paste); a button that has the keyboard's focus is pressed by
+  Enter and Space instead; buttons press home,
   lock and the volume. Type brings up a phone's on-screen keyboard (or takes this machine's input
   method) and sends what is typed there: typed key by key, or, where a US keyboard doesn't type it
   (Japanese), by `paste`, once the input method has it chosen, which takes a few seconds and leaves it
   on the device's pasteboard; Refresh
   asks for a key frame; Full screen takes the browser's full screen, or the whole window where the
-  browser gives a page none (Safari on an iPhone). Inputs go to the device one at a time, and the
-  page is told how each went.
+  browser gives a page none (Safari on an iPhone). Inputs go to the device one at a time, 20 at most
+  waiting from one page (more are refused), and those of a page that is gone aren't made; the page
+  is told how each went, and one that failed is shown over the picture. The long press and the
+  pinch from the page haven't been tried on a device.
 - Sound: the device sends its sound as AAC-ELD, which neither Chrome nor Safari decodes (asked of
   `AudioDecoder` on a Mac and an iPhone). Where this machine is a Mac, it is decoded here with
   AudioToolbox, and a page whose Sound button was pressed gets it as PCM (48 kHz, two channels,
   16-bit: about 190 KB/s), played as it comes on a WebSocket of its own,
   kept 0.15 to 0.5 s ahead (each gap adds 50 ms, each 10 s without one takes 25 ms off; what comes
   beyond that is let go). In Safari on an iPhone through Tailscale, with the sound on the
-  picture's WebSocket it stopped for up to 2 s behind the frames; on its own one it barely gaps. On Linux and Windows there is none.
+  picture's WebSocket it stopped for up to 2 s behind the frames; on its own one it barely gaps. On Linux and Windows there is none,
+  and the page's Sound button says so (the server's `hello` says whether there is sound).
   Heard from an iPhone Duo over USB in Chrome on a Mac and in Safari on an iPhone; the delay against the picture hasn't been
   measured.
+- Where the page can't show the device it says why over the picture, and doesn't wait on: a browser
+  without `VideoDecoder`, a page that isn't a secure one (and where to open it instead), a browser
+  whose decoder doesn't take HEVC (as the decoder says), a token refused, the device's connection
+  gone (start view again). A server that sends nothing for 5 s (it sends its counts each second) is
+  connected to again.
 - The header says whether the picture is live, and the frames and KB a second. Details shows the bytes and frames received each second, the decode time, the key frames
   asked for and answered, how often it was cut, and click-to-change: the time from a click to
   the first decoded picture in which the 48 × 48 pixels around it changed. It also shows the
@@ -553,10 +578,12 @@ at its address on the home Wi‑Fi, and 38 times through Tailscale (another run:
   typed, or pictures.
 - The WebSocket's messages: the server's binary ones are a byte (1: a key frame), the server's
   time in ms (8 bytes, big-endian), and the access unit (Annex B). Its text ones are JSON:
-  `hello`, `picture` (`codec`, `width`, `height`, `crop`), `counts`, `status`, `done`, `error`.
+  `hello` (`feedback`, `sound`: true, or why there is none), `picture` (`codec`, `width`, `height`,
+  `crop`), `counts`, `status`, `agent` (`what`, `points`), `done`, `error`.
   Sound is a binary message too: a byte (2), the time, then the PCM (little-endian).
-  The page's are JSON: `hello` (`token`), `ack` (`t`), `tap` (`x`, `y`, 0 to 1), `swipe` (`x1`,
-  `y1`, `x2`, `y2`, `ms`), `type` (`text`), `press` (`button`), `keyframe`. For the sound the page opens a second WebSocket, whose `hello` has `only: "sound"`: it
+  The page's are JSON: `hello` (`token`), `ack` (`t`), `alive`, `tap` (`x`, `y`, 0 to 1), `swipe` (`x1`,
+  `y1`, `x2`, `y2`, `ms`), `pinch` (`x`, `y`, `scale` 0.25 to 4, `degrees` −180 to 180, `ms`),
+  `type` (`text`), `paste` (`text`), `press` (`button`), `keyframe`. For the sound the page opens a second WebSocket, whose `hello` has `only: "sound"`: it
   carries the sound alone, so that no frame holds it up.
 
 ## Through an HTTP proxy (`ROAMRUNCTL_PROXY`)

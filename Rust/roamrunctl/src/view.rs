@@ -1163,12 +1163,13 @@ mod tests {
     #[test]
     fn a_login_not_allowed_is_refused() {
         let (at, _) = served("other@example.com");
-        // The page says why, to whoever opened it.
-        let (mut stream, first) = ask(at, "GET / HTTP/1.1\r\nHost: {at}\r\n\r\n");
-        assert!(first.starts_with("HTTP/1.1 403"));
-        let mut body = String::new();
-        let _ = stream.read_to_string(&mut body);
-        assert!(body.contains("other@example.com, not allowed") && body.contains("--allow"), "{body}");
+        // The page says why, to whoever opened it (read whole: `ask` reads the head through a buffer of its own).
+        let mut stream = TcpStream::connect(at).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        stream.write_all(format!("GET / HTTP/1.1\r\nHost: {at}\r\n\r\n").as_bytes()).unwrap();
+        let mut answer = String::new();
+        let _ = stream.read_to_string(&mut answer);
+        assert!(answer.starts_with("HTTP/1.1 403") && answer.contains("other@example.com, not allowed") && answer.contains("--allow"), "{answer}");
         assert!(ask(at, UPGRADE).1.starts_with("HTTP/1.1 403"));
     }
 
