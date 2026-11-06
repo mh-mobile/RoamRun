@@ -501,8 +501,9 @@ fn whois_local() -> Whois {
 
 /// While anyone watches: the stream, to each viewer. Once nobody does, it is let go of (and the device stops it).
 fn pump(hub: &Hub, screen: &dyn Screen) {
-    // What the last key frame said (its codec and size), and what the page was told of it.
+    // What the last key frame said (its codec and size), and what the page was told of it; the last parameter sets.
     let mut picture: Option<(Described, Arc<str>)> = None;
+    let mut sets: Vec<Vec<u8>> = Vec::new();
     loop {
         {
             let mut viewers = hub.viewers.lock().unwrap_or_else(|e| e.into_inner());
@@ -529,7 +530,9 @@ fn pump(hub: &Hub, screen: &dyn Screen) {
             let (asked, answered) = frames.counts();
             hub.asked.store(asked, Ordering::Relaxed);
             hub.answered.store(answered, Ordering::Relaxed);
-            let said = if frame.key { described(&frame.data) } else { None };
+            // A key frame without its parameter sets is given those last seen: a page or a look starting at it decodes it.
+            let data = if frame.key { with_parameter_sets(frame.data, &mut sets) } else { frame.data };
+            let said = if frame.key { described(&data) } else { None };
             if let Some(said) = said {
                 if picture.as_ref().is_none_or(|(was, _)| *was != said) {
                     let crop = crate::device::fit(said.1, screen.size()).unwrap_or(said.1);
@@ -538,7 +541,7 @@ fn pump(hub: &Hub, screen: &dyn Screen) {
                 }
             }
             let ms = hub.began.elapsed().as_millis() as u64;
-            hub.push(Sent { key: frame.key, whole: frame.key && whole(&frame.data), at: Instant::now(), ms, picture: frame.key.then(|| picture.as_ref().map(|p| p.1.clone())).flatten(), data: frame.data });
+            hub.push(Sent { key: frame.key, whole: frame.key && whole(&data), at: Instant::now(), ms, picture: frame.key.then(|| picture.as_ref().map(|p| p.1.clone())).flatten(), data });
         }
     }
 }
@@ -745,6 +748,29 @@ fn decoded(frame: &[u8]) -> Result<crate::device::Picture, String> {
 
 #[cfg(not(target_os = "macos"))]
 fn decoded(_: &[u8]) -> Result<crate::device::Picture, String> { Err("it is decoded on macOS only".into()) }
+
+/// A key frame as it came where it carries its parameter sets (which are kept in `sets`); otherwise those kept, after
+/// its access unit delimiter: the depacketizer gives them with the first IRAP after a picture of another kind only,
+/// so consecutive ones come without.
+fn with_parameter_sets(data: Vec<u8>, sets: &mut Vec<Vec<u8>>) -> Vec<u8> {
+    let kind = |nal: &[u8]| (nal[0] >> 1) & 0x3f;
+    if whole(&data) {
+        *sets = nal_units(&data).filter(|nal| (32..=34).contains(&kind(nal))).map(<[u8]>::to_vec).collect();
+        return data;
+    }
+    if sets.is_empty() { return data }
+    let mut made = Vec::with_capacity(data.len() + sets.iter().map(|set| set.len() + 4).sum::<usize>());
+    let mut put = false;
+    for nal in nal_units(&data) {
+        if !put && kind(nal) != 35 {
+            for set in sets.iter() { made.extend([0, 0, 0, 1]); made.extend(set) }
+            put = true;
+        }
+        made.extend([0, 0, 0, 1]);
+        made.extend(nal);
+    }
+    made
+}
 
 /// Whether an access unit carries its parameter sets (VPS, SPS, PPS) and a slice: decodable alone.
 fn whole(annexb: &[u8]) -> bool {
@@ -1387,6 +1413,20 @@ mod tests {
         let began = Instant::now();
         let (_, body) = posted(at, &bearer, look);
         assert!(body.contains("no key frame came") && began.elapsed() >= LOOK_WAIT, "{body}");
+    }
+
+    /// A key frame without parameter sets (an IDR right after another) is given those of the last whole one, after its
+    /// delimiter; a whole one, or anything before the first whole one, goes as it came.
+    #[test]
+    fn a_key_frame_without_parameter_sets_is_given_the_last_ones() {
+        let mut sets = Vec::new();
+        let bare = vec![0, 0, 0, 1, 0x46, 1, 0x50, 0, 0, 1, 0x26, 1, 0xaa];   // AUD, IDR
+        assert_eq!(with_parameter_sets(bare.clone(), &mut sets), bare);
+        assert_eq!(with_parameter_sets(FAKE_KEY.to_vec(), &mut sets), FAKE_KEY.to_vec());
+        let made = with_parameter_sets(bare, &mut sets);
+        assert!(whole(&made));
+        let kinds: Vec<u8> = nal_units(&made).map(|nal| (nal[0] >> 1) & 0x3f).collect();
+        assert_eq!(kinds, [35, 32, 33, 34, 19]);
     }
 
     #[test]

@@ -213,7 +213,9 @@ setInterval(() => {
   ].join("\n");
   // The server says something each second (its counts): from one that went quiet, nothing more comes (a link that
   // dropped without closing). The video pausing on a still screen isn't that.
-  if (socket && socket.readyState <= 1 && performance.now() - heardAt > 5000) dropped("nothing from the server for 5 s");
+  // Opening has 15 s of its own (a slow TLS handshake through Tailscale Serve isn't a server gone quiet).
+  if (socket && socket.readyState === WebSocket.OPEN && performance.now() - heardAt > 5000) dropped("nothing from the server for 5 s");
+  if (socket && socket.readyState === WebSocket.CONNECTING && performance.now() - connectedAt > 15000) dropped("not connected within 15 s");
 }, 1000);
 
 // Drawn turned as the interface is: the stream comes in the device's own (upright) terms.
@@ -329,7 +331,7 @@ function configure(said) {
 // What the device is asked to do: text still held (keys outside US ones, see `unusual`) goes before it, in order.
 const INPUTS = new Set(["tap", "swipe", "pinch", "type", "paste", "press"]);
 function send(message) {
-  if (INPUTS.has(message.type) && unusual && message.type !== "paste") flushUnusual();
+  if (INPUTS.has(message.type) && unusual) flushUnusual();   // it empties `unusual` before its own paste
   if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
 }
 
@@ -349,10 +351,12 @@ function connect() {
   firstPicture = false;
   failures.length = 0;
   $("toast").hidden = true;   // what was said of the last connection's inputs ("Pasting…") isn't of this one's
-  // Counted from now: a connection that opens and says nothing is given up on too.
-  heardAt = performance.now();
   state("wait", "connecting");
-  socket.onopen = () => { tokenSent = token !== ""; socket.send(JSON.stringify({ type: "hello", token })); };
+  socket.onopen = () => {
+    heardAt = performance.now();   // counted from now: a connection that opens and says nothing is given up on too
+    tokenSent = token !== "";
+    socket.send(JSON.stringify({ type: "hello", token }));
+  };
   socket.onclose = (e) => {
     if (e.code === 1008) {
       state("down", tokenSent ? "the token was refused" : "a token is needed");

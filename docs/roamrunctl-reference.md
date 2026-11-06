@@ -524,7 +524,8 @@ connection goes, start view again. Sound comes only from a Mac.
 - The device is this command's alone while it runs: don't use it from another command meanwhile
   (with `--mcp`, an agent uses `/mcp` instead).
   The screen stream runs while a page watches. Each page gets the access units as they come, none
-  before a key frame that carries its parameter sets (another is asked for where one comes without). A page acknowledges a frame once it has decoded it. A page whose oldest frame
+  before a key frame that carries its parameter sets: one that comes without (an IDR right after
+  another) is given those last seen. A page acknowledges a frame once it has decoded it. A page whose oldest frame
   not yet shown (waiting, or sent and not yet acknowledged) is older than 0.5 s beyond that page's
   shortest round trip (taken as 1.5 s until its first acknowledgement) is cut to the next key frame, and one is asked for (the device answers one
   each 1.05 s at most). When the last page goes, the stream stops within about 5 s, as after a
@@ -569,8 +570,9 @@ connection goes, start view again. Sound comes only from a Mac.
 - Where the page can't show the device it says why over the picture, and doesn't wait on: a browser
   without `VideoDecoder`, a page that isn't a secure one (and where to open it instead), a browser
   whose decoder doesn't take HEVC (as the decoder says, or three failures in 10 s before any picture
-  on that connection), a token refused, the device's connection gone (start view again). A server that sends nothing for 5 s (it sends its counts each second) is
-  connected to again.
+  on that connection), a token refused, the device's connection gone (start view again). A server
+  that sends nothing for 5 s once connected (it sends its counts each second), or a connection not
+  open within 15 s, is connected to again.
 - The header says whether the picture is live, and the frames and KB a second. Details shows the bytes and frames received each second, the decode time, the key frames
   asked for and answered, how often it was cut, and click-to-change: the time from a click to
   the first decoded picture in which the 48 × 48 pixels around it changed. It also shows the
