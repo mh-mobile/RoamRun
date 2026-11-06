@@ -26,10 +26,17 @@ const AT_ONCE: usize = 12;
 const LOOK_WAIT: Duration = if cfg!(test) { Duration::from_secs(1) } else { Duration::from_secs(8) };
 /// A page takes two (its picture and its sound), an MCP client two or three at once.
 const FROM_ONE: usize = 6;
-/// For a request's head, each read; and for a viewer's first message.
-const HEAD_WITHIN: Duration = Duration::from_secs(10);
-/// A viewer whose oldest frame not yet shown is older than this is cut to the next key frame.
+/// For a request's head, each read and all of it; for a viewer's first message, or an MCP request's body, the same,
+/// counted from the connection's start: a caller not yet let in doesn't keep a connection longer.
+const HEAD_WITHIN: Duration = if cfg!(test) { Duration::from_secs(3) } else { Duration::from_secs(10) };
+/// A viewer whose oldest frame not yet shown is older than this, beyond its shortest round trip (a page acknowledges
+/// a frame once it is decoded), is cut to the next key frame.
 const LATE: Duration = Duration::from_millis(500);
+/// A page says it is there at least this often (its acknowledgements, or `alive` each 5 s while the video pauses):
+/// one that says nothing for this long is gone (a laptop asleep), and is let go of.
+const PAGE_QUIET: Duration = if cfg!(test) { Duration::from_secs(2) } else { Duration::from_secs(20) };
+/// Inputs from one page waiting their turn, at most: more are refused, not kept for minutes.
+const INPUTS_WAITING: usize = 20;
 /// A message from the page, at most.
 const MESSAGE: usize = 64 * 1024;
 /// Off: no frame acks and no receiver reports go back to the device (to compare a stream without them).
@@ -49,17 +56,20 @@ struct Queue {
     waiting: VecDeque<Arc<Sent>>,
     /// Written, and not yet acknowledged by the page: by their time, and when they were written.
     flight: VecDeque<(u64, Instant)>,
+    /// The shortest time from writing a frame to the page's acknowledgement: the page's way's own, not lateness.
+    trip: Option<Duration>,
     key_needed: bool,
     cuts: u32,
 }
 
 impl Queue {
-    fn new() -> Queue { Queue { waiting: VecDeque::new(), flight: VecDeque::new(), key_needed: true, cuts: 0 } }
+    fn new() -> Queue { Queue { waiting: VecDeque::new(), flight: VecDeque::new(), trip: None, key_needed: true, cuts: 0 } }
 
     /// Takes a frame from the stream; true where a key frame is to be asked for (this viewer was just cut).
     fn push(&mut self, frame: Arc<Sent>, now: Instant) -> bool {
-        let oldest = self.waiting.front().map(|f| f.at).into_iter().chain(self.flight.front().map(|f| f.1)).min();
-        let cut = oldest.is_some_and(|at| now.duration_since(at) > LATE);
+        let late = |at: Instant, beyond: Duration| now.duration_since(at) > LATE + beyond;
+        let cut = self.waiting.front().is_some_and(|f| late(f.at, Duration::ZERO))
+            || self.flight.front().is_some_and(|f| late(f.1, self.trip.unwrap_or_default()));
         if cut {
             self.waiting.clear();
             self.flight.clear();
@@ -79,8 +89,12 @@ impl Queue {
     }
 
     /// The page has the frame of time `ms`, and those before it.
-    fn acked(&mut self, ms: u64) {
-        while self.flight.front().is_some_and(|f| f.0 <= ms) { self.flight.pop_front(); }
+    fn acked(&mut self, ms: u64, now: Instant) {
+        while let Some((_, written)) = self.flight.front().filter(|f| f.0 <= ms).copied() {
+            self.flight.pop_front();
+            let took = now.duration_since(written);
+            self.trip = Some(self.trip.map_or(took, |trip| trip.min(took)));
+        }
     }
 
     /// The page's decoder failed: nothing until a key frame.
@@ -107,6 +121,8 @@ struct Viewer {
     ready: Condvar,
     /// A connection the page opens for the sound alone: no frames on it, so that none holds the sound up behind it.
     sound_only: bool,
+    /// Its inputs not yet done.
+    pending: std::sync::atomic::AtomicUsize,
 }
 
 impl Viewer {
@@ -118,6 +134,9 @@ impl Viewer {
         self.out.lock().unwrap_or_else(|e| e.into_inner()).closed = true;
         self.ready.notify_one();
     }
+    fn new(sound_only: bool) -> Viewer {
+        Viewer { out: Mutex::new(Out { queue: Queue::new(), texts: VecDeque::new(), hears: sound_only, sounds: VecDeque::new(), closed: false }), ready: Condvar::new(), sound_only, pending: Default::default() }
+    }
 }
 
 /// What a page asks of the device.
@@ -125,6 +144,8 @@ impl Viewer {
 enum Input {
     Tap(f64, f64),
     Swipe((f64, f64), (f64, f64), u32),
+    /// Its centre, scale, degrees clockwise, and ms.
+    Pinch((f64, f64), f64, f64, u32),
     Type(String),
     Paste(String),
     Press(String),
@@ -141,7 +162,8 @@ trait Screen: Send + Sync {
 }
 
 trait Frames: Send {
-    fn frame(&mut self) -> Result<roamrun_device::watch::Frame, String>;
+    /// `None`: nothing yet (the video pauses on a still screen); asked again once the viewers are looked at.
+    fn frame(&mut self) -> Result<Option<roamrun_device::watch::Frame>, String>;
     /// The sound's access units to `to` from now on, where there is sound.
     fn sound_to(&mut self, _to: mpsc::Sender<Vec<u8>>) {}
     /// Key frames asked for, and answered.
@@ -149,7 +171,7 @@ trait Frames: Send {
 }
 
 impl Frames for Watch {
-    fn frame(&mut self) -> Result<roamrun_device::watch::Frame, String> { Watch::frame(self) }
+    fn frame(&mut self) -> Result<Option<roamrun_device::watch::Frame>, String> { Watch::frame(self) }
     fn sound_to(&mut self, to: mpsc::Sender<Vec<u8>>) { Watch::sound_to(self, to) }
     fn counts(&self) -> (u32, u32) { (self.asked, self.answered) }
 }
@@ -171,6 +193,7 @@ impl Screen for OnDevice {
         crate::device::said(match input {
             Input::Tap(x, y) => device.tap(*x, *y),
             Input::Swipe(from, to, ms) => device.swipe(*from, *to, *ms),
+            Input::Pinch(centre, scale, degrees, ms) => device.pinch(*centre, *scale, *degrees, *ms),
             Input::Type(text) => device.type_text(text),
             Input::Paste(text) => device.paste(text),
             Input::Press(button) => device.button(button),
@@ -200,7 +223,10 @@ struct Hub {
     mcp: Option<Mcp>,
     /// Agents' looks waiting for the next whole key frame.
     waiting: Mutex<Vec<mpsc::Sender<Arc<Sent>>>>,
-    open: Mutex<std::collections::HashMap<IpAddr, usize>>,
+    /// Connections open, by the way they came and the address: on loopback, Serve's and this machine's are told apart.
+    open: Mutex<std::collections::HashMap<(Route, IpAddr), usize>>,
+    /// Whether the sound can be decoded here, once that is known: the page is told.
+    can_hear: Mutex<Option<Result<(), String>>>,
 }
 
 impl Hub {
@@ -224,7 +250,8 @@ impl Hub {
     fn keyframe(&self, within: Duration) -> Option<Arc<Sent>> {
         let (look, came) = mpsc::channel();
         self.waiting.lock().unwrap_or_else(|e| e.into_inner()).push(look);
-        let standing = Arc::new(Viewer { out: Mutex::new(Out { queue: Queue::new(), texts: VecDeque::new(), hears: false, sounds: VecDeque::new(), closed: false }), ready: Condvar::new(), sound_only: true });
+        let standing = Arc::new(Viewer::new(true));
+        standing.out.lock().unwrap_or_else(|e| e.into_inner()).hears = false;
         self.viewers.lock().unwrap_or_else(|e| e.into_inner()).push(standing.clone());
         self.joined.notify_all();
         self.wanted.store(true, Ordering::Relaxed);
@@ -288,8 +315,11 @@ pub fn serve(options: Options) -> Result<String, String> {
     });
     let screen = Arc::new(OnDevice { device, feedback });
     // On this machine's loopback too, for a browser on this machine that takes no flags (an app's own): there the page
-    // is a secure one. Callers there are this machine, so they give the token.
-    let local = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).map_err(|e| note!("roamrunctl: not on localhost:{port} too ({e})")).ok();
+    // is a secure one. Callers there are this machine, so they give the token: without one, not there.
+    let local = match &options.token {
+        Some(_) => TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).map_err(|e| note!("roamrunctl: not on localhost:{port} too ({e})")).ok(),
+        None => { note!("roamrunctl: not on localhost, and not for this machine at all: this machine gives the token (--token-file)"); None }
+    };
     let mut hosts = http::hosts(IpAddr::V4(own), names.clone(), port);
     if local.is_some() {
         hosts.extend([format!("localhost:{port}"), format!("127.0.0.1:{port}")]);
@@ -335,7 +365,7 @@ fn run(listener: TcpListener, local: Option<TcpListener>, forwarded: Option<TcpL
         }
         Hub {
         viewers: Mutex::new(Vec::new()), joined: Condvar::new(), wanted: Arc::new(AtomicBool::new(false)), asked: AtomicU32::new(0), answered: AtomicU32::new(0),
-        way: std::sync::atomic::AtomicU8::new(0), began: Instant::now(), feedback, allowed, token, hosts, own_ip, own_id, whois, inputs: Mutex::new(inputs), sound: Mutex::new(sound), open: Mutex::new(Default::default()), mcp, waiting: Mutex::new(Vec::new()),
+        way: std::sync::atomic::AtomicU8::new(0), began: Instant::now(), feedback, allowed, token, hosts, own_ip, own_id, whois, inputs: Mutex::new(inputs), sound: Mutex::new(sound), open: Mutex::new(Default::default()), mcp, waiting: Mutex::new(Vec::new()), can_hear: Mutex::new(None),
         }
     });
     // The sound decoded on a thread of its own, and given to the pages that asked for it.
@@ -343,8 +373,9 @@ fn run(listener: TcpListener, local: Option<TcpListener>, forwarded: Option<TcpL
     std::thread::spawn(move || {
         let mut decoder = match roamrun_device::sound::Decoder::new() {
             Ok(decoder) => Some(decoder),
-            Err(why) => { note!("roamrunctl: no sound for the page: {why}"); None }
+            Err(why) => { note!("roamrunctl: no sound for the page: {why}"); *hearing.can_hear.lock().unwrap_or_else(|e| e.into_inner()) = Some(Err(why)); None }
         };
+        if decoder.is_some() { *hearing.can_hear.lock().unwrap_or_else(|e| e.into_inner()) = Some(Ok(())) }
         for unit in heard {
             let Some(pcm) = decoder.as_mut().and_then(|d| d.decode(&unit)) else { continue };
             let message = Arc::new(sound_message(hearing.began.elapsed().as_millis() as u64, &pcm));
@@ -363,12 +394,19 @@ fn run(listener: TcpListener, local: Option<TcpListener>, forwarded: Option<TcpL
     let pages = hub.mcp.as_ref().map(|mcp| mcp.page.clone());
     std::thread::spawn(move || {
         for (viewer, input) in asked {
+            // A page gone: what it left waiting isn't done for nobody.
+            if viewer.out.lock().unwrap_or_else(|e| e.into_inner()).closed { viewer.pending.fetch_sub(1, Ordering::SeqCst); continue }
             let began = Instant::now();
-            let what = match &input { Input::Tap(..) => "tap", Input::Swipe(..) => "swipe", Input::Type(_) => "type", Input::Paste(_) => "paste", Input::Press(_) => "press" };
-            // Counted before it begins and timed once it ends: an agent's look meanwhile isn't taken to be current.
+            let what = match &input { Input::Tap(..) => "tap", Input::Swipe(..) => "swipe", Input::Pinch(..) => "pinch", Input::Type(_) => "type", Input::Paste(_) => "paste", Input::Press(_) => "press" };
+            // An agent's action waits meanwhile, and this waits for one: what an agent looked at is judged, and acted on,
+            // with no input of a page's between. Counted before it begins and timed once it ends: an agent's look
+            // meanwhile isn't taken to be current.
+            let turn = pages.as_ref().map(|page| page.gate.lock().unwrap_or_else(|e| e.into_inner()));
             if let Some(page) = &pages { page.count.fetch_add(1, Ordering::SeqCst); }
             let said = device.input(&input);
             if let Some(page) = &pages { *page.ended.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now()); }
+            drop(turn);
+            viewer.pending.fetch_sub(1, Ordering::SeqCst);
             viewer.say(match said {
                 Ok(()) => json!({ "type": "done", "what": what, "ms": began.elapsed().as_millis() as u64 }),
                 Err(why) => json!({ "type": "error", "what": what, "error": why }),
@@ -400,7 +438,7 @@ fn run(listener: TcpListener, local: Option<TcpListener>, forwarded: Option<TcpL
 }
 
 /// How a connection arrived; Serve never inherits the local caller's allowance.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Route { Tailnet, Local, Serve }
 
 /// Each connection on its own thread, within the limits.
@@ -411,20 +449,25 @@ fn accept(listener: TcpListener, hub: &Arc<Hub>, route: Route) {
         {
             let mut open = hub.open.lock().unwrap_or_else(|e| e.into_inner());
             // Closed unanswered: one machine doesn't take them all.
-            if open.values().sum::<usize>() >= AT_ONCE || open.get(&from).is_some_and(|n| *n >= FROM_ONE) { continue }
-            *open.entry(from).or_default() += 1;
+            if open.values().sum::<usize>() >= AT_ONCE || open.get(&(route, from)).is_some_and(|n| *n >= FROM_ONE) { continue }
+            *open.entry((route, from)).or_default() += 1;
         }
         let hub = hub.clone();
         std::thread::spawn(move || {
             let began = Instant::now();
             let (mut who, mut what) = ("-".to_string(), "-".to_string());
             let lingering = stream.try_clone().ok();
-            let outcome = connection(stream, from, route, &hub, &mut who, &mut what);
+            // Closed once HEAD_WITHIN has gone by, unless let in before (`in_time` dropped).
+            let (in_time, deadline) = mpsc::channel::<()>();
+            if let Ok(watched) = stream.try_clone() {
+                std::thread::spawn(move || if deadline.recv_timeout(HEAD_WITHIN) == Err(mpsc::RecvTimeoutError::Timeout) { let _ = watched.shutdown(std::net::Shutdown::Both); });
+            }
+            let outcome = connection(stream, from, route, &hub, &mut who, &mut what, in_time);
             // A body not read (refused first) is drained a moment, so that the caller isn't reset before its answer.
             if let Some(stream) = lingering.filter(|_| what.starts_with("POST")) { http::linger(&stream) }
             note!("{} {from} {} {} {outcome} {:.1}s", http::clock(), http::printable(&who), what, began.elapsed().as_secs_f64());
             let mut open = hub.open.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(n) = open.get_mut(&from) { *n -= 1; if *n == 0 { open.remove(&from); } }
+            if let Some(n) = open.get_mut(&(route, from)) { *n -= 1; if *n == 0 { open.remove(&(route, from)); } }
         });
     }
 }
@@ -470,7 +513,9 @@ fn pump(hub: &Hub, screen: &dyn Screen) {
         frames.sound_to(hub.sound.lock().unwrap_or_else(|e| e.into_inner()).clone());
         while !hub.viewers.lock().unwrap_or_else(|e| e.into_inner()).is_empty() {
             let frame = match frames.frame() {
-                Ok(frame) => frame,
+                Ok(Some(frame)) => frame,
+                // A pause: whether anyone still watches is looked at again, so that the last to go lets the stream go.
+                Ok(None) => continue,
                 Err(why) => { hub.say(&json!({ "type": "status", "text": format!("the stream stopped ({why}): starting it again") }).to_string()); break }
             };
             let (asked, answered) = frames.counts();
@@ -491,7 +536,7 @@ fn pump(hub: &Hub, screen: &dyn Screen) {
 }
 
 /// One connection: the page, or a viewer's WebSocket. What is shown or typed is never logged.
-fn connection(stream: TcpStream, from: IpAddr, route: Route, hub: &Hub, who: &mut String, what: &mut String) -> String {
+fn connection(stream: TcpStream, from: IpAddr, route: Route, hub: &Hub, who: &mut String, what: &mut String, in_time: mpsc::Sender<()>) -> String {
     let _ = stream.set_read_timeout(Some(HEAD_WITHIN));
     let Ok(mut writer) = stream.try_clone() else { return "gone".into() };
     let mut reader = BufReader::new(stream);
@@ -499,7 +544,7 @@ fn connection(stream: TcpStream, from: IpAddr, route: Route, hub: &Hub, who: &mu
     let request = match http::head(&mut reader) { Ok(request) => request, Err(status) => return refuse(&mut writer, status) };
     *what = format!("{} {}", http::printable(&request.method), http::printable(&request.path));
     let Some(host) = request.header("host").filter(|host| hub.hosts.iter().any(|h| h.eq_ignore_ascii_case(host))) else { return refuse(&mut writer, 400) };
-    if request.path == "/mcp" { return mcp_call(&mut reader, &mut writer, &request, from, route, hub, who, what) }
+    if request.path == "/mcp" { return mcp_call(&mut reader, &mut writer, &request, from, route, hub, who, what, in_time) }
     // A page of this server's own, or none (the page itself, opened): not one of another site.
     // http, or https where Tailscale serves it in front (`--https`).
     let own_origin = |origin: &str| origin.eq_ignore_ascii_case(&format!("http://{host}")) || origin.eq_ignore_ascii_case(&format!("https://{host}"));
@@ -516,11 +561,18 @@ fn connection(stream: TcpStream, from: IpAddr, route: Route, hub: &Hub, who: &mu
         Err(why) => { *who = format!("(whois: {why})"); return refuse(&mut writer, 503) }
     };
     // This machine's own users take the token: they are let in to the page, and asked for it in the first message.
-    match http::judged(&whois, &hub.allowed, own, own && hub.token.is_some() || !socket) {
+    match http::judged(&whois, &hub.allowed, own, hub.token.is_some()) {
         Ok(name) => *who = name,
-        Err(why) => { *who = why; return refuse(&mut writer, 403) }
+        Err(why) => {
+            // The page's refusal says why, to whoever opened it.
+            let body = if socket { String::new() } else { format!("{why}: roamrunctl view lets in the logins it was started with (--allow), and this machine with its token (--token-file)\n") };
+            answer(&mut writer, 403, "text/plain; charset=utf-8", &body);
+            *who = why;
+            return "403".into();
+        }
     }
     if !socket {
+        drop(in_time);
         answer(&mut writer, 200, "text/html; charset=utf-8", PAGE);
         return "ok".into();
     }
@@ -540,12 +592,15 @@ fn connection(stream: TcpStream, from: IpAddr, route: Route, hub: &Hub, who: &mu
         let _ = writer.write_all(&ws_frame(8, &[0x03, 0xf0]));   // 1008: refused
         return "token refused".into();
     }
-    // A stream isn't cut for being quiet, or slow to take what is written.
-    let _ = reader.get_ref().set_read_timeout(None);
+    drop(in_time);
+    // A page that says nothing for PAGE_QUIET is gone (its acknowledgements, or `alive` while the video pauses); one
+    // slow to take what is written isn't cut for that.
+    let _ = reader.get_ref().set_read_timeout(Some(PAGE_QUIET));
     let _ = writer.set_write_timeout(None);
     let sound_only = hello["only"] == "sound";
-    let viewer = Arc::new(Viewer { out: Mutex::new(Out { queue: Queue::new(), texts: VecDeque::new(), hears: sound_only, sounds: VecDeque::new(), closed: false }), ready: Condvar::new(), sound_only });
-    viewer.say(json!({ "type": "hello", "feedback": hub.feedback }).to_string());
+    let viewer = Arc::new(Viewer::new(sound_only));
+    let sound = match &*hub.can_hear.lock().unwrap_or_else(|e| e.into_inner()) { Some(Ok(())) => json!(true), Some(Err(why)) => json!(why), None => Value::Null };
+    viewer.say(json!({ "type": "hello", "feedback": hub.feedback, "sound": sound }).to_string());
     hub.viewers.lock().unwrap_or_else(|e| e.into_inner()).push(viewer.clone());
     if !sound_only { hub.wanted.store(true, Ordering::Relaxed) }
     hub.joined.notify_all();
@@ -577,13 +632,20 @@ fn read_from(reader: &mut impl BufRead, viewer: &Arc<Viewer>, hub: &Hub) -> Stri
         };
         let message: Value = serde_json::from_str(&text).unwrap_or_default();
         match message["type"].as_str().unwrap_or("") {
-            "ack" => if let Some(ms) = message["t"].as_u64() { viewer.out.lock().unwrap_or_else(|e| e.into_inner()).queue.acked(ms) },
+            "ack" => if let Some(ms) = message["t"].as_u64() { viewer.out.lock().unwrap_or_else(|e| e.into_inner()).queue.acked(ms, Instant::now()) },
+            "alive" => {}
             "keyframe" => {
                 viewer.out.lock().unwrap_or_else(|e| e.into_inner()).queue.restart();
                 hub.wanted.store(true, Ordering::Relaxed);
             }
             _ => match input(&message) {
-                Ok(input) => { let _ = hub.inputs.lock().unwrap_or_else(|e| e.into_inner()).send((viewer.clone(), input)); }
+                Ok(_) if viewer.pending.load(Ordering::SeqCst) >= INPUTS_WAITING => {
+                    viewer.say(json!({ "type": "error", "what": message["type"], "error": format!("{INPUTS_WAITING} inputs are waiting their turn already: this one wasn't taken") }).to_string())
+                }
+                Ok(input) => {
+                    viewer.pending.fetch_add(1, Ordering::SeqCst);
+                    let _ = hub.inputs.lock().unwrap_or_else(|e| e.into_inner()).send((viewer.clone(), input));
+                }
                 Err(why) => viewer.say(json!({ "type": "error", "what": message["type"], "error": why }).to_string()),
             },
         }
@@ -599,6 +661,12 @@ fn input(message: &Value) -> Result<Input, String> {
         "swipe" => {
             let ms = message["ms"].as_u64().filter(|ms| (50..=5000).contains(ms)).ok_or("ms: 50...5000")?;
             Ok(Input::Swipe((at("x1")?, at("y1")?), (at("x2")?, at("y2")?), ms as u32))
+        }
+        "pinch" => {
+            let ms = message["ms"].as_u64().filter(|ms| (50..=5000).contains(ms)).ok_or("ms: 50...5000")?;
+            let scale = message["scale"].as_f64().filter(|s| (0.25..=4.0).contains(s)).ok_or("scale: 0.25...4")?;
+            let degrees = message["degrees"].as_f64().filter(|d| (-180.0..=180.0).contains(d)).ok_or("degrees: -180...180")?;
+            Ok(Input::Pinch((at("x")?, at("y")?), scale, degrees, ms as u32))
         }
         "type" => Ok(Input::Type(word("text")?)),
         "paste" => Ok(Input::Paste(word("text")?)),
@@ -675,7 +743,7 @@ fn whole(annexb: &[u8]) -> bool {
 /// an agent's look starts no second screen stream (which stops view's). Asked as `mcp --http` asks: no Origin (no
 /// browser's page, this one's included), the token as a bearer, `--allow`. A call waits for the one before it.
 #[allow(clippy::too_many_arguments)]
-fn mcp_call(reader: &mut BufReader<TcpStream>, writer: &mut TcpStream, request: &http::Request, from: IpAddr, route: Route, hub: &Hub, who: &mut String, what: &mut String) -> String {
+fn mcp_call(reader: &mut BufReader<TcpStream>, writer: &mut TcpStream, request: &http::Request, from: IpAddr, route: Route, hub: &Hub, who: &mut String, what: &mut String, in_time: mpsc::Sender<()>) -> String {
     let Some(mcp) = &hub.mcp else { return reply(writer, 404, "", "") };
     if request.header("origin").is_some() { return reply(writer, 403, "", "") }
     if request.method != "POST" { return reply(writer, 405, "Allow: POST\r\n", "") }
@@ -696,6 +764,7 @@ fn mcp_call(reader: &mut BufReader<TcpStream>, writer: &mut TcpStream, request: 
     let _ = reader.get_ref().set_read_timeout(Some(http::BODY_WITHIN));
     if request.header("expect").is_some_and(|e| e.eq_ignore_ascii_case("100-continue")) { let _ = writer.write_all(b"HTTP/1.1 100 Continue\r\n\r\n"); }
     let body = match http::body(reader, request, http::BODY) { Ok(body) => body, Err(status) => return reply(writer, status, "", "") };
+    drop(in_time);
     let Ok(message) = serde_json::from_slice::<Value>(&body) else { return reply(writer, 400, "", &http::rpc_error(Value::Null, -32700, "not JSON")) };
     if !message.is_object() { return reply(writer, 400, "", &http::rpc_error(Value::Null, -32600, "one message a request, as an object")) }
     let method = message["method"].as_str().unwrap_or("");
@@ -878,7 +947,7 @@ mod tests {
         assert_eq!(queue.take(t).unwrap().ms, 2);
         // Written, and acknowledged in time: on it goes.
         let later = t + Duration::from_millis(400);
-        queue.acked(2);
+        queue.acked(2, t + Duration::from_millis(20));
         assert!(!queue.push(sent(false, later, 4), later));
         // Frame 3 has waited more than LATE: cut, a key frame asked for, nothing until one comes.
         let late = t + Duration::from_millis(600);
@@ -888,14 +957,25 @@ mod tests {
         assert!(!queue.push(sent(true, late, 7), late));
         assert_eq!(queue.take(late).unwrap().ms, 7);
         assert_eq!(queue.cuts, 1);
-        // Written and not acknowledged for longer than LATE (the page's link is slow): cut too.
-        let slow = late + Duration::from_millis(501);
+        // Written and not acknowledged for longer than LATE beyond the page's round trip (20 ms): cut too.
+        let slow = late + Duration::from_millis(521);
         assert!(queue.push(sent(true, slow, 8), slow));
         assert_eq!(queue.take(slow).unwrap().ms, 8);
         // A decoder that failed: nothing until a key frame.
         queue.restart();
         assert!(!queue.push(sent(false, slow, 9), slow));
         assert!(queue.take(slow).is_none());
+
+        // A page far away (its acknowledgements come 700 ms after writing) isn't late for that alone.
+        let mut far = Queue::new();
+        assert!(!far.push(sent(true, t, 1), t));
+        far.take(t);
+        far.acked(1, t + Duration::from_millis(700));
+        let next = t + Duration::from_millis(700);
+        assert!(!far.push(sent(false, next, 2), next));
+        far.take(next);
+        assert!(!far.push(sent(false, next + Duration::from_millis(1000), 3), next + Duration::from_millis(1000)));
+        assert!(far.push(sent(false, next + Duration::from_millis(1300), 4), next + Duration::from_millis(1300)));
     }
 
     #[test]
@@ -949,28 +1029,40 @@ mod tests {
         assert!(parse(r#"{"type":"type","text":""}"#).is_err());
         assert_eq!(parse(r#"{"type":"paste","text":"日本語"}"#), Ok(Input::Paste("日本語".into())));
         assert!(parse(r#"{"type":"elements"}"#).is_err());
+        assert_eq!(parse(r#"{"type":"pinch","x":0.5,"y":0.5,"scale":2,"degrees":-30,"ms":400}"#), Ok(Input::Pinch((0.5, 0.5), 2.0, -30.0, 400)));
+        assert!(parse(r#"{"type":"pinch","x":0.5,"y":0.5,"scale":9,"degrees":0,"ms":400}"#).is_err());
     }
 
     /// A screen whose frames are made up: one key frame, then others, while it is watched.
     /// `whole`: its key frames carry their parameter sets, as the device's do.
-    struct Fake { watched: Arc<AtomicU32>, whole: bool }
-    struct FakeFrames { n: u32, whole: bool }
+    /// `still`: after its first key frame, the video pauses for good (a still screen). `let_go` counts the watches
+    /// dropped, `done` the inputs made (each takes 300 ms).
+    struct Fake { watched: Arc<AtomicU32>, whole: bool, still: bool, let_go: Arc<AtomicU32>, done: Arc<AtomicU32> }
+    struct FakeFrames { n: u32, whole: bool, still: bool, let_go: Arc<AtomicU32> }
+    impl Drop for FakeFrames { fn drop(&mut self) { self.let_go.fetch_add(1, Ordering::SeqCst); } }
+    impl Fake {
+        fn new(whole: bool) -> Fake { Fake { watched: Default::default(), whole, still: false, let_go: Default::default(), done: Default::default() } }
+    }
     /// A key frame as the stream gives one: VPS, SPS, PPS, then an IDR slice.
     const FAKE_KEY: [u8; 20] = [0, 0, 1, 0x40, 1, 0, 0, 1, 0x42, 1, 0, 0, 1, 0x44, 1, 0, 0, 1, 0x26, 1];
     impl Frames for FakeFrames {
-        fn frame(&mut self) -> Result<roamrun_device::watch::Frame, String> {
+        fn frame(&mut self) -> Result<Option<roamrun_device::watch::Frame>, String> {
             std::thread::sleep(Duration::from_millis(5));
+            if self.still && self.n > 0 { std::thread::sleep(Duration::from_millis(50)); return Ok(None) }
             self.n += 1;
             let key = self.n % 50 == 1;
             let data = match (key, self.whole) { (true, true) => FAKE_KEY.to_vec(), (true, false) => vec![0, 0, 1, 0x26, 1], _ => vec![0, 0, 1, 0x02, 1] };
-            Ok(roamrun_device::watch::Frame { key, data })
+            Ok(Some(roamrun_device::watch::Frame { key, data }))
         }
         fn counts(&self) -> (u32, u32) { (0, 0) }
     }
     impl Screen for Fake {
-        fn watch(&self, _: Arc<AtomicBool>) -> Result<Box<dyn Frames>, String> { self.watched.fetch_add(1, Ordering::SeqCst); Ok(Box::new(FakeFrames { n: 0, whole: self.whole })) }
+        fn watch(&self, _: Arc<AtomicBool>) -> Result<Box<dyn Frames>, String> {
+            self.watched.fetch_add(1, Ordering::SeqCst);
+            Ok(Box::new(FakeFrames { n: 0, whole: self.whole, still: self.still, let_go: self.let_go.clone() }))
+        }
         fn size(&self) -> Option<(u32, u32)> { None }
-        fn input(&self, _: &Input) -> Result<(), String> { Ok(()) }
+        fn input(&self, _: &Input) -> Result<(), String> { std::thread::sleep(Duration::from_millis(300)); self.done.fetch_add(1, Ordering::SeqCst); Ok(()) }
         fn way(&self) -> u8 { 1 }
     }
 
@@ -987,16 +1079,20 @@ mod tests {
 
     /// As `served_with`, its key frames whole or not.
     fn served_as(caller: &'static str, mcp: bool, whole: bool) -> (std::net::SocketAddr, Arc<AtomicU32>) {
+        let fake = Fake::new(whole);
+        let watched = fake.watched.clone();
+        (served_fake(caller, mcp, fake), watched)
+    }
+
+    fn served_fake(caller: &'static str, mcp: bool, fake: Fake) -> std::net::SocketAddr {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let at = listener.local_addr().unwrap();
         let hosts = vec![at.to_string()];
-        let watched = Arc::new(AtomicU32::new(0));
-        let fake = Fake { watched: watched.clone(), whole };
         std::thread::spawn(move || run(listener, None, None, Arc::new(fake), vec![Allow::Login("me@example.com".into())], Some("t".repeat(32)), hosts,
             "100.64.0.1".parse().unwrap(), "own".into(), true,
             mcp.then(|| Mcp { name: "fake".into(), server: Mutex::new(crate::mcp::Server::holding("fake", Arc::new(Device::none()), None)), page: Default::default() }),
             Box::new(move |_| Ok(whois(caller)))));
-        (at, watched)
+        at
     }
 
     fn ask(at: std::net::SocketAddr, head: &str) -> (TcpStream, String) {
@@ -1067,8 +1163,113 @@ mod tests {
     #[test]
     fn a_login_not_allowed_is_refused() {
         let (at, _) = served("other@example.com");
-        assert!(ask(at, "GET / HTTP/1.1\r\nHost: {at}\r\n\r\n").1.starts_with("HTTP/1.1 403"));
+        // The page says why, to whoever opened it.
+        let (mut stream, first) = ask(at, "GET / HTTP/1.1\r\nHost: {at}\r\n\r\n");
+        assert!(first.starts_with("HTTP/1.1 403"));
+        let mut body = String::new();
+        let _ = stream.read_to_string(&mut body);
+        assert!(body.contains("other@example.com, not allowed") && body.contains("--allow"), "{body}");
         assert!(ask(at, UPGRADE).1.starts_with("HTTP/1.1 403"));
+    }
+
+    /// A WebSocket's messages until the server closes it, or `within` goes by: whether it closed, and its texts.
+    fn until_closed(stream: &mut TcpStream, within: Duration, alive: bool) -> (bool, Vec<String>) {
+        let until = Instant::now() + within;
+        let mut texts = Vec::new();
+        stream.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
+        let mut said = Instant::now();
+        while Instant::now() < until {
+            if alive && said.elapsed() > Duration::from_millis(500) {
+                said = Instant::now();
+                let text = br#"{"type":"alive"}"#;
+                let mut frame = vec![0x81, 0x80 | text.len() as u8, 0, 0, 0, 0];
+                frame.extend(text);
+                if stream.write_all(&frame).is_err() { return (true, texts) }
+            }
+            let mut head = [0u8; 2];
+            match stream.read_exact(&mut head) {
+                Ok(()) => {}
+                Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => continue,
+                Err(_) => return (true, texts),
+            }
+            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let length = match head[1] { 126 => { let mut n = [0u8; 2]; stream.read_exact(&mut n).unwrap(); u16::from_be_bytes(n) as usize } n => n as usize };
+            let mut payload = vec![0u8; length];
+            if stream.read_exact(&mut payload).is_err() { return (true, texts) }
+            stream.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
+            match head[0] & 0x0f { 8 => return (true, texts), 1 => texts.push(String::from_utf8_lossy(&payload).into_owned()), _ => {} }
+        }
+        (false, texts)
+    }
+
+    /// A page that says nothing (its machine asleep) is let go of after PAGE_QUIET; one that says it is there stays.
+    #[test]
+    fn a_page_that_says_nothing_is_let_go_of() {
+        let (at, _) = served("me@example.com");
+        let (mut quiet, _) = ask(at, UPGRADE);
+        hello(&mut quiet, &"t".repeat(32));
+        let (mut there, _) = ask(at, UPGRADE);
+        hello(&mut there, &"t".repeat(32));
+        let stays = std::thread::spawn(move || !until_closed(&mut there, PAGE_QUIET + Duration::from_secs(2), true).0);
+        assert!(until_closed(&mut quiet, PAGE_QUIET + Duration::from_secs(2), false).0);
+        assert!(stays.join().unwrap());
+    }
+
+    /// On a still screen the video pauses for good: the last viewer to go still lets the stream go.
+    #[test]
+    fn a_still_screen_lets_the_stream_go_when_the_last_viewer_does() {
+        let fake = Fake { still: true, ..Fake::new(true) };
+        let let_go = fake.let_go.clone();
+        let at = served_fake("me@example.com", false, fake);
+        let (mut stream, _) = ask(at, UPGRADE);
+        hello(&mut stream, &"t".repeat(32));
+        assert_eq!(first(&mut stream, 2)[0], 1);
+        drop(stream);
+        let until = Instant::now() + Duration::from_secs(3);
+        while let_go.load(Ordering::SeqCst) == 0 && Instant::now() < until { std::thread::sleep(Duration::from_millis(50)) }
+        assert_eq!(let_go.load(Ordering::SeqCst), 1);
+    }
+
+    /// A page's inputs wait their turn, INPUTS_WAITING at most; those left waiting by a page that is gone aren't made.
+    #[test]
+    fn a_pages_inputs_are_bounded_and_not_made_once_it_is_gone() {
+        let fake = Fake::new(true);
+        let done = fake.done.clone();
+        let at = served_fake("me@example.com", false, fake);
+        let (mut stream, _) = ask(at, UPGRADE);
+        hello(&mut stream, &"t".repeat(32));
+        for _ in 0..INPUTS_WAITING + 3 {
+            let text = br#"{"type":"tap","x":0.5,"y":0.5}"#;
+            let mut frame = vec![0x81, 0x80 | text.len() as u8, 0, 0, 0, 0];
+            frame.extend(text);
+            stream.write_all(&frame).unwrap();
+        }
+        let (_, texts) = until_closed(&mut stream, Duration::from_millis(800), true);
+        assert!(texts.iter().any(|t| t.contains("waiting their turn")), "{texts:?}");
+        drop(stream);
+        std::thread::sleep(Duration::from_millis(1500));
+        let made = done.load(Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(1000));
+        assert_eq!(done.load(Ordering::SeqCst), made);
+        assert!(made < 8, "{made}");
+    }
+
+    /// A caller that sends its head a little at a time isn't kept past HEAD_WITHIN.
+    #[test]
+    fn a_head_sent_slowly_is_cut_at_head_within() {
+        let (at, _) = served("me@example.com");
+        let mut stream = TcpStream::connect(at).unwrap();
+        stream.write_all(b"GET / HTTP/1.1\r\n").unwrap();
+        let began = Instant::now();
+        let cut = loop {
+            std::thread::sleep(Duration::from_millis(500));
+            if stream.write_all(b"X-A: b\r\n").is_err() { break true }
+            stream.set_read_timeout(Some(Duration::from_millis(10))).unwrap();
+            let mut byte = [0u8; 1];
+            if matches!(stream.read(&mut byte), Ok(0)) { break true }
+            if began.elapsed() > HEAD_WITHIN + Duration::from_secs(3) { break false }
+        };
+        assert!(cut && began.elapsed() < HEAD_WITHIN + Duration::from_secs(2), "{:?}", began.elapsed());
     }
 
     /// One POST to /mcp with `extra` head lines and `body`: the status line and the body.
@@ -1142,7 +1343,7 @@ mod tests {
         let at = local.local_addr().unwrap();
         let host = format!("localhost:{}", at.port());
         let hosts = vec![main.local_addr().unwrap().to_string(), host.clone()];
-        let fake = Fake { watched: Arc::new(AtomicU32::new(0)), whole: true };
+        let fake = Fake::new(true);
         std::thread::spawn(move || run(main, Some(local), None, Arc::new(fake), vec![Allow::Login("me@example.com".into())], Some("t".repeat(32)), hosts,
             "100.64.0.1".parse().unwrap(), "own".into(), true,
             Some(Mcp { name: "fake".into(), server: Mutex::new(crate::mcp::Server::holding("fake", Arc::new(Device::none()), None)), page: Default::default() }),
@@ -1169,7 +1370,7 @@ mod tests {
         let main = TcpListener::bind("127.0.0.1:0").unwrap();
         let proxy = TcpListener::bind("127.0.0.1:0").unwrap();
         let (direct, at) = (main.local_addr().unwrap(), proxy.local_addr().unwrap());
-        let fake = Fake { watched: Arc::new(AtomicU32::new(0)), whole: true };
+        let fake = Fake::new(true);
         let mut hosts = vec![direct.to_string(), at.to_string()];
         hosts.extend(https_hosts(&["view.example.ts.net".into()], 443));
         std::thread::spawn(move || run(main, None, Some(proxy), Arc::new(fake), vec![Allow::Login("me@example.com".into())], Some("t".repeat(32)),

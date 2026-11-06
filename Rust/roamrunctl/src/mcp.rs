@@ -106,6 +106,8 @@ type Size = (u32, u32);
 pub struct PageInputs {
     pub count: std::sync::atomic::AtomicU64,
     pub ended: std::sync::Mutex<Option<Instant>>,
+    /// Held by a page's input while it runs, and by an agent's from judging its look to acting: none comes between.
+    pub gate: std::sync::Mutex<()>,
 }
 
 /// Where a look takes its picture instead of asking the device for one (`view --mcp`: view's own stream).
@@ -491,6 +493,10 @@ impl Server {
         }
         let number = |key: &str| arguments[key].as_f64().ok_or(format!("{key} is missing"));
         let word = |key: &str| arguments[key].as_str().map(str::to_string).ok_or("nothing to send".to_string());
+        // A page's input waits for this, and this for one running (see `PageInputs::gate`).
+        let page = self.page.clone();
+        let _turn = page.as_deref().filter(|_| matches!(tool, "tap" | "swipe" | "pinch" | "type" | "paste" | "press"))
+            .map(|page| page.gate.lock().unwrap_or_else(|e| e.into_inner()));
         match tool {
             "look" => {
                 // A look that fails leaves none to act by: what an earlier one saw may have moved meanwhile.
@@ -1223,6 +1229,29 @@ pub(crate) mod tests {
         *page.ended.lock().unwrap() = Some(Instant::now() - Duration::from_secs(5));
         looked(&mut server, Instant::now());
         assert!(!server.call("tap", &tap).unwrap_err().contains("used from view's page"));
+    }
+
+    /// A page's input running when an agent acts by a look taken meanwhile: the action waits for it to end, and is then
+    /// refused, not made after it.
+    #[test]
+    fn an_agents_action_waits_for_a_page_input_running() {
+        let page = Arc::new(PageInputs::default());
+        let mut server = Server::holding("usb", Arc::new(Device::none()), Some(page.clone()));
+        let (began, running) = std::sync::mpsc::channel();
+        let input = page.clone();
+        let page_input = std::thread::spawn(move || {
+            let _turn = input.gate.lock().unwrap();
+            input.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            began.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(300));
+            *input.ended.lock().unwrap() = Some(Instant::now());
+        });
+        running.recv().unwrap();
+        // Looked at while it runs: counted as begun, not yet ended.
+        server.looked_page.insert("usb".into(), page.count.load(std::sync::atomic::Ordering::SeqCst));
+        server.shown.insert("usb".into(), Shown { size: (100.0, 200.0), way: 1, native: true, at: Instant::now(), of: None, id: 7, spent: false });
+        assert!(server.call("tap", &json!({ "device": "usb", "look": 7, "x": 10, "y": 10 })).unwrap_err().contains("used from view's page"));
+        page_input.join().unwrap();
     }
 
     #[test]

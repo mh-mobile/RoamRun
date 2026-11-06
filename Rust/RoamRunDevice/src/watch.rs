@@ -53,6 +53,8 @@ pub struct Watch {
     heard_at: Instant,
     /// The device's last report (RTCP): they go on while a still screen pauses the video.
     reported_at: Instant,
+    /// When `next` last gave nothing for a pause.
+    idle_said: Instant,
     count: u16,
     first_seq: Option<u16>,
     highest_seq: u16,
@@ -110,18 +112,18 @@ impl Watch {
         let now = Instant::now();
         wanted.store(true, Ordering::Relaxed);
         Ok(Watch {
-            held, video, audio, ssrc, media, feedback_port, frames: HevcDepacketizer::new(), feedback, began: now, rctl_at: now, heard_at: now, reported_at: now,
+            held, video, audio, ssrc, media, feedback_port, frames: HevcDepacketizer::new(), feedback, began: now, rctl_at: now, heard_at: now, reported_at: now, idle_said: now,
             count: 0, first_seq: None, highest_seq: 0, keyframe_at, asked_at: None, asked_first: None, requests: 0, wanted, asked: 0, answered: 0,
             last_seq: None, gap: 0, frame_first: None, trace: std::env::var_os("ROAMRUNCTL_VIEW_TRACE").is_some(), broken: false, skip_rasl: false, max_datagram: 0, fed: 0, broken_at: None, looked_at: now, busy_at: now, sound: None, moved: Default::default(), asking: Default::default(), ready: Default::default(), lost: 0, dropped: 0,
         })
     }
 
-    /// The next access unit; an error once nothing has come for `SILENT` (the stream is then let go of: watch anew).
-    /// From a thread of its own, with room (8 MB).
     /// The sound's access units (AAC-ELD, 48 kHz, stereo, 480 samples each) from now on to `to`, as they come.
     pub fn sound_to(&mut self, to: std::sync::mpsc::Sender<Vec<u8>>) { self.sound = Some(to) }
 
-    pub fn frame(&mut self) -> Result<Frame, String> {
+    /// The next access unit; `None` each second the video pauses (a still screen), for the caller to see whether
+    /// anyone still watches; an error once the stream is let go of (watch anew). From a thread of its own, with room (8 MB).
+    pub fn frame(&mut self) -> Result<Option<Frame>, String> {
         let held = self.held.clone();
         held.runtime.block_on(self.next())
     }
@@ -143,7 +145,7 @@ impl Watch {
         if asked.is_err() { self.asking.store(false, Ordering::Relaxed) }
     }
 
-    async fn next(&mut self) -> Result<Frame, String> {
+    async fn next(&mut self) -> Result<Option<Frame>, String> {
         loop {
             if self.moved.swap(false, Ordering::Relaxed) {
                 self.let_stream_go().await;
@@ -165,7 +167,7 @@ impl Watch {
                     if self.asked_at.take().is_some() { self.answered += 1 }
                     self.wanted.store(false, Ordering::Relaxed);
                 }
-                return Ok(Frame { key, data });
+                return Ok(Some(Frame { key, data }));
             }
             // The sound's RTP: each payload an AAC-ELD access unit (48 kHz, stereo, 480 samples), given on where it is wanted.
             while let Ok(Ok(datagram)) = tokio::time::timeout(Duration::ZERO, self.audio.recv()).await {
@@ -192,6 +194,10 @@ impl Watch {
             let datagram = match tokio::time::timeout(RCTL_EVERY, self.video.recv()).await {
                 Ok(Ok(datagram)) => datagram,
                 Ok(Err(e)) => return Err(format!("video: {e:?}")),
+                Err(_) if paused >= QUIET && self.idle_said.elapsed() >= QUIET => {
+                    self.idle_said = Instant::now();
+                    return Ok(None);
+                }
                 Err(_) => continue,
             };
             if is_rtcp(&datagram.data) {
