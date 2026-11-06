@@ -565,7 +565,11 @@ connection goes, start view again. Sound comes only from a Mac.
   on the iPhone Duo itself (the page showing its own screen, over `--https`): a press held on a
   home-screen icon opened its menu, and pinches zoomed a map in and out. Opened on the device it
   shows, the page shows itself over and over, which the device both sends and decodes: there it
-  lagged, and connected again every 20 to 50 s. Open it elsewhere.
+  lagged, and connected again every 20 to 50 s. Open it elsewhere. In Safari on an iPhone 15 Pro on
+  the same home Wi‑Fi (Tailscale direct), the page was cut to a key frame once in 2–3 s and lagged a
+  little, decoding in 5 ms: the same over plain HTTP as over `--https`, and with the sound off as on.
+  A headless Chrome on the serving Mac (localhost) wasn't cut after its first second. Letting a page
+  be later before it is cut (up to 2 s) was tried there and made it worse: about 8 s behind.
 - Sound: the device sends its sound as AAC-ELD, which neither Chrome nor Safari decodes (asked of
   `AudioDecoder` on a Mac and an iPhone). Where this machine is a Mac, it is decoded here with
   AudioToolbox, and a page whose Sound button was pressed gets it as PCM (48 kHz, two channels,
