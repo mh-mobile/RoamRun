@@ -131,7 +131,7 @@ import ImageIO
             throw DeviceSession.Failure.message("no")
         }
 
-        func elements(limit: Int) throws -> (captions: [String], complete: Bool) {
+        func elements(limit: Int) throws -> (elements: [ScreenElement], complete: Bool) {
             ([], true)
         }
 
