@@ -154,6 +154,7 @@ function unable(short, long) {
   log(long, true);
   // Nothing more is asked of the device for this page: its stream stops once no other page watches.
   if (socket) { socket.onclose = null; socket.close(); }
+  soundOff();
 }
 
 const support = [];
@@ -212,7 +213,7 @@ setInterval(() => {
   ].join("\n");
   // The server says something each second (its counts): from one that went quiet, nothing more comes (a link that
   // dropped without closing). The video pausing on a still screen isn't that.
-  if (socket && socket.readyState === WebSocket.OPEN && heardAt && performance.now() - heardAt > 5000) dropped("nothing from the server for 5 s");
+  if (socket && socket.readyState <= 1 && performance.now() - heardAt > 5000) dropped("nothing from the server for 5 s");
 }, 1000);
 // While the video pauses no frame is acknowledged: the server is told that this page is still here.
 setInterval(() => { send({ type: "alive" }); if (earSocket && earSocket.readyState === WebSocket.OPEN) earSocket.send(JSON.stringify({ type: "alive" })); }, 5000);
@@ -242,6 +243,7 @@ function newDecoder() {
       draw(frame);
       if (shownFrame) shownFrame.close();
       shownFrame = frame;
+      failures.length = 0;
       if (!firstPicture) { firstPicture = true; log(`first picture ${(performance.now() - connectedAt).toFixed(0)} ms after connecting`); }
       state("live", "live");
       if (pending) looked();
@@ -326,7 +328,12 @@ function configure(said) {
   try { decoder.configure({ codec: said.codec, optimizeForLatency: true }); } catch (e) { return noHevc(e.message); }
 }
 
-function send(message) { if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message)); }
+// What the device is asked to do: text still held (keys outside US ones, see `unusual`) goes before it, in order.
+const INPUTS = new Set(["tap", "swipe", "pinch", "type", "paste", "press"]);
+function send(message) {
+  if (INPUTS.has(message.type) && unusual && message.type !== "paste") flushUnusual();
+  if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+}
 
 // A connection given up on: opened again in a second.
 function dropped(why) {
@@ -342,7 +349,9 @@ function connect() {
   socket.binaryType = "arraybuffer";
   connectedAt = performance.now();
   firstPicture = false;
-  heardAt = 0;
+  failures.length = 0;
+  // Counted from now: a connection that opens and says nothing is given up on too.
+  heardAt = performance.now();
   state("wait", "connecting");
   socket.onopen = () => { tokenSent = token !== ""; socket.send(JSON.stringify({ type: "hello", token })); };
   socket.onclose = (e) => {
@@ -386,9 +395,9 @@ function said(message) {
       stats.feedback = message.feedback;
       state("wait", "waiting for a picture");
       if (typeof message.sound === "string") {
+        soundOff();
         $("sound").disabled = true;
         $("sound").title = "No sound from this server: " + message.sound;
-        if (hearing) $("sound").click();
       }
       break;
     case "picture":
@@ -580,15 +589,22 @@ function listen() {
   ear.onmessage = (e) => { if (ear === earSocket && typeof e.data !== "string" && new DataView(e.data).getUint8(0) === 2) heard(e.data); };
   ear.onclose = () => { if (hearing && ear === earSocket) earTimer = setTimeout(listen, 1000); };
 }
-$("sound").onclick = async () => {
-  hearing = !hearing;
-  $("sound").classList.toggle("on", hearing);
+// Off, and its connection with it: nothing opened again for it.
+function soundOff() {
+  hearing = false;
+  $("sound").classList.remove("on");
   clearTimeout(earTimer);
   const ear = earSocket;
   earSocket = null;
   if (ear) ear.close();
-  log(hearing ? "sound on (the Mac serving this decodes it: none from Linux or Windows)" : "sound off");
-  if (!hearing) return;
+}
+$("sound").onclick = async () => {
+  if (hearing) { soundOff(); log("sound off"); return; }
+  if (cannot) return;
+  soundOff();
+  hearing = true;
+  $("sound").classList.add("on");
+  log("sound on (the Mac serving this decodes it: none from Linux or Windows)");
   ears = ears || new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
   await ears.resume();
   if (!hearing) return;   // turned off again meanwhile

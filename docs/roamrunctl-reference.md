@@ -524,7 +524,7 @@ connection goes, start view again. Sound comes only from a Mac.
   The screen stream runs while a page watches. Each page gets the access units as they come, none
   before a key frame. A page acknowledges a frame once it has decoded it. A page whose oldest frame
   not yet shown (waiting, or sent and not yet acknowledged) is older than 0.5 s beyond that page's
-  shortest round trip is cut to the next key frame, and one is asked for (the device answers one
+  shortest round trip (taken as 1.5 s until its first acknowledgement) is cut to the next key frame, and one is asked for (the device answers one
   each 1.05 s at most). When the last page goes, the stream stops within about 5 s, as after a
   look, during a still screen's pause too; Ctrl-C stops it too.
 - Once the pictures have changed nothing for 1 s (each a few hundred bytes), the device is asked

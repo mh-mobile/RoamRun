@@ -32,6 +32,9 @@ const HEAD_WITHIN: Duration = if cfg!(test) { Duration::from_secs(3) } else { Du
 /// A viewer whose oldest frame not yet shown is older than this, beyond its shortest round trip (a page acknowledges
 /// a frame once it is decoded), is cut to the next key frame.
 const LATE: Duration = Duration::from_millis(500);
+/// A page's round trip assumed until its first acknowledgement says what it is: a far page, cut sooner, would never
+/// get one in.
+const FIRST_TRIP: Duration = Duration::from_millis(1500);
 /// A page says it is there at least this often (its acknowledgements, or `alive` each 5 s while the video pauses):
 /// one that says nothing for this long is gone (a laptop asleep), and is let go of.
 const PAGE_QUIET: Duration = if cfg!(test) { Duration::from_secs(2) } else { Duration::from_secs(20) };
@@ -69,7 +72,7 @@ impl Queue {
     fn push(&mut self, frame: Arc<Sent>, now: Instant) -> bool {
         let late = |at: Instant, beyond: Duration| now.duration_since(at) > LATE + beyond;
         let cut = self.waiting.front().is_some_and(|f| late(f.at, Duration::ZERO))
-            || self.flight.front().is_some_and(|f| late(f.1, self.trip.unwrap_or_default()));
+            || self.flight.front().is_some_and(|f| late(f.1, self.trip.unwrap_or(FIRST_TRIP)));
         if cut {
             self.waiting.clear();
             self.flight.clear();
@@ -394,14 +397,14 @@ fn run(listener: TcpListener, local: Option<TcpListener>, forwarded: Option<TcpL
     let pages = hub.mcp.as_ref().map(|mcp| mcp.page.clone());
     std::thread::spawn(move || {
         for (viewer, input) in asked {
-            // A page gone: what it left waiting isn't done for nobody.
-            if viewer.out.lock().unwrap_or_else(|e| e.into_inner()).closed { viewer.pending.fetch_sub(1, Ordering::SeqCst); continue }
             let began = Instant::now();
             let what = match &input { Input::Tap(..) => "tap", Input::Swipe(..) => "swipe", Input::Pinch(..) => "pinch", Input::Type(_) => "type", Input::Paste(_) => "paste", Input::Press(_) => "press" };
             // An agent's action waits meanwhile, and this waits for one: what an agent looked at is judged, and acted on,
             // with no input of a page's between. Counted before it begins and timed once it ends: an agent's look
             // meanwhile isn't taken to be current.
             let turn = pages.as_ref().map(|page| page.gate.lock().unwrap_or_else(|e| e.into_inner()));
+            // A page gone, while this waited too: what it left isn't done for nobody.
+            if viewer.out.lock().unwrap_or_else(|e| e.into_inner()).closed { viewer.pending.fetch_sub(1, Ordering::SeqCst); continue }
             if let Some(page) = &pages { page.count.fetch_add(1, Ordering::SeqCst); }
             let said = device.input(&input);
             if let Some(page) = &pages { *page.ended.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now()); }
@@ -978,6 +981,26 @@ mod tests {
         assert!(far.push(sent(false, next + Duration::from_millis(1300), 4), next + Duration::from_millis(1300)));
     }
 
+    /// A page 700 ms away, sent a frame each 16 ms and acknowledging each 700 ms after it was written, isn't cut: its
+    /// round trip is learned before the allowance for it runs out.
+    #[test]
+    fn a_far_page_sent_frames_all_along_learns_its_round_trip() {
+        let t = Instant::now();
+        let mut queue = Queue::new();
+        let mut written: VecDeque<(u64, Instant)> = VecDeque::new();
+        for i in 0..300u64 {
+            let now = t + Duration::from_millis(16 * i);
+            while written.front().is_some_and(|w| now.duration_since(w.1) >= Duration::from_millis(700)) {
+                let (ms, at) = written.pop_front().unwrap();
+                queue.acked(ms, at + Duration::from_millis(700));
+            }
+            queue.push(sent(i % 60 == 0, now, i), now);
+            if let Some(frame) = queue.take(now) { written.push_back((frame.ms, now)); }
+        }
+        assert_eq!(queue.cuts, 0);
+        assert_eq!(queue.trip, Some(Duration::from_millis(700)));
+    }
+
     #[test]
     fn the_codec_and_size_come_from_the_sps() {
         // x265's SPS of a 1180 x 2556 picture (coded 1184 x 2560), Main, level 5: emulation prevention bytes in it.
@@ -1253,6 +1276,33 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1000));
         assert_eq!(done.load(Ordering::SeqCst), made);
         assert!(made < 8, "{made}");
+    }
+
+    /// A page that goes while its input waits behind an agent's action: the input isn't made once the agent is done.
+    #[test]
+    fn an_input_left_by_a_page_gone_behind_an_agent_isnt_made() {
+        let fake = Fake::new(true);
+        let done = fake.done.clone();
+        let page = Arc::new(crate::mcp::PageInputs::default());
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let at = listener.local_addr().unwrap();
+        let hosts = vec![at.to_string()];
+        let mcp = Mcp { name: "fake".into(), server: Mutex::new(crate::mcp::Server::holding("fake", Arc::new(Device::none()), Some(page.clone()))), page: page.clone() };
+        std::thread::spawn(move || run(listener, None, None, Arc::new(fake), vec![Allow::Login("me@example.com".into())], Some("t".repeat(32)), hosts,
+            "100.64.0.1".parse().unwrap(), "own".into(), true, Some(mcp), Box::new(|_| Ok(whois("me@example.com")))));
+        let agent = page.gate.lock().unwrap();
+        let (mut stream, _) = ask(at, UPGRADE);
+        hello(&mut stream, &"t".repeat(32));
+        let text = br#"{"type":"tap","x":0.5,"y":0.5}"#;
+        let mut frame = vec![0x81, 0x80 | text.len() as u8, 0, 0, 0, 0];
+        frame.extend(text);
+        stream.write_all(&frame).unwrap();
+        std::thread::sleep(Duration::from_millis(300));   // the tap waits at the gate
+        drop(stream);
+        std::thread::sleep(Duration::from_millis(300));   // the page is seen to be gone
+        drop(agent);
+        std::thread::sleep(Duration::from_millis(700));
+        assert_eq!(done.load(Ordering::SeqCst), 0);
     }
 
     /// A caller that sends its head a little at a time isn't kept past HEAD_WITHIN.
