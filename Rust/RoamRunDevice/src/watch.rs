@@ -12,7 +12,9 @@ use crate::{stream_for_input, with_room, Held, KEYFRAME_APART, KEYFRAME_WAIT, LA
 
 /// How often the receiver's report goes, as idevice's `build_rctl` documents it.
 const RCTL_EVERY: Duration = Duration::from_millis(50);
-/// No video from the device for this long, key frames asked for or not: the stream is started again, on the display that is on.
+/// No video and no reports from the device for this long: the stream is started again, on the display that is on. A still
+/// screen pauses the video alone (up to ~10 s seen) and sends on by itself; a key frame asked for meanwhile doesn't come,
+/// so then the stream is started again at once.
 const SILENT: Duration = Duration::from_secs(8);
 /// No picture with anything in it for this long: which display is on is asked, again each `LOOK_EVERY` meanwhile. A
 /// folded Duo's inner screen goes on sending pictures of a few hundred bytes, unchanged, for about 9 s.
@@ -49,11 +51,15 @@ pub struct Watch {
     began: Instant,
     rctl_at: Instant,
     heard_at: Instant,
+    /// The device's last report (RTCP): they go on while a still screen pauses the video.
+    reported_at: Instant,
     count: u16,
     first_seq: Option<u16>,
     highest_seq: u16,
     keyframe_at: Instant,
     asked_at: Option<Instant>,
+    /// The first of the requests not answered yet.
+    asked_first: Option<Instant>,
     requests: u8,
     /// Raised by whoever wants a key frame; lowered when one comes.
     wanted: Arc<AtomicBool>,
@@ -104,8 +110,8 @@ impl Watch {
         let now = Instant::now();
         wanted.store(true, Ordering::Relaxed);
         Ok(Watch {
-            held, video, audio, ssrc, media, feedback_port, frames: HevcDepacketizer::new(), feedback, began: now, rctl_at: now, heard_at: now,
-            count: 0, first_seq: None, highest_seq: 0, keyframe_at, asked_at: None, requests: 0, wanted, asked: 0, answered: 0,
+            held, video, audio, ssrc, media, feedback_port, frames: HevcDepacketizer::new(), feedback, began: now, rctl_at: now, heard_at: now, reported_at: now,
+            count: 0, first_seq: None, highest_seq: 0, keyframe_at, asked_at: None, asked_first: None, requests: 0, wanted, asked: 0, answered: 0,
             last_seq: None, gap: 0, frame_first: None, trace: std::env::var_os("ROAMRUNCTL_VIEW_TRACE").is_some(), broken: false, skip_rasl: false, max_datagram: 0, fed: 0, broken_at: None, looked_at: now, busy_at: now, sound: None, moved: Default::default(), asking: Default::default(), ready: Default::default(), lost: 0, dropped: 0,
         })
     }
@@ -155,6 +161,7 @@ impl Watch {
                 else if self.skip_rasl && is_rasl(&data) { self.dropped += 1; continue }
                 else { self.skip_rasl = false }
                 if key {
+                    self.asked_first = None;
                     if self.asked_at.take().is_some() { self.answered += 1 }
                     self.wanted.store(false, Ordering::Relaxed);
                 }
@@ -177,9 +184,10 @@ impl Watch {
                 self.looked_at = Instant::now();
                 self.ask_aside();
             }
-            if self.heard_at.elapsed() >= SILENT {
+            let paused = self.heard_at.elapsed();
+            if given_up(paused, self.reported_at.elapsed(), self.asked_first.map(|at| at.elapsed())) {
                 self.let_stream_go().await;
-                return Err(format!("no frames for {} s", SILENT.as_secs()));
+                return Err(format!("no frames for {} s", paused.as_secs()));
             }
             let datagram = match tokio::time::timeout(RCTL_EVERY, self.video.recv()).await {
                 Ok(Ok(datagram)) => datagram,
@@ -188,8 +196,10 @@ impl Watch {
             };
             if is_rtcp(&datagram.data) {
                 self.feedback_port = Some(datagram.source_port);
+                self.reported_at = Instant::now();
                 continue;
             }
+            if self.trace && self.heard_at.elapsed() >= QUIET { eprintln!("trace: {} ms: video again after {} ms", now_ms(), self.heard_at.elapsed().as_millis()) }
             self.heard_at = Instant::now();
             self.max_datagram = self.max_datagram.max(datagram.data.len());
             let Some(packet) = RtpPacket::parse(&datagram.data) else { continue };
@@ -266,6 +276,7 @@ impl Watch {
         if self.trace { eprintln!("trace: key frame asked ({}), to {:?}", self.requests, self.feedback_port) }
         self.asked += 1;
         self.asked_at = Some(Instant::now());
+        self.asked_first.get_or_insert_with(Instant::now);
         let request = build_keyframe_request(self.ssrc, LABEL, media, &[], self.requests);
         match self.feedback_port {
             Some(_) => self.send(request).await,
@@ -289,6 +300,12 @@ impl Drop for Watch {
         // The idle stop from now: the device stops listing screen sharing some seconds after the last viewer.
         link.stream_used = Instant::now();
     }
+}
+
+/// Whether a stream is let go of, by how long its video and its reports have been away, and since a key frame was
+/// first asked for (twice unanswered).
+fn given_up(paused: Duration, unreported: Duration, asked: Option<Duration>) -> bool {
+    paused >= SILENT && unreported >= SILENT || paused >= QUIET && asked.is_some_and(|asked| asked >= KEYFRAME_WAIT * 2)
 }
 
 /// Duplicates and late RTP packets are ignored; forward gaps wrap at 65536.
@@ -382,6 +399,18 @@ pub fn nal_units(annexb: &[u8]) -> impl Iterator<Item = &[u8]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A still screen's pause, its reports going on, isn't the stream's end; nothing at all, or a key frame not coming, is.
+    #[test]
+    fn a_paused_stream_lives_while_it_reports() {
+        let s = Duration::from_secs;
+        assert!(!given_up(s(9), s(1), None));
+        assert!(given_up(s(8), s(8), None));
+        assert!(given_up(s(2), s(1), Some(KEYFRAME_WAIT * 2)));
+        assert!(!given_up(s(2), s(1), Some(KEYFRAME_WAIT)));
+        assert!(!given_up(Duration::from_millis(500), s(0), Some(s(1))));
+        assert!(!given_up(s(2), s(1), Some(Duration::from_millis(100))));
+    }
 
     #[test]
     fn duplicate_and_late_packets_dont_break_the_next_picture() {

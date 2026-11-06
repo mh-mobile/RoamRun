@@ -519,8 +519,10 @@ at its address on the home Wi‑Fi, and 38 times through Tailscale (another run:
   which display is on, again every 2 s while that lasts. Where it isn't the one streamed (an iPhone
   Duo folded or opened), the stream is stopped and started on the one that is on. On the Duo that
   took about 3 s from closing it to the outer screen in the page: its inner screen goes on sending
-  unchanged pictures for about 9 s after it is closed. A stream with no video at all for 8 s is
-  started again too.
+  unchanged pictures for about 9 s after it is closed. On a still screen the device pauses the
+  video by itself (on the Duo by USB, up to 9.7 s in 5 minutes) while its reports go on, and sends
+  again later: the stream is kept meanwhile. It is started again when neither video nor reports
+  have come for 8 s, or when a key frame asked for (a new page, a look) doesn't come during a pause.
 - Frame acknowledgements and receiver reports (every 50 ms) go back to the device, as idevice's
   `build_frame_ack` and `build_rctl` document them; `ROAMRUNCTL_VIEW_FEEDBACK=off` sends neither,
   to compare.
