@@ -175,7 +175,7 @@ function noVideoDecoder() {
   const here = location.hostname === "localhost" || location.hostname === "127.0.0.1";
   if (!window.isSecureContext) {
     unable("not a secure page", "This browser decodes video only on a secure page, and plain http to another machine isn't one. "
-      + (here ? "" : "On the Mac running view, open http://localhost" + (location.port ? ":" + location.port : "") + "/; from anywhere on the tailnet, start view with --https <port> and open https://<the Mac's Tailscale name>:<port>/. ")
+      + (here ? "" : "On the Mac running view (started with --token-file), open http://localhost" + (location.port ? ":" + location.port : "") + "/; from anywhere on the tailnet, start view with --token-file and --https <port>, and open https://<the Mac's Tailscale name>:<port>/. ")
       + "Safari on an iPhone decodes it on this page as it is.");
   } else {
     unable("can't decode here", "This browser has no VideoDecoder (WebCodecs), so it can't show the device. " + tried);
@@ -215,8 +215,6 @@ setInterval(() => {
   // dropped without closing). The video pausing on a still screen isn't that.
   if (socket && socket.readyState <= 1 && performance.now() - heardAt > 5000) dropped("nothing from the server for 5 s");
 }, 1000);
-// While the video pauses no frame is acknowledged: the server is told that this page is still here.
-setInterval(() => { send({ type: "alive" }); if (earSocket && earSocket.readyState === WebSocket.OPEN) earSocket.send(JSON.stringify({ type: "alive" })); }, 5000);
 
 // Drawn turned as the interface is: the stream comes in the device's own (upright) terms.
 function draw(frame) {
@@ -350,6 +348,7 @@ function connect() {
   connectedAt = performance.now();
   firstPicture = false;
   failures.length = 0;
+  $("toast").hidden = true;   // what was said of the last connection's inputs ("Pasting…") isn't of this one's
   // Counted from now: a connection that opens and says nothing is given up on too.
   heardAt = performance.now();
   state("wait", "connecting");
@@ -468,9 +467,12 @@ function lifted(e, cancelled) {
     const [a, b] = [...fingers.values()].map((f) => f.to);
     const px = (p, q) => [(q.x - p.x) * r.width, (q.y - p.y) * r.height];
     const [dx0, dy0] = px(two[0], two[1]), [dx1, dy1] = px(a, b);
-    const scale = Math.min(4, Math.max(0.25, Math.hypot(dx1, dy1) / Math.max(1, Math.hypot(dx0, dy0))));
+    let scale = Math.min(4, Math.max(0.25, Math.hypot(dx1, dy1) / Math.max(1, Math.hypot(dx0, dy0))));
     let degrees = (Math.atan2(dy1, dx1) - Math.atan2(dy0, dx0)) * 180 / Math.PI;
     degrees = ((degrees + 540) % 360) - 180;
+    // Fingers never move quite alike: a turn under 10° is none, a change under 5 % none (a two-finger tap).
+    if (Math.abs(degrees) < 10) degrees = 0;
+    if (Math.abs(scale - 1) < 0.05) scale = 1;
     const centre = upright({ x: (two[0].x + two[1].x) / 2, y: (two[0].y + two[1].y) / 2 });
     send({ type: "pinch", x: centre.x, y: centre.y, scale, degrees, ms: ms(finger.to.t - two[1].t) });
     spoilt = true;   // the other finger, lifted after, sends nothing

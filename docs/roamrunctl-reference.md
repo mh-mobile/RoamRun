@@ -441,8 +441,9 @@ picture then stops until the next key frame: over 30 s, 1 to 3.5 times with the 
 at its address on the home Wi‑Fi, and 38 times through Tailscale (another run: 12 in 70 s).
 
 In short: run it on the Mac the device is connected to, by USB (`--usb`) or on the same Wi‑Fi
-(`--at`), not through Tailscale. Open `http://localhost:<port>/` on that Mac, or start it with
-`--https <port>` and open the HTTPS address it prints from another machine on the tailnet. The
+(`--at`), not through Tailscale, and give it `--token-file`. Open `http://localhost:<port>/` on
+that Mac, or start it with `--https <port>` too and open the HTTPS address it prints from another
+machine on the tailnet. The
 browser must decode HEVC (tried: Chrome on a Mac, Safari on an iPhone). If the device's
 connection goes, start view again. Sound comes only from a Mac.
 
@@ -466,9 +467,10 @@ connection goes, start view again. Sound comes only from a Mac.
 - 12 connections at once, 6 from one address by one way in (the Tailscale address, this machine's
   localhost and Serve's loopback are counted apart; a page takes two, an MCP client two or three);
   more are closed unanswered. A caller not yet let in has 10 s for the head, the page's first
-  message or an MCP request's body, each read and all together. A page that says nothing for 20 s
-  is let go of (a page acknowledges frames, and says `alive` every 5 s while the video pauses); one
-  slow to take what is written isn't cut for that.
+  message or an MCP request's body, each read and all together. Each page is pinged every 5 s; one
+  whose browser says nothing for 20 s (no pong, no acknowledgement) is let go of. A browser answers
+  pings with its page's script asleep in a background tab too. One slow to take what is written isn't
+  cut for that.
 - With `--token-file` it listens on this machine's loopback too, at `http://localhost:<port>/` (without one,
   this machine can't watch at all, and it says so as it starts): a browser takes a page
   on `localhost` for a secure one, so one that takes no flags (an app's own, as a coding agent's
@@ -522,7 +524,7 @@ connection goes, start view again. Sound comes only from a Mac.
 - The device is this command's alone while it runs: don't use it from another command meanwhile
   (with `--mcp`, an agent uses `/mcp` instead).
   The screen stream runs while a page watches. Each page gets the access units as they come, none
-  before a key frame. A page acknowledges a frame once it has decoded it. A page whose oldest frame
+  before a key frame that carries its parameter sets (another is asked for where one comes without). A page acknowledges a frame once it has decoded it. A page whose oldest frame
   not yet shown (waiting, or sent and not yet acknowledged) is older than 0.5 s beyond that page's
   shortest round trip (taken as 1.5 s until its first acknowledgement) is cut to the next key frame, and one is asked for (the device answers one
   each 1.05 s at most). When the last page goes, the stream stops within about 5 s, as after a
@@ -566,8 +568,8 @@ connection goes, start view again. Sound comes only from a Mac.
   measured.
 - Where the page can't show the device it says why over the picture, and doesn't wait on: a browser
   without `VideoDecoder`, a page that isn't a secure one (and where to open it instead), a browser
-  whose decoder doesn't take HEVC (as the decoder says), a token refused, the device's connection
-  gone (start view again). A server that sends nothing for 5 s (it sends its counts each second) is
+  whose decoder doesn't take HEVC (as the decoder says, or three failures in 10 s before any picture
+  on that connection), a token refused, the device's connection gone (start view again). A server that sends nothing for 5 s (it sends its counts each second) is
   connected to again.
 - The header says whether the picture is live, and the frames and KB a second. Details shows the bytes and frames received each second, the decode time, the key frames
   asked for and answered, how often it was cut, and click-to-change: the time from a click to
@@ -581,7 +583,7 @@ connection goes, start view again. Sound comes only from a Mac.
   `hello` (`feedback`, `sound`: true, or why there is none), `picture` (`codec`, `width`, `height`,
   `crop`), `counts`, `status`, `agent` (`what`, `points`), `done`, `error`.
   Sound is a binary message too: a byte (2), the time, then the PCM (little-endian).
-  The page's are JSON: `hello` (`token`), `ack` (`t`), `alive`, `tap` (`x`, `y`, 0 to 1), `swipe` (`x1`,
+  The page's are JSON: `hello` (`token`), `ack` (`t`), `tap` (`x`, `y`, 0 to 1), `swipe` (`x1`,
   `y1`, `x2`, `y2`, `ms`), `pinch` (`x`, `y`, `scale` 0.25 to 4, `degrees` −180 to 180, `ms`),
   `type` (`text`), `paste` (`text`), `press` (`button`), `keyframe`. For the sound the page opens a second WebSocket, whose `hello` has `only: "sound"`: it
   carries the sound alone, so that no frame holds it up.

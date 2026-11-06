@@ -35,9 +35,11 @@ const LATE: Duration = Duration::from_millis(500);
 /// A page's round trip assumed until its first acknowledgement says what it is: a far page, cut sooner, would never
 /// get one in.
 const FIRST_TRIP: Duration = Duration::from_millis(1500);
-/// A page says it is there at least this often (its acknowledgements, or `alive` each 5 s while the video pauses):
-/// one that says nothing for this long is gone (a laptop asleep), and is let go of.
+/// A page's browser says it is there at least this often (its pongs to the pings each PING_EVERY, which it answers
+/// with the page's script asleep in a background tab too, and the page's acknowledgements): one that says nothing for
+/// this long is gone (a laptop asleep), and is let go of.
 const PAGE_QUIET: Duration = if cfg!(test) { Duration::from_secs(2) } else { Duration::from_secs(20) };
+const PING_EVERY: Duration = if cfg!(test) { Duration::from_millis(500) } else { Duration::from_secs(5) };
 /// Inputs from one page waiting their turn, at most: more are refused, not kept for minutes.
 const INPUTS_WAITING: usize = 20;
 /// A message from the page, at most.
@@ -48,6 +50,8 @@ pub const FEEDBACK: &str = "ROAMRUNCTL_VIEW_FEEDBACK";
 /// One access unit as viewers are sent it. `picture`: for a key frame, what the page decodes it with.
 struct Sent {
     key: bool,
+    /// A key frame with its parameter sets: decodable alone, by a decoder just made.
+    whole: bool,
     at: Instant,
     ms: u64,
     data: Vec<u8>,
@@ -79,7 +83,8 @@ impl Queue {
             self.key_needed = true;
             self.cuts += 1;
         }
-        if self.key_needed && !frame.key { return cut }
+        // Waiting for a key frame: one without its parameter sets doesn't do, and another is asked for.
+        if self.key_needed && !frame.whole { return cut || frame.key }
         self.key_needed = false;
         self.waiting.push_back(frame);
         cut
@@ -240,7 +245,7 @@ impl Hub {
         // again (the stream lowered the asking at this one).
         if frame.key {
             let mut waiting = self.waiting.lock().unwrap_or_else(|e| e.into_inner());
-            if whole(&frame.data) { for look in waiting.drain(..) { let _ = look.send(frame.clone()); } }
+            if frame.whole { for look in waiting.drain(..) { let _ = look.send(frame.clone()); } }
             else if !waiting.is_empty() { self.wanted.store(true, Ordering::Relaxed) }
         }
         for viewer in self.viewers.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|v| !v.sound_only) {
@@ -533,7 +538,7 @@ fn pump(hub: &Hub, screen: &dyn Screen) {
                 }
             }
             let ms = hub.began.elapsed().as_millis() as u64;
-            hub.push(Sent { key: frame.key, at: Instant::now(), ms, picture: frame.key.then(|| picture.as_ref().map(|p| p.1.clone())).flatten(), data: frame.data });
+            hub.push(Sent { key: frame.key, whole: frame.key && whole(&frame.data), at: Instant::now(), ms, picture: frame.key.then(|| picture.as_ref().map(|p| p.1.clone())).flatten(), data: frame.data });
         }
     }
 }
@@ -568,7 +573,9 @@ fn connection(stream: TcpStream, from: IpAddr, route: Route, hub: &Hub, who: &mu
         Ok(name) => *who = name,
         Err(why) => {
             // The page's refusal says why, to whoever opened it.
-            let body = if socket { String::new() } else { format!("{why}: roamrunctl view lets in the logins it was started with (--allow), and this machine with its token (--token-file)\n") };
+            let body = if socket { String::new() }
+                else if whois.user.login.is_empty() && whois.node.tags.as_ref().is_none_or(Vec::is_empty) { "no Tailscale login came with the request: a tagged machine opens http://<this machine's Tailscale address>:<port>/, let in by --allow tag:<name>\n".to_string() }
+                else { format!("{why}: roamrunctl view lets in the logins it was started with (--allow), and this machine with its token (--token-file)\n") };
             answer(&mut writer, 403, "text/plain; charset=utf-8", &body);
             *who = why;
             return "403".into();
@@ -596,7 +603,7 @@ fn connection(stream: TcpStream, from: IpAddr, route: Route, hub: &Hub, who: &mu
         return "token refused".into();
     }
     drop(in_time);
-    // A page that says nothing for PAGE_QUIET is gone (its acknowledgements, or `alive` while the video pauses); one
+    // A page that says nothing for PAGE_QUIET is gone (its pongs, its acknowledgements); one
     // slow to take what is written isn't cut for that.
     let _ = reader.get_ref().set_read_timeout(Some(PAGE_QUIET));
     let _ = writer.set_write_timeout(None);
@@ -636,7 +643,6 @@ fn read_from(reader: &mut impl BufRead, viewer: &Arc<Viewer>, hub: &Hub) -> Stri
         let message: Value = serde_json::from_str(&text).unwrap_or_default();
         match message["type"].as_str().unwrap_or("") {
             "ack" => if let Some(ms) = message["t"].as_u64() { viewer.out.lock().unwrap_or_else(|e| e.into_inner()).queue.acked(ms, Instant::now()) },
-            "alive" => {}
             "keyframe" => {
                 viewer.out.lock().unwrap_or_else(|e| e.into_inner()).queue.restart();
                 hub.wanted.store(true, Ordering::Relaxed);
@@ -681,7 +687,7 @@ fn input(message: &Value) -> Result<Input, String> {
 /// To the page: what is said, then frames as they come; the counts once a second.
 fn write_to(writer: &mut TcpStream, viewer: &Viewer, hub: &Hub) {
     let mut picture: Option<Arc<str>> = None;
-    let mut counted = Instant::now();
+    let (mut counted, mut pinged) = (Instant::now(), Instant::now());
     loop {
         let (texts, sounds, frame, cuts) = {
             let mut out = viewer.out.lock().unwrap_or_else(|e| e.into_inner());
@@ -700,6 +706,10 @@ fn write_to(writer: &mut TcpStream, viewer: &Viewer, hub: &Hub) {
             counted = Instant::now();
             let counts = json!({ "type": "counts", "keyframesAsked": hub.asked.load(Ordering::Relaxed), "keyframesAnswered": hub.answered.load(Ordering::Relaxed), "cuts": cuts, "way": hub.way.load(Ordering::Relaxed) });
             bytes.extend(ws_frame(1, counts.to_string().as_bytes()));
+        }
+        if pinged.elapsed() >= PING_EVERY {
+            pinged = Instant::now();
+            bytes.extend(ws_frame(9, &[]));
         }
         if let Some(frame) = frame {
             if let Some(said) = frame.picture.as_ref().filter(|said| picture.as_ref() != Some(said)) {
@@ -936,7 +946,7 @@ mod tests {
     use super::*;
     use crate::tailscale::{WhoisNode, WhoisUser};
 
-    fn sent(key: bool, at: Instant, ms: u64) -> Arc<Sent> { Arc::new(Sent { key, at, ms, data: vec![], picture: None }) }
+    fn sent(key: bool, at: Instant, ms: u64) -> Arc<Sent> { Arc::new(Sent { key, whole: key, at, ms, data: vec![], picture: None }) }
 
     #[test]
     fn a_viewer_waits_for_a_key_frame_and_once_behind_is_cut_to_the_next() {
@@ -964,9 +974,10 @@ mod tests {
         let slow = late + Duration::from_millis(521);
         assert!(queue.push(sent(true, slow, 8), slow));
         assert_eq!(queue.take(slow).unwrap().ms, 8);
-        // A decoder that failed: nothing until a key frame.
+        // A decoder that failed: nothing until a key frame, and not one without its parameter sets (another is asked for).
         queue.restart();
         assert!(!queue.push(sent(false, slow, 9), slow));
+        assert!(queue.push(Arc::new(Sent { key: true, whole: false, at: slow, ms: 10, data: vec![], picture: None }), slow));
         assert!(queue.take(slow).is_none());
 
         // A page far away (its acknowledgements come 700 ms after writing) isn't late for that alone.
@@ -1197,19 +1208,12 @@ mod tests {
     }
 
     /// A WebSocket's messages until the server closes it, or `within` goes by: whether it closed, and its texts.
-    fn until_closed(stream: &mut TcpStream, within: Duration, alive: bool) -> (bool, Vec<String>) {
+    /// `answer`: its pings are answered, as a browser does, its page's script asleep or not.
+    fn until_closed(stream: &mut TcpStream, within: Duration, answer: bool) -> (bool, Vec<String>) {
         let until = Instant::now() + within;
         let mut texts = Vec::new();
         stream.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
-        let mut said = Instant::now();
         while Instant::now() < until {
-            if alive && said.elapsed() > Duration::from_millis(500) {
-                said = Instant::now();
-                let text = br#"{"type":"alive"}"#;
-                let mut frame = vec![0x81, 0x80 | text.len() as u8, 0, 0, 0, 0];
-                frame.extend(text);
-                if stream.write_all(&frame).is_err() { return (true, texts) }
-            }
             let mut head = [0u8; 2];
             match stream.read_exact(&mut head) {
                 Ok(()) => {}
@@ -1221,12 +1225,18 @@ mod tests {
             let mut payload = vec![0u8; length];
             if stream.read_exact(&mut payload).is_err() { return (true, texts) }
             stream.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
-            match head[0] & 0x0f { 8 => return (true, texts), 1 => texts.push(String::from_utf8_lossy(&payload).into_owned()), _ => {} }
+            match head[0] & 0x0f {
+                8 => return (true, texts),
+                1 => texts.push(String::from_utf8_lossy(&payload).into_owned()),
+                9 if answer && stream.write_all(&[0x8a, 0x80, 0, 0, 0, 0]).is_err() => return (true, texts),
+                _ => {}
+            }
         }
         (false, texts)
     }
 
-    /// A page that says nothing (its machine asleep) is let go of after PAGE_QUIET; one that says it is there stays.
+    /// A page that says nothing (its machine asleep) is let go of after PAGE_QUIET; one whose browser answers the pings
+    /// stays, though it sends nothing else (its script asleep in a background tab).
     #[test]
     fn a_page_that_says_nothing_is_let_go_of() {
         let (at, _) = served("me@example.com");
@@ -1435,6 +1445,13 @@ mod tests {
             assert!(ask(at, &format!("GET / HTTP/1.1\r\nHost: {{at}}\r\n{login}\r\n")).1.starts_with("HTTP/1.1 403"));
             assert!(ask(at, &UPGRADE.replace("\r\n\r\n", &format!("\r\n{login}\r\n"))).1.starts_with("HTTP/1.1 403"));
         }
+        // No login with it (a tagged machine through Serve): the page says to use the direct address.
+        let mut stream = TcpStream::connect(at).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        stream.write_all(format!("GET / HTTP/1.1\r\nHost: {at}\r\n\r\n").as_bytes()).unwrap();
+        let mut answer = String::new();
+        let _ = stream.read_to_string(&mut answer);
+        assert!(answer.contains("no Tailscale login came with the request") && answer.contains("--allow tag:"), "{answer}");
         let login = "Tailscale-User-Login: me@example.com\r\n";
         assert!(posted(at, &(bearer.clone() + login), ping).0.starts_with("HTTP/1.1 200"));
         assert!(posted(at, login, ping).0.starts_with("HTTP/1.1 401"));
