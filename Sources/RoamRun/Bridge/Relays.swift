@@ -184,22 +184,6 @@ final class Relay: @unchecked Sendable {
         self.remotePort = remotePort
     }
 
-    /// Nagle off: the tunnel carries lldb's small request/response packets,
-    /// and Nagle + delayed ACK added ~150ms to every round trip.
-    /// Keepalive (outbound only): a sleeping iPhone never sends a FIN, so
-    /// without probes its dead connection kept the bridge looking Ready.
-    private static func tcpParams(keepalive: Bool = false) -> NWParameters {
-        let tcp = NWProtocolTCP.Options()
-        tcp.noDelay = true
-        if keepalive {
-            tcp.enableKeepalive = true
-            tcp.keepaliveIdle = 10
-            tcp.keepaliveInterval = 5
-            tcp.keepaliveCount = 3 // dead after ~25s of silence
-        }
-        return NWParameters(tls: nil, tcp: tcp)
-    }
-
     /// A relay dropped without stop() would keep its pairs in the process-wide count.
     deinit { stop() }
 
@@ -212,7 +196,7 @@ final class Relay: @unchecked Sendable {
             refusedDials = 0
             heldOff = 0
         }
-        let params = Self.tcpParams()
+        let params = DirectTCP.parameters()
         params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(localIP), port: port)
         let listener = try NWListener(using: params)
         // A relay started again drops the listener before: its late states must not
@@ -427,7 +411,7 @@ final class Relay: @unchecked Sendable {
         let outbound = NWConnection(
             host: NWEndpoint.Host(remoteIP),
             port: rport,
-            using: Self.tcpParams(keepalive: true)
+            using: DirectTCP.parameters(keepalive: true)
         )
         let stats = ConnStats(clock: clock)
         let port = remotePort
