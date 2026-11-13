@@ -221,6 +221,19 @@ device off the app's list of bridges to restore.
 
 ## 4. Build, install, launch
 
+For another project's agent, the handoff is the saved device id, expected hardware
+UDID and working Xcode developer directory, not a fresh pairing procedure. Reuse
+the existing bridge and the project's build/signing workflow. If `xcrun` cannot
+find `devicectl` while `xcode-select -p` names Command Line Tools, check that
+project's toolchain configuration before concluding Xcode is absent; set
+`DEVELOPER_DIR` for this process rather than changing the global selection.
+
+Coordinate installs on the same device across agents; send one build at a time.
+For a signed artifact, prefer `roamrun install` below: it checks signing and
+does not impose a short transfer timeout. A large app on a slow direct link can
+take minutes. Do not wrap it in a 45-second process deadline or restart an
+interrupted transfer without checking its outcome. Low ping is not throughput.
+
 With your usual tools, using `$UDID` — e.g.:
 
 ```sh
@@ -243,6 +256,10 @@ Only build projects the user trusts: their build scripts run on this Mac.
 Prebuilt .ipa (e.g. from CI) or .app: `roamrun install iPhone App.ipa` checks
 it's signed for this device (Debugging, Release Testing / Ad Hoc, Enterprise)
 first; App Store / TestFlight builds can't be installed directly.
+
+Keep installation, version readback and launch results separate. An empty
+`devicectl device info apps` result alone does not prove an installation failed:
+retain the install's exit status/receipt, then verify launch and the actual build.
 
 ## 5. See what the app shows
 
