@@ -42,7 +42,9 @@ const FAKES = () => {
     const data = new ArrayBuffer(9 + 4), view = new DataView(data);
     view.setUint8(0, key ? 1 : 0);
     view.setBigUint64(1, BigInt(ms));
-    socket(i).onmessage({ data });
+    // As a browser gives it: a Blob unless the page asked for ArrayBuffers.
+    const s = socket(i);
+    s.onmessage({ data: s.binaryType === "arraybuffer" ? data : new Blob([data]) });
   };
   window.__closes = (code, i) => { const s = socket(i); s.readyState = 3; s.onclose && s.onclose({ code }); };
   window.__sent = (i) => socket(i).sent.map((m) => JSON.parse(m));
@@ -162,9 +164,10 @@ const checks = {
 (async () => {
   const only = process.argv[2];
   const browser = await chromium.launch();
-  let failed = 0;
+  let failed = 0, ran = 0;
   for (const [name, check] of Object.entries(checks)) {
     if (only && !name.includes(only)) continue;
+    ran++;
     const context = await browser.newContext();
     const page = await context.newPage();
     const errors = [];
@@ -185,6 +188,7 @@ const checks = {
     await context.close();
   }
   await browser.close();
-  console.log(failed ? `${failed} failed` : "all passed");
+  if (!ran) { console.log(`no check is named with “${only}”`); process.exit(1); }
+  console.log(failed ? `${failed} failed` : `all ${ran} passed`);
   process.exit(failed ? 1 : 0);
 })();

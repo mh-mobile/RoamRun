@@ -490,7 +490,7 @@ connection goes, start view again. Sound comes only from a Mac.
   listener, separate from the localhost page, with Tailscale's certificate: a secure page to any browser on the tailnet, an app's own
   included (T3 Code's gave it `VideoDecoder` there). A port `tailscale serve` already serves is
   refused. Where `tailscale serve` doesn't serve the port (HTTPS not turned on for the tailnet, say)
-  or doesn't answer within 20 s, view stops with what it printed, and how to see what it needs.
+  or doesn't answer within 20 s, view stops with what it printed (and takes off a port it did serve).
   The rest of `tailscale serve` is left as it is; at Ctrl-C that port alone is taken
   off it (a view that is killed leaves it: `tailscale serve --https=<port> off`). A request handed
   on so says whose it is (`Tailscale-User-Login`), and is judged by `--allow` as that login; one

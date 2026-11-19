@@ -511,7 +511,7 @@ impl Server {
         let word = |key: &str| arguments[key].as_str().map(str::to_string).ok_or("nothing to send".to_string());
         // A page's input waits for this, and this for one running (see `PageInputs::gate`).
         let page = self.page.clone();
-        let turn = page.as_deref().filter(|_| matches!(tool, "tap" | "swipe" | "pinch" | "type" | "paste" | "press"))
+        let turn = page.as_deref().filter(|_| matches!(tool, "tap" | "swipe" | "pinch" | "type" | "paste" | "press" | "launch" | "elements"))
             .map(|page| page.gate.lock().unwrap_or_else(|e| e.into_inner()));
         if turn.is_some() && self.gone.as_ref().is_some_and(|gone| gone()) { return Err("not made: its caller went while a page's input ran".into()) }
         match tool {
@@ -526,9 +526,10 @@ impl Server {
                 // From view's stream where it gives one; else the device is asked, and the look says why.
                 // The device's picture is taken as of when it was asked for: a page's input just before isn't in it yet.
                 let asked = Instant::now();
-                let (taken, aside, captured) = match self.pictures.as_ref().map(|pictures| pictures()) {
+                // Where view's stream gave none, the PNG: asking the device for a key frame would start a stream of its own.
+                let (taken, aside, mut captured) = match self.pictures.as_ref().map(|pictures| pictures()) {
                     Some(Ok((picture, at))) => (Ok(picture), None, at),
-                    Some(Err(why)) => { let asked = Instant::now(); (device::picture(device), Some(why), asked) }
+                    Some(Err(why)) => { let asked = Instant::now(); (device::screenshot(device), Some(why), asked) }
                     None => (device::picture(device), None, asked),
                 };
                 let picture = match taken {
@@ -537,7 +538,9 @@ impl Server {
                     Err(_) => {
                         // Let go of meanwhile: once more, on a new connection.
                         self.open.remove(&name);
-                        device::picture(self.device(&name, None)?)?
+                        let device = self.device(&name, None)?;
+                        captured = Instant::now();
+                        device::picture(device)?
                     }
                 };
                 let device = &self.open[&name].0;
@@ -1301,6 +1304,9 @@ pub(crate) mod tests {
         let mut server = Server::holding("usb", Arc::new(Device::none()), Some(page.clone()));
         server.ask_gone(Some(Box::new(|| true)));
         assert!(server.call("press", &json!({ "device": "usb", "button": "home" })).unwrap_err().contains("its caller went"));
+        // Those that wait for the device as a page's input does, without a look.
+        assert!(server.call("launch", &json!({ "device": "usb", "bundle_id": "com.example.app" })).unwrap_err().contains("its caller went"));
+        assert!(server.call("elements", &json!({ "device": "usb" })).unwrap_err().contains("its caller went"));
         server.ask_gone(Some(Box::new(|| false)));
         assert!(!server.call("press", &json!({ "device": "usb", "button": "home" })).unwrap_err().contains("its caller went"));
     }
