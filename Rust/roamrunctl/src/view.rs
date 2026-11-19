@@ -1372,7 +1372,8 @@ mod tests {
         let cut = loop {
             std::thread::sleep(Duration::from_millis(500));
             if stream.write_all(b"X-A: b\r\n").is_err() { break true }
-            stream.set_read_timeout(Some(Duration::from_millis(10))).unwrap();
+            // macOS refuses the option (EINVAL) on a socket the other side has closed.
+            if stream.set_read_timeout(Some(Duration::from_millis(10))).is_err() { break true }
             let mut byte = [0u8; 1];
             if matches!(stream.read(&mut byte), Ok(0)) { break true }
             if began.elapsed() > HEAD_WITHIN + Duration::from_secs(3) { break false }
