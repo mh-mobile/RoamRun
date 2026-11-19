@@ -148,6 +148,39 @@ const checks = {
     assert.deepEqual((await page.evaluate(() => __sent())).filter((m) => m.type !== "hello" && m.type !== "ack").map((m) => m.type), ["tap"]);
   },
 
+  async "after a reconnect, a frame the last connection's decoder still gives doesn't count as the screen now"(page) {
+    await shown(page);
+    await page.evaluate(() => __frame(true, 30));   // given to the decoder, not yet decoded
+    await page.evaluate(() => __closes(1006));
+    await page.clock.runFor(2000);
+    await page.evaluate(() => __decoded(30000));
+    await page.locator("#screen").click({ force: true });
+    assert.deepEqual((await page.evaluate(() => __sent())).filter((m) => m.type !== "hello"), []);
+  },
+
+  async "while the stream starts again, no point is sent until a frame of it is decoded"(page) {
+    await shown(page);
+    await page.evaluate(() => __says({ type: "status", text: "the stream stopped (no frames for 8 s): starting it again" }));
+    await page.locator("#screen").click({ force: true });
+    const points = async () => (await page.evaluate(() => __sent())).filter((m) => m.type === "tap").length;
+    assert.equal(await points(), 0);
+    await page.evaluate(() => { __frame(true, 40); __decoded(40000); });
+    await page.locator("#screen").click();
+    assert.equal(await points(), 1);
+  },
+
+  async "a press begun on a picture that went sends nothing when it lifts"(page) {
+    await shown(page);
+    const box = await page.locator("#screen").boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.evaluate(() => __closes(1006));
+    await page.clock.runFor(2000);
+    await shown(page);
+    await page.mouse.up();
+    assert.deepEqual((await page.evaluate(() => __sent())).filter((m) => ["tap", "swipe", "pinch"].includes(m.type)), []);
+  },
+
   async "Type: a composition goes once chosen, and the Return that chooses it isn't sent"(page) {
     await page.click("#keyboard");
     await page.evaluate(() => {

@@ -38,7 +38,7 @@ money, posts, sends, deletes or signs in unless the user asked for exactly that.
 fn instructions(in_view: bool) -> String {
     INSTRUCTIONS.replace("SHARING", match (device::streams(), in_view) {
         (true, false) => "A look comes from the device's screen stream, which the device lists as screen sharing, where its user can see it, and some apps' sound goes silent, until about five seconds after the last look or action: asked to keep watching a screen, tell the user that first. Its picture is the display's own way up (on a device held sideways the screen may come turned), and points are pixels of it all the same. During a phone or VoIP call a look is slower",
-        (true, true) => "A look comes from the screen stream that roamrunctl view's browser page shows, which the device lists as screen sharing, where its user can see it, and some apps' sound goes silent, for as long as anyone watches that page, and otherwise while a look waits for its picture. Its picture is the display's own way up (on a device held sideways the screen may come turned), and points are pixels of it all the same. During a phone or VoIP call a look is slower",
+        (true, true) => "A look comes from the screen stream that roamrunctl view's browser page shows, which the device lists as screen sharing, where its user can see it, and some apps' sound goes silent, for as long as anyone watches that page, and otherwise until about five seconds after a look: asked to keep watching a screen, tell the user that first. Its picture is the display's own way up (on a device held sideways the screen may come turned), and points are pixels of it all the same. During a phone or VoIP call a look is slower",
         (false, _) => "The device shows no screen-sharing session for looks",
     })
 }
@@ -791,7 +791,8 @@ pub(crate) mod tests {
         // Where looks are the device's PNG (off macOS, ROAMRUNCTL_LOOK=screenshot), both say none is shown.
         if !device::streams() { return assert_eq!(alone, in_view) }
         assert!(alone.contains("about five seconds after the last look") && !alone.contains("view"), "{alone}");
-        assert!(in_view.contains("for as long as anyone watches that page") && !in_view.contains("five seconds"), "{in_view}");
+        assert!(in_view.contains("for as long as anyone watches that page") && !in_view.contains("after the last look or action"), "{in_view}");
+        assert!(in_view.contains("tell the user that first"), "{in_view}");
     }
 
     #[test]
