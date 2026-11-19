@@ -325,7 +325,7 @@ The rules:
   `elements` or an action without `--look` came since, or after a minute. Without it, a `tap`, `swipe` or `pinch` goes by the last look, and `type` or `paste` needs none.
 - The image is the screen as the device holds it. An app in landscape appeared turned on its side
   (seen), and points are still pixels of that image.
-- `type` sends at most 2000 characters, about 16 a second, and a newline is Return. Under a
+- `type` sends at most 2000 characters, about 16 a second; a newline is Return, and U+0008 Backspace. Under a
   Japanese keyboard even a space converts instead of being typed (seen); use `paste` there.
 - `swipe` takes a duration in milliseconds as a last argument (50–5000, default 300). `elements`
   takes a limit (default 40) and may scroll the screen while it reads.
@@ -338,6 +338,12 @@ The rules:
   `--rotate 45` turned the map clockwise, and after Ctrl-C part-way through a pinch a two-finger
   tap still zoomed out (no finger was left down); folded, scale 1 and 2 did the same; through
   `roamrun mcp`, scale 2 zoomed in.
+- `elements` prints one caption a line, followed by ` — id: <identifier>` when the app set an
+  accessibility identifier (`com.apple.settings.airplaneMode`). The identifier was seen in what an
+  iPhone Duo sent in Settings, where each of the five elements read had one. What the device sent
+  held no positions. On 2026-11-06, `roamrunctl mcp`'s `elements` on that iPhone Duo gave the
+  identifier on each of 12 lines in Settings, and on a screen of widgets the caption alone for a
+  search widget's elements; `roamrun elements` itself wasn't run on a device.
 
 **For an agent** the same are MCP tools: `claude mcp add roamrun -- roamrun mcp`, or the like for
 another agent. The tools are `devices`, `look`, `tap`, `swipe`, `pinch`, `type`, `paste`, `press` and

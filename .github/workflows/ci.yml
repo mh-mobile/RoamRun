@@ -19,6 +19,18 @@ jobs:
       - name: No advisory against a crate Cargo.lock pins that hasn't been looked into
         run: python3 scripts/audit-crates.py
 
+  # view's page (Rust/roamrunctl/src/view.html) in a headless Chromium, its server and decoder made up.
+  # The runner's own Node (20 or later); the script pins Playwright.
+  page:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5
+      - run: node --version
+      - name: The page's checks
+        run: PAGE_CHECK_DEPS=1 scripts/page-check.sh
+
   # The stand-in for a machine that has no RoamRun: tested where it is meant to run, and built
   # there as the archives a release carries (kept two weeks; `make roamrunctl-archives` takes
   # those of the release's commit).

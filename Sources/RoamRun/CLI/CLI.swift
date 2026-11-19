@@ -71,7 +71,8 @@ enum CLI {
                                      Two fingers about a point of the last look, ending <scale> times as far
                                      apart (2 zooms in, 0.5 out) and turned clockwise by --rotate; scale 1
                                      without --rotate is a two-finger tap. 500 ms unless given
-      elements <name> [limit]        What accessibility says is on the screen, one caption a line
+      elements <name> [limit]        What accessibility says is on the screen, one caption a line,
+                                     with "— id: …" when the app set an identifier
                                      (no positions; the screen may scroll)
       type <name> <text> [--look <n>]
                                      Type on the device's keyboard (US keys; right only while that

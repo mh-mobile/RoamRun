@@ -138,10 +138,10 @@ case "elements":
         let found = try session.elements(limit: rest.first.flatMap {
             Int($0)
         } ?? 40)
-        for (n, caption) in found.captions.enumerated() {
-            print("\(n): \(caption)")
+        for (n, element) in found.elements.enumerated() {
+            print("\(n): \(element.line)")
         }
-        print("\(found.captions.count) elements, complete: \(found.complete), \(ms(started)) ms")
+        print("\(found.elements.count) elements, complete: \(found.complete), \(ms(started)) ms")
     } catch { print("elements: \(error)") }
 case "hold":
     guard let dir = rest.first else { exit(2) }

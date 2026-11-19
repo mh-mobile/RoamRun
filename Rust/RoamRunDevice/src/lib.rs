@@ -5,6 +5,8 @@ pub mod proxy;
 #[cfg(target_os = "macos")]
 pub mod hevc;
 pub mod safe;
+pub mod sound;
+pub mod watch;
 
 use std::ffi::{c_char, CStr, CString};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -90,6 +92,8 @@ struct Link {
     shown_size: Option<(u32, u32)>,
     /// That display's touch surface, found on the HID connection; again after a stream starts.
     touchscreen: Option<u64>,
+    /// A `Watch` reads the stream: nothing else does, and it isn't stopped meanwhile.
+    watched: bool,
     verified_ms: u128,
     tunnel_ms: u128,
     rsd_ms: u128,
@@ -135,7 +139,7 @@ fn watch_idle_stream(held: &Arc<Held>) {
         std::thread::sleep(Duration::from_secs(1));
         let Some(held) = held.upgrade() else { return };
         let mut link = held.link.lock().unwrap_or_else(|e| e.into_inner());
-        if link.stream.is_some() && link.stream_used.elapsed() >= STREAM_IDLE {
+        if link.stream.is_some() && !link.watched && link.stream_used.elapsed() >= STREAM_IDLE {
             if let Some(mut stream) = link.stream.take() {
                 held.runtime.block_on(stream.stop());
                 link.stream_stopped = Some(Instant::now());
@@ -275,21 +279,42 @@ unsafe fn open_with(ip: *const c_char, port: u16, pairing: *const u8, pairing_le
     let ip = (!ip.is_null()).then(|| unsafe { CStr::from_ptr(ip) }.to_str().ok()).flatten();
     let file = (!pairing.is_null()).then(|| unsafe { std::slice::from_raw_parts(pairing, pairing_len) });
     let opened = match (ip, file) {
-        (Some(ip), Some(file)) => tokio::runtime::Builder::new_multi_thread().worker_threads(1).thread_stack_size(STACK).enable_all().build()
-            .map_err(|e| format!("no runtime: {e}"))
-            .and_then(|runtime| {
-                let link = with_room(|| runtime.block_on(async {
-                    tokio::time::timeout(DEADLINE, connect(ip, port, file, signer.clone())).await.unwrap_or_else(|_| Err("timed out".into()))
-                }))?;
-                let held = Arc::new(Held { runtime, link: Mutex::new(link) });
-                watch_idle_stream(&held);
-                let mut open = OPEN.lock().unwrap_or_else(|e| e.into_inner());
-                open.retain(|held| held.strong_count() > 0);
-                open.push(Arc::downgrade(&held));
-                Ok(RRDevice { held })
-            }),
+        (Some(ip), Some(file)) => held_by(|| connect(ip, port, file, signer.clone())),
         _ => Err("bad arguments".into()),
     };
+    unsafe { given(opened, error) }
+}
+
+/// Opens the device connected by USB with this UDID (null: the only one connected by USB), through usbmuxd and the
+/// pairing this machine's system keeps with it (the device's “Trust”): no pairing of RoamRun's is used.
+/// # Safety
+/// `udid` is null or a C string; `error` as rr_device_open's.
+#[no_mangle]
+pub unsafe extern "C" fn rr_device_open_usb(udid: *const c_char, error: *mut *mut c_char) -> *mut RRDevice {
+    let udid = (!udid.is_null()).then(|| unsafe { CStr::from_ptr(udid) }.to_str().map(str::to_string));
+    let opened = match udid {
+        Some(Err(_)) => Err("bad arguments".into()),
+        udid => { let udid = udid.and_then(Result::ok); held_by(|| connect_usb(udid.clone())) }
+    };
+    unsafe { given(opened, error) }
+}
+
+/// A link made by `connecting`, held with a runtime of its own and listed among those open.
+fn held_by<F: std::future::Future<Output = Result<Link, String>>>(connecting: impl Fn() -> F + Send + Sync) -> Result<RRDevice, String> {
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(1).thread_stack_size(STACK).enable_all().build()
+        .map_err(|e| format!("no runtime: {e}"))?;
+    let link = with_room(|| runtime.block_on(async {
+        tokio::time::timeout(DEADLINE, connecting()).await.unwrap_or_else(|_| Err("timed out".into()))
+    }))?;
+    let held = Arc::new(Held { runtime, link: Mutex::new(link) });
+    watch_idle_stream(&held);
+    let mut open = OPEN.lock().unwrap_or_else(|e| e.into_inner());
+    open.retain(|held| held.strong_count() > 0);
+    open.push(Arc::downgrade(&held));
+    Ok(RRDevice { held })
+}
+
+unsafe fn given(opened: Result<RRDevice, String>, error: *mut *mut c_char) -> *mut RRDevice {
     match opened {
         Ok(device) => Box::into_raw(Box::new(device)),
         Err(why) => {
@@ -692,6 +717,7 @@ fn app(device: &RRDevice, what: App) -> String {
 /// A stream a look left, stopped before what holds the link for long (an install, a launch, a walk): the idle watcher
 /// can't stop it meanwhile, and the device would list screen sharing all that time.
 async fn stream_ended(link: &mut Link) {
+    if link.watched { return }
     if let Some(mut stream) = link.stream.take() {
         stream.stop().await;
         link.stream_stopped = Some(Instant::now());
@@ -928,6 +954,8 @@ fn key(c: char) -> Option<(u64, bool)> {
         '1'..='9' => (0x1E + (c as u64 - '1' as u64), false),
         '0' => (0x27, false),
         '\n' => (0x28, false),
+        // Backspace (U+0008): the key that deletes what is before the cursor.
+        '\u{8}' => (0x2A, false),
         ' ' => (0x2C, false),
         _ => {
             if let Some(i) = PLAIN.find(c) { (PLAIN_USAGE[i], false) }
@@ -954,9 +982,9 @@ pub unsafe extern "C" fn rr_device_elements(device: *mut RRDevice, limit: u32) -
         })
     });
     c_string(match result {
-        Ok((captions, complete, ended)) => format!(
+        Ok((found, complete, ended)) => format!(
             "{{\"ok\":true,\"elements\":[{}],\"complete\":{complete},\"ended\":\"{ended}\",\"ms\":{}}}",
-            captions.iter().map(|c| format!("{{\"caption\":{}}}", quoted(c))).collect::<Vec<_>>().join(","),
+            found.iter().map(Element::json).collect::<Vec<_>>().join(","),
             started.elapsed().as_millis()
         ),
         Err(why) => failure(&why),
@@ -986,8 +1014,34 @@ async fn within<T>(until: Instant, sending: impl std::future::Future<Output = T>
         .map_err(|_| "the accessibility service stopped taking what was sent".to_string())
 }
 
-/// Captions in the inspector's order, and whether the walk came round (true) or was cut short.
-async fn elements(link: &mut Link, limit: usize, until: Instant) -> Result<(Vec<String>, bool, &'static str), String> {
+#[derive(Debug, PartialEq)]
+struct Element {
+    caption: String,
+    identifier: Option<String>,
+}
+
+impl Element {
+    /// The token that says when the walk has come round, and the element.
+    fn of(focus: &plist::Value) -> (Option<String>, Element) {
+        let inner = unwrapped(unwrapped(focus)).as_dictionary();
+        let field = |key: &str| inner.and_then(|d| d.get(key)).map(unwrapped);
+        let element = field("ElementValue_v1").map(unwrapped);
+        let identifier = element.and_then(|e| e.as_dictionary()?.get("AccessibilityIdentifier_v1"))
+            .and_then(|v| unwrapped(v).as_string()).filter(|s| !s.is_empty()).map(str::to_string);
+        let caption = field("CaptionTextValue_v1").and_then(|v| v.as_string()).unwrap_or_default().to_string();
+        (element.map(|e| format!("{e:?}")), Element { caption, identifier })
+    }
+
+    fn json(&self) -> String {
+        match &self.identifier {
+            Some(id) => format!("{{\"caption\":{},\"identifier\":{}}}", quoted(&self.caption), quoted(id)),
+            None => format!("{{\"caption\":{}}}", quoted(&self.caption)),
+        }
+    }
+}
+
+/// Elements in the inspector's order, and whether the walk came round (true) or was cut short.
+async fn elements(link: &mut Link, limit: usize, until: Instant) -> Result<(Vec<Element>, bool, &'static str), String> {
     let port = link.handshake.services.get(WANTED[3].1).ok_or("no accessibility service on this device")?.port;
     let call = |name: &'static str, argument: plist::Value| (name, Some(vec![AuxValue::archived_value(argument)]));
     // Getting to the service has the deadline every call has: one that takes the connection and
@@ -1014,14 +1068,14 @@ async fn elements(link: &mut Link, limit: usize, until: Instant) -> Result<(Vec<
         within(until, client.root_channel().call_method(Some(name), arguments, false)).await?.map_err(|e| format!("{name} {e:?}"))?;
     }
 
-    let mut captions = Vec::new();
+    let mut found = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut asked_twice = false;
     // How the walk gets to its first element: 0 asks for the first; 1 takes a step away; 2 asks for the first again.
     let mut start = 0u8;
     let mut step = 0;
     while step < limit {
-        if Instant::now() >= until { return Ok((captions, false, "deadline")); }
+        if Instant::now() >= until { return Ok((found, false, "deadline")); }
         if link.stop.raised() { return Err(STOPPED.into()); }   // a walk moves the focus, and can scroll
         // From the first element each time a walk starts: the focus is wherever the last one left it.
         let options: plist::Dictionary = [
@@ -1060,24 +1114,22 @@ async fn elements(link: &mut Link, limit: usize, until: Instant) -> Result<(Vec<
                 continue;
             }
             // A screen read whole ends by coming round (seen on the device); silence is a walk cut short.
-            return Ok((captions, false, "quiet"));
+            return Ok((found, false, "quiet"));
         };
         if step == 0 && start == 1 {
             start = 2;   // that was the step away, not the first element
             continue;
         }
         asked_twice = false;
-        let inner = unwrapped(unwrapped(&focus)).as_dictionary();
-        let field = |key: &str| inner.and_then(|d| d.get(key)).map(unwrapped);
+        let (token, element) = Element::of(&focus);
         // The element's token says when the walk has come round to where it began.
-        let token = field("ElementValue_v1").map(|e| format!("{:?}", unwrapped(e)));
         if let Some(token) = token {
-            if !seen.insert(token) { return Ok((captions, true, "round")); }
+            if !seen.insert(token) { return Ok((found, true, "round")); }
         }
-        captions.push(field("CaptionTextValue_v1").and_then(|v| v.as_string()).unwrap_or("").to_string());
+        found.push(element);
         step += 1;
     }
-    Ok((captions, false, "limit"))
+    Ok((found, false, "limit"))
 }
 
 /// What a failed verification is said as. The caller knows three of them by how they begin (the
@@ -1128,7 +1180,33 @@ async fn connect(ip: &str, port: u16, file: &[u8], signer: Option<Signer>) -> Re
 
     let rsd = handle.connect(info.server_rsd_port).await.map_err(|e| format!("RSD: {e:?}"))?;
     let handshake = RsdHandshake::new(rsd).await.map_err(|e| format!("RSD handshake: {e:?}"))?;
-    Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_stopped: None, stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, resent: 0, bare_inputs: false, stop: Stop(std::ptr::null()), held: None, fingers: Vec::new(), shown: None, shown_id: None, shown_size: None, touchscreen: None, verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
+    Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_stopped: None, stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, resent: 0, bare_inputs: false, stop: Stop(std::ptr::null()), held: None, fingers: Vec::new(), shown: None, shown_id: None, shown_size: None, touchscreen: None, watched: false, verified_ms, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
+}
+
+/// The device connected by USB with this UDID, or the only one: a tunnel through its CoreDeviceProxy service, which
+/// lockdown starts with the pairing the system keeps for it, then RSD as over the network.
+async fn connect_usb(udid: Option<String>) -> Result<Link, String> {
+    use idevice::usbmuxd::{Connection, UsbmuxdAddr, UsbmuxdConnection};
+    use idevice::IdeviceService;
+    let started = Instant::now();
+    let mut mux = UsbmuxdConnection::default().await.map_err(|e| format!("usbmuxd: {e:?}"))?;
+    let mut usb: Vec<_> = mux.get_devices().await.map_err(|e| format!("usbmuxd: {e:?}"))?
+        .into_iter().filter(|d| matches!(d.connection_type, Connection::Usb)).collect();
+    let device = match (udid, usb.len()) {
+        (Some(udid), _) => usb.into_iter().find(|d| d.udid == udid).ok_or(format!("no device {udid} is connected by USB"))?,
+        (None, 1) => usb.remove(0),
+        (None, 0) => return Err("no device is connected by USB (one that trusts this machine, unlocked once since)".into()),
+        (None, _) => return Err(format!("{} devices are connected by USB: name one by its UDID ({})", usb.len(), usb.iter().map(|d| d.udid.as_str()).collect::<Vec<_>>().join(", "))),
+    };
+    let provider = device.to_provider(UsbmuxdAddr::default(), LABEL);
+    let proxy = idevice::core_device_proxy::CoreDeviceProxy::connect(&provider).await.map_err(|e| format!("CoreDeviceProxy: {e:?}"))?;
+    let rsd_port = proxy.tunnel_info().server_rsd_port;
+    let adapter = proxy.create_software_tunnel().map_err(|e| format!("tunnel: {e:?}"))?;
+    let mut handle = adapter.to_async_handle();
+    let tunnel_ms = started.elapsed().as_millis();
+    let rsd = handle.connect(rsd_port).await.map_err(|e| format!("RSD: {e:?}"))?;
+    let handshake = RsdHandshake::new(rsd).await.map_err(|e| format!("RSD handshake: {e:?}"))?;
+    Ok(Link { handle, handshake, hid: None, keys: None, stream: None, stream_used: Instant::now(), stream_stopped: None, stream_starts: 0, keyframes_asked: 0, keyframes_answered: 0, resent: 0, bare_inputs: false, stop: Stop(std::ptr::null()), held: None, fingers: Vec::new(), shown: None, shown_id: None, shown_size: None, touchscreen: None, watched: false, verified_ms: 0, tunnel_ms, rsd_ms: started.elapsed().as_millis() })
 }
 
 /// The most that is typed in one call: beyond it, a slip in the middle is too costly, and paste does it in one.
@@ -1194,6 +1272,7 @@ async fn perform(link: &mut Link, input: Input) -> Result<(), String> {
 async fn stream_for_input(link: &mut Link) -> Result<(), String> {
     // Looked at where it is kept: taken out, it would be dropped unstopped if this were cut short.
     let alive = match link.stream.as_mut() {
+        Some(_) if link.watched => true,
         Some(stream) => stream.alive().await,
         None => false,
     };
@@ -1547,8 +1626,9 @@ const SUPPORTED_FEATURES: u64 = 140;
 /// A screen stream that is running.
 struct Stream {
     display: DisplayServiceClient<Box<dyn ReadWrite>>,
-    video: UdpSocketHandle,
-    audio: UdpSocketHandle,
+    /// Shared with a `Watch`, which reads them without the link.
+    video: Arc<UdpSocketHandle>,
+    audio: Arc<UdpSocketHandle>,
     /// Ours, as declared in the offer: the device heeds feedback only from it.
     ssrc: u32,
     /// The device's, once a packet has shown it.
@@ -1558,6 +1638,8 @@ struct Stream {
     requests: u8,
     /// When the last key frame came (or the stream began, which opens with one).
     keyframe_at: Instant,
+    /// The display it was started on: `link.shown_id` is asked again by others (a look) since.
+    shown: i64,
 }
 
 /// The device sends video from this port, and takes feedback there or on the next.
@@ -1705,7 +1787,7 @@ async fn start_stream(link: &mut Link) -> Result<Stream, String> {
         },
         Err(why) => Err(why),
     };
-    let mut stream = Stream { display, video, audio, ssrc, media: None, feedback_port: None, requests: 0, keyframe_at: Instant::now() };
+    let mut stream = Stream { display, video: Arc::new(video), audio: Arc::new(audio), ssrc, media: None, feedback_port: None, requests: 0, keyframe_at: Instant::now(), shown };
     if let Err(why) = video_started {
         // The sound's half did start, or may have (no answer isn't no): it is ended, not left running on the device.
         stream.stop().await;
@@ -1729,6 +1811,7 @@ const FIRST_KEYFRAME: Duration = Duration::from_secs(6);
 /// is one datagram, and can be lost); when none comes for the asking, or no stream runs, the
 /// stream is started over, which opens with one.
 async fn keyframe(link: &mut Link) -> Result<Vec<u8>, String> {
+    if link.watched { return Err("the screen is being watched (roamrunctl view): no look meanwhile".into()) }
     // Asked where it is kept: taken out, it would be dropped unstopped if this were cut short.
     if let Some(stream) = link.stream.as_mut() {
         if stream.drain().await {
@@ -2026,6 +2109,26 @@ async fn accept_pairing(pairing: &RRPairing, show: &(impl Fn(&str) + Sync)) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_element_carries_its_identifier_when_the_app_set_one() {
+        // An element as an iPhone sent it in Settings, read the way the walk reads it.
+        let focus = ns_keyed_archive::decode::from_bytes(include_bytes!("../tests/airplane-mode-element.plist")).unwrap();
+        let (token, element) = Element::of(&focus);
+        assert!(token.is_some());
+        assert_eq!(element, Element { caption: "機内モード, 0, ボタン, 静的テキスト, 切り替える".into(), identifier: Some("com.apple.settings.airplaneMode".into()) });
+        assert_eq!(element.json(), r#"{"caption":"機内モード, 0, ボタン, 静的テキスト, 切り替える","identifier":"com.apple.settings.airplaneMode"}"#);
+
+        // None set: the caption alone.
+        let inner: plist::Dictionary = [
+            ("CaptionTextValue_v1".to_string(), wrapped("General, button".into())),
+            ("ElementValue_v1".to_string(), wrapped(wrapped(plist::Value::Dictionary(plist::Dictionary::new())))),
+        ].into_iter().collect();
+        let bytes = ns_keyed_archive::encode::encode_to_bytes(wrapped(wrapped(plist::Value::Dictionary(inner)))).unwrap();
+        let (token, element) = Element::of(&ns_keyed_archive::decode::from_bytes(&bytes).unwrap());
+        assert!(token.is_some());
+        assert_eq!(element.json(), r#"{"caption":"General, button"}"#);
+    }
 
     #[test]
     fn only_the_processes_of_the_app_replaced_are_ended() {
@@ -2447,6 +2550,7 @@ mod tests {
         assert_eq!(key(')'), Some((0x27, true)));
         assert_eq!(key(' '), Some((0x2C, false)));
         assert_eq!(key('\n'), Some((0x28, false)));
+        assert_eq!(key('\u{8}'), Some((0x2A, false)));
         assert_eq!(key('-'), Some((0x2D, false)));
         assert_eq!(key('_'), Some((0x2D, true)));
         assert_eq!(key('?'), Some((0x38, true)));

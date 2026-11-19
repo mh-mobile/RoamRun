@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import RoamRun
 import CryptoKit
+import DeviceControl
 import Network
 import os
 import ImageIO
@@ -381,7 +382,7 @@ final class StandInDevice: ControlledDevice, @unchecked Sendable {
     /// Where the last tap went, as fractions of the screen.
     var tapped: (x: Double, y: Double)?
     var pinched: (x: Double, y: Double, scale: Double, degrees: Double, milliseconds: Int)?
-    func elements(limit: Int) throws -> (captions: [String], complete: Bool) {
+    func elements(limit: Int) throws -> (elements: [ScreenElement], complete: Bool) {
         count("elements")
         return ([], true)
     }

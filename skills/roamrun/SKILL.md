@@ -417,12 +417,14 @@ have the user add the MCP tools, which run outside it.
   `milliseconds`. Look after it to see what it did. Tried on one device, an iPhone Duo (opened
   and folded), in Google Maps: 2 zoomed in, 1 out, `--rotate 45` turned the map clockwise.
 - `roamrun elements iPhone [limit]` prints what accessibility says is on the
-  screen, one caption a line ("Home, tab, selected"). It gives **no positions** —
+  screen, one caption a line ("Home, tab, selected"), followed by
+  ` — id: <identifier>` when the app set an accessibility identifier
+  (`com.apple.settings.airplaneMode`). It gives **no positions** —
   a caption can't be tapped by name; find it in a `look`. The screen may scroll
   to what it visits. Nothing on the home screen; under a system alert, only the alert.
 - `roamrun type iPhone "text"` types US-keyboard characters (the text may
   start with `-`; 2000 characters at most, `paste` for more); a newline in the
-  text is Return (`$'search this\n'` in a shell — the two characters `\n` are typed as such).
+  text is Return, and U+0008 Backspace (`$'search this\n'` in a shell — the two characters `\n` are typed as such).
   It comes out right only while the device's keyboard is an English one: look
   first, and switch with the globe key if it shows Japanese (there keys go to
   its conversion — even a single space converts or confirms instead of being

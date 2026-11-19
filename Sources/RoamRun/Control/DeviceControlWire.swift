@@ -1,4 +1,5 @@
 import CryptoKit
+import DeviceControl
 import Foundation
 
 /// How `roamrun look`, `tap` and the rest ask the app, which holds the connections: one JSON
@@ -36,6 +37,8 @@ enum DeviceControlWire {
         var width: Int?
         var height: Int?
         var captions: [String]?
+        /// For "elements": each with what else is known of it; an older app sends only `captions`.
+        var elements: [ScreenElement]?
         var complete: Bool?
         /// For "state": whether the connection to the device stands.
         var open: Bool?
@@ -444,5 +447,12 @@ enum DeviceControlWire {
             close(fd)
             close(held) // last: until here nobody else makes the socket
         }
+    }
+}
+
+extension DeviceControlWire.Response {
+    /// For "elements": one line each, from an older app its caption alone.
+    var elementLines: [String]? {
+        elements?.map(\.line) ?? captions
     }
 }
