@@ -368,6 +368,28 @@ Mac introducing this machine, `mcp`'s swipe and a paste that goes through, pinch
 Windows (it builds there). If one of those fails, say what it
 said; don't work around it.
 
+**`roamrunctl view <device> --http <port> --allow <login> [--at <address>]`** is experimental, tried
+on an iPhone Duo in Chrome (through Tailscale its picture often stops until a key frame; `--at`
+reaches the device at its address on this machine's Wi‑Fi instead, and `--usb [<UDID>]` in place of
+`<device>` takes the one connected by USB, which lost nothing): the user's own device's screen
+in a browser elsewhere on the tailnet, to watch and touch (the page needs WebCodecs; roamrunctl's reference, under “The screen in a browser”, says how to
+open it). It is the user's to start, at a terminal of their own. While it runs, the
+device is its alone: don't `look`, tap or install on that device meanwhile, nor serve it with `mcp` —
+a look through another connection stops the page's picture for about 9 s. Started with `--mcp`, it
+serves the same MCP tools (no install) at `http://<address>:<port>/mcp` with its token as a bearer:
+an agent operates the device there while people watch, its looks taken from the page's own stream.
+A tap, swipe, type or paste there is refused (“look again”) once a page acted on the device since the
+look; one made while a page's input runs waits for it, then is refused: look again and go on.
+If view's connection to the device goes, it says so: the user starts view again.
+A browser that can't be given Chrome's flag (an app's own) shows the page at `http://localhost:<port>/`
+on that machine (only with `--token-file`), or elsewhere on the tailnet at `https://<name>:<port>/` when
+started with `--https <port>`.
+HTTPS requires `--token-file` and an allowed login; a connection without Tailscale's login header is
+refused. Tagged machines use the direct HTTP endpoint with `--allow tag:<name>`.
+Codex's MCP client was checked over HTTPS with look, tap and swipe while T3 Code's browser watched.
+For Codex, configure the `/mcp` URL and `bearer_token_env_var` naming an environment variable that holds
+the token; keep the token out of the URL and the conversation.
+
 ## 6. What it doesn't do
 
 It doesn't bridge to Xcode, build, sign or debug. Where it only introduced (sections
