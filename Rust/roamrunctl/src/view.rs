@@ -340,7 +340,9 @@ pub fn serve(options: Options) -> Result<String, String> {
         let proxy = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).map_err(|e| e.to_string())?;
         crate::tailscale::serve_https(https, &format!("http://{}", proxy.local_addr().map_err(|e| e.to_string())?))?;
         forwarded = Some(proxy);
-        stop.then(move || { let _ = crate::tailscale::serve_https_off(https); });
+        stop.then(move || {
+            if let Err(why) = crate::tailscale::serve_https_off(https) { note!("roamrunctl: port {https} not taken off tailscale serve ({why}): `tailscale serve --https={https} off`") }
+        });
         hosts.extend(https_hosts(&names, https));
         note!("roamrunctl: and at https://{}:{https}/ for the same callers, by tailscale serve, with the token (taken off it at Ctrl-C)", names.first().map_or("this machine", String::as_str));
     } else {
@@ -827,7 +829,7 @@ fn mcp_call(reader: &mut BufReader<TcpStream>, writer: &mut TcpStream, request: 
         answer
     } else {
         // Asks nothing of the device: answered at once, by a server like it, not after the call that runs.
-        crate::mcp::Server::holding(&mcp.name, Arc::new(Device::none()), None).handle(&line)
+        crate::mcp::Server::holding(&mcp.name, Arc::new(Device::none()), Some(mcp.page.clone())).handle(&line)
     }.unwrap_or_default();
     let failed = serde_json::from_str::<Value>(&answer).is_ok_and(|a| a["result"]["isError"] == true);
     reply(writer, 200, "", &answer);

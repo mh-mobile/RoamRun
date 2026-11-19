@@ -497,7 +497,7 @@ connection goes, start view again. Sound comes only from a Mac.
   without an allowed login is refused, even with the token. Tagged machines use the direct
   tailnet HTTP endpoint with `--allow tag:<name>`; Serve does not supply their login. All HTTPS
   callers give the token. Port 443 also accepts the address without `:443`.
-- `--at <address>` reaches the device at that address instead of the one it was saved with: its
+- `--at <address>` reaches the device at that IPv4 address instead of the one it was saved with: its
   address on this machine's Wi‑Fi, so that the stream doesn't go through Tailscale. The pairing
   opens it as ever, and the page is still served on the Tailscale address. A device another
   machine signs for takes `--at` once `view` has opened it without. With `--at` and a video

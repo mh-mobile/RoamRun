@@ -57,6 +57,8 @@ const FAKES = () => {
 };
 
 const PICTURE = { type: "picture", codec: "hvc1.1.6.L120.90", width: 400, height: 800, crop: [390, 844] };
+// The server's hello and picture, and a key frame decoded: the device's screen shown, on the socket given (the last).
+const shown = (page, i) => page.evaluate(([picture, i]) => { __says({ type: "hello" }, i); __says(picture, i); __frame(true, 20, i); __decoded(20000); }, [PICTURE, i]);
 
 const checks = {
   async "says hello with no token, then decodes from a key frame on and acknowledges each frame"(page) {
@@ -112,7 +114,7 @@ const checks = {
   },
 
   async "a click taps, a press held taps long, a drag swipes, all in the device's terms"(page) {
-    await page.evaluate((picture) => { __says({ type: "hello" }); __says(picture); }, PICTURE);
+    await shown(page);
     const box = await page.locator("#screen").boundingBox();
     const at = (x, y) => [box.x + x * box.width, box.y + y * box.height];
     await page.mouse.move(...at(0.5, 0.25)); await page.mouse.down(); await page.mouse.up();
@@ -127,10 +129,23 @@ const checks = {
   },
 
   async "keys outside a US keyboard go as one paste, before an input that follows"(page) {
+    await shown(page);
     await page.evaluate(() => { for (const key of ["ä", "é"]) document.body.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })); });
     await page.locator("#screen").click();
-    const inputs = (await page.evaluate(() => __sent())).filter((m) => m.type !== "hello");
+    const inputs = (await page.evaluate(() => __sent())).filter((m) => !["hello", "ack"].includes(m.type));
     assert.deepEqual(inputs.slice(0, 2).map((m) => [m.type, m.text]), [["paste", "äé"], ["tap", undefined]]);
+  },
+
+  async "no point is sent before this connection's first picture: after a reconnect the older one is shown"(page) {
+    await shown(page);
+    await page.evaluate(() => __closes(1006));
+    await page.clock.runFor(2000);
+    assert.equal(await page.evaluate(() => __sockets.length), 2);
+    await page.locator("#screen").click({ force: true });
+    assert.deepEqual((await page.evaluate(() => __sent())).filter((m) => m.type !== "hello"), []);
+    await shown(page);
+    await page.locator("#screen").click();
+    assert.deepEqual((await page.evaluate(() => __sent())).filter((m) => m.type !== "hello" && m.type !== "ack").map((m) => m.type), ["tap"]);
   },
 
   async "Type: a composition goes once chosen, and the Return that chooses it isn't sent"(page) {
