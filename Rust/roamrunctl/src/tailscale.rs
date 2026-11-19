@@ -153,16 +153,17 @@ fn answered_within(command: &mut Command, what: &str, within: Duration) -> Resul
     let until = Instant::now() + within;
     loop {
         if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-            // Its pipes end with it, unless a child of it (a wrapper script's) holds them: not waited on past `until`.
-            let by = until.max(Instant::now() + AFTER_IT);
+            // Its pipes end with it, unless a child of it (a wrapper script's) holds them: waited on briefly.
+            let by = Instant::now() + AFTER_IT;
             let (out, said) = (out.by(by), said.by(by));
             return if status.success() { Ok(out) } else { Err(format!("tailscale {what}: {}", said.trim())) };
         }
         if Instant::now() >= until {
             let _ = child.kill();
             let _ = child.wait();
-            // What it printed before (`serve` says there what it waits for).
-            let out = out.by(Instant::now() + AFTER_IT);
+            // What it printed before, on either (`serve` says there what it waits for).
+            let by = Instant::now() + AFTER_IT;
+            let out = format!("{}\n{}", out.by(by), said.by(by));
             let out = out.trim();
             return Err(format!("tailscale {what} didn't answer in {} s{}", within.as_secs(), if out.is_empty() { String::new() } else { format!(": {}", out.chars().take(500).collect::<String>()) }));
         }
@@ -391,7 +392,7 @@ mod tests {
     #[test]
     fn what_tailscale_printed_before_it_hung_is_said() {
         // Also where a child of the wrapper holds the output open after the kill.
-        for script in ["echo enable HTTPS first; exec /bin/sleep 10", "echo enable HTTPS first; /bin/sleep 10; true"] {
+        for script in ["echo enable HTTPS first; exec /bin/sleep 10", "echo enable HTTPS first; /bin/sleep 10; true", "echo enable HTTPS first >&2; /bin/sleep 10; true"] {
             let said = answered_within(Command::new("/bin/sh").args(["-c", script]), "serve", Duration::from_millis(300));
             assert!(said.as_ref().is_err_and(|why| why.contains("enable HTTPS first")), "{script}: {said:?}");
         }
@@ -400,10 +401,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_wrapper_that_ended_isnt_waited_on_for_a_child_holding_its_output() {
-        let began = Instant::now();
-        let said = answered_within(Command::new("/bin/sh").args(["-c", "echo answered; /bin/sleep 5 & exit 0"]), "status", Duration::from_millis(300));
-        assert_eq!(said.as_deref().map(str::trim), Ok("answered"));
-        assert!(began.elapsed() < Duration::from_secs(2), "{:?}", began.elapsed());
+        // Both pipes held, or only the one whose text isn't used: not waited on for the time it was given.
+        for script in ["echo answered; /bin/sleep 5 & exit 0", "echo answered; /bin/sleep 5 >/dev/null & exit 0"] {
+            let began = Instant::now();
+            let said = answered_within(Command::new("/bin/sh").args(["-c", script]), "status", Duration::from_secs(3));
+            assert_eq!(said.as_deref().map(str::trim), Ok("answered"), "{script}");
+            assert!(began.elapsed() < Duration::from_millis(1500), "{script}: {:?}", began.elapsed());
+        }
     }
 
     #[test]

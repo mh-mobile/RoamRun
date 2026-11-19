@@ -169,6 +169,21 @@ const checks = {
     assert.equal(await points(), 1);
   },
 
+  async "a frame given before the stream started again, or a press begun meanwhile, sends no point"(page) {
+    await shown(page);
+    const box = await page.locator("#screen").boundingBox();
+    await page.evaluate(() => { __frame(true, 30); window.__before = __decoders.at(-1); });   // given, not yet decoded
+    await page.evaluate(() => __says({ type: "status", text: "the stream stopped (no frames for 8 s): starting it again" }));
+    await page.evaluate(() => __before.output(Object.assign(document.createElement("canvas"), { width: 10, height: 10, timestamp: 30000, displayWidth: 10, displayHeight: 10, close() {} })));
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.evaluate(() => { __frame(true, 40); __decoded(40000); });   // the started stream's first frame
+    await page.mouse.up();
+    assert.deepEqual((await page.evaluate(() => __sent())).filter((m) => ["tap", "swipe", "pinch"].includes(m.type)), []);
+    await page.locator("#screen").click();
+    assert.equal((await page.evaluate(() => __sent())).filter((m) => m.type === "tap").length, 1);
+  },
+
   async "a press begun on a picture that went sends nothing when it lifts"(page) {
     await shown(page);
     const box = await page.locator("#screen").boundingBox();

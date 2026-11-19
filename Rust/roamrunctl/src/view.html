@@ -431,7 +431,9 @@ function said(message) {
     case "status":
       log(message.text, true);
       // The device's connection gone: view has to be started again, which this page can't do.
-      stale();
+      // A decoder of its own for the stream started again (the page is told no new picture if it is the same):
+      // what the last one still gives isn't the screen now.
+      if (picture) configure(picture); else stale();
       if (message.text.includes("start view again")) state("down", "the device is gone", message.text[0].toUpperCase() + message.text.slice(1) + ".");
       else state("wait", "starting the stream again");
       break;
@@ -470,7 +472,7 @@ const ms = (t) => Math.round(Math.min(5000, Math.max(50, t)));
 canvas.addEventListener("pointerdown", (e) => {
   e.preventDefault();   // the field Type uses keeps its focus
   canvas.setPointerCapture(e.pointerId);
-  fingers.set(e.pointerId, { from: at(e), to: at(e), era });
+  fingers.set(e.pointerId, { from: at(e), to: at(e), era: ready ? era : -1 });   // begun on a stale picture: goes nowhere
   if (fingers.size === 2) two = [...fingers.values()].map((f) => ({ ...f.to }));
   if (fingers.size > 2) spoilt = true;
 });
