@@ -17,6 +17,10 @@ KNOWN = {
     "RUSTSEC-2026-0374": "basic-toml: build-time only (under age's proc-macros), not in the binary",
     # Unmaintained; wasmtimer brings it through jktcp only on wasm32. RoamRun ships native targets.
     "RUSTSEC-2026-0441": "pin-utils: only wasmtimer on wasm32 uses it; absent from our native builds",
+    # Unmaintained, and that alone: the advisory is informational and reports no flaw. idevice
+    # brings chrono with its `afc` feature, which we turn on; afc reads a file's creation and
+    # modified times with it (NaiveDateTime, services/afc/mod.rs). Leaving it is idevice's to do.
+    "RUSTSEC-2026-0543": "chrono: unmaintained only, no flaw reported; idevice's afc reads file times with it",
 }
 
 def ask(url, body=None):
