@@ -308,6 +308,7 @@ roamrun look iPhone /tmp/now.png          # the screen now, as PNG, 1280 pixels 
 roamrun tap iPhone 295 640                # a point, in the pixels of that image (--look 12: of that look only)
 roamrun look iPhone /tmp/now.png          # look again before the next action
 roamrun swipe iPhone 295 900 295 450      # drag from one point to another
+roamrun look iPhone /tmp/now.png          # and again: each look serves one tap, swipe or pinch
 roamrun pinch iPhone 295 640 2            # two fingers about a point: 2 zooms in, 0.5 out
 roamrun type iPhone "hello"               # US keys; right only while the device's keyboard is an English one
 roamrun paste iPhone "任意の文字列"         # any text, through the device's pasteboard; iOS asks "Allow Paste"
