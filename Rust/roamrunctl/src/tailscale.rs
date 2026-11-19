@@ -142,25 +142,32 @@ fn run(args: &[&str]) -> Result<String, String> {
 /// The same, given `within` to answer: what waits on it (a request) isn't held by a Tailscale that hangs. Not
 /// given this process's input, which is `mcp`'s requests over stdio.
 fn run_within(args: &[&str], within: Duration) -> Result<String, String> {
-    let mut child = command().args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped())
+    answered_within(command().args(args), args[0], within)
+}
+
+fn answered_within(command: &mut Command, what: &str, within: Duration) -> Result<String, String> {
+    let mut child = command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped())
         .spawn().map_err(|e| format!("tailscale isn't installed here ({e})"))?;
     let read = |mut from: Box<dyn Read + Send>| std::thread::spawn(move || { let mut out = String::new(); let _ = from.read_to_string(&mut out); out });
-    let reading = read(Box::new(child.stdout.take().ok_or("tailscale gave no output")?));
+    // Through a channel: on the timeout, a child of what was killed (a wrapper script's) may keep the pipe open.
+    let (printed, reading) = std::sync::mpsc::channel();
+    let mut stdout = child.stdout.take().ok_or("tailscale gave no output")?;
+    std::thread::spawn(move || { let mut out = String::new(); let _ = stdout.read_to_string(&mut out); let _ = printed.send(out); });
     let said = read(Box::new(child.stderr.take().ok_or("tailscale gave no output")?));
     let until = Instant::now() + within;
     loop {
         if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-            let out = reading.join().unwrap_or_default();
+            let out = reading.recv().unwrap_or_default();
             let said = said.join().unwrap_or_default();
-            return if status.success() { Ok(out) } else { Err(format!("tailscale {}: {}", args[0], said.trim())) };
+            return if status.success() { Ok(out) } else { Err(format!("tailscale {what}: {}", said.trim())) };
         }
         if Instant::now() >= until {
             let _ = child.kill();
             let _ = child.wait();
             // What it printed before (`serve` says there what it waits for).
-            let out = reading.join().unwrap_or_default();
+            let out = reading.recv_timeout(Duration::from_millis(500)).unwrap_or_default();
             let out = out.trim();
-            return Err(format!("tailscale {} didn't answer in {} s{}", args[0], within.as_secs(), if out.is_empty() { String::new() } else { format!(": {}", out.chars().take(500).collect::<String>()) }));
+            return Err(format!("tailscale {what} didn't answer in {} s{}", within.as_secs(), if out.is_empty() { String::new() } else { format!(": {}", out.chars().take(500).collect::<String>()) }));
         }
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -242,9 +249,9 @@ fn served(out: &str, https: u16) -> Result<bool, String> {
     Ok(!status["TCP"][https.to_string()].is_null())
 }
 
-/// That HTTPS port no longer served; the rest of `tailscale serve` as it is.
+/// That HTTPS port no longer served; the rest of `tailscale serve` as it is. Bounded: Ctrl-C waits on it.
 pub fn serve_https_off(https: u16) -> Result<(), String> {
-    run(&["serve", &format!("--https={https}"), "off"]).map(|_| ())
+    run_within(&["serve", &format!("--https={https}"), "off"], SERVE_WITHIN).map(|_| ())
 }
 
 /// Who is at `ip`, with five seconds for Tailscale to say.
@@ -347,6 +354,23 @@ pub fn pinged(output: &str) -> Option<Ipv4Addr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_hung_tailscale_behind_a_wrapper_still_times_out() {
+        // A script that doesn't exec it: the kill ends the shell, its child keeps the output open.
+        let began = Instant::now();
+        let said = answered_within(Command::new("/bin/sh").args(["-c", "echo started; /bin/sleep 10; true"]), "whois", Duration::from_millis(300));
+        assert!(said.as_ref().is_err_and(|why| why.starts_with("tailscale whois didn't answer")), "{said:?}");
+        assert!(began.elapsed() < Duration::from_secs(3), "{:?}", began.elapsed());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn what_tailscale_printed_before_it_hung_is_said() {
+        let said = answered_within(Command::new("/bin/sh").args(["-c", "echo enable HTTPS first; exec /bin/sleep 10"]), "serve", Duration::from_millis(300));
+        assert!(said.as_ref().is_err_and(|why| why.contains("enable HTTPS first")), "{said:?}");
+    }
 
     #[test]
     fn tailscale_is_given_a_term_only_where_there_is_none() {
