@@ -547,7 +547,8 @@ function took() {
   emptied();
 }
 typing.addEventListener("input", (e) => { if (!e.isComposing) took(); });
-typing.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); typed("\n"); } });
+// Safari gives the Return that chooses a composition after compositionend, not composing but with keyCode 229.
+typing.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); typed("\n"); } });
 
 for (const button of document.querySelectorAll("[data-press]")) button.onclick = () => send({ type: "press", button: button.dataset.press });
 $("key").onclick = () => { waitKey = true; send({ type: "keyframe" }); toast("A fresh picture is asked for", false, 1500); };

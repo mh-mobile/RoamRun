@@ -34,6 +34,9 @@ see `skills/roamrun/SKILL.md` — installed with `roamrun init` or
   `scripts/local-check.py` for the mechanics on this Mac. Its version is RoamRun's (its `build.rs`
   reads `Info.plist`). `make audit` covers its lock too, and `make licenses` writes its
   `THIRD-PARTY-LICENSES.txt`, which its archives carry: both after changing its `Cargo.lock`.
+- `make page-check` runs `view`'s page (`Rust/roamrunctl/src/view.html`) in a headless Chromium against a made-up
+  server and decoder (`scripts/page-check.cjs`; Node 20 or later, Playwright pinned in `scripts/page-check.sh`).
+  CI runs it too. A change to the page's behaviour takes a check there.
 - `make test` runs the unit tests (log parsing, port attribution, status-file
   ownership, names). They never touch the real status/profile files or start a
   real bridge — keep it that way (no `AppCoordinator` in tests). A bridge on a

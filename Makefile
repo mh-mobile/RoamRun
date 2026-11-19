@@ -20,7 +20,7 @@ SIGN_ID ?= -
 NOTARY_PROFILE ?=
 SIGN_FLAGS = --force --options runtime $(if $(filter -,$(SIGN_ID))$(findstring Apple Development,$(SIGN_ID)),,--timestamp)
 
-.PHONY: all build app run dmg release-dmg icon install-cli test clean device-lib device-probe licenses audit roamrunctl-archives lint-ja format
+.PHONY: all build app run dmg release-dmg icon install-cli test clean device-lib device-probe licenses audit roamrunctl-archives lint-ja page-check format
 
 all: app
 
@@ -52,6 +52,10 @@ app: build
 # The Japanese documents through textlint (scripts/lint-ja.sh says what it sees and what it can't).
 lint-ja:
 	scripts/lint-ja.sh
+
+# view's page in a headless Chromium, its server and decoder made up (scripts/page-check.sh says what it installs).
+page-check:
+	scripts/page-check.sh
 
 # The Swift sources through SwiftFormat (.swiftformat says how), for development: CI doesn't run it.
 # The version is pinned and fetched into .build once, checked against its SHA-256.
