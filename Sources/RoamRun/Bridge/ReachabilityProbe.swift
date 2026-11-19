@@ -43,7 +43,7 @@ enum ReachabilityProbe {
     /// before we commit to publishing the proxy.
     static func checkTCP(host: String, port: UInt16, timeout: TimeInterval = 4) async -> Bool {
         guard let p = NWEndpoint.Port(rawValue: port) else { return false }
-        let conn = NWConnection(host: NWEndpoint.Host(host), port: p, using: .tcp)
+        let conn = NWConnection(host: NWEndpoint.Host(host), port: p, using: DirectTCP.parameters())
         return await withCheckedContinuation { cont in
             let box = ProbeBox()
             conn.stateUpdateHandler = { state in
@@ -97,7 +97,7 @@ extension ReachabilityProbe {
         frame.append(Data(hello.utf8))
         let payload = frame
 
-        let conn = NWConnection(to: endpoint, using: .tcp)
+        let conn = NWConnection(to: endpoint, using: DirectTCP.parameters())
         return await withCheckedContinuation { cont in
             let box = ProbeBox()
             let finish: @Sendable (Bool) -> Void = { ok in
