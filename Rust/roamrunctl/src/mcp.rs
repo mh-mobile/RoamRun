@@ -524,10 +524,11 @@ impl Server {
                 let of = self.open[&name].1.clone();
                 let device = &self.open[&name].0;
                 // From view's stream where it gives one; else the device is asked, and the look says why.
-                // The device's picture is taken as of when it was asked for: a page's input just before isn't in it yet.
+                // With view's page, the device's picture is taken as of when it was asked for: a page's input just before
+                // isn't in it yet.
                 let asked = Instant::now();
                 // Where view's stream gave none, the PNG: asking the device for a key frame would start a stream of its own.
-                let (taken, aside, mut captured) = match self.pictures.as_ref().map(|pictures| pictures()) {
+                let (taken, aside, captured) = match self.pictures.as_ref().map(|pictures| pictures()) {
                     Some(Ok((picture, at))) => (Ok(picture), None, at),
                     Some(Err(why)) => { let asked = Instant::now(); (device::screenshot(device), Some(why), asked) }
                     None => (device::picture(device), None, asked),
@@ -538,9 +539,7 @@ impl Server {
                     Err(_) => {
                         // Let go of meanwhile: once more, on a new connection.
                         self.open.remove(&name);
-                        let device = self.device(&name, None)?;
-                        captured = Instant::now();
-                        device::picture(device)?
+                        device::picture(self.device(&name, None)?)?
                     }
                 };
                 let device = &self.open[&name].0;
@@ -565,7 +564,7 @@ impl Server {
                 let way = if native { 1 } else { match device.way() { 0 => device.way(), way => way } };
                 let (jpeg, width, height) = device::fitted(picture.image, image::ImageFormat::Jpeg)?;
                 let id = self.next_look();
-                self.shown.insert(name, Shown { size: (width as f64, height as f64), way, native, at: captured, of, id, spent: false });
+                self.shown.insert(name, Shown { size: (width as f64, height as f64), way, native, at: if self.page.is_some() { captured } else { Instant::now() }, of, id, spent: false });
                 let mut content = vec![json!({ "type": "image", "data": base64::engine::general_purpose::STANDARD.encode(jpeg), "mimeType": "image/jpeg" })];
                 // Said, so that a look much slower than the last isn't a mystery.
                 let png = if streamed && !native { " (The device's PNG: the screen stream's frame couldn't be cut to the screen, or the device didn't say its size.)" } else { "" };
