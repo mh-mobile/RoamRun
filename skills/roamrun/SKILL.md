@@ -230,7 +230,11 @@ xcrun devicectl device install app --device "$UDID" build/Build/Products/Debug-i
 xcrun devicectl device process launch --device "$UDID" com.example.App
 ```
 
-Debugger: `lldb` → `device select $UDID` → `device process attach -n App`.
+Debugger: `lldb` → `device list` → `device select` with the identifier it prints
+for the device, which is not `$UDID` (with the UDID it selects nothing and says
+nothing, and the attach after it does nothing) → `device process attach -n App`,
+naming the executable, which isn't always the app's name on the device. The attach
+returns before it has finished: `process status` a moment later shows the thread stopped.
 
 Or in one command from the project folder (checks readiness, lock state and
 signing, and says what to do):
