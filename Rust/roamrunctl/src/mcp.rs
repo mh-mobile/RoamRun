@@ -116,6 +116,9 @@ pub type Pictures = Box<dyn Fn() -> Result<(device::Picture, Instant), String> +
 /// Told of each tap and swipe an agent made, in the device's upright terms (0…1): `view --mcp` shows it on its pages.
 pub type Seen = Box<dyn Fn(&str, &[(f64, f64)]) + Send>;
 
+/// Whether the caller of the call that runs went meanwhile (`view --mcp`: its connection closed).
+pub type Gone = Box<dyn Fn() -> bool + Send>;
+
 /// What the library says of a tunnel that closed (the device unplugged, or it let the connection go).
 pub const GONE: &str = "adapter closed";
 
@@ -157,6 +160,7 @@ pub struct Server {
     /// `view --mcp`: a look's picture from view's stream; where none comes, the device is asked as ever.
     pictures: Option<Pictures>,
     seen: Option<Seen>,
+    gone: Option<Gone>,
 }
 
 fn text(s: impl Into<String>) -> Vec<Value> { vec![json!({ "type": "text", "text": s.into() })] }
@@ -303,6 +307,9 @@ impl Server {
 
     /// For `view --mcp`: each tap and swipe made is told to `seen`.
     pub fn tell(&mut self, seen: Seen) { self.seen = Some(seen) }
+
+    /// For `view --mcp`: the next calls ask `gone` whether their caller went, once they have waited for a page's input.
+    pub fn ask_gone(&mut self, gone: Option<Gone>) { self.gone = gone }
 
     /// A held device whose connection is gone (its tunnel closed: unplugged, or the device let it go) is said to be,
     /// with what to do: it isn't opened again here.
@@ -504,8 +511,9 @@ impl Server {
         let word = |key: &str| arguments[key].as_str().map(str::to_string).ok_or("nothing to send".to_string());
         // A page's input waits for this, and this for one running (see `PageInputs::gate`).
         let page = self.page.clone();
-        let _turn = page.as_deref().filter(|_| matches!(tool, "tap" | "swipe" | "pinch" | "type" | "paste" | "press"))
+        let turn = page.as_deref().filter(|_| matches!(tool, "tap" | "swipe" | "pinch" | "type" | "paste" | "press"))
             .map(|page| page.gate.lock().unwrap_or_else(|e| e.into_inner()));
+        if turn.is_some() && self.gone.as_ref().is_some_and(|gone| gone()) { return Err("not made: its caller went while a page's input ran".into()) }
         match tool {
             "look" => {
                 // A look that fails leaves none to act by: what an earlier one saw may have moved meanwhile.
@@ -516,10 +524,12 @@ impl Server {
                 let of = self.open[&name].1.clone();
                 let device = &self.open[&name].0;
                 // From view's stream where it gives one; else the device is asked, and the look says why.
+                // The device's picture is taken as of when it was asked for: a page's input just before isn't in it yet.
+                let asked = Instant::now();
                 let (taken, aside, captured) = match self.pictures.as_ref().map(|pictures| pictures()) {
                     Some(Ok((picture, at))) => (Ok(picture), None, at),
-                    Some(Err(why)) => (device::picture(device), Some(why), Instant::now()),
-                    None => (device::picture(device), None, Instant::now()),
+                    Some(Err(why)) => { let asked = Instant::now(); (device::picture(device), Some(why), asked) }
+                    None => (device::picture(device), None, asked),
                 };
                 let picture = match taken {
                     Ok(picture) => picture,
@@ -1282,6 +1292,17 @@ pub(crate) mod tests {
         server.call("look", &json!({ "device": "usb" })).unwrap();
         let id = server.shown["usb"].id;
         assert!(server.call("tap", &json!({ "device": "usb", "look": id, "x": 10, "y": 10 })).unwrap_err().contains("used from view's page"));
+    }
+
+    /// A call whose caller went while it waited behind a page's input isn't made; one with its caller still there is.
+    #[test]
+    fn a_call_whose_caller_went_behind_a_page_input_isnt_made() {
+        let page = Arc::new(PageInputs::default());
+        let mut server = Server::holding("usb", Arc::new(Device::none()), Some(page.clone()));
+        server.ask_gone(Some(Box::new(|| true)));
+        assert!(server.call("press", &json!({ "device": "usb", "button": "home" })).unwrap_err().contains("its caller went"));
+        server.ask_gone(Some(Box::new(|| false)));
+        assert!(!server.call("press", &json!({ "device": "usb", "button": "home" })).unwrap_err().contains("its caller went"));
     }
 
     /// Only what reached the device is told to the watchers: a tap the device didn't take isn't.

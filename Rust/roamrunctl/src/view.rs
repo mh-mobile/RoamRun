@@ -364,7 +364,8 @@ fn run(listener: TcpListener, local: Option<TcpListener>, forwarded: Option<TcpL
     let hub = Arc::new_cyclic(|hub: &std::sync::Weak<Hub>| {
         if let Some(mcp) = &mcp {
             let mut server = mcp.server.lock().unwrap_or_else(|e| e.into_inner());
-            server.take_pictures(from_stream(hub.clone()));
+            // Where a look is the device's PNG (off macOS, ROAMRUNCTL_LOOK=screenshot), it doesn't touch the stream.
+            if crate::device::streams() { server.take_pictures(from_stream(hub.clone())) }
             // What an agent pressed, shown to whoever watches (a ring where it tapped, a line where it swiped).
             let told = hub.clone();
             server.tell(Box::new(move |what, points| {
@@ -527,6 +528,8 @@ fn pump(hub: &Hub, screen: &dyn Screen) {
                 Ok(None) => continue,
                 Err(why) => { hub.say(&json!({ "type": "status", "text": format!("the stream stopped ({why}): starting it again") }).to_string()); break }
             };
+            // When it came, before the device is asked its size below: a look's picture isn't made newer than it is.
+            let (at, ms) = (Instant::now(), hub.began.elapsed().as_millis() as u64);
             let (asked, answered) = frames.counts();
             hub.asked.store(asked, Ordering::Relaxed);
             hub.answered.store(answered, Ordering::Relaxed);
@@ -540,8 +543,7 @@ fn pump(hub: &Hub, screen: &dyn Screen) {
                     picture = Some((said, text.into()));
                 }
             }
-            let ms = hub.began.elapsed().as_millis() as u64;
-            hub.push(Sent { key: frame.key, whole: frame.key && whole(&data), at: Instant::now(), ms, picture: frame.key.then(|| picture.as_ref().map(|p| p.1.clone())).flatten(), data });
+            hub.push(Sent { key: frame.key, whole: frame.key && whole(&data), at, ms, picture: frame.key.then(|| picture.as_ref().map(|p| p.1.clone())).flatten(), data });
         }
     }
 }
@@ -630,7 +632,7 @@ fn connection(stream: TcpStream, from: IpAddr, route: Route, hub: &Hub, who: &mu
 
 fn answer(stream: &mut TcpStream, status: u16, kind: &str, body: &str) {
     let reason = match status { 200 => "OK", 400 => "Bad Request", 403 => "Forbidden", 404 => "Not Found", 405 => "Method Not Allowed", 503 => "Service Unavailable", _ => "" };
-    let head = format!("HTTP/1.1 {status} {reason}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", body.len());
+    let head = format!("HTTP/1.1 {status} {reason}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nContent-Security-Policy: frame-ancestors 'none'\r\nX-Frame-Options: DENY\r\nConnection: close\r\n\r\n", body.len());
     let _ = stream.write_all(head.as_bytes()).and_then(|()| stream.write_all(body.as_bytes()));
 }
 
@@ -808,20 +810,21 @@ fn mcp_call(reader: &mut BufReader<TcpStream>, writer: &mut TcpStream, request: 
     let Ok(message) = serde_json::from_slice::<Value>(&body) else { return reply(writer, 400, "", &http::rpc_error(Value::Null, -32700, "not JSON")) };
     if !message.is_object() { return reply(writer, 400, "", &http::rpc_error(Value::Null, -32600, "one message a request, as an object")) }
     let method = message["method"].as_str().unwrap_or("");
-    *what = match method {
-        "tools/call" => format!("POST /mcp tools/call {}", message["params"]["name"].as_str().unwrap_or("?")),
-        "" => "POST /mcp a response".into(),
-        method => format!("POST /mcp {method}"),
-    };
+    *what = logged_call(&message);
     // A notification or a response: nothing to answer (a cancel does nothing here; closing the connection does).
     let response = method.is_empty() && (message.get("result").is_some() || message.get("error").is_some());
     if response || message.get("id").is_none() { return reply(writer, 202, "", "") }
     let line = message.to_string();
     let answer = if method == "tools/call" {
         let mut server = mcp.server.lock().unwrap_or_else(|e| e.into_inner());
-        // Gone while it waited its turn: not made for nobody (a client that tries again would have it twice).
+        // Gone while it waited its turn: not made for nobody (a client that tries again would have it twice). The same
+        // once it has waited behind a page's input.
         if http::closed(writer) { return "not begun".into() }
-        server.handle(&line)
+        let caller = writer.try_clone().ok();
+        server.ask_gone(Some(Box::new(move || caller.as_ref().is_none_or(http::closed))));
+        let answer = server.handle(&line);
+        server.ask_gone(None);
+        answer
     } else {
         // Asks nothing of the device: answered at once, by a server like it, not after the call that runs.
         crate::mcp::Server::holding(&mcp.name, Arc::new(Device::none()), None).handle(&line)
@@ -829,6 +832,15 @@ fn mcp_call(reader: &mut BufReader<TcpStream>, writer: &mut TcpStream, request: 
     let failed = serde_json::from_str::<Value>(&answer).is_ok_and(|a| a["result"]["isError"] == true);
     reply(writer, 200, "", &answer);
     if failed { "error".into() } else { "ok".into() }
+}
+
+/// What the log says of a call to `/mcp`: the caller's words, printable.
+fn logged_call(message: &Value) -> String {
+    match message["method"].as_str().unwrap_or("") {
+        "tools/call" => format!("POST /mcp tools/call {}", http::printable(message["params"]["name"].as_str().unwrap_or("?"))),
+        "" => "POST /mcp a response".into(),
+        method => format!("POST /mcp {}", http::printable(method)),
+    }
 }
 
 /// An answer to `/mcp`, and its status for the log.
@@ -1192,6 +1204,14 @@ mod tests {
     fn a_viewer_is_let_in_by_its_login_its_origin_and_the_token_and_first_sent_a_key_frame() {
         let (at, watched) = served("me@example.com");
         assert!(ask(at, "GET / HTTP/1.1\r\nHost: {at}\r\n\r\n").1.starts_with("HTTP/1.1 200"));
+        // Not put in a frame by another site's page, where a click would be a tap on the device.
+        let mut page = TcpStream::connect(at).unwrap();
+        page.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        page.write_all(format!("GET / HTTP/1.1\r\nHost: {at}\r\n\r\n").as_bytes()).unwrap();
+        let mut answer = String::new();
+        let _ = page.read_to_string(&mut answer);
+        let head = answer.split("\r\n\r\n").next().unwrap();
+        assert!(head.contains("Content-Security-Policy: frame-ancestors 'none'") && head.contains("X-Frame-Options: DENY"), "{head}");
         // Another site's page, none at all on the WebSocket, or a Host that isn't this server.
         assert!(ask(at, "GET / HTTP/1.1\r\nHost: {at}\r\nOrigin: http://evil.example\r\n\r\n").1.starts_with("HTTP/1.1 403"));
         assert!(ask(at, &UPGRADE.replace("Origin: http://{at}", "Origin: http://evil.example")).1.starts_with("HTTP/1.1 403"));
@@ -1402,6 +1422,7 @@ mod tests {
     /// An agent's look takes its picture from view's stream, which runs for it with no page open: a whole key frame
     /// comes (the Fake's isn't HEVC, so its decoding is what fails, not the wait); with none whole, the look waits
     /// LOOK_WAIT, asks the device instead (none here) and says why.
+    #[cfg(target_os = "macos")]
     #[test]
     fn an_agents_look_takes_a_whole_key_frame_from_the_stream() {
         let bearer = format!("Authorization: Bearer {}\r\n", "t".repeat(32));
@@ -1414,6 +1435,29 @@ mod tests {
         let began = Instant::now();
         let (_, body) = posted(at, &bearer, look);
         assert!(body.contains("no key frame came") && began.elapsed() >= LOOK_WAIT, "{body}");
+    }
+
+    /// Off macOS a look is the device's PNG: no stream is started for it.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn off_macos_an_agents_look_starts_no_stream() {
+        let bearer = format!("Authorization: Bearer {}\r\n", "t".repeat(32));
+        let look = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"device":"fake"}}}"#;
+        let (at, watched) = served_as("me@example.com", true, true);
+        let (_, body) = posted(at, &bearer, look);
+        assert!(body.contains("\"isError\":true") && !body.contains("from view's stream"), "{body}");
+        assert_eq!(watched.load(Ordering::SeqCst), 0);
+    }
+
+    /// The log's line for a call: a caller's control characters in it don't make lines of their own.
+    #[test]
+    fn a_calls_line_in_the_log_is_printable() {
+        let forged = "x\n99:99:99 UTC 100.64.0.9 FORGED GET / ok 0.0s\u{1b}[31m";
+        let line = logged_call(&json!({ "method": forged }));
+        assert!(!line.chars().any(char::is_control) && line.starts_with("POST /mcp x?99"), "{line}");
+        let line = logged_call(&json!({ "method": "tools/call", "params": { "name": forged } }));
+        assert!(!line.chars().any(char::is_control) && line.starts_with("POST /mcp tools/call x?"), "{line}");
+        assert_eq!(logged_call(&json!({ "result": {} })), "POST /mcp a response");
     }
 
     /// A key frame without parameter sets (an IDR right after another) is given those of the last whole one, after its

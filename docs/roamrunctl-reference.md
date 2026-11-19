@@ -470,7 +470,9 @@ connection goes, start view again. Sound comes only from a Mac.
   the WebSocket must have it); a method other than `GET` (405); another path (404); a caller
   `tailscale whois` doesn't say (503) or one not allowed (403; the page's says why, as text). This machine
   itself is let in only with `--token-file`. The token isn't in the URL: the page asks for it and sends it in its
-  first message; a wrong one, or none where one is set, closes the WebSocket with 1008.
+  first message; a wrong one, or none where one is set, closes the WebSocket with 1008. The page
+  says it isn't to be put in a frame (`frame-ancestors 'none'`): another site's page can't hold it
+  where a click would be a tap on the device.
 - 12 connections at once, 6 from one address by one way in (the Tailscale address, this machine's
   localhost and Serve's loopback are counted apart; a page takes two, an MCP client two or three);
   more are closed unanswered. A caller not yet let in has 10 s for the head, the page's first
@@ -487,7 +489,9 @@ connection goes, start view again. Sound comes only from a Mac.
   `https://<this machine's Tailscale name>:<port>/`, by `tailscale serve` in front of a dedicated loopback
   listener, separate from the localhost page, with Tailscale's certificate: a secure page to any browser on the tailnet, an app's own
   included (T3 Code's gave it `VideoDecoder` there). A port `tailscale serve` already serves is
-  refused, and the rest of `tailscale serve` is left as it is; at Ctrl-C that port alone is taken
+  refused. Where `tailscale serve` doesn't serve the port (HTTPS not turned on for the tailnet, say)
+  or doesn't answer within 20 s, view stops with what it printed, and how to see what it needs.
+  The rest of `tailscale serve` is left as it is; at Ctrl-C that port alone is taken
   off it (a view that is killed leaves it: `tailscale serve --https=<port> off`). A request handed
   on so says whose it is (`Tailscale-User-Login`), and is judged by `--allow` as that login; one
   without an allowed login is refused, even with the token. Tagged machines use the direct
@@ -512,10 +516,12 @@ connection goes, start view again. Sound comes only from a Mac.
   (the saved name, or for `--usb` the UDID, else `usb`). A look takes its picture from this
   stream: it waits for the next whole key frame (one is asked for), decodes it here (macOS) and
   gives it the display's own way up; with no page open the stream runs for it and stops some
-  seconds after. Where none comes within 8 s, or off macOS, the device's PNG is taken instead, and
-  the look says why. A tap, swipe, type or paste by a look is refused ("look again") once a page
+  seconds after. Where none comes within 8 s, the device's PNG is taken instead, and the look says
+  why. Off macOS, and with `ROAMRUNCTL_LOOK=screenshot`, a look is the device's PNG and asks nothing
+  of the stream. A tap, swipe, type or paste by a look is refused ("look again") once a page
   acted on the device since that look began, or within 0.5 s before its picture; one made while a
-  page's input runs waits for it to end, and is then refused. What an agent
+  page's input runs waits for it to end, and is then refused. Any call that waited behind a page's
+  input isn't made if its caller closed the connection meanwhile. What an agent
   taps or swipes is shown on the pages as a ring. A connection to the device that is gone isn't
   opened again (another would start a second stream): the agent and the page are told to start
   view again. On the iPhone Duo, with a page watching in Chrome: a look took 0.4–1.1 s over USB

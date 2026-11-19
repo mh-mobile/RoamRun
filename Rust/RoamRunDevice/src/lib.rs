@@ -1638,6 +1638,8 @@ struct Stream {
     requests: u8,
     /// When the last key frame came (or the stream began, which opens with one).
     keyframe_at: Instant,
+    /// The display it was started on: `link.shown_id` is asked again by others (a look) since.
+    shown: i64,
 }
 
 /// The device sends video from this port, and takes feedback there or on the next.
@@ -1785,7 +1787,7 @@ async fn start_stream(link: &mut Link) -> Result<Stream, String> {
         },
         Err(why) => Err(why),
     };
-    let mut stream = Stream { display, video: Arc::new(video), audio: Arc::new(audio), ssrc, media: None, feedback_port: None, requests: 0, keyframe_at: Instant::now() };
+    let mut stream = Stream { display, video: Arc::new(video), audio: Arc::new(audio), ssrc, media: None, feedback_port: None, requests: 0, keyframe_at: Instant::now(), shown };
     if let Err(why) = video_started {
         // The sound's half did start, or may have (no answer isn't no): it is ended, not left running on the device.
         stream.stop().await;

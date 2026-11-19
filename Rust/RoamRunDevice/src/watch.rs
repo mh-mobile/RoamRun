@@ -80,6 +80,8 @@ pub struct Watch {
     busy_at: Instant,
     /// Where the sound's access units go, if anywhere.
     sound: Option<std::sync::mpsc::Sender<Vec<u8>>>,
+    /// The display the stream was started on.
+    streamed: i64,
     /// Raised by `ask_aside` where another display is on than the one streamed.
     moved: Arc<AtomicBool>,
     asking: Arc<AtomicBool>,
@@ -103,18 +105,18 @@ impl Watch {
             if link.watched { return Err("the screen is watched already".into()) }
             held.runtime.block_on(async { tokio::time::timeout(STREAM_DEADLINE, stream_for_input(&mut link)).await.unwrap_or_else(|_| Err("timed out".into())) })?;
             let stream = link.stream.as_ref().ok_or("no stream")?;
-            let parts = (stream.video.clone(), stream.audio.clone(), stream.ssrc, stream.media, stream.feedback_port, stream.keyframe_at);
+            let parts = (stream.video.clone(), stream.audio.clone(), stream.ssrc, stream.media, stream.feedback_port, stream.keyframe_at, stream.shown);
             link.watched = true;
             Ok(parts)
         })?;
-        let (video, audio, ssrc, media, feedback_port, keyframe_at) = watch;
+        let (video, audio, ssrc, media, feedback_port, keyframe_at, streamed) = watch;
         if std::env::var_os("ROAMRUNCTL_VIEW_TRACE").is_some() { eprintln!("trace: {} ms: watching, the stream ready in {} ms", now_ms(), began.elapsed().as_millis()) }
         let now = Instant::now();
         wanted.store(true, Ordering::Relaxed);
         Ok(Watch {
             held, video, audio, ssrc, media, feedback_port, frames: HevcDepacketizer::new(), feedback, began: now, rctl_at: now, heard_at: now, reported_at: now, idle_said: now,
             count: 0, first_seq: None, highest_seq: 0, keyframe_at, asked_at: None, asked_first: None, requests: 0, wanted, asked: 0, answered: 0,
-            last_seq: None, gap: 0, frame_first: None, trace: std::env::var_os("ROAMRUNCTL_VIEW_TRACE").is_some(), broken: false, skip_rasl: false, max_datagram: 0, fed: 0, broken_at: None, looked_at: now, busy_at: now, sound: None, moved: Default::default(), asking: Default::default(), ready: Default::default(), lost: 0, dropped: 0,
+            last_seq: None, gap: 0, frame_first: None, trace: std::env::var_os("ROAMRUNCTL_VIEW_TRACE").is_some(), broken: false, skip_rasl: false, max_datagram: 0, fed: 0, broken_at: None, looked_at: now, busy_at: now, sound: None, streamed, moved: Default::default(), asking: Default::default(), ready: Default::default(), lost: 0, dropped: 0,
         })
     }
 
@@ -132,14 +134,15 @@ impl Watch {
     /// is read on meanwhile, however long the device takes to answer. Asked only while the screen changes
     /// nothing, which a service connection then can't hold up.
     fn ask_aside(&self) {
-        let (held, moved, asking, trace) = (self.held.clone(), self.moved.clone(), self.asking.clone(), self.trace);
+        let (held, moved, asking, trace, streamed) = (self.held.clone(), self.moved.clone(), self.asking.clone(), self.trace, self.streamed);
         if asking.swap(true, Ordering::Relaxed) { return }
         let asked = std::thread::Builder::new().stack_size(8 << 20).spawn(move || {
             let mut link = held.link.lock().unwrap_or_else(|e| e.into_inner());
-            let (streamed, began) = (link.shown_id, Instant::now());
+            let began = Instant::now();
             held.runtime.block_on(crate::ask_shown(&mut link));
-            if trace { eprintln!("trace: {} ms: quiet; display streamed {streamed:?}, on {:?} (asked in {} ms)", now_ms(), link.shown_id, began.elapsed().as_millis()) }
-            if link.shown_id != streamed { moved.store(true, Ordering::Relaxed) }
+            if trace { eprintln!("trace: {} ms: quiet; display streamed {streamed}, on {:?} (asked in {} ms)", now_ms(), link.shown_id, began.elapsed().as_millis()) }
+            // Against the display the stream was started on, not the one last asked (a look asks too): none said isn't another.
+            if link.shown_id.is_some_and(|on| on != streamed) { moved.store(true, Ordering::Relaxed) }
             asking.store(false, Ordering::Relaxed);
         });
         if asked.is_err() { self.asking.store(false, Ordering::Relaxed) }

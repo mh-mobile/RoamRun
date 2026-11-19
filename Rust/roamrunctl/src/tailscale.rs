@@ -192,16 +192,36 @@ pub struct WhoisUser {
 
 /// HTTPS on the tailnet at `https` (Tailscale's certificate for this machine's name), handed to `target` on this
 /// machine, in the background: refused where something is served at that port already.
+/// Where HTTPS isn't turned on for the tailnet, `tailscale serve` says so on its output and may wait for it: it is
+/// held to SERVE_WITHIN, and the port is looked for in its status afterwards.
 pub fn serve_https(https: u16, target: &str) -> Result<(), String> {
     serve_port_free(&run(&["serve", "status", "--json"])?, https)?;
-    run(&["serve", "--bg", "--yes", &format!("--https={https}"), target]).map(|_| ())
+    let said = run_within(&["serve", "--bg", "--yes", &format!("--https={https}"), target], SERVE_WITHIN);
+    let now = served(&run(&["serve", "status", "--json"])?, https)?;
+    let by_hand = format!("`tailscale serve --bg --https={https} {target}` run by hand says what it needs (HTTPS turned on for the tailnet)");
+    match said {
+        Ok(_) if now => Ok(()),
+        Ok(said) => Err(format!("tailscale serve didn't serve port {https}{}; {by_hand}", if said.trim().is_empty() { String::new() } else { format!(" ({})", said.trim()) })),
+        Err(why) => {
+            if now { let _ = serve_https_off(https); }
+            Err(format!("{why}; {by_hand}"))
+        }
+    }
 }
 
+/// How long `tailscale serve --bg` gets: it answers at once where it can serve.
+const SERVE_WITHIN: Duration = Duration::from_secs(20);
+
 fn serve_port_free(out: &str, https: u16) -> Result<(), String> {
+    if served(out, https)? { return Err(format!("port {https} is served already (tailscale serve status): pick another for --https")) }
+    Ok(())
+}
+
+/// Whether `tailscale serve status --json` lists that port.
+fn served(out: &str, https: u16) -> Result<bool, String> {
     let status: serde_json::Value = serde_json::from_str(out).map_err(|e| unreadable("serve status", out, e))?;
     if !status.is_object() { return Err("tailscale serve status wasn't an object".into()) }
-    if !status["TCP"][https.to_string()].is_null() { return Err(format!("port {https} is served already (tailscale serve status): pick another for --https")) }
-    Ok(())
+    Ok(!status["TCP"][https.to_string()].is_null())
 }
 
 /// That HTTPS port no longer served; the rest of `tailscale serve` as it is.
@@ -421,6 +441,9 @@ mod tests {
         assert!(serve_port_free(r#"{"TCP":{"443":{"HTTPS":true}}}"#, 8443).is_ok());
         assert!(serve_port_free(r#"{"TCP":{"8443":{"HTTPS":true}}}"#, 8443).unwrap_err().contains("served already"));
         for out in ["", "not JSON", "null", "[]"] { assert!(serve_port_free(out, 8443).is_err()); }
+        assert_eq!(served(r#"{"TCP":{"8443":{"HTTPS":true}}}"#, 8443), Ok(true));
+        assert_eq!(served(r#"{"TCP":{"443":{"HTTPS":true}}}"#, 8443), Ok(false));
+        assert!(served("null", 8443).is_err());
     }
 
 }
