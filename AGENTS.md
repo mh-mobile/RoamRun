@@ -37,8 +37,8 @@ see `skills/roamrun/SKILL.md` — installed with `roamrun init` or
 - `make page-check` runs `view`'s page (`Rust/roamrunctl/src/view.html`) in a headless Chromium against a made-up
   server and decoder (`scripts/page-check.cjs`; Node 20 or later, Playwright pinned in `scripts/page-check.sh`).
   CI runs it too. A change to the page's behaviour takes a check there.
-- CI doesn't run for a change of Markdown files or `docs/` alone. A document's `roamrun …` commands
-  (the READMEs, the skills, docs/another-mac.md) are checked by `make test`: run it before such a pull request.
+- CI doesn't run for a change of Markdown files or `docs/` alone, except the READMEs,
+  docs/another-mac.md and the skills: `make test` checks their `roamrun …` commands, and the skills ship.
 - `make test` runs the unit tests (log parsing, port attribution, status-file
   ownership, names). They never touch the real status/profile files or start a
   real bridge — keep it that way (no `AppCoordinator` in tests). A bridge on a

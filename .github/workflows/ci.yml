@@ -3,11 +3,26 @@ name: CI
 on:
   push:
     branches: [main]
-    # Not for a change of documents alone (the tests take over ten minutes); a release's pull
-    # request always changes code, so its CI still checks the commands the documents give.
-    paths-ignore: ["**/*.md", "docs/**"]
+    # Not for a change of documents alone (the tests take over ten minutes), except those whose
+    # commands a test checks (DocumentTests) or that go into the app and the archives (the skills):
+    # the last pattern that matches a file decides.
+    paths:
+      - "**"
+      - "!**/*.md"
+      - "!docs/**"
+      - README.md
+      - README.ja.md
+      - docs/another-mac.md
+      - skills/**
   pull_request:
-    paths-ignore: ["**/*.md", "docs/**"]
+    paths:   # the same as push's
+      - "**"
+      - "!**/*.md"
+      - "!docs/**"
+      - README.md
+      - README.ja.md
+      - docs/another-mac.md
+      - skills/**
   schedule:
     - cron: "17 3 * * 1"   # Mondays: an advisory published since is seen without a push
 
