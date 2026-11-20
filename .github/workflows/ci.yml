@@ -3,7 +3,26 @@ name: CI
 on:
   push:
     branches: [main]
+    # Not for a change of documents alone; the ones a test reads or a build carries still count.
+    paths:
+      - "**"
+      - "!**/*.md"
+      - "!docs/**"
+      - README.md
+      - README.ja.md
+      - docs/another-mac.md
+      - skills/**
+      - Rust/roamrunctl/README.md
   pull_request:
+    paths:   # the same as push's
+      - "**"
+      - "!**/*.md"
+      - "!docs/**"
+      - README.md
+      - README.ja.md
+      - docs/another-mac.md
+      - skills/**
+      - Rust/roamrunctl/README.md
   schedule:
     - cron: "17 3 * * 1"   # Mondays: an advisory published since is seen without a push
 
