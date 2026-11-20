@@ -217,6 +217,7 @@ roamrun look iPhone /tmp/now.png          # いまの画面を PNG で保存す�
 roamrun tap iPhone 295 640                # その画像のピクセルで、位置を指定する
 roamrun look iPhone /tmp/now.png          # 次の操作の前に、もう一度見る
 roamrun swipe iPhone 295 900 295 450      # ある点から別の点までドラッグする
+roamrun look iPhone /tmp/now.png          # 1 回の look で使えるのは、tap、swipe、pinch のどれか 1 回だけ
 roamrun pinch iPhone 295 640 2            # ある点を中心に 2 本指で操作する。2 で拡大、0.5 で縮小
 roamrun type iPhone "hello"               # US 配列のキーで入力する。デバイスのキーボードが英語のときだけ正しく入る
 roamrun paste iPhone "任意の文字列"         # デバイスのペーストボード経由で、任意の文字列を入れる。iOS が「ペーストを許可」と尋ねる

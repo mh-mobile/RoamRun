@@ -140,9 +140,9 @@ enum Command {
         /// A token the page must also give (it asks): a file of the owner's alone, 32 characters or more. Needed for this machine itself
         #[arg(long = "token-file")]
         token_file: Option<std::path::PathBuf>,
-        /// Reach the device at this address, not the one it was saved with: its address on this machine's Wi‑Fi, so that the stream doesn't go through Tailscale
+        /// Reach the device at this IPv4 address, not the one it was saved with: its address on this machine's Wi‑Fi, so that the stream doesn't go through Tailscale
         #[arg(long, value_name = "ADDRESS", conflicts_with = "usb")]
-        at: Option<std::net::IpAddr>,
+        at: Option<std::net::Ipv4Addr>,
         /// The device connected to this machine by USB, through usbmuxd and the pairing this machine's system keeps with it (it trusts this machine): no pairing of roamrunctl's. With several connected, name one by its UDID
         #[arg(long, value_name = "UDID", num_args = 0..=1, default_missing_value = "")]
         usb: Option<String>,
@@ -860,6 +860,17 @@ mod tests {
         assert_eq!(given(&["roamrunctl", "launch", "a", "b", "--relay", ""]), Ok(None));
         assert_eq!(given(&["roamrunctl", "launch", "a", "b", "--relay", "100.64.0.1:9090"]).map(|g| g.map(|(relay, _)| relay)), Ok(Some("100.64.0.1:9090".into())));
         assert!(given(&["roamrunctl", "launch", "a", "b", "--relay", " ", "--token-file", "t"]).is_err());
+    }
+
+    #[test]
+    fn view_at_is_an_ipv4_address() {
+        let at = |address: &str| match Cli::try_parse_from(["roamrunctl", "view", "phone", "--http", "8099", "--at", address]).map(|cli| cli.command) {
+            Ok(Command::View { at, .. }) => at,
+            _ => None,
+        };
+        assert_eq!(at("192.168.0.19"), Some(Ipv4Addr::new(192, 168, 0, 19)));
+        // Its reachability is asked as "<address>:<port>", which an IPv6 address doesn't make.
+        assert_eq!(at("::1"), None);
     }
 
     #[test]

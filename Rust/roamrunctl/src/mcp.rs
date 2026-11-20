@@ -33,12 +33,13 @@ action, and points are pixels of the image the last look returned, given with th
 money, posts, sends, deletes or signs in unless the user asked for exactly that. A look shows whatever is on the screen \
 (notifications, messages); don't pass the image on. What an action itself brings up (paste's \"Allow Paste\") shows on the device. SHARING. Type and paste give the id of the latest look too, within a minute of it (after a tap with it is fine), and are refused once something else was looked at or done since: they go to whatever has focus. Press goes to whatever is on the screen: look before it too.";
 
-/// What the device shows of looks, for INSTRUCTIONS: a stream runs until about five seconds after the last look or action.
-fn instructions() -> String {
-    INSTRUCTIONS.replace("SHARING", if device::streams() {
-        "A look comes from the device's screen stream, which the device lists as screen sharing, where its user can see it, and some apps' sound goes silent, until about five seconds after the last look or action: asked to keep watching a screen, tell the user that first. Its picture is the display's own way up (on a device held sideways the screen may come turned), and points are pixels of it all the same. During a phone or VoIP call a look is slower"
-    } else {
-        "The device shows no screen-sharing session for looks"
+/// What the device shows of looks, for INSTRUCTIONS: a stream runs until about five seconds after the last look or action;
+/// in `view` (`in_view`), the stream its page shows, while anyone watches there.
+fn instructions(in_view: bool) -> String {
+    INSTRUCTIONS.replace("SHARING", match (device::streams(), in_view) {
+        (true, false) => "A look comes from the device's screen stream, which the device lists as screen sharing, where its user can see it, and some apps' sound goes silent, until about five seconds after the last look or action: asked to keep watching a screen, tell the user that first. Its picture is the display's own way up (on a device held sideways the screen may come turned), and points are pixels of it all the same. During a phone or VoIP call a look is slower",
+        (true, true) => "A look comes from the screen stream that roamrunctl view's browser page shows, which the device lists as screen sharing, where its user can see it, and some apps' sound goes silent, for as long as anyone watches that page, and otherwise until about five seconds after a look: asked to keep watching a screen, tell the user that first. Its picture is the display's own way up (on a device held sideways the screen may come turned), and points are pixels of it all the same. During a phone or VoIP call a look is slower",
+        (false, _) => "The device shows no screen-sharing session for looks",
     })
 }
 
@@ -383,7 +384,7 @@ impl Server {
                 "protocolVersion": VERSIONS.into_iter().find(|v| params["protocolVersion"] == *v).or(VERSIONS.into_iter().max()),
                 "capabilities": { "tools": {} },
                 "serverInfo": { "name": "roamrunctl", "version": env!("ROAMRUN_VERSION") },
-                "instructions": instructions(),
+                "instructions": instructions(self.page.is_some()),
             }),
             "ping" => json!({}),
             "tools/list" => json!({ "tools": tools(self.offered.is_some(), self.uploads.is_some()) }),
@@ -778,6 +779,20 @@ pub(crate) mod tests {
             let turn = (u.0 * v.1 - u.1 * v.0).atan2(u.0 * v.0 + u.1 * v.1).to_degrees();
             assert!((turn - 30.0).abs() < 0.01, "way {way}: {turn}");
         }
+    }
+
+    #[test]
+    fn in_view_an_agent_is_told_the_stream_lasts_while_the_page_is_watched() {
+        let said = |page: Option<Arc<PageInputs>>| {
+            let hello: Value = serde_json::from_str(&Server::holding("usb", Arc::new(Device::none()), page).handle(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#).unwrap()).unwrap();
+            hello["result"]["instructions"].as_str().unwrap_or_default().to_string()
+        };
+        let (alone, in_view) = (said(None), said(Some(Arc::new(PageInputs::default()))));
+        // Where looks are the device's PNG (off macOS, ROAMRUNCTL_LOOK=screenshot), both say none is shown.
+        if !device::streams() { return assert_eq!(alone, in_view) }
+        assert!(alone.contains("about five seconds after the last look") && !alone.contains("view"), "{alone}");
+        assert!(in_view.contains("for as long as anyone watches that page") && !in_view.contains("after the last look or action"), "{in_view}");
+        assert!(in_view.contains("tell the user that first"), "{in_view}");
     }
 
     #[test]

@@ -414,8 +414,8 @@ have the user add the MCP tools, which run outside it.
   over ms (50–5000, default 500), then lifts them. Scale 1 without `--rotate` is a two-finger tap.
   The wider of the two spreads is 40% of the screen's shorter side: a point too near the edge for
   that is refused, not moved. The tool is `pinch` with `x`, `y`, `scale`, `degrees` and
-  `milliseconds`. Look after it to see what it did. Tried on one device, an iPhone Duo (opened
-  and folded), in Google Maps: 2 zoomed in, 1 out, `--rotate 45` turned the map clockwise.
+  `milliseconds`. Look after it to see what it did. Tried on one device, an iPhone Duo, in Google
+  Maps: opened, 2 zoomed in, 1 out, `--rotate 45` turned the map clockwise; folded, 2 and 1 did the same.
 - `roamrun elements iPhone [limit]` prints what accessibility says is on the
   screen, one caption a line ("Home, tab, selected"), followed by
   ` — id: <identifier>` when the app set an accessibility identifier

@@ -184,6 +184,10 @@ function noVideoDecoder() {
 
 let way = 1, socket, decoder, picture, waitKey = true, token = sessionStorage.getItem("roamrunctl-token") || "";
 let connectedAt = 0, firstPicture = false, heardAt = 0, tokenSent = false;
+// What is shown is of the device's screen now (`ready`) once a frame of this connection and stream is decoded; `era`
+// counts the pictures that went (a reconnect, a new picture, the stream started again): a gesture begun on one goes nowhere.
+let ready = false, era = 0;
+function stale() { ready = false; era++; }
 const decodeStarted = new Map();
 const stats = { bytes: 0, frames: 0, decodeMs: [], rate: 0, fps: 0, counts: {}, feedback: null, frameSize: "" };
 const latencies = [];
@@ -233,8 +237,9 @@ function draw(frame) {
 function newDecoder() {
   if (decoder && decoder.state !== "closed") decoder.close();
   if (shownFrame) { shownFrame.close(); shownFrame = null; }
-  decoder = new VideoDecoder({
+  const made = decoder = new VideoDecoder({
     output: (frame) => {
+      if (made !== decoder || made.state === "closed") { frame.close(); return; }   // a frame of a decoder let go of
       // Acknowledged once decoded: a page whose decoder falls behind is late, and is cut to the next key frame.
       send({ type: "ack", t: Math.round(frame.timestamp / 1000) });
       const started = decodeStarted.get(frame.timestamp);
@@ -244,6 +249,7 @@ function newDecoder() {
       if (shownFrame) shownFrame.close();
       shownFrame = frame;
       failures.length = 0;
+      ready = true;
       if (!firstPicture) { firstPicture = true; log(`first picture ${(performance.now() - connectedAt).toFixed(0)} ms after connecting`); }
       state("live", "live");
       if (pending) looked();
@@ -319,6 +325,7 @@ function upright(p) {
 // decoded. Whether the browser decodes it is what the decoder says, not what the checks do.
 function configure(said) {
   picture = said;
+  stale();
   fit();
   if (typeof VideoDecoder === "undefined" || cannot) return;
   check(said.codec);
@@ -330,7 +337,10 @@ function configure(said) {
 
 // What the device is asked to do: text still held (keys outside US ones, see `unusual`) goes before it, in order.
 const INPUTS = new Set(["tap", "swipe", "pinch", "type", "paste", "press"]);
+// A point is of the picture: none goes while what is shown isn't the screen now (see `ready`).
+const POINTED = new Set(["tap", "swipe", "pinch"]);
 function send(message) {
+  if (POINTED.has(message.type) && !ready) return;
   if (INPUTS.has(message.type) && unusual) flushUnusual();   // it empties `unusual` before its own paste
   if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
 }
@@ -349,6 +359,8 @@ function connect() {
   socket.binaryType = "arraybuffer";
   connectedAt = performance.now();
   firstPicture = false;
+  stale();
+  if (decoder && decoder.state !== "closed") decoder.close();   // what it still holds is of the last connection
   failures.length = 0;
   $("toast").hidden = true;   // what was said of the last connection's inputs ("Pasting…") isn't of this one's
   state("wait", "connecting");
@@ -419,6 +431,9 @@ function said(message) {
     case "status":
       log(message.text, true);
       // The device's connection gone: view has to be started again, which this page can't do.
+      // A decoder of its own for the stream started again (the page is told no new picture if it is the same):
+      // what the last one still gives isn't the screen now.
+      if (picture) configure(picture); else stale();
       if (message.text.includes("start view again")) state("down", "the device is gone", message.text[0].toUpperCase() + message.text.slice(1) + ".");
       else state("wait", "starting the stream again");
       break;
@@ -457,7 +472,7 @@ const ms = (t) => Math.round(Math.min(5000, Math.max(50, t)));
 canvas.addEventListener("pointerdown", (e) => {
   e.preventDefault();   // the field Type uses keeps its focus
   canvas.setPointerCapture(e.pointerId);
-  fingers.set(e.pointerId, { from: at(e), to: at(e) });
+  fingers.set(e.pointerId, { from: at(e), to: at(e), era: ready ? era : -1 });   // begun on a stale picture: goes nowhere
   if (fingers.size === 2) two = [...fingers.values()].map((f) => ({ ...f.to }));
   if (fingers.size > 2) spoilt = true;
 });
@@ -466,6 +481,7 @@ function lifted(e, cancelled) {
   const finger = fingers.get(e.pointerId);
   if (!finger) return;
   finger.to = at(e);
+  if ([...fingers.values()].some((f) => f.era !== era)) cancelled = true;   // begun on a picture that went
   const r = canvas.getBoundingClientRect();
   if (!cancelled && !spoilt && two && fingers.size === 2) {
     const [a, b] = [...fingers.values()].map((f) => f.to);
