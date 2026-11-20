@@ -344,7 +344,8 @@ The rules:
   iPhone Duo sent in Settings, where each of the five elements read had one. What the device sent
   held no positions. On 2026-11-06, `roamrunctl mcp`'s `elements` on that iPhone Duo gave the
   identifier on each of 12 lines in Settings, and on a screen of widgets the caption alone for a
-  search widget's elements; `roamrun elements` itself wasn't run on a device.
+  search widget's elements. On 2026-11-20, `roamrun elements` and `roamrun mcp`'s `elements` on that
+  iPhone Duo gave the identifier in Apple Maps (`Card grabber`, `UserLocationButton`).
 
 **For an agent** the same are MCP tools: `claude mcp add roamrun -- roamrun mcp`, or the like for
 another agent. The tools are `devices`, `look`, `tap`, `swipe`, `pinch`, `type`, `paste`, `press` and

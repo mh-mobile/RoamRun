@@ -71,7 +71,7 @@ Bitrise では、[RoamRun の Step](https://github.com/mh-mobile/bitrise-step-ro
 - xcode-archive@6:
     inputs:
       - distribution_method: ad-hoc
-- git::https://github.com/mh-mobile/bitrise-step-roamrun.git@1.2.0:
+- git::https://github.com/mh-mobile/bitrise-step-roamrun.git@1.3.0:
     inputs:
       - tailscale_auth_key: $TS_AUTHKEY
       - ota_server: 100.x.y.z:9091

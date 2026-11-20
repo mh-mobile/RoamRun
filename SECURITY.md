@@ -329,6 +329,23 @@ bounded.
   owner's alone (not checked on Windows). The log has one line a request — the caller's
   address and identity, the method and tool, the outcome — and never the token, a body,
   text, captions, images or uploads.
+- **roamrunctl can show a device's screen in a browser** (`view`, experimental, 0.13.0+).
+  `roamrunctl view <device> --http <port> --allow <who> [--allow <who>…] [--token-file <file>]`
+  (or `--usb` for the device connected by USB), started by a person and ended with Ctrl-C, listens
+  on the machine's Tailscale IPv4 address and, with `--token-file`, on its loopback; it doesn't
+  start without Tailscale or `--allow`, or as root. Whoever is let in sees the device's screen as
+  it is, notifications included, hears its sound where view runs on a Mac, and taps, swipes,
+  pinches and types on it; with `--mcp`, an agent let in the same way operates it too. A caller on
+  the tailnet is let in as by `mcp --http` (`tailscale whois` and `--allow`, once a connection);
+  the machine itself only with the token, which the page asks for (it isn't in the URL). Refused:
+  a `Host` other than the server's address or Tailscale name, an `Origin` other than the server's
+  own, a wrong token or none where one is set. The page says it isn't to be put in a frame, so
+  another site's page can't hold it where a click would be a tap on the device. `--https <port>`
+  adds that one port to `tailscale serve` (a port already served is refused) and takes it off at
+  Ctrl-C — a view that is killed leaves it (`tailscale serve --https=<port> off`); a request
+  through it is judged by the login Tailscale hands on with it, and needs the token too. `--usb`
+  uses the pairing the machine's system keeps with a device connected by USB that trusts it, not a
+  pairing of roamrunctl's.
 - **roamrunctl can use a pairing whose key is on another machine.** `roamrunctl sign
   <devices> --for <machine>` runs where the keys are and listens on that machine's
   tailnet address (port 41831) for the one machine named, held to its address and to
