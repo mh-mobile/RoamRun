@@ -117,7 +117,7 @@ roamrun down <name>              # ブリッジを止める
 roamrun doctor                   # 問題の場所と直し方を調べる
 roamrun run <name>               # プロジェクトのフォルダで、ビルド、インストール、起動まで行う
 roamrun logs <name> <bundle-id>  # アプリを起動し直して、出力を流す
-roamrun screenshot <name>        # デバイスの画面を PNG で保存する
+roamrun screenshot <name>        # 画面を PNG で保存する（Xcode 26.3 以降で確認）
 ```
 
 ほかのコマンドと細かい動作は [docs/cli.ja.md](docs/cli.ja.md) にあります。`roamrun --help` ですべて確かめられます。
@@ -248,7 +248,7 @@ CI のジョブから、`.ipa` を Tailscale 越しにデバイスへインス�
 | デバイスの Tailscale は接続中に見えるのに通信しない | VPN を一度オフにして、オンに戻す |
 | USB のデバイスがあると、ブリッジ中の別のデバイスが Ready にならない | USB のデバイスを外す |
 | そばにあるデバイスをブリッジし続け、**On this Wi‑Fi** にならない | システム設定 › プライバシーとセキュリティ › ローカルネットワーク で RoamRun を許可する。すでにオンなら、入れ直す前に[既知の問題](docs/troubleshooting.ja.md#既知の問題)を読む（保存したデバイスを残す方法があります） |
-| デバイスを再起動したら、ブリッジが動かなくなった | デバイスのページの Find RemotePairing Port を使う。再起動のあと、一度 USB でつなぐ必要があったこともある |
+| デバイスを再起動したら、ブリッジが動かなくなった | デバイスのページで **Technical details** を開き、**Find RemotePairing Port** を押す。再起動のあと、一度 USB でつなぐ必要があったこともある |
 
 RoamRun は Apple の非公開のプロトコルに依存しているので、iOS、macOS、Xcode の新しいバージョンで動かなくなる可能性があります。制限の一覧と、動作中に公開されるものは[制限と既知の問題](docs/troubleshooting.ja.md)にあります。
 

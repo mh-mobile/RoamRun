@@ -151,7 +151,7 @@ roamrun down <name>              # stop a bridge
 roamrun doctor                   # find out what's wrong, and how to fix it
 roamrun run <name>               # in a project folder: build, install, launch
 roamrun logs <name> <bundle-id>  # relaunch the app and stream its output
-roamrun screenshot <name>        # save the device's screen as PNG
+roamrun screenshot <name>        # save the screen as PNG (tried with Xcode 26.3 and later)
 ```
 
 More commands and what each does are in [docs/cli.md](docs/cli.md). `roamrun --help` lists everything.
@@ -328,7 +328,7 @@ Run `roamrun doctor` first. Problems seen so far, and what fixes them:
 | Tailscale on the device looks connected but passes nothing | Turn its VPN off and on |
 | A bridged device stays not Ready while another is on USB | Unplug the USB device |
 | RoamRun keeps bridging a device beside the Mac and never shows **On this Wi‑Fi** | Allow RoamRun under System Settings › Privacy & Security › Local Network. If it is already on, see [Known problems](docs/troubleshooting.md#known-problems) before reinstalling: it says how to keep your saved devices |
-| The bridge stops working after the device restarted | Use Find RemotePairing Port on the device's page. Xcode has also needed the device on USB once after a restart |
+| The bridge stops working after the device restarted | On the device's page, open **Technical details** and press **Find RemotePairing Port**. Xcode has also needed the device on USB once after a restart |
 
 RoamRun relies on Apple's private protocols, so a new iOS, macOS or Xcode may break it. The full
 list of limits, and what RoamRun exposes while it runs, is in
