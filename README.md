@@ -51,9 +51,9 @@ If you only want Xcode to reach your device, [Get started](#get-started) is all 
 - An **iPhone or iPad on iOS 17.4 or later**, an Apple Vision Pro, or an Apple TV
 - **Xcode 15 or later** (16 for `roamrun logs`), new enough for the device's iOS
   ([Apple's table](https://developer.apple.com/support/xcode/))
-- **Tailscale** on both the Mac and the device, signed in with the same account and turned on. That
-  puts them in one *tailnet*, your private Tailscale network. Another mesh VPN also works if you
-  enter the device's address by hand
+- **Tailscale** on both the Mac and the device, turned on and in the same *tailnet*, your private
+  Tailscale network. Signing in to both with one account does that. Another mesh VPN also works if
+  you enter the device's address by hand
 - The device **on a Wi-Fi with internet access** when RoamRun starts connecting to it. Cellular alone
   can't start a connection
 
@@ -72,9 +72,9 @@ skip it, it is later under Open RoamRun › Settings › Command line tool › I
 ### 2. Pair the device with this Mac, once
 
 Open Xcode and connect the iPhone or iPad to the Mac with a USB cable. Unlock it, and tap Trust if
-it asks. Then turn on Settings › Privacy & Security › Developer Mode; the device restarts once. If
-the switch isn't there yet, run an app on the device from Xcode first. The device is ready when
-Xcode lists it as a place to run.
+it asks. Then turn on Settings › Privacy & Security › Developer Mode; the device restarts once. The
+switch appears once an app is installed, so if it isn't there yet, press Run on the device in Xcode
+once.
 
 With Xcode 27 and iOS 27 you can pair on the same Wi-Fi instead: in Xcode's Device Hub › + › Pair
 Nearby Device, then on the device under Developer Mode, pick the Mac and enter the code Device Hub
@@ -99,7 +99,7 @@ these:
 
 | RoamRun shows | What it means |
 |---|---|
-| **Ready for Xcode** | RoamRun is carrying the connection over Tailscale, and Xcode can use the device. |
+| **Ready for Xcode** | RoamRun is carrying the connection to the device over Tailscale or your VPN. |
 | **On this Wi‑Fi** | RoamRun found the device on the Mac's Wi-Fi, so Xcode reaches it directly. RoamRun stands aside, and takes over by itself when the device moves to another Wi-Fi. Leaving straight onto cellular ends the session. |
 
 When the Mac's address changes, the bridge restarts.
@@ -265,10 +265,11 @@ To install on someone else's device, such as a tester's phone:
 1. They install Tailscale and join your tailnet.
 2. For an Ad Hoc build, add their device to the build's profile before you build.
 3. They open the page on the device and tap Install.
-4. They turn on Developer Mode, which the app needs to launch.
+4. To launch the app, they turn on Developer Mode for an Ad Hoc build, or trust the developer under
+   Settings › General › VPN & Device Management for an Enterprise build.
 
-When the build's profile names none of your devices, `roamrun ota` warns you. For a build meant
-for someone else, that is expected.
+For an Ad Hoc build, `roamrun ota` warns when the profile names none of the devices it checks the
+build against. For a build meant for someone else, that is expected.
 
 To take the page down, delete `~/Library/Application Support/RoamRun/ota/`.
 
