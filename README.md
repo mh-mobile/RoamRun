@@ -21,7 +21,8 @@
 Xcode's wireless debugging normally works only while the Mac and the device are on the same
 network. With RoamRun and [Tailscale](https://tailscale.com), you can leave the Mac at home, take
 the device with you, and keep building, running and debugging from Xcode as usual. It works with
-iPhone, iPad, Apple Vision Pro and Apple TV.
+iPhone, iPad, Apple Vision Pro and Apple TV. How to drive the Mac from where you are is in
+[Working away from the Mac](#working-away-from-the-mac).
 
 ```mermaid
 flowchart LR
@@ -65,16 +66,20 @@ The full list is in [docs/install.md](docs/install.md#requirements).
 brew install --cask mh-mobile/tap/roamrun
 ```
 
-Without Homebrew, download the dmg from [Releases](https://github.com/mh-mobile/RoamRun/releases)
-and drag RoamRun to Applications. Its first screen offers to install the `roamrun` command. If you
-skip it, it is later under Open RoamRun › Settings › Command line tool › Install….
+This puts RoamRun in Applications and makes the `roamrun` command available.
+
+Without Homebrew, download the dmg from [Releases](https://github.com/mh-mobile/RoamRun/releases),
+drag RoamRun to Applications and open it. Its first screen offers to install the `roamrun` command.
+If you skip it, it is later under Open RoamRun › Settings › Command line tool › Install….
 
 ### 2. Pair the device with this Mac, once
 
+If this Mac's Xcode already runs apps on the device, skip this step.
+
 Open Xcode and connect the iPhone or iPad to the Mac with a USB cable. Unlock it, and tap Trust if
-it asks. Then turn on Settings › Privacy & Security › Developer Mode; the device restarts once. The
-switch appears once an app is installed, so if it isn't there yet, press Run on the device in Xcode
-once.
+it asks. Then, on the device, turn on Settings › Privacy & Security › Developer Mode; it restarts
+once. The switch appears once an app is installed, so if it isn't there yet, press Run on the
+device in Xcode once.
 
 With Xcode 27 and iOS 27 you can pair on the same Wi-Fi instead: in Xcode's Device Hub › + › Pair
 Nearby Device, then on the device under Developer Mode, pick the Mac and enter the code Device Hub
@@ -100,20 +105,20 @@ these:
 | RoamRun shows | What it means |
 |---|---|
 | **Ready for Xcode** | RoamRun is carrying the connection to the device over Tailscale or your VPN. |
-| **On this Wi‑Fi** | RoamRun found the device on the Mac's Wi-Fi, so Xcode reaches it directly. RoamRun stands aside, and takes over by itself when the device moves to another Wi-Fi. Leaving straight onto cellular ends the session. |
-
-When the Mac's address changes, the bridge restarts.
+| **On this Wi‑Fi** | RoamRun found the device on the Mac's Wi-Fi, so Xcode reaches it directly. RoamRun stands aside, and takes over by itself when the device moves to another Wi-Fi. If the device goes from this Wi-Fi directly to cellular, the session ends. |
 
 ### 5. Run from Xcode
 
-Unplug the USB cable and move the device to another Wi-Fi with internet access, such as another
-phone's hotspot. Wait for **Ready for Xcode**, then pick the device in Xcode and press Run.
+With **On this Wi‑Fi**, you can pick the device in Xcode and press Run right away. To try it from
+another network, unplug the USB cable and move the device to another Wi-Fi with internet access,
+such as another phone's hotspot. Wait for **Ready for Xcode**, then pick the device and press Run.
 
 While debugging, keep the device unlocked with its screen on: when it sleeps, Tailscale on it pauses
-too. Keep the Mac awake as well: Xcode's session does not survive the Mac sleeping for minutes.
+too. Keep the Mac awake as well: if it sleeps for a few minutes, Xcode's session ends.
 
 If something doesn't work, run `roamrun doctor`. It checks the Mac, Tailscale and the device step
-by step, and says how to fix what it finds.
+by step, and says how to fix what it finds. If that doesn't settle it, see
+[When something goes wrong](#when-something-goes-wrong).
 
 ## Working away from the Mac
 
@@ -163,13 +168,16 @@ roamrun init
 Run it again after updating RoamRun, so that the two match. More in
 [docs/cli.md](docs/cli.md#using-it-from-an-ai-agent).
 
-To let an agent see and tap the device, which `roamrun init` doesn't set up:
+With [device control](#seeing-and-operating-the-device) set up and on, an agent that has the skill
+can already run `roamrun look` and `roamrun tap`. To give it the MCP tools as well:
 
 1. [Add the device](#3-add-the-device-to-roamrun) and set up
    [device control](#seeing-and-operating-the-device).
 2. Keep the RoamRun app running.
 3. Register its MCP server, for example with `claude mcp add roamrun -- roamrun mcp`
    ([the tools](docs/device-control.md#for-an-agent-mcp)).
+
+The pictures an agent looks at go into its conversation, which a hosted agent sends to its service.
 
 ## Seeing and operating the device
 
@@ -180,13 +188,13 @@ the bridge nor Xcode. It was run on an iPhone; an iPad has not been tried.
 > [!WARNING]
 > **Set Up leaves device control on. While it is on, any program you run on this Mac can see and
 > operate the device, lock screen, notifications and messages included, and install and launch
-> apps on it.** Turn it off with the switch on the device's page
+> apps on it.** Locking the device doesn't stop it. Turn it off with the switch on the device's page
 > when nothing of yours is using it. See [who can use it](docs/device-control.md#who-can-use-it).
 
 **Set up once for each device**, with the device on the Mac's Wi-Fi:
 
-1. [Add the device](#3-add-the-device-to-roamrun) if it isn't in RoamRun yet. You don't need the
-   bridge. Then open its page and press Device control › Set Up….
+1. [Add the device](#3-add-the-device-to-roamrun) if it isn't in RoamRun yet, after
+   [step 2](#2-pair-the-device-with-this-mac-once). You don't need the bridge. Then open its page and press Device control › Set Up….
 2. On the device, under Settings › Privacy & Security › Developer Mode, pick "RoamRun (this Mac's
    name)" and enter the code the Mac shows.
 3. Keep the RoamRun app running: it holds the connection. Wait until `roamrun status <name>` shows
@@ -206,7 +214,7 @@ Swipe, pinch, typing, the rules, and use from an agent are in
 ## Pairing a far Mac for Xcode
 
 A bridge needs a Mac that Xcode has paired with the device, and Xcode pairs on one network. A cloud
-Mac is never on the device's network. With **iOS 27 and Xcode 27**, something that is on it can
+Mac is never on the device's network. With **iOS 27 and Xcode 27**, something beside the device can
 introduce the far Mac, once.
 
 **A Mac you introduce can use the device as a developer from then on**: install and run apps, debug
@@ -239,7 +247,8 @@ It is **install only**: no debugger, no `roamrun logs`, no `roamrun screenshot`.
 > [!WARNING]
 > **Anyone on your tailnet can open the page and install the builds on it** (an Ad Hoc build, only
 > on devices in its profile). On a tailnet you share, restrict it with Tailscale's access rules
-> before you publish. Naming a device below only chooses what the build is checked against.
+> before you publish. Naming a device below does not limit who can install: it only chooses which
+> devices the build is checked against.
 
 ```sh
 roamrun ota build/MyApp.ipa            # checks it against every device RoamRun knows
@@ -262,7 +271,8 @@ What it needs:
 
 To install on someone else's device, such as a tester's phone:
 
-1. They install Tailscale and join your tailnet.
+1. They install Tailscale and join your tailnet. A member reaches whatever your access rules allow,
+   not only this page, so set the rules first.
 2. For an Ad Hoc build, add their device to the build's profile before you build.
 3. They open the page on the device and tap Install.
 4. To launch the app, they turn on Developer Mode for an Ad Hoc build, or trust the developer under
