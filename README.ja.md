@@ -47,8 +47,8 @@ Xcode からデバイスを使いたいだけなら、[はじめかた](#はじ�
 - **Apple シリコンの Mac**（macOS 13 以降）と、管理者アカウント
 - **iOS 17.4 以降の iPhone か iPad**、Apple Vision Pro、Apple TV のいずれか
 - **Xcode 15 以降**（`roamrun logs` は 16 以降）。デバイスの iOS に対応したバージョンが必要です（[Apple の対応表](https://developer.apple.com/support/xcode/)）
-- **Tailscale**。Mac とデバイスの両方で、同じ tailnet（Tailscale の自分専用のネットワーク）に接続しておきます。デバイスのアドレスを手で入力すれば、ほかの mesh VPN も使えます
-- ブリッジを始めるときに、デバイスがつないでいる**インターネット接続のある Wi-Fi**
+- **Tailscale**。Mac とデバイスの両方に入れて、同じアカウントでサインインし、接続をオンにします。これで 2 台が同じ tailnet（Tailscale の自分専用のネットワーク）に入ります。デバイスのアドレスを手で入力すれば、ほかの mesh VPN も使えます
+- **インターネット接続のある Wi-Fi**。RoamRun がデバイスへの接続を始めるときに必要です。モバイル通信だけでは始められません
 
 すべての条件は [docs/install.ja.md](docs/install.ja.md#必要なもの) にあります。
 
@@ -58,17 +58,17 @@ Xcode からデバイスを使いたいだけなら、[はじめかた](#はじ�
 brew install --cask mh-mobile/tap/roamrun
 ```
 
-Homebrew を使わない場合は、[Releases](https://github.com/mh-mobile/RoamRun/releases) から dmg をダウンロードし、RoamRun を「アプリケーション」にドラッグします。最初の画面で、`roamrun` コマンドも入れられます。
+Homebrew を使わない場合は、[Releases](https://github.com/mh-mobile/RoamRun/releases) から dmg をダウンロードし、RoamRun を「アプリケーション」にドラッグします。最初の画面で、`roamrun` コマンドも入れられます。あとから入れるときは、Open RoamRun › Settings › Command line tool › Install… を使います。
 
 ### 2. デバイスをこの Mac と一度ペアリングする
 
-iPhone か iPad を USB ケーブルで Mac につなぎ、ロックを解除します。確認が出たら「信頼」を選びます。続けて、設定 › プライバシーとセキュリティ › デベロッパモード をオンにします。デバイスは再起動します。
+Xcode を開いて、iPhone か iPad を USB ケーブルで Mac につなぎ、ロックを解除します。確認が出たら「信頼」を選びます。続けて、設定 › プライバシーとセキュリティ › デベロッパモード をオンにします。デバイスは一度再起動します。スイッチが見当たらないときは、先に Xcode からデバイスでアプリを実行します。Xcode の実行先にデバイスが出れば準備完了です。
 
-Xcode 27 と iOS 27 なら、同じ Wi-Fi 上で、Xcode の Device Hub › ＋ › Pair Nearby Device からもペアリングできます。Apple Vision Pro と Apple TV も、[ペアリングの画面を開いて](docs/far-mac.ja.md#apple-vision-pro)ここからペアリングします。
+Xcode 27 と iOS 27 なら、同じ Wi-Fi 上でもペアリングできます。Xcode の Device Hub › ＋ › Pair Nearby Device を開きます。デバイスのデベロッパモードの画面で Mac を選び、Device Hub に表示されたコードを入力します。Apple Vision Pro と Apple TV も Device Hub からペアリングします。デバイスでは[ペアリングの画面](docs/far-mac.ja.md#apple-vision-pro)を開いておきます。
 
 ### 3. RoamRun にデバイスを追加する
 
-「アプリケーション」から RoamRun を開きます。デバイスを USB でつなぐか、Mac と同じ Wi-Fi に接続します。RoamRun のメニューバーのアイコンをクリックし、Open RoamRun › Add Device を選びます。デバイスを選び、Tailscale 上の同じデバイスと対応づけて（アドレスの直接入力もできます）、名前を付けます。
+「アプリケーション」から RoamRun を開きます。デバイスは USB でつなぐか、Mac と同じ Wi-Fi に接続しておきます。メニューバーの RoamRun のアイコンをクリックし、Open RoamRun › Add Device を選びます。デバイスを選び、Tailscale 上の同じデバイスと対応づけて（アドレスの直接入力もできます）、名前を付けます。
 
 <p align="center">
   <img src="docs/images/add-device.png" width="520" alt="Add Device の画面">
@@ -81,22 +81,24 @@ RoamRun では、デバイスへのつながりを「ブリッジ」と呼びま
 
 | 表示 | 意味 |
 |---|---|
-| **Ready for Xcode** | デバイスは別のネットワークにあり、RoamRun が通信を中継しています。 |
-| **On this Wi‑Fi** | デバイスは Mac と同じ Wi-Fi にあり、Xcode が直接つながっています。RoamRun は待機し、デバイスが別の Wi-Fi に移ると自動で引き継ぎます。そのままモバイル通信に移ると、セッションは切れます。 |
+| **Ready for Xcode** | RoamRun が Tailscale 越しに通信を中継していて、Xcode からデバイスを使えます。 |
+| **On this Wi‑Fi** | RoamRun がデバイスを Mac と同じ Wi-Fi で見つけ、Xcode が直接つながっています。RoamRun は待機し、デバイスが別の Wi-Fi に移ると自動で引き継ぎます。この Wi-Fi からそのままモバイル通信に移ると、セッションは切れます。 |
 
 Mac のアドレスが変わった場合、ブリッジは再起動します。
 
 ### 5. Xcode から実行する
 
-デバイスは Xcode に表示されたままです。選んで Run を押します。ブリッジを試すには、デバイスを別の電話のテザリングなど、インターネットにつながる別の Wi-Fi に移します。デバッグ中は、デバイスのロックを解除し、画面をつけたままにしてください。デバイスがスリープすると、デバイスの Tailscale も止まります。
+USB ケーブルを抜いて、デバイスをインターネットにつながる別の Wi-Fi に移します。ほかの電話のテザリングでも構いません。**Ready for Xcode** と表示されたら、Xcode でデバイスを選んで Run を押します。
+
+デバッグ中はデバイスのロックを解除し、画面をつけたままにしてください。デバイスがスリープすると、デバイスの Tailscale も止まります。Mac もスリープさせないでください。Mac が数分間スリープすると、Xcode のセッションは切れます。
 
 動かないときは `roamrun doctor` を実行します。Mac、Tailscale、デバイスの順に確かめて、直し方を表示します。
 
 ## Mac から離れて作業する
 
 - **ブリッジを始めるには、インターネットにつながる Wi-Fi が必要です**。カフェやホテルの Wi-Fi、モバイルルーター、別の電話のテザリングが使えます。モバイル通信だけでは始められません。デバイス自身のテザリングも使えません。
-- **動いているセッションをモバイル通信でも保つには**、Open RoamRun › Settings › Network › Keep debugging on cellular をオンにします。オンにすると Run のたびにモバイルデータを使うので、初期設定はオフです。効くのは **Ready for Xcode** のときだけです。**On this Wi‑Fi** のままモバイル通信に移ると、セッションは切れます。
-- **デバイスから Mac を操作するには**、AI エージェントのリモート機能、SSH のターミナル、画面共有のどれかを使います。エージェントの会話は、そのサービスのサーバーを通ります。仕事用の Mac では、会社の方針を確かめてください。
+- **動いているセッションをモバイル通信でも保つには**、Open RoamRun › Settings › Network › Keep debugging on cellular をオンにします。オンにすると Run のたびにモバイルデータを使うので、初期設定はオフです。この設定が使えるのは **Ready for Xcode** のときだけです。**On this Wi‑Fi** のままモバイル通信に移ると、セッションは切れます。
+- **デバイスから Mac を操作するには**、AI エージェントのリモート機能、SSH のターミナル、画面共有のどれかを使います。エージェントの会話はそのサービスのサーバーを通ります。仕事用の Mac では会社の方針を確かめてください。
 
 外出先でのデバッグは、自宅より時間がかかります。速くする方法と、上の条件の詳細は [docs/away.ja.md](docs/away.ja.md) にあります。
 
@@ -116,32 +118,38 @@ roamrun logs <name> <bundle-id>  # アプリを起動し直して、出力を流
 roamrun screenshot <name>        # デバイスの画面を PNG で保存する
 ```
 
-すべてのコマンドとオプションは [docs/cli.ja.md](docs/cli.ja.md) にあります。
+ほかのコマンドと細かい動作は [docs/cli.ja.md](docs/cli.ja.md) にあります。`roamrun --help` ですべて確かめられます。
 
 ## AI エージェントから使う
 
-Claude Code、Codex、Cursor などのエージェントは、RoamRun を使ってビルド、インストール、デバッグができます。次のコマンドは、ホームにあるエージェントのフォルダ（`.claude`、`.codex`、`.cursor`、`.gemini`、`.copilot`、`.devin`）すべてに、RoamRun のスキルを追加します。`--client claude` のように指定すると、そのエージェントだけに追加します。
+Claude Code、Codex、Cursor などのエージェントは、RoamRun を使ってビルド、インストール、デバッグができます。次のコマンドはホームにあるエージェントのフォルダ（`.claude`、`.codex`、`.cursor`、`.gemini`、`.copilot`、`.devin`）すべてに、RoamRun のスキルを追加します。`--client claude` のように指定すると、そのエージェントだけに追加します。
 
 ```sh
 roamrun init
 ```
 
-RoamRun をアップデートしたら、バージョンをそろえるためにもう一度実行してください。エージェントに画面の確認やタップもさせるには、[デバイスを追加](#3-roamrun-にデバイスを追加する)して、[デバイス操作](#デバイスの画面を見て操作する)を設定します。RoamRun のアプリは起動したままにします。そのうえで、MCP サーバーを登録します（例: `claude mcp add roamrun -- roamrun mcp`）。詳しくは [docs/cli.ja.md](docs/cli.ja.md#ai-エージェントから使う) にあります。
+RoamRun をアップデートしたら、バージョンをそろえるためにもう一度実行してください。詳しくは [docs/cli.ja.md](docs/cli.ja.md#ai-エージェントから使う) にあります。
+
+エージェントに画面を見せてタップさせる設定は、`roamrun init` には含まれません。次の順に設定します。
+
+1. [デバイスを追加](#3-roamrun-にデバイスを追加する)して、[デバイス操作](#デバイスの画面を見て操作する)を設定します。
+2. RoamRun のアプリを起動したままにします。
+3. MCP サーバーを登録します（例: `claude mcp add roamrun -- roamrun mcp`）。ツールの一覧は[エージェントから使う](docs/device-control.ja.md#エージェントから使うmcp)にあります。
 
 ## デバイスの画面を見て操作する
 
-RoamRun は、コマンドや AI エージェントから、デバイスの画面を見て、タップ、スワイプ、文字入力、ボタン操作ができます。この機能を「デバイス操作」と呼びます。**iOS / iPadOS 27 以降**が必要です。ブリッジと Xcode は使いません。動作を確かめたのは iPhone で、iPad では試していません。
+RoamRun を使うと、コマンドや AI エージェントからデバイスの画面を見て、タップ、スワイプ、文字入力、ボタン操作ができます。この機能を「デバイス操作」と呼びます。**iOS / iPadOS 27 以降**が必要です。ブリッジと Xcode は使いません。動作を確かめたのは iPhone で、iPad では試していません。
 
 > [!WARNING]
 > **設定が終わると、スイッチはオンになります。オンの間は、この Mac で実行したどのプログラムでも、デバイスを見て操作でき、アプリを入れて起動もできます**。ロック画面、通知、メッセージも見えます。自分の作業で使っていないときは、デバイスのページのスイッチでオフにしてください。詳しくは[だれが使えるか](docs/device-control.ja.md#だれが使えるか)にあります。
 
 **設定はデバイスごとに一度だけです**。デバイスを Mac と同じ Wi-Fi に接続して、次のように操作します。
 
-1. RoamRun でデバイスのページを開き、Device control › Set Up… を押します。
+1. RoamRun にデバイスがなければ、[追加します](#3-roamrun-にデバイスを追加する)。ブリッジは要りません。デバイスのページを開き、Device control › Set Up… を押します。
 2. デバイスの 設定 › プライバシーとセキュリティ › デベロッパモード で「RoamRun（この Mac の名前）」を選び、Mac に表示されたコードを入力します。
-3. RoamRun のアプリは起動したままにします。接続を保つのはアプリです。`roamrun status <name>` に「Device control: connected」と出れば準備完了です。
+3. RoamRun のアプリは起動したままにします。接続を保つのはアプリです。`roamrun status <name>` に「Device control: connected」と出るまで待ちます。
 
-あとは、画面を見てから操作します。タップの前には毎回、`look` で画面を撮り直します。
+あとは画面を見てから操作します。タップの前には毎回、`look` で画面を撮り直します。
 
 ```sh
 roamrun look <name> /tmp/now.png   # 画面を保存する。パス、サイズ、「look 12」のような番号を表示する
@@ -157,14 +165,14 @@ roamrun look <name> /tmp/now.png   # 次の操作の前に、もう一度見る
 
 **ペアリングした Mac は、そのあとデバイスを開発者として使えます**。アプリのインストールと実行、デバッグ、アプリのデータの読み取りができます。取り消すには、デバイスの 設定 › プライバシーとセキュリティ › デベロッパモード で、その Mac を削除します。
 
+<a id="apple-vision-pro"></a>
+
 | デバイスのそばにあるもの | 方法 |
 |---|---|
 | RoamRun を入れた Mac | [2 台の Mac が同じ tailnet にある場合](docs/far-mac.ja.md#2-台の-mac-が同じ-tailnet-にある場合) |
-| デバイスだけ | [デバイス上の Introducer アプリ](docs/far-mac.ja.md#デバイス自身に仲介させる) |
+| デバイスだけ（RoamRun Introducer アプリを Xcode で入れておく） | [Introducer アプリ](docs/far-mac.ja.md#デバイス自身に仲介させる) |
 | Windows や Linux のマシン | [`roamrunctl`](docs/far-mac.ja.md#windows-や-linux-のマシンに仲介させる) |
 | デバイスが Apple Vision Pro か Apple TV で、そばに RoamRun を入れた Mac がある（Introducer と `roamrunctl` では仲介できません） | [専用の手順](docs/far-mac.ja.md#apple-vision-pro) |
-
-<a id="apple-vision-pro"></a>
 
 ## ブリッジを使わずにインストールする（OTA）
 
@@ -177,23 +185,33 @@ roamrun look <name> /tmp/now.png   # 次の操作の前に、もう一度見る
 
 できるのは**インストールだけ**です。デバッガ、`roamrun logs`、`roamrun screenshot` は使えません。
 
+> [!WARNING]
+> **tailnet のメンバーなら、だれでもこのページを開いて、ビルドをインストールできます**（Ad Hoc のビルドは、プロファイルに入っているデバイスだけです）。tailnet を共有している場合は、公開する前に Tailscale のアクセス制御で制限してください。下のコマンドのデバイス名は、ビルドをどのデバイスについて確かめるかを選ぶだけです。
+
 ```sh
 roamrun ota build/MyApp.ipa            # RoamRun が知っているすべてのデバイスについて、ビルドを確かめる
 roamrun ota iPhone build/MyApp.ipa     # 名前を指定すると、そのデバイスについてだけ確かめる
 ```
 
-実行すると、そのビルドをインストールできるデバイスと、ページのアドレスが表示されます。デバイスでそのアドレスを開き、Install をタップします。ページには、アプリごとに直近 5 つのビルドが、新しい順に並びます。
+実行すると、そのビルドをインストールできるデバイスと、ページのアドレスが表示されます。デバイスでそのアドレスを開き、Install をタップします。ページには、アプリごとに直近 5 つのビルドが新しい順に並びます。
 
-必要なものは、次の 4 つです。
+必要なものは次の 4 つです。
 
 - **Release Testing（Ad Hoc）か Enterprise 用に署名した .ipa**。有料の Apple Developer アカウントが必要です。Development ビルド、App Store / TestFlight 用のビルド、署名のないビルド、プロビジョニングプロファイルの期限が切れたビルドは、`roamrun ota` が拒否します。
 - **tailnet の HTTPS**。Tailscale の管理画面の DNS で、MagicDNS と HTTPS 証明書を有効にしておきます。
 - **tailnet に入ったデバイス**。ページを開くには、デバイスに Tailscale が必要です。Ad Hoc のビルドでは、ビルドのプロビジョニングプロファイルにもデバイスが入っている必要があります。
 - **起動している RoamRun**。ページはアプリが配信します。`tailscale serve` を使い、ポートは 41443 です。
 
-テスターの電話のように、RoamRun が知らないデバイスに入れる場合は、ビルドのプロファイルに自分のデバイスが 1 台も入っていない、という警告が出ます。これは想定どおりの動作です。テスターのデバイスは、Ad Hoc のプロファイルに入っている必要があります。アプリの起動には、デベロッパモードも必要です。
+テスターの電話のように、ほかの人のデバイスに入れる手順は次のとおりです。
 
-**tailnet のメンバーなら、だれでもこのページを開いて、ビルドをインストールできます**。tailnet を共有している場合は、Tailscale のアクセス制御で制限してください。ページの公開をやめるには、`~/Library/Application Support/RoamRun/ota/` を削除します。
+1. 相手が Tailscale を入れて、自分の tailnet に参加します。
+2. Ad Hoc のビルドなら、ビルドする前に、相手のデバイスをプロファイルに追加します。
+3. 相手がデバイスでページを開き、Install をタップします。
+4. 相手がデベロッパモードをオンにします。アプリの起動に必要です。
+
+プロファイルに自分のデバイスが 1 台も入っていないと、`roamrun ota` は警告を出します。ほかの人に配るビルドでは、これは想定どおりの動作です。
+
+ページの公開をやめるには、`~/Library/Application Support/RoamRun/ota/` を削除します。
 
 ポートと Funnel、`--replace`、デバイス側のデベロッパモード、ビルドを保存する前に RoamRun が確かめることは、[docs/ota.ja.md](docs/ota.ja.md)にあります。
 
@@ -201,8 +219,10 @@ roamrun ota iPhone build/MyApp.ipa     # 名前を指定すると、そのデバ
 
 CI のジョブから、`.ipa` を Tailscale 越しにデバイスへインストールし、起動できます。`.ipa` は、そのジョブで作ったものでも、別に用意したものでもかまいません。使うのは [`roamrunctl`](Rust/roamrunctl/README.ja.md) です。ブリッジも Xcode も通らないので、Linux のランナーでもできます。ジョブは tailnet に参加したうえで、次のどちらかを行います。
 
-- CI のマシンで roamrunctl を動かす。デバイス操作のペアリング（Xcode のものではありません）を、CI のシークレットに置きます。ペアリングは、デバイスと同じ Wi‑Fi のマシンで一度だけ作ります。RoamRun の入った Mac なら `roamrun key create`、どのマシンでも `roamrunctl pair control --to` で作れます。
+- CI のマシンで roamrunctl を動かす。デバイス操作のペアリング（Xcode のものではありません）を、CI のシークレットに置きます。ペアリングはデバイスと同じ Wi‑Fi のマシンで一度だけ作ります。RoamRun の入った Mac なら `roamrun key create`、どのマシンでも `roamrunctl pair control --to` で作れます。
 - 手元の relay のマシンに頼む。そのマシンで `roamrunctl mcp --http` を動かし、ペアリングはそこに置きます。ジョブは `.ipa` を relay に送り、relay がインストールして起動します。
+
+1 つ目なら、手元で動かし続けるものは要りません。ペアリングを CI のシークレットに置かず、手元のマシンに残したいときは 2 つ目を選びます。
 
 | CI | やり方 | 手順 |
 |---|---|---|
@@ -212,7 +232,7 @@ CI のジョブから、`.ipa` を Tailscale 越しにデバイスへインス�
 
 どれも、iOS 27.0 の iPhone 15 Pro で試しました。やり方と、試していないことは、それぞれの手順にあります。
 
-必要なものは、デバイスと `.ipa` です。デバイスは iOS 27 以降で、デベロッパモードをオンにします。Wi‑Fi につなぎ、Tailscale をオンにして、起動してから一度はロックを解除しておきます。`.ipa` は、そのデバイスを含む開発用プロファイルで署名します。CI のシークレットを読める人は、デバイスを操作できます。それが誰か、各シークレットをどう取り消すかも、それぞれの手順に書いてあります。
+必要なものはデバイスと `.ipa` です。デバイスは iOS 27 以降で、デベロッパモードをオンにします。Wi‑Fi につなぎ、Tailscale をオンにして、起動してから一度はロックを解除しておきます。`.ipa` は、そのデバイスを含む開発用プロファイルで署名します。CI のシークレットを読める人は、デバイスを操作できます。それが誰か、各シークレットをどう取り消すかも、それぞれの手順に書いてあります。
 
 ## 困ったとき
 
@@ -223,10 +243,10 @@ CI のジョブから、`.ipa` を Tailscale 越しにデバイスへインス�
 | デバイスにつながらない | ロックを解除して画面をつけたまま、Wi-Fi に接続する |
 | デバイスの Tailscale は接続中に見えるのに通信しない | VPN を一度オフにして、オンに戻す |
 | USB のデバイスがあると、ブリッジ中の別のデバイスが Ready にならない | USB のデバイスを外す |
-| そばにあるのに、デバイスが常に「離れた場所」に見える | システム設定 › プライバシーとセキュリティ › ローカルネットワーク で RoamRun を許可する |
+| そばにあるデバイスをブリッジし続け、**On this Wi‑Fi** にならない | システム設定 › プライバシーとセキュリティ › ローカルネットワーク で RoamRun を許可する。すでにオンなら、入れ直す前に[既知の問題](docs/troubleshooting.ja.md#既知の問題)を読む（保存したデバイスを残す方法があります） |
 | デバイスを再起動したら、ブリッジが動かなくなった | デバイスのページの Find RemotePairing Port を使う。再起動のあと、一度 USB でつなぐ必要があったこともある |
 
-RoamRun は Apple の非公開のプロトコルに依存しているので、iOS、macOS、Xcode の新しいバージョンで動かなくなる可能性があります。制限の一覧と、動作中に公開されるものは [docs/troubleshooting.ja.md](docs/troubleshooting.ja.md) にあります。
+RoamRun は Apple の非公開のプロトコルに依存しているので、iOS、macOS、Xcode の新しいバージョンで動かなくなる可能性があります。制限の一覧と、動作中に公開されるものは[制限と既知の問題](docs/troubleshooting.ja.md)にあります。
 
 ## Mac に作られるものとアンインストール
 

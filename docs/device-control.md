@@ -40,7 +40,7 @@ roamrun press iPhone home                 # home, lock, volume-up, volume-down
 roamrun elements iPhone                   # what accessibility says is on the screen, without positions
 ```
 
-## The rules
+## How looks and actions work
 
 - **Look, act, look again.** A `tap`, `swipe` or `pinch` needs a `look` taken within the last minute, and
   each look serves one action. `type` and `paste` may still go by a look an action used (look, tap
