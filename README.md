@@ -228,7 +228,7 @@ tried.
 
 | What is beside the device | How |
 |---|---|
-| A Mac with RoamRun | [Both Macs on one tailnet](docs/far-mac.md#both-macs-on-one-tailnet) |
+| A Mac with RoamRun, beside an iPhone or iPad | [Both Macs on one tailnet](docs/far-mac.md#both-macs-on-one-tailnet) |
 | Only the device, with the RoamRun Introducer app installed from Xcode beforehand | [The Introducer app](docs/far-mac.md#from-the-device-itself) |
 | A Windows or Linux machine | [`roamrunctl`](docs/far-mac.md#from-a-windows-or-linux-machine) |
 | The device is an Apple Vision Pro or Apple TV, with a Mac with RoamRun beside it (the Introducer and `roamrunctl` can't introduce these) | [Its own steps](docs/far-mac.md#apple-vision-pro) |

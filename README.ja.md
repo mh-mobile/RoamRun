@@ -173,7 +173,7 @@ roamrun look <name> /tmp/now.png        # 次の操作の前に、もう一度�
 
 | デバイスのそばにあるもの | 方法 |
 |---|---|
-| RoamRun を入れた Mac | [2 台の Mac が同じ tailnet にある場合](docs/far-mac.ja.md#2-台の-mac-が同じ-tailnet-にある場合) |
+| RoamRun を入れた Mac（デバイスが iPhone か iPad の場合） | [2 台の Mac が同じ tailnet にある場合](docs/far-mac.ja.md#2-台の-mac-が同じ-tailnet-にある場合) |
 | デバイスだけ（RoamRun Introducer アプリを Xcode で入れておく） | [Introducer アプリ](docs/far-mac.ja.md#デバイス自身に仲介させる) |
 | Windows や Linux のマシン | [`roamrunctl`](docs/far-mac.ja.md#windows-や-linux-のマシンに仲介させる) |
 | デバイスが Apple Vision Pro か Apple TV で、そばに RoamRun を入れた Mac がある（Introducer と `roamrunctl` では仲介できません） | [専用の手順](docs/far-mac.ja.md#apple-vision-pro) |
