@@ -145,7 +145,7 @@ gave the device in RoamRun.
 roamrun devices                  # list your devices and their status
 roamrun up <name>                # start a bridge; it runs until Ctrl-C
 roamrun up <name> -d             # start it in the background
-roamrun status <name>            # exits 0 when Xcode can use the device
+roamrun status <name>            # exits 0 when ready; warns if the device is locked
 roamrun down <name>              # stop a bridge
 roamrun doctor                   # find out what's wrong, and how to fix it
 roamrun run <name>               # in a project folder: build, install, launch
@@ -262,24 +262,24 @@ What it needs:
 
 - An **.ipa signed for Release Testing (Ad Hoc) or Enterprise**, which takes a paid Apple
   Developer account. `roamrun ota` refuses a Development build, an App Store or TestFlight build,
-  an unsigned one, and one whose provisioning profile has expired.
+  one without a readable provisioning profile, and one whose profile has expired.
 - **HTTPS in your tailnet**: MagicDNS and HTTPS certificates turned on, in Tailscale's admin console
   under DNS.
 - **The device on your tailnet**, with Tailscale on it, to open the page. For an Ad Hoc build, the
   device also has to be in the build's provisioning profile.
-- **RoamRun running.** The app serves the page, through `tailscale serve`, on port 41443.
+- **RoamRun running.** The app serves the page, through `tailscale serve`, on port 41443 by default.
 
-To install on someone else's device, such as a tester's phone:
+To install on someone else's device, such as a tester's phone, use an Ad Hoc build:
 
 1. They install Tailscale and join your tailnet. A member reaches whatever your access rules allow,
    not only this page, so set the rules first.
-2. For an Ad Hoc build, add their device to the build's profile before you build.
+2. Add their device to the build's profile before you build.
 3. They open the page on the device and tap Install.
-4. To launch the app, they turn on Developer Mode for an Ad Hoc build, or trust the developer under
-   Settings › General › VPN & Device Management for an Enterprise build.
+4. They turn on Developer Mode, which the app needs to launch.
 
-For an Ad Hoc build, `roamrun ota` warns when the profile names none of the devices it checks the
-build against. For a build meant for someone else, that is expected.
+`roamrun ota` warns when the profile names none of the devices it checks the build against. For a
+build meant for someone else, that is expected. An Enterprise build needs its developer trusted on
+the device instead: [On the device](docs/ota.md#on-the-device).
 
 To take the page down, delete `~/Library/Application Support/RoamRun/ota/`.
 
@@ -296,7 +296,7 @@ things:
 - **roamrunctl on the CI machine**, with a device-control pairing to the device (not Xcode's) kept
   as a CI secret. It is made once on a machine on the device's
   Wi‑Fi: `roamrun key create` on a Mac with RoamRun, or `roamrunctl pair control --to` on any machine.
-- **Through a relay machine of yours**: it runs `roamrunctl mcp --http` and keeps that pairing; the
+- **Through a relay machine of yours**: it runs `roamrunctl mcp --http` with `--allow-install` and keeps that pairing; the
   job sends it the `.ipa`, and it installs and launches.
 
 The first needs nothing of yours kept running. Take the second if the pairing must stay on your
@@ -341,7 +341,7 @@ What RoamRun keeps on your Mac, and the steps to remove it, are in
 |---|---|
 | [Install and requirements](docs/install.md) | Everything needed, updating, building from source, uninstalling |
 | [Working away from the Mac](docs/away.md) | Networks, cellular, debugging speed |
-| [The `roamrun` command](docs/cli.md) | Every command, other tools over the bridge, agents |
+| [The `roamrun` command](docs/cli.md) | The bridge and Xcode commands, other tools over the bridge, agents |
 | [Device control](docs/device-control.md) | Operating a device, MCP, who can use it |
 | [Far Macs](docs/far-mac.md) | Pairing a Mac that was never near the device |
 | [Over-the-air installs](docs/ota.md) | The install page in detail |
@@ -354,7 +354,8 @@ What RoamRun keeps on your Mac, and the steps to remove it, are in
 
 Something broken, or the docs unclear? Open an
 [issue](https://github.com/mh-mobile/RoamRun/issues). Please include `roamrun --version`, your
-macOS, Xcode and iOS versions, and the output of `roamrun doctor --json`.
+macOS, Xcode and iOS versions, and the output of `roamrun doctor --json`. Remove device identifiers, names and network addresses
+before you post it.
 
 How to report a vulnerability, and what RoamRun exposes: [SECURITY.md](SECURITY.md).
 

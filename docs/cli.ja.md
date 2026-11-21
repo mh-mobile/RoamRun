@@ -2,7 +2,7 @@
 
 <p align="center"><a href="cli.md">English</a> | 日本語</p>
 
-`roamrun` の各コマンドの細かい動作です。よく使うものだけなら、[README](../README.ja.md#コマンド)で足ります。
+ブリッジと Xcode に使う `roamrun` コマンドの細かい動作です。デバイス操作のコマンドは [device-control.ja.md](device-control.ja.md) にあります。よく使うものだけなら、[README](../README.ja.md#コマンド)で足ります。
 
 RoamRun の実行ファイルは、`roamrun` コマンドとしても使えます。SSH 越しの操作や、スクリプトで使うためのものです。
 

@@ -2,7 +2,8 @@
 
 <p align="center">English | <a href="cli.ja.md">日本語</a></p>
 
-What each `roamrun` command does, in detail. The [README](../README.md#commands) has the ones used most.
+What the `roamrun` commands for the bridge and Xcode do, in detail. Device control's commands are in
+[device-control.md](device-control.md). The [README](../README.md#commands) has the ones used most.
 
 The app's binary is also the `roamrun` command, for use over SSH or in scripts.
 

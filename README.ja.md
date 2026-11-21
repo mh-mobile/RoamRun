@@ -47,7 +47,7 @@ Xcode からデバイスを使いたいだけなら、[はじめかた](#はじ�
 - **Apple シリコンの Mac**（macOS 13 以降）と、管理者アカウント
 - **iOS 17.4 以降の iPhone か iPad**、Apple Vision Pro、Apple TV のいずれか
 - **Xcode 15 以降**（`roamrun logs` は 16 以降）。デバイスの iOS に対応したバージョンが必要です（[Apple の対応表](https://developer.apple.com/support/xcode/)）
-- **Tailscale**。Mac とデバイスの両方に入れて接続をオンにし、同じ tailnet（Tailscale の自分専用のネットワーク）に入れます。両方を同じアカウントでサインインすれば、同じ tailnet に入ります。デバイスのアドレスを手で入力すれば、ほかの mesh VPN も使えます
+- **Tailscale**。Mac とデバイスの両方に入れて接続をオンにし、同じ tailnet（Tailscale の自分専用のネットワーク）に入れます。両方とも同じアカウントでサインインすれば、同じ tailnet に入ります。デバイスのアドレスを手で入力すれば、ほかの mesh VPN も使えます
 - **デバイスが接続する、インターネットにつながる Wi-Fi**。RoamRun がデバイスへの接続を始めるときに必要です。モバイル通信だけでは始められません
 
 すべての条件は [docs/install.ja.md](docs/install.ja.md#必要なもの) にあります。
@@ -112,7 +112,7 @@ RoamRun では、デバイスへのつながりを「ブリッジ」と呼びま
 roamrun devices                  # デバイスの一覧と状態を表示する
 roamrun up <name>                # ブリッジを始める。Ctrl-C で止めるまで動く
 roamrun up <name> -d             # バックグラウンドで始める
-roamrun status <name>            # Xcode から使える状態なら、終了コード 0
+roamrun status <name>            # 使える状態なら終了コード 0。ロック中は警告を出す
 roamrun down <name>              # ブリッジを止める
 roamrun doctor                   # 問題の場所と直し方を調べる
 roamrun run <name>               # プロジェクトのフォルダで、ビルド、インストール、起動まで行う
@@ -201,19 +201,19 @@ roamrun ota iPhone build/MyApp.ipa     # 名前を指定すると、そのデバ
 
 必要なものは次の 4 つです。
 
-- **Release Testing（Ad Hoc）か Enterprise 用に署名した .ipa**。有料の Apple Developer アカウントが必要です。Development ビルド、App Store / TestFlight 用のビルド、署名のないビルド、プロビジョニングプロファイルの期限が切れたビルドは、`roamrun ota` が拒否します。
+- **Release Testing（Ad Hoc）か Enterprise 用に署名した .ipa**。有料の Apple Developer アカウントが必要です。`roamrun ota` は、Development、App Store / TestFlight 用のビルドと、プロファイルを読み取れないビルド、プロファイルの期限が切れたビルドを拒否します。
 - **tailnet の HTTPS**。Tailscale の管理画面の DNS で、MagicDNS と HTTPS 証明書を有効にしておきます。
 - **tailnet に入ったデバイス**。ページを開くには、デバイスに Tailscale が必要です。Ad Hoc のビルドでは、ビルドのプロビジョニングプロファイルにもデバイスが入っている必要があります。
-- **起動している RoamRun**。ページはアプリが配信します。`tailscale serve` を使い、ポートは 41443 です。
+- **起動している RoamRun**。ページはアプリが配信します。`tailscale serve` を使い、既定のポートは 41443 です。
 
-テスターの電話のように、ほかの人のデバイスに入れる手順は次のとおりです。
+テスターの電話のように、ほかの人のデバイスに入れるときは、Ad Hoc のビルドを使います。
 
-1. 相手が Tailscale を入れて、ビルドを公開する Mac と同じ tailnet に参加します。メンバーが届くのはこのページだけではなく、アクセス制御が許す範囲すべてです。先に制限してください。
-2. Ad Hoc のビルドなら、ビルドする前に、相手のデバイスをプロファイルに追加します。
+1. 相手が Tailscale を入れて、ビルドを公開する Mac と同じ tailnet に参加します。メンバーがアクセスできるのはこのページだけではなく、アクセス制御が許す範囲すべてです。先に制限してください。
+2. ビルドする前に、相手のデバイスをプロファイルに追加します。
 3. 相手がデバイスでページを開き、Install をタップします。
-4. アプリを起動するために、Ad Hoc のビルドなら相手がデベロッパモードをオンにします。Enterprise のビルドなら、設定 › 一般 › VPN とデバイス管理 で開発元を信頼します。
+4. 相手がデベロッパモードをオンにします。アプリの起動に必要です。
 
-Ad Hoc のビルドでは、確かめる対象のデバイスがプロファイルに 1 台も入っていないと、`roamrun ota` は警告を出します。ほかの人に配るビルドでは、これは想定どおりの動作です。
+確かめる対象のデバイスがプロファイルに 1 台も入っていないと、`roamrun ota` は警告を出します。ほかの人に配るビルドでは、これは想定どおりの動作です。Enterprise のビルドでは、代わりにデバイスで開発元を信頼します（[デバイス側の条件](docs/ota.ja.md#デバイス側の条件)）。
 
 ページの公開をやめるには、`~/Library/Application Support/RoamRun/ota/` を削除します。
 
@@ -224,14 +224,14 @@ Ad Hoc のビルドでは、確かめる対象のデバイスがプロファイ�
 CI のジョブから、`.ipa` を Tailscale 越しにデバイスへインストールし、起動できます。`.ipa` は、そのジョブで作ったものでも、別に用意したものでもかまいません。使うのは [`roamrunctl`](Rust/roamrunctl/README.ja.md) です。ブリッジも Xcode も使わないので、Linux のランナーでもできます。ジョブは tailnet に参加したうえで、次のどちらかを行います。
 
 - CI のマシンで roamrunctl を動かす。デバイス操作のペアリング（Xcode のものではありません）を、CI のシークレットに置きます。ペアリングはデバイスと同じ Wi‑Fi のマシンで一度だけ作ります。RoamRun の入った Mac なら `roamrun key create`、どのマシンでも `roamrunctl pair control --to` で作れます。
-- 手元のマシンを relay にする。relay は、ペアリングを持って `roamrunctl mcp --http` を動かすマシンです。ジョブは `.ipa` を relay に送り、relay がインストールして起動します。
+- 手元のマシンを relay にする。relay は、ペアリングを持って `roamrunctl mcp --http` を `--allow-install` 付きで動かすマシンです。ジョブは `.ipa` を relay に送り、relay がインストールして起動します。
 
 1 つ目なら、手元で動かし続けるものは要りません。ペアリングを CI のシークレットに置かず、手元のマシンに残したいときは 2 つ目を選びます。
 
 | CI | やり方 | 手順 |
 |---|---|---|
 | GitHub Actions | Tailscale の action のあとに [mh-mobile/roamrun-action](https://github.com/mh-mobile/roamrun-action) を置く。Linux と macOS のランナーで動く | [docs/ci.ja.md](docs/ci.ja.md) |
-| Xcode Cloud | プロジェクトのスクリプトで Tailscale を userspace で動かし、Tailscale の HTTP プロキシを通してデバイスか relay に届く（`ROAMRUNCTL_PROXY`、roamrunctl 0.10.0 以降）。または `curl` で relay を呼ぶ | [docs/xcode-cloud.ja.md](docs/xcode-cloud.ja.md) |
+| Xcode Cloud | プロジェクトのスクリプトで Tailscale を userspace で動かし、Tailscale の HTTP プロキシを通してデバイスか relay に接続する（`ROAMRUNCTL_PROXY`、roamrunctl 0.10.0 以降）。または `curl` で relay を呼ぶ | [docs/xcode-cloud.ja.md](docs/xcode-cloud.ja.md) |
 | Bitrise | Step の [mh-mobile/bitrise-step-roamrun](https://github.com/mh-mobile/bitrise-step-roamrun)。Step が自分で tailnet に参加する | [docs/bitrise.ja.md](docs/bitrise.ja.md) |
 
 どれも、iOS 27.0 の iPhone 15 Pro で試しました。やり方と、試していないことは、それぞれの手順にあります。
@@ -262,7 +262,7 @@ RoamRun が Mac に置くものと、削除の手順は、[docs/install.ja.md](d
 |---|---|
 | [インストールと必要なもの](docs/install.ja.md) | 必要なものすべて、アップデート、ソースからのビルド、アンインストール |
 | [Mac から離れて作業する](docs/away.ja.md) | ネットワーク、モバイル通信、デバッグの速さ |
-| [`roamrun` コマンド](docs/cli.ja.md) | 全コマンド、ブリッジ越しのほかのツール、エージェント |
+| [`roamrun` コマンド](docs/cli.ja.md) | ブリッジと Xcode のコマンド、ブリッジ越しのほかのツール、エージェント |
 | [デバイス操作](docs/device-control.ja.md) | デバイスの操作、MCP、だれが使えるか |
 | [離れた Mac](docs/far-mac.ja.md) | デバイスのそばに置いたことのない Mac のペアリング |
 | [OTA インストール](docs/ota.ja.md) | インストールページの詳細 |
@@ -273,7 +273,7 @@ RoamRun が Mac に置くものと、削除の手順は、[docs/install.ja.md](d
 
 ## 問い合わせ
 
-動かない場合や、説明が分かりにくい場合は、[issue](https://github.com/mh-mobile/RoamRun/issues) を作成してください。`roamrun --version` の出力、macOS・Xcode・iOS のバージョン、`roamrun doctor --json` の出力を添えてもらえると助かります。
+動かない場合や、説明が分かりにくい場合は、[issue](https://github.com/mh-mobile/RoamRun/issues) を作成してください。`roamrun --version` の出力、macOS・Xcode・iOS のバージョン、`roamrun doctor --json` の出力を添えてもらえると助かります。投稿する前に、デバイスの識別子、名前、ネットワークアドレスを伏せてください。
 
 脆弱性の報告のしかたと、RoamRun が外部に公開するものについては、[SECURITY.md](SECURITY.md)（英語）にまとめてあります。
 
