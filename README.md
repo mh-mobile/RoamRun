@@ -127,8 +127,8 @@ by step, and says how to fix what it finds. If that doesn't settle it, see
   Wi-Fi, a pocket router, or another phone's hotspot. Cellular alone does not work, and neither
   does the device's own hotspot.
 - **To keep a running session on cellular**, turn on Open RoamRun › Settings › Network › Keep
-  debugging on cellular. It is off by default, because every Run then uses the device's mobile
-  data. It works only from **Ready for Xcode**: leaving **On this Wi‑Fi** straight onto cellular
+  debugging on cellular. It is off by default, because every Run on cellular uses the device's
+  mobile data. It works only from **Ready for Xcode**: leaving **On this Wi‑Fi** straight onto cellular
   ends the session.
 - **To drive the Mac from the device**, use an AI agent's remote feature, a terminal over SSH, or
   Screen Sharing. An agent's conversation goes through that service's servers, so check your
@@ -206,7 +206,7 @@ Then look at the screen and act on it. Each tap needs a new look:
 
 ```sh
 roamrun look <name> /tmp/now.png        # save the screen; prints the path, its size, then "look 12"
-roamrun tap <name> 295 640 --look 12    # tap a point in that image; 12 is the number look printed
+roamrun tap <name> 295 640 --look <n>   # tap a point in that image; <n> is the number look printed
 roamrun look <name> /tmp/now.png        # look again before the next action
 ```
 
@@ -220,8 +220,9 @@ Mac is never on the device's network. With **iOS 27 and Xcode 27**, something be
 introduce the far Mac, once.
 
 **A Mac you introduce can use the device as a developer from then on**: install and run apps, debug
-them, read their data. To withdraw that, remove the Mac on the device under Settings › Privacy &
-Security › Developer Mode.
+them, read their data. To withdraw that on an iPhone or iPad, remove the Mac under Settings ›
+Privacy & Security › Developer Mode. Removing it from an Apple Vision Pro or Apple TV hasn't been
+tried.
 
 <a id="apple-vision-pro"></a>
 

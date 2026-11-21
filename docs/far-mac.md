@@ -43,9 +43,10 @@ What to know:
   anything. (For an Apple Vision Pro the far Mac says whose device it is instead.)
 
 **Who gets the device.** Introducing a Mac lets it use the device as a developer from then on:
-install and run apps, debug them, read their data. To withdraw that, remove the Mac on the device
-under Settings › Privacy & Security › Developer Mode. It is listed there under the name the Mac
-gives itself, which `pair introduce` tells you. Unlike device control, Xcode's pairing cannot be
+install and run apps, debug them, read their data. To withdraw that on an iPhone or iPad, remove the
+Mac under Settings › Privacy & Security › Developer Mode. It is listed there under the name the Mac
+gives itself, which `pair introduce` tells you. Removing it from an Apple Vision Pro or Apple TV
+hasn't been tried. Unlike device control, Xcode's pairing cannot be
 switched off in RoamRun: removing it on the device is the only way.
 
 The same exchange with a line carried by hand, what each side checks, debugging symbols on the
