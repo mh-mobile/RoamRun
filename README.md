@@ -83,8 +83,9 @@ device in Xcode once.
 
 With Xcode 27 and iOS 27 you can pair on the same Wi-Fi instead: in Xcode's Device Hub › + › Pair
 Nearby Device, then on the device under Developer Mode, pick the Mac and enter the code Device Hub
-shows. An Apple Vision Pro or Apple TV pairs in Device Hub too, with
-[its pairing screen open](docs/far-mac.md#apple-vision-pro).
+shows. An Apple Vision Pro or Apple TV pairs in Device Hub too, with Settings › General › Remote Devices
+(Apple Vision Pro) or Settings › Remotes and Devices › Remote App and Devices (Apple TV) left open
+on it.
 
 ### 3. Add the device to RoamRun
 
@@ -193,8 +194,9 @@ the bridge nor Xcode. It was run on an iPhone; an iPad has not been tried.
 
 **Set up once for each device**, with the device on the Mac's Wi-Fi:
 
-1. [Add the device](#3-add-the-device-to-roamrun) if it isn't in RoamRun yet, after
-   [step 2](#2-pair-the-device-with-this-mac-once). You don't need the bridge. Then open its page and press Device control › Set Up….
+1. [Add the device](#3-add-the-device-to-roamrun) if it isn't in RoamRun yet. If it isn't listed
+   there, do [step 2 of Get started](#2-pair-the-device-with-this-mac-once) first. You don't need the
+   bridge. Then open its page and press Device control › Set Up….
 2. On the device, under Settings › Privacy & Security › Developer Mode, pick "RoamRun (this Mac's
    name)" and enter the code the Mac shows.
 3. Keep the RoamRun app running: it holds the connection. Wait until `roamrun status <name>` shows
@@ -203,9 +205,9 @@ the bridge nor Xcode. It was run on an iPhone; an iPad has not been tried.
 Then look at the screen and act on it. Each tap needs a new look:
 
 ```sh
-roamrun look <name> /tmp/now.png   # save the screen; prints the path, its size, then "look 12"
-roamrun tap <name> 295 640         # tap a point, in the pixels of that image
-roamrun look <name> /tmp/now.png   # look again before the next action
+roamrun look <name> /tmp/now.png        # save the screen; prints the path, its size, then "look 12"
+roamrun tap <name> 295 640 --look 12    # tap a point in that image; 12 is the number look printed
+roamrun look <name> /tmp/now.png        # look again before the next action
 ```
 
 Swipe, pinch, typing, the rules, and use from an agent are in
@@ -281,7 +283,8 @@ To install on someone else's device, such as a tester's phone, use an Ad Hoc bui
 build meant for someone else, that is expected. An Enterprise build needs its developer trusted on
 the device instead: [On the device](docs/ota.md#on-the-device).
 
-To take the page down, delete `~/Library/Application Support/RoamRun/ota/`.
+To take the page down, delete `~/Library/Application Support/RoamRun/ota/`. The builds stored there
+go with it.
 
 The rest — the port and Funnel, `--replace`, Developer Mode on the device, and what RoamRun checks
 before it stores a build — is in [docs/ota.md](docs/ota.md).

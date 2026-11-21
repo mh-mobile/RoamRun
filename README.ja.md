@@ -68,7 +68,7 @@ Homebrew を使わない場合は、[Releases](https://github.com/mh-mobile/Roam
 
 Xcode を開いて、iPhone か iPad を USB ケーブルで Mac につなぎ、ロックを解除します。確認が出たら「信頼」を選びます。続けて、デバイスの 設定 › プライバシーとセキュリティ › デベロッパモード をオンにします。デバイスは一度再起動します。スイッチはアプリが入ると現れるので、見当たらないときは Xcode からデバイスに一度 Run を実行します。
 
-Xcode 27 と iOS 27 なら、同じ Wi-Fi 上でもペアリングできます。Xcode の Device Hub › ＋ › Pair Nearby Device を開きます。デバイスのデベロッパモードの画面で Mac を選び、Device Hub に表示されたコードを入力します。Apple Vision Pro と Apple TV も Device Hub からペアリングします。デバイスでは[ペアリングの画面](docs/far-mac.ja.md#apple-vision-pro)を開いておきます。
+Xcode 27 と iOS 27 なら、同じ Wi-Fi 上でもペアリングできます。Xcode の Device Hub › ＋ › Pair Nearby Device を開きます。デバイスのデベロッパモードの画面で Mac を選び、Device Hub に表示されたコードを入力します。Apple Vision Pro と Apple TV も Device Hub からペアリングします。デバイスでは、設定 › 一般 › Remote Devices（Apple Vision Pro）か、設定 › リモコンとデバイス › リモコンアプリとデバイス（Apple TV）を開いておきます。
 
 ### 3. RoamRun にデバイスを追加する
 
@@ -149,16 +149,16 @@ RoamRun を使うと、コマンドや AI エージェントからデバイス�
 
 **設定はデバイスごとに一度だけです**。デバイスを Mac と同じ Wi-Fi に接続して、次のように操作します。
 
-1. RoamRun にデバイスがなければ、[手順 2](#2-デバイスをこの-mac-と一度ペアリングする)のあとで[追加します](#3-roamrun-にデバイスを追加する)。ブリッジは要りません。デバイスのページを開き、Device control › Set Up… を押します。
+1. RoamRun にデバイスがなければ、[追加します](#3-roamrun-にデバイスを追加する)。一覧に出ないときは、先に「はじめかた」の[手順 2](#2-デバイスをこの-mac-と一度ペアリングする)を済ませます。ブリッジは要りません。デバイスのページを開き、Device control › Set Up… を押します。
 2. デバイスの 設定 › プライバシーとセキュリティ › デベロッパモード で「RoamRun（この Mac の名前）」を選び、Mac に表示されたコードを入力します。
 3. RoamRun のアプリは起動したままにします。接続を保つのはアプリです。`roamrun status <name>` に「Device control: connected」と出るまで待ちます。
 
 あとは画面を見てから操作します。タップの前には毎回、`look` で画面を撮り直します。
 
 ```sh
-roamrun look <name> /tmp/now.png   # 画面を保存する。パス、サイズ、「look 12」のような番号を表示する
-roamrun tap <name> 295 640         # その画像のピクセルで指定した位置をタップする
-roamrun look <name> /tmp/now.png   # 次の操作の前に、もう一度見る
+roamrun look <name> /tmp/now.png        # 画面を保存する。パス、サイズ、「look 12」のような番号を表示する
+roamrun tap <name> 295 640 --look 12    # その画像の位置をタップする。12 は look が表示した番号
+roamrun look <name> /tmp/now.png        # 次の操作の前に、もう一度見る
 ```
 
 スワイプ、ピンチ、文字入力、操作の決まり、エージェントからの使い方は [docs/device-control.ja.md](docs/device-control.ja.md) にあります。
@@ -215,7 +215,7 @@ roamrun ota iPhone build/MyApp.ipa     # 名前を指定すると、そのデバ
 
 確かめる対象のデバイスがプロファイルに 1 台も入っていないと、`roamrun ota` は警告を出します。ほかの人に配るビルドでは、これは想定どおりの動作です。Enterprise のビルドでは、代わりにデバイスで開発元を信頼します（[デバイス側の条件](docs/ota.ja.md#デバイス側の条件)）。
 
-ページの公開をやめるには、`~/Library/Application Support/RoamRun/ota/` を削除します。
+ページの公開をやめるには、`~/Library/Application Support/RoamRun/ota/` を削除します。保存されていたビルドも消えます。
 
 ポートと Funnel、`--replace`、デバイス側のデベロッパモード、ビルドを保存する前に RoamRun が確かめることは、[docs/ota.ja.md](docs/ota.ja.md)にあります。
 
