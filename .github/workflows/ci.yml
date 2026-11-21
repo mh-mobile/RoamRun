@@ -13,6 +13,16 @@ on:
       - README.md
       - README.ja.md
       - docs/another-mac.md
+      - docs/cli.md
+      - docs/cli.ja.md
+      - docs/device-control.md
+      - docs/device-control.ja.md
+      - docs/far-mac.md
+      - docs/far-mac.ja.md
+      - docs/install.md
+      - docs/install.ja.md
+      - docs/troubleshooting.md
+      - docs/troubleshooting.ja.md
       - skills/**
   pull_request:
     paths:   # the same as push's
@@ -22,6 +32,16 @@ on:
       - README.md
       - README.ja.md
       - docs/another-mac.md
+      - docs/cli.md
+      - docs/cli.ja.md
+      - docs/device-control.md
+      - docs/device-control.ja.md
+      - docs/far-mac.md
+      - docs/far-mac.ja.md
+      - docs/install.md
+      - docs/install.ja.md
+      - docs/troubleshooting.md
+      - docs/troubleshooting.ja.md
       - skills/**
   schedule:
     - cron: "17 3 * * 1"   # Mondays: an advisory published since is seen without a push

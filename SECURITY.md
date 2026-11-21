@@ -480,5 +480,6 @@ bounded.
   exit within about a second if it quits or is killed, taking the advertisement
   with them.
 
-See the README's *Limitations and known issues* for the full list, and *What
-it creates on your Mac, and uninstalling* for how to remove everything.
+See [Limitations and known issues](docs/troubleshooting.md) for the full list, and
+[What it creates on your Mac, and uninstalling](docs/install.md#what-it-creates-on-your-mac-and-uninstalling)
+for how to remove everything.

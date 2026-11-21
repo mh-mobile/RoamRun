@@ -4,7 +4,7 @@
 
 RoamRun Introducer は、離れたマシンを、このアプリを入れた iPhone とペアリングするための iPhone アプリです。デバイスのそばの Mac で `roamrun pair introduce` が行うことを、デバイス自身で行います。離れたマシンが出すペアリングのオファー（ペアリングを始めるためのデータ）を、デバイスがつながっている Wi-Fi 上に公開します。「設定」からの接続を受けて、デバイスに入っている Tailscale の VPN 経由で、離れたマシンへ中継します。デバイスのそばに Mac は要りません。
 
-離れたマシンは、RoamRun を入れた Mac です。デバイス操作のペアリングに限り、`roamrunctl` を入れたマシン（Linux、Windows、macOS）でも構いません（RoamRun 0.7.0 以降）。離れた Mac の側から見た手順は、本体の README の「[デバイス自身に仲介させる](../README.ja.md#デバイス自身に仲介させる)」にあります。
+離れたマシンは、RoamRun を入れた Mac です。デバイス操作のペアリングに限り、`roamrunctl` を入れたマシン（Linux、Windows、macOS）でも構いません（RoamRun 0.7.0 以降）。離れた Mac の側から見た手順は、[離れた Mac の手順](../docs/far-mac.ja.md)の「[デバイス自身に仲介させる](../docs/far-mac.ja.md#デバイス自身に仲介させる)」にあります。
 
 <p align="center">
   <img src="../docs/images/introducer-home.png" width="200" alt="最初の画面：離れた Mac の名前と Introduce ボタン">

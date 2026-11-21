@@ -41,7 +41,17 @@ import Testing
     "skills/roamrunctl/SKILL.md",
     "README.md",
     "README.ja.md",
-    "docs/another-mac.md"
+    "docs/another-mac.md",
+    "docs/cli.md",
+    "docs/cli.ja.md",
+    "docs/device-control.md",
+    "docs/device-control.ja.md",
+    "docs/far-mac.md",
+    "docs/far-mac.ja.md",
+    "docs/install.md",
+    "docs/install.ja.md",
+    "docs/troubleshooting.md",
+    "docs/troubleshooting.ja.md"
 ])
 func everyDocumentedCommandParses(_ doc: String) throws {
     let root = URL(fileURLWithPath: #filePath)

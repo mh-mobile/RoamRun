@@ -9,8 +9,8 @@ it, and relays them to the far machine over the Tailscale VPN already on the dev
 the device is needed.
 
 The far machine is a Mac with RoamRun, or — for device control only, since RoamRun 0.7.0 — a machine
-with `roamrunctl` (Linux, Windows or macOS). How it looks from the far Mac's side is in the main README,
-under [From the device itself](../README.md#from-the-device-itself).
+with `roamrunctl` (Linux, Windows or macOS). How it looks from the far Mac's side is in the far Mac guide,
+under [From the device itself](../docs/far-mac.md#from-the-device-itself).
 
 <p align="center">
   <img src="../docs/images/introducer-home.png" width="200" alt="The first screen: the far Mac's name, and Introduce">

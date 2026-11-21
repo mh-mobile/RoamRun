@@ -8,6 +8,33 @@ What the bridge does, step by step, and where each part lives in the source. The
 Statements about what iOS, Xcode and `remotepairingd` do are what was seen while building RoamRun.
 They are Apple's behaviour, not RoamRun's, and a new release can change them.
 
+## Why it is needed
+
+Since iOS 17, wireless debugging finds devices with Bonjour (`_remotepairing._tcp`). Bonjour
+stays on the local network, so it does not cross a VPN such as Tailscale. The Mac's
+`remotepairingd` also ties its connection to the network interface where it found the device (as
+seen), so advertising the device's VPN address is not enough either.
+
+RoamRun tells Xcode that the device is on the same Wi-Fi, and carries the traffic over the VPN:
+
+```mermaid
+flowchart LR
+  subgraph mac["Mac at home"]
+    xcode["Xcode / devicectl"] --> rpd["remotepairingd<br/>(Apple)"]
+    fake["Stand-in Bonjour record<br/>(pointing at this Mac)"]
+    relay["RoamRun relay<br/>(on the Mac's LAN interface)"]
+  end
+  subgraph away["Away"]
+    iphone["iPhone<br/>(on some Wi-Fi)"]
+  end
+  rpd -. "① looks for the iPhone" .-> fake
+  rpd -- "② connects to this Mac" --> relay
+  relay == "③ over Tailscale" ==> iphone
+```
+
+Pairing verification and encryption stay end to end between the Mac and the device, as Apple
+implements them. RoamRun relays bytes; it does not read or change them.
+
 ## The bridge
 
 Since iOS 17, wireless debugging runs on Apple's CoreDevice stack. The Mac's `remotepairingd`

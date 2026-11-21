@@ -1,13 +1,147 @@
-# Pairing a Mac the device was never near: details
+# Pairing a Mac the device was never near
 
 <p align="center">English | <a href="far-mac.ja.md">日本語</a></p>
 
-The [README](../README.md#pairing-a-far-mac-for-xcode) has the commands for the usual case,
-where both Macs are on one tailnet. This document has the other way of doing it, what each side
-checks, what the far Mac needs, and what was tried.
+A bridge needs a Mac that Xcode has paired with the device, and Xcode pairs on one network. A Mac
+elsewhere — in a data centre, an agent's, yours in another place — never shares one with the
+device. With **iOS 27 and Xcode 27**, a Mac that does share one can introduce it, once.
+
+The far Mac needs Xcode, RoamRun and Tailscale. Setting such a Mac up from nothing is in
+[another-mac.md](another-mac.md).
 
 It all needs iOS 27 and Xcode 27. Names are Tailscale names. "The introducing Mac" is the one on
 the device's Wi-Fi; "the far Mac" is the one that comes to be paired.
+
+## Both Macs on one tailnet
+
+When both Macs are on one tailnet, each names the other and nothing is carried by hand:
+
+```sh
+# on the far Mac: Xcode's Device Hub › + › Pair Nearby Device (before or after), and
+roamrun pair xcode --with macbook-pro                # macbook-pro: the Tailscale name of the Mac beside the device
+
+# on the Mac beside the device, with the device saved in RoamRun:
+roamrun pair introduce --host cloud-mac --to iPhone   # cloud-mac: the far Mac's Tailscale name
+#   on the device: Settings › Privacy & Security › Developer Mode › Pair with “cloud-mac”,
+#   and the code that Device Hub shows on the far Mac
+
+# on the far Mac, once it says the device is saved:
+roamrun up iPhone
+```
+
+What to know:
+
+- The far Mac waits up to 10 minutes for the other Mac, then up to 7 minutes for the pairing.
+- "Saved" is not "paired". The far Mac saves the device when a pairing was tried; `roamrun up`
+  there shows whether it was made. `pair introduce` cannot tell: a wrong code looks the same to it
+  as one not yet typed.
+- Someone has to press the button in Device Hub on the far Mac and read its code, at its screen
+  or over screen sharing. It cannot be done over ssh alone.
+- The device has to be on the introducing Mac's own Wi-Fi for this one step. Afterwards the bridge
+  works from anywhere.
+- `pair introduce` says whose Mac the far one is, as Tailscale has it, before it announces
+  anything. (For an Apple Vision Pro the far Mac says whose device it is instead.)
+
+**Who gets the device.** Introducing a Mac lets it use the device as a developer from then on:
+install and run apps, debug them, read their data. To withdraw that, remove the Mac on the device
+under Settings › Privacy & Security › Developer Mode. It is listed there under the name the Mac
+gives itself, which `pair introduce` tells you. Unlike device control, Xcode's pairing cannot be
+switched off in RoamRun: removing it on the device is the only way.
+
+The same exchange with a line carried by hand, what each side checks, debugging symbols on the
+far Mac, and what was tried are further down this page.
+
+## From the device itself
+
+Where no Mac with RoamRun is beside the device, an app on the device introduces instead: RoamRun
+Introducer, in [`iOS/`](../iOS/). It is built and installed with Xcode, for iOS 27 or later, and is
+not on the App Store.
+
+<p align="center">
+  <img src="images/introducer-home.png" width="200" alt="RoamRun Introducer: the far Mac's name, and Introduce">
+  <img src="images/introducer-pairing.png" width="200" alt="An introduction under way: pair in Settings">
+  <img src="images/introducer-done.png" width="200" alt="The end: the far Mac has saved this iPhone">
+</p>
+
+```sh
+# on the far Mac: Device Hub › + › Pair Nearby Device, and
+roamrun pair xcode --with iphone-15-pro --qr   # iphone-15-pro: the device's Tailscale name
+# on the device: the app, Scan (or type the far Mac's name), Introduce; then
+#   Settings › Privacy & Security › Developer Mode › Pair with “cloud-mac”, and the code Device Hub shows
+# on the far Mac, once it says the device is saved:
+roamrun up iphone-15-pro
+```
+
+`--qr` draws the far Mac's Tailscale name as a code in the terminal for the app to read. The app
+keeps the name, so the code is not needed next time. `roamrun pair control --with iphone-15-pro`,
+with the RoamRun app open on the far Mac, pairs for device control the same way; the code to type
+then shows on the device, in a notification. If iOS refuses the app its background task, the app
+has about 30 seconds and says so: go to Settings and type the code straight away.
+
+## From a Windows or Linux machine
+
+Or the machine beside the device introduces, with [`roamrunctl`](../Rust/roamrunctl/README.md), a
+separate command for a machine without RoamRun:
+
+```sh
+# on the far Mac: Device Hub › + › Pair Nearby Device, and
+roamrun pair xcode --with my-pc                                # my-pc: that machine's Tailscale name
+# on that machine, on the device's Wi‑Fi:
+roamrunctl pair introduce --host cloud-mac --to iphone-15-pro   # the far Mac's Tailscale name, and the device's
+# on the device: Settings › Privacy & Security › Developer Mode › Pair with “cloud-mac”, and the code Device Hub shows
+# on the far Mac, once it says the device is saved:
+roamrun up iphone-15-pro
+```
+
+`roamrun pair control --with my-pc`, with the RoamRun app open on the far Mac, pairs for device
+control the same way. `roamrunctl` then prints the code to type, so run it yourself.
+
+In the other direction, the `--host` of a Mac's `roamrun pair introduce` can also be a Linux or Windows
+machine that waits with `roamrunctl pair control --with <name>`, for device control only. And
+`roamrunctl` can hold a pairing and use a device with no Mac and no Xcode on that machine; see
+[its README](../Rust/roamrunctl/README.md#using-a-device-from-a-machine-without-xcode). Keep `roamrun`
+and `roamrunctl` at the same version, since they talk to each other. Before 0.7.0 `pair introduce`
+named its machine with `--mac`; it is `--host` now in both.
+
+<a id="apple-vision-pro"></a>
+
+## Apple Vision Pro and Apple TV
+
+An Apple Vision Pro or Apple TV is paired the other way round: it waits, and the Mac picks it.
+The two commands are the same as for an iPhone. An Apple TV needs Tailscale's app for tvOS, and
+RoamRun 0.12.0 or later on both Macs: an older one refuses it as not an iPhone, iPad or Apple
+Vision Pro.
+
+```sh
+# on the device, left open: Settings › General › Remote Devices (Apple Vision Pro),
+#   Settings › Remotes and Devices › Remote App and Devices (Apple TV)
+# on the far Mac:
+roamrun pair xcode --with home-mac            # home-mac: the Tailscale name of a Mac on the device's Wi‑Fi
+# on that Mac, with the device saved in RoamRun there:
+roamrun pair introduce --host cloud-mac --to vision-pro
+# on the far Mac, when its command says so: Device Hub › + › Pair Nearby Device › Apple Vision Pro
+# (or Apple TV), pick the device, Next, and type the code the device shows
+roamrun up vision-pro
+```
+
+- The far Mac's command ends by itself once Device Hub has paired. It reads that from a line
+  Device Hub writes to the system log, and that line does not name the device: do not pair another
+  device in Device Hub meanwhile. It also ends with Ctrl-C, or after five minutes.
+- Tailscale has to reach the device directly, over IPv4, on the Wi-Fi of the Mac beside it.
+- The far Mac announces the device on its own network while this runs, and carries only its own
+  connections to the device. It saves the device if it had connected to it by the time it ends.
+- The host has to be a Mac. For a device that waits to be picked, `pair introduce` refuses another
+  kind of `--host`, and neither the Introducer app nor `roamrunctl` introduces one.
+- If Device Hub lists no device afterwards, its Available and Unavailable headings may be
+  collapsed: point at one and click the arrow that appears.
+
+Run with these commands on 2026-10-13, with one Apple Vision Pro and a virtual Mac as the far one:
+the pairing, the far Mac's command ending by itself, and the bridge Ready there. On 2026-11-01,
+with an Apple TV 4K (2nd generation) on tvOS 27.2 and, as the far Mac, a virtual Mac on its own
+network inside the Mac beside the Apple TV: the same, then Xcode 27.0 there ran an app on it and
+stopped at a breakpoint. The Apple TV's settings were in Japanese, so its menu names above are
+the English ones as they are expected to read. Not tried: a far Mac elsewhere than at home, the
+device away from home, and device control (look, tap) on an Apple TV.
 
 ## With a line carried by hand
 

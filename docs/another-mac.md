@@ -25,10 +25,11 @@ behind. It is this one pairing you remove on the device to take the other Mac's 
 Once the other Mac is on your tailnet (steps 2 and 3, without the file), there is a way that
 carries nothing: there, with the RoamRun app open, `roamrun pair control --with <this-mac>`,
 and here `roamrun pair introduce --host <that-mac> --to iPhone`, run by you — the code to enter
-on the device prints here. The README's "Device control on a far Mac" (under Seeing and
-operating the device) has it; it needs iOS 27. With no Mac of yours near the device, the device
-itself or a Windows or Linux machine beside it introduces instead: the README's "From the device
-itself" and "From a Windows or Linux machine".
+on the device prints here. [Device control on a far Mac](device-control.md#device-control-on-a-far-mac)
+has it; it needs iOS 27. With no Mac of yours near the device, the device
+itself or a Windows or Linux machine beside it introduces instead:
+[From the device itself](far-mac.md#from-the-device-itself) and
+[From a Windows or Linux machine](far-mac.md#from-a-windows-or-linux-machine).
 
 ## 2. In Tailscale's admin console: an auth key for it
 
@@ -104,4 +105,4 @@ For an agent there: the skill `roamrun init` installed tells it how to look and 
   copies of the file are.
 - In Tailscale's admin console, remove the machine (an ephemeral one goes by itself).
 - On that Mac, if it stays yours: `brew uninstall --zap --cask roamrun`, and the two Keychain
-  items the README's uninstall section names.
+  items [the uninstall steps](install.md#what-it-creates-on-your-mac-and-uninstalling) name.

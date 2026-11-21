@@ -38,7 +38,8 @@ see `skills/roamrun/SKILL.md` — installed with `roamrun init` or
   server and decoder (`scripts/page-check.cjs`; Node 20 or later, Playwright pinned in `scripts/page-check.sh`).
   CI runs it too. A change to the page's behaviour takes a check there.
 - CI doesn't run for a change of Markdown files or `docs/` alone, except the READMEs,
-  docs/another-mac.md and the skills: `make test` checks their `roamrun …` commands, and the skills ship.
+  the docs that `DocumentTests` lists and the skills: `make test` checks their `roamrun …` commands, and
+  the skills ship. A new document that gives `roamrun` commands to run goes in that list and in `ci.yml`'s `paths`.
 - `make test` runs the unit tests (log parsing, port attribution, status-file
   ownership, names). They never touch the real status/profile files or start a
   real bridge — keep it that way (no `AppCoordinator` in tests). A bridge on a

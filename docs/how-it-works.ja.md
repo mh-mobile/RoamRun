@@ -6,6 +6,29 @@
 
 iOS、Xcode、`remotepairingd` の動作についての記述は、RoamRun を作る過程で、実際の動作を見て確かめたものです。これは RoamRun ではなく Apple の動作なので、新しいリリースで変わる可能性があります。
 
+## なぜ必要か
+
+iOS 17 以降のワイヤレスデバッグは、Bonjour（`_remotepairing._tcp`）でデバイスを探します。Bonjour はローカルネットワークの中だけで働くので、Tailscale のような VPN は越えられません。そのうえ、Mac の `remotepairingd` は、デバイスを見つけたネットワークインターフェイスに接続を限定します（動作を見て確かめたことです）。そのため、デバイスの VPN 上のアドレスを知らせるだけでは足りません。
+
+そこで RoamRun は、Xcode には「デバイスは同じ Wi-Fi にある」と見せて、実際の通信を VPN に流します。
+
+```mermaid
+flowchart LR
+  subgraph mac["自宅の Mac"]
+    xcode["Xcode / devicectl"] --> rpd["remotepairingd<br/>（Apple）"]
+    fake["代わりの Bonjour レコード<br/>（この Mac を指す）"]
+    relay["RoamRun の中継<br/>（Mac の LAN インターフェイス）"]
+  end
+  subgraph away["外出先"]
+    iphone["iPhone<br/>（どこかの Wi-Fi）"]
+  end
+  rpd -. "① iPhone を探す" .-> fake
+  rpd -- "② この Mac に接続" --> relay
+  relay == "③ Tailscale 経由" ==> iphone
+```
+
+ペアリングの検証と暗号化は、Apple の実装のまま、Mac とデバイスの間で行われます。RoamRun は通信を中継するだけで、中身を読むことも書き換えることもありません。
+
 ## ブリッジ
 
 iOS 17 以降のワイヤレスデバッグは、Apple の CoreDevice の上で動きます。Mac の `remotepairingd` は、Bonjour（`_remotepairing._tcp`）でローカルネットワーク上のデバイスを探します。Bonjour はリンクローカルのマルチキャストなので、Tailscale のようなレイヤー 3 の VPN は越えられません。そのうえ、`remotepairingd` は、デバイスを見つけたインターフェイスに接続を限定します。そのため、デバイスの VPN 上のアドレスを公開するだけでは動きません。

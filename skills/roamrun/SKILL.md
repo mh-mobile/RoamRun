@@ -173,7 +173,7 @@ introduced; you can run the commands, they do the rest.
   seconds if it is open.
 - lldb from that Mac needs the device's OS symbols there; without them an attach
   waits for minutes. `devicectl`, `roamrun run` and `roamrun logs` don't. Tell the
-  user (the README says how they are copied over) rather than wait.
+  user (docs/far-mac.md says how they are copied over) rather than wait.
 
 ## 3. Get the device ready
 
