@@ -24,8 +24,8 @@ Xcode のワイヤレスデバッグは、ふつう Mac とデバイスが同じ
 flowchart LR
   subgraph mac["自宅の Mac"]
     xcode["Xcode"] --> service["remotepairingd<br/>（macOS）"]
-    relay["RoamRun"] -. "① デバイスを知らせる" .-> service
-    service -- "② 接続する" --> relay
+    record["RoamRun の Bonjour レコード<br/>（接続先はこの Mac）"] -. "① 知らせる" .-> service
+    service -- "② 接続する" --> relay["RoamRun の中継"]
   end
   subgraph away["外出先"]
     device["iPhone<br/>Tailscale オン<br/>別の Wi-Fi"]

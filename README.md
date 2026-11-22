@@ -28,8 +28,8 @@ iPhone, iPad, Apple Vision Pro and Apple TV. How to drive the Mac from where you
 flowchart LR
   subgraph mac["Mac at home"]
     xcode["Xcode"] --> service["remotepairingd<br/>(macOS)"]
-    relay["RoamRun"] -. "① announces the device" .-> service
-    service -- "② connects" --> relay
+    record["RoamRun's Bonjour record<br/>(device is at this Mac)"] -. "① announces" .-> service
+    service -- "② connects" --> relay["RoamRun relay"]
   end
   subgraph away["Away"]
     device["iPhone<br/>Tailscale on<br/>another Wi-Fi"]
