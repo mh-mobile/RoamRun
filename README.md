@@ -24,11 +24,11 @@ the device with you, and keep building, running and debugging from Xcode as usua
 iPhone, iPad, Apple Vision Pro and Apple TV. How to drive the Mac from where you are is in
 [Working away from the Mac](#working-away-from-the-mac).
 
-```mermaid
-flowchart LR
-  xcode["Xcode on your Mac"] --> bridge["RoamRun"]
-  bridge == "Tailscale" ==> device["Your iPhone<br/>on another network"]
-```
+<p align="center"><img src="docs/images/how-it-connects.svg" width="760" alt="On the Mac at home, Xcode finds the iPhone through RoamRun. RoamRun relays the connection over Tailscale to the iPhone on another network."></p>
+
+1. Xcode looks for the iPhone on this Mac's network.
+2. RoamRun answers in its place, so Xcode sees the iPhone as nearby.
+3. RoamRun relays the connection over Tailscale. It does not read or change what it carries.
 
 If you only want Xcode to reach your device, [Get started](#get-started) is all you need to read.
 

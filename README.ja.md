@@ -20,11 +20,11 @@
 
 Xcode のワイヤレスデバッグは、ふつう Mac とデバイスが同じネットワークにある間しか使えません。RoamRun と [Tailscale](https://tailscale.com) があれば、Mac を自宅に置いたままデバイスを持ち出して、いつもどおり Xcode からビルド、実行、デバッグができます。iPhone、iPad、Apple Vision Pro、Apple TV で使えます。外出先から Mac を操作する方法は、[Mac から離れて作業する](#mac-から離れて作業する)にあります。
 
-```mermaid
-flowchart LR
-  xcode["Mac の Xcode"] --> bridge["RoamRun"]
-  bridge == "Tailscale" ==> device["別のネットワークの<br/>iPhone"]
-```
+<p align="center"><img src="docs/images/how-it-connects.ja.svg" width="760" alt="自宅の Mac の Xcode は RoamRun を通して iPhone を見つけます。RoamRun は Tailscale 越しに、別のネットワークの iPhone へ通信を中継します。"></p>
+
+1. Xcode が、この Mac のネットワークで iPhone を探します。
+2. RoamRun が iPhone の代わりに応答するので、Xcode には iPhone が近くにあるように見えます。
+3. RoamRun は通信を Tailscale 越しに中継します。中身を読むことも書き換えることもありません。
 
 Xcode からデバイスを使いたいだけなら、[はじめかた](#はじめかた)だけ読めば足ります。
 
