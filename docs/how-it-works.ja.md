@@ -77,14 +77,14 @@ sequenceDiagram
 ```mermaid
 flowchart RL
   subgraph home["デバイスのそばの Mac"]
-    fake["代わりの Bonjour レコード<br/>（離れた Mac のオファー。接続先はデバイスのそばの Mac）"]
-    relay["RoamRun の中継<br/>（デバイスのアドレスからだけ受ける）"]
+    fake["代わりの<br/>Bonjour<br/>レコード<br/>（離れた Mac の<br/>オファー。<br/>接続先は<br/>デバイスの<br/>そばの Mac）"]
+    relay["RoamRun の<br/>中継<br/>（デバイスの<br/>アドレスから<br/>だけ受ける）"]
   end
   subgraph far["離れた Mac"]
-    host["Xcode か RoamRun のアプリ<br/>（ペアリングを待つ。鍵はここで作られ、ここに残る）"]
+    host["Xcode か<br/>RoamRun の<br/>アプリ<br/>（ペアリングを<br/>待つ。鍵は<br/>ここで作られ、<br/>ここに残る）"]
   end
   iphone["iPhone / iPad"]
-  iphone -. "① “Pair with far-mac” を見つける" .-> fake
+  iphone -. "① “Pair with far-mac”<br/>を見つける" .-> fake
   iphone -- "② Wi-Fi 経由で接続" --> relay
   relay == "③ Tailscale 経由" ==> host
 ```

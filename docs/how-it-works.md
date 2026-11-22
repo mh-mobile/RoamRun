@@ -105,14 +105,14 @@ that the far Mac is on its Wi-Fi, and the traffic goes over Tailscale.
 ```mermaid
 flowchart RL
   subgraph home["Mac on the device's Wi-Fi"]
-    fake["Stand-in Bonjour record<br/>(the far Mac's offer, pointing at this Mac)"]
-    relay["RoamRun relay<br/>(takes the device's address only)"]
+    fake["Stand-in<br/>Bonjour record<br/>(the far Mac's<br/>offer, pointing<br/>at this Mac)"]
+    relay["RoamRun relay<br/>(takes the<br/>device's<br/>address only)"]
   end
   subgraph far["Far Mac"]
-    host["Xcode, or the RoamRun app<br/>(waiting to pair, the key is made and stays here)"]
+    host["Xcode, or the<br/>RoamRun app<br/>(waiting to pair,<br/>the key is made<br/>and stays here)"]
   end
   iphone["iPhone / iPad"]
-  iphone -. "① finds “Pair with far-mac”" .-> fake
+  iphone -. "① finds<br/>“Pair with far-mac”" .-> fake
   iphone -- "② connects over Wi-Fi" --> relay
   relay == "③ over Tailscale" ==> host
 ```
