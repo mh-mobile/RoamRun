@@ -25,11 +25,10 @@ iPhone, iPad, Apple Vision Pro and Apple TV. How to drive the Mac from where you
 [Working away from the Mac](#working-away-from-the-mac).
 
 ```mermaid
-%%{init: {"flowchart": {"htmlLabels": false}}}%%
 flowchart LR
   subgraph mac["Mac at home"]
     xcode["Xcode<br/>devicectl"] --> rpd["remotepairingd<br/>(macOS)"]
-    fake["Bonjour record<br/>from RoamRun<br/>(points at this Mac)"] -. "① announces" .-> rpd
+    fake["Bonjour record<br/>from RoamRun"] -. "① announces" .-> rpd
     rpd -- "② connects" --> relay["RoamRun<br/>relay"]
   end
   subgraph away["Away"]
