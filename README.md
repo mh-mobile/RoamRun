@@ -24,7 +24,18 @@ the device with you, and keep building, running and debugging from Xcode as usua
 iPhone, iPad, Apple Vision Pro and Apple TV. How to drive the Mac from where you are is in
 [Working away from the Mac](#working-away-from-the-mac).
 
-<p align="center"><img src="docs/images/how-it-connects.svg" width="760" alt="RoamRun announces the device on the Mac's network. The macOS service remotepairingd, which Xcode uses, finds it and connects to RoamRun. RoamRun relays the connection both ways over Tailscale to the iPhone on another Wi-Fi."></p>
+```mermaid
+flowchart LR
+  subgraph mac["Mac at home"]
+    xcode["Xcode"] --> service["remotepairingd<br/>(macOS)"]
+    relay["RoamRun"] -. "① announces the device" .-> service
+    service -- "② connects" --> relay
+  end
+  subgraph away["Away"]
+    device["iPhone<br/>Tailscale on<br/>another Wi-Fi"]
+  end
+  relay <== "③ Tailscale" ==> device
+```
 
 1. RoamRun announces the device on this Mac's network, with this Mac as its address.
 2. `remotepairingd`, the macOS service Xcode uses to reach devices, finds it and connects to RoamRun.
