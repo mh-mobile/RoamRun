@@ -18,18 +18,17 @@ seen), so advertising the device's VPN address is not enough either.
 RoamRun tells Xcode that the device is on the same Wi-Fi, and carries the traffic over the VPN:
 
 ```mermaid
+%%{init: {"flowchart": {"htmlLabels": false}}}%%
 flowchart LR
   subgraph mac["Mac at home"]
-    xcode["Xcode / devicectl"] --> rpd["remotepairingd<br/>(Apple)"]
-    fake["Stand-in Bonjour record<br/>(pointing at this Mac)"]
-    relay["RoamRun relay<br/>(on the Mac's LAN interface)"]
+    xcode["Xcode<br/>devicectl"] --> rpd["remotepairingd<br/>(macOS)"]
+    fake["Bonjour record<br/>from RoamRun<br/>(points at this Mac)"] -. "① announces" .-> rpd
+    rpd -- "② connects" --> relay["RoamRun<br/>relay"]
   end
   subgraph away["Away"]
-    iphone["iPhone<br/>(on some Wi-Fi)"]
+    iphone["iPhone<br/>Tailscale on<br/>another Wi-Fi"]
   end
-  fake -. "① RoamRun announces<br/>the iPhone" .-> rpd
-  rpd -- "② connects to this Mac" --> relay
-  relay <== "③ over Tailscale" ==> iphone
+  relay <== "③ Tailscale" ==> iphone
 ```
 
 Pairing verification and encryption stay end to end between the Mac and the device, as Apple

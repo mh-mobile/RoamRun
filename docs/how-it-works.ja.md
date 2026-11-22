@@ -13,18 +13,17 @@ iOS 17 以降のワイヤレスデバッグは、Bonjour（`_remotepairing._tcp`
 そこで RoamRun は、Xcode には「デバイスは同じ Wi-Fi にある」と見せて、実際の通信を VPN に流します。
 
 ```mermaid
+%%{init: {"flowchart": {"htmlLabels": false}}}%%
 flowchart LR
   subgraph mac["自宅の Mac"]
-    xcode["Xcode / devicectl"] --> rpd["remotepairingd<br/>（Apple）"]
-    fake["代わりの Bonjour レコード<br/>（この Mac を指す）"]
-    relay["RoamRun の中継<br/>（Mac の LAN インターフェイス）"]
+    xcode["Xcode<br/>devicectl"] --> rpd["remotepairingd<br/>（macOS）"]
+    fake["RoamRun の<br/>Bonjour レコード<br/>（この Mac を指す）"] -. "① 知らせる" .-> rpd
+    rpd -- "② 接続する" --> relay["RoamRun の<br/>中継"]
   end
   subgraph away["外出先"]
-    iphone["iPhone<br/>（どこかの Wi-Fi）"]
+    iphone["iPhone<br/>Tailscale オン<br/>別の Wi-Fi"]
   end
-  fake -. "① RoamRun が<br/>iPhone を知らせる" .-> rpd
-  rpd -- "② この Mac に接続" --> relay
-  relay <== "③ Tailscale 経由" ==> iphone
+  relay <== "③ Tailscale" ==> iphone
 ```
 
 ペアリングの検証と暗号化は、Apple の実装のまま、Mac とデバイスの間で行われます。RoamRun は通信を中継するだけで、中身を読むことも書き換えることもありません。
