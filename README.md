@@ -27,14 +27,19 @@ iPhone, iPad, Apple Vision Pro and Apple TV. How to drive the Mac from where you
 ```mermaid
 flowchart LR
   subgraph mac["Mac at home"]
-    xcode["Xcode<br/>devicectl"] --> rpd["remotepairingd<br/>(macOS)"]
-    fake["Bonjour record<br/>from RoamRun"] -. "① announces" .-> rpd
-    rpd -- "② connects" --> relay["RoamRun<br/>relay"]
+    xcode["Xcode<br/>devicectl"] --> rpd["remotepairingd<br/>(Apple)"]
+    subgraph rr["RoamRun"]
+      fake["Stand-in<br/>Bonjour record<br/>pointing at<br/>this Mac"]
+      relay["Relay<br/>on the Mac's<br/>LAN interface"]
+    end
+    rpd ~~~ fake
+    fake -. "① RoamRun announces<br/>the iPhone" .-> rpd
+    rpd -- "② connects to this Mac" --> relay
   end
   subgraph away["Away"]
-    iphone["iPhone<br/>Tailscale on<br/>another Wi-Fi"]
+    iphone["iPhone<br/>on some Wi-Fi"]
   end
-  relay <== "③ Tailscale" ==> iphone
+  relay <== "③ over Tailscale" ==> iphone
 ```
 
 1. RoamRun announces the device on this Mac's network, with this Mac as its address.

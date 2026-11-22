@@ -20,14 +20,19 @@ RoamRun tells Xcode that the device is on the same Wi-Fi, and carries the traffi
 ```mermaid
 flowchart LR
   subgraph mac["Mac at home"]
-    xcode["Xcode<br/>devicectl"] --> rpd["remotepairingd<br/>(macOS)"]
-    fake["Bonjour record<br/>from RoamRun"] -. "① announces" .-> rpd
-    rpd -- "② connects" --> relay["RoamRun<br/>relay"]
+    xcode["Xcode<br/>devicectl"] --> rpd["remotepairingd<br/>(Apple)"]
+    subgraph rr["RoamRun"]
+      fake["Stand-in<br/>Bonjour record<br/>pointing at<br/>this Mac"]
+      relay["Relay<br/>on the Mac's<br/>LAN interface"]
+    end
+    rpd ~~~ fake
+    fake -. "① RoamRun announces<br/>the iPhone" .-> rpd
+    rpd -- "② connects to this Mac" --> relay
   end
   subgraph away["Away"]
-    iphone["iPhone<br/>Tailscale on<br/>another Wi-Fi"]
+    iphone["iPhone<br/>on some Wi-Fi"]
   end
-  relay <== "③ Tailscale" ==> iphone
+  relay <== "③ over Tailscale" ==> iphone
 ```
 
 Pairing verification and encryption stay end to end between the Mac and the device, as Apple
