@@ -18,7 +18,7 @@ flowchart LR
     xcode["Xcode<br/>devicectl"] --> rpd["remotepairingd<br/>（Apple）"]
     subgraph rr["RoamRun"]
       fake["代わりの<br/>Bonjour<br/>レコード<br/>この Mac を指す"]
-      relay["中継<br/>Mac の LAN<br/>インターフェイス"]
+      relay["中継<br/>Mac の LAN 側"]
     end
     rpd ~~~ fake
     fake -. "① RoamRun が<br/>iPhone を知らせる" .-> rpd
