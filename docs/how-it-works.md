@@ -27,9 +27,9 @@ flowchart LR
   subgraph away["Away"]
     iphone["iPhone<br/>(on some Wi-Fi)"]
   end
-  rpd -. "① looks for the iPhone" .-> fake
+  fake -. "① RoamRun announces<br/>the iPhone" .-> rpd
   rpd -- "② connects to this Mac" --> relay
-  relay == "③ over Tailscale" ==> iphone
+  relay <== "③ over Tailscale" ==> iphone
 ```
 
 Pairing verification and encryption stay end to end between the Mac and the device, as Apple
