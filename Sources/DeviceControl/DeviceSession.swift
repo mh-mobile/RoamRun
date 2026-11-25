@@ -254,6 +254,8 @@ public final class DeviceSession: @unchecked Sendable {
                 sizes.size(of: "\(frame.width)x\(frame.height)") {
                     Self.screen(d)
                 }
+            }, misfit: { frame in
+                sizes.forget("\(frame.width)x\(frame.height)")
             }, png: {
                 let png = try Self.bytes(d, rr_device_screenshot, "no picture")
                 guard let source = CGImageSourceCreateWithData(png as CFData, nil),
@@ -270,14 +272,19 @@ public final class DeviceSession: @unchecked Sendable {
     public static func look(
         frame: () throws -> CGImage,
         screen: ((width: Int, height: Int)) -> (width: Int, height: Int)?,
+        misfit: ((width: Int, height: Int)) -> Void = { _ in },
         png: () throws -> CGImage,
         way: () -> UInt8
     ) throws -> Look {
         let why: String
         do {
             let image = try frame()
-            if let cut = cut(image, to: screen((image.width, image.height))) {
+            let size = screen((image.width, image.height))
+            if let cut = cut(image, to: size) {
                 return Look(image: cut)
+            }
+            if size != nil {
+                misfit((image.width, image.height))
             }
             why = "the screen stream's frame couldn't be cut to the screen, or the device didn't say its size"
         } catch {
@@ -294,11 +301,12 @@ public final class DeviceSession: @unchecked Sendable {
         return Look(image: image, way: first == 0 ? way() : first, fellBack: why)
     }
 
-    /// Whether the PNG is asked for after the stream failed so: not for a call told to stop.
+    /// Whether the PNG is asked for after the stream failed so: not for a call told to stop, nor where the stream
+    /// timed out (the connection is in doubt; the PNG on it would only add its own wait to each attempt).
     public static func fallsBack(_ error: Error) -> Bool {
         switch error {
         case Failure.invalid, Failure.notBegun: false
-        case Failure.message(let m): !m.hasPrefix(stopped)
+        case Failure.message(let m): !m.hasPrefix(stopped) && m != "timed out"
         default: true
         }
     }

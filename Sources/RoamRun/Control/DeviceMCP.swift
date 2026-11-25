@@ -688,7 +688,7 @@ final class DeviceMCP: @unchecked Sendable {
             tool("devices", "The devices saved in RoamRun, one name a line."),
             tool(
                 "look",
-                "The device's screen now, as an image, and the look's id. Do this before every tap, swipe or pinch: it serves one, which gives that id. Where the device refuses its screen stream (during a phone or VoIP call), the look is the device's own PNG, slower, and says so."
+                "The device's screen now, as an image, and the look's id. Do this before every tap, swipe or pinch: it serves one, which gives that id. Where the screen stream gives no frame to use (refused during a phone or VoIP call, unreadable, not fitting the screen, or the screen's size unsaid), the look is the device's own PNG, slower, and says so; a point by it is refused once the device was turned since, or while it is on its side without saying which way."
             ),
             tool("tap", "Tap a point of the last look. Operates the device: whatever is there gets pressed.",
                  ["look": lookGiven, "x": point, "y": point], required: ["look", "x", "y"]),

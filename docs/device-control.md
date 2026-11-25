@@ -50,11 +50,14 @@ roamrun elements iPhone                   # what accessibility says is on the sc
   `elements` or an action without `--look` came since, or after a minute. Without it, a `tap`, `swipe` or `pinch` goes by the last look, and `type` or `paste` needs none.
 - The image is the screen as the device holds it. An app in landscape appeared turned on its side
   (seen), and points are still pixels of that image.
-- Where the device refuses its screen stream (during a phone or VoIP call), doesn't say its screen's size, or
-  sends a frame that doesn't fit it, a look is the device's own PNG instead (0.14.0+), which is slower. That
-  image is turned as the device's interface is; a `tap`, `swipe` or `pinch` by it is turned back to the device
-  held upright, and refused, with nothing sent, once the device was turned since that look. `roamrun look` says
-  so on stderr ("the device's PNG: …"), and MCP's `look` in its answer. Not yet tried on a device.
+- Where the screen stream gives no frame to use, a look is the device's own PNG instead (0.14.0+), which is
+  slower: the device refuses the stream (during a phone or VoIP call), its frame can't be read or doesn't fit
+  the screen, or the device doesn't say its screen's size. A stream that timed out isn't followed by the PNG:
+  the look fails as before. The PNG is turned as the device's interface is; a `tap`, `swipe` or `pinch` by it is
+  turned back to the device held upright, and refused, with nothing sent, once the device was turned since that
+  look, or where the device is on its side and doesn't say which way ("Ask the user to turn it upright").
+  `roamrun look` says it used the PNG on stderr ("the device's PNG: …"), and MCP's `look` in its answer. Not yet
+  tried on a device.
 - `type` sends at most 2000 characters, about 16 a second; a newline is Return, and U+0008 Backspace. Under a
   Japanese keyboard even a space converts instead of being typed (seen); use `paste` there.
 - `swipe` takes a duration in milliseconds as a last argument (50–5000, default 300). `elements`

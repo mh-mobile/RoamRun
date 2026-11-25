@@ -2,7 +2,14 @@ import CoreMedia
 import Foundation
 import VideoToolbox
 
-public enum FrameError: Error { case message(String) }
+public enum FrameError: Error, CustomStringConvertible {
+    case message(String)
+    public var description: String {
+        switch self {
+        case .message(let m): m
+        }
+    }
+}
 
 /// A screen's size, kept by what it was asked for (a frame's size: another display shown is asked anew) once it has
 /// been answered, and while it hasn't, asked again only after `retry` (a look mustn't wait for the answer every time).
@@ -34,6 +41,14 @@ public final class ScreenSizes: @unchecked Sendable {
             failed[key] = answer == nil ? now : nil
         }
         return answer
+    }
+
+    /// Asked anew at the next look: a size the frames don't fit was answered for another display than they show.
+    public func forget(_ key: String) {
+        lock.withLock {
+            known[key] = nil
+            failed[key] = nil
+        }
     }
 }
 

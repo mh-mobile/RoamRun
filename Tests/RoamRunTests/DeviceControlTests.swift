@@ -1031,6 +1031,10 @@ private func listenerSoon(
     #expect(size("A", t0.addingTimeInterval(120))?.width == 1179 && asked == 3)
     #expect(size("A", t0.addingTimeInterval(121))?.height == 2556 && asked == 3) // kept
     #expect(size("B", t0.addingTimeInterval(122))?.width == 1878 && asked == 4)
+    // Forgotten (the frames didn't fit it): asked anew at once.
+    answers = [(1408, 2016)]
+    sizes.forget("A")
+    #expect(size("A", t0.addingTimeInterval(123))?.width == 1408 && asked == 5)
 }
 
 /// Device control looks for a device's port itself only when no bridge does, only when the
@@ -1769,6 +1773,7 @@ private func blank(_ width: Int, _ height: Int) -> CGImage {
         throw FrameError.message("decode: -12909")
     })
     #expect(seen.way == 3 && pngs == 2)
+    #expect(seen.fellBack == "the screen stream gave none: decode: -12909")
     // The size unsaid, or a frame of another screen: the PNG.
     seen = try look({
         blank(1179, 2560)
@@ -1778,14 +1783,34 @@ private func blank(_ width: Int, _ height: Int) -> CGImage {
         blank(1320, 1920)
     })
     #expect(seen.way == 3 && pngs == 4)
+    // A frame that doesn't fit a size said: that size is let go of, to be asked anew; not where none was said.
+    var misfits: [Int] = []
+    for said in [Optional(screen), nil] {
+        _ = try DeviceSession.look(frame: {
+            blank(1320, 1920)
+        }, screen: { _ in
+            said
+        }, misfit: { frame in
+            misfits.append(frame.width)
+        }, png: {
+            blank(2556, 1179)
+        }, way: {
+            1
+        })
+    }
+    #expect(misfits == [1320])
     // The way not said the first time is asked once more.
     seen = try look({
         throw DeviceSession.Failure.message(call)
     }, ways: [0, 4])
     #expect(seen.way == 4)
-    // Told to stop, or not begun: no PNG either.
+    // Told to stop, not begun, or timed out (the connection in doubt): no PNG either.
     pngs = 0
-    for refused in [DeviceSession.Failure.message("\(DeviceSession.stopped) told to"), .notBegun("no connection")] {
+    for refused in [
+        DeviceSession.Failure.message("\(DeviceSession.stopped) told to"),
+        .notBegun("no connection"),
+        .message("timed out")
+    ] {
         #expect(throws: (any Error).self) {
             try look({
                 throw refused
