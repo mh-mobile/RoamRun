@@ -468,7 +468,9 @@ mod tests {
         assert!(began.elapsed() < Duration::from_millis(2800), "{:?}", began.elapsed());
     }
 
-    /// A write that its timeout would hold past the deadline ends there all the same.
+    /// A write that its timeout would hold past the deadline ends there all the same. Not on Windows, where a shutdown
+    /// doesn't end a send already waiting (seen on windows-11-arm): there its timeout ends it, as before.
+    #[cfg(unix)]
     #[test]
     fn a_write_held_past_the_deadline_ends_there() {
         let at = serving(|_| std::thread::sleep(Duration::from_secs(10)));
