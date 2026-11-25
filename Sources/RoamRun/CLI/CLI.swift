@@ -871,6 +871,13 @@ enum CLI {
                     "unexpected \(shellName(a)) — to pick a client: roamrun init --client \(shellName(a))"
             }
         }
+        // One folder: a second would be dropped without a word (--client is the one that repeats).
+        if args.filter({
+            $0 == "--output-dir"
+        })
+        .count > 1 {
+            return "--output-dir once: one folder a run"
+        }
         for option in valued {
             if let i = args.lastIndex(of: option),
                !args.indices.contains(i + 1) || args[i + 1].isEmpty || args[i + 1].hasPrefix("-")

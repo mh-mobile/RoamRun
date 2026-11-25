@@ -74,7 +74,7 @@ roamrun init --client claude                  # 指定したエージェント�
 roamrun init --output-dir .claude/skills      # 指定したフォルダに入れる（.claude/skills/roamrun/SKILL.md になる）
 ```
 
-`--output-dir` は、プロジェクトのスキルフォルダに入れたいときや、一覧にないエージェントで使いたいときに指定します。相対パスは、いまいるディレクトリから数えます。
+`--output-dir` は、プロジェクトのスキルフォルダに入れたいときや、一覧にないエージェントで使いたいときに指定します。相対パスは、いまいるディレクトリから数えます。指定できるフォルダは 1 回に 1 つです。そのフォルダからスキルを消すには、`roamrun init --output-dir <dir> --uninstall` を実行します。
 
 `init` が入れるのは、いま使っている RoamRun に同梱されているスキルです。そのため、スキルと RoamRun のバージョンがそろいます。RoamRun をアップデートしたら、`roamrun init` をもう一度実行してください。`~/.<client>/skills/roamrun` にあるスキルのバージョンが違う場合は、`roamrun status` と `roamrun doctor` がそれを知らせます。ほかのフォルダは確かめません。`--output-dir` で入れたスキルは、同じコマンドをもう一度実行して更新してください。スキルを別のツールで管理している場合は、RoamRun のリリースに合わせて固定してください。たとえば、次のようにします。
 

@@ -671,6 +671,11 @@ private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> {
     #expect(CLI.initUsageError(["init", "--print", "--output-dir", "x"])?
         .hasPrefix("--output-dir and --print can't go together") == true)
     #expect(CLI.initUsageError(["init", "--client"])?.hasPrefix("--client needs a value") == true)
+    for twice in [["init", "--output-dir", "a", "--output-dir", "b"], ["init", "--output-dir", "--output-dir", "x"],
+                  ["init", "--output-dir", "-x", "--output-dir", "b"]]
+    {
+        #expect(CLI.initUsageError(twice) == "--output-dir once: one folder a run", "\(twice)")
+    }
     #expect(CLI.initUsageError(["init", "claude"])?.hasPrefix("unexpected claude") == true)
     #expect(CLI.initUsageError(["init", "--output"])?.hasPrefix("unknown option --output") == true)
 }

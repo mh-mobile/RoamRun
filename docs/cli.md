@@ -98,7 +98,8 @@ roamrun init --output-dir .claude/skills      # or in a folder you name: .claude
 ```
 
 `--output-dir` is for a project's skills folder, or for an agent that isn't on the list. A relative
-path is from the current directory.
+path is from the current directory, and it is given once. `roamrun init --output-dir <dir> --uninstall`
+removes the skill from that folder.
 
 `init` installs the skill that ships with your RoamRun, so the two match. After updating RoamRun,
 run `roamrun init` again; `roamrun status` and `roamrun doctor` say so when a skill in
