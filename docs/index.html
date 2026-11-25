@@ -47,6 +47,7 @@
   .btn.primary { background: var(--accent); color: var(--accent-fg); }
   .btn.ghost { border: 1px solid var(--line); color: var(--fg); }
   .shot { display: block; width: 100%; height: auto; border-radius: 12px; border: 1px solid var(--line); margin: 32px 0 8px; }
+  .intro video { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; border-radius: 12px; border: 1px solid var(--line); margin: 16px 0 8px; background: #0f1020; }
   h2 { font-size: 26px; margin: 56px 0 16px; letter-spacing: -0.01em; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
   .card { background: var(--card); border-radius: 12px; padding: 20px; }
@@ -87,6 +88,8 @@
   </header>
 
   <img class="shot" src="images/main.png" width="1600" height="1002" alt="RoamRun main window: an iPad ready for Xcode over Tailscale">
+  <div class="intro" data-l="en"><video src="videos/intro-en.mp4" poster="videos/intro-en.jpg" controls muted playsinline preload="none" aria-label="RoamRun intro video, 28 seconds, no sound"></video></div>
+  <div class="intro" data-l="ja"><video src="videos/intro-ja.mp4" poster="videos/intro-ja.jpg" controls muted playsinline preload="none" aria-label="RoamRun の紹介動画（28 秒、音声なし）"></video></div>
 
   <h2 data-l="en">What you get</h2>
   <h2 data-l="ja">できること</h2>
