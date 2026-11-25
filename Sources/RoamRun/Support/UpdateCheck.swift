@@ -73,6 +73,15 @@ enum UpdateCheck {
         return r
     }
 
+    /// Keeps the check to its one request: a redirect (a renamed repository, say) is answered as it came, not followed.
+    final class NoRedirects: NSObject, URLSessionTaskDelegate, Sendable {
+        func urlSession(_: URLSession, task _: URLSessionTask, willPerformHTTPRedirection _: HTTPURLResponse,
+                        newRequest _: URLRequest) async -> URLRequest?
+        {
+            nil
+        }
+    }
+
     static let session: URLSession = {
         let c = URLSessionConfiguration.ephemeral
         c.httpCookieStorage = nil
@@ -80,7 +89,7 @@ enum UpdateCheck {
         c.urlCredentialStorage = nil
         c.urlCache = nil
         c.timeoutIntervalForResource = 20 // the whole request, not only a pause in it
-        return URLSession(configuration: c)
+        return URLSession(configuration: c, delegate: NoRedirects(), delegateQueue: nil)
     }()
 
     static let fetch: Fetch = { request in

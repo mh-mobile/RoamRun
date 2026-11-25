@@ -64,6 +64,24 @@ private func answering(_ status: Int, _ body: Data, calls: Counter = Counter()) 
     #expect(c.timeoutIntervalForResource <= 30)
 }
 
+@Test func aRedirectIsAnsweredAsItCameNotFollowed() async {
+    #expect(UpdateCheck.session.delegate is UpdateCheck.NoRedirects)
+    let elsewhere = URL(string: "https://example.com/")!
+    let moved = HTTPURLResponse(url: UpdateCheck.latestURL, statusCode: 301, httpVersion: nil,
+                                headerFields: ["Location": elsewhere.absoluteString])!
+    // Never resumed: nothing is sent.
+    let task = UpdateCheck.session.dataTask(with: UpdateCheck.request)
+    let next = await UpdateCheck.NoRedirects().urlSession(UpdateCheck.session, task: task,
+                                                          willPerformHTTPRedirection: moved,
+                                                          newRequest: URLRequest(url: elsewhere))
+    #expect(next == nil)
+    // And the 301 itself is a failed check.
+    guard case .failure = await UpdateCheck.check(current: "0.13.0", fetch: answering(301, Data())) else {
+        Issue.record("301 answered")
+        return
+    }
+}
+
 @Test func anAnswerOtherThanAReleaseIsAFailedCheck() async {
     for (status, body) in [(404, Data()), (403, release("v0.14.0")), (200, Data("{}".utf8))] {
         guard case .failure = await UpdateCheck.check(current: "0.13.0", fetch: answering(status, body)) else {

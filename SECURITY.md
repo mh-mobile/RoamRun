@@ -471,7 +471,7 @@ bounded.
   Settings › General › Check for updates automatically (off by default; then at most
   once a day, while the app runs). It is one `GET
   https://api.github.com/repos/mh-mobile/RoamRun/releases/latest` to GitHub, with no
-  cookies and no credentials. RoamRun sets three headers, `User-Agent: RoamRun`,
+  cookies and no credentials; a redirect isn't followed. RoamRun sets three headers, `User-Agent: RoamRun`,
   `Accept: application/vnd.github+json` and `Accept-Language: en`; macOS's URL
   loading adds its usual ones, such as the host and `Accept-Encoding`. Nothing about you, your
   devices or your bridges is in it; GitHub still sees the Mac's IP address. From the

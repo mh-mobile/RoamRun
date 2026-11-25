@@ -53,7 +53,8 @@ What each command does, more exactly:
   Xcode 26.3 and later; earlier versions were not tried.
 - `version --check` asks GitHub for the newest release. When it is newer than this RoamRun, it
   prints that version, `brew upgrade --cask roamrun` and the release page. It exits 0 when GitHub
-  answered (up to date or not) and 1 when it didn't. Plain `version` and `--version` send nothing.
+  named its newest release (newer or not), and 1 when the check failed: no answer, an answer other
+  than a release (a rate limit's 403, a redirect, which isn't followed), or a tag that isn't a version. Plain `version` and `--version` send nothing.
   What the check sends is in [SECURITY.md](../SECURITY.md#what-it-touches-on-the-mac).
 - `--json` is taken by `devices`, `status` and `doctor`; `-v` by `up`. In `devices --json`, `ready`
   says only that the bridge is Ready or the device is on this Wi‑Fi; `status` also asks CoreDevice. A command rejects an option

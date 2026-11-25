@@ -183,7 +183,7 @@ enum CLI {
                                      (<name>: check one device rather than all; --replace: drop builds
                                      already listed under the same version and build)
       version [--check]              Print the version (also --version). --check: also ask GitHub whether a
-                                     newer release is out (exit 1 when that couldn't be asked); without
+                                     newer release is out (exit 1 when the check failed); without
                                      --check nothing is sent
       init [--client <name>] [--print] [--uninstall]
                                      Install the agent skill (clients: claude, codex, cursor, gemini, copilot, devin)
