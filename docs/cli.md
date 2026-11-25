@@ -19,6 +19,7 @@ roamrun install <name> <App.ipa|App.app>   # install a build signed for the devi
 roamrun logs <name> <bundle-id>            # relaunch the app and stream its print / os_log output
 roamrun screenshot <name> [file.png]       # save the device's screen as PNG and print the path
 roamrun ota [<name>] <App.ipa> [--replace] # publish a build for a device to install by itself
+roamrun version --check                    # is a newer release out? (asks GitHub)
 ```
 
 `<name>` is the name you gave the device in RoamRun. It is
@@ -50,6 +51,10 @@ What each command does, more exactly:
   `roamrun ota` or TestFlight.
 - `screenshot` writes `./<name>-<date and time>.png` when no file is given. It was run with
   Xcode 26.3 and later; earlier versions were not tried.
+- `version --check` asks GitHub for the newest release. When it is newer than this RoamRun, it
+  prints that version, `brew upgrade --cask roamrun` and the release page. It exits 0 when GitHub
+  answered (up to date or not) and 1 when it didn't. Plain `version` and `--version` send nothing.
+  What the check sends is in [SECURITY.md](../SECURITY.md#what-it-touches-on-the-mac).
 - `--json` is taken by `devices`, `status` and `doctor`; `-v` by `up`. In `devices --json`, `ready`
   says only that the bridge is Ready or the device is on this Wi‑Fi; `status` also asks CoreDevice. A command rejects an option
   it does not take, with exit code 2. `roamrun --help` lists everything.

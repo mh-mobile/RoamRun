@@ -43,8 +43,14 @@ This installs `RoamRun.app` in `/Applications` and links the `roamrun` command. 
 Without Homebrew, download the dmg from
 [Releases](https://github.com/mh-mobile/RoamRun/releases), drag RoamRun to Applications and open
 it. The first screen offers to install the `roamrun` command; later it is under Open RoamRun ›
-Settings › Command line tool › Install…. To update, quit RoamRun and replace the app. There is no
-automatic update. Saved devices stay, and bridges that were running start again.
+Settings › Command line tool › Install…. To update, quit RoamRun and replace the app. Saved
+devices stay, and bridges that were running start again.
+
+RoamRun downloads and installs no update itself, but it can tell you that a newer release is out:
+Check for Updates… in the menu bar, `roamrun version --check`, or Open RoamRun › Settings › General ›
+Check for updates automatically (off by default; then at most once a day). Each asks GitHub for the
+newest release, and the menu then offers its release page. What is sent is in
+[SECURITY.md](../SECURITY.md#what-it-touches-on-the-mac).
 
 The app is signed with a Developer ID and notarized by Apple.
 

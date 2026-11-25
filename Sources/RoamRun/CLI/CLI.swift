@@ -182,7 +182,9 @@ enum CLI {
                                      prints the page's address. Anyone on your tailnet can install from it
                                      (<name>: check one device rather than all; --replace: drop builds
                                      already listed under the same version and build)
-      version                        Print the version (also --version)
+      version [--check]              Print the version (also --version). --check: also ask GitHub whether a
+                                     newer release is out (exit 1 when that couldn't be asked); without
+                                     --check nothing is sent
       init [--client <name>] [--print] [--uninstall]
                                      Install the agent skill (clients: claude, codex, cursor, gemini, copilot, devin)
 
@@ -229,8 +231,29 @@ enum CLI {
                     .deletingLastPathComponent()
                     .deletingLastPathComponent()
                 let info = app.flatMap(Bundle.init(url:))?.infoDictionary ?? Bundle.main.infoDictionary
-                print("roamrun \(info?["CFBundleShortVersionString"] as? String ?? "dev")")
-                exit(0)
+                let version = info?["CFBundleShortVersionString"] as? String ?? "dev"
+                let check: Bool
+                switch parse(args) {
+                case .success(let p): check = p.flags.contains("--check")
+                case .failure(let e): fail(e.message)
+                }
+                print("roamrun \(version)")
+                guard check else { exit(0) }
+                Task {
+                    switch await UpdateCheck.check(current: version) {
+                    case .success(.upToDate):
+                        print("Up to date: no newer release")
+                    case .success(.newer(let newer)):
+                        print(
+                            "A newer version is out: \(newer)\n  brew upgrade --cask roamrun\n  \(UpdateCheck.page(newer))"
+                        )
+                    case .failure(let failure):
+                        note("roamrun: couldn't check for updates: \(failure.reason)")
+                        exit(1)
+                    }
+                    exit(0)
+                }
+                RunLoop.main.run()
             }
             if args[0] == "init" {
                 initSkill(args)
@@ -591,6 +614,8 @@ enum CLI {
         "devices": (["--json", "--as=", "--replace=", "--peer="], 0 ... 2),
         "pair": (["--host=", "--to=", "--with=", "--attempt=", "--last", "--peer=", "--qr"], 0 ... 2),
         "status": (["--json", "--wait="], 0 ... 1),
+        "version": (["--check"], 0 ... 0),
+        "--version": (["--check"], 0 ... 0),
         "doctor": (["--json"], 0 ... 1),
         "down": ([], 0 ... 1),
         "up": (["-v", "-d", detachedFlag], 0 ... 1),

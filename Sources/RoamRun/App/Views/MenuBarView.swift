@@ -4,6 +4,7 @@ import AppKit
 struct MenuBarView: View {
     @EnvironmentObject private var coordinator: AppCoordinator
     @Environment(\.openWindow) private var openWindow
+    @ObservedObject private var updates = UpdateChecker.shared
 
     var body: some View {
         if coordinator.profiles.isEmpty {
@@ -29,6 +30,20 @@ struct MenuBarView: View {
         }
         Divider()
         Text("RoamRun \(Bundle.main.versionText)")
+        if let newer = updates.available {
+            Button {
+                NSWorkspace.shared.open(UpdateCheck.page(newer))
+            } label: {
+                Text("RoamRun \(newer) Is Available…")
+                Text("You have \(updates.current); opens its release page")
+            }
+        } else {
+            Button("Check for Updates…") {
+                updates.checkNow()
+                openWindow(id: "updates")
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        }
         Button("Open RoamRun") {
             openMain()
         }
@@ -81,6 +96,73 @@ private struct BridgeMenuItem: View {
             }
         }
         Divider()
+    }
+}
+
+/// What a check the user asked for came to. A window, not an alert: a modal alert would hold up
+/// the bridges' timers while it is open.
+struct UpdateWindowView: View {
+    @ObservedObject private var updates = UpdateChecker.shared
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            switch updates.lastAnswer {
+            case nil where updates.checking:
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text("Asking GitHub for the newest release…")
+                }
+            case nil: // reopened with the app, before any check
+                Text(
+                    "RoamRun asks GitHub for its newest release only when you check, or once a day if Settings says so."
+                )
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            case .success(.upToDate):
+                Text("RoamRun is up to date").font(.headline)
+                Text("You have \(updates.current); no newer release is out.").foregroundStyle(.secondary)
+            case .success(.newer(let version)):
+                Text("RoamRun \(version) is available").font(.headline)
+                Text("You have \(updates.current). Its release page tells how to update; RoamRun downloads nothing.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            case .failure(let failure):
+                Text("Couldn't check for updates").font(.headline)
+                Text(failure.reason).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                Spacer()
+                if updates.lastAnswer == nil && !updates.checking {
+                    Button("Check Now") {
+                        updates.checkNow()
+                    }
+                }
+                if case .failure = updates.lastAnswer {
+                    Button("Try Again") {
+                        updates.checkNow()
+                    }
+                }
+                if case .success(.newer(let version)) = updates.lastAnswer {
+                    Button("Later") {
+                        dismiss()
+                    }
+                    Button("Open Release Page") {
+                        NSWorkspace.shared.open(UpdateCheck.page(version))
+                        dismiss()
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else {
+                    Button("OK") {
+                        dismiss()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(updates.checking)
+                }
+            }
+        }
+        .padding(20)
+        .frame(width: 380)
     }
 }
 
