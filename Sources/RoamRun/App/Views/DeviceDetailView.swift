@@ -219,8 +219,9 @@ private struct StatusCard: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
-                // Its own bridge's status leaves this out; an external one's detail has it.
-                if external == nil, coordinator.localNetworkDenied, status != .local {
+                if LocalNetwork.shownOnCard(denied: coordinator.localNetworkDenied, status: status,
+                                            external: external != nil)
+                {
                     Label(LocalNetwork.advice, systemImage: "exclamationmark.triangle")
                         .font(.callout)
                         .foregroundStyle(.secondary)

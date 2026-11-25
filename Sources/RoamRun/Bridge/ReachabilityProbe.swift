@@ -29,6 +29,12 @@ enum LocalNetwork {
         }
     }
 
+    /// Whether a status card shows the advice: for this app's own bridge while it runs and looks for the device, as
+    /// the bridge's status entry (and so `roamrun status`) says it; a `roamrun up` bridge's detail carries its own.
+    static func shownOnCard(denied: Bool, status: BridgeStatus, external: Bool) -> Bool {
+        denied && !external && status != .off && status != .local
+    }
+
     /// Ages out instead of being cleared: once access is allowed again no probe
     /// reports another denial, so nothing has to notice that it stopped.
     static func isDenied(last: Date?, now: Date) -> Bool {

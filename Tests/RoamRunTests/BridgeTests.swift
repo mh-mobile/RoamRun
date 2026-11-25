@@ -64,6 +64,17 @@ private let t0 = Date(timeIntervalSinceReferenceDate: 800_000_000)
     #expect(!LocalNetwork.isDenied(last: now.addingTimeInterval(-300), now: now))
 }
 
+@Test func aStatusCardSaysLocalNetworkIsBlockedOnlyForItsOwnRunningBridge() {
+    #expect(LocalNetwork.shownOnCard(denied: true, status: .waiting, external: false))
+    #expect(LocalNetwork.shownOnCard(denied: true, status: .ready, external: false))
+    #expect(!LocalNetwork.shownOnCard(denied: false, status: .waiting, external: false))
+    // Off: nothing looks for the device, and `roamrun status` says nothing of it.
+    #expect(!LocalNetwork.shownOnCard(denied: true, status: .off, external: false))
+    #expect(!LocalNetwork.shownOnCard(denied: true, status: .local, external: false))
+    // A `roamrun up` bridge's detail carries the advice itself.
+    #expect(!LocalNetwork.shownOnCard(denied: true, status: .waiting, external: true))
+}
+
 @MainActor @Test func aStartStoppedWhileItAwaitedDoesntPutTheBridgeBack() {
     let dir = scratchDir()
     defer { try? FileManager.default.removeItem(at: dir) }
