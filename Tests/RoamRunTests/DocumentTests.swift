@@ -108,6 +108,7 @@ func everyDocumentedCommandParses(_ doc: String) throws {
             if command == "init" {
                 let known: Set = [
                     "--client",
+                    "--output-dir",
                     "--print",
                     "--uninstall",
                     "claude",
@@ -118,9 +119,15 @@ func everyDocumentedCommandParses(_ doc: String) throws {
                     "devin",
                     "x"
                 ]
-                let given = words.dropFirst().map {
-                    $0.hasPrefix("--client=") ? "--client" : $0
-                }
+                // A folder after --output-dir is any path.
+                let given = words.indices
+                    .dropFirst()
+                    .filter {
+                        words[$0 - 1] != "--output-dir"
+                    }
+                    .map {
+                        words[$0].hasPrefix("--client=") ? "--client" : words[$0]
+                    }
                 #expect(Set(given).isSubset(of: known), "\(doc): roamrun \(m.1)")
             } else if case .failure(let e) = CLI.parse(words) {
                 Issue.record("\(doc): roamrun \(m.1) — \(e.message)")
