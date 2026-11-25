@@ -26,6 +26,8 @@ the device with you, and keep building, running and debugging from Xcode as usua
 iPhone, iPad, Apple Vision Pro and Apple TV. How to drive the Mac from where you are is in
 [Working away from the Mac](#working-away-from-the-mac).
 
+https://github.com/user-attachments/assets/441be2e5-9703-4eb9-b591-5f5e941ddb01
+
 ```mermaid
 flowchart LR
   subgraph mac["Mac at home"]
