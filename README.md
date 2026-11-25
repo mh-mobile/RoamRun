@@ -208,6 +208,8 @@ RoamRun can show the device's screen and tap, swipe, type and press its buttons,
 an AI agent. This is called *device control*. It needs **iOS or iPadOS 27 or later**, and neither
 the bridge nor Xcode. It was run on an iPhone; an iPad has not been tried.
 
+https://github.com/user-attachments/assets/3e2ceed2-79a4-4d7d-8ce3-36c026eb964b
+
 > [!WARNING]
 > **Set Up leaves device control on. While it is on, any program you run on this Mac can see and
 > operate the device, lock screen, notifications and messages included, and install and launch
