@@ -129,6 +129,7 @@ func everyDocumentedCommandParses(_ doc: String) throws {
                         words[$0].hasPrefix("--client=") ? "--client" : words[$0]
                     }
                 #expect(Set(given).isSubset(of: known), "\(doc): roamrun \(m.1)")
+                #expect(CLI.initUsageError(words) == nil, "\(doc): roamrun \(m.1)")
             } else if case .failure(let e) = CLI.parse(words) {
                 Issue.record("\(doc): roamrun \(m.1) — \(e.message)")
             }

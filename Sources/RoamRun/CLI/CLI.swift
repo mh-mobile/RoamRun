@@ -896,8 +896,8 @@ enum CLI {
         }) {
             return "Skipped \(dir.path): it is a link managed elsewhere"
         }
-        let existing = try? String(contentsOf: file, encoding: .utf8)
-        let ours = existing?.hasPrefix("---\nname: roamrun\n") ?? false
+        // By its bytes, as `staleSkills` reads it: a file that isn't UTF-8, or can't be read, is still not ours.
+        let ours = (try? Data(contentsOf: file))?.starts(with: Data("---\nname: roamrun\n".utf8)) ?? false
         if uninstall {
             guard ours else { return "Skipped \(dir.path): no RoamRun skill there" }
             do { try fm.removeItem(at: file) } catch {
@@ -906,7 +906,7 @@ enum CLI {
             rmdir(dir.path) // only if now empty
             return "Removed \(file.path)"
         }
-        if existing != nil && !ours {
+        if fm.fileExists(atPath: file.path) && !ours {
             return "Skipped \(dir.path): its SKILL.md isn't RoamRun's"
         }
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)

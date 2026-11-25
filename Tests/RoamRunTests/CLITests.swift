@@ -698,6 +698,13 @@ private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> {
     try Data("---\nname: mine\n---\n".utf8).write(to: foreign.appendingPathComponent("SKILL.md"))
     #expect(try CLI.placeSkill(skill, in: foreign, uninstall: false).hasSuffix("its SKILL.md isn't RoamRun's"))
     #expect(read(foreign) == "---\nname: mine\n---\n")
+    // So is one that isn't UTF-8.
+    let latin1 = root.appendingPathComponent("latin1/roamrun")
+    try fm.createDirectory(at: latin1, withIntermediateDirectories: true)
+    let bytes = Data([0x2D, 0x2D, 0x2D, 0x0A, 0xE9, 0x0A])
+    try bytes.write(to: latin1.appendingPathComponent("SKILL.md"))
+    #expect(try CLI.placeSkill(skill, in: latin1, uninstall: false).hasSuffix("its SKILL.md isn't RoamRun's"))
+    #expect(try Data(contentsOf: latin1.appendingPathComponent("SKILL.md")) == bytes)
 
     // A linked folder, and a linked SKILL.md, are left alone.
     let linkedDir = root.appendingPathComponent("linked-dir/roamrun")
