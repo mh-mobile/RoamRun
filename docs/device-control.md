@@ -56,7 +56,9 @@ roamrun elements iPhone                   # what accessibility says is on the sc
   frame, timed out: the connection is in doubt), the look fails as before, without the PNG. The PNG is turned as the device's interface is; a `tap`, `swipe` or `pinch` by it is
   turned back to the device held upright, and refused, with nothing sent, once the device was turned since that
   look, where it was turned as that look was taken ("Look again"), or where it is on its side and doesn't say
-  which way ("Ask the user to turn it upright").
+  which way ("Ask the user to turn it upright"). Where the device doesn't say which way it is when the point is
+  sent, the point goes by that look. An input the device refuses the screen stream for (during a call) is sent
+  without one.
   `roamrun look` says it used the PNG on stderr ("the device's PNG: …"), and MCP's `look` in its answer. Not yet
   tried on a device.
 - `type` sends at most 2000 characters, about 16 a second; a newline is Return, and U+0008 Backspace. Under a

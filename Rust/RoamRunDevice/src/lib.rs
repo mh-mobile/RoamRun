@@ -1254,7 +1254,9 @@ async fn perform(link: &mut Link, input: Input) -> Result<(), String> {
     // Without one where the caller said so (rr_device_bare_inputs): taps, keys and buttons were taken that way
     // on iOS 27.0, and no screen-sharing session then shows on the device or takes its sound.
     if !link.bare_inputs {
-        tokio::time::timeout(STREAM_DEADLINE, stream_for_input(link)).await.unwrap_or_else(|_| Err("timed out".into()))?;
+        let ready = tokio::time::timeout(STREAM_DEADLINE, stream_for_input(link)).await.unwrap_or_else(|_| Err("timed out".into()));
+        // Refused by the device (during a call): sent without one, as roamrunctl sends every input.
+        if let Err(why) = ready { if !refused_stream(&why) { return Err(why) } }
     }
     // Told to stop while the stream was got ready (that can take seconds): nothing is sent.
     if link.stop.raised() { return Err(STOPPED.into()); }
@@ -1267,6 +1269,12 @@ async fn perform(link: &mut Link, input: Input) -> Result<(), String> {
     };
     link.stream_used = Instant::now();
     done
+}
+
+/// Whether a stream's start failed for the device's own answer ("audio start:" or "video start:" with what it said, as
+/// during a phone or VoIP call), not for no answer: the connection is fine, only the stream isn't to be had.
+fn refused_stream(why: &str) -> bool {
+    (why.starts_with("audio start: ") || why.starts_with("video start: ")) && !why.ends_with("no answer")
 }
 
 async fn stream_for_input(link: &mut Link) -> Result<(), String> {
@@ -2108,6 +2116,17 @@ async fn accept_pairing(pairing: &RRPairing, show: &(impl Fn(&str) + Sync)) -> R
 
 #[cfg(test)]
 mod tests {
+    use super::refused_stream;
+
+    #[test]
+    fn an_input_goes_without_a_stream_the_device_refused_but_not_one_that_didn_t_answer() {
+        assert!(refused_stream("audio start: A phone or VoIP call is currently in progress on the device."));
+        assert!(refused_stream("video start: CoreDevice(DeviceError(\"Dictionary(...)\"))"));
+        for no in ["audio start: no answer", "video start: no answer", "display service: no answer", "timed out", "the stream started but sent no key frame"] {
+            assert!(!refused_stream(no), "{no}");
+        }
+    }
+
     use super::*;
 
     #[test]

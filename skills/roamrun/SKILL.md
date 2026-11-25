@@ -416,7 +416,8 @@ have the user add the MCP tools, which run outside it.
   once the device was turned since that look ("the device was turned since that
   look"): look again. So is one where the device was turned as that look was
   taken ("Look again"), and one on its side without saying which way ("Ask the
-  user to turn it upright"): ask the user to.
+  user to turn it upright"): ask the user to. Where the device doesn't say
+  which way it is when the point is sent, the point goes by that look.
 - `roamrun swipe iPhone 295 900 295 450 [ms]` drags; start on something that
   does nothing when pressed if you can.
 - `roamrun pinch iPhone 295 640 <scale> [ms] [--rotate <degrees>]` (0.13.0+) puts two fingers about the point and moves them until they are `scale` (0.25–4) times
