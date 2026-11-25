@@ -29,8 +29,10 @@ enum LocalNetwork {
         }
     }
 
-    /// Whether a status card shows the advice: for this app's own bridge while it runs and looks for the device, as
-    /// the bridge's status entry (and so `roamrun status`) says it; a `roamrun up` bridge's detail carries its own.
+    /// Whether a status card shows the advice: for this app's own bridge while it runs and looks for the device, the
+    /// statuses its status entry (and so `roamrun status`) says it for. The card follows the condition now; an
+    /// entry is rewritten every 10 s, but an errored bridge's only at its next try. A `roamrun up` bridge's detail
+    /// carries its own.
     static func shownOnCard(denied: Bool, status: BridgeStatus, external: Bool) -> Bool {
         denied && !external && status != .off && status != .local
     }
