@@ -98,6 +98,7 @@ impl Relay {
                 stream?
             }
         };
+        let _closing = closed_at(&stream, until);
         // Before the head is sent and the Expect waited on: no longer than what is left. (The body and the answer: `Bounded`.)
         let within = |most: Duration| -> Result<(), String> {
             let most = most.min(left()?);
@@ -307,6 +308,20 @@ impl Bounded<'_> {
     }
 }
 
+/// Shuts the connection's sending side at `until`, unless what this gives is dropped first: a write held past its timeout
+/// (macOS lets one run on while the relay takes a little now and then) still ends at the deadline.
+fn closed_at(stream: &TcpStream, until: Instant) -> std::sync::mpsc::Sender<()> {
+    let (dropped, watch) = std::sync::mpsc::channel();
+    if let Ok(stream) = stream.try_clone() {
+        std::thread::spawn(move || {
+            if watch.recv_timeout(until.saturating_duration_since(Instant::now())) == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
+                let _ = stream.shutdown(std::net::Shutdown::Write);
+            }
+        });
+    }
+    dropped
+}
+
 /// A relay that stops reading doesn't hold an upload past the deadline.
 impl Write for Bounded<'_> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -451,6 +466,18 @@ mod tests {
         // Said as out of time alone, not with what the socket said then.
         assert_eq!(said, format!("the relay at {at}: out of time"));
         assert!(began.elapsed() < Duration::from_millis(2800), "{:?}", began.elapsed());
+    }
+
+    /// A write that its timeout would hold past the deadline ends there all the same.
+    #[test]
+    fn a_write_held_past_the_deadline_ends_there() {
+        let at = serving(|_| std::thread::sleep(Duration::from_secs(10)));
+        let stream = TcpStream::connect(at).unwrap();
+        stream.set_write_timeout(Some(Duration::from_secs(8))).unwrap();
+        let began = Instant::now();
+        let _closing = closed_at(&stream, began + Duration::from_secs(1));
+        let sent = std::io::copy(&mut std::io::repeat(0).take(1 << 30), &mut &stream);
+        assert!(sent.is_err() && began.elapsed() < Duration::from_secs(4), "{sent:?} after {:?}", began.elapsed());
     }
 
     /// A relay that says nothing is given up on at `ANSWER`, before a deadline further off, and said so.
