@@ -122,6 +122,8 @@ final class UpdateChecker: ObservableObject {
     private let fetch: UpdateCheck.Fetch
     private let now: () -> Date
     private var timer: Timer?
+    /// The user asked while a check ran: its answer is theirs too.
+    private var asked = false
 
     init(current: String = Bundle.main.versionText, defaults: UserDefaults = .standard,
          fetch: @escaping UpdateCheck.Fetch = UpdateCheck.fetch, now: @escaping () -> Date = Date.init)
@@ -147,16 +149,16 @@ final class UpdateChecker: ObservableObject {
         guard !checking,
               UpdateCheck.isDue(enabled: defaults.bool(forKey: UpdateCheck.automaticKey), last: last, now: now())
         else { return nil }
-        return check(asked: false)
+        return check()
     }
 
     @discardableResult func checkNow() -> Task<Void, Never>? {
-        guard !checking else { return nil }
         lastAnswer = nil
-        return check(asked: true)
+        asked = true
+        return checking ? nil : check()
     }
 
-    private func check(asked: Bool) -> Task<Void, Never> {
+    private func check() -> Task<Void, Never> {
         checking = true
         defaults.set(now(), forKey: UpdateCheck.lastAttemptKey) // a failed one waits a day too
         let (current, fetch) = (current, fetch)
@@ -172,6 +174,7 @@ final class UpdateChecker: ObservableObject {
             }
             if asked {
                 lastAnswer = result
+                asked = false
             } // a failed automatic check shows nothing
         }
     }

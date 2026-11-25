@@ -139,3 +139,17 @@ private func answering(_ status: Int, _ body: Data, calls: Counter = Counter()) 
         return
     }
 }
+
+@MainActor @Test func askingDuringAnAutomaticCheckGetsItsAnswer() async throws {
+    let suite = "roamrun-update-test-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.set(true, forKey: UpdateCheck.automaticKey)
+    let calls = Counter()
+    let checker = UpdateChecker(current: "0.13.0", defaults: defaults,
+                                fetch: answering(200, release("v0.13.0"), calls: calls))
+    let automatic = try #require(checker.checkIfDue())
+    #expect(checker.checkNow() == nil) // one request, not two
+    await automatic.value
+    #expect(calls.value == 1 && checker.lastAnswer == .success(.upToDate))
+}

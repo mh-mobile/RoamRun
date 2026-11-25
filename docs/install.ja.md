@@ -27,7 +27,7 @@ brew install --cask mh-mobile/tap/roamrun
 
 Homebrew を使わない場合は、[Releases](https://github.com/mh-mobile/RoamRun/releases) から dmg をダウンロードし、RoamRun を「アプリケーション」にドラッグして開きます。最初の画面で、`roamrun` コマンドをインストールするか尋ねられます。あとから入れるには、Open RoamRun › Settings › Command line tool › Install… を使います。アップデートするには、RoamRun を終了して、アプリを新しいものに置き換えます。保存したデバイスはそのまま残り、動いていたブリッジは再び始まります。
 
-RoamRun がアップデートを自分でダウンロードしたり、インストールしたりすることはありません。新しいリリースが出ているかどうかは、次のどれかで確かめられます。どれも GitHub に最新のリリースを問い合わせます。新しいリリースが見つかると、メニューからそのリリースのページを開けます。送る内容は [SECURITY.md](../SECURITY.md#what-it-touches-on-the-mac) にあります。
+RoamRun がアップデートを自分でダウンロードしたり、インストールしたりすることはありません。新しいリリースが出ているかどうかは、次のどれかで確かめられます。どれも GitHub に最新のリリースを問い合わせます。新しいリリースが見つかると、メニューからそのリリースのページを開けます。`version --check` は、そのページのアドレスを表示します。送る内容は [SECURITY.md](../SECURITY.md#what-it-touches-on-the-mac) にあります。
 
 - メニューバーの Check for Updates…
 - `roamrun version --check`

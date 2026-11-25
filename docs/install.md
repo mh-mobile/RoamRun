@@ -49,7 +49,8 @@ devices stay, and bridges that were running start again.
 RoamRun downloads and installs no update itself, but it can tell you that a newer release is out:
 Check for Updates… in the menu bar, `roamrun version --check`, or Open RoamRun › Settings › General ›
 Check for updates automatically (off by default; then at most once a day). Each asks GitHub for the
-newest release, and the menu then offers its release page. What is sent is in
+newest release. When it is newer, the menu offers its release page, and `version --check` prints
+that page's address. What is sent is in
 [SECURITY.md](../SECURITY.md#what-it-touches-on-the-mac).
 
 The app is signed with a Developer ID and notarized by Apple.

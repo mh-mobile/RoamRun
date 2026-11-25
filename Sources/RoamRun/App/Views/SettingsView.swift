@@ -82,7 +82,7 @@ struct SettingsView: View {
                             UpdateChecker.shared.checkIfDue()
                         }
                     Text(
-                        "At most once a day, ask GitHub for the newest release (GitHub sees this Mac's IP address; nothing about you or your devices is sent). Off: RoamRun asks only when you choose Check for Updates… in the menu. It downloads nothing."
+                        "At most once a day, ask GitHub for the newest release (GitHub sees this Mac's IP address; nothing about you or your devices is sent). Off: RoamRun asks only when you choose Check for Updates… in the menu or run `roamrun version --check`. It downloads nothing."
                     )
                     .font(.caption)
                     .foregroundStyle(.secondary)
