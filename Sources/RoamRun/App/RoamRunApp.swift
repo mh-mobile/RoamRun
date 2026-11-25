@@ -164,10 +164,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.terminate(nil)
     }
 
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag {
-            Self.openMain?()
-        }
+    /// Opened again (Finder, Spotlight, the Dock): the main window, though another (Check for Updates) may be open.
+    func applicationShouldHandleReopen(_: NSApplication, hasVisibleWindows _: Bool) -> Bool {
+        Self.openMain?()
         return true
     }
 }

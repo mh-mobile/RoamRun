@@ -158,6 +158,23 @@ private func answering(_ status: Int, _ body: Data, calls: Counter = Counter()) 
     }
 }
 
+@MainActor @Test func aCheckThatSentNothingIsDueAgain() async throws {
+    let suite = "roamrun-update-test-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.set(true, forKey: UpdateCheck.automaticKey)
+    let offline: UpdateCheck.Fetch = { _ in
+        throw URLError(.notConnectedToInternet)
+    }
+    await UpdateChecker(current: "0.13.0", defaults: defaults, fetch: offline).checkIfDue()?.value
+    #expect(defaults.object(forKey: UpdateCheck.lastAttemptKey) == nil) // just after login, say: the next hour tries
+    let timedOut: UpdateCheck.Fetch = { _ in
+        throw URLError(.timedOut)
+    }
+    await UpdateChecker(current: "0.13.0", defaults: defaults, fetch: timedOut).checkIfDue()?.value
+    #expect(defaults.object(forKey: UpdateCheck.lastAttemptKey) != nil) // it may have reached GitHub: a day
+}
+
 @MainActor @Test func askingDuringAnAutomaticCheckGetsItsAnswer() async throws {
     let suite = "roamrun-update-test-\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suite))

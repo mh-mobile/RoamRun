@@ -16,6 +16,8 @@ enum UpdateCheck {
 
     struct Failure: Error, Equatable {
         let reason: String
+        /// Nothing went out (no network yet, as just after login): an automatic check is due again.
+        var unsent = false
     }
 
     typealias Fetch = @Sendable (URLRequest) async throws -> (Data, URLResponse)
@@ -96,12 +98,19 @@ enum UpdateCheck {
         try await session.data(for: request)
     }
 
+    /// Whether the request can't have left the Mac: no network, or no address for the host.
+    static func unsent(_ error: Error) -> Bool {
+        guard let code = (error as? URLError)?.code else { return false }
+        return [.notConnectedToInternet, .cannotFindHost, .dnsLookupFailed, .dataNotAllowed,
+                .internationalRoamingOff].contains(code)
+    }
+
     static func check(current: String, fetch: Fetch = fetch) async -> Result<Answer, Failure> {
         let data: Data, response: URLResponse
         do {
             (data, response) = try await fetch(request)
         } catch {
-            return .failure(Failure(reason: error.localizedDescription))
+            return .failure(Failure(reason: error.localizedDescription, unsent: unsent(error)))
         }
         guard let status = (response as? HTTPURLResponse)?.statusCode, status == 200 else {
             let code = (response as? HTTPURLResponse).map {
@@ -169,11 +178,16 @@ final class UpdateChecker: ObservableObject {
 
     private func check() -> Task<Void, Never> {
         checking = true
+        let before = defaults.object(forKey: UpdateCheck.lastAttemptKey)
         defaults.set(now(), forKey: UpdateCheck.lastAttemptKey) // a failed one waits a day too
         let (current, fetch) = (current, fetch)
         return Task {
             let result = await UpdateCheck.check(current: current, fetch: fetch)
             checking = false
+            // …unless nothing went out: the hourly look tries again once there is a network.
+            if case .failure(let failure) = result, failure.unsent {
+                defaults.set(before, forKey: UpdateCheck.lastAttemptKey)
+            }
             if case .success(let answer) = result {
                 if case .newer(let version) = answer {
                     available = version
