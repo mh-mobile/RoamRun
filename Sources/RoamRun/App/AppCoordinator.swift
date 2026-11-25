@@ -74,8 +74,6 @@ final class AppCoordinator: ObservableObject {
     /// Deleted devices' bridges whose status removal failed: kept until a retry lands it, or
     /// the entry (this app's own, so never stale) would make the iPhone a duplicate if added again.
     private var departing: [ProxyBridge] = []
-    /// Set at launch when bridges left on are being brought back.
-    private(set) var isRestoringBridges = false
     private var wasActiveIDs: Set<UUID> {
         get { Set((UserDefaults.standard.array(forKey: "wasActiveIDs") as? [String] ?? []).compactMap(UUID.init)) }
         set { UserDefaults.standard.set(newValue.map {
@@ -290,7 +288,6 @@ final class AppCoordinator: ObservableObject {
             if let p = profiles.first(where: {
                 $0.id == id
             }) {
-                isRestoringBridges = true
                 logStore.log("restoring bridge for \"\(p.displayName)\"", device: p.id)
                 autoStart(id, live: live, .restore)
             }
