@@ -418,6 +418,10 @@ extension TimingSensitive {
         == AppCoordinator.carries([TailscaleClient.Serving.foreground], on: 41443))
     #expect(AppCoordinator.notServed(on: 41443, after: .nothing, host: "m", said: refused)
         == "port 41443 isn't served after asking tailscale to, will retry: \(refused)")
+
+    // A foreground session ends with its terminal, and the page goes up there after it: said so.
+    #expect(AppCoordinator.remedy(for: [TailscaleClient.Serving.foreground]).hasPrefix("Stop that `tailscale serve`"))
+    #expect(AppCoordinator.remedy(for: ["/docs"]).hasPrefix("Give RoamRun another port: defaults write"))
 }
 
 @Test func onlyTheMountUnderTheNameThisNodeAnswersToNowIsOurs() {

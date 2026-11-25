@@ -535,8 +535,17 @@ extension AppCoordinator {
     }
 
     nonisolated static func carries(_ beside: [String], on port: Int) -> String {
-        "port \(port) also carries \(beside.joined(separator: ", ")), and RoamRun keeps " +
-            "a port to itself. Give it another one: defaults write \(AppID.bundle) otaPort -int 41444"
+        "port \(port) also carries \(beside.joined(separator: ", ")), and RoamRun keeps a port to itself. " +
+            remedy(for: beside)
+    }
+
+    /// What to do about a port something else holds. A foreground `tailscale serve` ends with its terminal, and the
+    /// 30 s check then publishes the page there; anything else stays, so RoamRun moves.
+    nonisolated static func remedy(for beside: [String]) -> String {
+        let move = "defaults write \(AppID.bundle) otaPort -int 41444"
+        guard beside.contains(TailscaleClient.Serving.foreground) else { return "Give RoamRun another port: \(move)" }
+        return "Stop that `tailscale serve` (Ctrl-C in its terminal) and RoamRun publishes the page there within " +
+            "half a minute, or give RoamRun another port: \(move)"
     }
 
     /// Whatever `tailscale` said, the entry isn't there. Something that took the port
