@@ -412,8 +412,7 @@ extension AppCoordinator {
                     // settings naming our registrations were deleted with the app.
                     let why: String
                     if !beside.isEmpty {
-                        why = "port \(tailnetPort) also carries \(beside.joined(separator: ", ")), and RoamRun keeps " +
-                            "a port to itself. Give it another one: defaults write \(AppID.bundle) otaPort -int 41444"
+                        why = Self.carries(beside, on: tailnetPort)
                     } else if Self.abandoned(here) {
                         why = "port \(tailnetPort) is serving \(state.described) with nothing behind it, so it is " +
                             "left over from a run that was killed: `tailscale serve --https=\(tailnetPort) " +
@@ -480,12 +479,7 @@ extension AppCoordinator {
                     self.complainOnce("published port \(tailnetPort), but `tailscale serve status` didn't " +
                         "answer, so RoamRun can't confirm it. Checking again shortly.")
                 } else {
-                    // Whatever `tailscale` said, the entry isn't there. Its stdout
-                    // carries the only thing that explains the silent case — a link
-                    // to the page where HTTPS certificates are turned on.
-                    self.complainOnce("port \(tailnetPort) isn't served after asking tailscale to, will retry" +
-                        (said.isEmpty ? ". Does your tailnet have HTTPS certificates turned on?"
-                            : ": \(said)"))
+                    self.complainOnce(Self.notServed(on: tailnetPort, after: after, host: host, said: said))
                     // Remembered before the call in case we died during it. It
                     // didn't take, so drop it: a window full of addresses that
                     // were never registered can't recognise one that was.
@@ -538,6 +532,23 @@ extension AppCoordinator {
                 }
             }
         }
+    }
+
+    nonisolated static func carries(_ beside: [String], on port: Int) -> String {
+        "port \(port) also carries \(beside.joined(separator: ", ")), and RoamRun keeps " +
+            "a port to itself. Give it another one: defaults write \(AppID.bundle) otaPort -int 41444"
+    }
+
+    /// Whatever `tailscale` said, the entry isn't there. Something that took the port
+    /// meanwhile is named, as the check before names it; else its stdout carries the
+    /// only thing that explains the silent case — a link to turn HTTPS certificates on.
+    nonisolated static func notServed(on port: Int, after: TailscaleClient.Serving, host: String,
+                                      said: String) -> String
+    {
+        let beside = after.alongside(host)
+        guard beside.isEmpty else { return carries(beside, on: port) }
+        return "port \(port) isn't served after asking tailscale to, will retry" +
+            (said.isEmpty ? ". Does your tailnet have HTTPS certificates turned on?" : ": \(said)")
     }
 
     enum PublishStep: Equatable {
