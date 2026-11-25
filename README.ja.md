@@ -10,7 +10,7 @@
   <a href="https://github.com/mh-mobile/RoamRun/actions/workflows/ci.yml"><img src="https://github.com/mh-mobile/RoamRun/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/mh-mobile/RoamRun" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/macOS-13%2B%20Apple%20Silicon-blue" alt="macOS 13+ on Apple Silicon">
-  <a href="https://github.com/mh-mobile/homebrew-tap/blob/main/Casks/roamrun.rb"><img src="https://img.shields.io/badge/Homebrew-mh--mobile%2Ftap%2Froamrun-orange?logo=homebrew" alt="Homebrew: mh-mobile/tap/roamrun"></a>
+  <a href="#1-roamrun-%E3%82%92%E3%82%A4%E3%83%B3%E3%82%B9%E3%83%88%E3%83%BC%E3%83%AB%E3%81%99%E3%82%8B"><img src="https://img.shields.io/badge/Homebrew-mh--mobile%2Ftap%2Froamrun-orange?logo=homebrew" alt="Homebrew: mh-mobile/tap/roamrun"></a>
   <a href="https://deepwiki.com/mh-mobile/RoamRun"><img src="https://img.shields.io/badge/Ask-DeepWiki-blue" alt="Ask DeepWiki"></a>
 </p>
 
