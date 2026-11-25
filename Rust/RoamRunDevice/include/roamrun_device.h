@@ -71,6 +71,18 @@ char *rr_device_screen(RRDevice *device);
  */
 uint8_t *rr_device_keyframe(RRDevice *device, size_t *length, char **error);
 
+/**
+ * The screen as a PNG the device makes itself, turned as its interface is; no stream is started
+ * for it. NULL on failure, with *error (if given) set. Free it with rr_bytes_free.
+ */
+uint8_t *rr_device_screenshot(RRDevice *device, size_t *length, char **error);
+
+/**
+ * Which way up the device's interface is: 1 portrait, 2 upside down, 3 on its side with the home
+ * indicator at the right, 4 with it at the left; 0 when the device doesn't say.
+ */
+uint8_t rr_device_way(RRDevice *device);
+
 /*
  * The calls below OPERATE THE DEVICE: look at a fresh frame first. Each returns JSON
  * ({"ok":true,"ms":…} or {"ok":false,"error":…}) to free with rr_string_free. A failure with

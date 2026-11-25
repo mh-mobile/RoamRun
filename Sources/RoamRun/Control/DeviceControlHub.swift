@@ -55,7 +55,9 @@ protocol ControlledDevice: AnyObject, Sendable {
     /// Asked when a call gets its turn on the device, before it begins: false, it isn't begun.
     func gate(_ mayBegin: @escaping @Sendable () -> Bool)
     func close()
-    func look() throws -> CGImage
+    func look() throws -> DeviceSession.Look
+    /// Which way up the device's interface is (see `DeviceSession.way`); 0 where it doesn't say.
+    func way() -> UInt8
     func elements(limit: Int) throws -> (elements: [ScreenElement], complete: Bool)
     func tap(x: Double, y: Double) throws
     func swipe(from: (x: Double, y: Double), to: (x: Double, y: Double), milliseconds: Int) throws
@@ -75,6 +77,10 @@ extension ControlledDevice {
     }
 
     func interrupt() {}
+    func way() -> UInt8 {
+        0
+    }
+
     func gate(_ mayBegin: @escaping @Sendable () -> Bool) {}
     func install(_ path: String) throws {
         throw DeviceSession.Failure.invalid("this device can't install")
@@ -120,9 +126,9 @@ final class DeviceControlHub: @unchecked Sendable {
         let session: any ControlledDevice
         /// The device's latest look: its size, which a tap's pixels are of, which look it was, when, and
         /// whether a tap, swipe or text went by it already — then no other tap or swipe does (what it
-        /// saw may have moved), while text still may (look, tap a field, type). (This and `acted`
-        /// under the device's gate.)
-        var looked: (width: Int, height: Int, id: Int, at: Date, spent: Bool)?
+        /// saw may have moved), while text still may (look, tap a field, type); and for the device's PNG, which way up
+        /// its interface was (see `upright`). (This and `acted` under the device's gate.)
+        var looked: (width: Int, height: Int, id: Int, at: Date, spent: Bool, way: UInt8?)?
         /// When the last input ended: a look, or text, right after it waits for the screen to settle.
         var acted: Date?
         /// Opening it in the background: one attempt at a time, and further apart while they fail.
@@ -1083,6 +1089,35 @@ final class DeviceControlHub: @unchecked Sendable {
         return (x / Double(size.width), y / Double(size.height))
     }
 
+    /// A point of a look as fractions of it, in the terms of the device held upright, where a touch is sent: as it is
+    /// for the screen stream's picture (`way` nil), turned back for the device's PNG, which comes turned as the
+    /// interface is. Nil where the PNG lies on its side and which way isn't known, or the way doesn't go with its
+    /// shape: the mirror of a point isn't pressed. The same in roamrunctl.
+    static func upright(_ way: UInt8?, sideways: Bool, _ p: (x: Double, y: Double)) -> (x: Double, y: Double)? {
+        switch (way, sideways) {
+        case (nil, _), (1, false): p
+        case (1, true), (2, true), (3, false), (4, false): nil
+        case (2, false): (1 - p.x, 1 - p.y)
+        case (3, true): (1 - p.y, p.x)
+        case (4, true): (p.y, 1 - p.x)
+        default: sideways ? nil : p
+        }
+    }
+
+    /// Whether the device was turned between a look and now. ponytail: a way not said (0) is taken as no turn; the
+    /// look's shape still refuses the sideways case.
+    static func turned(_ then: UInt8, _ now: UInt8) -> Bool {
+        then != 0 && now != 0 && then != now
+    }
+
+    static func notUpright(_ way: UInt8) -> String {
+        way == 0
+            ? "the device is on its side and doesn't say which way: nothing was pressed. Ask the user to turn it upright"
+            : "the device was turned as that look was taken: nothing was pressed. Look again"
+    }
+
+    static let turnedSince = "the device was turned since that look: nothing was pressed. Look again"
+
     // ponytail: a fixed wait, enough for a transition or a scroll coming to rest. Comparing
     // frames until they stop changing, if it proves short (a playing video never stops).
     static let settle: TimeInterval = 1
@@ -1373,6 +1408,25 @@ final class DeviceControlHub: @unchecked Sendable {
             }
             return nil
         }
+        /// A point of the latest look as the touch takes it: the device's PNG's turned back as its interface was.
+        func touch(_ x: Double?, _ y: Double?, of size: (width: Int, height: Int, way: UInt8?)) throws
+            -> (x: Double, y: Double)
+        {
+            guard let point = Self.fraction(x: x, y: y, of: (size.width, size.height)) else {
+                throw DeviceSession.Failure
+                    .invalid("the point must be inside the image (\(size.width) x \(size.height))")
+            }
+            guard let turned = Self.upright(size.way, sideways: size.width > size.height, point) else {
+                throw DeviceSession.Failure.invalid(Self.notUpright(size.way ?? 0))
+            }
+            return turned
+        }
+        /// A PNG's point isn't sent where the device was turned since that look: what it saw is gone.
+        func unturned(_ way: UInt8?) throws {
+            guard let way, Self.turned(way, h.session.way()) else { return }
+            end()
+            throw DeviceSession.Failure.invalid(Self.turnedSince)
+        }
         /// The look a point is read against: one no tap or swipe went by yet, the one given, still good.
         func pointable() -> (Int, Int)? {
             guard let size = h.looked, !size.spent else { return nil }
@@ -1492,14 +1546,12 @@ final class DeviceControlHub: @unchecked Sendable {
                 guard Date().timeIntervalSince(size.at) <= lookStands else { end()
                     return .failure(Self.lookOld)
                 }
-                guard let from = Self.fraction(x: request.x, y: request.y, of: (size.width, size.height)),
-                      let to = Self.fraction(x: request.x2, y: request.y2, of: (size.width, size.height))
-                else {
-                    return .failure("the point must be inside the image (\(size.width) x \(size.height))")
-                }
+                let from = try touch(request.x, request.y, of: (size.width, size.height, size.way)),
+                    to = try touch(request.x2, request.y2, of: (size.width, size.height, size.way))
                 guard let duration = Self.swipeDuration(request.milliseconds) else {
                     return .failure("a swipe takes 50...5000 ms")
                 }
+                try unturned(size.way)
                 begun = true
                 try Self.whileWanted(wanted, else: {
                     session.interrupt()
@@ -1516,12 +1568,12 @@ final class DeviceControlHub: @unchecked Sendable {
                 guard Date().timeIntervalSince(size.at) <= lookStands else { end()
                     return .failure(Self.lookOld)
                 }
-                guard let centre = Self.fraction(x: request.x, y: request.y, of: (size.width, size.height)) else {
-                    return .failure("the point must be inside the image (\(size.width) x \(size.height))")
-                }
+                // Turned as the look was, clockwise there is clockwise held upright: the degrees go as they are.
+                let centre = try touch(request.x, request.y, of: (size.width, size.height, size.way))
                 guard let duration = Self.pinchDuration(request.milliseconds) else {
                     return .failure("a pinch takes 50...5000 ms")
                 }
+                try unturned(size.way)
                 begun = true
                 try Self.whileWanted(wanted, else: {
                     session.interrupt()
@@ -1581,7 +1633,8 @@ final class DeviceControlHub: @unchecked Sendable {
                 guard wanted() else { return .failure(Self.notGiven) }
                 // As large as a model is shown it, no larger: an image scaled again by whatever shows
                 // it has points that aren't the look's any more, and a tap goes beside what was meant.
-                let image = Self.fitted(try h.session.look())
+                let look = try h.session.look()
+                let image = Self.fitted(look.image)
                 guard let out = CGImageDestinationCreateWithURL(
                     URL(fileURLWithPath: path) as CFURL,
                     UTType.png.identifier as CFString,
@@ -1601,8 +1654,8 @@ final class DeviceControlHub: @unchecked Sendable {
                     looks += 1
                     return looks
                 }
-                h.looked = (image.width, image.height, id, Date(), false)
-                return .init(ok: true, width: image.width, height: image.height, look: id)
+                h.looked = (image.width, image.height, id, Date(), false, look.way)
+                return .init(ok: true, width: image.width, height: image.height, look: id, said: look.fellBack)
             case "tap":
                 // In the pixels of what was last looked at, no tap or swipe gone by it: there is no tapping a screen not seen.
                 guard pointable() != nil, let size = h.looked else { return .failure(Self.lookFirst) }
@@ -1612,9 +1665,8 @@ final class DeviceControlHub: @unchecked Sendable {
                 guard Date().timeIntervalSince(size.at) <= lookStands else { end()
                     return .failure(Self.lookOld)
                 }
-                guard let point = Self.fraction(x: request.x, y: request.y, of: (size.width, size.height)) else {
-                    return .failure("the point must be inside the image (\(size.width) x \(size.height))")
-                }
+                let point = try touch(request.x, request.y, of: (size.width, size.height, size.way))
+                try unturned(size.way)
                 begun = true
                 try Self.whileWanted(wanted, else: {
                     session.interrupt()

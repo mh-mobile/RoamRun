@@ -342,6 +342,9 @@ final class DeviceMCP: @unchecked Sendable {
                 +
                 text(
                     "\(Int(size.width)) x \(Int(size.height)), look \(id). Points for tap, swipe and pinch are pixels of this image, given with look \(id). Within a minute it serves one tap, swipe, pinch, type or paste, and type and paste after that: look again before another tap, swipe or pinch."
+                        + (looked.said.map {
+                            " (The device's PNG: \($0).)"
+                        } ?? "")
                 )
         case "tap":
             let look = try Self.look(of: arguments)
@@ -685,7 +688,7 @@ final class DeviceMCP: @unchecked Sendable {
             tool("devices", "The devices saved in RoamRun, one name a line."),
             tool(
                 "look",
-                "The device's screen now, as an image, and the look's id. Do this before every tap, swipe or pinch: it serves one, which gives that id."
+                "The device's screen now, as an image, and the look's id. Do this before every tap, swipe or pinch: it serves one, which gives that id. Where the device refuses its screen stream (during a phone or VoIP call), the look is the device's own PNG, slower, and says so."
             ),
             tool("tap", "Tap a point of the last look. Operates the device: whatever is there gets pressed.",
                  ["look": lookGiven, "x": point, "y": point], required: ["look", "x", "y"]),

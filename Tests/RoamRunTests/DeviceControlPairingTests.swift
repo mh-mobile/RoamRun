@@ -127,7 +127,7 @@ import ImageIO
         func check() {}
         func letGo() {}
         func close() {}
-        func look() throws -> CGImage {
+        func look() throws -> DeviceSession.Look {
             throw DeviceSession.Failure.message("no")
         }
 

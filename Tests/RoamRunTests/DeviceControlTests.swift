@@ -1012,20 +1012,25 @@ private func listenerSoon(
 }
 
 /// A screen's size is asked until it is answered, a minute apart, and then kept: a look that
-/// came while the device didn't say it no longer leaves every later one uncut.
+/// came while the device didn't say it doesn't make every later one the PNG. A frame of another
+/// size (another display shown) is asked anew.
 @Test func aScreensSizeIsAskedAgainUntilItIsKnown() {
-    var answers: [(width: Int, height: Int)?] = [nil, nil, (1179, 2556)]
+    var answers: [(width: Int, height: Int)?] = [nil, nil, (1179, 2556), (1878, 2670)]
     var asked = 0
-    let sizes = ScreenSizes(ask: { _ in
-        asked += 1
-        return answers.removeFirst()
-    }, retry: 60)
+    let sizes = ScreenSizes(retry: 60)
+    func size(_ key: String, _ now: Date) -> (width: Int, height: Int)? {
+        sizes.size(of: key, now: now) {
+            asked += 1
+            return answers.removeFirst()
+        }
+    }
     let t0 = Date()
-    #expect(sizes.size(of: "A", now: t0) == nil && asked == 1)
-    #expect(sizes.size(of: "A", now: t0.addingTimeInterval(59)) == nil && asked == 1) // not yet again
-    #expect(sizes.size(of: "A", now: t0.addingTimeInterval(60)) == nil && asked == 2)
-    #expect(sizes.size(of: "A", now: t0.addingTimeInterval(120))?.width == 1179 && asked == 3)
-    #expect(sizes.size(of: "A", now: t0.addingTimeInterval(121))?.height == 2556 && asked == 3) // kept
+    #expect(size("A", t0) == nil && asked == 1)
+    #expect(size("A", t0.addingTimeInterval(59)) == nil && asked == 1) // not yet again
+    #expect(size("A", t0.addingTimeInterval(60)) == nil && asked == 2)
+    #expect(size("A", t0.addingTimeInterval(120))?.width == 1179 && asked == 3)
+    #expect(size("A", t0.addingTimeInterval(121))?.height == 2556 && asked == 3) // kept
+    #expect(size("B", t0.addingTimeInterval(122))?.width == 1878 && asked == 4)
 }
 
 /// Device control looks for a device's port itself only when no bridge does, only when the
@@ -1720,4 +1725,174 @@ func anInputIsInterruptedWhenItsAskerLeavesOrItsDeviceIsSwitchedOff(_ op: String
         ofItemAtPath: upload.path
     )
     #expect(DeviceControlWire.leftToInstall(upload))
+}
+
+private func blank(_ width: Int, _ height: Int) -> CGImage {
+    CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+              space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!.makeImage()!
+}
+
+/// A look is the device's PNG where the stream gives none (the device refuses it during a call, or the frame can't be
+/// decoded), where the device doesn't say the screen's size, or where the frame doesn't fit it; not where the call was
+/// told to stop, or never began.
+@Test func aLookFallsBackToTheDevicesPNGWhereTheStreamServesNot() throws {
+    let screen = (width: 1179, height: 2556)
+    var pngs = 0
+    func look(_ frame: () throws -> CGImage, screen: (width: Int, height: Int)? = screen,
+              ways: [UInt8] = [3]) throws -> DeviceSession.Look
+    {
+        var ways = ways
+        return try DeviceSession.look(frame: frame, screen: { _ in
+            screen
+        }, png: {
+            pngs += 1
+            return blank(2556, 1179)
+        }, way: {
+            ways.removeFirst()
+        })
+    }
+
+    // The stream's frame, cut to the screen: no PNG.
+    var seen = try look({
+        blank(1179, 2560)
+    })
+    #expect(seen.image.width == 1179 && seen.image.height == 2556 && seen.way == nil && seen
+        .fellBack == nil && pngs == 0)
+    // Refused during a call, or not decoded: the PNG, turned as the interface was.
+    let call = "A phone or VoIP call is currently in progress on the device."
+    seen = try look({
+        throw DeviceSession.Failure.message(call)
+    })
+    #expect(seen.image.width == 2556 && seen.way == 3 && pngs == 1)
+    #expect(seen.fellBack == "the screen stream gave none: \(call.dropLast())")
+    seen = try look({
+        throw FrameError.message("decode: -12909")
+    })
+    #expect(seen.way == 3 && pngs == 2)
+    // The size unsaid, or a frame of another screen: the PNG.
+    seen = try look({
+        blank(1179, 2560)
+    }, screen: nil)
+    #expect(seen.way == 3 && seen.fellBack != nil && pngs == 3)
+    seen = try look({
+        blank(1320, 1920)
+    })
+    #expect(seen.way == 3 && pngs == 4)
+    // The way not said the first time is asked once more.
+    seen = try look({
+        throw DeviceSession.Failure.message(call)
+    }, ways: [0, 4])
+    #expect(seen.way == 4)
+    // Told to stop, or not begun: no PNG either.
+    pngs = 0
+    for refused in [DeviceSession.Failure.message("\(DeviceSession.stopped) told to"), .notBegun("no connection")] {
+        #expect(throws: (any Error).self) {
+            try look({
+                throw refused
+            })
+        }
+    }
+    #expect(pngs == 0)
+    // Both failing: the PNG's failure, and the stream's.
+    let both = #expect(throws: DeviceSession.Failure.self) {
+        try DeviceSession.look(frame: {
+            throw DeviceSession.Failure.message(call)
+        }, screen: { _ in
+            screen
+        }, png: {
+            throw DeviceSession.Failure.message("screenshot: timed out")
+        }, way: {
+            1
+        })
+    }
+    #expect(both.map {
+        "\($0)".contains("screenshot: timed out") && "\($0)".contains(call.dropLast())
+    } == true)
+}
+
+/// A stream frame is cut to the screen either way round, at its size or scaled down as the stream may send it, without
+/// the padding; another is not cut. The same cases as roamrunctl's.
+@Test func aStreamFrameFitsTheScreenOrNot() {
+    let size = { (frame: (Int, Int), screen: (width: Int, height: Int)?) -> [Int]? in
+        fit((frame.0, frame.1), to: screen).map {
+            [$0.width, $0.height]
+        }
+    }
+    #expect(size((1878, 2688), (1878, 2670)) == [1878, 2670])
+    #expect(size((2688, 1878), (1878, 2670)) == [2670, 1878])
+    #expect(size((1408, 2016), (1878, 2670)) == [1408, 2002]) // scaled down by the stream, then padded
+    #expect(size((1200, 2700), (1178, 2556)) == nil) // more than 32 over: not this screen's
+    #expect(size((1320, 1920), (1878, 2670)) == nil) // the other screen's shape
+    #expect(size((1878, 2688), nil) == nil) // the screen's size unsaid
+}
+
+/// A PNG's point is turned back to the device held upright; the stream's goes as it is. The same as roamrunctl's.
+@Test func aPNGsPointIsTurnedBackToTheDeviceHeldUpright() {
+    let p = (x: 0.25, y: 0.1)
+    let up = { (way: UInt8?, sideways: Bool) -> [Double]? in
+        DeviceControlHub.upright(way, sideways: sideways, p).map {
+            [$0.x, $0.y]
+        }
+    }
+    #expect(up(nil, true) == [0.25, 0.1])
+    #expect(up(1, false) == [0.25, 0.1])
+    #expect(up(2, false) == [0.75, 0.9])
+    #expect(up(3, true) == [0.9, 0.25])
+    #expect(up(4, true) == [0.1, 0.75])
+    // Not said, and upright by its shape: taken as it is. On its side: not pressed.
+    #expect(up(0, false) == [0.25, 0.1])
+    #expect(up(0, true) == nil)
+    // Said one way and shaped the other (turned in between): not pressed.
+    #expect(up(1, true) == nil && up(3, false) == nil)
+    #expect(DeviceControlHub.turned(1, 3) && !DeviceControlHub.turned(1, 1) && !DeviceControlHub
+        .turned(0, 3) && !DeviceControlHub.turned(3, 0))
+}
+
+/// A look that is the device's PNG says so; a tap by it is turned back as the interface was, and none is sent once
+/// the device was turned since that look. A stream look's point goes as it is, whichever way the device is.
+@Test func aPNGLookIsTurnedBackAndRefusedOnceTheDeviceTurned() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (hub, made) = try standInHub(dir)
+    defer { hub.stop() }
+    hub.settling = 0
+    let id = UUID()
+    hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
+    let device = try #require(made().first)
+    let png = lookFile(in: dir)
+    // On its side, the home indicator at the right.
+    device.screen = (200, 100)
+    device.lookWay = 3
+    device.wayNow = 3
+    var look = hub.answer(.init(op: "look", device: id, path: png))
+    #expect(look.ok && look.said != nil)
+    #expect(hub.answer(.init(op: "tap", device: id, x: 50, y: 10, look: look.look)).ok)
+    let tapped = try #require(device.tapped)
+    #expect(abs(tapped.x - 0.9) < 0.001 && abs(tapped.y - 0.25) < 0.001)
+    // Turned upright since: not pressed, and the look is gone.
+    look = hub.answer(.init(op: "look", device: id, path: png))
+    device.wayNow = 1
+    let taps = device.calls
+        .filter {
+            $0 == "tap"
+        }
+        .count
+    #expect(hub.answer(.init(op: "tap", device: id, x: 50, y: 10, look: look.look)).error == DeviceControlHub
+        .turnedSince)
+    #expect(hub.answer(.init(op: "swipe", device: id, x: 50, y: 10, x2: 60, y2: 10, look: look.look))
+        .error == DeviceControlHub.lookFirst)
+    #expect(device.calls
+        .filter {
+            $0 == "tap"
+        }
+        .count == taps)
+    // The stream's: as it is, and not asked which way.
+    device.lookWay = nil
+    device.screen = (100, 200)
+    look = hub.answer(.init(op: "look", device: id, path: png))
+    device.wayNow = 3
+    #expect(look.said == nil)
+    #expect(hub.answer(.init(op: "tap", device: id, x: 25, y: 20, look: look.look)).ok)
+    let streamed = try #require(device.tapped)
+    #expect(abs(streamed.x - 0.25) < 0.001 && abs(streamed.y - 0.1) < 0.001)
 }

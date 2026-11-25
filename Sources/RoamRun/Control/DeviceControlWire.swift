@@ -65,7 +65,8 @@ enum DeviceControlWire {
         var state: String?
         var code: String?
         var reason: String?
-        /// For "install": its id. For "launch": the process started. For "install" and "install_status": what to tell.
+        /// For "install": its id. For "launch": the process started. For "install" and "install_status": what to tell;
+        /// for "look", why it is the device's PNG, where it is.
         var install: String?
         var pid: Int?
         var said: String?

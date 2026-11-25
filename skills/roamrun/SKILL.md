@@ -407,6 +407,13 @@ have the user add the MCP tools, which run outside it.
   the screen may have changed while you thought — look, and read the point anew.
   The image is the screen as the device holds it, upright: an app in landscape
   shows turned on its side in it, and its points are still the image's.
+  Where the device refuses its screen stream (during a phone or VoIP call), a
+  look is the device's own picture instead (0.14.0+), slower, and says so
+  (`roamrun look` on stderr, "the device's PNG: …"; the tool in its answer).
+  That picture is turned as the device's interface is (an app in landscape
+  comes landscape); its points are still the image's. A point by it is refused
+  once the device was turned since that look ("the device was turned since that
+  look"): look again.
 - `roamrun swipe iPhone 295 900 295 450 [ms]` drags; start on something that
   does nothing when pressed if you can.
 - `roamrun pinch iPhone 295 640 <scale> [ms] [--rotate <degrees>]` (0.13.0+) puts two fingers about the point and moves them until they are `scale` (0.25–4) times
