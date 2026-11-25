@@ -1246,7 +1246,7 @@ fn input_time(input: &Input) -> Duration {
     Duration::from_millis(own) + Duration::from_secs(10) + finding
 }
 
-/// The device drops input that isn't accompanied by a screen stream, so one runs with it: the
+/// A screen stream runs with the app's inputs (it sends them with one; roamrunctl's go bare): the
 /// one kept from before if frames still come on it, a new one otherwise. Getting that far has
 /// a stream's deadline; the input then gets the time its own length needs, so that the
 /// deadline doesn't fall in the middle of it.
@@ -1271,8 +1271,9 @@ async fn perform(link: &mut Link, input: Input) -> Result<(), String> {
     done
 }
 
-/// Whether a stream's start failed for the device's own answer ("audio start:" or "video start:" with what it said, as
-/// during a phone or VoIP call), not for no answer: the connection is fine, only the stream isn't to be had.
+/// Whether a stream's start failed with an answer ("audio start:" or "video start:" and what came back, as the device's
+/// refusal during a phone or VoIP call), not for no answer. A transport error there passes too; the input then fails
+/// on its own if the connection is gone.
 fn refused_stream(why: &str) -> bool {
     (why.starts_with("audio start: ") || why.starts_with("video start: ")) && !why.ends_with("no answer")
 }
