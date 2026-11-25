@@ -422,6 +422,8 @@ extension TimingSensitive {
     // A foreground session ends with its terminal, and the page goes up there after it: said so.
     #expect(AppCoordinator.remedy(for: [TailscaleClient.Serving.foreground]).hasPrefix("Stop that `tailscale serve`"))
     #expect(AppCoordinator.remedy(for: ["/docs"]).hasPrefix("Give RoamRun another port: defaults write"))
+    // Nothing beside (a root that isn't RoamRun's alone, as `doctor` asks): the other port.
+    #expect(AppCoordinator.remedy(for: []).hasPrefix("Give RoamRun another port"))
     // Stopping it frees nothing where something else holds the port too.
     #expect(AppCoordinator.remedy(for: [TailscaleClient.Serving.foreground, "/docs"])
         .hasPrefix("Give RoamRun another port"))
