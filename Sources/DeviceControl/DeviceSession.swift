@@ -301,13 +301,15 @@ public final class DeviceSession: @unchecked Sendable {
         return Look(image: image, way: first == 0 ? way() : first, fellBack: why)
     }
 
-    /// Whether the PNG is asked for after the stream failed so: not for a call told to stop, nor where the stream
-    /// timed out (the connection is in doubt; the PNG on it would only add its own wait to each attempt).
+    /// Whether the PNG is asked for after the stream failed so: where the device answered and refused the stream (during a
+    /// call) or sent a frame that couldn't be read. Not where it didn't answer, or the call was stopped: the connection is
+    /// in doubt, and the PNG on it would only add its own wait to each attempt.
     public static func fallsBack(_ error: Error) -> Bool {
         switch error {
-        case Failure.invalid, Failure.notBegun: false
-        case Failure.message(let m): !m.hasPrefix(stopped) && m != "timed out"
-        default: true
+        case is FrameError: true
+        case Failure.message(let m):
+            ["audio start: ", "video start: "].contains(where: m.hasPrefix) && !m.hasSuffix("no answer")
+        default: false
         }
     }
 

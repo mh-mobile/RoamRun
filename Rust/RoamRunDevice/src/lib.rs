@@ -518,7 +518,7 @@ pub unsafe extern "C" fn rr_device_keyframe(device: *mut RRDevice, length: *mut 
             Box::into_raw(boxed) as *mut u8
         }
         Err(why) => {
-            unsafe { set_error(error, why) };
+            unsafe { set_error(error, safe::readable(&why)) };
             std::ptr::null_mut()
         }
     }

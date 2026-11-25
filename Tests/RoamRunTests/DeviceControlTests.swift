@@ -1763,7 +1763,7 @@ private func blank(_ width: Int, _ height: Int) -> CGImage {
     #expect(seen.image.width == 1179 && seen.image.height == 2556 && seen.way == nil && seen
         .fellBack == nil && pngs == 0)
     // Refused during a call, or not decoded: the PNG, turned as the interface was.
-    let call = "A phone or VoIP call is currently in progress on the device."
+    let call = "audio start: A phone or VoIP call is currently in progress on the device."
     seen = try look({
         throw DeviceSession.Failure.message(call)
     })
@@ -1804,12 +1804,17 @@ private func blank(_ width: Int, _ height: Int) -> CGImage {
         throw DeviceSession.Failure.message(call)
     }, ways: [0, 4])
     #expect(seen.way == 4)
-    // Told to stop, not begun, or timed out (the connection in doubt): no PNG either.
+    #expect(DeviceSession.fallsBack(DeviceSession.Failure.message("video start: refused")))
+    // Told to stop, not begun, or not answered (the connection in doubt): no PNG either.
     pngs = 0
     for refused in [
         DeviceSession.Failure.message("\(DeviceSession.stopped) told to"),
         .notBegun("no connection"),
-        .message("timed out")
+        .message("timed out"),
+        .message("audio start: no answer"),
+        .message("video start: no answer"),
+        .message("display service: no answer"),
+        .message("the stream started but sent no key frame")
     ] {
         #expect(throws: (any Error).self) {
             try look({

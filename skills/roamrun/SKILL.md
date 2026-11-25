@@ -414,8 +414,9 @@ have the user add the MCP tools, which run outside it.
   That picture is turned as the device's interface is (an app in landscape
   comes landscape); its points are still the image's. A point by it is refused
   once the device was turned since that look ("the device was turned since that
-  look"): look again. On its side without saying which way, it is refused too
-  ("Ask the user to turn it upright"): ask the user to.
+  look"): look again. So is one where the device was turned as that look was
+  taken ("Look again"), and one on its side without saying which way ("Ask the
+  user to turn it upright"): ask the user to.
 - `roamrun swipe iPhone 295 900 295 450 [ms]` drags; start on something that
   does nothing when pressed if you can.
 - `roamrun pinch iPhone 295 640 <scale> [ms] [--rotate <degrees>]` (0.13.0+) puts two fingers about the point and moves them until they are `scale` (0.25–4) times
