@@ -309,7 +309,8 @@ impl Bounded<'_> {
 }
 
 /// Shuts the connection's sending side at `until`, unless what this gives is dropped first: a write held past its timeout
-/// (macOS lets one run on while the relay takes a little now and then) still ends at the deadline.
+/// (macOS lets one run on while the relay takes a little now and then) still ends at the deadline. Not on Windows,
+/// where a shutdown doesn't end a send already waiting: there the write's timeout ends it.
 fn closed_at(stream: &TcpStream, until: Instant) -> std::sync::mpsc::Sender<()> {
     let (dropped, watch) = std::sync::mpsc::channel();
     if let Ok(stream) = stream.try_clone() {
