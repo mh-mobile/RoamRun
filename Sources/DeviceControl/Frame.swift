@@ -2,25 +2,32 @@ import CoreMedia
 import Foundation
 import VideoToolbox
 
-public enum FrameError: Error { case message(String) }
+public enum FrameError: Error, CustomStringConvertible {
+    case message(String)
+    public var description: String {
+        switch self {
+        case .message(let m): m
+        }
+    }
+}
 
-/// Each device's screen size: asked once it has been answered, and while it hasn't, asked again
-/// only after `retry` (a look mustn't wait for the answer every time).
+/// A screen's size, kept by what it was asked for (a frame's size: another display shown is asked anew) once it has
+/// been answered, and while it hasn't, asked again only after `retry` (a look mustn't wait for the answer every time).
 public final class ScreenSizes: @unchecked Sendable {
-    private let ask: (String) -> (width: Int, height: Int)?
     private let retry: TimeInterval
     private let lock = NSLock()
     private var known: [String: (width: Int, height: Int)] = [:]
     private var failed: [String: Date] = [:]
 
-    public init(ask: @escaping (String) -> (width: Int, height: Int)?, retry: TimeInterval = 60) {
-        self.ask = ask
+    public init(retry: TimeInterval = 60) {
         self.retry = retry
     }
 
-    public func size(of udid: String, now: Date = Date()) -> (width: Int, height: Int)? {
+    public func size(of key: String, now: Date = Date(),
+                     ask: () -> (width: Int, height: Int)?) -> (width: Int, height: Int)?
+    {
         let (size, due) = lock.withLock {
-            (known[udid], failed[udid].map {
+            (known[key], failed[key].map {
                 now.timeIntervalSince($0) >= retry
             } ?? true)
         }
@@ -28,25 +35,48 @@ public final class ScreenSizes: @unchecked Sendable {
             return size
         }
         guard due else { return nil }
-        let answer = ask(udid) // not under the lock: it can take seconds
+        let answer = ask() // not under the lock: it can take seconds
         lock.withLock {
-            known[udid] = answer
-            failed[udid] = answer == nil ? now : nil
+            known[key] = answer
+            failed[key] = answer == nil ? now : nil
         }
         return answer
     }
+
+    /// Asked anew at the next look: a size the frames don't fit was answered for another display than they show.
+    public func forget(_ key: String) {
+        lock.withLock {
+            known[key] = nil
+            failed[key] = nil
+        }
+    }
 }
 
-/// The frame without the stream's padding, which is on the right and at the bottom. A frame
-/// that is neither the screen's size nor a little more (either way round) is left alone.
-func cut(_ image: CGImage, to screen: (width: Int, height: Int)?) -> CGImage {
-    guard let screen else { return image }
-    for (w, h) in [(screen.width, screen.height), (screen.height, screen.width)]
-        where (w ... w + 32).contains(image.width) && (h ... h + 32).contains(image.height)
-    {
-        return image.cropping(to: CGRect(x: 0, y: 0, width: w, height: h)) ?? image
+/// What a stream frame of `frame`'s size is cut to: the screen, either way round, at its size or scaled down as the
+/// stream may send it (an opened iPhone Duo: 1878 x 2670 came as 1408 x 2016), without the padding up to 32 pixels
+/// on the right and at the bottom. Nil where the frame isn't that. The same in roamrunctl.
+public func fit(_ frame: (width: Int, height: Int),
+                to screen: (width: Int, height: Int)?) -> (width: Int, height: Int)?
+{
+    guard let screen else { return nil }
+    for (w, h) in [(screen.width, screen.height), (screen.height, screen.width)] {
+        if (w ... w + 32).contains(frame.width), (h ... h + 32).contains(frame.height) {
+            return (w, h)
+        }
+        let scale = min(Double(frame.width) / Double(w), Double(frame.height) / Double(h))
+        let (sw, sh) = (Int((Double(w) * scale).rounded()), Int((Double(h) * scale).rounded()))
+        if scale < 1, frame.width - sw <= 32, frame.height - sh <= 32 {
+            return (sw, sh)
+        }
     }
-    return image
+    return nil
+}
+
+/// The frame without the stream's padding (see `fit`); nil where it doesn't fit.
+func cut(_ image: CGImage, to screen: (width: Int, height: Int)?) -> CGImage? {
+    fit((image.width, image.height), to: screen).flatMap {
+        image.cropping(to: CGRect(x: 0, y: 0, width: $0.width, height: $0.height))
+    }
 }
 
 final class Output: @unchecked Sendable {

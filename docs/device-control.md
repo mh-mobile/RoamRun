@@ -50,6 +50,20 @@ roamrun elements iPhone                   # what accessibility says is on the sc
   `elements` or an action without `--look` came since, or after a minute. Without it, a `tap`, `swipe` or `pinch` goes by the last look, and `type` or `paste` needs none.
 - The image is the screen as the device holds it. An app in landscape appeared turned on its side
   (seen), and points are still pixels of that image.
+- Where the screen stream gives no frame to use, a look is the device's own PNG instead (0.14.0+), which is
+  slower: the device refuses the stream (during a phone or VoIP call, or while the microphone or camera is in use), its frame can't be read or doesn't fit
+  the screen, or the device doesn't say its screen's size. Where the stream doesn't answer (no answer, no key
+  frame, timed out: the connection is in doubt), the look fails as before, without the PNG. The PNG is turned as the device's interface is; a `tap`, `swipe` or `pinch` by it is
+  turned back to the device held upright, and refused, with nothing sent, once the device was turned since that
+  look, where it was turned as that look was taken ("Look again"), or where it is on its side and doesn't say
+  which way ("Ask the user to turn it upright"). Where the device doesn't say which way it is when the point is
+  sent, the point goes by that look. An input the device refuses the screen stream for is sent without one.
+  `roamrun look` says it used the PNG on stderr ("the device's PNG: …"), and MCP's `look` in its answer. Tried
+  on 2026-11-26 on an iPhone Duo, folded, during a Grok voice chat and a Voice Memos recording: the device
+  refused the stream ("The device microphone or camera is currently in use"), and `roamrun look` and
+  `roamrun mcp`'s `look` gave the PNG and said so. Taps by it landed held upright and in landscape (a 1280 x 880
+  PNG); a tap after the device was turned was refused. Opened and folded with neither, looks came from the
+  stream. A phone call wasn't tried.
 - `type` sends at most 2000 characters, about 16 a second; a newline is Return, and U+0008 Backspace. Under a
   Japanese keyboard even a space converts instead of being typed (seen); use `paste` there.
 - `swipe` takes a duration in milliseconds as a last argument (50–5000, default 300). `elements`

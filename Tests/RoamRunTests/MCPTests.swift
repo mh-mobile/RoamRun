@@ -74,7 +74,14 @@ import ImageIO
             CGImageDestinationFinalize(out)
             looks += 1
             latest = looks
-            return .init(ok: true, width: 640, height: 1280, look: looks)
+            // The sixth is the device's PNG: the look says why.
+            return .init(
+                ok: true,
+                width: 640,
+                height: 1280,
+                look: looks,
+                said: looks == 6 ? "the screen stream gave none: a call" : nil
+            )
         case "tap", "swipe", "type", "paste":
             // As the app holds to it: the latest look only.
             return request.look == latest ? .init(ok: true) : .failure(DeviceControlHub.lookedSince(request.look ?? -1))
@@ -175,9 +182,11 @@ import ImageIO
     let look = try call("look", #"{"device":"iphone"}"#) // names match as the CLI's do
     let content = try #require(look["content"] as? [[String: Any]])
     #expect(content.first?["type"] as? String == "image" && content.first?["mimeType"] as? String == "image/jpeg")
-    #expect(said(look).hasPrefix("640 x 1280, look 5."))
+    #expect(said(look).hasPrefix("640 x 1280, look 5.") && !said(look).contains("PNG"))
     // Another client's look meanwhile: a tap with the first is the app's to refuse; the newer still goes.
-    #expect(said(try call("look", #"{"device":"iPhone"}"#)).hasPrefix("640 x 1280, look 6."))
+    let png = said(try call("look", #"{"device":"iPhone"}"#))
+    #expect(png.hasPrefix("640 x 1280, look 6.") && png
+        .hasSuffix(" (The device's PNG: the screen stream gave none: a call.)"))
     let older = try call("tap", #"{"device":"iPhone","look":5,"x":320,"y":640}"#)
     #expect(older["isError"] as? Bool == true && said(older) == DeviceControlHub.lookedSince(5))
     #expect(try call("tap", #"{"device":"iPhone","look":"6","x":320,"y":640}"#)["isError"] as? Bool ==

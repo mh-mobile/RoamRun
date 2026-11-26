@@ -80,7 +80,7 @@ func ms(_ since: Date) -> Int {
 func save(to path: String, _ label: String) -> Bool {
     let started = Date()
     do {
-        let image = try session.look()
+        let image = try session.look().image
         guard let out = CGImageDestinationCreateWithURL(
             URL(fileURLWithPath: path) as CFURL,
             UTType.png.identifier as CFString,

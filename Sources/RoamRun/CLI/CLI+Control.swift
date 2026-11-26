@@ -314,6 +314,10 @@ extension CLI {
         if let id = r.look {
             print("look \(id)")
         }
+        // Said, so that a look much slower than the last isn't a mystery.
+        if let png = r.said {
+            note("the device's PNG: \(png)")
+        }
         exit(0)
     }
 

@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import ImageIO
 import RoamRunDevice
 
 /// What to do when a call on a kept connection fails. Pure, so it can be checked without a device.
@@ -224,33 +225,129 @@ public final class DeviceSession: @unchecked Sendable {
         }
     }
 
-    /// The screen's size by the device's own word, asked over this session's connection: once,
-    /// with nothing tried again for it (a look does without). First made by a look, which has its turn alone.
-    private lazy var sizes = ScreenSizes(ask: { [weak self] _ in
-        guard let object = try? self?.answer(repeatable: false, {
-                  rr_device_screen($0)
-              }),
+    /// The screen's size by the device's own word, kept by the frame's size it was asked for.
+    private let sizes = ScreenSizes()
+
+    /// A look, and where it came from.
+    public struct Look {
+        public var image: CGImage
+        /// Which way up the device's interface was (see `way`) where the image is the device's PNG, which comes turned
+        /// as the interface is; nil for the screen stream's, the display's own way up, whose points go as they are.
+        public var way: UInt8?
+        /// Why it is the PNG, where the stream was asked first.
+        public var fellBack: String?
+
+        public init(image: CGImage, way: UInt8? = nil, fellBack: String? = nil) {
+            self.image = image
+            self.way = way
+            self.fellBack = fellBack
+        }
+    }
+
+    /// The screen now: from the screen stream, cut to the screen's size; the device's PNG where the device refuses the
+    /// stream (during a call, or while the microphone or camera is in use), doesn't say the screen's size, or sends a frame that doesn't fit it.
+    public func look() throws -> Look {
+        try perform(repeatable: true) { d in
+            try Self.look(frame: {
+                try decodeKeyFrame(Self.bytes(d, rr_device_keyframe, "no frame"))
+            }, screen: { frame in
+                sizes.size(of: "\(frame.width)x\(frame.height)") {
+                    Self.screen(d)
+                }
+            }, misfit: { frame in
+                sizes.forget("\(frame.width)x\(frame.height)")
+            }, png: {
+                let png = try Self.bytes(d, rr_device_screenshot, "no picture")
+                guard let source = CGImageSourceCreateWithData(png as CFData, nil),
+                      let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+                else { throw Failure.message("the device's picture couldn't be read") }
+                return image
+            }, way: {
+                rr_device_way(d)
+            })
+        }
+    }
+
+    /// Which way the stream's picture and the PNG are taken, apart from the device: see `look()`.
+    public static func look(
+        frame: () throws -> CGImage,
+        screen: ((width: Int, height: Int)) -> (width: Int, height: Int)?,
+        misfit: ((width: Int, height: Int)) -> Void = { _ in },
+        png: () throws -> CGImage,
+        way: () -> UInt8
+    ) throws -> Look {
+        let why: String
+        do {
+            let image = try frame()
+            let size = screen((image.width, image.height))
+            if let cut = cut(image, to: size) {
+                return Look(image: cut)
+            }
+            if size != nil {
+                misfit((image.width, image.height))
+            }
+            why = "the screen stream's frame couldn't be cut to the screen, or the device didn't say its size"
+        } catch {
+            guard fallsBack(error) else { throw error }
+            // Without its full stop: the look's answer puts this in a sentence of its own.
+            why = "the screen stream gave none: \("\(error)".trimmingCharacters(in: CharacterSet(charactersIn: ". ")))"
+        }
+        let image: CGImage
+        do { image = try png() } catch {
+            throw Failure.message("\(error) (and \(why))")
+        }
+        // Not said the first time, it is asked once more.
+        let first = way()
+        return Look(image: image, way: first == 0 ? way() : first, fellBack: why)
+    }
+
+    /// Whether the PNG is asked for after the stream failed so: where the device answered and refused the stream (during a
+    /// call) or sent a frame that couldn't be read. Not where it didn't answer, or the call was stopped: the connection is
+    /// in doubt, and the PNG on it would only add its own wait to each attempt.
+    public static func fallsBack(_ error: Error) -> Bool {
+        switch error {
+        case is FrameError: true
+        case Failure.message(let m):
+            ["audio start: ", "video start: "].contains(where: m.hasPrefix) && !m.hasSuffix("no answer")
+        default: false
+        }
+    }
+
+    /// Which way up the device's interface is: 1 portrait, 2 upside down, 3 and 4 on its side (see rr_device_way); 0
+    /// where it doesn't say, asked once more. Not tried again on another connection.
+    public func way() -> UInt8 {
+        (try? perform(repeatable: false) { d in
+            let first = rr_device_way(d)
+            return first == 0 ? rr_device_way(d) : first
+        }) ?? 0
+    }
+
+    /// The screen's size, asked on the connection a look holds: once, with nothing tried again for it.
+    private static func screen(_ d: OpaquePointer) -> (width: Int, height: Int)? {
+        guard let json = rr_device_screen(d) else { return nil }
+        defer { rr_string_free(json) }
+        guard let object = try? JSONSerialization.jsonObject(with: Data(String(cString: json).utf8)) as? [String: Any],
               let width = object["width"] as? Int, let height = object["height"] as? Int else { return nil }
         return (width, height)
-    })
+    }
 
-    /// The screen now, cut to its own size when the device said it.
-    public func look() throws -> CGImage {
-        // Before the frame: a size that couldn't be had leaves the connection in doubt, and the frame settles it.
-        let screen = sizes.size(of: "")
-        let frame = try perform(repeatable: true) { d -> Data in
-            var length = 0
-            var error: UnsafeMutablePointer<CChar>?
-            guard let bytes = rr_device_keyframe(d, &length, &error) else {
-                defer { rr_string_free(error) }
-                throw Failure.message(error.map {
-                    String(cString: $0)
-                } ?? "no frame")
-            }
-            defer { rr_bytes_free(bytes, length) }
-            return Data(bytes: bytes, count: length)
+    /// What a call that answers bytes gave, or its error.
+    private static func bytes(
+        _ d: OpaquePointer,
+        _ call: (OpaquePointer, UnsafeMutablePointer<Int>, UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>)
+            -> UnsafeMutablePointer<UInt8>?,
+        _ none: String
+    ) throws -> Data {
+        var length = 0
+        var error: UnsafeMutablePointer<CChar>?
+        guard let bytes = call(d, &length, &error) else {
+            defer { rr_string_free(error) }
+            throw Failure.message(error.map {
+                String(cString: $0)
+            } ?? none)
         }
-        return cut(try decodeKeyFrame(frame), to: screen)
+        defer { rr_bytes_free(bytes, length) }
+        return Data(bytes: bytes, count: length)
     }
 
     /// What accessibility says is on the screen; `complete` is false when the walk was cut short. Can scroll the screen.
