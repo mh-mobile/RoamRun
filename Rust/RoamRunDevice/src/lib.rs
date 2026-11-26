@@ -1272,7 +1272,7 @@ async fn perform(link: &mut Link, input: Input) -> Result<(), String> {
 }
 
 /// Whether a stream's start failed with an answer ("audio start:" or "video start:" and what came back, as the device's
-/// refusal during a phone or VoIP call), not for no answer. A transport error there passes too; the input then fails
+/// refusal during a call or while the microphone or camera is in use), not for no answer. A transport error there passes too; the input then fails
 /// on its own if the connection is gone.
 fn refused_stream(why: &str) -> bool {
     (why.starts_with("audio start: ") || why.starts_with("video start: ")) && !why.ends_with("no answer")
@@ -2122,6 +2122,7 @@ mod tests {
     #[test]
     fn an_input_goes_without_a_stream_the_device_refused_but_not_one_that_didn_t_answer() {
         assert!(refused_stream("audio start: A phone or VoIP call is currently in progress on the device."));
+        assert!(refused_stream("audio start: The device microphone or camera is currently in use"));
         assert!(refused_stream("video start: CoreDevice(DeviceError(\"Dictionary(...)\"))"));
         for no in ["audio start: no answer", "video start: no answer", "display service: no answer", "timed out", "the stream started but sent no key frame"] {
             assert!(!refused_stream(no), "{no}");

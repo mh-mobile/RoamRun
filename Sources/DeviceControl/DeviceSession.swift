@@ -245,7 +245,7 @@ public final class DeviceSession: @unchecked Sendable {
     }
 
     /// The screen now: from the screen stream, cut to the screen's size; the device's PNG where the device refuses the
-    /// stream (during a phone or VoIP call), doesn't say the screen's size, or sends a frame that doesn't fit it.
+    /// stream (during a call, or while the microphone or camera is in use), doesn't say the screen's size, or sends a frame that doesn't fit it.
     public func look() throws -> Look {
         try perform(repeatable: true) { d in
             try Self.look(frame: {

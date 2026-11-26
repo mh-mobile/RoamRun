@@ -408,7 +408,7 @@ have the user add the MCP tools, which run outside it.
   The image is the screen as the device holds it, upright: an app in landscape
   shows turned on its side in it, and its points are still the image's.
   Where the screen stream gives no frame to use (the device refuses it during a
-  phone or VoIP call; its frame can't be read or doesn't fit; the screen's size
+  phone or VoIP call or while the microphone or camera is in use; its frame can't be read or doesn't fit; the screen's size
   isn't said), a look is the device's own picture instead (0.14.0+), slower, and says so
   (`roamrun look` on stderr, "the device's PNG: …"; the tool in its answer).
   That picture is turned as the device's interface is (an app in landscape
