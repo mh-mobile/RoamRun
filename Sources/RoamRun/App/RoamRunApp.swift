@@ -114,6 +114,11 @@ struct RoamRunApp: App {
                 .frame(minWidth: 680, minHeight: 500)
         }
         .defaultSize(width: 860, height: 620)
+
+        Window("Check for Updates", id: "updates") {
+            UpdateWindowView()
+        }
+        .windowResizability(.contentSize)
     }
 }
 
@@ -126,6 +131,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Snapshot.scheduleIfRequested()
+        if Snapshot.path == nil {
+            UpdateChecker.shared.start()
+        }
         DistributedNotificationCenter.default()
             .addObserver(forName: Self.showNotification, object: nil, queue: .main) { _ in
                 MainActor.assumeIsolated {
@@ -156,10 +164,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.terminate(nil)
     }
 
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag {
-            Self.openMain?()
-        }
+    /// Opened again (Finder, Spotlight, the Dock): the main window, though another (Check for Updates) may be open.
+    func applicationShouldHandleReopen(_: NSApplication, hasVisibleWindows _: Bool) -> Bool {
+        Self.openMain?()
         return true
     }
 }

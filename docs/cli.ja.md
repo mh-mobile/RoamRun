@@ -18,6 +18,7 @@ roamrun install <name> <App.ipa|App.app>   # そのデバイス向けに署名�
 roamrun logs <name> <bundle-id>            # アプリを起動し直して、print / os_log の出力を流す
 roamrun screenshot <name> [file.png]       # デバイスの画面を PNG で保存し、パスを表示する
 roamrun ota [<name>] <App.ipa> [--replace] # デバイスが自分でインストールできるように、ビルドを公開する
+roamrun version --check                    # 新しいリリースが出ているか、GitHub に問い合わせる
 ```
 
 `<name>` は、RoamRun でデバイスに付けた名前です。大文字と小文字は区別せず、同じ名前は付けられません。名前は `roamrun devices` で確かめられ、デバイスのページの鉛筆のアイコンで変えられます。iOS の「設定」に出るデバイス名は使いません。その名前のデバイスが保存されていなければ、Tailscale 上の名前（`roamrunctl` に渡すのと同じ `iphone-15-pro` など）でも指定できます。`iphone-15-pro.tail1234.ts.net` のような完全な名前は使えません。デバイスの id か、その先頭 8 文字以上でも指定できます。
@@ -38,6 +39,7 @@ roamrun ota [<name>] <App.ipa> [--replace] # デバイスが自分でインス�
 - `run` と `logs` には、起動時のオプションを渡せます。`--arg A`（繰り返し指定できます）、`--env NAME=value`（同じく）、`--url myapp://settings` の 3 つです。`logs` がアプリを起動し直すのは、`devicectl` が実行中のアプリにコンソールをつなげられないためです。
 - `install` は、先に署名を確かめます。受け付けるのは、Debugging か Release Testing（Ad Hoc）用に書き出したビルドで、プロビジョニングプロファイルにそのデバイスが入っているものです。Enterprise 用のビルドも受け付けます。こちらは、証明書を信頼しているデバイスならどれでも構いません。App Store Connect 用のビルドは拒否します。`install` を使えるのは、この Mac とペアリングしたデバイスだけです。それ以外のデバイスには、`roamrun ota` か TestFlight を使ってください。
 - `screenshot` は、ファイル名を指定しなければ `./<名前>-<日時>.png` に保存します。Xcode 26.3 以降で動かしました。それより前のバージョンでは試していません。
+- `version --check` は、GitHub に最新のリリースを問い合わせます。いまの RoamRun より新しければ、そのバージョン、`brew upgrade --cask roamrun`、リリースのページを表示します。GitHub が最新のリリースを答えたときは、新しいかどうかにかかわらず終了コード 0 で終わります。確認に失敗したときは 1 です。答えがなかったとき、リリース以外の答え（回数制限による 403 や、たどらないリダイレクト）が返ったとき、タグがバージョンの形でなかったときが、これに当たります。`--check` を付けない `version` と `--version` は、何も送りません。問い合わせで送る内容は [SECURITY.md](../SECURITY.md#what-it-touches-on-the-mac) にあります。
 - `--json` は `devices`、`status`、`doctor` で使えます。`-v` は `up` で使えます。`devices --json` の `ready` が表すのは、ブリッジが Ready か、デバイスが同じ Wi-Fi にあるかだけです。`status` は、これに加えて CoreDevice にも問い合わせます。対応していないオプションを渡すと、コマンドは終了コード 2 で終わります。`roamrun --help` で、すべてのオプションを確かめられます。
 
 アプリと CLI が、同じデバイスを同時にブリッジすることはありません。あとから始めたほうが拒否されます。ただし、例外が 1 つあります。待機中（On this Wi‑Fi）のブリッジと、エラーになっているブリッジは、引き継げます。引き継げるのは、アプリの Start ボタンを押したときと、`roamrun up` を実行したときだけです。アプリの自動のやり直しでは、引き継ぎません。すでに `roamrun up` が動いているデバイスに 2 つ目の `roamrun up` を実行しても、2 つ目は始まりません。1 つ目が Ready か待機中なら終了コード 0、開始の途中かエラーなら 1 で終わります。

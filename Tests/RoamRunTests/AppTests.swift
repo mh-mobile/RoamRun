@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import RoamRun
@@ -66,4 +67,16 @@ import Testing
     #expect(AppCoordinator.beginServeChange())
     #expect(!AppCoordinator.beginReleaseAtQuit().allowed)
     AppCoordinator.endServeChange()
+}
+
+/// Opened again while the Check for Updates window is the one visible: the main window still comes.
+@MainActor @Test func reopeningShowsTheMainWindowWithAnotherOneOpen() {
+    var opened = 0
+    let saved = AppDelegate.openMain
+    AppDelegate.openMain = {
+        opened += 1
+    }
+    defer { AppDelegate.openMain = saved }
+    #expect(AppDelegate().applicationShouldHandleReopen(NSApplication.shared, hasVisibleWindows: true))
+    #expect(opened == 1)
 }
