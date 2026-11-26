@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import Testing
 @testable import RoamRun
 
@@ -62,6 +63,11 @@ private let t0 = Date(timeIntervalSinceReferenceDate: 800_000_000)
     #expect(!LocalNetwork.isDenied(last: nil, now: now))
     #expect(LocalNetwork.isDenied(last: now.addingTimeInterval(-5), now: now))
     #expect(!LocalNetwork.isDenied(last: now.addingTimeInterval(-300), now: now))
+    let policyDenied = NWConnection.State.waiting(.dns(DNSServiceErrorType(kDNSServiceErr_PolicyDenied)))
+    #expect(LocalNetwork.isDenial(nil, policyDenied)) // a Bonjour name, path satisfied
+    #expect(LocalNetwork.isDenial(.localNetworkDenied, .waiting(.posix(.ENETUNREACH))))
+    #expect(!LocalNetwork.isDenial(nil, .waiting(.posix(.ECONNREFUSED))))
+    #expect(!LocalNetwork.isDenial(nil, .waiting(.dns(DNSServiceErrorType(kDNSServiceErr_NoSuchRecord)))))
 }
 
 @Test func aStatusCardSaysLocalNetworkIsBlockedOnlyForItsOwnRunningBridge() {

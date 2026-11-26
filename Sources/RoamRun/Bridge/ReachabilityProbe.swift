@@ -22,12 +22,22 @@ enum LocalNetwork {
         detail.replacingOccurrences(of: " — " + advice, with: "").replacingOccurrences(of: advice, with: "")
     }
 
-    static func note(_ path: NWPath?) {
-        guard let path, path.status == .unsatisfied, path.unsatisfiedReason == .localNetworkDenied else { return }
+    static func note(_ path: NWPath?, _ state: NWConnection.State) {
+        guard isDenial(path?.status == .unsatisfied ? path?.unsatisfiedReason : nil, state) else { return }
         lock.withLock {
             lastDenial = .now
         }
     }
+
+    /// A Bonjour name is refused before any path: its resolver says PolicyDenied while the path stays satisfied.
+    static func isDenial(_ unsatisfied: NWPath.UnsatisfiedReason?, _ state: NWConnection.State) -> Bool {
+        switch state {
+        case .waiting(.dns(policyDenied)), .failed(.dns(policyDenied)): true
+        default: unsatisfied == .localNetworkDenied
+        }
+    }
+
+    private static let policyDenied = DNSServiceErrorType(kDNSServiceErr_PolicyDenied)
 
     /// Whether a status card shows the advice: for this app's own bridge while it runs and looks for the device, the
     /// statuses its status entry (and so `roamrun status`) says it for. The card follows the condition now; an
@@ -65,14 +75,14 @@ enum ReachabilityProbe {
                 // Refused: no need to sit out the timeout. Other .waiting (the path still
                 // settling after wake or a network switch) may still turn .ready.
                 case .failed, .cancelled, .waiting(.posix(.ECONNREFUSED)):
-                    LocalNetwork.note(conn.currentPath)
+                    LocalNetwork.note(conn.currentPath, state)
                     box.done {
                         conn.stateUpdateHandler = nil
                         conn.cancel()
                         cont.resume(returning: false)
                     }
                 case .waiting:
-                    LocalNetwork.note(conn.currentPath)
+                    LocalNetwork.note(conn.currentPath, state)
                 default:
                     break
                 }
@@ -126,9 +136,9 @@ extension ReachabilityProbe {
                     }
                 // As in checkTCP: other .waiting (a path settling after wake) may still turn .ready.
                 case .failed, .cancelled, .waiting(.posix(.ECONNREFUSED)):
-                    LocalNetwork.note(conn.currentPath)
+                    LocalNetwork.note(conn.currentPath, state)
                     finish(false)
-                case .waiting: LocalNetwork.note(conn.currentPath)
+                case .waiting: LocalNetwork.note(conn.currentPath, state)
                 default: break
                 }
             }
