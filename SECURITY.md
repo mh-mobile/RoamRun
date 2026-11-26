@@ -465,9 +465,19 @@ bounded.
   pairing screen and code then stand between and a pairing.
 - The system log gets RoamRun's messages with device identifiers and addresses
   marked private; the in-app activity log shows them in full.
-- **Nothing about you is sent anywhere** — no telemetry, no analytics, no update
-  check; there is no code in RoamRun that talks to a server of ours or anyone
-  else's. It does open connections of its own — to your device (and, for `pair
+- **No telemetry, no analytics, no server of ours.** The one request RoamRun makes
+  to someone else's server is the update check, and only when you ask for it (Check
+  for Updates… in the menu bar, `roamrun version --check`) or have turned on
+  Settings › General › Check for updates automatically (off by default; then at most
+  once a day, while the app runs). It is one `GET
+  https://api.github.com/repos/mh-mobile/RoamRun/releases/latest` to GitHub, with no
+  cookies and no credentials; a redirect isn't followed. RoamRun sets three headers, `User-Agent: RoamRun`,
+  `Accept: application/vnd.github+json` and `Accept-Language: en`; macOS's URL
+  loading adds its usual ones, such as the host and `Accept-Encoding`. Nothing about you, your
+  devices or your bridges is in it; GitHub still sees the Mac's IP address. From the
+  answer RoamRun takes the release's tag only; the page it opens is built from that
+  version on this repository's address, and it downloads and installs nothing. With
+  the setting off and no check asked for, it sends nothing. It also opens connections of its own — to your device (and, for `pair
   introduce`, one to the pairing port of the Mac you named, to see that it is
   waiting, before anything is announced; for an Apple Vision Pro, one from the far
   Mac to the port the device waits on): a TCP probe to see

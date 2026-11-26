@@ -19,6 +19,7 @@ roamrun install <name> <App.ipa|App.app>   # install a build signed for the devi
 roamrun logs <name> <bundle-id>            # relaunch the app and stream its print / os_log output
 roamrun screenshot <name> [file.png]       # save the device's screen as PNG and print the path
 roamrun ota [<name>] <App.ipa> [--replace] # publish a build for a device to install by itself
+roamrun version --check                    # is a newer release out? (asks GitHub)
 ```
 
 `<name>` is the name you gave the device in RoamRun. It is
@@ -50,6 +51,11 @@ What each command does, more exactly:
   `roamrun ota` or TestFlight.
 - `screenshot` writes `./<name>-<date and time>.png` when no file is given. It was run with
   Xcode 26.3 and later; earlier versions were not tried.
+- `version --check` asks GitHub for the newest release. When it is newer than this RoamRun, it
+  prints that version, `brew upgrade --cask roamrun` and the release page. It exits 0 when GitHub
+  named its newest release (newer or not), and 1 when the check failed: no answer, an answer other
+  than a release (a rate limit's 403, a redirect, which isn't followed), or a tag that isn't a version. Plain `version` and `--version` send nothing.
+  What the check sends is in [SECURITY.md](../SECURITY.md#what-it-touches-on-the-mac).
 - `--json` is taken by `devices`, `status` and `doctor`; `-v` by `up`. In `devices --json`, `ready`
   says only that the bridge is Ready or the device is on this Wi‑Fi; `status` also asks CoreDevice. A command rejects an option
   it does not take, with exit code 2. `roamrun --help` lists everything.
@@ -94,11 +100,17 @@ teaches them how:
 ```sh
 roamrun init                                  # add the skill to every agent found in ~ (.claude, .codex, .cursor, .gemini, .copilot, .devin)
 roamrun init --client claude                  # or only to the ones you name (repeat --client)
+roamrun init --output-dir .claude/skills      # or in a folder you name: .claude/skills/roamrun/SKILL.md
 ```
 
+`--output-dir` is for a project's skills folder, or for an agent that isn't on the list. A relative
+path is from the current directory, and it is given once. `roamrun init --output-dir <dir> --uninstall`
+removes the skill from that folder.
+
 `init` installs the skill that ships with your RoamRun, so the two match. After updating RoamRun,
-run `roamrun init` again; `roamrun status` and `roamrun doctor` say so when an installed skill is
-from another version. If another tool manages your skills, pin it to your RoamRun's release, for
+run `roamrun init` again; `roamrun status` and `roamrun doctor` say so when a skill in
+`~/.<client>/skills/roamrun` is from another version. They don't look in other folders: for a skill
+put there with `--output-dir`, run the same command again. If another tool manages your skills, pin it to your RoamRun's release, for
 example `gh skill install mh-mobile/RoamRun roamrun --pin "v$(roamrun --version | cut -d" " -f2)"`.
 
 The skill covers connecting the device (`roamrun up -d`, then `roamrun status --wait 60 --json`

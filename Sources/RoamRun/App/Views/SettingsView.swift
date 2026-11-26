@@ -9,6 +9,7 @@ struct SettingsView: View {
 
     @AppStorage("networkInterface") private var networkInterface = ""
     @AppStorage(DeviceNetwork.keepOnCellularKey) private var keepOnCellular = false
+    @AppStorage(UpdateCheck.automaticKey) private var checkForUpdates = false
     private let interfaces = InterfaceMonitor.ipv4Addresses()
 
     var body: some View {
@@ -76,6 +77,16 @@ struct SettingsView: View {
                     Text("Keeps bridges you left on running in the menu bar after a restart.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    Toggle("Check for updates automatically", isOn: $checkForUpdates)
+                        .onChange(of: checkForUpdates) { _ in
+                            UpdateChecker.shared.checkIfDue()
+                        }
+                    Text(
+                        "At most once a day, ask GitHub for the newest release (GitHub sees this Mac's IP address; nothing about you or your devices is sent). Off: RoamRun asks only when you choose Check for Updates… in the menu or run `roamrun version --check`. It downloads nothing."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.vertical, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)

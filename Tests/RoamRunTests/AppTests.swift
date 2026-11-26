@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import RoamRun
@@ -85,4 +86,16 @@ import Testing
     #expect(AppDelegate.opensWindowAtLaunch(atLogin: false, warning: false))
     #expect(!AppDelegate.opensWindowAtLaunch(atLogin: true, warning: false)) // bridges come back in the menu bar
     #expect(AppDelegate.opensWindowAtLaunch(atLogin: true, warning: true)) // e.g. saved devices unreadable
+}
+
+/// Opened again while the Check for Updates window is the one visible: the main window still comes.
+@MainActor @Test func reopeningShowsTheMainWindowWithAnotherOneOpen() {
+    var opened = 0
+    let saved = AppDelegate.openMain
+    AppDelegate.openMain = {
+        opened += 1
+    }
+    defer { AppDelegate.openMain = saved }
+    #expect(AppDelegate().applicationShouldHandleReopen(NSApplication.shared, hasVisibleWindows: true))
+    #expect(opened == 1)
 }

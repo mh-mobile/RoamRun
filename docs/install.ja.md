@@ -25,7 +25,13 @@ brew install --cask mh-mobile/tap/roamrun
 
 `/Applications` に `RoamRun.app` が入り、`roamrun` コマンドも使えるようになります。アップデートは `brew upgrade --cask roamrun` です。
 
-Homebrew を使わない場合は、[Releases](https://github.com/mh-mobile/RoamRun/releases) から dmg をダウンロードし、RoamRun を「アプリケーション」にドラッグして開きます。最初の画面で、`roamrun` コマンドをインストールするか尋ねられます。あとから入れるには、Open RoamRun › Settings › Command line tool › Install… を使います。アップデートするには、RoamRun を終了して、アプリを新しいものに置き換えます。自動アップデートはありません。保存したデバイスはそのまま残り、動いていたブリッジは再び始まります。
+Homebrew を使わない場合は、[Releases](https://github.com/mh-mobile/RoamRun/releases) から dmg をダウンロードし、RoamRun を「アプリケーション」にドラッグして開きます。最初の画面で、`roamrun` コマンドをインストールするか尋ねられます。あとから入れるには、Open RoamRun › Settings › Command line tool › Install… を使います。アップデートするには、RoamRun を終了して、アプリを新しいものに置き換えます。保存したデバイスはそのまま残り、動いていたブリッジは再び始まります。
+
+RoamRun がアップデートを自分でダウンロードしたり、インストールしたりすることはありません。新しいリリースが出ているかどうかは、次のどれかで確かめられます。どれも GitHub に最新のリリースを問い合わせます。新しいリリースが見つかると、メニューからそのリリースのページを開けます。`version --check` は、そのページのアドレスを表示します。送る内容は [SECURITY.md](../SECURITY.md#what-it-touches-on-the-mac) にあります。
+
+- メニューバーの Check for Updates…
+- `roamrun version --check`
+- Open RoamRun › Settings › General › Check for updates automatically（既定はオフです。オンにすると、1 日に 1 回まで確かめます）
 
 アプリは Developer ID で署名し、Apple の公証を受けています。
 
@@ -64,7 +70,7 @@ RoamRun は、自分のファイルを次の場所に置きます。
 アンインストールは、次の順で行います。
 
 1. `roamrun up` で始めたブリッジ（`-d` を付けたものも、ターミナルで動いているものも）を止めます（`roamrun down <name>`）。このブリッジは、アプリがなくても動き続けます。
-2. スキルを入れた場合は、ここで `roamrun init --uninstall` を実行します。`roamrun` コマンドがあるうちに実行してください。
+2. スキルを入れた場合は、ここで `roamrun init --uninstall` を実行します。`--output-dir` で入れたフォルダがあれば、フォルダごとに `roamrun init --output-dir <dir> --uninstall` も実行します。どちらも、`roamrun` コマンドがあるうちに実行してください。
 3. 「Open at login」をオンにしていた場合はオフにして、RoamRun を終了します。終了するとき、RoamRun は `tailscale serve` の設定を自分で片づけます。
 4. Homebrew を使っている場合は、`brew uninstall --zap --cask roamrun` を実行します。アプリ、CLI のリンク、設定、ログ、保存したデバイスが削除されます。キーチェーンの 2 つの項目は残るので、下の `security` の 2 行で削除してください。Homebrew を使っていない場合は、下の行のうち、該当するものを実行します。
 

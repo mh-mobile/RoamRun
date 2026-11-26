@@ -385,6 +385,50 @@ extension TimingSensitive {
     #expect(!TailscaleClient.serving(port: 41443, inJSON: #"{"AllowFunnel":{"m:41443":false}}"#).funnelled(on: "m"))
 }
 
+@Test func aForegroundServeOnThePortIsSeen() {
+    // `tailscale serve --https=41443 …` without `--bg`: its entries sit under a session id.
+    let foreground = #"""
+    {"Foreground":{"a1b2":{"TCP":{"41443":{"HTTPS":true}},
+                           "Web":{"m:41443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:3000"}}}}}}}
+    """#
+    let state = TailscaleClient.serving(port: 41443, inJSON: foreground)
+    #expect(state == .mounted(roots: [], others: [.init(host: nil, path: TailscaleClient.Serving.foreground)]))
+    // Never a root: a root is what RoamRun replaces or gives back.
+    #expect(state.root(on: "m") == nil)
+    // tailscaled refuses the port whatever the name.
+    #expect(state.alongside("m") == [TailscaleClient.Serving.foreground])
+    #expect(state.alongside("other") == [TailscaleClient.Serving.foreground])
+    #expect(TailscaleClient.serving(
+        port: 41443,
+        inJSON: #"{"Foreground":{"s":{"TCP":{"41443":{"TCPForward":"localhost:22"}}}}}"#
+    )
+    .alongside("m") == [TailscaleClient.Serving.foreground])
+    #expect(TailscaleClient.serving(port: 8443, inJSON: foreground) == .nothing)
+    // Beside a background config, which reads as it did.
+    let both = TailscaleClient.serving(port: 41443, inJSON: #"""
+    {"Web":{"m:41443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:61816"}}}},
+     "Foreground":{"s":{"TCP":{"41443":{"HTTPS":true}}}}}
+    """#)
+    #expect(both.root(on: "m") == "http://127.0.0.1:61816")
+    #expect(both.alongside("m") == [TailscaleClient.Serving.foreground])
+
+    // Refused for a session that took the port meanwhile: the message names it.
+    let refused = "updating config: foreground listener already exists for port 41443"
+    #expect(AppCoordinator.notServed(on: 41443, after: state, host: "m", said: refused)
+        == AppCoordinator.carries([TailscaleClient.Serving.foreground], on: 41443))
+    #expect(AppCoordinator.notServed(on: 41443, after: .nothing, host: "m", said: refused)
+        == "port 41443 isn't served after asking tailscale to, will retry: \(refused)")
+
+    // A foreground session ends with its terminal, and the page goes up there after it: said so.
+    #expect(AppCoordinator.remedy(for: [TailscaleClient.Serving.foreground]).hasPrefix("Stop that `tailscale serve`"))
+    #expect(AppCoordinator.remedy(for: ["/docs"]).hasPrefix("Give RoamRun another port: defaults write"))
+    // Nothing beside (a root that isn't RoamRun's alone, as `doctor` asks): the other port.
+    #expect(AppCoordinator.remedy(for: []).hasPrefix("Give RoamRun another port"))
+    // Stopping it frees nothing where something else holds the port too.
+    #expect(AppCoordinator.remedy(for: [TailscaleClient.Serving.foreground, "/docs"])
+        .hasPrefix("Give RoamRun another port"))
+}
+
 @Test func onlyTheMountUnderTheNameThisNodeAnswersToNowIsOurs() {
     // `tailscale serve` adds and removes under st.Self.DNSName and nothing else,
     // so after a rename our old entry is neither ours to replace nor ours to
