@@ -46,8 +46,7 @@ extension CLI {
                 let why: String
                 if !beside.isEmpty {
                     why = "port \(tailnetPort) also carries \(beside.joined(separator: ", ")), and RoamRun keeps\n" +
-                        "  a port to itself. Give it another one:\n" +
-                        "    defaults write \(AppID.bundle) otaPort -int 41444"
+                        "  a port to itself. \(AppCoordinator.remedy(for: beside))"
                 } else if AppCoordinator.abandoned(here) {
                     why = "port \(tailnetPort) is serving \(state.described) with nothing behind it, so a run\n" +
                         "  was killed before it gave the port back:\n" +

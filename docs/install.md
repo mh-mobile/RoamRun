@@ -43,8 +43,15 @@ This installs `RoamRun.app` in `/Applications` and links the `roamrun` command. 
 Without Homebrew, download the dmg from
 [Releases](https://github.com/mh-mobile/RoamRun/releases), drag RoamRun to Applications and open
 it. The first screen offers to install the `roamrun` command; later it is under Open RoamRun ›
-Settings › Command line tool › Install…. To update, quit RoamRun and replace the app. There is no
-automatic update. Saved devices stay, and bridges that were running start again.
+Settings › Command line tool › Install…. To update, quit RoamRun and replace the app. Saved
+devices stay, and bridges that were running start again.
+
+RoamRun downloads and installs no update itself, but it can tell you that a newer release is out:
+Check for Updates… in the menu bar, `roamrun version --check`, or Open RoamRun › Settings › General ›
+Check for updates automatically (off by default; then at most once a day). Each asks GitHub for the
+newest release. When it is newer, the menu offers its release page, and `version --check` prints
+that page's address. What is sent is in
+[SECURITY.md](../SECURITY.md#what-it-touches-on-the-mac).
 
 The app is signed with a Developer ID and notarized by Apple.
 
@@ -90,7 +97,8 @@ To uninstall, in this order:
 
 1. Stop the bridges `roamrun up` started, with `-d` or in a terminal (`roamrun down <name>`). They
    run without the app.
-2. If you installed the skill, run `roamrun init --uninstall` now, while the command still exists.
+2. If you installed the skill, run `roamrun init --uninstall` now, while the command still exists, and
+   `roamrun init --output-dir <dir> --uninstall` for each folder you put it in with `--output-dir`.
 3. Turn off "Open at login" if you turned it on, and quit RoamRun. Quitting gives its
    `tailscale serve` entry back.
 4. With Homebrew, `brew uninstall --zap --cask roamrun` removes the app, the CLI link, settings,

@@ -39,6 +39,8 @@ final class AppCoordinator: ObservableObject {
     private var syncingLoginItem = false
     /// Shown once at launch, e.g. the saved devices couldn't be read.
     @Published var launchWarning: String?
+    /// macOS blocks this app's local network access (`LocalNetwork.denied`), for the status card.
+    @Published private(set) var localNetworkDenied = false
 
     let capture = BonjourCapture()
     let logStore = LogStore()
@@ -74,8 +76,6 @@ final class AppCoordinator: ObservableObject {
     /// Deleted devices' bridges whose status removal failed: kept until a retry lands it, or
     /// the entry (this app's own, so never stale) would make the iPhone a duplicate if added again.
     private var departing: [ProxyBridge] = []
-    /// Set at launch when bridges left on are being brought back.
-    private(set) var isRestoringBridges = false
     private var wasActiveIDs: Set<UUID> {
         get { Set((UserDefaults.standard.array(forKey: "wasActiveIDs") as? [String] ?? []).compactMap(UUID.init)) }
         set { UserDefaults.standard.set(newValue.map {
@@ -290,7 +290,6 @@ final class AppCoordinator: ObservableObject {
             if let p = profiles.first(where: {
                 $0.id == id
             }) {
-                isRestoringBridges = true
                 logStore.log("restoring bridge for \"\(p.displayName)\"", device: p.id)
                 autoStart(id, live: live, .restore)
             }
@@ -327,10 +326,12 @@ final class AppCoordinator: ObservableObject {
         listSaved()
         // Nothing else tells the user: over the mesh VPN everything still works,
         // so a blocked local network only shows up as the device looking away.
-        if LocalNetwork.denied, launchWarning == nil, !warnedLocalNetwork {
-            warnedLocalNetwork = true
-            launchWarning = LocalNetwork.advice
-            logStore.log(LocalNetwork.advice)
+        let denied = LocalNetwork.denied
+        if denied != localNetworkDenied {
+            localNetworkDenied = denied
+            if denied {
+                logStore.log(LocalNetwork.advice)
+            }
         }
     }
 
@@ -411,9 +412,6 @@ final class AppCoordinator: ObservableObject {
     var otaAttempt = 0
     var strays = StrayWork()
     var publishWork = PublishWork()
-
-    /// The alert is shown once a run; the activity log and `roamrun status` keep saying it.
-    private var warnedLocalNetwork = false
 
     /// Stops a bridge run by `roamrun up` (its SIGTERM handler cleans up).
     func stopExternalBridge(_ id: UUID) {

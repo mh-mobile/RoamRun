@@ -114,18 +114,55 @@ struct RoamRunApp: App {
                 .frame(minWidth: 680, minHeight: 500)
         }
         .defaultSize(width: 860, height: 620)
+
+        Window("Check for Updates", id: "updates") {
+            UpdateWindowView()
+        }
+        .windowResizability(.contentSize)
     }
 }
 
 /// Double-clicking the app while it's already running should show the window.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor static var openMain: (() -> Void)?
+    /// Whether macOS opened the app at login; nil until the launch's open event is seen.
+    @MainActor private static var atLogin: Bool?
+    /// Something to tell from launch (`AppCoordinator.launchWarning`).
+    @MainActor static var launchWarning = false
+    @MainActor private static var launchHandled = false
+
+    /// Called by both halves of a launch (the open event, the menu bar icon appearing), in either
+    /// order: once both are in, the window opens unless the app was opened at login with nothing to say.
+    @MainActor static func openWindowIfLaunchWants() {
+        guard !launchHandled, let atLogin, let openMain else { return }
+        launchHandled = true
+        if opensWindowAtLaunch(atLogin: atLogin, warning: launchWarning) || Snapshot.path != nil {
+            openMain()
+        }
+    }
+
+    nonisolated static func opensWindowAtLaunch(atLogin: Bool, warning: Bool) -> Bool {
+        !atLogin || warning
+    }
+
+    /// The open event's marker; no event (run from a terminal) counts as opened by the user.
+    nonisolated static func launchedAtLogin(_ event: NSAppleEventDescriptor?) -> Bool {
+        event?.eventID == AEEventID(kAEOpenApplication)
+            && event?.paramDescriptor(forKeyword: AEKeyword(keyAEPropData))?.enumCodeValue
+            == OSType(keyAELaunchedAsLogInItem)
+    }
 
     /// Posted by a second launch; the running app opens its window.
     static let showNotification = Notification.Name(AppID.bundle + ".showWindow")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Snapshot.scheduleIfRequested()
+        // Only here is the current event still the one that opened the app.
+        Self.atLogin = Self.launchedAtLogin(NSAppleEventManager.shared().currentAppleEvent)
+        Self.openWindowIfLaunchWants()
+        if Snapshot.path == nil {
+            UpdateChecker.shared.start()
+        }
         DistributedNotificationCenter.default()
             .addObserver(forName: Self.showNotification, object: nil, queue: .main) { _ in
                 MainActor.assumeIsolated {
@@ -156,10 +193,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.terminate(nil)
     }
 
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag {
-            Self.openMain?()
-        }
+    /// Opened again (Finder, Spotlight, the Dock): the main window, though another (Check for Updates) may be open.
+    func applicationShouldHandleReopen(_: NSApplication, hasVisibleWindows _: Bool) -> Bool {
+        Self.openMain?()
         return true
     }
 }

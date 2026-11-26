@@ -219,6 +219,15 @@ private struct StatusCard: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
+                if LocalNetwork.shownOnCard(denied: coordinator.localNetworkDenied, status: status,
+                                            external: external != nil)
+                {
+                    Label(LocalNetwork.advice, systemImage: "exclamationmark.triangle")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
                 if let external {
                     Label(external.cli == true ? "Running from Terminal (roamrun up, pid \(external.pid))"
                         : "Running in another copy of RoamRun (pid \(external.pid))",
@@ -242,8 +251,8 @@ private struct StatusCard: View {
 
     private func message(for status: BridgeStatus) -> String {
         let vpn = MeshProvider(rawValue: profile.providerID) == .tailscale ? "Tailscale" : "the VPN"
-        // A bridge run by `roamrun up` detects this in its own process, so the
-        // window's alert never fires for it: the only way here is its detail.
+        // A bridge run by `roamrun up` detects this in its own process, so this
+        // app's flag doesn't see it: the only way here is its detail.
         if let external, external.detail.contains(LocalNetwork.advice) {
             return external.detail
         }

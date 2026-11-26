@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import RoamRun
@@ -66,4 +67,35 @@ import Testing
     #expect(AppCoordinator.beginServeChange())
     #expect(!AppCoordinator.beginReleaseAtQuit().allowed)
     AppCoordinator.endServeChange()
+}
+
+@Test func theWindowOpensAtLaunchUnlessOpenedAtLogin() {
+    let open = NSAppleEventDescriptor(
+        eventClass: AEEventClass(kCoreEventClass), eventID: AEEventID(kAEOpenApplication),
+        targetDescriptor: nil, returnID: AEReturnID(kAutoGenerateReturnID),
+        transactionID: AETransactionID(kAnyTransactionID)
+    )
+    #expect(!AppDelegate.launchedAtLogin(open)) // Finder, Spotlight, `open`
+    #expect(!AppDelegate.launchedAtLogin(nil))
+    open.setParam(
+        NSAppleEventDescriptor(enumCode: OSType(keyAELaunchedAsLogInItem)),
+        forKeyword: AEKeyword(keyAEPropData)
+    )
+    #expect(AppDelegate.launchedAtLogin(open))
+
+    #expect(AppDelegate.opensWindowAtLaunch(atLogin: false, warning: false))
+    #expect(!AppDelegate.opensWindowAtLaunch(atLogin: true, warning: false)) // bridges come back in the menu bar
+    #expect(AppDelegate.opensWindowAtLaunch(atLogin: true, warning: true)) // e.g. saved devices unreadable
+}
+
+/// Opened again while the Check for Updates window is the one visible: the main window still comes.
+@MainActor @Test func reopeningShowsTheMainWindowWithAnotherOneOpen() {
+    var opened = 0
+    let saved = AppDelegate.openMain
+    AppDelegate.openMain = {
+        opened += 1
+    }
+    defer { AppDelegate.openMain = saved }
+    #expect(AppDelegate().applicationShouldHandleReopen(NSApplication.shared, hasVisibleWindows: true))
+    #expect(opened == 1)
 }
