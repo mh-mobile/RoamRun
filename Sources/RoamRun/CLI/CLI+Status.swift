@@ -114,6 +114,9 @@ extension CLI {
         } else if e?.kind == .local && !ready {
             // Still on this Wi‑Fi (so `state` stays local), but not usable right now.
             detail = "On this Wi‑Fi, but Xcode can't reach the device right now (asleep or locked, or CoreDevice didn't answer). Ask the user to unlock it and keep the screen on, then check again."
+            if e?.detail.contains(LocalNetwork.advice) == true {
+                detail! += " — " + LocalNetwork.advice
+            }
         }
         return (ready, kind, status, detail)
     }
