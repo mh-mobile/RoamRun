@@ -97,7 +97,8 @@ To uninstall, in this order:
 
 1. Stop the bridges `roamrun up` started, with `-d` or in a terminal (`roamrun down <name>`). They
    run without the app.
-2. If you installed the skill, run `roamrun init --uninstall` now, while the command still exists.
+2. If you installed the skill, run `roamrun init --uninstall` now, while the command still exists, and
+   `roamrun init --output-dir <dir> --uninstall` for each folder you put it in with `--output-dir`.
 3. Turn off "Open at login" if you turned it on, and quit RoamRun. Quitting gives its
    `tailscale serve` entry back.
 4. With Homebrew, `brew uninstall --zap --cask roamrun` removes the app, the CLI link, settings,

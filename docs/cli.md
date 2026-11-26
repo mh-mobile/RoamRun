@@ -100,11 +100,17 @@ teaches them how:
 ```sh
 roamrun init                                  # add the skill to every agent found in ~ (.claude, .codex, .cursor, .gemini, .copilot, .devin)
 roamrun init --client claude                  # or only to the ones you name (repeat --client)
+roamrun init --output-dir .claude/skills      # or in a folder you name: .claude/skills/roamrun/SKILL.md
 ```
 
+`--output-dir` is for a project's skills folder, or for an agent that isn't on the list. A relative
+path is from the current directory, and it is given once. `roamrun init --output-dir <dir> --uninstall`
+removes the skill from that folder.
+
 `init` installs the skill that ships with your RoamRun, so the two match. After updating RoamRun,
-run `roamrun init` again; `roamrun status` and `roamrun doctor` say so when an installed skill is
-from another version. If another tool manages your skills, pin it to your RoamRun's release, for
+run `roamrun init` again; `roamrun status` and `roamrun doctor` say so when a skill in
+`~/.<client>/skills/roamrun` is from another version. They don't look in other folders: for a skill
+put there with `--output-dir`, run the same command again. If another tool manages your skills, pin it to your RoamRun's release, for
 example `gh skill install mh-mobile/RoamRun roamrun --pin "v$(roamrun --version | cut -d" " -f2)"`.
 
 The skill covers connecting the device (`roamrun up -d`, then `roamrun status --wait 60 --json`

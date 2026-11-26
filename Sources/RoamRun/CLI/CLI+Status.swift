@@ -660,7 +660,7 @@ extension CLI {
                   : stray
                   ? "port \(tailnetPort) carries an entry with nothing behind it, left by a run that was killed: tailscale serve --https=\(tailnetPort) --set-path=/ off"
                   :
-                  "port \(tailnetPort) is serving \(served.described), which isn't RoamRun's. Give RoamRun another port: defaults write \(AppID.bundle) otaPort -int 41444",
+                  "port \(tailnetPort) is serving \(served.described), which isn't RoamRun's. \(AppCoordinator.remedy(for: host.map { served.alongside($0) } ?? []))",
               !failsDoctor(.notPublished))
         if !live, TailscaleClient.httpsEnabled() == false {
             check(false,

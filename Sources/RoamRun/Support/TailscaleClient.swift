@@ -212,6 +212,9 @@ struct TailscaleClient {
             let path: String
         }
 
+        /// The mount for a `tailscale serve` run without `--bg`, said in a sentence.
+        static let foreground = "a foreground `tailscale serve`"
+
         /// Whether `target` is registered under any name at all. For "did my
         /// registration land", where the name it landed under doesn't matter and
         /// scoping to one would read a rename as a failure.
@@ -293,6 +296,17 @@ struct TailscaleClient {
            tcp["TCPForward"] != nil || tcp["TerminateTLS"] != nil
         { // ipn.TCPPortHandler's keys
             others.append(.init(host: nil, path: "TCP forwarding")) // no Web entry of its own
+        }
+        // `tailscale serve` without `--bg` keeps its entries under `Foreground`, one
+        // config per session. tailscaled refuses a background serve on any port a
+        // session holds, whatever the name; never a root, so never ours to remove.
+        for case let session as [String: Any] in (root["Foreground"] as? [String: Any] ?? [:]).values
+            where (session["TCP"] as? [String: Any])?["\(port)"] != nil
+            || (session["Web"] as? [String: Any] ?? [:]).keys.contains(where: {
+                $0.hasSuffix(":\(port)")
+            })
+        {
+            others.append(.init(host: nil, path: Serving.foreground))
         }
         // Every host key for that port, not the first the dictionary happens to
         // yield: a tailnet rename leaves the old name behind.
