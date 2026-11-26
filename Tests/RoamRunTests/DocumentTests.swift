@@ -116,8 +116,7 @@ func everyDocumentedCommandParses(_ doc: String) throws {
                     "cursor",
                     "gemini",
                     "copilot",
-                    "devin",
-                    "x"
+                    "devin"
                 ]
                 // A folder after --output-dir is any path.
                 let given = words.indices

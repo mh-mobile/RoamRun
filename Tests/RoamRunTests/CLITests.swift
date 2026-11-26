@@ -725,7 +725,16 @@ private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> {
     }
     #expect(read(fresh) == "---\nname: roamrun\ndescription: older\n---\n")
 
-    // --uninstall removes only ours.
+    // --uninstall removes only ours: not through a link, nor a folder with other files in it.
+    for dir in [linkedDir, linkedFile] {
+        #expect(try CLI.placeSkill(skill, in: dir, uninstall: true).hasSuffix("it is a link managed elsewhere"))
+    }
+    #expect(read(fresh) == "---\nname: roamrun\ndescription: older\n---\n")
+    let kept = root.appendingPathComponent("kept/roamrun")
+    _ = try CLI.placeSkill(skill, in: kept, uninstall: false)
+    try Data("mine".utf8).write(to: kept.appendingPathComponent("notes.md"))
+    #expect(try CLI.placeSkill(skill, in: kept, uninstall: true) == "Removed \(kept.path)/SKILL.md")
+    #expect(fm.fileExists(atPath: kept.appendingPathComponent("notes.md").path))
     #expect(try CLI.placeSkill(skill, in: fresh, uninstall: true) == "Removed \(fresh.path)/SKILL.md")
     #expect(!fm.fileExists(atPath: fresh.path))
     #expect(try CLI.placeSkill(skill, in: foreign, uninstall: true).hasSuffix("no RoamRun skill there"))
