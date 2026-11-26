@@ -1034,10 +1034,9 @@ final class ProxyBridge: ObservableObject {
                     " To keep the session next time the device leaves Wi‑Fi, turn on Keep debugging on cellular in Settings.")
         }
         // Not an error: the bridge itself works over the mesh VPN. But the home
-        // check is blind while this lasts, so say so wherever status is read.
-        // Not while standing aside: getting to .local means the LAN answered, so the
-        // gate is open again and the flag is only waiting to age out.
-        if env.localNetworkDenied(), s != .local {
+        // check is blind while this lasts, so say so wherever status is read. Also when
+        // standing aside: Tailscale's path, not the LAN, may have said home.
+        if env.localNetworkDenied() {
             detail = detail.isEmpty ? LocalNetwork.advice : detail + " — " + LocalNetwork.advice
         }
         if pingsNotRun >= 2, s == .error {

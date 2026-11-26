@@ -39,12 +39,12 @@ enum LocalNetwork {
 
     private static let policyDenied = DNSServiceErrorType(kDNSServiceErr_PolicyDenied)
 
-    /// Whether a status card shows the advice: for this app's own bridge while it runs and looks for the device, the
+    /// Whether a status card shows the advice: for this app's own bridge while it runs (on this Wi‑Fi too), the
     /// statuses its status entry (and so `roamrun status`) says it for. The card follows the condition now; an
     /// entry is rewritten every 10 s, but an errored bridge's only at its next try. A `roamrun up` bridge's detail
     /// carries its own.
     static func shownOnCard(denied: Bool, status: BridgeStatus, external: Bool) -> Bool {
-        denied && !external && status != .off && status != .local
+        denied && !external && status != .off
     }
 
     /// Ages out instead of being cleared: once access is allowed again no probe

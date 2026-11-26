@@ -76,7 +76,8 @@ private let t0 = Date(timeIntervalSinceReferenceDate: 800_000_000)
     #expect(!LocalNetwork.shownOnCard(denied: false, status: .waiting, external: false))
     // Off: nothing looks for the device, and `roamrun status` says nothing of it.
     #expect(!LocalNetwork.shownOnCard(denied: true, status: .off, external: false))
-    #expect(!LocalNetwork.shownOnCard(denied: true, status: .local, external: false))
+    // On this Wi‑Fi: Tailscale's path may have said so while the LAN is blocked.
+    #expect(LocalNetwork.shownOnCard(denied: true, status: .local, external: false))
     // A `roamrun up` bridge's detail carries the advice itself.
     #expect(!LocalNetwork.shownOnCard(denied: true, status: .waiting, external: true))
 }
