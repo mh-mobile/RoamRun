@@ -656,3 +656,86 @@ private func parsed(_ s: String) -> Result<CLI.Parsed, CLI.ArgumentError> {
     let address = "roamrun-introducer://cloud-mac.example.ts.net?p=53050&i=0A0A0A0A-D414-41D0-BE80-7567AE75B2BC&a=AAECAwQF&m=Mac16,1&n=cloud-mac&f=1&v=26&w=17"
     #expect(TerminalQR.modules(address, level: "L").count < TerminalQR.modules(address, level: "M").count)
 }
+
+// MARK: - init
+
+@Test func initOutputDirUsageErrors() {
+    #expect(CLI.initUsageError(["init", "--output-dir", ".claude/skills"]) == nil)
+    #expect(CLI.initUsageError(["init", "--output-dir", "x", "--uninstall"]) == nil)
+    #expect(CLI.initUsageError(["init", "--client", "claude"]) == nil)
+    #expect(CLI.initUsageError(["init", "--output-dir"]) == "--output-dir needs a folder")
+    #expect(CLI.initUsageError(["init", "--output-dir", ""]) == "--output-dir needs a folder")
+    #expect(CLI.initUsageError(["init", "--output-dir", "--print"]) == "--output-dir needs a folder")
+    #expect(CLI.initUsageError(["init", "--output-dir", "x", "--client", "claude"])?
+        .hasPrefix("--output-dir and --client can't go together") == true)
+    #expect(CLI.initUsageError(["init", "--print", "--output-dir", "x"])?
+        .hasPrefix("--output-dir and --print can't go together") == true)
+    #expect(CLI.initUsageError(["init", "--client"])?.hasPrefix("--client needs a value") == true)
+    for twice in [["init", "--output-dir", "a", "--output-dir", "b"], ["init", "--output-dir", "--output-dir", "x"],
+                  ["init", "--output-dir", "-x", "--output-dir", "b"]]
+    {
+        #expect(CLI.initUsageError(twice) == "--output-dir once: one folder a run", "\(twice)")
+    }
+    #expect(CLI.initUsageError(["init", "claude"])?.hasPrefix("unexpected claude") == true)
+    #expect(CLI.initUsageError(["init", "--output"])?.hasPrefix("unknown option --output") == true)
+}
+
+@Test func initPlacesOnlyOurOwnSkill() throws {
+    let fm = FileManager.default
+    let root = fm.temporaryDirectory.appendingPathComponent("roamrun-skills-\(UUID().uuidString)")
+    defer { try? fm.removeItem(at: root) }
+    let skill = Data("---\nname: roamrun\ndescription: now\n---\n".utf8)
+    func read(_ dir: URL) -> String? {
+        try? String(contentsOf: dir.appendingPathComponent("SKILL.md"), encoding: .utf8)
+    }
+
+    // Lands in <dir>/SKILL.md, folders created; RoamRun's own older one is updated.
+    let fresh = root.appendingPathComponent("a/b/roamrun")
+    #expect(try CLI.placeSkill(skill, in: fresh, uninstall: false) == "Installed \(fresh.path)/SKILL.md")
+    #expect(read(fresh) == String(decoding: skill, as: UTF8.self))
+    try Data("---\nname: roamrun\ndescription: older\n---\n".utf8).write(to: fresh.appendingPathComponent("SKILL.md"))
+    _ = try CLI.placeSkill(skill, in: fresh, uninstall: false)
+    #expect(read(fresh) == String(decoding: skill, as: UTF8.self))
+
+    // A foreign SKILL.md is left alone.
+    let foreign = root.appendingPathComponent("foreign/roamrun")
+    try fm.createDirectory(at: foreign, withIntermediateDirectories: true)
+    try Data("---\nname: mine\n---\n".utf8).write(to: foreign.appendingPathComponent("SKILL.md"))
+    #expect(try CLI.placeSkill(skill, in: foreign, uninstall: false).hasSuffix("its SKILL.md isn't RoamRun's"))
+    #expect(read(foreign) == "---\nname: mine\n---\n")
+    // So is one that isn't UTF-8.
+    let latin1 = root.appendingPathComponent("latin1/roamrun")
+    try fm.createDirectory(at: latin1, withIntermediateDirectories: true)
+    let bytes = Data([0x2D, 0x2D, 0x2D, 0x0A, 0xE9, 0x0A])
+    try bytes.write(to: latin1.appendingPathComponent("SKILL.md"))
+    #expect(try CLI.placeSkill(skill, in: latin1, uninstall: false).hasSuffix("its SKILL.md isn't RoamRun's"))
+    #expect(try Data(contentsOf: latin1.appendingPathComponent("SKILL.md")) == bytes)
+
+    // A linked folder, and a linked SKILL.md, are left alone.
+    let linkedDir = root.appendingPathComponent("linked-dir/roamrun")
+    try fm.createDirectory(at: linkedDir.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try fm.createSymbolicLink(at: linkedDir, withDestinationURL: foreign)
+    let linkedFile = root.appendingPathComponent("linked-file/roamrun")
+    try fm.createDirectory(at: linkedFile, withIntermediateDirectories: true)
+    try fm.createSymbolicLink(at: linkedFile.appendingPathComponent("SKILL.md"),
+                              withDestinationURL: fresh.appendingPathComponent("SKILL.md"))
+    try Data("---\nname: roamrun\ndescription: older\n---\n".utf8).write(to: fresh.appendingPathComponent("SKILL.md"))
+    for dir in [linkedDir, linkedFile] {
+        #expect(try CLI.placeSkill(skill, in: dir, uninstall: false).hasSuffix("it is a link managed elsewhere"))
+    }
+    #expect(read(fresh) == "---\nname: roamrun\ndescription: older\n---\n")
+
+    // --uninstall removes only ours: not through a link, nor a folder with other files in it.
+    for dir in [linkedDir, linkedFile] {
+        #expect(try CLI.placeSkill(skill, in: dir, uninstall: true).hasSuffix("it is a link managed elsewhere"))
+    }
+    #expect(read(fresh) == "---\nname: roamrun\ndescription: older\n---\n")
+    let kept = root.appendingPathComponent("kept/roamrun")
+    _ = try CLI.placeSkill(skill, in: kept, uninstall: false)
+    try Data("mine".utf8).write(to: kept.appendingPathComponent("notes.md"))
+    #expect(try CLI.placeSkill(skill, in: kept, uninstall: true) == "Removed \(kept.path)/SKILL.md")
+    #expect(fm.fileExists(atPath: kept.appendingPathComponent("notes.md").path))
+    #expect(try CLI.placeSkill(skill, in: fresh, uninstall: true) == "Removed \(fresh.path)/SKILL.md")
+    #expect(!fm.fileExists(atPath: fresh.path))
+    #expect(try CLI.placeSkill(skill, in: foreign, uninstall: true).hasSuffix("no RoamRun skill there"))
+}

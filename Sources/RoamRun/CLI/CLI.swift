@@ -183,8 +183,9 @@ enum CLI {
                                      (<name>: check one device rather than all; --replace: drop builds
                                      already listed under the same version and build)
       version                        Print the version (also --version)
-      init [--client <name>] [--print] [--uninstall]
-                                     Install the agent skill (clients: claude, codex, cursor, gemini, copilot, devin)
+      init [--client <name>] [--output-dir <dir>] [--print] [--uninstall]
+                                     Install the agent skill (clients: claude, codex, cursor, gemini, copilot, devin;
+                                     --output-dir: in <dir>/roamrun instead)
 
     Exit codes: 0 ok/ready, 1 not ready or a check failed, 2 usage error.
     Name a device when a script needs the answer to be about that one.
@@ -858,19 +859,72 @@ enum CLI {
             )
     }
 
-    /// Installs the bundled SKILL.md for every detected (or named) agent.
-    private static func initSkill(_ args: [String]) -> Never {
+    /// The usage error in `init`'s options, if any.
+    nonisolated static func initUsageError(_ args: [String]) -> String? {
+        let valued = ["--client", "--output-dir"]
         // A typo (e.g. --uninstal) must not fall through to installing everywhere.
-        for (i, a) in args.enumerated().dropFirst() where args[i - 1] != "--client" {
+        for (i, a) in args.enumerated().dropFirst() where !valued.contains(args[i - 1]) {
             // Also bare words: `init claude` must not install into every client.
-            guard ["--client", "--print", "--uninstall"].contains(a) else {
-                fail(a
+            guard (valued + ["--print", "--uninstall"]).contains(a) else {
+                return a
                     .hasPrefix("-") ? "unknown option \(a) — see roamrun --help" :
-                    "unexpected \(shellName(a)) — to pick a client: roamrun init --client \(shellName(a))")
+                    "unexpected \(shellName(a)) — to pick a client: roamrun init --client \(shellName(a))"
             }
         }
-        if let i = args.lastIndex(of: "--client"), !args.indices.contains(i + 1) || args[i + 1].hasPrefix("-") {
-            fail("--client needs a value (\(skillClients.map(\.name).joined(separator: ", ")))")
+        // One folder: a second would be dropped without a word (--client is the one that repeats).
+        if args.filter({
+            $0 == "--output-dir"
+        })
+        .count > 1 {
+            return "--output-dir once: one folder a run"
+        }
+        for option in valued {
+            if let i = args.lastIndex(of: option),
+               !args.indices.contains(i + 1) || args[i + 1].isEmpty || args[i + 1].hasPrefix("-")
+            {
+                return option == "--client" ?
+                    "--client needs a value (\(skillClients.map(\.name).joined(separator: ", ")))" :
+                    "--output-dir needs a folder"
+            }
+        }
+        if args.contains("--output-dir"), let other = ["--client", "--print"].first(where: args.contains) {
+            return "--output-dir and \(other) can't go together: each says where the skill goes"
+        }
+        return nil
+    }
+
+    /// Puts the skill in `dir` (or removes it), touching only our own plain file; says what it did.
+    nonisolated static func placeSkill(_ skill: Data, in dir: URL, uninstall: Bool) throws -> String {
+        let fm = FileManager.default
+        let file = dir.appendingPathComponent("SKILL.md")
+        // A linked dir/file is managed elsewhere (npx skills, a checkout), and a foreign SKILL.md is the user's.
+        if [dir, file].contains(where: {
+            (try? fm.destinationOfSymbolicLink(atPath: $0.path)) != nil
+        }) {
+            return "Skipped \(dir.path): it is a link managed elsewhere"
+        }
+        // By its bytes, as `staleSkills` reads it: a file that isn't UTF-8, or can't be read, is still not ours.
+        let ours = (try? Data(contentsOf: file))?.starts(with: Data("---\nname: roamrun\n".utf8)) ?? false
+        if uninstall {
+            guard ours else { return "Skipped \(dir.path): no RoamRun skill there" }
+            do { try fm.removeItem(at: file) } catch {
+                return "Couldn't remove \(file.path): \(error.localizedDescription)"
+            }
+            rmdir(dir.path) // only if now empty
+            return "Removed \(file.path)"
+        }
+        if fm.fileExists(atPath: file.path) && !ours {
+            return "Skipped \(dir.path): its SKILL.md isn't RoamRun's"
+        }
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        try skill.write(to: file, options: .atomic)
+        return "Installed \(file.path)"
+    }
+
+    /// Installs the bundled SKILL.md for every detected (or named) agent, or in --output-dir.
+    private static func initSkill(_ args: [String]) -> Never {
+        if let e = initUsageError(args) {
+            fail(e)
         }
         guard let skill = bundledSkill() else {
             stop("skill not found in the app bundle — build with `make app`")
@@ -880,64 +934,42 @@ enum CLI {
             exit(0)
         }
 
-        let home = homeDir
-        let named = args.indices
-            .filter {
-                args[$0] == "--client" && args.indices.contains($0 + 1)
-            }
-            .map {
-                args[$0 + 1]
-            }
-        if let unknown = named.first(where: { n in
-            !skillClients.contains {
-                $0.name == n
-            }
-        }) {
-            fail("unknown client “\(unknown)”. Known: \(skillClients.map(\.name).joined(separator: ", "))")
-        }
-        let targets = skillClients.filter { c in
-            named.isEmpty ? FileManager.default.fileExists(atPath: home.appendingPathComponent(c.home).path) : named
-                .contains(c.name)
-        }
-        guard !targets.isEmpty else {
-            stop(
-                "no supported agent found in ~ (\(skillClients.map(\.home).joined(separator: ", "))). Use --client, or --print and paste it yourself."
-            )
-        }
-        let fm = FileManager.default
-        for c in targets {
-            let dir = home.appendingPathComponent("\(c.home)/skills/roamrun")
-            let file = dir.appendingPathComponent("SKILL.md")
-            // Only ever touch our own plain file: a linked dir/file is managed
-            // elsewhere (npx skills, a checkout), and a foreign SKILL.md is the user's.
-            if [dir, file].contains(where: {
-                (try? fm.destinationOfSymbolicLink(atPath: $0.path)) != nil
+        let dirs: [URL]
+        if let i = args.lastIndex(of: "--output-dir") {
+            // Relative to the current directory.
+            dirs = [URL(fileURLWithPath: args[i + 1]).appendingPathComponent("roamrun")]
+        } else {
+            let home = homeDir
+            let named = args.indices
+                .filter {
+                    args[$0] == "--client"
+                }
+                .map {
+                    args[$0 + 1]
+                }
+            if let unknown = named.first(where: { n in
+                !skillClients.contains {
+                    $0.name == n
+                }
             }) {
-                print("Skipped \(dir.path): it is a link managed elsewhere")
-                continue
+                fail("unknown client “\(unknown)”. Known: \(skillClients.map(\.name).joined(separator: ", "))")
             }
-            let existing = try? String(contentsOf: file, encoding: .utf8)
-            let ours = existing?.hasPrefix("---\nname: roamrun\n") ?? false
-            if args.contains("--uninstall") {
-                guard ours else { print("Skipped \(dir.path): no RoamRun skill there")
-                    continue
-                }
-                do { try fm.removeItem(at: file) } catch {
-                    print("Couldn't remove \(file.path): \(error.localizedDescription)")
-                    continue
-                }
-                rmdir(dir.path) // only if now empty
-                print("Removed \(file.path)")
-                continue
+            let targets = skillClients.filter { c in
+                named.isEmpty ? FileManager.default.fileExists(atPath: home.appendingPathComponent(c.home).path) :
+                    named.contains(c.name)
             }
-            if existing != nil && !ours {
-                print("Skipped \(dir.path): its SKILL.md isn't RoamRun's")
-                continue
+            guard !targets.isEmpty else {
+                stop(
+                    "no supported agent found in ~ (\(skillClients.map(\.home).joined(separator: ", "))). Use --client or --output-dir, or --print and paste it yourself."
+                )
             }
+            dirs = targets.map {
+                home.appendingPathComponent("\($0.home)/skills/roamrun")
+            }
+        }
+        for dir in dirs {
             do {
-                try fm.createDirectory(at: dir, withIntermediateDirectories: true)
-                try skill.write(to: file, options: .atomic)
-                print("Installed \(file.path)")
+                print(try placeSkill(skill, in: dir, uninstall: args.contains("--uninstall")))
             } catch {
                 stop("could not write \(dir.path): \(error.localizedDescription)")
             }
