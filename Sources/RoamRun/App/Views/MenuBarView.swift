@@ -177,12 +177,8 @@ struct MenuBarIcon: View {
                 openWindow(id: "main")
                 NSApp.activate(ignoringOtherApps: true)
             }
-            // A launch that restores running bridges is a login/background
-            // launch — stay in the menu bar. Otherwise the user opened the
-            // app on purpose (or it's the first run): show the window.
-            if !coordinator.isRestoringBridges || Snapshot.path != nil {
-                AppDelegate.openMain?()
-            }
+            AppDelegate.launchWarning = coordinator.launchWarning != nil
+            AppDelegate.openWindowIfLaunchWants()
         }
     }
 
