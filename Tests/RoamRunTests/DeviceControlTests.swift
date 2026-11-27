@@ -1926,3 +1926,32 @@ private func blank(_ width: Int, _ height: Int) -> CGImage {
     let streamed = try #require(device.tapped)
     #expect(abs(streamed.x - 0.25) < 0.001 && abs(streamed.y - 0.1) < 0.001)
 }
+
+/// Whoever asked for a tap by a PNG look leaves while the device is asked which way it is: no tap is sent.
+@Test func aTapByAPNGLookIsNotSentForAnAskerGoneMeanwhile() throws {
+    let dir = scratchDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (hub, made) = try standInHub(dir)
+    defer { hub.stop() }
+    hub.settling = 0
+    let id = UUID()
+    hub.update([.init(id: id, name: "iPhone", ip: "127.0.0.1", port: 1, udid: "UDID-1")])
+    let device = try #require(made().first)
+    device.screen = (100, 200)
+    device.lookWay = 1
+    let look = hub.answer(.init(op: "look", device: id, path: lookFile(in: dir)))
+    #expect(look.ok)
+    let gone = OSAllocatedUnfairLock(initialState: false)
+    device.onWay = {
+        gone.withLock {
+            $0 = true
+        }
+    }
+    let answer = hub.answer(.init(op: "tap", device: id, x: 50, y: 50, look: look.look), wanted: {
+        !gone.withLock {
+            $0
+        }
+    })
+    #expect(answer.error == DeviceControlHub.notGiven)
+    #expect(device.tapped == nil)
+}

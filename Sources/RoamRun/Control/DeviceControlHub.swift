@@ -1423,7 +1423,11 @@ final class DeviceControlHub: @unchecked Sendable {
         }
         /// A PNG's point isn't sent where the device was turned since that look: what it saw is gone.
         func unturned(_ way: UInt8?) throws {
-            guard let way, Self.turned(way, h.session.way()) else { return }
+            guard let way else { return }
+            let now = h.session.way()
+            // Whoever asked may have left while the device was asked: nothing is begun for nobody.
+            guard wanted() else { throw DeviceSession.Failure.invalid(Self.notGiven) }
+            guard Self.turned(way, now) else { return }
             end()
             throw DeviceSession.Failure.invalid(Self.turnedSince)
         }

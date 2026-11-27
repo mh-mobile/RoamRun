@@ -166,7 +166,9 @@ bounded.
   the list of devices switched on — is a sign that something else replaced it:
   don't allow it; a build you made yourself, signed otherwise, does get asked. The device lists the pairing in Settings ›
   Privacy & Security › Developer Mode, where it can be removed; during each look
-  or action, and for about five seconds after, the device shows screen sharing.
+  or action, and for about five seconds after, the device shows screen sharing — except while it
+  refuses the screen stream (its microphone or camera in use, or a call): a look is then its own
+  PNG and an action goes without the stream, and RoamRun runs no screen-sharing session for them.
   **Locking the device doesn't stop device control**: its lock screen is seen and
   operated like any other — what it shows (notifications as the device is set to show
   them) and what it lets be done without unlocking. Unlocking takes the device's
