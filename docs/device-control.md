@@ -151,7 +151,8 @@ The two flags go on two servers, on two ports.
 
 **What the device does meanwhile.** Each look and each action runs a screen-sharing session on the
 device, which RoamRun keeps for about five seconds after the last one. The device showed it as
-screen sharing (seen). What happened to sound and the microphone during such sessions was noted app by
+screen sharing (seen). Not while the device refuses the screen stream (see `look` above): a look is
+then the device's PNG and an action goes without the stream, so RoamRun runs no session for them. What happened to sound and the microphone during such sessions was noted app by
 app in one sitting — some apps went on sounding, some played unheard, one stopped, and dictation
 took nothing: [sound-while-looking.md](sound-while-looking.md).
 

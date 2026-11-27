@@ -362,8 +362,11 @@ final class StandInDevice: ControlledDevice, @unchecked Sendable {
     /// Set, a look is the device's PNG, its interface that way up; and what `way` says now.
     var lookWay: UInt8?
     var wayNow: UInt8 = 1
+    /// Run as `way` is asked, as whoever asked leaving meanwhile.
+    var onWay: (@Sendable () -> Void)?
     func way() -> UInt8 {
-        lock.withLock {
+        onWay?()
+        return lock.withLock {
             wayNow
         }
     }

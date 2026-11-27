@@ -575,7 +575,8 @@ final class DeviceMCP: @unchecked Sendable {
     has focus. Press goes to whatever is on the screen: look before it too. These press what is really \
     there — don't tap what spends money, posts, sends, deletes or signs in unless the user asked \
     for exactly that. A look shows whatever is on the screen (notifications, messages); don't pass \
-    the image on. The device lists this as screen sharing, where its user can see it: until about \
+    the image on. The device lists this as screen sharing, where its user can see it (not while it \
+    refuses the screen stream, as while its microphone or camera is in use): until about \
     five seconds after the last look or action, voice input on it may not hear and some apps go \
     silent or stop playing. Asked to keep watching a screen, tell the user that first.
     """
