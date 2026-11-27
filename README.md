@@ -350,7 +350,6 @@ Run `roamrun doctor` first. Problems seen so far, and what fixes them:
 |---|---|
 | The device doesn't connect | Unlock it and keep its screen on, on a Wi-Fi |
 | Tailscale on the device looks connected but passes nothing | Turn its VPN off and on |
-| A bridged device stays not Ready while another is on USB | Unplug the USB device |
 | RoamRun keeps bridging a device beside the Mac and never shows **On this Wi‑Fi** | Allow RoamRun under System Settings › Privacy & Security › Local Network. If it is already on, see [Known problems](docs/troubleshooting.md#known-problems) before reinstalling: it says how to keep your saved devices |
 | The bridge stops working after the device restarted | On the device's page, open **Technical details** and press **Find RemotePairing Port**. Xcode has also needed the device on USB once after a restart |
 

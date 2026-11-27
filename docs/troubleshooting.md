@@ -49,7 +49,9 @@ When in trouble, run `roamrun doctor` first.
 - **Tailscale on iOS has been seen to stop passing traffic** after sleep or a network change while
   it still looks connected ("MagicSock function ReceiveIPv4 is not running"). Turn the VPN off and
   on.
-- **A device plugged in over USB can keep a bridged one from becoming Ready.** Unplug it.
+- **Quitting RoamRun while Xcode debugs over the bridge ends the session**: the tunnel closes with it.
+  Tried on 2026-11-26 with Xcode 27.2: Stop ended the run in Xcode, the app kept running on the
+  device, and Run started it again. On 0.1.18, Stop had done nothing and Xcode had to be reopened.
 - **Xcode's session does not survive the Mac sleeping for minutes.** Run again afterwards.
 - **After the device restarts**, its pairing port may have changed: use Find RemotePairing Port on
   the device's page. Xcode has also needed the device on USB once after a restart, to prepare it

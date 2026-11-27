@@ -28,9 +28,8 @@ unattended (device away, app quit) and prints ok/FAIL per step. It kills helpers
 the status file, so it refuses to start while any bridge runs: `roamrun down` each first (an
 `up -d` outlives its terminal).
 
-Known, not regressions: a device (an iPhone, say) on USB can keep a bridged one from getting
-Ready; unplug it. Xcode's session doesn't survive the Mac sleeping for minutes: iOS drops the
-tunnel and Xcode has to run again.
+Known, not regressions: Xcode's session doesn't survive the Mac sleeping for minutes: iOS drops
+the tunnel and Xcode has to run again.
 
 ## One device, away (e.g. on a phone's hotspot)
 
