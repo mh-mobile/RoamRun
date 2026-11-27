@@ -40,7 +40,7 @@ too, with `ota-server`.
 
 The GitHub Action [mh-mobile/roamrun-action](https://github.com/mh-mobile/roamrun-action) does either
 of the two ways in one step, placed after the Tailscale step, or publishes to the OTA page
-(`ota-server`, from v1.2.0). It downloads roamrunctl (0.13.0 by default, from v1.3.0) from RoamRun's release, checks it against `roamrunctl-SHA256SUMS`, and by default installs
+(`ota-server`, from v1.2.0). It downloads roamrunctl (0.14.0 by default, from v1.4.0) from RoamRun's release, checks it against `roamrunctl-SHA256SUMS`, and by default installs
 and launches: `key import -` and `install --launch` on the runner, or `install --relay … --launch`
 through a relay, which runs 0.10.0 or later. Before using it, set up what this page describes: the
 [Tailscale tag and OAuth client](#tailscale-a-tag-and-an-oauth-client), and to install, either
@@ -61,7 +61,7 @@ resolving. The action's README shows the line that puts the runner's own DNS bac
 steps. Its inputs (installing only, launching only, and more) and what was tried with it are in
 [its README](https://github.com/mh-mobile/roamrun-action#readme).
 
-What the action runs is the 0.13.0 form of [the runner's step](#the-runners-step) and
+What the action runs is the 0.14.0 form of [the runner's step](#the-runners-step) and
 [the step that calls the relay](#the-step-that-calls-the-relay), and with `ota-server`,
 `roamrunctl ota --server` as [ota.md](ota.md#from-a-ci-job) shows it. The rest of this page is the setup,
 and the runs made without the action.

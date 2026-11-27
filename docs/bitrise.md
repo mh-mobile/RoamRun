@@ -18,7 +18,7 @@ It runs on macOS stacks with macOS
     inputs:
       - distribution_method: development
       - automatic_code_signing: api-key
-- git::https://github.com/mh-mobile/bitrise-step-roamrun.git@1.3.0:
+- git::https://github.com/mh-mobile/bitrise-step-roamrun.git@1.4.0:
     inputs:
       - tailscale_auth_key: $TS_AUTHKEY
       - roamrun_key: $ROAMRUN_KEY
